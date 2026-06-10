@@ -24,6 +24,7 @@ import {
   MegaphoneIcon,
   GlobeAltIcon,
   CalendarDaysIcon,
+  StarIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -49,6 +50,7 @@ const aiItems = [
   { path: '/campaigns', labelKey: 'nav.campaigns', icon: MegaphoneIcon },
   { path: '/sites', labelKey: 'nav.sites', icon: GlobeAltIcon },
   { path: '/booking', labelKey: 'nav.booking', icon: CalendarDaysIcon },
+  { path: '/reviews', labelKey: 'nav.reviews', icon: StarIcon },
 ];
 
 const managerOnlyItems = [

@@ -113,7 +113,8 @@
     "automations": "Avtomatlashtirishlar",
     "campaigns": "Kampaniyalar",
     "sites": "Voronkalar va sahifalar",
-    "booking": "Band qilish"
+    "booking": "Band qilish",
+    "reviews": "Sharhlar"
   },
   "common": {
     "save": "Save",
@@ -834,5 +835,22 @@
       "5": "Jum",
       "6": "Shan"
     }
+  },
+  "reviews": {
+    "title": "Sharhlar",
+    "subtitle": "Avtomatlashtirishlar orqali sharh so'rovlarini yuboring; mamnun mijozlar (≥4★) ommaviy sahifaga, norozilari avval sizga shaxsan keladi.",
+    "sources": "Sharh manbalari",
+    "sourceName": "Nomi (masalan, Google)",
+    "sourceUrl": "Google sharh URL (g.page/r/…)",
+    "addSource": "Manba qo'shish",
+    "sourceAdded": "Manba qo'shildi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "draftFailed": "Tuzib bo'lmadi",
+    "replied": "Javob saqlandi",
+    "yourReply": "Sizning javobingiz",
+    "replyPlaceholder": "Javob yozing…",
+    "aiDraft": "AI qoralama",
+    "saveReply": "Javobni saqlash",
+    "empty": "Hali sharh yo'q — manba qo'shing va avtomatlashtirishdan sharh so'rovini yuboring."
   }
 }

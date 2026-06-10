@@ -113,7 +113,8 @@
     "automations": "Automations",
     "campaigns": "Campaigns",
     "sites": "Funnels & Pages",
-    "booking": "Booking"
+    "booking": "Booking",
+    "reviews": "Reviews"
   },
   "common": {
     "save": "Save",
@@ -838,5 +839,22 @@
       "5": "Fri",
       "6": "Sat"
     }
+  },
+  "reviews": {
+    "title": "Reviews",
+    "subtitle": "Send review requests via automations; happy customers (≥4★) go to your public page, unhappy ones reach you privately first.",
+    "sources": "Review sources",
+    "sourceName": "Name (e.g. Google)",
+    "sourceUrl": "Google review URL (g.page/r/…)",
+    "addSource": "Add source",
+    "sourceAdded": "Source added",
+    "saveFailed": "Save failed",
+    "draftFailed": "Draft failed",
+    "replied": "Reply saved",
+    "yourReply": "Your reply",
+    "replyPlaceholder": "Write a reply…",
+    "aiDraft": "AI draft",
+    "saveReply": "Save reply",
+    "empty": "No reviews yet — add a source and send review requests from an automation."
   }
 }

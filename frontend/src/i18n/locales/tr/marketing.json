@@ -113,7 +113,8 @@
     "automations": "Otomasyonlar",
     "campaigns": "Kampanyalar",
     "sites": "Funnel & Sayfalar",
-    "booking": "Randevu"
+    "booking": "Randevu",
+    "reviews": "Yorumlar"
   },
   "common": {
     "save": "Kaydet",
@@ -838,5 +839,22 @@
       "5": "Cum",
       "6": "Cmt"
     }
+  },
+  "reviews": {
+    "title": "Yorumlar",
+    "subtitle": "Otomasyonlarla yorum isteği gönderin; mutlu müşteriler (≥4★) genel sayfanıza, mutsuzlar önce size özel ulaşır.",
+    "sources": "Yorum kaynakları",
+    "sourceName": "Ad (örn. Google)",
+    "sourceUrl": "Google yorum URL'si (g.page/r/…)",
+    "addSource": "Kaynak ekle",
+    "sourceAdded": "Kaynak eklendi",
+    "saveFailed": "Kaydedilemedi",
+    "draftFailed": "Taslak başarısız",
+    "replied": "Yanıt kaydedildi",
+    "yourReply": "Yanıtınız",
+    "replyPlaceholder": "Yanıt yazın…",
+    "aiDraft": "AI taslağı",
+    "saveReply": "Yanıtı kaydet",
+    "empty": "Henüz yorum yok — kaynak ekleyin ve bir otomasyondan yorum isteği gönderin."
   }
 }

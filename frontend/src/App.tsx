@@ -26,6 +26,7 @@ import AutomationsPage from './pages/marketing/AutomationsPage';
 import CampaignsPage from './pages/marketing/CampaignsPage';
 import SitesPage from './pages/marketing/SitesPage';
 import BookingSettingsPage from './pages/marketing/BookingSettingsPage';
+import ReviewsPage from './pages/marketing/ReviewsPage';
 import WidgetChatPage from './pages/marketing/WidgetChatPage';
 import BillingPage from './pages/marketing/BillingPage';
 import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
@@ -81,6 +82,7 @@ export default function App() {
             <Route path="/campaigns" element={<CampaignsPage />} />
             <Route path="/sites" element={<SitesPage />} />
             <Route path="/booking" element={<BookingSettingsPage />} />
+            <Route path="/reviews" element={<ReviewsPage />} />
           </Route>
         </Route>
       </Route>

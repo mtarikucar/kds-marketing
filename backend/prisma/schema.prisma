@@ -1094,6 +1094,45 @@ model Booking {
   @@map("bookings")
 }
 
+/// A place reviews are collected (v1: a Google Business "leave a review" URL).
+model ReviewSource {
+  id          String  @id @default(uuid())
+  workspaceId String
+  type        String  @default("GOOGLE") // GOOGLE
+  name        String
+  placeUrl    String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("review_sources")
+}
+
+/// A review-request / review. The `send_review_request` workflow action mints
+/// one (status REQUESTED + token) and sends the lead the rating-gate link
+/// (/r/:token): ≥4 stars routes to the public source URL (PUBLIC_ROUTED), <4
+/// captures private feedback (PRIVATE_FEEDBACK). The team can AI-draft a reply.
+model Review {
+  id          String  @id @default(uuid())
+  workspaceId String
+  sourceId    String?
+  leadId      String?
+  rating      Int?
+  text        String? @db.Text
+  authorName  String?
+  status      String  @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED
+  replyDraft  String? @db.Text
+  replyText   String? @db.Text
+  token       String  @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("reviews")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.
