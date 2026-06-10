@@ -63,14 +63,17 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
     }),
     {
       name: 'marketing-auth-storage',
-      // Tokens (both access AND refresh) stay in memory only — persisting
-      // either makes XSS a session-takeover primitive for a long-term
-      // (30-day) stolen refresh. Matches the SuperAdmin store's stance.
-      // On reload we rely on the persisted `user` flag to show the shell
-      // and re-auth via /api/marketing/auth/refresh.
+      // The ACCESS token stays in memory only, but the REFRESH token must
+      // be persisted: every full page load (deep link, F5) starts with an
+      // empty store, and the api client's single-flight refresh is the only
+      // way back to a session. The previous stance persisted neither —
+      // which silently logged every user out on reload (all requests 401 →
+      // interceptor logout). Rotation caps the blast radius of a stolen
+      // refresh token: each use revokes it server-side.
       partialize: (state) => ({
         user: state.user,
         isAuthenticated: state.isAuthenticated,
+        refreshToken: state.refreshToken,
       }),
     }
   )
