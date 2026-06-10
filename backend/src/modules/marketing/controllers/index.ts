@@ -21,3 +21,6 @@ export * from './netgsm-public.controller';
 export * from './marketing-workflows.controller';
 export * from './marketing-campaigns.controller';
 export * from './campaign-tracking.controller';
+export * from './marketing-sites.controller';
+export * from './marketing-booking.controller';
+export * from './public-site.controller';

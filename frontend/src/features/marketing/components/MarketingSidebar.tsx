@@ -22,6 +22,8 @@ import {
   ChatBubbleLeftRightIcon,
   BoltIcon,
   MegaphoneIcon,
+  GlobeAltIcon,
+  CalendarDaysIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -45,6 +47,8 @@ const aiItems = [
   { path: '/channels', labelKey: 'nav.channels', icon: ChatBubbleLeftRightIcon },
   { path: '/automations', labelKey: 'nav.automations', icon: BoltIcon },
   { path: '/campaigns', labelKey: 'nav.campaigns', icon: MegaphoneIcon },
+  { path: '/sites', labelKey: 'nav.sites', icon: GlobeAltIcon },
+  { path: '/booking', labelKey: 'nav.booking', icon: CalendarDaysIcon },
 ];
 
 const managerOnlyItems = [

@@ -111,7 +111,9 @@
     "inbox": "Inbox",
     "channels": "Channels",
     "automations": "Automations",
-    "campaigns": "Campaigns"
+    "campaigns": "Campaigns",
+    "sites": "Funnels & Pages",
+    "booking": "Booking"
   },
   "common": {
     "save": "Save",
@@ -789,5 +791,52 @@
     "unsub": "unsub",
     "launch": "Launch",
     "empty": "No campaigns yet — create one and let AI write the copy."
+  },
+  "sites": {
+    "title": "Funnels & Pages",
+    "subtitle": "Build landing pages with lead-capture forms. Describe one and AI drafts the blocks.",
+    "new": "New page",
+    "aiPlaceholder": "Describe the page — e.g. a demo-booking page for a coffee POS",
+    "draftBtn": "Draft",
+    "pageTitle": "Title",
+    "slug": "Slug",
+    "blocks": "Blocks (JSON)",
+    "badBlocks": "Blocks are not valid JSON",
+    "saved": "Page saved",
+    "saveFailed": "Save failed",
+    "drafted": "Draft ready",
+    "draftFailed": "Could not draft",
+    "publish": "Publish",
+    "unpublish": "Unpublish",
+    "copyUrl": "public URL",
+    "empty": "No pages yet — describe one and let AI draft it.",
+    "forms": "Lead-capture forms",
+    "formName": "Form name (name/email/phone fields)",
+    "addForm": "Add",
+    "formCreated": "Form created",
+    "noForms": "No forms yet. Add one, then reference it in a page form block: {\"type\":\"form\",\"formId\":\"…\"}.",
+    "delete": "Delete"
+  },
+  "booking": {
+    "title": "Booking",
+    "subtitle": "Let leads book a slot. Availability windows are in UTC for now.",
+    "new": "New calendar",
+    "name": "Name",
+    "slot": "Slot (min)",
+    "buffer": "Buffer (min)",
+    "availability": "Weekly availability (UTC)",
+    "saved": "Calendar saved",
+    "saveFailed": "Save failed",
+    "copyUrl": "booking link",
+    "empty": "No calendars yet — create one to let leads book time.",
+    "day": {
+      "0": "Sun",
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat"
+    }
   }
 }

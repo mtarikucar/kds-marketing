@@ -1010,6 +1010,90 @@ model CampaignRecipient {
   @@map("campaign_recipients")
 }
 
+/// A published landing page / funnel step. `blocks` is an ordered array of
+/// typed content blocks (hero/features/pricing/form/cta/faq) rendered to HTML
+/// server-side (no inline JS). A `form` block references a FormDef by id.
+model SitePage {
+  id          String  @id @default(uuid())
+  workspaceId String
+  slug        String
+  title       String
+  blocks      Json
+  seo         Json?
+  theme       Json?
+  published   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@map("site_pages")
+}
+
+/// A lead-capture form (embedded in a SitePage `form` block). `fields` is an
+/// ordered array of { name, label, type, required }. A submission creates or
+/// updates a Lead and emits form.submitted (a workflow trigger).
+model FormDef {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  fields      Json
+  redirectUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("form_defs")
+}
+
+/// A bookable calendar with weekly availability. `availability` is a per-weekday
+/// list of {start,end} HH:mm windows; bookable slots = windows sliced into
+/// slotMinutes, minus existing bookings, plus bufferMinutes between.
+model BookingCalendar {
+  id            String  @id @default(uuid())
+  workspaceId   String
+  name          String
+  slug          String
+  ownerUserId   String?
+  availability  Json
+  slotMinutes   Int     @default(30)
+  bufferMinutes Int     @default(0)
+  timezone      String  @default("Europe/Istanbul")
+  active        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@map("booking_calendars")
+}
+
+/// A booked slot. Creating one mints/links a Lead, emits booking.created (a
+/// workflow trigger), emails an ICS invite, and schedules a booking.reminder.
+model Booking {
+  id          String   @id @default(uuid())
+  workspaceId String
+  calendarId  String
+  leadId      String?
+  startAt     DateTime
+  endAt       DateTime
+  name        String
+  email       String?
+  phone       String?
+  notes       String?
+  status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED
+  token       String   @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([calendarId, startAt])
+  @@index([workspaceId])
+  @@map("bookings")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.

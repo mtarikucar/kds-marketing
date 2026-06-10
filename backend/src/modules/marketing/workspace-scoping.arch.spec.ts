@@ -55,6 +55,11 @@ const OWNED_DELEGATES = [
   // P4 (GoHighLevel parity): campaigns.
   'campaign',
   'campaignRecipient',
+  // P5 (GoHighLevel parity): funnels/sites + forms + booking.
+  'sitePage',
+  'formDef',
+  'bookingCalendar',
+  'booking',
 ] as const;
 
 /** Methods that can address many rows or create rows. */
