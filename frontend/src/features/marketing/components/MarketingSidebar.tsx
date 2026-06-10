@@ -14,6 +14,7 @@ import {
   PhoneIcon,
   PresentationChartLineIcon,
   FlagIcon,
+  BeakerIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -33,6 +34,7 @@ const navItems = [
 const managerOnlyItems = [
   { path: '/users', labelKey: 'nav.users', icon: UsersIcon },
   { path: '/targets', labelKey: 'nav.targets', icon: FlagIcon },
+  { path: '/research', labelKey: 'nav.research', icon: BeakerIcon },
 ];
 
 export default function MarketingSidebar() {

@@ -36,6 +36,9 @@ const OWNED_DELEGATES = [
   'installationTask',
   'salesTarget',
   'marketingDistributionConfig',
+  'researchProfile',
+  'ingestToken',
+  'usageCounter',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

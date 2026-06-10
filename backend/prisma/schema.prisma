@@ -512,6 +512,75 @@ model SalesTarget {
   @@map("sales_targets")
 }
 
+/// A research focus inside a workspace: WHO to find and HOW to pitch.
+/// icpDescription is the customer-authored prompt the nightly routine
+/// researches against; the workspace's daily lead quota is shared across
+/// its profiles.
+model ResearchProfile {
+  id          String @id @default(uuid())
+  workspaceId String
+  name        String
+  status      String @default("ACTIVE") // ACTIVE, PAUSED
+
+  /// Customer-authored: ideal customer profile + pain signals to hunt for.
+  icpDescription String  @db.Text
+  /// Optional pitch angle the routine should write per-lead pitches with.
+  productPitch   String? @db.Text
+
+  /// { country?, regions?: string[], cities?: string[] } — hard geo filter.
+  geo           Json?
+  /// Output language for painPoint/evidence/pitch (ISO 639-1).
+  language      String  @default("en")
+  /// Taxonomy hints for the researcher (subset of workspace businessTypes).
+  businessTypes Json?
+  /// Hard exclusions, free text ("no franchises", "skip enterprises"...).
+  exclusions    String? @db.Text
+
+  lastRunAt    DateTime?
+  /// { posted, created, skipped, clipped, at } from the latest routine run.
+  lastRunStats Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("research_profiles")
+}
+
+/// Per-workspace ingest credential. Only the sha256 hash is stored; the raw
+/// token (mkt_live_<hex>) is shown exactly once at mint time. Replaces the
+/// global MARKETING_INGEST_TOKEN env.
+model IngestToken {
+  id          String    @id @default(uuid())
+  workspaceId String
+  tokenHash   String    @unique
+  /// First characters of the raw token so the UI can identify it.
+  tokenPrefix String
+  label       String
+  status      String    @default("ACTIVE") // ACTIVE, REVOKED
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@index([workspaceId])
+  @@map("ingest_tokens")
+}
+
+/// Daily usage counters (UTC periodKey YYYY-MM-DD). The ingest path
+/// reserves/settles `leads.ingested` under a per-workspace advisory lock;
+/// billing reads it for quota meters.
+model UsageCounter {
+  id          String   @id @default(uuid())
+  workspaceId String
+  metric      String // 'leads.ingested'
+  periodKey   String // '2026-06-10'
+  value       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, metric, periodKey])
+  @@map("usage_counters")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.

@@ -40,6 +40,10 @@ import {
 import { MarketingGuard } from './guards/marketing.guard';
 import { MarketingRolesGuard } from './guards/marketing-roles.guard';
 import { IngestTokenGuard } from './guards/ingest-token.guard';
+import { LeadQuotaResolver } from './services/lead-quota.resolver';
+import { MarketingResearchService } from './services/marketing-research.service';
+import { MarketingIngestTokensService } from './services/marketing-ingest-tokens.service';
+import { MarketingResearchController } from './controllers/marketing-research.controller';
 
 // Event consumers (Step C decoupling: settlement → commission crediting).
 import { SettlementCommissionConsumer } from './events/settlement-commission.consumer';
@@ -116,6 +120,7 @@ import { SalesTargetService } from './services/sales-target.service';
     SalesCallController,
     InstallationController,
     SalesTargetController,
+    MarketingResearchController,
   ],
   providers: [
     // Services
@@ -131,6 +136,11 @@ import { SalesTargetService } from './services/sales-target.service';
     MarketingNotificationsService,
     MarketingLeadsIngestService,
     LeadAutoAssignerService,
+    // Daily lead quota (Phase-F entitlement seam) — used by the ingest path.
+    LeadQuotaResolver,
+    // Research settings surface: profiles + per-workspace ingest tokens.
+    MarketingResearchService,
+    MarketingIngestTokensService,
     MarketingDistributionService,
     // Cron jobs (offer expiry, notification TTL, follow-up reminders).
     MarketingSchedulerService,
@@ -160,6 +170,9 @@ import { SalesTargetService } from './services/sales-target.service';
   exports: [
     MarketingAuthService,
     MarketingUsersService,
+    // InternalApiModule's research-jobs surface shares the quota-clipped
+    // ingest path (one implementation of the clipping invariant).
+    MarketingLeadsIngestService,
   ],
 })
 export class MarketingModule {}

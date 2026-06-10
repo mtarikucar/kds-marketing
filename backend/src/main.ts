@@ -19,9 +19,11 @@ function validateEnv(): void {
     // distinctness checks, inside MarketingModule's JwtModule factory).
     'MARKETING_JWT_SECRET',
     'MARKETING_JWT_REFRESH_SECRET',
-    // IngestTokenGuard fails closed without it, but only when an ingest
-    // request arrives — boot-gate it so a misconfigured deploy fails loudly.
-    'MARKETING_INGEST_TOKEN',
+    // The nightly research routine's surface (/api/internal/research/*);
+    // ResearchTokenGuard fails closed without it — boot-gate it so a
+    // misconfigured deploy fails loudly. (Lead ingest itself now uses
+    // per-workspace DB-backed tokens, no env needed.)
+    'RESEARCH_ROUTINE_TOKEN',
     // Service-to-service token for /api/internal/* (both directions).
     'INTERNAL_SERVICE_TOKEN',
     // Platform (superadmin) realm — operator login + workspace admin.

@@ -1,65 +1,83 @@
-import { ConfigService } from '@nestjs/config';
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
-import { IngestTokenGuard } from './ingest-token.guard';
+import {
+  IngestTokenGuard,
+  hashIngestToken,
+  INGEST_TOKEN_PREFIX,
+} from './ingest-token.guard';
 
-function makeContext(headers: Record<string, string>): ExecutionContext {
-  const req = { headers };
-  return {
-    switchToHttp: () => ({ getRequest: () => req }),
-  } as any as ExecutionContext;
-}
+/**
+ * DB-backed per-workspace ingest tokens (Phase E): the guard hashes the
+ * presented token, resolves the owning workspace and attaches it to the
+ * request. Revoked/unknown tokens die with the same generic 401.
+ */
+describe('IngestTokenGuard — per-workspace hashed tokens', () => {
+  const RAW = `${INGEST_TOKEN_PREFIX}${'a'.repeat(48)}`;
 
-function makeGuard(expected: string | undefined): IngestTokenGuard {
-  const config = {
-    get: (key: string) =>
-      key === 'MARKETING_INGEST_TOKEN' ? expected : undefined,
-  } as ConfigService;
-  return new IngestTokenGuard(config);
-}
+  let prisma: {
+    ingestToken: { findUnique: jest.Mock; update: jest.Mock };
+  };
+  let guard: IngestTokenGuard;
+  let request: any;
 
-describe('IngestTokenGuard', () => {
-  const TOKEN = 'a'.repeat(64);
+  function ctx(): ExecutionContext {
+    return {
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as unknown as ExecutionContext;
+  }
 
-  it('returns true when the x-ingest-token header matches', () => {
-    const guard = makeGuard(TOKEN);
-    expect(
-      guard.canActivate(makeContext({ 'x-ingest-token': TOKEN })),
-    ).toBe(true);
+  beforeEach(() => {
+    prisma = {
+      ingestToken: {
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    guard = new IngestTokenGuard(prisma as any);
+    request = { headers: { 'x-ingest-token': RAW } };
   });
 
-  it('throws when the header is missing', () => {
-    const guard = makeGuard(TOKEN);
-    expect(() => guard.canActivate(makeContext({}))).toThrow(
-      UnauthorizedException,
-    );
-    expect(() => guard.canActivate(makeContext({}))).toThrow(/Missing/);
+  it('accepts an ACTIVE token, attaches its workspace and looks up by sha256 (never the raw)', async () => {
+    prisma.ingestToken.findUnique.mockResolvedValue({
+      id: 'tok-1',
+      workspaceId: 'ws-1',
+      status: 'ACTIVE',
+    });
+
+    await expect(guard.canActivate(ctx())).resolves.toBe(true);
+    expect(request.ingestWorkspaceId).toBe('ws-1');
+
+    const where = prisma.ingestToken.findUnique.mock.calls[0][0].where;
+    expect(where.tokenHash).toBe(hashIngestToken(RAW));
+    expect(where.tokenHash).not.toContain(RAW);
   });
 
-  it('throws when the supplied token has the wrong length', () => {
-    const guard = makeGuard(TOKEN);
-    expect(() =>
-      guard.canActivate(makeContext({ 'x-ingest-token': 'short' })),
-    ).toThrow(UnauthorizedException);
+  it('rejects unknown tokens', async () => {
+    prisma.ingestToken.findUnique.mockResolvedValue(null);
+    await expect(guard.canActivate(ctx())).rejects.toThrow(UnauthorizedException);
   });
 
-  it('throws when the supplied token has the right length but wrong value', () => {
-    const guard = makeGuard(TOKEN);
-    expect(() =>
-      guard.canActivate(makeContext({ 'x-ingest-token': 'b'.repeat(64) })),
-    ).toThrow(UnauthorizedException);
+  it('rejects REVOKED tokens with the same generic error', async () => {
+    prisma.ingestToken.findUnique.mockResolvedValue({
+      id: 'tok-1',
+      workspaceId: 'ws-1',
+      status: 'REVOKED',
+    });
+    await expect(guard.canActivate(ctx())).rejects.toThrow('Invalid ingest token');
   });
 
-  it('throws "Ingest disabled" when MARKETING_INGEST_TOKEN is empty', () => {
-    const guard = makeGuard('');
-    expect(() =>
-      guard.canActivate(makeContext({ 'x-ingest-token': TOKEN })),
-    ).toThrow(/Ingest disabled/);
+  it('rejects a missing header without touching the database', async () => {
+    request = { headers: {} };
+    await expect(guard.canActivate(ctx())).rejects.toThrow('Missing ingest token');
+    expect(prisma.ingestToken.findUnique).not.toHaveBeenCalled();
   });
 
-  it('throws "Ingest disabled" when MARKETING_INGEST_TOKEN is unset', () => {
-    const guard = makeGuard(undefined);
-    expect(() =>
-      guard.canActivate(makeContext({ 'x-ingest-token': TOKEN })),
-    ).toThrow(/Ingest disabled/);
+  it('does not fail the request when the lastUsedAt telemetry write breaks', async () => {
+    prisma.ingestToken.findUnique.mockResolvedValue({
+      id: 'tok-1',
+      workspaceId: 'ws-1',
+      status: 'ACTIVE',
+    });
+    prisma.ingestToken.update.mockRejectedValue(new Error('db hiccup'));
+    await expect(guard.canActivate(ctx())).resolves.toBe(true);
   });
 });

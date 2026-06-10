@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { InternalTokenGuard } from './internal-token.guard';
+import { ResearchTokenGuard } from './research-token.guard';
 import { InternalReferralController } from './internal-referral.controller';
 import { InternalEventsController } from './internal-events.controller';
+import { InternalResearchController } from './internal-research.controller';
+import { MarketingModule } from '../marketing/marketing.module';
 
 /**
  * Service-to-service surface of the marketing service (Phase-5 split):
@@ -16,7 +19,12 @@ import { InternalEventsController } from './internal-events.controller';
  * @Global ProvisioningClientModule; OutboxService by the @Global OutboxModule.
  */
 @Module({
-  controllers: [InternalReferralController, InternalEventsController],
-  providers: [InternalTokenGuard],
+  imports: [MarketingModule],
+  controllers: [
+    InternalReferralController,
+    InternalEventsController,
+    InternalResearchController,
+  ],
+  providers: [InternalTokenGuard, ResearchTokenGuard],
 })
 export class InternalApiModule {}

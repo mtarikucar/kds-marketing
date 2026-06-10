@@ -34,7 +34,7 @@ services:
       # ── Secrets: override these in a real deployment (.env next to this file) ──
       MARKETING_JWT_SECRET: ${MARKETING_JWT_SECRET:-dev-marketing-jwt-secret-change-me-0001}
       MARKETING_JWT_REFRESH_SECRET: ${MARKETING_JWT_REFRESH_SECRET:-dev-marketing-refresh-secret-change-me}
-      MARKETING_INGEST_TOKEN: ${MARKETING_INGEST_TOKEN:-dev-ingest-token-change-me}
+      RESEARCH_ROUTINE_TOKEN: ${RESEARCH_ROUTINE_TOKEN:-dev-research-routine-token-change-me}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-service-token-change-me}
       PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET:-dev-platform-jwt-secret-change-me-000}
       # Core service base URL — the marketing service calls

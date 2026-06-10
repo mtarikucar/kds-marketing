@@ -17,6 +17,7 @@ import CallsPage from './pages/marketing/CallsPage';
 import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/TargetsPage';
 import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
+import ResearchSettingsPage from './pages/marketing/ResearchSettingsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
 import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
 import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
@@ -56,6 +57,7 @@ export default function App() {
           <Route element={<MarketingLayout />}>
             <Route path="/users" element={<MarketingUsersPage />} />
             <Route path="/targets" element={<TargetsPage />} />
+            <Route path="/research" element={<ResearchSettingsPage />} />
           </Route>
         </Route>
       </Route>
