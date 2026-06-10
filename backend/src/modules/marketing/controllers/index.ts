@@ -19,3 +19,5 @@ export * from './webchat-public.controller';
 export * from './meta-webhook.controller';
 export * from './netgsm-public.controller';
 export * from './marketing-workflows.controller';
+export * from './marketing-campaigns.controller';
+export * from './campaign-tracking.controller';

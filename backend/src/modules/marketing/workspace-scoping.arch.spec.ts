@@ -52,6 +52,9 @@ const OWNED_DELEGATES = [
   'workflow',
   'workflowRun',
   'workflowStepRun',
+  // P4 (GoHighLevel parity): campaigns.
+  'campaign',
+  'campaignRecipient',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

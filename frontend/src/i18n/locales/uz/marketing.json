@@ -110,7 +110,8 @@
     "knowledgeBase": "Bilimlar bazasi",
     "inbox": "Kiruvchi",
     "channels": "Kanallar",
-    "automations": "Avtomatlashtirishlar"
+    "automations": "Avtomatlashtirishlar",
+    "campaigns": "Kampaniyalar"
   },
   "common": {
     "save": "Save",
@@ -757,5 +758,32 @@
     "drafted": "Qoralama tayyor — ko'rib chiqing va saqlang",
     "draftFailed": "Tuzib bo'lmadi",
     "empty": "Hali avtomatlashtirish yo'q — birini tasvirlang, AI tuzadi."
+  },
+  "campaigns": {
+    "title": "Kampaniyalar",
+    "subtitle": "Lidlaringizning filtrlangan qismiga email, SMS yoki WhatsApp yuboring. Opt-out va obunani bekor qilish havolasi siz uchun hal qilinadi.",
+    "new": "Yangi kampaniya",
+    "name": "Nomi",
+    "channel": "Kanal",
+    "audience": "Auditoriya (barcha qoidalarga mos lidlar; bo'sh = rozi bo'lganlar)",
+    "field": "maydon",
+    "value": "qiymat",
+    "addRule": "Qoida qo'shish",
+    "aiGoal": "Maqsad — masalan, 20% bahorgi chegirmani e'lon qilish",
+    "write": "Yozish",
+    "subject": "Mavzu",
+    "body": "Xabar",
+    "saved": "Kampaniya saqlandi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "composed": "Qoralama tayyor",
+    "composeFailed": "Yozib bo'lmadi",
+    "launched": "Ishga tushirildi",
+    "launchFailed": "Ishga tushirib bo'lmadi",
+    "sent": "yuborildi",
+    "opened": "ochildi",
+    "clicked": "bosildi",
+    "unsub": "obuna bekor",
+    "launch": "Ishga tushirish",
+    "empty": "Hali kampaniya yo'q — birini yarating, matnni AI yozadi."
   }
 }

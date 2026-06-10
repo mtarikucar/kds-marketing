@@ -108,6 +108,13 @@ import { WorkflowActionHandler } from './workflows/workflow-action.handler';
 import { WorkflowExecutorService } from './workflows/workflow-executor.service';
 import { WorkflowTriggerService } from './workflows/workflow-trigger.service';
 
+// Phase F P4 — campaigns (email/SMS/WhatsApp blasts) + tracking.
+import { MarketingCampaignsController } from './controllers/marketing-campaigns.controller';
+import { CampaignTrackingController } from './controllers/campaign-tracking.controller';
+import { CampaignsService } from './campaigns/campaigns.service';
+import { CampaignSenderService } from './campaigns/campaign-sender.service';
+import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -176,6 +183,8 @@ import { WorkflowTriggerService } from './workflows/workflow-trigger.service';
     MetaWebhookController,
     NetgsmPublicController,
     MarketingWorkflowsController,
+    MarketingCampaignsController,
+    CampaignTrackingController,
   ],
   providers: [
     // Services
@@ -254,6 +263,11 @@ import { WorkflowTriggerService } from './workflows/workflow-trigger.service';
     WorkflowActionHandler,
     WorkflowExecutorService,
     WorkflowTriggerService,
+    // Phase F P4 — campaigns: CRUD/launch, the throttled batch sender (registers
+    // the campaign.batch ScheduledJob handler), and public open/click/unsub.
+    CampaignsService,
+    CampaignSenderService,
+    CampaignTrackingService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

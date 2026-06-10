@@ -21,6 +21,7 @@ import {
   InboxIcon,
   ChatBubbleLeftRightIcon,
   BoltIcon,
+  MegaphoneIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -43,6 +44,7 @@ const aiItems = [
   { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', icon: BookOpenIcon },
   { path: '/channels', labelKey: 'nav.channels', icon: ChatBubbleLeftRightIcon },
   { path: '/automations', labelKey: 'nav.automations', icon: BoltIcon },
+  { path: '/campaigns', labelKey: 'nav.campaigns', icon: MegaphoneIcon },
 ];
 
 const managerOnlyItems = [

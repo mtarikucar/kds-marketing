@@ -959,6 +959,57 @@ model WorkflowStepRun {
   @@map("workflow_step_runs")
 }
 
+/// A one-to-many marketing blast on one channel. `audienceFilter` reuses the
+/// workflow Filter DSL (lead.* fields). At launch the recipient set is frozen
+/// into CampaignRecipient rows and sent in throttled batches. `links` is the
+/// list of URLs extracted from `body` at launch so click-tracking can only ever
+/// redirect to a campaign-authored URL (no open redirect).
+model Campaign {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  name           String
+  channel        String // EMAIL | SMS | WHATSAPP
+  status         String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | PAUSED | CANCELLED
+  subject        String?
+  body           String    @db.Text
+  audienceFilter Json?
+  links          Json?
+  scheduledAt    DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  /// { recipients, sent, failed, skipped, opened, clicked, unsubscribed }.
+  stats          Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("campaigns")
+}
+
+/// A frozen recipient of a Campaign. `token` is the unguessable handle in the
+/// open-pixel / click / unsubscribe links. One row per (campaign, lead).
+model CampaignRecipient {
+  id          String    @id @default(uuid())
+  workspaceId String
+  campaignId  String
+  leadId      String
+  token       String    @unique
+  status      String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED | UNSUBSCRIBED
+  messageId   String?
+  error       String?
+  sentAt      DateTime?
+  openedAt    DateTime?
+  clickedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, leadId])
+  @@index([campaignId, status])
+  @@index([workspaceId])
+  @@map("campaign_recipients")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.
