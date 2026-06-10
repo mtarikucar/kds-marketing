@@ -26,7 +26,8 @@
     "WEBSITE": "Website",
     "PHONE": "Phone",
     "OTHER": "Other",
-    "AI_RESEARCH": "AI tadqiqot"
+    "AI_RESEARCH": "AI tadqiqot",
+    "HARDWARE_QUOTE": "Uskuna so'rovi"
   },
   "activityType": {
     "CALL": "Call",
@@ -82,8 +83,9 @@
     "NO_ANSWER": "No answer"
   },
   "role": {
-    "SALES_MANAGER": "Sales Manager",
-    "SALES_REP": "Sales Rep"
+    "OWNER": "Egasi",
+    "MANAGER": "Menejer",
+    "REP": "Savdo vakili"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -100,7 +102,9 @@
     "users": "Team",
     "managementGroup": "Management",
     "logout": "Logout",
-    "profile": "Profile"
+    "profile": "Profile",
+    "research": "AI tadqiqot",
+    "billing": "Hisob-kitob"
   },
   "common": {
     "save": "Save",
@@ -127,7 +131,10 @@
     "page": "Page",
     "of": "of",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "copied": "Nusxalandi",
+    "done": "Tayyor",
+    "saving": "Saqlanmoqda…"
   },
   "validation": {
     "required": "Required",
@@ -169,7 +176,11 @@
     "topPerformers": "Top performers",
     "noPerformers": "No converted leads this period",
     "today": "Today",
-    "thisMonth": "This month"
+    "thisMonth": "This month",
+    "openLeads": "Ochiq lidlar",
+    "unassignedLeads": "Biriktirilmagan lidlar",
+    "downloadGuide": "Vakil qo'llanmasi (PDF)",
+    "downloadManagerGuide": "Menejer qo'llanmasi (PDF)"
   },
   "leads": {
     "title": "Leads",
@@ -192,7 +203,33 @@
     },
     "empty": "No leads match your filters.",
     "loadError": "Couldn't load leads. Try again.",
-    "rowCount": "{{count}} leads"
+    "rowCount": "{{count}} leads",
+    "assignment": {
+      "assignButton": "Biriktirish",
+      "error": "Lid biriktirilmadi",
+      "noReps": "Faol vakillar yo'q",
+      "searchRep": "Vakilni qidirish…",
+      "success": "Lid biriktirildi",
+      "title": "Lidni biriktirish",
+      "unassign": "Biriktirishni olib tashlash",
+      "unassignSuccess": "Biriktirish bekor qilindi",
+      "unassigned": "Biriktirilmagan"
+    },
+    "assignmentStatus": {
+      "all": "Hammasi",
+      "assigned": "Biriktirilgan",
+      "mine": "Menga biriktirilgan",
+      "unassigned": "Biriktirilmagan"
+    },
+    "bulkAssign": {
+      "button": "Ommaviy biriktirish",
+      "cancel": "Tanlovni tozalash",
+      "error": "Ommaviy biriktirish xato",
+      "success": "{{count}} ta lid biriktirildi",
+      "toolbar": "{{count}} ta lid tanlandi"
+    },
+    "emptyManager": "Hozircha lid yo'q. Qo'lda qo'shing yoki AI agentini kuting.",
+    "emptyUnassigned": "Biriktirilmagan lid yo'q — hammasi ishda."
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -360,7 +397,15 @@
     "title": "Calendar",
     "subtitle": "Plan your week",
     "addTask": "Add task on this day",
-    "weekdayShort": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "weekdayShort": [
+      "Sun",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat"
+    ],
     "noTasksThisDay": "No tasks scheduled for this day."
   },
   "commissions": {
@@ -449,5 +494,155 @@
       "totalCommission": "Total commission"
     },
     "empty": "No data for this period."
+  },
+  "distribution": {
+    "strategy": {
+      "DISABLED": "O'chiq (qo'lda taqsimlash)",
+      "ROUND_ROBIN": "Navbatma-navbat",
+      "LEAST_LOADED": "Eng kam band vakil"
+    },
+    "lastAssignedTo": "Oxirgi biriktirilgan",
+    "save": "Saqlash",
+    "saveError": "Qoida saqlanmadi",
+    "saveSuccess": "Taqsimlash qoidasi yangilandi",
+    "subtitle": "Yangi lidlar qanday avtomatik taqsimlansin?",
+    "title": "Lidlarni avto-taqsimlash"
+  },
+  "activityTimeline": {
+    "assignmentAuto": "Avto",
+    "assignmentBulk": "Ommaviy",
+    "assignmentUnassigned": "Biriktirilmagan"
+  },
+  "register": {
+    "title": "Ish maydoningizni yarating",
+    "subtitle": "Jamoangiz, lidlaringiz, tadqiqotingiz — bir joyda.",
+    "workspaceName": "Kompaniya nomi",
+    "productName": "Nima sotasiz?",
+    "productUrl": "Mahsulot URL (ixtiyoriy)",
+    "firstName": "Ism",
+    "lastName": "Familiya",
+    "passwordHint": "Kamida 8 belgi, kamida bitta harf va bitta raqam.",
+    "submit": "Ish maydonini yaratish",
+    "loading": "Yaratilmoqda…",
+    "failed": "Ro'yxatdan o'tish xato",
+    "haveAccount": "Hisobingiz bormi?",
+    "noAccount": "Hali ish maydoningiz yo'qmi?",
+    "cta": "Yaratish"
+  },
+  "research": {
+    "title": "AI tadqiqot",
+    "subtitle": "Tungi tadqiqot agentiga kimni topishni ayting — u kunlik kvotangizgacha lid to'playdi.",
+    "quotaToday": "Bugungi lid kvotasi",
+    "quotaHint": "Yarim tunda (UTC) yangilanadi. Limitni oshirish uchun paketni yangilang.",
+    "newProfile": "Yangi tadqiqot profili",
+    "editProfile": "Profilni tahrirlash",
+    "name": "Profil nomi",
+    "language": "Natija tili",
+    "icp": "Agent kimni topishi kerak? (ideal mijoz + muammo signallari)",
+    "icpPlaceholder": "mas., so'nggi sharhlarda sekin xizmatdan shikoyat qilingan, Instagramda faol, lekin onlayn buyurtma havolasi yo'q mustaqil kafelar (1-5 filial)…",
+    "icpMin": "kamida 40 belgi — aniq brif yaxshi lid beradi",
+    "country": "Mamlakat",
+    "cities": "Shaharlar (vergul bilan)",
+    "pitch": "Taqdim burchagi (ixtiyoriy)",
+    "pitchPlaceholder": "Ochilish xabari mahsulotingizni qanday taqdim etsin?",
+    "exclusions": "Qat'iy istisnolar (ixtiyoriy)",
+    "exclusionsPlaceholder": "mas., franshizalarsiz, mehmonxona restoranlarini o'tkazib yuborish",
+    "active": "Faol",
+    "paused": "To'xtatilgan",
+    "saved": "Profil saqlandi",
+    "saveFailed": "Saqlanmadi",
+    "empty": "Hozircha profil yo'q — bittasini yarating, tungi agent ov boshlaydi.",
+    "lastRun": "Oxirgi ishga tushish",
+    "created": "yaratildi",
+    "skippedDupes": "takror",
+    "clipped": "kvotadan ortiq",
+    "tokens": "Qabul tokenlari",
+    "tokensHint": "O'z integratsiyalaringizdan lid yuborish uchun (x-ingest-token sarlavhasi bilan POST /api/marketing/leads/ingest). Platforma agentiga kerak emas.",
+    "tokenOnce": "Tokenni hozir nusxalang — qayta ko'rsatilmaydi.",
+    "tokenLabel": "Yorliq (mas., zapier)",
+    "mint": "Token yaratish",
+    "revoke": "Bekor qilish",
+    "lastUsed": "oxirgi foydalanish",
+    "neverUsed": "ishlatilmagan"
+  },
+  "billing": {
+    "title": "Hisob-kitob va paketlar",
+    "subtitle": "Paketingiz agent har kuni nechta lid keltirishini belgilaydi.",
+    "currentPlan": "Joriy paket",
+    "noPlan": "Paket yo'q",
+    "trialEnds": "sinov tugashi",
+    "renews": "yangilanish",
+    "limits": "Limitlar",
+    "seats": "O'rinlar",
+    "profiles": "Tadqiqot profillari",
+    "packages": "Paketlar",
+    "monthly": "Oylik",
+    "yearly": "Yillik (2 oy bepul)",
+    "popular": "Eng ommabop",
+    "leadsPerDay": "lid/kun",
+    "seatsWord": "o'rin",
+    "profilesWord": "profil",
+    "mo": "oy",
+    "yr": "yil",
+    "current": "Joriy",
+    "choose": "Tanlash",
+    "ownerOnly": "Faqat egasi",
+    "payByTransfer": "Bank o'tkazmasi bilan to'lash",
+    "addons": "Qo'shimchalar",
+    "buy": "Sotib olish",
+    "orders": "To'lovlar tarixi",
+    "checkoutFailed": "To'lov boshlanmadi",
+    "noProviders": "To'lov usuli sozlanmagan — qo'llab-quvvatlashga murojaat qiling",
+    "bankTitle": "O'tkazma ko'rsatmalari",
+    "accountName": "Hisob nomi",
+    "amount": "Summa",
+    "reference": "Izoh kodi (majburiy!)",
+    "bankHint": "O'tkazma izohiga kodni yozing — to'lov tasdiqlangach paket faollashadi."
+  },
+  "commission": {
+    "detailTitle": "Komissiya tafsiloti",
+    "approve": "Tasdiqlash",
+    "approved": "Tasdiqlandi",
+    "approveFailed": "Tasdiqlash xato",
+    "markPaid": "To'langan deb belgilash",
+    "paid": "To'langan deb belgilandi",
+    "payFailed": "Belgilab bo'lmadi",
+    "editAmount": "Summani o'zgartirish",
+    "amountUpdated": "Summa yangilandi",
+    "amountUpdateFailed": "Summa yangilanmadi",
+    "amountInvalid": "Noto'g'ri summa",
+    "auditLog": "Tarix",
+    "fields": {
+      "customer": "Mijoz",
+      "lead": "Bog'langan lid",
+      "noLead": "Lid bog'lanmagan",
+      "plan": "Reja",
+      "period": "Davr",
+      "notes": "Izohlar",
+      "calculation": "Hisob",
+      "calcUnavailable": "Reja aniqlanmadi"
+    },
+    "history": {
+      "created": "Komissiya yaratildi",
+      "approved": "Tasdiqlandi",
+      "paid": "To'langan deb belgilandi",
+      "amount": "Summa o'zgartirildi"
+    }
+  },
+  "referral": {
+    "copied": "Nusxalandi",
+    "copyCode": "Kodni nusxalash",
+    "copyLink": "Havolani nusxalash",
+    "copyFailed": "Nusxalab bo'lmadi",
+    "yourCode": "Sizning referal kodingiz",
+    "noCode": "Hali referal kodingiz yo'q. Menejeringizdan kod so'rang.",
+    "hint": "Ushbu havola/kod orqali qilingan obuna sotuvlaridan komissiya olasiz (birinchi sotuv + yangilanishlar + yangilashlar).",
+    "regenerate": "Kodni yangilash",
+    "regenerateConfirm": "Eski kod ishlamay qoladi va ulashilgan havolalar buziladi. Davom etilsinmi?",
+    "regenerated": "Kod yangilandi",
+    "regenerateFailed": "Yangilash xato",
+    "statsLeads": "Jami lidlar",
+    "statsWon": "Yutilgan",
+    "statsCommission": "Jami komissiya"
   }
 }

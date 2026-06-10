@@ -26,7 +26,8 @@
     "WEBSITE": "Website",
     "PHONE": "Phone",
     "OTHER": "Other",
-    "AI_RESEARCH": "بحث الذكاء الاصطناعي"
+    "AI_RESEARCH": "بحث الذكاء الاصطناعي",
+    "HARDWARE_QUOTE": "عرض أجهزة"
   },
   "activityType": {
     "CALL": "Call",
@@ -82,8 +83,9 @@
     "NO_ANSWER": "No answer"
   },
   "role": {
-    "SALES_MANAGER": "Sales Manager",
-    "SALES_REP": "Sales Rep"
+    "OWNER": "المالك",
+    "MANAGER": "مدير",
+    "REP": "مندوب مبيعات"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -100,7 +102,9 @@
     "users": "Team",
     "managementGroup": "Management",
     "logout": "Logout",
-    "profile": "Profile"
+    "profile": "Profile",
+    "research": "بحث الذكاء الاصطناعي",
+    "billing": "الفوترة"
   },
   "common": {
     "save": "Save",
@@ -127,7 +131,10 @@
     "page": "Page",
     "of": "of",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "copied": "تم النسخ",
+    "done": "تم",
+    "saving": "جارٍ الحفظ…"
   },
   "validation": {
     "required": "Required",
@@ -169,7 +176,11 @@
     "topPerformers": "Top performers",
     "noPerformers": "No converted leads this period",
     "today": "Today",
-    "thisMonth": "This month"
+    "thisMonth": "This month",
+    "openLeads": "عملاء محتملون مفتوحون",
+    "unassignedLeads": "عملاء غير معيّنين",
+    "downloadGuide": "دليل المندوب (PDF)",
+    "downloadManagerGuide": "دليل المدير (PDF)"
   },
   "leads": {
     "title": "Leads",
@@ -192,7 +203,33 @@
     },
     "empty": "No leads match your filters.",
     "loadError": "Couldn't load leads. Try again.",
-    "rowCount": "{{count}} leads"
+    "rowCount": "{{count}} leads",
+    "assignment": {
+      "assignButton": "تعيين",
+      "error": "فشل تعيين العميل",
+      "noReps": "لا يوجد مندوبون نشطون",
+      "searchRep": "ابحث عن مندوب…",
+      "success": "تم تعيين العميل",
+      "title": "تعيين العميل",
+      "unassign": "إلغاء التعيين",
+      "unassignSuccess": "تم إلغاء التعيين",
+      "unassigned": "غير معيّن"
+    },
+    "assignmentStatus": {
+      "all": "الكل",
+      "assigned": "معيّن",
+      "mine": "معيّن لي",
+      "unassigned": "غير معيّن"
+    },
+    "bulkAssign": {
+      "button": "تعيين جماعي",
+      "cancel": "مسح التحديد",
+      "error": "فشل التعيين الجماعي",
+      "success": "تم تعيين {{count}} عميلًا",
+      "toolbar": "تم تحديد {{count}} عميلًا"
+    },
+    "emptyManager": "لا عملاء بعد. أضف يدويًا أو انتظر وكيل البحث.",
+    "emptyUnassigned": "لا عملاء غير معيّنين — الكل قيد المتابعة."
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -360,7 +397,15 @@
     "title": "Calendar",
     "subtitle": "Plan your week",
     "addTask": "Add task on this day",
-    "weekdayShort": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "weekdayShort": [
+      "Sun",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat"
+    ],
     "noTasksThisDay": "No tasks scheduled for this day."
   },
   "commissions": {
@@ -449,5 +494,155 @@
       "totalCommission": "Total commission"
     },
     "empty": "No data for this period."
+  },
+  "distribution": {
+    "strategy": {
+      "DISABLED": "معطّل (توزيع يدوي)",
+      "ROUND_ROBIN": "بالتناوب",
+      "LEAST_LOADED": "الأقل عبئًا"
+    },
+    "lastAssignedTo": "آخر تعيين",
+    "save": "حفظ",
+    "saveError": "تعذّر حفظ القاعدة",
+    "saveSuccess": "تم تحديث قاعدة التوزيع",
+    "subtitle": "كيف يتم توزيع العملاء الجدد تلقائيًا؟",
+    "title": "التوزيع التلقائي للعملاء"
+  },
+  "activityTimeline": {
+    "assignmentAuto": "تلقائي",
+    "assignmentBulk": "جماعي",
+    "assignmentUnassigned": "غير معيّن"
+  },
+  "register": {
+    "title": "أنشئ مساحة عملك",
+    "subtitle": "فريقك وعملاؤك وأبحاثك — في مكان واحد.",
+    "workspaceName": "اسم الشركة / مساحة العمل",
+    "productName": "ما الذي تبيعه؟",
+    "productUrl": "رابط المنتج (اختياري)",
+    "firstName": "الاسم الأول",
+    "lastName": "اسم العائلة",
+    "passwordHint": "8 أحرف على الأقل، حرف ورقم على الأقل.",
+    "submit": "إنشاء مساحة العمل",
+    "loading": "جارٍ الإنشاء…",
+    "failed": "فشل التسجيل",
+    "haveAccount": "لديك حساب بالفعل؟",
+    "noAccount": "ليس لديك مساحة عمل بعد؟",
+    "cta": "أنشئ واحدة"
+  },
+  "research": {
+    "title": "بحث الذكاء الاصطناعي",
+    "subtitle": "أخبر وكيل البحث الليلي عمّن يبحث — وسيملأ قمعك حتى حصتك اليومية.",
+    "quotaToday": "حصة اليوم من العملاء",
+    "quotaHint": "يُعاد ضبطها منتصف الليل UTC. قم بترقية باقتك لرفع الحد اليومي.",
+    "newProfile": "ملف بحث جديد",
+    "editProfile": "تعديل الملف",
+    "name": "اسم الملف",
+    "language": "لغة المخرجات",
+    "icp": "عمّن يبحث الوكيل؟ (العميل المثالي + إشارات الألم)",
+    "icpPlaceholder": "مثال: مقاهٍ مستقلة ومجموعات مطاعم صغيرة (1-5 فروع) تظهر شكاوى بطء الخدمة في المراجعات الأخيرة، نشطة على إنستغرام بدون رابط طلب إلكتروني…",
+    "icpMin": "40 حرفًا على الأقل — التحديد يجلب عملاء أفضل",
+    "country": "الدولة",
+    "cities": "المدن (مفصولة بفواصل)",
+    "pitch": "زاوية العرض (اختياري)",
+    "pitchPlaceholder": "كيف يجب أن تقدّم الرسالة الافتتاحية منتجك؟",
+    "exclusions": "استثناءات صارمة (اختياري)",
+    "exclusionsPlaceholder": "مثال: بدون امتيازات، تجاهل مطاعم الفنادق",
+    "active": "نشط",
+    "paused": "متوقف",
+    "saved": "تم حفظ ملف البحث",
+    "saveFailed": "فشل الحفظ",
+    "empty": "لا ملفات بحث بعد — أنشئ واحدًا وسيبدأ الوكيل الليلي بالبحث.",
+    "lastRun": "آخر تشغيل",
+    "created": "أُنشئ",
+    "skippedDupes": "مكررات",
+    "clipped": "فوق الحصة",
+    "tokens": "رموز الإدخال",
+    "tokensHint": "لدفع العملاء من تكاملاتك الخاصة (POST /api/marketing/leads/ingest مع ترويسة x-ingest-token). وكيل المنصة لا يحتاجه.",
+    "tokenOnce": "انسخ هذا الرمز الآن — لن يظهر مرة أخرى.",
+    "tokenLabel": "تسمية (مثل zapier)",
+    "mint": "إنشاء رمز",
+    "revoke": "إبطال",
+    "lastUsed": "آخر استخدام",
+    "neverUsed": "لم يُستخدم"
+  },
+  "billing": {
+    "title": "الفوترة والباقات",
+    "subtitle": "تحدد باقتك عدد العملاء الذين يجلبهم الوكيل يوميًا.",
+    "currentPlan": "الباقة الحالية",
+    "noPlan": "لا توجد باقة",
+    "trialEnds": "تنتهي التجربة",
+    "renews": "يتجدد",
+    "limits": "الحدود",
+    "seats": "المقاعد",
+    "profiles": "ملفات البحث",
+    "packages": "الباقات",
+    "monthly": "شهري",
+    "yearly": "سنوي (شهران مجانًا)",
+    "popular": "الأكثر شيوعًا",
+    "leadsPerDay": "عميل/يوم",
+    "seatsWord": "مقاعد",
+    "profilesWord": "ملف بحث",
+    "mo": "شهر",
+    "yr": "سنة",
+    "current": "الباقة الحالية",
+    "choose": "اختر",
+    "ownerOnly": "للمالك فقط",
+    "payByTransfer": "الدفع بتحويل بنكي",
+    "addons": "تعزيزات",
+    "buy": "شراء",
+    "orders": "سجل المدفوعات",
+    "checkoutFailed": "فشل بدء الدفع",
+    "noProviders": "لا توجد وسيلة دفع — تواصل مع الدعم",
+    "bankTitle": "تعليمات التحويل البنكي",
+    "accountName": "اسم الحساب",
+    "amount": "المبلغ",
+    "reference": "المرجع (إلزامي!)",
+    "bankHint": "أدرج المرجع في وصف التحويل — تُفعَّل باقتك فور مطابقة الدفعة."
+  },
+  "commission": {
+    "detailTitle": "تفاصيل العمولة",
+    "approve": "اعتماد",
+    "approved": "معتمدة",
+    "approveFailed": "فشل الاعتماد",
+    "markPaid": "وضع كمدفوعة",
+    "paid": "وُسمت كمدفوعة",
+    "payFailed": "تعذّر وسمها كمدفوعة",
+    "editAmount": "تعديل المبلغ",
+    "amountUpdated": "تم تحديث المبلغ",
+    "amountUpdateFailed": "فشل تحديث المبلغ",
+    "amountInvalid": "مبلغ غير صالح",
+    "auditLog": "السجل",
+    "fields": {
+      "customer": "العميل",
+      "lead": "العميل المرتبط",
+      "noLead": "لا عميل مرتبط",
+      "plan": "الخطة",
+      "period": "الفترة",
+      "notes": "ملاحظات",
+      "calculation": "الحساب",
+      "calcUnavailable": "تعذّر تحديد الخطة"
+    },
+    "history": {
+      "created": "أُنشئت العمولة",
+      "approved": "اعتُمدت",
+      "paid": "وُسمت مدفوعة",
+      "amount": "تغيّر المبلغ"
+    }
+  },
+  "referral": {
+    "copied": "تم النسخ",
+    "copyCode": "نسخ الرمز",
+    "copyLink": "نسخ الرابط",
+    "copyFailed": "تعذّر النسخ",
+    "yourCode": "رمز الإحالة الخاص بك",
+    "noCode": "ليس لديك رمز إحالة بعد. اطلب من مديرك تخصيص واحد.",
+    "hint": "تكسب عمولة على مبيعات الاشتراك عبر هذا الرابط/الرمز (البيع الأول + التجديدات + الترقيات).",
+    "regenerate": "تجديد رمزي",
+    "regenerateConfirm": "سيتوقف الرمز القديم وستتعطل الروابط المشتركة. هل تريد المتابعة؟",
+    "regenerated": "تم تجديد رمزك",
+    "regenerateFailed": "فشل التجديد",
+    "statsLeads": "إجمالي العملاء",
+    "statsWon": "المكتسب",
+    "statsCommission": "إجمالي العمولة"
   }
 }

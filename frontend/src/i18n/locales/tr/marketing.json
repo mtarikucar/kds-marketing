@@ -26,7 +26,8 @@
     "WEBSITE": "Web sitesi",
     "PHONE": "Telefon",
     "OTHER": "Diğer",
-    "AI_RESEARCH": "AI Araştırma"
+    "AI_RESEARCH": "AI Araştırma",
+    "HARDWARE_QUOTE": "Donanım teklifi"
   },
   "activityType": {
     "CALL": "Telefon",
@@ -82,8 +83,9 @@
     "NO_ANSWER": "Cevap yok"
   },
   "role": {
-    "SALES_MANAGER": "Satış Müdürü",
-    "SALES_REP": "Satış Temsilcisi"
+    "OWNER": "Sahip",
+    "MANAGER": "Yönetici",
+    "REP": "Satış Temsilcisi"
   },
   "nav": {
     "dashboard": "Gösterge Paneli",
@@ -100,7 +102,9 @@
     "users": "Ekip",
     "managementGroup": "Yönetim",
     "logout": "Çıkış",
-    "profile": "Profil"
+    "profile": "Profil",
+    "research": "AI Araştırma",
+    "billing": "Faturalama"
   },
   "common": {
     "save": "Kaydet",
@@ -127,7 +131,10 @@
     "page": "Sayfa",
     "of": "/",
     "previous": "Önceki",
-    "next": "Sonraki"
+    "next": "Sonraki",
+    "copied": "Kopyalandı",
+    "done": "Tamam",
+    "saving": "Kaydediliyor…"
   },
   "validation": {
     "required": "Zorunlu",
@@ -412,7 +419,15 @@
     "title": "Takvim",
     "subtitle": "Haftanı planla",
     "addTask": "Bu güne görev ekle",
-    "weekdayShort": ["Paz", "Pzt", "Sal", "Çar", "Per", "Cum", "Cmt"],
+    "weekdayShort": [
+      "Paz",
+      "Pzt",
+      "Sal",
+      "Çar",
+      "Per",
+      "Cum",
+      "Cmt"
+    ],
     "noTasksThisDay": "Bu gün için planlanmış görev yok."
   },
   "commissions": {
@@ -501,5 +516,137 @@
       "totalCommission": "Toplam komisyon"
     },
     "empty": "Bu dönem için veri yok."
+  },
+  "register": {
+    "title": "Çalışma alanınızı oluşturun",
+    "subtitle": "Ekibiniz, lead'leriniz, araştırmanız — tek yerde.",
+    "workspaceName": "Şirket / çalışma alanı adı",
+    "productName": "Ne satıyorsunuz?",
+    "productUrl": "Ürün adresi (opsiyonel)",
+    "firstName": "Ad",
+    "lastName": "Soyad",
+    "passwordHint": "En az 8 karakter; en az bir harf ve bir rakam.",
+    "submit": "Çalışma alanını oluştur",
+    "loading": "Çalışma alanı oluşturuluyor…",
+    "failed": "Kayıt başarısız",
+    "haveAccount": "Zaten hesabınız var mı?",
+    "noAccount": "Henüz çalışma alanınız yok mu?",
+    "cta": "Hemen oluşturun"
+  },
+  "research": {
+    "title": "AI Araştırma",
+    "subtitle": "Gece çalışan araştırma ajanına kimi bulacağını söyleyin — pipeline'ınızı günlük kotanıza kadar doldursun.",
+    "quotaToday": "Bugünkü lead kotası",
+    "quotaHint": "Gece yarısı (UTC) sıfırlanır. Günlük limiti artırmak için paketinizi yükseltin.",
+    "newProfile": "Yeni araştırma profili",
+    "editProfile": "Profili düzenle",
+    "name": "Profil adı",
+    "language": "Çıktı dili",
+    "icp": "Ajan kimi bulmalı? (ideal müşteri + sorun sinyalleri)",
+    "icpPlaceholder": "örn. Son yorumlarında yavaş servis şikayeti olan, Instagram'da aktif ama online sipariş linki olmayan bağımsız kafeler ve küçük restoran grupları (1-5 şube)…",
+    "icpMin": "en az 40 karakter — net brief daha iyi lead getirir",
+    "country": "Ülke",
+    "cities": "Şehirler (virgülle)",
+    "pitch": "Sunum açısı (opsiyonel)",
+    "pitchPlaceholder": "Açılış mesajı ürününüzü bu lead'lere nasıl konumlandırsın?",
+    "exclusions": "Kesin hariç tutulanlar (opsiyonel)",
+    "exclusionsPlaceholder": "örn. franchise yok, otel restoranlarını atla",
+    "active": "Aktif",
+    "paused": "Duraklatıldı",
+    "saved": "Araştırma profili kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "empty": "Henüz araştırma profili yok — bir tane oluşturun, gece ajanı avlanmaya başlasın.",
+    "lastRun": "Son çalışma",
+    "created": "oluşturuldu",
+    "skippedDupes": "tekrar",
+    "clipped": "kota dışı",
+    "tokens": "Veri alım token'ları",
+    "tokensHint": "Kendi entegrasyonlarınızdan lead basmak için (x-ingest-token başlığıyla POST /api/marketing/leads/ingest). Platformun araştırma ajanının buna ihtiyacı yoktur.",
+    "tokenOnce": "Bu token'ı şimdi kopyalayın — bir daha asla gösterilmeyecek.",
+    "tokenLabel": "Etiket (örn. zapier-entegrasyonu)",
+    "mint": "Token oluştur",
+    "revoke": "İptal et",
+    "lastUsed": "son kullanım",
+    "neverUsed": "hiç kullanılmadı"
+  },
+  "billing": {
+    "title": "Faturalama ve Paketler",
+    "subtitle": "Paketiniz, araştırma ajanının her gün kaç lead getireceğini belirler.",
+    "currentPlan": "Mevcut paket",
+    "noPlan": "Paket yok",
+    "trialEnds": "deneme bitişi",
+    "renews": "yenilenme",
+    "limits": "Limitler",
+    "seats": "Kullanıcı",
+    "profiles": "Araştırma profilleri",
+    "packages": "Paketler",
+    "monthly": "Aylık",
+    "yearly": "Yıllık (2 ay bedava)",
+    "popular": "En popüler",
+    "leadsPerDay": "lead/gün",
+    "seatsWord": "kullanıcı",
+    "profilesWord": "araştırma profili",
+    "mo": "ay",
+    "yr": "yıl",
+    "current": "Mevcut paket",
+    "choose": "Seç",
+    "ownerOnly": "Sadece sahip",
+    "payByTransfer": "Havale/EFT ile öde",
+    "addons": "Ek paketler",
+    "buy": "Satın al",
+    "orders": "Ödeme geçmişi",
+    "checkoutFailed": "Ödeme başlatılamadı",
+    "noProviders": "Tanımlı ödeme yöntemi yok — destekle iletişime geçin",
+    "bankTitle": "Havale talimatları",
+    "accountName": "Hesap adı",
+    "amount": "Tutar",
+    "reference": "Açıklama kodu (zorunlu!)",
+    "bankHint": "Açıklama koduna referansı mutlaka yazın — ödeme eşleştirilir eşleştirilmez paketiniz aktifleşir."
+  },
+  "commission": {
+    "detailTitle": "Komisyon detayı",
+    "approve": "Onayla",
+    "approved": "Onaylandı",
+    "approveFailed": "Onay başarısız",
+    "markPaid": "Ödendi işaretle",
+    "paid": "Ödendi olarak işaretlendi",
+    "payFailed": "Ödeme işaretlenemedi",
+    "editAmount": "Tutarı düzelt",
+    "amountUpdated": "Tutar güncellendi",
+    "amountUpdateFailed": "Tutar güncellenemedi",
+    "amountInvalid": "Geçersiz tutar",
+    "auditLog": "Geçmiş",
+    "fields": {
+      "customer": "Müşteri",
+      "lead": "Bağlı lead",
+      "noLead": "Lead bağlantısı yok",
+      "plan": "Plan",
+      "period": "Periyot",
+      "notes": "Notlar",
+      "calculation": "Hesaplama",
+      "calcUnavailable": "Plan ilişkilendirilemedi"
+    },
+    "history": {
+      "created": "Komisyon oluşturuldu",
+      "approved": "Onaylandı",
+      "paid": "Ödendi işaretlendi",
+      "amount": "Tutar değiştirildi"
+    }
+  },
+  "referral": {
+    "copied": "Kopyalandı",
+    "copyCode": "Kodu kopyala",
+    "copyLink": "Linki kopyala",
+    "copyFailed": "Panoya kopyalanamadı",
+    "yourCode": "Sizin referans kodunuz",
+    "noCode": "Henüz bir referans kodunuz yok. Yöneticinizden bir kod tahsis etmesini isteyin.",
+    "hint": "Bu link/kod ile yapılan abonelik satışlarından komisyon kazanırsınız (ilk satış + yenilemeler + yükseltmeler).",
+    "regenerate": "Kodumu yenile",
+    "regenerateConfirm": "Eski kod artık çalışmayacak ve paylaştığınız linkler kırılacak. Devam edilsin mi?",
+    "regenerated": "Kodunuz yenilendi",
+    "regenerateFailed": "Yenileme başarısız",
+    "statsLeads": "Toplam Lead",
+    "statsWon": "Kazanılan",
+    "statsCommission": "Toplam Komisyon"
   }
 }

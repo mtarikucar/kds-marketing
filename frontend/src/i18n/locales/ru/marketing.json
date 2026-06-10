@@ -26,7 +26,8 @@
     "WEBSITE": "Website",
     "PHONE": "Phone",
     "OTHER": "Other",
-    "AI_RESEARCH": "AI исследование"
+    "AI_RESEARCH": "AI исследование",
+    "HARDWARE_QUOTE": "Запрос на оборудование"
   },
   "activityType": {
     "CALL": "Call",
@@ -82,8 +83,9 @@
     "NO_ANSWER": "No answer"
   },
   "role": {
-    "SALES_MANAGER": "Sales Manager",
-    "SALES_REP": "Sales Rep"
+    "OWNER": "Владелец",
+    "MANAGER": "Менеджер",
+    "REP": "Торговый представитель"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -100,7 +102,9 @@
     "users": "Team",
     "managementGroup": "Management",
     "logout": "Logout",
-    "profile": "Profile"
+    "profile": "Profile",
+    "research": "ИИ-исследование",
+    "billing": "Тарифы и оплата"
   },
   "common": {
     "save": "Save",
@@ -127,7 +131,10 @@
     "page": "Page",
     "of": "of",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "copied": "Скопировано",
+    "done": "Готово",
+    "saving": "Сохранение…"
   },
   "validation": {
     "required": "Required",
@@ -169,7 +176,11 @@
     "topPerformers": "Top performers",
     "noPerformers": "No converted leads this period",
     "today": "Today",
-    "thisMonth": "This month"
+    "thisMonth": "This month",
+    "openLeads": "Открытые лиды",
+    "unassignedLeads": "Неназначенные лиды",
+    "downloadGuide": "Гид представителя (PDF)",
+    "downloadManagerGuide": "Гид менеджера (PDF)"
   },
   "leads": {
     "title": "Leads",
@@ -192,7 +203,33 @@
     },
     "empty": "No leads match your filters.",
     "loadError": "Couldn't load leads. Try again.",
-    "rowCount": "{{count}} leads"
+    "rowCount": "{{count}} leads",
+    "assignment": {
+      "assignButton": "Назначить",
+      "error": "Не удалось назначить лид",
+      "noReps": "Нет активных представителей",
+      "searchRep": "Поиск представителя…",
+      "success": "Лид назначен",
+      "title": "Назначить лид",
+      "unassign": "Снять назначение",
+      "unassignSuccess": "Назначение снято",
+      "unassigned": "Не назначен"
+    },
+    "assignmentStatus": {
+      "all": "Все",
+      "assigned": "Назначенные",
+      "mine": "Назначены мне",
+      "unassigned": "Неназначенные"
+    },
+    "bulkAssign": {
+      "button": "Массовое назначение",
+      "cancel": "Сбросить выбор",
+      "error": "Массовое назначение не удалось",
+      "success": "Назначено лидов: {{count}}",
+      "toolbar": "Выбрано лидов: {{count}}"
+    },
+    "emptyManager": "Лидов пока нет. Добавьте вручную или дождитесь ИИ-агента.",
+    "emptyUnassigned": "Неназначенных лидов нет — всё в работе."
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -360,7 +397,15 @@
     "title": "Calendar",
     "subtitle": "Plan your week",
     "addTask": "Add task on this day",
-    "weekdayShort": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "weekdayShort": [
+      "Sun",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat"
+    ],
     "noTasksThisDay": "No tasks scheduled for this day."
   },
   "commissions": {
@@ -449,5 +494,155 @@
       "totalCommission": "Total commission"
     },
     "empty": "No data for this period."
+  },
+  "distribution": {
+    "strategy": {
+      "DISABLED": "Выкл (ручное назначение)",
+      "ROUND_ROBIN": "По кругу",
+      "LEAST_LOADED": "Наименее загруженный"
+    },
+    "lastAssignedTo": "Последнее назначение",
+    "save": "Сохранить",
+    "saveError": "Не удалось сохранить правило",
+    "saveSuccess": "Правило распределения обновлено",
+    "subtitle": "Как автоматически распределять новые лиды?",
+    "title": "Автораспределение лидов"
+  },
+  "activityTimeline": {
+    "assignmentAuto": "Авто",
+    "assignmentBulk": "Массово",
+    "assignmentUnassigned": "Не назначен"
+  },
+  "register": {
+    "title": "Создайте рабочее пространство",
+    "subtitle": "Ваша команда, лиды и исследования — в одном месте.",
+    "workspaceName": "Название компании",
+    "productName": "Что вы продаёте?",
+    "productUrl": "URL продукта (необязательно)",
+    "firstName": "Имя",
+    "lastName": "Фамилия",
+    "passwordHint": "Минимум 8 символов, хотя бы одна буква и одна цифра.",
+    "submit": "Создать пространство",
+    "loading": "Создание…",
+    "failed": "Не удалось зарегистрироваться",
+    "haveAccount": "Уже есть аккаунт?",
+    "noAccount": "Ещё нет рабочего пространства?",
+    "cta": "Создать"
+  },
+  "research": {
+    "title": "ИИ-исследование",
+    "subtitle": "Опишите ночному агенту, кого искать — он заполнит вашу воронку в пределах дневной квоты.",
+    "quotaToday": "Квота лидов на сегодня",
+    "quotaHint": "Сбрасывается в полночь UTC. Повысьте тариф, чтобы увеличить лимит.",
+    "newProfile": "Новый профиль исследования",
+    "editProfile": "Изменить профиль",
+    "name": "Название профиля",
+    "language": "Язык результатов",
+    "icp": "Кого искать агенту? (идеальный клиент + сигналы боли)",
+    "icpPlaceholder": "напр., независимые кафе и небольшие сети (1-5 точек) с жалобами на медленное обслуживание, активные в Instagram, но без онлайн-заказа…",
+    "icpMin": "мин. 40 символов — конкретика даёт лучшие лиды",
+    "country": "Страна",
+    "cities": "Города (через запятую)",
+    "pitch": "Угол подачи (необязательно)",
+    "pitchPlaceholder": "Как первое сообщение должно подавать ваш продукт?",
+    "exclusions": "Жёсткие исключения (необязательно)",
+    "exclusionsPlaceholder": "напр., без франшиз, пропускать рестораны отелей",
+    "active": "Активен",
+    "paused": "На паузе",
+    "saved": "Профиль сохранён",
+    "saveFailed": "Не удалось сохранить",
+    "empty": "Профилей пока нет — создайте один, и ночной агент начнёт охоту.",
+    "lastRun": "Последний запуск",
+    "created": "создано",
+    "skippedDupes": "дубликаты",
+    "clipped": "сверх квоты",
+    "tokens": "Токены приёма",
+    "tokensHint": "Для отправки лидов из ваших интеграций (POST /api/marketing/leads/ingest с заголовком x-ingest-token). Агенту платформы токен не нужен.",
+    "tokenOnce": "Скопируйте токен сейчас — он больше не будет показан.",
+    "tokenLabel": "Метка (напр., zapier)",
+    "mint": "Создать токен",
+    "revoke": "Отозвать",
+    "lastUsed": "последнее исп.",
+    "neverUsed": "не использовался"
+  },
+  "billing": {
+    "title": "Тарифы и оплата",
+    "subtitle": "Тариф определяет, сколько лидов агент приносит ежедневно.",
+    "currentPlan": "Текущий тариф",
+    "noPlan": "Нет тарифа",
+    "trialEnds": "пробный до",
+    "renews": "продление",
+    "limits": "Лимиты",
+    "seats": "Места",
+    "profiles": "Профили исследований",
+    "packages": "Тарифы",
+    "monthly": "Помесячно",
+    "yearly": "Годовой (2 месяца в подарок)",
+    "popular": "Самый популярный",
+    "leadsPerDay": "лидов/день",
+    "seatsWord": "мест",
+    "profilesWord": "профиль",
+    "mo": "мес",
+    "yr": "год",
+    "current": "Текущий",
+    "choose": "Выбрать",
+    "ownerOnly": "Только владелец",
+    "payByTransfer": "Оплата банковским переводом",
+    "addons": "Бусты",
+    "buy": "Купить",
+    "orders": "История платежей",
+    "checkoutFailed": "Не удалось начать оплату",
+    "noProviders": "Способ оплаты не настроен — обратитесь в поддержку",
+    "bankTitle": "Реквизиты для перевода",
+    "accountName": "Получатель",
+    "amount": "Сумма",
+    "reference": "Назначение платежа (обязательно!)",
+    "bankHint": "Укажите референс в назначении платежа — тариф активируется после сверки."
+  },
+  "commission": {
+    "detailTitle": "Детали комиссии",
+    "approve": "Утвердить",
+    "approved": "Утверждена",
+    "approveFailed": "Не удалось утвердить",
+    "markPaid": "Отметить оплаченной",
+    "paid": "Отмечена оплаченной",
+    "payFailed": "Не удалось отметить оплату",
+    "editAmount": "Изменить сумму",
+    "amountUpdated": "Сумма обновлена",
+    "amountUpdateFailed": "Не удалось обновить сумму",
+    "amountInvalid": "Неверная сумма",
+    "auditLog": "История",
+    "fields": {
+      "customer": "Клиент",
+      "lead": "Связанный лид",
+      "noLead": "Лид не связан",
+      "plan": "Тариф",
+      "period": "Период",
+      "notes": "Заметки",
+      "calculation": "Расчёт",
+      "calcUnavailable": "Тариф не определён"
+    },
+    "history": {
+      "created": "Комиссия создана",
+      "approved": "Утверждена",
+      "paid": "Отмечена оплаченной",
+      "amount": "Сумма изменена"
+    }
+  },
+  "referral": {
+    "copied": "Скопировано",
+    "copyCode": "Копировать код",
+    "copyLink": "Копировать ссылку",
+    "copyFailed": "Не удалось скопировать",
+    "yourCode": "Ваш реферальный код",
+    "noCode": "У вас пока нет реферального кода. Попросите менеджера выдать его.",
+    "hint": "Вы получаете комиссию с продаж по этой ссылке/коду (первая продажа + продления + апгрейды).",
+    "regenerate": "Обновить код",
+    "regenerateConfirm": "Старый код перестанет работать, а разосланные ссылки сломаются. Продолжить?",
+    "regenerated": "Код обновлён",
+    "regenerateFailed": "Не удалось обновить",
+    "statsLeads": "Всего лидов",
+    "statsWon": "Выиграно",
+    "statsCommission": "Сумма комиссий"
   }
 }

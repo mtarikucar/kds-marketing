@@ -26,7 +26,8 @@
     "WEBSITE": "Website",
     "PHONE": "Phone",
     "OTHER": "Other",
-    "AI_RESEARCH": "AI Research"
+    "AI_RESEARCH": "AI Research",
+    "HARDWARE_QUOTE": "Hardware quote"
   },
   "activityType": {
     "CALL": "Call",
@@ -82,8 +83,9 @@
     "NO_ANSWER": "No answer"
   },
   "role": {
-    "SALES_MANAGER": "Sales Manager",
-    "SALES_REP": "Sales Rep"
+    "OWNER": "Owner",
+    "MANAGER": "Manager",
+    "REP": "Sales Rep"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -100,7 +102,9 @@
     "users": "Team",
     "managementGroup": "Management",
     "logout": "Logout",
-    "profile": "Profile"
+    "profile": "Profile",
+    "research": "AI Research",
+    "billing": "Billing"
   },
   "common": {
     "save": "Save",
@@ -127,7 +131,10 @@
     "page": "Page",
     "of": "of",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "copied": "Copied",
+    "done": "Done",
+    "saving": "Saving…"
   },
   "validation": {
     "required": "Required",
@@ -412,7 +419,15 @@
     "title": "Calendar",
     "subtitle": "Plan your week",
     "addTask": "Add task on this day",
-    "weekdayShort": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "weekdayShort": [
+      "Sun",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat"
+    ],
     "noTasksThisDay": "No tasks scheduled for this day."
   },
   "commissions": {
@@ -501,5 +516,137 @@
       "totalCommission": "Total commission"
     },
     "empty": "No data for this period."
+  },
+  "register": {
+    "title": "Create your workspace",
+    "subtitle": "Your team, your leads, your research — in one place.",
+    "workspaceName": "Company / workspace name",
+    "productName": "What do you sell?",
+    "productUrl": "Product URL (optional)",
+    "firstName": "First name",
+    "lastName": "Last name",
+    "passwordHint": "Min 8 characters, at least one letter and one digit.",
+    "submit": "Create workspace",
+    "loading": "Creating workspace…",
+    "failed": "Registration failed",
+    "haveAccount": "Already have an account?",
+    "noAccount": "Don't have a workspace yet?",
+    "cta": "Create one"
+  },
+  "research": {
+    "title": "AI Research",
+    "subtitle": "Tell the nightly research agent who to find — it fills your pipeline up to your daily quota.",
+    "quotaToday": "Today's lead quota",
+    "quotaHint": "Resets at midnight UTC. Upgrade your package to raise the daily limit.",
+    "newProfile": "New research profile",
+    "editProfile": "Edit profile",
+    "name": "Profile name",
+    "language": "Output language",
+    "icp": "Who should the agent find? (ideal customer + pain signals)",
+    "icpPlaceholder": "e.g. Independent cafes and small restaurant groups (1-5 branches) showing slow-service complaints in recent reviews, active on Instagram but with no online ordering link…",
+    "icpMin": "min 40 characters — specific briefs get better leads",
+    "country": "Country",
+    "cities": "Cities (comma separated)",
+    "pitch": "Pitch angle (optional)",
+    "pitchPlaceholder": "How should the opener position your product for these leads?",
+    "exclusions": "Hard exclusions (optional)",
+    "exclusionsPlaceholder": "e.g. no franchises, skip hotel restaurants",
+    "active": "Active",
+    "paused": "Paused",
+    "saved": "Research profile saved",
+    "saveFailed": "Save failed",
+    "empty": "No research profiles yet — create one and the nightly agent starts hunting.",
+    "lastRun": "Last run",
+    "created": "created",
+    "skippedDupes": "dupes",
+    "clipped": "over quota",
+    "tokens": "Ingest tokens",
+    "tokensHint": "For pushing leads from your own integrations (POST /api/marketing/leads/ingest with the x-ingest-token header). The platform research agent does not need one.",
+    "tokenOnce": "Copy this token now — it will never be shown again.",
+    "tokenLabel": "Label (e.g. zapier-integration)",
+    "mint": "Create token",
+    "revoke": "Revoke",
+    "lastUsed": "last used",
+    "neverUsed": "never used"
+  },
+  "billing": {
+    "title": "Billing & Packages",
+    "subtitle": "Your plan decides how many leads the research agent delivers every day.",
+    "currentPlan": "Current plan",
+    "noPlan": "No plan",
+    "trialEnds": "trial ends",
+    "renews": "renews",
+    "limits": "Limits",
+    "seats": "Seats",
+    "profiles": "Research profiles",
+    "packages": "Packages",
+    "monthly": "Monthly",
+    "yearly": "Yearly (2 months free)",
+    "popular": "Most popular",
+    "leadsPerDay": "leads/day",
+    "seatsWord": "seats",
+    "profilesWord": "research profile",
+    "mo": "mo",
+    "yr": "yr",
+    "current": "Current plan",
+    "choose": "Choose",
+    "ownerOnly": "Owner only",
+    "payByTransfer": "Pay by bank transfer",
+    "addons": "Boosts",
+    "buy": "Buy",
+    "orders": "Payment history",
+    "checkoutFailed": "Checkout failed",
+    "noProviders": "No payment method is configured — contact support",
+    "bankTitle": "Bank transfer instructions",
+    "accountName": "Account name",
+    "amount": "Amount",
+    "reference": "Reference (required!)",
+    "bankHint": "Include the reference in the transfer description — your package activates as soon as our team matches the payment."
+  },
+  "commission": {
+    "detailTitle": "Commission detail",
+    "approve": "Approve",
+    "approved": "Approved",
+    "approveFailed": "Approval failed",
+    "markPaid": "Mark paid",
+    "paid": "Marked as paid",
+    "payFailed": "Could not mark paid",
+    "editAmount": "Adjust amount",
+    "amountUpdated": "Amount updated",
+    "amountUpdateFailed": "Amount update failed",
+    "amountInvalid": "Invalid amount",
+    "auditLog": "History",
+    "fields": {
+      "customer": "Customer",
+      "lead": "Linked lead",
+      "noLead": "No linked lead",
+      "plan": "Plan",
+      "period": "Period",
+      "notes": "Notes",
+      "calculation": "Calculation",
+      "calcUnavailable": "Plan could not be resolved"
+    },
+    "history": {
+      "created": "Commission created",
+      "approved": "Approved",
+      "paid": "Marked paid",
+      "amount": "Amount changed"
+    }
+  },
+  "referral": {
+    "copied": "Copied",
+    "copyCode": "Copy code",
+    "copyLink": "Copy link",
+    "copyFailed": "Could not copy to clipboard",
+    "yourCode": "Your referral code",
+    "noCode": "You don't have a referral code yet. Ask your manager to allocate one.",
+    "hint": "You earn commission on subscription sales made with this link/code (first sale + renewals + upgrades).",
+    "regenerate": "Regenerate my code",
+    "regenerateConfirm": "The old code will stop working and shared links will break. Continue?",
+    "regenerated": "Your code was regenerated",
+    "regenerateFailed": "Regeneration failed",
+    "statsLeads": "Total leads",
+    "statsWon": "Won",
+    "statsCommission": "Total commission"
   }
 }
