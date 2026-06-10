@@ -17,15 +17,77 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// A customer organization on the platform. Every marketing-owned row hangs
+/// off exactly one workspace; isolation is enforced in the service layer
+/// (workspace-scoping arch spec) — workspaceId columns are plain strings
+/// (no FK) to match the codebase's soft-reference style and keep workspace
+/// closure a status flip, not a cascade.
+model Workspace {
+  id     String @id @default(uuid())
+  slug   String @unique // subdomain-safe handle, e.g. "acme"
+  name   String
+  status String @default("ACTIVE") // ACTIVE, SUSPENDED, CLOSED
+
+  // What this workspace sells — feeds outbound copy and (Phase E) the
+  // research routine's understanding of the product.
+  productName        String
+  productUrl         String?
+  productDescription String? @db.Text
+
+  defaultLanguage String @default("en") // ISO 639-1
+  defaultCurrency String @default("USD") // TRY | USD | EUR
+  timezone        String @default("UTC")
+
+  /// Free-shape per-workspace settings: { businessTypes: string[],
+  /// emailFromName?, brandColor?, guideUrls?: {manager?, rep?} }.
+  /// Jsonb so additions don't need migrations.
+  settings Json?
+
+  /// Present ONLY on a workspace wired to a core product deployment
+  /// ({ type: 'KDS_CORE', appName, appUrl }). Gates the lead→tenant
+  /// provisioning flow, settlement commissions and hardware-quote intake;
+  /// generic workspaces close WON leads without provisioning.
+  coreIntegration Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@map("workspaces")
+}
+
+/// Platform-level operator (superadmin realm, separate JWT secret). Manages
+/// workspaces, packages and manual bank-transfer activations. Deliberately
+/// NOT a MarketingUser — different audience, different token type.
+model PlatformOperator {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  password     String
+  name         String
+  status       String    @default("ACTIVE") // ACTIVE, INACTIVE
+  failedLogins Int       @default(0)
+  lockedUntil  DateTime?
+  lastLogin    DateTime?
+
+  // Same session-revocation device as MarketingUser.
+  tokenVersion Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_operators")
+}
+
 model MarketingUser {
   id           String    @id @default(uuid())
+  workspaceId  String
   email        String    @unique
   password     String
   firstName    String
   lastName     String
   phone        String?
   avatar       String?
-  role         String // SALES_MANAGER, SALES_REP
+  role         String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
   status       String    @default("ACTIVE") // ACTIVE, INACTIVE
   lastLogin    DateTime?
   lastLoginIp  String?
@@ -49,13 +111,15 @@ model MarketingUser {
   updatedAt DateTime @updatedAt
 
   // Relations
-  leads            Lead[]                  @relation("AssignedRep")
-  activities       LeadActivity[]
-  tasks            MarketingTask[]
-  offers           LeadOffer[]
-  commissions      Commission[]
-  notifications    MarketingNotification[]
+  leads         Lead[]                  @relation("AssignedRep")
+  activities    LeadActivity[]
+  tasks         MarketingTask[]
+  offers        LeadOffer[]
+  commissions   Commission[]
+  notifications MarketingNotification[]
 
+  @@index([workspaceId])
+  @@index([workspaceId, role])
   @@index([email])
   @@index([role])
   @@index([status])
@@ -64,6 +128,7 @@ model MarketingUser {
 
 model Lead {
   id            String    @id @default(uuid())
+  workspaceId   String
   businessName  String
   contactPerson String
   phone         String?
@@ -82,7 +147,9 @@ model Lead {
   notes         String?   @db.Text
   nextFollowUp  DateTime?
   priority      String    @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
-  externalRef   String?   @unique
+  // Dedup key from the research routine; uniqueness is per-workspace so two
+  // customers may independently surface the same business.
+  externalRef   String?
 
   // Assigned sales rep
   assignedToId String?
@@ -113,6 +180,10 @@ model Lead {
   productSnapshot Json?
   originTenantId  String?
 
+  @@unique([workspaceId, externalRef])
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt])
   @@index([assignedToId])
   @@index([status])
   @@index([city])
@@ -158,6 +229,7 @@ model LeadActivity {
 
 model MarketingTask {
   id          String    @id @default(uuid())
+  workspaceId String
   title       String
   description String?
   type        String // CALL, VISIT, DEMO, FOLLOW_UP, MEETING, OTHER
@@ -175,6 +247,8 @@ model MarketingTask {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([workspaceId])
+  @@index([workspaceId, status])
   @@index([assignedToId])
   @@index([leadId])
   @@index([dueDate])
@@ -185,7 +259,8 @@ model MarketingTask {
 }
 
 model LeadOffer {
-  id          String            @id @default(uuid())
+  id          String  @id @default(uuid())
+  workspaceId String
   planId      String?
 
   /// Step-E plan snapshot, captured at offer-create time via the provisioning
@@ -197,15 +272,15 @@ model LeadOffer {
   planMonthlyPrice Decimal? @db.Decimal(10, 2)
   planCurrency     String?
 
-  customPrice Decimal?          @db.Decimal(10, 2)
+  customPrice Decimal?  @db.Decimal(10, 2)
   // v2.8.97 — was Decimal(5, 2) which capped the discount at 999.99
   // TRY. Sales reps offering a four-digit lira discount on enterprise
   // tiers would have hit a silent precision overflow. Aligned with
   // every other money column in the schema (Decimal(10, 2)).
-  discount    Decimal?          @db.Decimal(10, 2)
+  discount    Decimal?  @db.Decimal(10, 2)
   trialDays   Int?
-  notes       String?           @db.Text
-  status      String            @default("DRAFT") // DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED
+  notes       String?   @db.Text
+  status      String    @default("DRAFT") // DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED
   validUntil  DateTime?
   sentAt      DateTime?
   respondedAt DateTime?
@@ -219,6 +294,8 @@ model LeadOffer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([workspaceId])
+  @@index([workspaceId, status])
   @@index([leadId])
   @@index([createdById])
   @@index([status])
@@ -227,16 +304,17 @@ model LeadOffer {
 }
 
 model Commission {
-  id       String  @id @default(uuid())
-  amount   Decimal @db.Decimal(10, 2)
-  type     String // SIGNUP, RENEWAL, UPSELL
-  status   String  @default("PENDING") // PENDING, APPROVED, PAID
-  period   String // "2026-04" (YYYY-MM format)
+  id          String  @id @default(uuid())
+  workspaceId String
+  amount      Decimal @db.Decimal(10, 2)
+  type        String // SIGNUP, RENEWAL, UPSELL
+  status      String  @default("PENDING") // PENDING, APPROVED, PAID
+  period      String // "2026-04" (YYYY-MM format)
   // Step-F decoupling: soft (no-FK) reference to the core-owned tenant.
-  tenantId String?
-  leadId   String?
-  lead     Lead?   @relation("CommissionLead", fields: [leadId], references: [id], onDelete: SetNull)
-  notes    String? @db.Text
+  tenantId    String?
+  leadId      String?
+  lead        Lead?   @relation("CommissionLead", fields: [leadId], references: [id], onDelete: SetNull)
+  notes       String? @db.Text
 
   marketingUserId String
   marketingUser   MarketingUser @relation(fields: [marketingUserId], references: [id], onDelete: Restrict)
@@ -262,6 +340,8 @@ model Commission {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([workspaceId])
+  @@index([workspaceId, period])
   @@index([marketingUserId])
   @@index([tenantId])
   @@index([leadId])
@@ -273,32 +353,35 @@ model Commission {
 }
 
 model MarketingNotification {
-  id       String  @id @default(uuid())
-  type     String // FOLLOW_UP_REMINDER, DEMO_REMINDER, INACTIVE_LEAD, OFFER_EXPIRING, TASK_DUE
-  title    String
-  message  String
-  isRead   Boolean @default(false)
-  metadata Json?
+  id          String  @id @default(uuid())
+  workspaceId String
+  type        String // FOLLOW_UP_REMINDER, DEMO_REMINDER, INACTIVE_LEAD, OFFER_EXPIRING, TASK_DUE
+  title       String
+  message     String
+  isRead      Boolean @default(false)
+  metadata    Json?
 
   userId String
   user   MarketingUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
+  @@index([workspaceId])
   @@index([userId, isRead])
   @@index([createdAt])
   @@map("marketing_notifications")
 }
 
-/// Singleton row controlling how newly-created leads are auto-assigned
-/// to sales reps. A NULL row (or strategy=DISABLED) means manual
+/// Per-workspace row controlling how newly-created leads are auto-assigned
+/// to sales reps. A missing row (or strategy=DISABLED) means manual
 /// assignment only — managers dispatch leads themselves. ROUND_ROBIN
-/// rotates through ACTIVE SALES_REP users in stable createdAt order,
+/// rotates through ACTIVE REP users in stable createdAt order,
 /// using `lastAssignedToId` as a cursor. LEAST_LOADED picks the rep
 /// with the fewest open (non-WON/LOST) leads at the time of the new
-/// lead. Only one row is expected; seeded with strategy=DISABLED.
+/// lead. One row per workspace; created with strategy=DISABLED on signup.
 model MarketingDistributionConfig {
   id               String   @id @default(uuid())
+  workspaceId      String   @unique
   strategy         String   @default("DISABLED") // DISABLED, ROUND_ROBIN, LEAST_LOADED
   lastAssignedToId String?
   updatedById      String?
@@ -315,6 +398,7 @@ model MarketingDistributionConfig {
 /// seams a future Netgsm API/webhook provider fills.
 model SalesCall {
   id              String    @id @default(uuid())
+  workspaceId     String
   marketingUserId String
   leadId          String?
   direction       String    @default("OUTBOUND") // OUTBOUND, INBOUND
@@ -330,6 +414,7 @@ model SalesCall {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  @@index([workspaceId])
   @@index([marketingUserId, startedAt(sort: Desc)])
   @@index([leadId])
   @@index([status])
@@ -340,6 +425,7 @@ model SalesCall {
 /// install team with a per-day job capacity used for availability checks.
 model InstallationCrew {
   id            String   @id @default(uuid())
+  workspaceId   String
   name          String
   active        Boolean  @default(true)
   dailyCapacity Int      @default(1)
@@ -347,6 +433,7 @@ model InstallationCrew {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  @@index([workspaceId])
   @@index([active])
   @@map("installation_crews")
 }
@@ -358,6 +445,7 @@ model InstallationCrew {
 /// from the lead so the job never reads core tables.
 model InstallationJob {
   id              String    @id @default(uuid())
+  workspaceId     String
   tenantId        String
   leadId          String?
   crewId          String?
@@ -378,6 +466,8 @@ model InstallationJob {
 
   tasks InstallationTask[]
 
+  @@index([workspaceId])
+  @@index([workspaceId, status])
   @@index([status])
   @@index([crewId, scheduledDate])
   @@index([tenantId])
@@ -405,6 +495,7 @@ model InstallationTask {
 /// calls). marketingUserId / setById are soft references to MarketingUser.
 model SalesTarget {
   id              String   @id @default(uuid())
+  workspaceId     String
   marketingUserId String
   period          String // YYYY-MM
   metric          String // WON_LEADS, COMMISSION_AMOUNT, CONNECTED_CALLS
@@ -415,6 +506,7 @@ model SalesTarget {
   updatedAt       DateTime @updatedAt
 
   @@unique([marketingUserId, period, metric])
+  @@index([workspaceId])
   @@index([period])
   @@index([marketingUserId, period])
   @@map("sales_targets")
