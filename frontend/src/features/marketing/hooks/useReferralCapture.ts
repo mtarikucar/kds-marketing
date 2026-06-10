@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 
 // Cookie name + lifetime are the public contract — bump both via a
 // constant rather than scattering literals across the checkout code.
-const COOKIE_NAME = 'kds_ref';
+// (Product-neutral name; renamed from the legacy product-prefixed one.)
+const COOKIE_NAME = 'mkt_ref';
 const COOKIE_TTL_DAYS = 30;
 
 // Matches the backend regex in `referral-code.ts`: 5–12 chars from the

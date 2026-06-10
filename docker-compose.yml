@@ -50,7 +50,8 @@ services:
       EMAIL_USER: ${EMAIL_USER:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
-      APP_NAME: ${APP_NAME:-HummyTummy}
+      APP_NAME: ${APP_NAME:-}
+      APP_URL: ${APP_URL:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
     # Host port 3100: the core stack already publishes ITS backend on host
     # port 3000, and CORE_SERVICE_URL defaults to host.docker.internal:3000 —

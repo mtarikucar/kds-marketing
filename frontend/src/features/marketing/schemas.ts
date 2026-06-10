@@ -32,7 +32,10 @@ const optionalIntString = z
 export const leadSchema = z.object({
   businessName: z.string().trim().min(1, 'required').max(200),
   contactPerson: z.string().trim().min(1, 'required').max(120),
-  businessType: z.enum(['CAFE', 'RESTAURANT', 'BAR', 'PATISSERIE', 'FAST_FOOD', 'OTHER']),
+  // Workspace-defined taxonomy key (UPPER_SNAKE) — mirrors the backend's
+  // BUSINESS_TYPE_PATTERN; the select still offers the default list, but any
+  // workspace-configured value round-trips through edits unchanged.
+  businessType: z.string().regex(/^[A-Z0-9][A-Z0-9_]{0,59}$/, 'required'),
   source: z.enum(['INSTAGRAM', 'REFERRAL', 'FIELD_VISIT', 'ADS', 'WEBSITE', 'PHONE', 'OTHER']),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   phone: optionalPhone,

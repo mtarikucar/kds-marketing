@@ -7,6 +7,10 @@ import App from './App';
 import './i18n/config';
 import './index.css';
 
+// Brand the tab from the build env; index.html ships a neutral default.
+const appTitle = import.meta.env.VITE_APP_TITLE;
+if (appTitle) document.title = appTitle;
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 30_000 },

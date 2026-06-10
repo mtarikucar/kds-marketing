@@ -6,18 +6,30 @@ import {
   IsInt,
   IsEnum,
   IsDateString,
+  Matches,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { EmptyStringToNumber } from '../../../common/dto/transforms';
 
-export enum BusinessType {
-  CAFE = 'CAFE',
-  RESTAURANT = 'RESTAURANT',
-  BAR = 'BAR',
-  PATISSERIE = 'PATISSERIE',
-  FAST_FOOD = 'FAST_FOOD',
-  OTHER = 'OTHER',
-}
+/**
+ * businessType is a free-form workspace-defined taxonomy value, not a fixed
+ * enum — the platform is product-agnostic, so a software vendor's workspace
+ * may classify prospects as AGENCY/ECOMMERCE/CLINIC while an F&B-focused one
+ * keeps CAFE/RESTAURANT/BAR. UPPER_SNAKE keeps values stable as filter keys
+ * (reports group by the raw string); display labels live client-side.
+ * DEFAULT_BUSINESS_TYPES seeds new workspaces and remains the fallback list.
+ */
+export const BUSINESS_TYPE_PATTERN = /^[A-Z0-9][A-Z0-9_]{0,59}$/;
+
+export const DEFAULT_BUSINESS_TYPES = [
+  'CAFE',
+  'RESTAURANT',
+  'BAR',
+  'PATISSERIE',
+  'FAST_FOOD',
+  'OTHER',
+] as const;
 
 export enum LeadSource {
   INSTAGRAM = 'INSTAGRAM',
@@ -73,8 +85,13 @@ export class CreateLeadDto {
   @IsString()
   region?: string;
 
-  @IsEnum(BusinessType)
-  businessType: BusinessType;
+  @IsString()
+  @Matches(BUSINESS_TYPE_PATTERN, {
+    message:
+      'businessType must be an UPPER_SNAKE taxonomy key (max 60 chars), e.g. CAFE or ECOMMERCE',
+  })
+  @MaxLength(60)
+  businessType: string;
 
   @EmptyStringToNumber()
   @IsOptional()

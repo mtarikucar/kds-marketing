@@ -40,6 +40,10 @@ describe('MarketingLeadsService — convert + reconcile', () => {
   };
 
   beforeEach(() => {
+    // Genericization: the welcome email is only sent when the core product's
+    // public URL is configured (no more hardcoded product domain fallback).
+    process.env.APP_URL = 'https://core.example.com';
+    process.env.APP_NAME = 'ExampleCore';
     prisma = mockPrismaClient();
     email = { sendEmail: jest.fn().mockResolvedValue(undefined) };
     provisioning = {
@@ -65,6 +69,11 @@ describe('MarketingLeadsService — convert + reconcile', () => {
     prisma.marketingTask.updateMany.mockResolvedValue({ count: 0 } as any);
     prisma.commission.create.mockResolvedValue({ id: 'comm-1' } as any);
     prisma.leadActivity.create.mockResolvedValue({} as any);
+  });
+
+  afterEach(() => {
+    delete process.env.APP_URL;
+    delete process.env.APP_NAME;
   });
 
   describe('convert', () => {
@@ -100,12 +109,27 @@ describe('MarketingLeadsService — convert + reconcile', () => {
         payload: expect.objectContaining({ leadId: 'lead-1', tenantId: 'tenant-1', commissionId: 'comm-1' }),
       });
       expect(email.sendEmail).toHaveBeenCalled();
+      // Branding comes from env, never from a hardcoded product domain.
+      expect(email.sendEmail.mock.calls[0][0]).toMatchObject({
+        subject: 'ExampleCore hesabınız hazır',
+        context: expect.objectContaining({
+          appUrl: 'https://core.example.com',
+          loginUrl: 'https://core.example.com/login',
+        }),
+      });
       expect(res).toMatchObject({ tenantId: 'tenant-1' });
 
       // Decoupling invariant: marketing wrote none of the core tables.
       expect((prisma as any).tenant.create).not.toHaveBeenCalled();
       expect((prisma as any).user.create).not.toHaveBeenCalled();
       expect((prisma as any).subscription.create).not.toHaveBeenCalled();
+    });
+
+    it('skips the welcome email (but still converts) when APP_URL is not configured', async () => {
+      delete process.env.APP_URL;
+      const res = await svc.convert('lead-1', DTO, 'user-1');
+      expect(res).toMatchObject({ tenantId: 'tenant-1' });
+      expect(email.sendEmail).not.toHaveBeenCalled();
     });
 
     it('throws NotFound when the lead is missing', async () => {

@@ -18,7 +18,7 @@ import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/TargetsPage';
 
 /**
- * Standalone marketing console at the ROOT of marketing.hummytummy.com. This is
+ * Standalone marketing console served at the ROOT of its own (sub)domain. This is
  * the sole home of the marketing panel now — the POS app no longer embeds it
  * (its /marketing routes were removed; nginx 301-redirects /marketing/* here).
  */

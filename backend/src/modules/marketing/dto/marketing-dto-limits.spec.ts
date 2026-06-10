@@ -1,3 +1,6 @@
+// class-transformer's @Type metadata (pulled in via IngestLeadCandidateDto)
+// needs the polyfill at module load — same as transforms.spec.ts.
+import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { MarketingLoginDto } from './login.dto';
@@ -7,6 +10,7 @@ import {
   MarketingUserRole,
 } from './create-marketing-user.dto';
 import { UpdateProfileDto } from './update-profile.dto';
+import { IngestLeadCandidateDto } from './ingest-leads.dto';
 
 /**
  * Iter-49 regression: marketing is the third auth realm in the
@@ -116,6 +120,78 @@ describe('Marketing DTO length caps (iter-49)', () => {
 
     it('rejects garbage phone (newly-validated regex)', async () => {
       const msgs = await validateDto(UpdateProfileDto, { phone: 'abc' });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * Genericization: the ingest contract is country/product-agnostic —
+   * externalRef accepts any E.164 phone + the new domain: form, and
+   * businessType is a workspace taxonomy key instead of the old F&B enum.
+   */
+  describe('IngestLeadCandidateDto (generic taxonomy + E.164)', () => {
+    const base = {
+      externalRef: 'phone:+905551234567',
+      businessName: 'Acme Coffee',
+      businessType: 'CAFE',
+      painPoint: 'Slow service complaints in recent reviews',
+      evidence: 'https://maps.example.com/review/1',
+      pitch: 'Cut wait times with digital ordering',
+    };
+
+    it('accepts a TR E.164 phone ref (back-compat)', async () => {
+      expect(await validateDto(IngestLeadCandidateDto, base)).toEqual([]);
+    });
+
+    it('accepts non-TR E.164 phone refs and phones', async () => {
+      expect(
+        await validateDto(IngestLeadCandidateDto, {
+          ...base,
+          externalRef: 'phone:+4915123456789',
+          phone: '+12025550123',
+        }),
+      ).toEqual([]);
+    });
+
+    it('accepts the new domain: ref form', async () => {
+      expect(
+        await validateDto(IngestLeadCandidateDto, {
+          ...base,
+          externalRef: 'domain:acme-coffee.example.com',
+        }),
+      ).toEqual([]);
+    });
+
+    it('accepts a workspace-defined businessType outside the F&B defaults', async () => {
+      expect(
+        await validateDto(IngestLeadCandidateDto, {
+          ...base,
+          businessType: 'ECOMMERCE',
+        }),
+      ).toEqual([]);
+    });
+
+    it('rejects lowercase/malformed businessType keys', async () => {
+      const msgs = await validateDto(IngestLeadCandidateDto, {
+        ...base,
+        businessType: 'cafe shop',
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects refs without a known prefix', async () => {
+      const msgs = await validateDto(IngestLeadCandidateDto, {
+        ...base,
+        externalRef: 'tel:+905551234567',
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects non-E.164 phones (leading zero)', async () => {
+      const msgs = await validateDto(IngestLeadCandidateDto, {
+        ...base,
+        phone: '+05551234567',
+      });
       expect(msgs.length).toBeGreaterThan(0);
     });
   });

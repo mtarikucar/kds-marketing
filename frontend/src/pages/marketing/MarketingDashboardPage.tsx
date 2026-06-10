@@ -70,7 +70,7 @@ export default function MarketingDashboardPage() {
               href={managerGuideUrl}
               target="_blank"
               rel="noopener noreferrer"
-              download="KDS-Yonetici-Rehberi.pdf"
+              download="Yonetici-Rehberi.pdf"
               className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
               data-testid="dashboard-manager-guide-download"
             >
@@ -85,7 +85,7 @@ export default function MarketingDashboardPage() {
             href={guideUrl}
             target="_blank"
             rel="noopener noreferrer"
-            download="KDS-Pazarlamaci-Rehberi.pdf"
+            download="Pazarlamaci-Rehberi.pdf"
             className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
             data-testid="dashboard-guide-download"
           >

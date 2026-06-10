@@ -781,24 +781,37 @@ export class MarketingLeadsService {
     // Failure here never rolls back the conversion; the owner can recover via
     // /auth/forgot-password.
     if (provision.created && provision.adminTempPassword) {
-      try {
-        const appUrl = process.env.APP_URL ?? 'https://hummytummy.com';
-        await this.emailService.sendEmail({
-          to: dto.adminEmail,
-          subject: 'HummyTummy hesabınız hazır',
-          template: 'marketing-tenant-welcome',
-          context: {
-            adminFirstName: dto.adminFirstName,
-            adminEmail: dto.adminEmail,
-            tenantName: dto.tenantName,
-            rawPassword: provision.adminTempPassword,
-            appUrl,
-            loginUrl: `${appUrl}/login`,
-          },
-        });
-      } catch (err) {
-        // Log only; do not fail the response.
-        this.logger.error('Failed to send welcome email after lead conversion', err as any);
+      // Product identity comes from env, not code: APP_NAME/APP_URL describe
+      // the CORE product the lead was converted into (per-workspace branding
+      // replaces this once Workspace.coreIntegration carries it). Without a
+      // URL the credentials mail would point nowhere — skip it; the owner
+      // can still recover via the core app's forgot-password flow.
+      const appUrl = (process.env.APP_URL ?? '').trim().replace(/\/+$/, '');
+      const appName = (process.env.APP_NAME ?? '').trim();
+      if (!appUrl) {
+        this.logger.warn(
+          'APP_URL is not set — skipping tenant welcome email after lead conversion',
+        );
+      } else {
+        try {
+          await this.emailService.sendEmail({
+            to: dto.adminEmail,
+            subject: appName ? `${appName} hesabınız hazır` : 'Hesabınız hazır',
+            template: 'marketing-tenant-welcome',
+            context: {
+              adminFirstName: dto.adminFirstName,
+              adminEmail: dto.adminEmail,
+              tenantName: dto.tenantName,
+              rawPassword: provision.adminTempPassword,
+              appName,
+              appUrl,
+              loginUrl: `${appUrl}/login`,
+            },
+          });
+        } catch (err) {
+          // Log only; do not fail the response.
+          this.logger.error('Failed to send welcome email after lead conversion', err as any);
+        }
       }
     }
 

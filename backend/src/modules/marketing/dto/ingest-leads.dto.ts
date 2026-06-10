@@ -4,12 +4,24 @@ import {
   Matches, MaxLength, IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { BusinessType, LeadPriority } from './create-lead.dto';
+import { BUSINESS_TYPE_PATTERN, LeadPriority } from './create-lead.dto';
+
+/**
+ * Deterministic dedup key, in researcher priority order: E.164 phone →
+ * instagram handle → Google Place ID → apex domain → sha1 of
+ * lowercase(businessName|city). Country-agnostic on purpose (was +90-only
+ * when the platform served a single Turkish workspace).
+ */
+export const EXTERNAL_REF_PATTERN =
+  /^(phone:\+[1-9]\d{6,14}|instagram:@[A-Za-z0-9_.]{1,30}|google:[A-Za-z0-9_-]{20,}|domain:[a-z0-9][a-z0-9.-]{2,251}\.[a-z]{2,}|hash:[a-f0-9]{40})$/;
+
+/** E.164: + then 7–15 digits, no leading zero. */
+export const E164_PATTERN = /^\+[1-9]\d{6,14}$/;
 
 export class IngestLeadCandidateDto {
   @IsString()
-  @Matches(/^(phone:\+90\d{10}|instagram:@[A-Za-z0-9_.]{1,30}|google:[A-Za-z0-9_-]{20,}|hash:[a-f0-9]{40})$/, {
-    message: 'externalRef must match phone:|instagram:|google:|hash: pattern',
+  @Matches(EXTERNAL_REF_PATTERN, {
+    message: 'externalRef must match phone:|instagram:|google:|domain:|hash: pattern',
   })
   externalRef: string;
 
@@ -22,10 +34,15 @@ export class IngestLeadCandidateDto {
   @IsOptional() @IsString() @MaxLength(120)
   region?: string;
 
-  @IsEnum(BusinessType)
-  businessType: BusinessType;
+  @IsString()
+  @Matches(BUSINESS_TYPE_PATTERN, {
+    message:
+      'businessType must be an UPPER_SNAKE taxonomy key (max 60 chars), e.g. CAFE or ECOMMERCE',
+  })
+  @MaxLength(60)
+  businessType: string;
 
-  @IsOptional() @Matches(/^\+90\d{10}$/)
+  @IsOptional() @Matches(E164_PATTERN)
   phone?: string;
 
   @IsOptional() @IsString() @MaxLength(60)

@@ -26,7 +26,7 @@ describe('maskEmail', () => {
   });
 
   it('preserves the full domain (so debugging different mail providers stays possible)', () => {
-    expect(maskEmail('admin@hummytummy.com')).toBe('a***@hummytummy.com');
+    expect(maskEmail('admin@example.com')).toBe('a***@example.com');
     expect(maskEmail('admin@gmail.com')).toBe('a***@gmail.com');
   });
 });

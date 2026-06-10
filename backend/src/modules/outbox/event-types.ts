@@ -28,7 +28,7 @@ export const EventTypes = {
   // Checkout (mixed cart provisioning).
   CheckoutCompleted: "checkout.completed.v1",
 
-  // Order lifecycle — driven by orders.service, consumed by kds-routing.
+  // Order lifecycle — driven by orders.service, consumed by the POS routing screen.
   OrderCreated: "order.created.v1",
   OrderUpdated: "order.updated.v1",
   OrderCompleted: "order.completed.v1",

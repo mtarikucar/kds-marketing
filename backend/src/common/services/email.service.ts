@@ -110,7 +110,7 @@ export class EmailService {
 
       // Send email
       const info = await this.transporter.sendMail({
-        from: `"${this.configService.get<string>("APP_NAME", "HummyTummy")}" <${from}>`,
+        from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
         to,
         subject,
         html,
@@ -156,7 +156,7 @@ export class EmailService {
         this.configService.get<string>("EMAIL_FROM") ||
         this.configService.get<string>("EMAIL_USER");
       await this.transporter.sendMail({
-        from: `"${this.configService.get<string>("APP_NAME", "HummyTummy")}" <${from}>`,
+        from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
         to,
         subject,
         text: body,
@@ -198,64 +198,4 @@ export class EmailService {
     return compiled;
   }
 
-  /**
-   * Send password reset email
-   */
-  async sendPasswordResetEmail(
-    email: string,
-    resetToken: string,
-  ): Promise<boolean> {
-    const resetLink = `${this.configService.get<string>("FRONTEND_URL", "http://localhost:5173")}/reset-password?token=${resetToken}`;
-
-    return this.sendEmail({
-      to: email,
-      subject: "Password Reset Request",
-      template: "password-reset",
-      context: {
-        resetLink,
-        expiresIn: "1 hour",
-      },
-    });
-  }
-
-  /**
-   * Send email verification code
-   * Sends a 6-digit code for email verification
-   */
-  async sendEmailVerificationCode(
-    email: string,
-    code: string,
-    userName: string,
-  ): Promise<boolean> {
-    return this.sendEmail({
-      to: email,
-      subject: "Email Doğrulama Kodu - HummyTummy",
-      template: "email-verification-code",
-      context: {
-        userName,
-        code,
-        expiresIn: "1 saat",
-      },
-    });
-  }
-
-  /**
-   * Send welcome email
-   */
-  async sendWelcomeEmail(
-    email: string,
-    userName: string,
-    restaurantName?: string,
-  ): Promise<boolean> {
-    return this.sendEmail({
-      to: email,
-      subject: "Welcome to HummyTummy!",
-      template: "welcome",
-      context: {
-        userName,
-        restaurantName: restaurantName || "our platform",
-        loginLink: `${this.configService.get<string>("FRONTEND_URL", "http://localhost:5173")}/login`,
-      },
-    });
-  }
 }

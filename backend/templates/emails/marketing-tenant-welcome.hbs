@@ -17,7 +17,7 @@
   </style>
 </head>
 <body>
-  <div class="header"><h1>HummyTummy hesabınız hazır</h1></div>
+  <div class="header"><h1>{{#if appName}}{{appName}} hesabınız hazır{{else}}Hesabınız hazır{{/if}}</h1></div>
   <div class="content">
     <p>Merhaba <strong>{{adminFirstName}}</strong>,</p>
     <p><strong>{{tenantName}}</strong> için hesabınız oluşturuldu. Aşağıdaki bilgilerle giriş yapabilirsiniz.</p>
@@ -32,7 +32,7 @@
     {{#if loginUrl}}
     <a href="{{loginUrl}}" class="button">Hesabıma giriş yap</a>
     {{/if}}
-    <p>Saygılarımızla,<br>HummyTummy Ekibi</p>
+    <p>Saygılarımızla,<br>{{#if appName}}{{appName}} Ekibi{{else}}Ekibimiz{{/if}}</p>
   </div>
 </body>
 </html>
