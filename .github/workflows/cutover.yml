@@ -65,8 +65,12 @@ jobs:
           PSQL_M="docker exec -i kds_marketing_db psql -U marketing -d marketing -v ON_ERROR_STOP=1"
 
           echo "== 0. preconditions =="
-          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3211/api/marketing/billing/packages || true)
-          [ "$code" = "200" ] || { echo "new stack not healthy on 3211 (got $code) — run Release Deploy first"; exit 1; }
+          [ -f docker-compose.prod.yml ] && [ -f .env.production ] || { echo "deploy artifacts missing — run Release Deploy first"; exit 1; }
+          docker image inspect "$(docker inspect kds_marketing_api --format '{{.Config.Image}}')" >/dev/null
+          docker ps --format '{{.Names}}' | grep -q kds_marketing_db || $DC up -d postgres </dev/null
+          for i in $(seq 1 12); do
+            docker exec kds_marketing_db pg_isready -U marketing >/dev/null 2>&1 && break; sleep 3
+          done
 
           # Locate core's database (the one that has the leads table).
           CORE_DB=""
@@ -80,7 +84,7 @@ jobs:
           echo "core lead count: $(docker exec kds_postgres_prod psql -U postgres -d "$CORE_DB" -Atc 'SELECT count(*) FROM leads')"
 
           echo "== 1. stop backend, rebuild db to pre-workspace shape =="
-          $DC stop backend
+          $DC stop backend </dev/null
           docker exec kds_marketing_db psql -U marketing -d postgres -v ON_ERROR_STOP=1 \
             -c "DROP DATABASE IF EXISTS marketing WITH (FORCE);" \
             -c "CREATE DATABASE marketing OWNER marketing;"
@@ -94,8 +98,8 @@ jobs:
           docker rm "$tmp" >/dev/null
           $PSQL_M < /tmp/m0.sql
           $PSQL_M < /tmp/m1.sql
-          $DC run --rm --no-deps backend npx prisma migrate resolve --applied 0_init
-          $DC run --rm --no-deps backend npx prisma migrate resolve --applied 20260610000000_hardware_quote_fields
+          $DC run --rm --no-deps backend npx prisma migrate resolve --applied 0_init </dev/null
+          $DC run --rm --no-deps backend npx prisma migrate resolve --applied 20260610000000_hardware_quote_fields </dev/null
 
           echo "== 2. import legacy marketing data from core =="
           docker exec kds_postgres_prod pg_dump -U postgres -d "$CORE_DB" \
@@ -109,7 +113,7 @@ jobs:
           echo "imported leads: $($PSQL_M -Atc 'SELECT count(*) FROM leads' </dev/null)"
 
           echo "== 3. boot backend → workspace/research/billing migrations adopt the rows =="
-          $DC up -d backend
+          $DC up -d backend </dev/null
           for i in $(seq 1 36); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3211/api/marketing/billing/packages || true)
             [ "$code" = "200" ] && break
@@ -143,7 +147,7 @@ jobs:
               console.log("packages + operator seeded");
               await p.$disconnect();
             })().catch(e=>{console.error(e);process.exit(1)});
-          '
+          ' </dev/null
 
           $PSQL_M <<SQL
           UPDATE workspaces SET
