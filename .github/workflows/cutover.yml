@@ -1,0 +1,250 @@
+name: Production Cutover (one-time)
+
+# THE switch: moves marketing.hummytummy.com from the monorepo stack
+# (SPA :3200 + core API :3000) to THIS stack (:3210/:3211), carrying the
+# existing HummyTummy marketing data over as workspace #1.
+#
+# Idempotence/ordering notes:
+#   - Requires a successful Release Deploy first (stack healthy on 3211).
+#   - The data copy DROPS and rebuilds this stack's database: pre-workspace
+#     schema → import legacy rows → boot migrations adopt them into the
+#     deterministic default workspace (the rehearsed expand→backfill→contract
+#     path). Re-running repeats the copy (fresh dump) — safe while the old
+#     stack is still the system of record.
+#   - The nginx flip is last; the old vhost is backed up and auto-restored
+#     if anything after the flip fails.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type CUTOVER to proceed"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketing-production-deploy
+  cancel-in-progress: false
+
+env:
+  SERVER_HOST: '38.242.233.166'
+  DEPLOY_DIR: /root/kds-marketing
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Confirmation gate
+        run: |
+          [ "${{ inputs.confirm }}" = "CUTOVER" ] || { echo "::error::type CUTOVER to proceed"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-ssh
+        with:
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: ${{ env.SERVER_HOST }}
+
+      - name: Cutover
+        env:
+          PLATFORM_OPERATOR_EMAIL: tarik063442@gmail.com
+          PLATFORM_OPERATOR_PASSWORD: ${{ secrets.PLATFORM_OPERATOR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
+            root@${{ env.SERVER_HOST }} \
+            "OPERATOR_EMAIL='${PLATFORM_OPERATOR_EMAIL}' OPERATOR_PASSWORD='${PLATFORM_OPERATOR_PASSWORD}' bash -s" <<'CUTOVER'
+          set -euo pipefail
+          cd /root/kds-marketing
+          DC="docker compose -f docker-compose.prod.yml"
+          WS_ID="b6a7c000-0000-4000-8000-000000000001"
+          PSQL_M="docker exec -i kds_marketing_db psql -U marketing -d marketing -v ON_ERROR_STOP=1"
+
+          echo "== 0. preconditions =="
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3211/api/marketing/billing/packages || true)
+          [ "$code" = "200" ] || { echo "new stack not healthy on 3211 (got $code) — run Release Deploy first"; exit 1; }
+
+          # Locate core's database (the one that has the leads table).
+          CORE_DB=""
+          for db in $(docker exec kds_postgres_prod psql -U postgres -Atc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname<>'postgres'"); do
+            if docker exec kds_postgres_prod psql -U postgres -d "$db" -Atc "SELECT 1 FROM information_schema.tables WHERE table_name='leads'" | grep -q 1; then
+              CORE_DB="$db"; break
+            fi
+          done
+          [ -n "$CORE_DB" ] || { echo "could not locate core db containing 'leads'"; exit 1; }
+          echo "core db: $CORE_DB"
+          echo "core lead count: $(docker exec kds_postgres_prod psql -U postgres -d "$CORE_DB" -Atc 'SELECT count(*) FROM leads')"
+
+          echo "== 1. stop backend, rebuild db to pre-workspace shape =="
+          $DC stop backend
+          docker exec kds_marketing_db psql -U marketing -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS marketing WITH (FORCE);" \
+            -c "CREATE DATABASE marketing OWNER marketing;"
+
+          # Pre-workspace migrations only (0_init + hardware fields) — their
+          # SQL ships inside the backend image; the rest run on boot AFTER
+          # the import so the backfill adopts the legacy rows.
+          tmp=$(docker create "$(docker inspect kds_marketing_api --format '{{.Config.Image}}')")
+          docker cp "$tmp":/app/prisma/migrations/0_init/migration.sql /tmp/m0.sql
+          docker cp "$tmp":/app/prisma/migrations/20260610000000_hardware_quote_fields/migration.sql /tmp/m1.sql
+          docker rm "$tmp" >/dev/null
+          $PSQL_M < /tmp/m0.sql
+          $PSQL_M < /tmp/m1.sql
+          $DC run --rm --no-deps backend npx prisma migrate resolve --applied 0_init
+          $DC run --rm --no-deps backend npx prisma migrate resolve --applied 20260610000000_hardware_quote_fields
+
+          echo "== 2. import legacy marketing data from core =="
+          docker exec kds_postgres_prod pg_dump -U postgres -d "$CORE_DB" \
+            --data-only --no-owner --disable-triggers \
+            -t marketing_users -t leads -t lead_activities -t marketing_tasks \
+            -t lead_offers -t commissions -t marketing_notifications \
+            -t marketing_distribution_config -t sales_calls \
+            -t installation_crews -t installation_jobs -t installation_tasks \
+            -t sales_targets \
+          | docker exec -i kds_marketing_db psql -U marketing -d marketing -v ON_ERROR_STOP=1 --single-transaction
+          echo "imported leads: $($PSQL_M -Atc 'SELECT count(*) FROM leads' </dev/null)"
+
+          echo "== 3. boot backend → workspace/research/billing migrations adopt the rows =="
+          $DC up -d backend
+          for i in $(seq 1 36); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3211/api/marketing/billing/packages || true)
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+          [ "$code" = "200" ] || { echo "backend unhealthy after import:"; docker logs --tail 120 kds_marketing_api; exit 1; }
+          echo "adopted rows: $($PSQL_M -Atc "SELECT count(*) FROM leads WHERE \"workspaceId\"='$WS_ID'" </dev/null) leads in workspace #1"
+
+          echo "== 4. seeds: packages + operator + workspace #1 branding =="
+          $DC run --rm --no-deps \
+            -e OPERATOR_EMAIL="$OPERATOR_EMAIL" -e OPERATOR_PASSWORD="$OPERATOR_PASSWORD" \
+            backend node -e '
+            const {PrismaClient}=require("@prisma/client");
+            const bcrypt=require("bcryptjs");
+            const p=new PrismaClient();
+            const PKGS=[
+              {code:"TRIAL",name:"Trial",description:"14 days of AI-researched leads.",dailyLeadQuota:3,maxUsers:2,maxResearchProfiles:1,features:{autoAssign:true,telephony:false,installations:false,commissions:false,advancedReports:false,apiAccess:false},priceMonthlyTRY:0,priceMonthlyUSD:0,trialDays:14,isPublic:false,sortOrder:0},
+              {code:"STARTER",name:"Starter",description:"10 AI-researched leads every day.",dailyLeadQuota:10,maxUsers:3,maxResearchProfiles:1,features:{autoAssign:true,telephony:false,installations:false,commissions:false,advancedReports:true,apiAccess:false},priceMonthlyTRY:3490,priceMonthlyUSD:99,priceYearlyTRY:34900,priceYearlyUSD:990,trialDays:0,isPublic:true,sortOrder:1},
+              {code:"GROWTH",name:"Growth",description:"25 leads/day across two research focuses.",dailyLeadQuota:25,maxUsers:10,maxResearchProfiles:2,features:{autoAssign:true,telephony:true,installations:false,commissions:false,advancedReports:true,apiAccess:false},priceMonthlyTRY:8490,priceMonthlyUSD:249,priceYearlyTRY:84900,priceYearlyUSD:2490,trialDays:0,isPublic:true,sortOrder:2},
+              {code:"SCALE",name:"Scale",description:"50 leads/day with field ops + API access.",dailyLeadQuota:50,maxUsers:25,maxResearchProfiles:4,features:{autoAssign:true,telephony:true,installations:true,commissions:true,advancedReports:true,apiAccess:true},priceMonthlyTRY:16900,priceMonthlyUSD:499,priceYearlyTRY:169000,priceYearlyUSD:4990,trialDays:0,isPublic:true,sortOrder:3},
+              {code:"OPERATOR",name:"Operator (internal)",description:"Unlimited internal package.",dailyLeadQuota:-1,maxUsers:-1,maxResearchProfiles:-1,features:{autoAssign:true,telephony:true,installations:true,commissions:true,advancedReports:true,apiAccess:true},priceMonthlyTRY:0,priceMonthlyUSD:0,trialDays:0,isPublic:false,sortOrder:99},
+            ];
+            (async()=>{
+              for(const k of PKGS){const{code,...d}=k;await p.package.upsert({where:{code},create:{code,...d},update:d});}
+              const hash=await bcrypt.hash(process.env.OPERATOR_PASSWORD,12);
+              await p.platformOperator.upsert({
+                where:{email:process.env.OPERATOR_EMAIL},
+                create:{email:process.env.OPERATOR_EMAIL,password:hash,name:"Platform Operator"},
+                update:{password:hash,status:"ACTIVE",failedLogins:0,lockedUntil:null,tokenVersion:{increment:1}},
+              });
+              console.log("packages + operator seeded");
+              await p.$disconnect();
+            })().catch(e=>{console.error(e);process.exit(1)});
+          '
+
+          $PSQL_M <<SQL
+          UPDATE workspaces SET
+            slug='hummytummy', name='HummyTummy',
+            "productName"='HummyTummy POS', "productUrl"='https://hummytummy.com',
+            "productDescription"='Modern POS + digital ordering platform for cafes and restaurants in Turkey: QR menu, kitchen display, online ordering, multi-branch management.',
+            "defaultLanguage"='tr', "defaultCurrency"='TRY', timezone='Europe/Istanbul',
+            "coreIntegration"='{"type":"KDS_CORE","appName":"HummyTummy","appUrl":"https://hummytummy.com"}'
+          WHERE id='$WS_ID';
+
+          INSERT INTO workspace_subscriptions
+            (id,"workspaceId","packageId",status,"billingCycle",currency,
+             "currentPeriodStart","currentPeriodEnd","createdAt","updatedAt")
+          SELECT gen_random_uuid(),'$WS_ID',id,'ACTIVE','YEARLY','TRY',
+                 now(),now()+interval '10 years',now(),now()
+          FROM packages WHERE code='OPERATOR'
+          ON CONFLICT ("workspaceId") DO NOTHING;
+
+          -- Belt: the backfill turns the legacy global sentinel into SYSTEM;
+          -- if the legacy data somehow lacked it, mint one so ingest works.
+          INSERT INTO marketing_users
+            (id,"workspaceId",email,password,"firstName","lastName",role,"updatedAt")
+          SELECT gen_random_uuid(),'$WS_ID',
+                 'research+$WS_ID@system.internal','!locked!','AI','Research','SYSTEM',now()
+          WHERE NOT EXISTS (
+            SELECT 1 FROM marketing_users WHERE "workspaceId"='$WS_ID' AND role='SYSTEM');
+          SQL
+          echo "workspace #1 branded + OPERATOR sub + sentinel ensured"
+
+          echo "== 5. research profile for workspace #1 (the old routine's brief) =="
+          $PSQL_M <<'SQL'
+          INSERT INTO research_profiles
+            (id,"workspaceId",name,status,"icpDescription","productPitch",geo,language,"businessTypes",exclusions,"createdAt","updatedAt")
+          SELECT gen_random_uuid(),'b6a7c000-0000-4000-8000-000000000001',
+            'TR F&B prospects','ACTIVE',
+            'Independent cafes, restaurants, bars, patisseries and fast-food businesses in Turkey that show OPERATIONAL PAIN in recent Google/Instagram reviews: slow service, order mix-ups, long waits, crowded tills, handwritten checks, no QR menu, DM-only ordering. Prefer places with growth signals (new branch in last 90 days, >20 new reviews/month, active Instagram >1k followers with >2% engagement) but no visible digital ordering infrastructure. Rating sweet spot 3.5-4.3 with complaints in the last 60 days.',
+            'HummyTummy replaces paper pads and shouting with a kitchen display + QR menu + online ordering that cuts wait times and order errors within a week.',
+            '{"country":"TR","cities":["Istanbul","Ankara","Izmir","Antalya","Bursa"]}','tr',
+            '["CAFE","RESTAURANT","BAR","PATISSERIE","FAST_FOOD"]',
+            'Skip chains that already run POS infra: Starbucks, Burger King, McDonald''s, Espressolab, Big Chefs, Kahve Dunyasi, Mado, Simit Sarayi. Skip businesses inactive for 60+ days.',
+            now(),now()
+          WHERE NOT EXISTS (
+            SELECT 1 FROM research_profiles WHERE "workspaceId"='b6a7c000-0000-4000-8000-000000000001');
+          SQL
+
+          echo "== 6. nginx flip =="
+          VHOST=/etc/nginx/sites-available/marketing.hummytummy.com
+          cp "$VHOST" "$VHOST.pre-cutover.bak"
+          cat > "$VHOST" <<'NGINX'
+          # marketing.hummytummy.com → standalone kds-marketing stack
+          #   /     → panel  (kds_marketing_panel, host 3210)
+          #   /api  → API    (kds_marketing_api,  host 3211, /api prefix pass-through)
+          # Cutover backup: marketing.hummytummy.com.pre-cutover.bak
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name marketing.hummytummy.com;
+
+              location / {
+                  proxy_pass http://localhost:3210;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+
+              location /api {
+                  proxy_pass http://localhost:3211;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  client_max_body_size 5M;
+              }
+          }
+          NGINX
+          # the heredoc above is indented — strip leading spaces nginx dislikes
+          sed -i 's/^          //' "$VHOST"
+          if ! nginx -t; then
+            echo "nginx config test FAILED — restoring backup"
+            mv "$VHOST.pre-cutover.bak" "$VHOST"; nginx -t; systemctl reload nginx
+            exit 1
+          fi
+          systemctl reload nginx
+
+          echo "== 7. smokes =="
+          set +e
+          panel=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://localhost:3210/)
+          api=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://localhost:3211/api/marketing/billing/packages)
+          pub=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 https://marketing.hummytummy.com/api/marketing/billing/packages)
+          pubfe=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 https://marketing.hummytummy.com/)
+          set -e
+          echo "panel(3210)=$panel api(3211)=$api public-api=$pub public-panel=$pubfe"
+          if [ "$panel" != 200 ] || [ "$api" != 200 ] || [ "$pub" != 200 ] || [ "$pubfe" != 200 ]; then
+            echo "SMOKE FAILED — restoring old vhost"
+            mv "$VHOST.pre-cutover.bak" "$VHOST"; nginx -t && systemctl reload nginx
+            exit 1
+          fi
+
+          echo "== CUTOVER COMPLETE =="
+          echo "workspace #1 users: $($PSQL_M -Atc "SELECT email,role FROM marketing_users WHERE \"workspaceId\"='$WS_ID' ORDER BY role" </dev/null | tr '\n' ' ')"
+          CUTOVER

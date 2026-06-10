@@ -1,0 +1,86 @@
+# Production stack for the standalone marketing service — runs on the SAME
+# box as the kds monorepo stack, on its own ports/volume/network:
+#   host 3210 → panel (nginx static)        [old monorepo SPA owns 3200]
+#   host 3211 → API  (NestJS, /api prefix)  [core owns 3000]
+#   host 127.0.0.1:5434 → its own postgres  [core's postgres owns 5432]
+# marketing.hummytummy.com's host-nginx vhost proxies / → 3210 and
+# /api → 3211 after the cutover (ops/CUTOVER.md / cutover.yml).
+#
+# Interpolation (IMAGE_TAG, MARKETING_POSTGRES_PASSWORD) comes from ./.env —
+# the deploy workflow writes the SAME rendered file to .env.production
+# (backend env_file) and .env (compose interpolation).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kds_marketing_db
+    restart: always
+    environment:
+      POSTGRES_USER: marketing
+      POSTGRES_PASSWORD: ${MARKETING_POSTGRES_PASSWORD:?}
+      POSTGRES_DB: marketing
+    volumes:
+      - marketing_pgdata:/var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:5434:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U marketing -d marketing']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - marketing_net
+
+  backend:
+    image: ghcr.io/mtarikucar/kds-marketing/backend:${IMAGE_TAG:-current}
+    container_name: kds_marketing_api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && node dist/main"
+    env_file:
+      - .env.production
+    ports:
+      - '3211:3000'
+    # CORE_SERVICE_URL=http://host.docker.internal:3000 → the monorepo core
+    # on the same box (provisioning port + referral resolve).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      # Public packages endpoint — exercises Nest + Prisma + DB in one probe.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/marketing/billing/packages').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - marketing_net
+
+  frontend:
+    image: ghcr.io/mtarikucar/kds-marketing/frontend:${IMAGE_TAG:-current}
+    container_name: kds_marketing_panel
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - '3210:80'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:80/']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - marketing_net
+
+volumes:
+  marketing_pgdata:
+
+networks:
+  marketing_net:
+    name: kds_marketing_net

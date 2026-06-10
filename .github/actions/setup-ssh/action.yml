@@ -1,0 +1,36 @@
+name: 'Setup SSH'
+description: 'Install the deploy SSH key + known_hosts and verify connectivity (pattern ported from the kds monorepo).'
+inputs:
+  ssh-private-key-base64:
+    description: 'Base64-encoded SSH private key.'
+    required: true
+  ssh-known-hosts:
+    description: 'Plain-text contents for ~/.ssh/known_hosts.'
+    required: true
+  server-host:
+    description: 'Host to probe.'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install SSH key
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh-private-key-base64 }}" | base64 -d > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        printf '%s\n' "${{ inputs.ssh-known-hosts }}" > ~/.ssh/known_hosts
+        chmod 644 ~/.ssh/known_hosts
+        if ! ssh-keygen -l -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
+          echo "::error::SSH key did not parse — check the base64 payload"
+          exit 1
+        fi
+
+    - name: Probe connectivity
+      shell: bash
+      run: |
+        set -euo pipefail
+        ssh -o BatchMode=yes -o ConnectTimeout=10 \
+          root@${{ inputs.server-host }} 'echo "SSH OK: $(hostname)"'

@@ -1,32 +1,75 @@
-name: Build & Deploy
+name: Release Deploy
 
-# Images are built/pushed on every main push; the SSH deploy step only runs
-# when the repo variable DEPLOY_ENABLED is "true" AND the SSH secrets exist
-# (set them in Settings → Secrets/Variables → Actions):
-#   vars:    DEPLOY_ENABLED, DEPLOY_HOST, DEPLOY_PATH
-#   secrets: DEPLOY_SSH_KEY, DEPLOY_USER
+# Tag-driven production deploy to the shared box (38.242.233.166) — the same
+# machine and pattern as the kds monorepo's release-deploy.yml, scoped to the
+# marketing stack (ports 3210/3211, own postgres on 5434). The vhost flip
+# that points marketing.hummytummy.com at this stack is a ONE-TIME operation
+# in cutover.yml; ordinary releases just swap images behind it.
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0) — must exist'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: marketing-production-deploy
+  cancel-in-progress: false
 
 env:
-  REGISTRY: ghcr.io
+  SERVER_HOST: '38.242.233.166'
   IMAGE_BASE: ghcr.io/${{ github.repository }}
+  DEPLOY_DIR: /root/kds-marketing
 
 jobs:
-  images:
+  version:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - run: npm test
+
+  build:
+    needs: [version, test]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -37,10 +80,10 @@ jobs:
           target: production
           push: true
           tags: |
-            ${{ env.IMAGE_BASE }}/backend:${{ github.sha }}
-            ${{ env.IMAGE_BASE }}/backend:latest
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,scope=backend,mode=max
+            ${{ env.IMAGE_BASE }}/backend:${{ needs.version.outputs.version }}
+            ${{ env.IMAGE_BASE }}/backend:current
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/backend:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/backend:buildcache,mode=max
 
       - name: Frontend image
         uses: docker/build-push-action@v6
@@ -49,28 +92,129 @@ jobs:
           target: production
           push: true
           build-args: |
-            VITE_API_URL=${{ vars.PUBLIC_API_URL || 'http://localhost:3100/api' }}
+            VITE_API_URL=${{ vars.PUBLIC_API_URL || 'https://marketing.hummytummy.com/api' }}
             VITE_APP_TITLE=${{ vars.APP_TITLE || 'Marketing Console' }}
           tags: |
-            ${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}
-            ${{ env.IMAGE_BASE }}/frontend:latest
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,scope=frontend,mode=max
+            ${{ env.IMAGE_BASE }}/frontend:${{ needs.version.outputs.version }}
+            ${{ env.IMAGE_BASE }}/frontend:current
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/frontend:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/frontend:buildcache,mode=max
 
   deploy:
-    needs: images
-    if: vars.DEPLOY_ENABLED == 'true'
+    needs: [version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: SSH deploy (compose pull + up, migrations run on boot)
-        uses: appleboy/ssh-action@v1
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-ssh
         with:
-          host: ${{ vars.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            set -e
-            cd ${{ vars.DEPLOY_PATH }}
-            docker compose pull backend frontend
-            docker compose up -d backend frontend
-            docker compose ps
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: ${{ env.SERVER_HOST }}
+
+      - name: Render .env.production
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          MARKETING_POSTGRES_PASSWORD: ${{ secrets.MARKETING_POSTGRES_PASSWORD }}
+          MARKETING_JWT_SECRET: ${{ secrets.MARKETING_JWT_SECRET }}
+          MARKETING_JWT_REFRESH_SECRET: ${{ secrets.MARKETING_JWT_REFRESH_SECRET }}
+          PLATFORM_JWT_SECRET: ${{ secrets.PLATFORM_JWT_SECRET }}
+          RESEARCH_ROUTINE_TOKEN: ${{ secrets.RESEARCH_ROUTINE_TOKEN }}
+          INTERNAL_SERVICE_TOKEN: ${{ secrets.INTERNAL_SERVICE_TOKEN }}
+          BANK_IBAN: ${{ secrets.BANK_IBAN }}
+          BANK_ACCOUNT_NAME: ${{ secrets.BANK_ACCOUNT_NAME }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          required=(MARKETING_POSTGRES_PASSWORD MARKETING_JWT_SECRET
+                    MARKETING_JWT_REFRESH_SECRET PLATFORM_JWT_SECRET
+                    RESEARCH_ROUTINE_TOKEN INTERNAL_SERVICE_TOKEN)
+          missing=0
+          for k in "${required[@]}"; do
+            [ -n "${!k:-}" ] || { echo "::error::secret $k is missing"; missing=1; }
+          done
+          [ "$missing" -eq 0 ]
+
+          # PSP + email values that must MATCH core's live config are read on
+          # the server from /root/kds-marketing/.env.shared (extracted from
+          # core's .env.production by the bootstrap workflow) and appended
+          # below — they never transit the runner.
+          cat > .env.rendered <<ENV
+          # ── rendered by deploy.yml for ${VERSION} ──
+          NODE_ENV=production
+          PORT=3000
+          IMAGE_TAG=${VERSION}
+          DATABASE_URL=postgresql://marketing:${MARKETING_POSTGRES_PASSWORD}@postgres:5432/marketing?schema=public
+          MARKETING_POSTGRES_PASSWORD=${MARKETING_POSTGRES_PASSWORD}
+          MARKETING_JWT_SECRET=${MARKETING_JWT_SECRET}
+          MARKETING_JWT_REFRESH_SECRET=${MARKETING_JWT_REFRESH_SECRET}
+          PLATFORM_JWT_SECRET=${PLATFORM_JWT_SECRET}
+          RESEARCH_ROUTINE_TOKEN=${RESEARCH_ROUTINE_TOKEN}
+          INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+          CORE_SERVICE_URL=http://host.docker.internal:3000
+          CORS_ORIGIN=https://marketing.hummytummy.com
+          FRONTEND_URL=https://marketing.hummytummy.com
+          APP_NAME=HummyTummy
+          APP_URL=https://hummytummy.com
+          BANK_IBAN=${BANK_IBAN}
+          BANK_ACCOUNT_NAME=${BANK_ACCOUNT_NAME}
+          PAYTR_TEST_MODE=0
+          STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+          STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+          ENV
+
+      - name: Ship env + compose (atomic)
+        run: |
+          set -euo pipefail
+          scp -o ServerAliveInterval=15 .env.rendered \
+            root@${{ env.SERVER_HOST }}:${{ env.DEPLOY_DIR }}/.env.rendered.new
+          scp -o ServerAliveInterval=15 docker-compose.prod.yml \
+            root@${{ env.SERVER_HOST }}:${{ env.DEPLOY_DIR }}/docker-compose.prod.yml.new
+          ssh root@${{ env.SERVER_HOST }} "
+            set -euo pipefail
+            cd ${{ env.DEPLOY_DIR }}
+            # Final env = rendered part + shared (PSP/email) part from core.
+            cat .env.rendered.new > .env.production.new
+            if [ -f .env.shared ]; then cat .env.shared >> .env.production.new; fi
+            rm .env.rendered.new
+            chmod 600 .env.production.new
+            mv .env.production.new .env.production
+            cp .env.production .env   # compose interpolation reads ./.env
+            mv docker-compose.prod.yml.new docker-compose.prod.yml
+          "
+
+      - name: Pull + swap + health-gate
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=15 root@${{ env.SERVER_HOST }} "
+            set -euo pipefail
+            cd ${{ env.DEPLOY_DIR }}
+            echo '${GHCR_TOKEN}' | docker login ghcr.io -u '${GHCR_USER}' --password-stdin
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
+            echo 'waiting for API health on :3211 ...'
+            for i in \$(seq 1 30); do
+              code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                http://localhost:3211/api/marketing/billing/packages || true)
+              if [ \"\$code\" = '200' ]; then
+                echo \"API healthy (attempt \$i)\"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo '::error::API did not become healthy — recent backend logs:'
+            docker logs --tail 80 kds_marketing_api || true
+            exit 1
+          "
+
+      - name: Disk cleanup
+        if: success()
+        run: |
+          ssh root@${{ env.SERVER_HOST }} \
+            'docker image prune -af --filter "until=168h" >/dev/null 2>&1 || true'
