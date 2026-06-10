@@ -31,12 +31,25 @@ export class SiteRendererService {
     page: { title: string; blocks: unknown; seo?: any; theme?: any },
     forms: Map<string, FormDefLite>,
     publicBase: string,
+    branding?: { brandName?: string | null; accentColor?: string | null; logoUrl?: string | null },
   ): string {
     const theme = (page.theme ?? {}) as Record<string, string>;
-    const accent = /^#[0-9a-fA-F]{3,8}$/.test(theme.accent ?? '') ? theme.accent : '#1e40af';
+    // Accent precedence: page theme → workspace branding → default.
+    const accent = /^#[0-9a-fA-F]{3,8}$/.test(theme.accent ?? '')
+      ? theme.accent
+      : /^#[0-9a-fA-F]{6}$/.test(branding?.accentColor ?? '')
+        ? branding!.accentColor!
+        : '#1e40af';
     const seo = (page.seo ?? {}) as Record<string, string>;
     const blocks = Array.isArray(page.blocks) ? page.blocks : [];
-    const body = blocks.map((b: any) => this.block(b, forms, publicBase, accent!)).join('\n');
+    const header =
+      branding && (branding.logoUrl || branding.brandName)
+        ? `<header style="padding:14px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px">` +
+          (branding.logoUrl ? `<img src="${esc(branding.logoUrl)}" alt="${esc(branding.brandName || '')}" style="height:32px">` : '') +
+          (branding.brandName ? `<strong>${esc(branding.brandName)}</strong>` : '') +
+          `</header>`
+        : '';
+    const body = header + blocks.map((b: any) => this.block(b, forms, publicBase, accent!)).join('\n');
     return (
       `<!doctype html><html lang="${esc(seo.lang || 'en')}"><head><meta charset="utf-8">` +
       `<meta name="viewport" content="width=device-width,initial-scale=1">` +

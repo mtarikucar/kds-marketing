@@ -30,3 +30,5 @@ export * from './marketing-voice.controller';
 export * from './twilio-voice.controller';
 export * from './marketing-invoices.controller';
 export * from './public-invoice.controller';
+export * from './marketing-branding.controller';
+export * from './public-branding.controller';

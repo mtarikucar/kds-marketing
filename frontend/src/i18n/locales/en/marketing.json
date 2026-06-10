@@ -116,7 +116,8 @@
     "booking": "Booking",
     "reviews": "Reviews",
     "voice": "Voice AI",
-    "invoices": "Invoices"
+    "invoices": "Invoices",
+    "branding": "Branding"
   },
   "common": {
     "save": "Save",
@@ -901,5 +902,21 @@
     "send": "Send / copy pay link",
     "markPaid": "Mark paid",
     "empty": "No invoices yet."
+  },
+  "branding": {
+    "title": "Branding",
+    "subtitle": "Your brand on the customer-facing surfaces — funnel pages and the web-chat widget.",
+    "brandName": "Brand name",
+    "accent": "Accent color",
+    "logo": "Logo",
+    "uploadLogo": "Upload logo",
+    "uploading": "Uploading…",
+    "logoHint": "PNG, JPEG, WEBP or SVG, under 1 MB.",
+    "saved": "Branding saved",
+    "saveFailed": "Save failed",
+    "logoUploaded": "Logo uploaded",
+    "logoFailed": "Upload failed",
+    "previewName": "Your brand",
+    "preview": "This is how your brand appears on public pages and the chat widget."
   }
 }

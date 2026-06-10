@@ -141,6 +141,11 @@ import { MarketingInvoicesController } from './controllers/marketing-invoices.co
 import { PublicInvoiceController } from './controllers/public-invoice.controller';
 import { InvoicesService } from './invoicing/invoices.service';
 
+// Phase F P10 — white-label-lite branding.
+import { MarketingBrandingController } from './controllers/marketing-branding.controller';
+import { PublicBrandingController } from './controllers/public-branding.controller';
+import { BrandingService } from './branding/branding.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -220,6 +225,8 @@ import { InvoicesService } from './invoicing/invoices.service';
     TwilioVoiceController,
     MarketingInvoicesController,
     PublicInvoiceController,
+    MarketingBrandingController,
+    PublicBrandingController,
   ],
   providers: [
     // Services
@@ -319,6 +326,8 @@ import { InvoicesService } from './invoicing/invoices.service';
     VoiceAiService,
     // Phase F P9 — end-customer invoicing (per-workspace PSP, public pay page).
     InvoicesService,
+    // Phase F P10 — white-label-lite branding (logo upload + public theming).
+    BrandingService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

@@ -27,6 +27,7 @@ import {
   StarIcon,
   MicrophoneIcon,
   BanknotesIcon,
+  SwatchIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -55,6 +56,7 @@ const aiItems = [
   { path: '/reviews', labelKey: 'nav.reviews', icon: StarIcon },
   { path: '/voice', labelKey: 'nav.voice', icon: MicrophoneIcon },
   { path: '/invoices', labelKey: 'nav.invoices', icon: BanknotesIcon },
+  { path: '/branding', labelKey: 'nav.branding', icon: SwatchIcon },
 ];
 
 const managerOnlyItems = [
