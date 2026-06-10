@@ -28,3 +28,5 @@ export * from './marketing-reviews.controller';
 export * from './review-gate.controller';
 export * from './marketing-voice.controller';
 export * from './twilio-voice.controller';
+export * from './marketing-invoices.controller';
+export * from './public-invoice.controller';

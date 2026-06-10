@@ -115,7 +115,8 @@
     "sites": "Funnel & Sayfalar",
     "booking": "Randevu",
     "reviews": "Yorumlar",
-    "voice": "Sesli AI"
+    "voice": "Sesli AI",
+    "invoices": "Faturalar"
   },
   "common": {
     "save": "Kaydet",
@@ -877,5 +878,28 @@
     "empty": "Henüz AI çağrısı yok.",
     "selectPrompt": "Transkripti görmek için bir çağrı seçin.",
     "noTranscript": "Bu çağrı için transkript yok."
+  },
+  "invoices": {
+    "title": "Faturalar",
+    "subtitle": "Müşterilerinize fatura kesin ve kendi Stripe'ınız veya havale ile tahsil edin.",
+    "new": "Yeni fatura",
+    "payments": "Nasıl ödeme alırsınız",
+    "provider": "Sağlayıcı",
+    "manual": "Havale (manuel)",
+    "stripeKey": "Kendi Stripe gizli anahtarınız",
+    "instructions": "Ödeme talimatları (ödeyene gösterilir)",
+    "created": "Fatura oluşturuldu",
+    "saveFailed": "Kaydedilemedi",
+    "sent": "Gönderildi — ödeme linki kopyalandı",
+    "pspSaved": "Ödeme ayarları kaydedildi",
+    "itemDesc": "Açıklama",
+    "unitPrice": "Birim fiyat",
+    "addItem": "Satır ekle",
+    "currency": "Para birimi",
+    "notes": "Notlar",
+    "createBtn": "Oluştur",
+    "send": "Gönder / ödeme linki kopyala",
+    "markPaid": "Ödendi işaretle",
+    "empty": "Henüz fatura yok."
   }
 }

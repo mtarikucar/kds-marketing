@@ -66,6 +66,9 @@ const OWNED_DELEGATES = [
   // P8 (GoHighLevel parity): Voice AI (Twilio).
   'voiceCall',
   'voiceTranscript',
+  // P9 (GoHighLevel parity): end-customer invoicing.
+  'invoice',
+  'workspacePspConfig',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

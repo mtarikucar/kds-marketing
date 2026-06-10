@@ -115,7 +115,8 @@
     "sites": "Voronkalar va sahifalar",
     "booking": "Band qilish",
     "reviews": "Sharhlar",
-    "voice": "Ovozli AI"
+    "voice": "Ovozli AI",
+    "invoices": "Hisob-fakturalar"
   },
   "common": {
     "save": "Save",
@@ -873,5 +874,28 @@
     "empty": "Hali AI qo'ng'iroqlari yo'q.",
     "selectPrompt": "Transkriptni ko'rish uchun qo'ng'iroqni tanlang.",
     "noTranscript": "Bu qo'ng'iroq uchun transkript yo'q."
+  },
+  "invoices": {
+    "title": "Hisob-fakturalar",
+    "subtitle": "Mijozlaringizga hisob-faktura chiqaring va o'z Stripe yoki bank o'tkazmasi orqali to'lov oling.",
+    "new": "Yangi hisob-faktura",
+    "payments": "Qanday to'lov olasiz",
+    "provider": "Provayder",
+    "manual": "Bank o'tkazmasi (qo'lda)",
+    "stripeKey": "Sizning Stripe maxfiy kalitingiz",
+    "instructions": "To'lov ko'rsatmalari (to'lovchiga ko'rinadi)",
+    "created": "Hisob-faktura yaratildi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "sent": "Yuborildi — to'lov havolasi nusxalandi",
+    "pspSaved": "To'lov sozlamalari saqlandi",
+    "itemDesc": "Tavsif",
+    "unitPrice": "Birlik narxi",
+    "addItem": "Qator qo'shish",
+    "currency": "Valyuta",
+    "notes": "Izohlar",
+    "createBtn": "Yaratish",
+    "send": "Yuborish / havolani nusxalash",
+    "markPaid": "To'langan deb belgilash",
+    "empty": "Hali hisob-faktura yo'q."
   }
 }

@@ -136,6 +136,11 @@ import { TwilioVoiceController } from './controllers/twilio-voice.controller';
 import { VoiceAdapter } from './channels/adapters/voice.adapter';
 import { VoiceAiService } from './channels/voice-ai.service';
 
+// Phase F P9 — end-customer invoicing.
+import { MarketingInvoicesController } from './controllers/marketing-invoices.controller';
+import { PublicInvoiceController } from './controllers/public-invoice.controller';
+import { InvoicesService } from './invoicing/invoices.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -213,6 +218,8 @@ import { VoiceAiService } from './channels/voice-ai.service';
     ReviewGateController,
     MarketingVoiceController,
     TwilioVoiceController,
+    MarketingInvoicesController,
+    PublicInvoiceController,
   ],
   providers: [
     // Services
@@ -310,6 +317,8 @@ import { VoiceAiService } from './channels/voice-ai.service';
     // Twilio TwiML turn engine.
     VoiceAdapter,
     VoiceAiService,
+    // Phase F P9 — end-customer invoicing (per-workspace PSP, public pay page).
+    InvoicesService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

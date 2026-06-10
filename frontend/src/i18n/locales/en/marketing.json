@@ -115,7 +115,8 @@
     "sites": "Funnels & Pages",
     "booking": "Booking",
     "reviews": "Reviews",
-    "voice": "Voice AI"
+    "voice": "Voice AI",
+    "invoices": "Invoices"
   },
   "common": {
     "save": "Save",
@@ -877,5 +878,28 @@
     "empty": "No AI calls yet.",
     "selectPrompt": "Select a call to see the transcript.",
     "noTranscript": "No transcript for this call."
+  },
+  "invoices": {
+    "title": "Invoices",
+    "subtitle": "Bill your customers and collect via your own Stripe or bank transfer.",
+    "new": "New invoice",
+    "payments": "How you get paid",
+    "provider": "Provider",
+    "manual": "Bank transfer (manual)",
+    "stripeKey": "Your Stripe secret key",
+    "instructions": "Payment instructions (shown to payer)",
+    "created": "Invoice created",
+    "saveFailed": "Save failed",
+    "sent": "Sent — pay link copied",
+    "pspSaved": "Payment settings saved",
+    "itemDesc": "Description",
+    "unitPrice": "Unit price",
+    "addItem": "Add line",
+    "currency": "Currency",
+    "notes": "Notes",
+    "createBtn": "Create",
+    "send": "Send / copy pay link",
+    "markPaid": "Mark paid",
+    "empty": "No invoices yet."
   }
 }
