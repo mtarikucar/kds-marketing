@@ -12,7 +12,8 @@ export type ChannelType =
   | 'WHATSAPP'
   | 'SMS'
   | 'INSTAGRAM'
-  | 'MESSENGER';
+  | 'MESSENGER'
+  | 'VOICE'; // inbound AI phone (Twilio) — config-only, no text send
 
 export type ChannelCapability =
   | 'send'

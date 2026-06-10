@@ -25,6 +25,7 @@ import {
   GlobeAltIcon,
   CalendarDaysIcon,
   StarIcon,
+  MicrophoneIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -51,6 +52,7 @@ const aiItems = [
   { path: '/sites', labelKey: 'nav.sites', icon: GlobeAltIcon },
   { path: '/booking', labelKey: 'nav.booking', icon: CalendarDaysIcon },
   { path: '/reviews', labelKey: 'nav.reviews', icon: StarIcon },
+  { path: '/voice', labelKey: 'nav.voice', icon: MicrophoneIcon },
 ];
 
 const managerOnlyItems = [

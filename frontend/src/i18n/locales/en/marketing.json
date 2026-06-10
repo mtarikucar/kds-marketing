@@ -114,7 +114,8 @@
     "campaigns": "Campaigns",
     "sites": "Funnels & Pages",
     "booking": "Booking",
-    "reviews": "Reviews"
+    "reviews": "Reviews",
+    "voice": "Voice AI"
   },
   "common": {
     "save": "Save",
@@ -867,5 +868,14 @@
     "ex1": "How many leads are in each status?",
     "ex2": "Which leads in Istanbul are still NEW?",
     "ex3": "What's the status of my campaigns?"
+  },
+  "voice": {
+    "title": "Voice AI",
+    "subtitle": "AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).",
+    "unknown": "Unknown",
+    "turns": "turns",
+    "empty": "No AI calls yet.",
+    "selectPrompt": "Select a call to see the transcript.",
+    "noTranscript": "No transcript for this call."
   }
 }

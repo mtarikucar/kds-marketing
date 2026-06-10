@@ -63,6 +63,9 @@ const OWNED_DELEGATES = [
   // P6 (GoHighLevel parity): reviews/reputation.
   'reviewSource',
   'review',
+  // P8 (GoHighLevel parity): Voice AI (Twilio).
+  'voiceCall',
+  'voiceTranscript',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

@@ -114,7 +114,8 @@
     "campaigns": "Kampanyalar",
     "sites": "Funnel & Sayfalar",
     "booking": "Randevu",
-    "reviews": "Yorumlar"
+    "reviews": "Yorumlar",
+    "voice": "Sesli AI"
   },
   "common": {
     "save": "Kaydet",
@@ -867,5 +868,14 @@
     "ex1": "Her durumda kaç lead var?",
     "ex2": "İstanbul'da hâlâ NEW olan lead'ler hangileri?",
     "ex3": "Kampanyalarımın durumu nedir?"
+  },
+  "voice": {
+    "title": "Sesli AI",
+    "subtitle": "AI telefonunuza cevap verir (Twilio), bir ajan + bilgi bankanıza dayanır. Numarayı Kanallar altında (VOICE türü) yapılandırın.",
+    "unknown": "Bilinmiyor",
+    "turns": "tur",
+    "empty": "Henüz AI çağrısı yok.",
+    "selectPrompt": "Transkripti görmek için bir çağrı seçin.",
+    "noTranscript": "Bu çağrı için transkript yok."
   }
 }

@@ -25,6 +25,14 @@ export class PublicChannelResolverService {
     });
   }
 
+  /** Twilio gather/status → the VOICE channel a call belongs to (CallSid is
+   *  globally unique; the channel read is then workspace-scoped via the call). */
+  async channelForVoiceCall(callSid: string) {
+    const call = await this.prisma.voiceCall.findUnique({ where: { externalCallId: callSid } });
+    if (!call) return null;
+    return this.prisma.channel.findFirst({ where: { id: call.channelId, workspaceId: call.workspaceId } });
+  }
+
   /** NetGSM DLR → update an outbound message's delivery status by its provider
    *  job id (externalMessageId is globally unique). Returns rows touched. */
   async markDeliveryStatus(externalMessageId: string, status: string): Promise<number> {

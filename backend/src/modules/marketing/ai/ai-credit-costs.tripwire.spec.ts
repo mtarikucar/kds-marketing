@@ -15,6 +15,7 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'conversation.reply',
       'funnel.draft',
       'review.reply_draft',
+      'voice.turn',
       'workflow.ai_classify',
       'workflow.ai_generate',
       'workflow.draft',
