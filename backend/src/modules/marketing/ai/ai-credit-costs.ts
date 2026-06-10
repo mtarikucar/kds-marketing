@@ -15,6 +15,7 @@ export const AI_CREDIT_COSTS = {
   'workflow.draft': { credits: 2, tier: 'default' as AiModelTier },
   'funnel.draft': { credits: 3, tier: 'default' as AiModelTier },
   'review.reply_draft': { credits: 1, tier: 'default' as AiModelTier },
+  'voice.turn': { credits: 2, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

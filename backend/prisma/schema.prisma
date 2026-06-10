@@ -1133,6 +1133,39 @@ model Review {
   @@map("reviews")
 }
 
+/// An inbound AI-answered phone call (Twilio). The agent persona comes from the
+/// VOICE Channel's agentProfileId; turns are transcribed into VoiceTranscript.
+model VoiceCall {
+  id             String  @id @default(uuid())
+  workspaceId    String
+  channelId      String
+  leadId         String?
+  externalCallId String  @unique
+  fromNumber     String
+  toNumber       String
+  status         String  @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
+  turns          Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, createdAt])
+  @@map("voice_calls")
+}
+
+/// One turn of a voice call transcript.
+model VoiceTranscript {
+  id          String   @id @default(uuid())
+  workspaceId String
+  callId      String
+  role        String // CUSTOMER | AI | SYSTEM
+  text        String   @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([callId])
+  @@map("voice_transcripts")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.

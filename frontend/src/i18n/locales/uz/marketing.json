@@ -114,7 +114,8 @@
     "campaigns": "Kampaniyalar",
     "sites": "Voronkalar va sahifalar",
     "booking": "Band qilish",
-    "reviews": "Sharhlar"
+    "reviews": "Sharhlar",
+    "voice": "Ovozli AI"
   },
   "common": {
     "save": "Save",
@@ -863,5 +864,14 @@
     "ex1": "Har bir statusda nechta lid bor?",
     "ex2": "Istanbulda hali ham NEW bo'lgan lidlar qaysilari?",
     "ex3": "Kampaniyalarim holati qanday?"
+  },
+  "voice": {
+    "title": "Ovozli AI",
+    "subtitle": "AI telefoningizga javob beradi (Twilio), agent + bilim bazangizga tayanadi. Raqamni Kanallar bo'limida (VOICE turi) sozlang.",
+    "unknown": "Noma'lum",
+    "turns": "navbat",
+    "empty": "Hali AI qo'ng'iroqlari yo'q.",
+    "selectPrompt": "Transkriptni ko'rish uchun qo'ng'iroqni tanlang.",
+    "noTranscript": "Bu qo'ng'iroq uchun transkript yo'q."
   }
 }

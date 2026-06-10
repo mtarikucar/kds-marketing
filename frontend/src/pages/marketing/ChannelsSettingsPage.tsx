@@ -26,7 +26,7 @@ interface AgentRow {
   name: string;
 }
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER'] as const;
+const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'VOICE'] as const;
 
 // Secret + external-id fields the operator must supply, per channel type.
 const SECRET_FIELDS: Record<string, string[]> = {
@@ -35,11 +35,13 @@ const SECRET_FIELDS: Record<string, string[]> = {
   SMS: ['usercode', 'password', 'msgheader'],
   INSTAGRAM: ['pageAccessToken'],
   MESSENGER: ['pageAccessToken'],
+  VOICE: ['accountSid', 'authToken'],
 };
 const NEEDS_EXTERNAL_ID: Record<string, string> = {
   WHATSAPP: 'Phone number ID',
   INSTAGRAM: 'Page ID',
   MESSENGER: 'Page ID',
+  VOICE: 'Twilio phone number (E.164)',
 };
 
 export default function ChannelsSettingsPage() {

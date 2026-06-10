@@ -130,6 +130,12 @@ import { MarketingReviewsController } from './controllers/marketing-reviews.cont
 import { ReviewGateController } from './controllers/review-gate.controller';
 import { ReviewsService } from './reviews/reviews.service';
 
+// Phase F P8 — Voice AI (Twilio).
+import { MarketingVoiceController } from './controllers/marketing-voice.controller';
+import { TwilioVoiceController } from './controllers/twilio-voice.controller';
+import { VoiceAdapter } from './channels/adapters/voice.adapter';
+import { VoiceAiService } from './channels/voice-ai.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -205,6 +211,8 @@ import { ReviewsService } from './reviews/reviews.service';
     PublicSiteController,
     MarketingReviewsController,
     ReviewGateController,
+    MarketingVoiceController,
+    TwilioVoiceController,
   ],
   providers: [
     // Services
@@ -298,6 +306,10 @@ import { ReviewsService } from './reviews/reviews.service';
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
     ReviewsService,
+    // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
+    // Twilio TwiML turn engine.
+    VoiceAdapter,
+    VoiceAiService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
