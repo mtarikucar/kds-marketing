@@ -856,5 +856,16 @@
     "aiDraft": "AI taslağı",
     "saveReply": "Yanıtı kaydet",
     "empty": "Henüz yorum yok — kaynak ekleyin ve bir otomasyondan yorum isteği gönderin."
+  },
+  "askAi": {
+    "title": "AI'ya Sor",
+    "intro": "Lead'leriniz, görevleriniz ve kampanyalarınız hakkında düz dille sorun.",
+    "placeholder": "Bir soru sorun…",
+    "thinking": "Düşünüyor…",
+    "locked": "AI'ya Sor paketinizde yok — etkinleştirmek için yükseltin.",
+    "failed": "Bir şeyler ters gitti.",
+    "ex1": "Her durumda kaç lead var?",
+    "ex2": "İstanbul'da hâlâ NEW olan lead'ler hangileri?",
+    "ex3": "Kampanyalarımın durumu nedir?"
   }
 }

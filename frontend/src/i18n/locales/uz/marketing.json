@@ -852,5 +852,16 @@
     "aiDraft": "AI qoralama",
     "saveReply": "Javobni saqlash",
     "empty": "Hali sharh yo'q — manba qo'shing va avtomatlashtirishdan sharh so'rovini yuboring."
+  },
+  "askAi": {
+    "title": "AI'dan so'rang",
+    "intro": "Lidlar, vazifalar va kampaniyalar haqida oddiy tilda so'rang.",
+    "placeholder": "Savol bering…",
+    "thinking": "O'ylamoqda…",
+    "locked": "«AI'dan so'rang» tarifingizda yo'q — yoqish uchun yangilang.",
+    "failed": "Nimadir xato ketdi.",
+    "ex1": "Har bir statusda nechta lid bor?",
+    "ex2": "Istanbulda hali ham NEW bo'lgan lidlar qaysilari?",
+    "ex3": "Kampaniyalarim holati qanday?"
   }
 }

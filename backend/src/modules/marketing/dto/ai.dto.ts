@@ -112,6 +112,11 @@ export class UpdateAgentDto extends CreateAgentDto {
   declare persona: string;
 }
 
+export class AskAiDto {
+  @IsString() @IsNotEmpty() @MaxLength(1500)
+  question: string;
+}
+
 export class ComposeContentDto {
   @IsIn(['email', 'sms', 'social'])
   kind: 'email' | 'sms' | 'social';

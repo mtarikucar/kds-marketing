@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import MarketingSidebar from './MarketingSidebar';
 import MarketingHeader from './MarketingHeader';
+import AskAiPanel from './AskAiPanel';
 import { Bars3Icon, XMarkIcon } from '@heroicons/react/24/outline';
 
 export default function MarketingLayout() {
@@ -50,6 +51,8 @@ export default function MarketingLayout() {
           <Outlet />
         </main>
       </div>
+      {/* Global Ask-AI slide-over (gated on the askAi feature server-side). */}
+      <AskAiPanel />
     </div>
   );
 }
