@@ -60,6 +60,9 @@ const OWNED_DELEGATES = [
   'formDef',
   'bookingCalendar',
   'booking',
+  // P6 (GoHighLevel parity): reviews/reputation.
+  'reviewSource',
+  'review',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

@@ -124,6 +124,11 @@ import { SiteRendererService } from './sites/site-renderer.service';
 import { FormsService } from './sites/forms.service';
 import { BookingService } from './sites/booking.service';
 
+// Phase F P6 — reviews / reputation.
+import { MarketingReviewsController } from './controllers/marketing-reviews.controller';
+import { ReviewGateController } from './controllers/review-gate.controller';
+import { ReviewsService } from './reviews/reviews.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -197,6 +202,8 @@ import { BookingService } from './sites/booking.service';
     MarketingSitesController,
     MarketingBookingController,
     PublicSiteController,
+    MarketingReviewsController,
+    ReviewGateController,
   ],
   providers: [
     // Services
@@ -286,6 +293,9 @@ import { BookingService } from './sites/booking.service';
     SiteRendererService,
     FormsService,
     BookingService,
+    // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
+    // AI reply drafts (wired into the send_review_request workflow action).
+    ReviewsService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

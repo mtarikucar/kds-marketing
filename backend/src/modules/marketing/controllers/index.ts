@@ -24,3 +24,5 @@ export * from './campaign-tracking.controller';
 export * from './marketing-sites.controller';
 export * from './marketing-booking.controller';
 export * from './public-site.controller';
+export * from './marketing-reviews.controller';
+export * from './review-gate.controller';

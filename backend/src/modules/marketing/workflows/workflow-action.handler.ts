@@ -7,6 +7,7 @@ import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from '../channels/message-sender.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import { WorkflowFilter, WorkflowStep, FILTER_OPS } from './workflow-dsl.schema';
 
 export interface WorkflowContext {
@@ -48,6 +49,7 @@ export class WorkflowActionHandler {
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly notifications: MarketingNotificationsService,
     private readonly sender: MessageSenderService,
+    private readonly reviews: ReviewsService,
   ) {}
 
   async execute(step: WorkflowStep, ctx: WorkflowContext): Promise<StepOutcome> {
@@ -80,7 +82,7 @@ export class WorkflowActionHandler {
       case 'start_workflow':
         return { startWorkflowId: step.workflowId };
       case 'send_review_request':
-        return { output: { result: 'skipped (reviews ship in P6)' } };
+        return { output: { result: await this.reviewRequest(ctx) } };
       default:
         return { output: { result: 'unknown step' } };
     }
@@ -241,6 +243,14 @@ export class WorkflowActionHandler {
       message: this.interpolate(step.message, ctx).slice(0, 500),
     });
     return 'notified';
+  }
+
+  /** Mint a review request + stash the gate link in context as {{context.reviewLink}}. */
+  private async reviewRequest(ctx: WorkflowContext): Promise<string> {
+    if (!ctx.lead?.id) return 'skipped (no lead)';
+    const { gateUrl } = await this.reviews.requestReview(ctx.workspaceId, ctx.lead.id);
+    ctx.context.reviewLink = gateUrl;
+    return 'review request created';
   }
 
   private async webhook(step: any, ctx: WorkflowContext): Promise<string> {
