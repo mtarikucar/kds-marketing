@@ -28,6 +28,7 @@ import SitesPage from './pages/marketing/SitesPage';
 import BookingSettingsPage from './pages/marketing/BookingSettingsPage';
 import ReviewsPage from './pages/marketing/ReviewsPage';
 import VoicePage from './pages/marketing/VoicePage';
+import InvoicesPage from './pages/marketing/InvoicesPage';
 import WidgetChatPage from './pages/marketing/WidgetChatPage';
 import BillingPage from './pages/marketing/BillingPage';
 import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
@@ -85,6 +86,7 @@ export default function App() {
             <Route path="/booking" element={<BookingSettingsPage />} />
             <Route path="/reviews" element={<ReviewsPage />} />
             <Route path="/voice" element={<VoicePage />} />
+            <Route path="/invoices" element={<InvoicesPage />} />
           </Route>
         </Route>
       </Route>

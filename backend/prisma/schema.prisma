@@ -1166,6 +1166,46 @@ model VoiceTranscript {
   @@map("voice_transcripts")
 }
 
+/// An invoice the workspace sends to its OWN end customer. `items` is an array
+/// of { description, qty, unitPrice }; `total` is denormalized. Paid via the
+/// workspace's own PSP (WorkspacePspConfig) on the public /i/:token page.
+model Invoice {
+  id          String    @id @default(uuid())
+  workspaceId String
+  leadId      String?
+  number      String
+  items       Json
+  currency    String    @default("TRY")
+  total       Int       @default(0) // minor units (kuruş/cents)
+  notes       String?
+  dueDate     DateTime?
+  status      String    @default("DRAFT") // DRAFT | SENT | PAID | VOID
+  publicToken String    @unique
+  paidAt      DateTime?
+  paidVia     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("invoices")
+}
+
+/// The workspace's OWN payment config for billing ITS customers (distinct from
+/// the platform's billing PSP). Secret keys/IBAN are AES-256-GCM sealed.
+model WorkspacePspConfig {
+  id           String  @id @default(uuid())
+  workspaceId  String  @unique
+  provider     String  @default("MANUAL") // STRIPE | MANUAL
+  configSealed String? @db.Text
+  configPublic Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("workspace_psp_configs")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.

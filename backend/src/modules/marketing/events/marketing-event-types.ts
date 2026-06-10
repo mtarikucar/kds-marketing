@@ -37,6 +37,8 @@ export const MarketingEventTypes = {
   BookingCreated: "marketing.booking.created.v1",
   ReviewReceived: "marketing.review.received.v1",
   TaskCompleted: "marketing.task.completed.v1",
+  // Phase F P9 — end-customer invoicing.
+  InvoicePaid: "marketing.invoice.paid.v1",
 } as const;
 
 export type MarketingEventType =

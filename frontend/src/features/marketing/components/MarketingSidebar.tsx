@@ -26,6 +26,7 @@ import {
   CalendarDaysIcon,
   StarIcon,
   MicrophoneIcon,
+  BanknotesIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -53,6 +54,7 @@ const aiItems = [
   { path: '/booking', labelKey: 'nav.booking', icon: CalendarDaysIcon },
   { path: '/reviews', labelKey: 'nav.reviews', icon: StarIcon },
   { path: '/voice', labelKey: 'nav.voice', icon: MicrophoneIcon },
+  { path: '/invoices', labelKey: 'nav.invoices', icon: BanknotesIcon },
 ];
 
 const managerOnlyItems = [
