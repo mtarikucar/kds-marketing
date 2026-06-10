@@ -18,3 +18,4 @@ export * from './marketing-channels.controller';
 export * from './webchat-public.controller';
 export * from './meta-webhook.controller';
 export * from './netgsm-public.controller';
+export * from './marketing-workflows.controller';

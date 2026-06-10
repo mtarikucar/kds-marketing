@@ -109,7 +109,8 @@
     "agentStudio": "Agent studiyasi",
     "knowledgeBase": "Bilimlar bazasi",
     "inbox": "Kiruvchi",
-    "channels": "Kanallar"
+    "channels": "Kanallar",
+    "automations": "Avtomatlashtirishlar"
   },
   "common": {
     "save": "Save",
@@ -736,5 +737,25 @@
     "noSecrets": "hali maʼlumot yoʻq",
     "embed": "Joylashtirish kodi (</body> oldidan joylang)",
     "empty": "Hali kanal yoʻq — mijozlar yozishi uchun bittasini ulang."
+  },
+  "automations": {
+    "title": "Avtomatlashtirishlar",
+    "subtitle": "Biror narsa sodir bo'lganda shuni qil. Triggerlar qadamlarni ishga tushiradi — yuborish, kutish, tarmoqlanish, vazifa yaratish, lidni yangilash.",
+    "new": "Yangi avtomatlashtirish",
+    "aiAssist": "Tasvirlang — AI qadamlarni tuzadi",
+    "aiPlaceholder": "masalan, yangi lid kelganda 1 soat kuting, so'ng WhatsApp tanishtiruvini yuboring va kuzatuv vazifasini yarating",
+    "drafting": "Tuzilmoqda…",
+    "draftBtn": "Qoralama",
+    "name": "Nomi",
+    "trigger": "Trigger",
+    "filters": "Trigger filtrlari (JSON, ixtiyoriy)",
+    "steps": "Qadamlar (JSON)",
+    "badFilters": "Trigger filtrlari yaroqli JSON emas",
+    "badSteps": "Qadamlar yaroqli JSON emas",
+    "saved": "Avtomatlashtirish saqlandi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "drafted": "Qoralama tayyor — ko'rib chiqing va saqlang",
+    "draftFailed": "Tuzib bo'lmadi",
+    "empty": "Hali avtomatlashtirish yo'q — birini tasvirlang, AI tuzadi."
   }
 }

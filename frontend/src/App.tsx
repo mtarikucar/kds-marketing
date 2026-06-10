@@ -22,6 +22,7 @@ import AgentStudioPage from './pages/marketing/AgentStudioPage';
 import KnowledgeBasePage from './pages/marketing/KnowledgeBasePage';
 import InboxPage from './pages/marketing/InboxPage';
 import ChannelsSettingsPage from './pages/marketing/ChannelsSettingsPage';
+import AutomationsPage from './pages/marketing/AutomationsPage';
 import WidgetChatPage from './pages/marketing/WidgetChatPage';
 import BillingPage from './pages/marketing/BillingPage';
 import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
@@ -73,6 +74,7 @@ export default function App() {
             <Route path="/ai/agents" element={<AgentStudioPage />} />
             <Route path="/ai/knowledge" element={<KnowledgeBasePage />} />
             <Route path="/channels" element={<ChannelsSettingsPage />} />
+            <Route path="/automations" element={<AutomationsPage />} />
           </Route>
         </Route>
       </Route>

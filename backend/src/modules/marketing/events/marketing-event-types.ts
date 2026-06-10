@@ -26,6 +26,17 @@ export const MarketingEventTypes = {
   ConversationStarted: "marketing.conversation.started.v1",
   ConversationMessageReceived: "marketing.conversation.message.received.v1",
   ConversationMessageSent: "marketing.conversation.message.sent.v1",
+
+  // Phase F P3 — workflow-automation trigger sources. LeadCreated +
+  // ConversationMessageReceived fire from P3; the rest are emitted by their
+  // own phases (form/booking P5, review P6) and the workflow trigger service
+  // already listens for them.
+  LeadCreated: "marketing.lead.created.v1",
+  LeadStatusChanged: "marketing.lead.status_changed.v1",
+  FormSubmitted: "marketing.form.submitted.v1",
+  BookingCreated: "marketing.booking.created.v1",
+  ReviewReceived: "marketing.review.received.v1",
+  TaskCompleted: "marketing.task.completed.v1",
 } as const;
 
 export type MarketingEventType =

@@ -109,7 +109,8 @@
     "agentStudio": "Agent Studio",
     "knowledgeBase": "Knowledge Base",
     "inbox": "Inbox",
-    "channels": "Channels"
+    "channels": "Channels",
+    "automations": "Automations"
   },
   "common": {
     "save": "Save",
@@ -740,5 +741,25 @@
     "noSecrets": "no credentials yet",
     "embed": "Embed snippet (paste before </body>)",
     "empty": "No channels yet — connect one so customers can message you."
+  },
+  "automations": {
+    "title": "Automations",
+    "subtitle": "When something happens, do this. Triggers fire steps — send, wait, branch, create tasks, update leads.",
+    "new": "New automation",
+    "aiAssist": "Describe it — AI drafts the steps",
+    "aiPlaceholder": "e.g. when a new lead comes in, wait 1 hour then send a WhatsApp intro and create a follow-up task",
+    "drafting": "Drafting…",
+    "draftBtn": "Draft",
+    "name": "Name",
+    "trigger": "Trigger",
+    "filters": "Trigger filters (JSON, optional)",
+    "steps": "Steps (JSON)",
+    "badFilters": "Trigger filters are not valid JSON",
+    "badSteps": "Steps are not valid JSON",
+    "saved": "Automation saved",
+    "saveFailed": "Save failed",
+    "drafted": "Draft ready — review and save",
+    "draftFailed": "Could not draft",
+    "empty": "No automations yet — describe one and let AI draft it."
   }
 }
