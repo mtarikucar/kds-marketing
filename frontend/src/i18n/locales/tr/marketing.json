@@ -104,7 +104,10 @@
     "logout": "Çıkış",
     "profile": "Profil",
     "research": "AI Araştırma",
-    "billing": "Faturalama"
+    "billing": "Faturalama",
+    "aiGroup": "AI",
+    "agentStudio": "AI Ajan Stüdyosu",
+    "knowledgeBase": "Bilgi Bankası"
   },
   "common": {
     "save": "Kaydet",
@@ -601,7 +604,13 @@
     "accountName": "Hesap adı",
     "amount": "Tutar",
     "reference": "Açıklama kodu (zorunlu!)",
-    "bankHint": "Açıklama koduna referansı mutlaka yazın — ödeme eşleştirilir eşleştirilmez paketiniz aktifleşir."
+    "bankHint": "Açıklama koduna referansı mutlaka yazın — ödeme eşleştirilir eşleştirilmez paketiniz aktifleşir.",
+    "aiCredits": "Bu ay AI kredisi",
+    "aiCreditsHint": "Aylık sıfırlanır. Limiti artırmak için aşağıdan bir paket ekleyin.",
+    "agents": "AI ajanları",
+    "knowledgeDocs": "Bilgi belgeleri",
+    "aiCreditsWord": "AI kredisi",
+    "messagesWord": "mesaj"
   },
   "commission": {
     "detailTitle": "Komisyon detayı",
@@ -648,5 +657,49 @@
     "statsLeads": "Toplam Lead",
     "statsWon": "Kazanılan",
     "statsCommission": "Toplam Komisyon"
+  },
+  "agents": {
+    "title": "AI Ajan Stüdyosu",
+    "subtitle": "AI'ınızın müşterilere yanıt verirken kullandığı kişiliği, tonu ve bilgi temelini tanımlayın. Kanalları bir sonraki adımda bağlayın.",
+    "new": "Yeni ajan",
+    "edit": "Ajanı düzenle",
+    "name": "Ajan adı",
+    "language": "Dil",
+    "persona": "Kişilik (bu ajan kim?)",
+    "personaPlaceholder": "örn. Bir aile pizzacısının güler yüzlü ön büro asistanısın. Sıcak karşıla, kısa cümlelerle yanıtla…",
+    "personaMin": "en az 10 karakter",
+    "tone": "Ton (opsiyonel)",
+    "tonePlaceholder": "sıcak, kısa, profesyonel",
+    "maxReplies": "Konuşma başına günlük maks. AI yanıtı",
+    "goals": "Hedefler (opsiyonel)",
+    "goalsPlaceholder": "Ajan neyi başarmaya çalışmalı? örn. masa ayırt, telefon + kişi sayısı al",
+    "guardrails": "Sınırlar (opsiyonel)",
+    "guardrailsPlaceholder": "Asla ne yapmamalı? örn. asla fiyat verme, asla iade sözü verme",
+    "capture": "Toplanacak alanlar (virgülle)",
+    "knowledge": "Bilgi bankası temeli",
+    "noDocs": "Henüz bilgi belgesi yok — yanıtları gerçeklere dayandırmak için Bilgi Bankası'na ekleyin.",
+    "active": "Aktif",
+    "paused": "Duraklatıldı",
+    "saved": "Ajan kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "empty": "Henüz ajan yok — AI'ınızın müşterilerle nasıl konuşacağını tanımlamak için bir tane oluşturun."
+  },
+  "knowledge": {
+    "title": "Bilgi Bankası",
+    "subtitle": "AI'ınızın yanıt verirken dayandığı gerçekler — menüler, saatler, politikalar, SSS. Belgeleri Ajan Stüdyosu'nda bir ajana bağlayın.",
+    "new": "Yeni belge",
+    "edit": "Belgeyi düzenle",
+    "docTitle": "Başlık",
+    "titlePlaceholder": "örn. Menü ve fiyatlar",
+    "language": "Dil",
+    "content": "İçerik",
+    "contentPlaceholder": "AI'ın bilmesi gereken gerçekleri yapıştırın. Düz metin en iyisidir.",
+    "saved": "Belge kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "loadFailed": "Belge yüklenemedi",
+    "archived": "arşivlendi",
+    "updated": "güncellendi",
+    "toggleArchive": "Arşivle / geri yükle",
+    "empty": "Henüz belge yok — AI'ınızın yanıt vereceği gerçekleri ekleyin."
   }
 }

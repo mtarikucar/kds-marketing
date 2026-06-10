@@ -29,6 +29,9 @@ export interface CheckoutInput {
 const ADDON_PRICES: Record<string, { TRY: number; USD: number; name: string }> = {
   quota_boost_10: { TRY: 2690, USD: 79, name: '+10 leads/day boost' },
   extra_profile: { TRY: 1690, USD: 49, name: 'Extra research profile' },
+  // Phase F P1 — AI metering boosts (monthly recurring; fold via ADDON_GRANTS).
+  ai_credit_boost_500: { TRY: 290, USD: 9, name: '+500 AI credits / month' },
+  messages_boost_1000: { TRY: 190, USD: 6, name: '+1000 messages / month' },
 };
 
 /**

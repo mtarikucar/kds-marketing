@@ -44,6 +44,40 @@ function validateEnv(): void {
     // eslint-disable-next-line no-console
     console.warn(`[env] ${msg}`);
   }
+
+  // Phase F (AI). Runtime AI is gated by AnthropicService.isEnabled(); a
+  // missing key simply disables the AI surfaces (compose 503s, the engine
+  // no-ops) — it must NEVER take the whole app down, since the v1.x lead /
+  // billing features don't need it. So this is a loud WARNING, not a hard
+  // exit: shipping to prod without a key (and without the AI_DISABLED
+  // kill-switch) is surfaced, but the service still boots.
+  if (isProd && process.env.AI_DISABLED !== '1' && !process.env.ANTHROPIC_API_KEY) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[env] ANTHROPIC_API_KEY is not set — AI features will report "not configured" until you add it (or set AI_DISABLED=1 to silence this).',
+    );
+  }
+
+  // MARKETING_SECRET_KEY is the AES-256-GCM master key that seals channel/PSP
+  // secrets (consumed from Phase F P2 on). It's optional in P1, but if it's
+  // present it MUST decode to exactly 32 bytes or the box throws at first
+  // use — validate the format now rather than discover it mid-request.
+  const secretKey = process.env.MARKETING_SECRET_KEY;
+  if (secretKey) {
+    let bytes = 0;
+    try {
+      bytes = Buffer.from(secretKey, 'base64').length;
+    } catch {
+      bytes = 0;
+    }
+    if (bytes !== 32) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '[env] MARKETING_SECRET_KEY must be a base64-encoded 32-byte key (openssl rand -base64 32)',
+      );
+      process.exit(1);
+    }
+  }
 }
 
 validateEnv();

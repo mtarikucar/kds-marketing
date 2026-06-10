@@ -15,8 +15,34 @@ export const FEATURE_KEYS = [
   'commissions',
   'advancedReports',
   'apiAccess',
+  // GoHighLevel-class capabilities (P1+). Each is a sellable feature gate.
+  'conversationAi',
+  'workflows',
+  'campaigns',
+  'funnels',
+  'reviews',
+  'askAi',
+  'agentStudio',
+  'voiceAi',
+  'invoicing',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
+
+/**
+ * Numeric entitlement limits beyond the three legacy columns. Stored in
+ * Package.limits JSON; add-on grants fold in generically (`limit.<key>`).
+ * -1 = unlimited. Tripwire-pinned against seed-packages.ts `limits` blocks.
+ */
+export const LIMIT_KEYS = [
+  'aiCreditsMonthly',
+  'messagesMonthly',
+  'maxAgents',
+  'maxWorkflows',
+  'maxFunnels',
+  'maxKnowledgeDocs',
+  'maxCalendars',
+] as const;
+export type LimitKey = (typeof LIMIT_KEYS)[number];
 
 export interface EffectiveEntitlements {
   workspaceId: string;
@@ -26,8 +52,13 @@ export interface EffectiveEntitlements {
   maxUsers: number;
   maxResearchProfiles: number;
   features: Record<FeatureKey, boolean>;
+  limits: Record<LimitKey, number>;
   trialEndsAt: Date | null;
   currentPeriodEnd: Date | null;
+}
+
+function zeroLimits(): Record<LimitKey, number> {
+  return Object.fromEntries(LIMIT_KEYS.map((k) => [k, 0])) as Record<LimitKey, number>;
 }
 
 /** No (live) subscription → the floor: login works, nothing else moves. */
@@ -43,6 +74,7 @@ function zeroEntitlements(workspaceId: string, status: string | null): Effective
       FeatureKey,
       boolean
     >,
+    limits: zeroLimits(),
     trialEndsAt: null,
     currentPeriodEnd: null,
   };
@@ -120,6 +152,15 @@ export class EntitlementsService {
     let maxUsers = pkg.maxUsers;
     let maxResearchProfiles = pkg.maxResearchProfiles;
 
+    // Package.limits JSON seeds the LIMIT_KEYS record (missing key → 0).
+    const pkgLimits = (pkg.limits ?? {}) as Record<string, unknown>;
+    const limits = Object.fromEntries(
+      LIMIT_KEYS.map((k) => {
+        const v = pkgLimits[k];
+        return [k, typeof v === 'number' ? v : 0];
+      }),
+    ) as Record<LimitKey, number>;
+
     const addons = await this.prisma.workspaceAddOn.findMany({
       where: {
         workspaceId,
@@ -139,9 +180,13 @@ export class EntitlementsService {
           // -1 (unlimited) absorbs additions.
           if (limitKey === 'dailyLeadQuota' && dailyLeadQuota !== -1)
             dailyLeadQuota += delta;
-          if (limitKey === 'maxUsers' && maxUsers !== -1) maxUsers += delta;
-          if (limitKey === 'maxResearchProfiles' && maxResearchProfiles !== -1)
+          else if (limitKey === 'maxUsers' && maxUsers !== -1) maxUsers += delta;
+          else if (limitKey === 'maxResearchProfiles' && maxResearchProfiles !== -1)
             maxResearchProfiles += delta;
+          else if ((LIMIT_KEYS as readonly string[]).includes(limitKey)) {
+            const lk = limitKey as LimitKey;
+            if (limits[lk] !== -1) limits[lk] += delta;
+          }
         } else if (key.startsWith('feature.')) {
           const featureKey = key.slice('feature.'.length) as FeatureKey;
           if ((FEATURE_KEYS as readonly string[]).includes(featureKey) && rawValue) {
@@ -159,6 +204,7 @@ export class EntitlementsService {
       maxUsers,
       maxResearchProfiles,
       features,
+      limits,
       trialEndsAt: sub.trialEndsAt,
       currentPeriodEnd: sub.currentPeriodEnd,
     };

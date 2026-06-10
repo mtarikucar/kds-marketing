@@ -5,6 +5,10 @@ import { EntitlementsService } from './entitlements.service';
 const ADDON_GRANTS: Record<string, Record<string, number>> = {
   quota_boost_10: { 'limit.dailyLeadQuota': 10 },
   extra_profile: { 'limit.maxResearchProfiles': 1 },
+  // Phase F P1 — AI metering boosts. The `limit.*` grants fold generically
+  // into the monthly meters (entitlements.service.ts), -1 packages absorb them.
+  ai_credit_boost_500: { 'limit.aiCreditsMonthly': 500 },
+  messages_boost_1000: { 'limit.messagesMonthly': 1000 },
 };
 
 /**

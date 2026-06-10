@@ -1,0 +1,97 @@
+import { ScheduledJobService } from './scheduled-job.service';
+
+/**
+ * Enqueue/cancel side of the delayed-work primitive. The dedup contract is
+ * the load-bearing part: scheduling the same (kind, dedupKey) while one is
+ * still PENDING must collapse onto the existing row (reschedule, not pile up)
+ * — the partial-unique index is the DB backstop, this is the app-side path.
+ */
+describe('ScheduledJobService', () => {
+  const WS = 'ws-1';
+  const RUN_AT = new Date('2026-07-01T00:00:00.000Z');
+  let prisma: any;
+  let svc: ScheduledJobService;
+
+  beforeEach(() => {
+    prisma = {
+      scheduledJob: {
+        findFirst: jest.fn(),
+        create: jest.fn().mockResolvedValue({ id: 'job-new' }),
+        update: jest.fn().mockResolvedValue({ id: 'job-existing' }),
+        updateMany: jest.fn(),
+      },
+    };
+    svc = new ScheduledJobService(prisma as any);
+  });
+
+  it('creates a fresh job when there is no dedupKey', async () => {
+    const id = await svc.schedule({
+      workspaceId: WS,
+      kind: 'workflow.resume',
+      runAt: RUN_AT,
+      payload: { runId: 'r1' },
+    });
+    expect(id).toBe('job-new');
+    expect(prisma.scheduledJob.create).toHaveBeenCalledTimes(1);
+    const data = prisma.scheduledJob.create.mock.calls[0][0].data;
+    expect(data.workspaceId).toBe(WS);
+    expect(data.dedupKey).toBeNull();
+    expect(prisma.scheduledJob.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('creates when a dedupKey has no live PENDING row', async () => {
+    prisma.scheduledJob.findFirst.mockResolvedValue(null);
+    const id = await svc.schedule({
+      workspaceId: WS,
+      kind: 'conversation.followup',
+      runAt: RUN_AT,
+      payload: {},
+      dedupKey: 'conv-1',
+    });
+    expect(id).toBe('job-new');
+    expect(prisma.scheduledJob.findFirst).toHaveBeenCalledWith({
+      where: { kind: 'conversation.followup', dedupKey: 'conv-1', status: 'PENDING' },
+      select: { id: true },
+    });
+    expect(prisma.scheduledJob.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('reschedules in place (no second row) when a PENDING dedup row exists', async () => {
+    prisma.scheduledJob.findFirst.mockResolvedValue({ id: 'job-existing' });
+    const id = await svc.schedule({
+      workspaceId: WS,
+      kind: 'conversation.followup',
+      runAt: RUN_AT,
+      payload: { n: 2 },
+      dedupKey: 'conv-1',
+    });
+    expect(id).toBe('job-existing');
+    expect(prisma.scheduledJob.create).not.toHaveBeenCalled();
+    expect(prisma.scheduledJob.update).toHaveBeenCalledTimes(1);
+    expect(prisma.scheduledJob.update.mock.calls[0][0]).toMatchObject({
+      where: { id: 'job-existing' },
+      data: { runAt: RUN_AT, payload: { n: 2 }, workspaceId: WS },
+    });
+  });
+
+  it('cancel flips the PENDING (kind, dedupKey) row and reports whether it hit', async () => {
+    prisma.scheduledJob.updateMany.mockResolvedValue({ count: 1 });
+    await expect(svc.cancel('conversation.followup', 'conv-1')).resolves.toBe(true);
+    expect(prisma.scheduledJob.updateMany).toHaveBeenCalledWith({
+      where: { kind: 'conversation.followup', dedupKey: 'conv-1', status: 'PENDING' },
+      data: { status: 'CANCELLED', completedAt: expect.any(Date) },
+    });
+
+    prisma.scheduledJob.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.cancel('conversation.followup', 'gone')).resolves.toBe(false);
+  });
+
+  it('cancelById only cancels a still-PENDING row', async () => {
+    prisma.scheduledJob.updateMany.mockResolvedValue({ count: 1 });
+    await expect(svc.cancelById('job-x')).resolves.toBe(true);
+    expect(prisma.scheduledJob.updateMany).toHaveBeenCalledWith({
+      where: { id: 'job-x', status: 'PENDING' },
+      data: { status: 'CANCELLED', completedAt: expect.any(Date) },
+    });
+  });
+});

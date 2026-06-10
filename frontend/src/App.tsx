@@ -18,6 +18,8 @@ import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/TargetsPage';
 import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
 import ResearchSettingsPage from './pages/marketing/ResearchSettingsPage';
+import AgentStudioPage from './pages/marketing/AgentStudioPage';
+import KnowledgeBasePage from './pages/marketing/KnowledgeBasePage';
 import BillingPage from './pages/marketing/BillingPage';
 import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
@@ -62,6 +64,8 @@ export default function App() {
             <Route path="/users" element={<MarketingUsersPage />} />
             <Route path="/targets" element={<TargetsPage />} />
             <Route path="/research" element={<ResearchSettingsPage />} />
+            <Route path="/ai/agents" element={<AgentStudioPage />} />
+            <Route path="/ai/knowledge" element={<KnowledgeBasePage />} />
           </Route>
         </Route>
       </Route>
