@@ -104,7 +104,10 @@
     "logout": "Logout",
     "profile": "Profile",
     "research": "AI Research",
-    "billing": "Billing"
+    "billing": "Billing",
+    "aiGroup": "AI",
+    "agentStudio": "Agent Studio",
+    "knowledgeBase": "Knowledge Base"
   },
   "common": {
     "save": "Save",
@@ -601,7 +604,13 @@
     "accountName": "Account name",
     "amount": "Amount",
     "reference": "Reference (required!)",
-    "bankHint": "Include the reference in the transfer description — your package activates as soon as our team matches the payment."
+    "bankHint": "Include the reference in the transfer description — your package activates as soon as our team matches the payment.",
+    "aiCredits": "AI credits this month",
+    "aiCreditsHint": "Resets monthly. Add a boost below to raise the cap.",
+    "agents": "AI agents",
+    "knowledgeDocs": "Knowledge docs",
+    "aiCreditsWord": "AI credits",
+    "messagesWord": "messages"
   },
   "commission": {
     "detailTitle": "Commission detail",
@@ -648,5 +657,49 @@
     "statsLeads": "Total leads",
     "statsWon": "Won",
     "statsCommission": "Total commission"
+  },
+  "agents": {
+    "title": "Agent Studio",
+    "subtitle": "Define the persona, tone and grounding your AI uses to answer customers. Connect channels in the next step.",
+    "new": "New agent",
+    "edit": "Edit agent",
+    "name": "Agent name",
+    "language": "Language",
+    "persona": "Persona (who is this agent?)",
+    "personaPlaceholder": "e.g. You are the friendly front-desk assistant for a family pizzeria. Greet warmly, answer in short sentences…",
+    "personaMin": "min 10 characters",
+    "tone": "Tone (optional)",
+    "tonePlaceholder": "warm, concise, professional",
+    "maxReplies": "Max AI replies / conversation / day",
+    "goals": "Goals (optional)",
+    "goalsPlaceholder": "What should the agent try to achieve? e.g. book a table, capture phone + party size",
+    "guardrails": "Guardrails (optional)",
+    "guardrailsPlaceholder": "What must it never do? e.g. never quote prices, never promise refunds",
+    "capture": "Fields to capture (comma separated)",
+    "knowledge": "Knowledge base grounding",
+    "noDocs": "No knowledge docs yet — add some in the Knowledge Base to ground replies in facts.",
+    "active": "Active",
+    "paused": "Paused",
+    "saved": "Agent saved",
+    "saveFailed": "Save failed",
+    "empty": "No agents yet — create one to define how your AI talks to customers."
+  },
+  "knowledge": {
+    "title": "Knowledge Base",
+    "subtitle": "The facts your AI answers from — menus, hours, policies, FAQs. Attach docs to an agent in Agent Studio.",
+    "new": "New document",
+    "edit": "Edit document",
+    "docTitle": "Title",
+    "titlePlaceholder": "e.g. Menu & prices",
+    "language": "Language",
+    "content": "Content",
+    "contentPlaceholder": "Paste the facts the AI should know. Plain text works best.",
+    "saved": "Document saved",
+    "saveFailed": "Save failed",
+    "loadFailed": "Could not load document",
+    "archived": "archived",
+    "updated": "updated",
+    "toggleArchive": "Archive / restore",
+    "empty": "No documents yet — add the facts your AI should answer from."
   }
 }

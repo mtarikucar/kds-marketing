@@ -4,11 +4,19 @@
  *
  * Pricing anchors (2026-06): based on the research routine's measured
  * output of 10–20 qualified leads/day/profile and an estimated COGS of
- * ~$1.5–3/day/profile in research tokens + scraping credits. TRY prices
- * are positioned for the local market, not FX-converted.
+ * ~$1.5–3/day/profile in research tokens + scraping credits. The Phase-F
+ * (GoHighLevel-parity) AI features add a second COGS axis — LLM tokens and
+ * outbound messages — metered per workspace via `limits` below.
  *
- * `features` keys MUST mirror FEATURE_KEYS in entitlements.service.ts —
- * the tripwire spec fails the build when they drift.
+ * `features` keys MUST mirror FEATURE_KEYS and `limits` keys MUST mirror
+ * LIMIT_KEYS in entitlements.service.ts — the tripwire spec fails the build
+ * when either drifts. Every package lists EVERY key explicitly (a missing
+ * key reads as "forgot", not "off"). -1 = unlimited.
+ *
+ * Limit philosophy: cost-bearing meters (aiCreditsMonthly, messagesMonthly,
+ * maxAgents, maxKnowledgeDocs) stay bounded at every paid tier and only go
+ * unlimited on the internal OPERATOR package; pure config counts (workflows,
+ * funnels, calendars) open up at SCALE.
  */
 import { PrismaClient } from '@prisma/client';
 
@@ -29,6 +37,24 @@ const PACKAGES = [
       commissions: false,
       advancedReports: false,
       apiAccess: false,
+      conversationAi: true,
+      workflows: true,
+      campaigns: false,
+      funnels: true,
+      reviews: false,
+      askAi: true,
+      agentStudio: true,
+      voiceAi: false,
+      invoicing: false,
+    },
+    limits: {
+      aiCreditsMonthly: 100,
+      messagesMonthly: 100,
+      maxAgents: 1,
+      maxWorkflows: 3,
+      maxFunnels: 1,
+      maxKnowledgeDocs: 5,
+      maxCalendars: 1,
     },
     priceMonthlyTRY: 0,
     priceMonthlyUSD: 0,
@@ -50,6 +76,24 @@ const PACKAGES = [
       commissions: false,
       advancedReports: true,
       apiAccess: false,
+      conversationAi: true,
+      workflows: true,
+      campaigns: true,
+      funnels: true,
+      reviews: false,
+      askAi: true,
+      agentStudio: true,
+      voiceAi: false,
+      invoicing: false,
+    },
+    limits: {
+      aiCreditsMonthly: 500,
+      messagesMonthly: 1000,
+      maxAgents: 1,
+      maxWorkflows: 10,
+      maxFunnels: 3,
+      maxKnowledgeDocs: 20,
+      maxCalendars: 2,
     },
     priceMonthlyTRY: 3490,
     priceMonthlyUSD: 99,
@@ -74,6 +118,24 @@ const PACKAGES = [
       commissions: false,
       advancedReports: true,
       apiAccess: false,
+      conversationAi: true,
+      workflows: true,
+      campaigns: true,
+      funnels: true,
+      reviews: true,
+      askAi: true,
+      agentStudio: true,
+      voiceAi: false,
+      invoicing: true,
+    },
+    limits: {
+      aiCreditsMonthly: 2000,
+      messagesMonthly: 5000,
+      maxAgents: 3,
+      maxWorkflows: 30,
+      maxFunnels: 10,
+      maxKnowledgeDocs: 100,
+      maxCalendars: 5,
     },
     priceMonthlyTRY: 8490,
     priceMonthlyUSD: 249,
@@ -98,6 +160,24 @@ const PACKAGES = [
       commissions: true,
       advancedReports: true,
       apiAccess: true,
+      conversationAi: true,
+      workflows: true,
+      campaigns: true,
+      funnels: true,
+      reviews: true,
+      askAi: true,
+      agentStudio: true,
+      voiceAi: true,
+      invoicing: true,
+    },
+    limits: {
+      aiCreditsMonthly: 6000,
+      messagesMonthly: 20000,
+      maxAgents: 10,
+      maxWorkflows: -1,
+      maxFunnels: -1,
+      maxKnowledgeDocs: 500,
+      maxCalendars: -1,
     },
     priceMonthlyTRY: 16900,
     priceMonthlyUSD: 499,
@@ -121,6 +201,24 @@ const PACKAGES = [
       commissions: true,
       advancedReports: true,
       apiAccess: true,
+      conversationAi: true,
+      workflows: true,
+      campaigns: true,
+      funnels: true,
+      reviews: true,
+      askAi: true,
+      agentStudio: true,
+      voiceAi: true,
+      invoicing: true,
+    },
+    limits: {
+      aiCreditsMonthly: -1,
+      messagesMonthly: -1,
+      maxAgents: -1,
+      maxWorkflows: -1,
+      maxFunnels: -1,
+      maxKnowledgeDocs: -1,
+      maxCalendars: -1,
     },
     priceMonthlyTRY: 0,
     priceMonthlyUSD: 0,

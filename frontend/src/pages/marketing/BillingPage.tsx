@@ -34,6 +34,15 @@ const FEATURE_LABELS: Record<string, string> = {
   commissions: 'Commission tracking',
   advancedReports: 'Advanced reports',
   apiAccess: 'API access (ingest tokens)',
+  conversationAi: 'Conversation AI (auto-reply)',
+  workflows: 'Workflow automation',
+  campaigns: 'Email & SMS campaigns',
+  funnels: 'Funnels, forms & booking',
+  reviews: 'Reviews & reputation',
+  askAi: 'Ask-AI assistant',
+  agentStudio: 'AI Agent Studio',
+  voiceAi: 'Voice AI receptionist',
+  invoicing: 'Customer invoicing',
 };
 
 /**
@@ -62,6 +71,11 @@ export default function BillingPage() {
   const { data: usage } = useQuery({
     queryKey: ['marketing', 'research', 'usage'],
     queryFn: () => marketingApi.get('/research/usage').then((r) => r.data),
+  });
+  const { data: aiUsage } = useQuery({
+    queryKey: ['marketing', 'ai', 'usage'],
+    queryFn: () => marketingApi.get('/ai/usage').then((r) => r.data),
+    refetchInterval: 60_000,
   });
   const { data: orders } = useQuery({
     queryKey: ['marketing', 'billing', 'orders'],
@@ -129,6 +143,10 @@ export default function BillingPage() {
   const ent = summary?.entitlements;
   const quotaPct =
     usage && usage.limit > 0 ? Math.min(100, Math.round((usage.used / usage.limit) * 100)) : 0;
+  const aiPct =
+    aiUsage && aiUsage.limit > 0
+      ? Math.min(100, Math.round((aiUsage.used / aiUsage.limit) * 100))
+      : 0;
 
   return (
     <div className="space-y-6">
@@ -140,7 +158,7 @@ export default function BillingPage() {
       </div>
 
       {/* Current plan + usage */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="text-xs text-slate-400 uppercase tracking-wide">{t('billing.currentPlan', 'Current plan')}</div>
           <div className="text-xl font-bold text-slate-900 mt-1">
@@ -179,10 +197,23 @@ export default function BillingPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <div className="text-xs text-slate-400 uppercase tracking-wide">{t('billing.aiCredits', 'AI credits this month')}</div>
+          <div className="text-xl font-bold text-slate-900 mt-1">
+            {aiUsage ? (aiUsage.limit === -1 ? `${aiUsage.used} / ∞` : `${aiUsage.used} / ${aiUsage.limit}`) : '…'}
+          </div>
+          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mt-2">
+            <div className={`h-full ${aiPct >= 100 ? 'bg-amber-500' : 'bg-primary'}`} style={{ width: aiUsage?.limit === -1 ? '8%' : `${aiPct}%` }} />
+          </div>
+          <p className="text-xs text-slate-400 mt-2">{t('billing.aiCreditsHint', 'Resets monthly. Add a boost below to raise the cap.')}</p>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="text-xs text-slate-400 uppercase tracking-wide">{t('billing.limits', 'Limits')}</div>
           <div className="text-sm text-slate-700 mt-2 space-y-1">
             <div>{t('billing.seats', 'Seats')}: <strong>{ent?.maxUsers === -1 ? '∞' : ent?.maxUsers ?? '—'}</strong></div>
             <div>{t('billing.profiles', 'Research profiles')}: <strong>{ent?.maxResearchProfiles === -1 ? '∞' : ent?.maxResearchProfiles ?? '—'}</strong></div>
+            <div>{t('billing.agents', 'AI agents')}: <strong>{ent?.limits?.maxAgents === -1 ? '∞' : ent?.limits?.maxAgents ?? '—'}</strong></div>
+            <div>{t('billing.knowledgeDocs', 'Knowledge docs')}: <strong>{ent?.limits?.maxKnowledgeDocs === -1 ? '∞' : ent?.limits?.maxKnowledgeDocs ?? '—'}</strong></div>
           </div>
         </div>
       </div>
@@ -301,6 +332,26 @@ export default function BillingPage() {
                 <div className="text-xs text-slate-400">{currency === 'TRY' ? '₺1.690' : '$49'}/{t('billing.mo', 'mo')}</div>
               </div>
               <button onClick={() => checkout.mutate({ addOnCode: 'extra_profile', provider: pickProvider() ?? 'manual' })}
+                className="px-3 py-1.5 text-xs rounded-lg bg-slate-900 text-white hover:bg-slate-800">
+                {t('billing.buy', 'Buy')}
+              </button>
+            </div>
+            <div className="border border-slate-200 rounded-lg p-4 flex items-center justify-between">
+              <div>
+                <div className="font-medium text-slate-800 text-sm">+500 {t('billing.aiCreditsWord', 'AI credits')}</div>
+                <div className="text-xs text-slate-400">{currency === 'TRY' ? '₺290' : '$9'}/{t('billing.mo', 'mo')}</div>
+              </div>
+              <button onClick={() => checkout.mutate({ addOnCode: 'ai_credit_boost_500', provider: pickProvider() ?? 'manual' })}
+                className="px-3 py-1.5 text-xs rounded-lg bg-slate-900 text-white hover:bg-slate-800">
+                {t('billing.buy', 'Buy')}
+              </button>
+            </div>
+            <div className="border border-slate-200 rounded-lg p-4 flex items-center justify-between">
+              <div>
+                <div className="font-medium text-slate-800 text-sm">+1000 {t('billing.messagesWord', 'messages')}</div>
+                <div className="text-xs text-slate-400">{currency === 'TRY' ? '₺190' : '$6'}/{t('billing.mo', 'mo')}</div>
+              </div>
+              <button onClick={() => checkout.mutate({ addOnCode: 'messages_boost_1000', provider: pickProvider() ?? 'manual' })}
                 className="px-3 py-1.5 text-xs rounded-lg bg-slate-900 text-white hover:bg-slate-800">
                 {t('billing.buy', 'Buy')}
               </button>

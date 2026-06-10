@@ -20,3 +20,4 @@ export * from './assign-lead.dto';
 export * from './bulk-assign-lead.dto';
 export * from './ingest-leads.dto';
 export * from './update-distribution-config.dto';
+export * from './ai.dto';

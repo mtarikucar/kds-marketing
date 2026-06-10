@@ -12,3 +12,4 @@ export * from './marketing-leads-ingest.controller';
 export * from './marketing-distribution.controller';
 export * from './sales-call.controller';
 export * from './sales-target.controller';
+export * from './marketing-ai.controller';

@@ -68,6 +68,18 @@ import { InstallationConsumer } from './installations/installation.consumer';
 import { SalesTargetController } from './controllers/sales-target.controller';
 import { SalesTargetService } from './services/sales-target.service';
 
+// Phase F (GoHighLevel parity) — P1: AI core + the delayed-work primitive
+// (ScheduledJob) that later phases (followups, campaign batches, booking
+// reminders, workflow waits) all enqueue onto.
+import { MarketingAiController } from './controllers/marketing-ai.controller';
+import { ScheduledJobService } from './scheduling/scheduled-job.service';
+import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
+import { AnthropicService } from './ai/anthropic.service';
+import { AiCreditsService } from './ai/ai-credits.service';
+import { KnowledgeService } from './ai/knowledge.service';
+import { AgentProfileService } from './ai/agent-profile.service';
+import { ContentAiService } from './ai/content-ai.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -128,6 +140,7 @@ import { SalesTargetService } from './services/sales-target.service';
     SalesTargetController,
     MarketingResearchController,
     MarketingBillingController,
+    MarketingAiController,
   ],
   providers: [
     // Services
@@ -169,6 +182,19 @@ import { SalesTargetService } from './services/sales-target.service';
     InstallationConsumer,
     // Phase 4 sales targets/quotas + performance.
     SalesTargetService,
+    // Phase F P1 — delayed-work primitive: the enqueue/cancel service and the
+    // once-a-minute claim+dispatch runner (advisory-locked, single-replica).
+    // Feature modules register per-kind handlers in onModuleInit (P2+).
+    ScheduledJobService,
+    ScheduledJobRunnerService,
+    // Phase F P1 — AI core: the single Anthropic entry point, monthly credit
+    // metering, the knowledge base + agent profiles (Agent Studio), and
+    // one-shot content generation.
+    AnthropicService,
+    AiCreditsService,
+    KnowledgeService,
+    AgentProfileService,
+    ContentAiService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

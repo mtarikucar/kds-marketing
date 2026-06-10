@@ -593,7 +593,12 @@ model Package {
   dailyLeadQuota      Int // -1 = unlimited
   maxUsers            Int
   maxResearchProfiles Int
-  features            Json // { autoAssign, telephony, installations, commissions, advancedReports, apiAccess }
+  features            Json // FEATURE_KEYS (15): autoAssign, telephony, installations, commissions, advancedReports, apiAccess, conversationAi, workflows, campaigns, funnels, reviews, askAi, agentStudio, voiceAi, invoicing
+  // Numeric entitlement limits (-1 = unlimited). Keys mirror LIMIT_KEYS in
+  // entitlements.service.ts (tripwire-pinned). Legacy dailyLeadQuota/maxUsers/
+  // maxResearchProfiles stay as their own columns; everything new lives here
+  // so adding a limit never needs a migration.
+  limits              Json? // { aiCreditsMonthly, messagesMonthly, maxAgents, maxWorkflows, maxFunnels, maxKnowledgeDocs, maxCalendars }
   priceMonthlyTRY     Decimal  @db.Decimal(10, 2)
   priceMonthlyUSD     Decimal  @db.Decimal(10, 2)
   priceYearlyTRY      Decimal? @db.Decimal(10, 2)
@@ -679,6 +684,90 @@ model PaymentOrder {
   @@index([workspaceId, status])
   @@index([status, createdAt])
   @@map("payment_orders")
+}
+
+/// Generic delayed-work primitive — the one table behind conversation
+/// follow-ups, workflow `wait` steps, campaign send batches, booking
+/// reminders and invoice verify-polls. Distinct from OutboxEvent (which is
+/// dispatch-asap, retention-pruned, uncancellable): jobs carry an arbitrary
+/// future runAt, are cancellable, and route to per-kind handlers.
+model ScheduledJob {
+  id          String    @id @default(uuid())
+  workspaceId String
+  kind        String // 'workflow.resume' | 'conversation.followup' | 'campaign.batch' | 'booking.reminder' | ...
+  runAt       DateTime
+  payload     Json
+  /// Deterministic key; rescheduling collapses onto the same PENDING row
+  /// (enforced by a raw partial-unique index, see the migration).
+  dedupKey    String?
+  status      String    @default("PENDING") // PENDING, RUNNING, DONE, FAILED, CANCELLED
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lastError   String?
+  lockedAt    DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, runAt])
+  @@index([workspaceId, kind])
+  @@map("scheduled_jobs")
+}
+
+/// Workspace-authored knowledge the AI agents are grounded on. v1 retrieval
+/// is Postgres FTS (searchVector tsvector + GIN, language-aware via a CASE
+/// whitelist trigger) — no pgvector dependency.
+model KnowledgeDoc {
+  id           String                   @id @default(uuid())
+  workspaceId  String
+  title        String
+  content      String                   @db.Text
+  source       String                   @default("MANUAL") // MANUAL | URL
+  sourceRef    String?
+  language     String                   @default("tr")
+  status       String                   @default("ACTIVE") // ACTIVE | ARCHIVED
+  /// Maintained by a BEFORE INSERT/UPDATE trigger (raw SQL in the migration);
+  /// Prisma only needs to know the column exists.
+  searchVector Unsupported("tsvector")?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([searchVector], type: Gin)
+  @@map("knowledge_docs")
+}
+
+/// An AI agent persona (Agent Studio): tone/goals/guardrails + which KB docs
+/// it can cite + which channels it answers on + lead-capture + human-handoff
+/// rules + follow-up policy. Conversation AI, Content AI and Voice AI all
+/// run grounded on one of these.
+model AgentProfile {
+  id                      String  @id @default(uuid())
+  workspaceId             String
+  name                    String
+  status                  String  @default("ACTIVE") // ACTIVE | PAUSED
+  persona                 String  @db.Text
+  tone                    String?
+  goals                   String? @db.Text
+  guardrails              String? @db.Text
+  language                String  @default("tr")
+  /// JSON arrays / objects: channels (Channel ids), kbDocIds, captureFields
+  /// (['email','city',...]), handoffRules ({keywords:[], outsideBusinessHours}),
+  /// followup ({enabled, afterHours, maxFollowups}).
+  channels                Json?
+  kbDocIds                Json?
+  captureFields           Json?
+  handoffRules            Json?
+  followup                Json?
+  bookingCalendarId       String?
+  maxRepliesPerConvoDaily Int     @default(30)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("agent_profiles")
 }
 
 model OutboxEvent {

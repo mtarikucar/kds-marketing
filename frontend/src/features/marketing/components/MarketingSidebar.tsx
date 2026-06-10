@@ -16,6 +16,8 @@ import {
   FlagIcon,
   BeakerIcon,
   CreditCardIcon,
+  SparklesIcon,
+  BookOpenIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
@@ -30,6 +32,11 @@ const navItems = [
   { path: '/installations', labelKey: 'nav.installations', icon: WrenchScrewdriverIcon },
   { path: '/calls', labelKey: 'nav.calls', icon: PhoneIcon },
   { path: '/performance', labelKey: 'nav.performance', icon: PresentationChartLineIcon },
+];
+
+const aiItems = [
+  { path: '/ai/agents', labelKey: 'nav.agentStudio', icon: SparklesIcon },
+  { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', icon: BookOpenIcon },
 ];
 
 const managerOnlyItems = [
@@ -72,6 +79,18 @@ export default function MarketingSidebar() {
 
         {isManager && (
           <>
+            <div className="pt-4 pb-2 px-4">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                {t('nav.aiGroup', 'AI')}
+              </span>
+            </div>
+            {aiItems.map((item) => (
+              <NavLink key={item.path} to={item.path} className={linkClass}>
+                <item.icon className="w-5 h-5" />
+                {t(item.labelKey)}
+              </NavLink>
+            ))}
+
             <div className="pt-4 pb-2 px-4">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 {t('nav.managementGroup')}

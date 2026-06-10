@@ -39,6 +39,10 @@ const OWNED_DELEGATES = [
   'researchProfile',
   'ingestToken',
   'usageCounter',
+  // P1 (GoHighLevel parity): AI core + delayed-work primitive.
+  'scheduledJob',
+  'knowledgeDoc',
+  'agentProfile',
 ] as const;
 
 /** Methods that can address many rows or create rows. */
@@ -80,6 +84,18 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'checklist rows inherit scope from a job resolved via a scoped read',
   'parent-scoped:installationTask.updateMany':
     'mutations are keyed by (id, jobId) with the job resolved via a scoped read',
+  // ScheduledJob is a single global sweeper primitive: one runner claims due
+  // rows across ALL workspaces, and dedup/cancel key on (kind, dedupKey) — the
+  // partial-unique index deliberately omits workspaceId, and dedupKeys embed
+  // unguessable row UUIDs so cross-workspace collision is impossible. The
+  // create path DOES carry workspaceId (every job is owned); only these
+  // global control-plane reads/sweeps below are legitimately unscoped.
+  'scheduling/scheduled-job.service.ts:scheduledJob.findFirst':
+    'dedup lookup keyed by (kind, dedupKey) — matches the partial-unique index, global by design',
+  'scheduling/scheduled-job.service.ts:scheduledJob.updateMany':
+    'cancel by (kind, dedupKey) or by id — control-plane mutation; dedupKey embeds a row UUID',
+  'scheduling/scheduled-job-runner.service.ts:scheduledJob.updateMany':
+    'stuck-reaper resets RUNNING rows across all workspaces (crash recovery sweeper)',
 };
 
 function walkTs(dir: string): string[] {

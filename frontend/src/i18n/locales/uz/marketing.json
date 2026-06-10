@@ -104,7 +104,10 @@
     "logout": "Logout",
     "profile": "Profile",
     "research": "AI tadqiqot",
-    "billing": "Hisob-kitob"
+    "billing": "Hisob-kitob",
+    "aiGroup": "AI",
+    "agentStudio": "Agent studiyasi",
+    "knowledgeBase": "Bilimlar bazasi"
   },
   "common": {
     "save": "Save",
@@ -597,7 +600,13 @@
     "accountName": "Hisob nomi",
     "amount": "Summa",
     "reference": "Izoh kodi (majburiy!)",
-    "bankHint": "O'tkazma izohiga kodni yozing — to'lov tasdiqlangach paket faollashadi."
+    "bankHint": "O'tkazma izohiga kodni yozing — to'lov tasdiqlangach paket faollashadi.",
+    "aiCredits": "Bu oygi AI kreditlari",
+    "aiCreditsHint": "Har oy yangilanadi. Limitni oshirish uchun quyidan paket qoʻshing.",
+    "agents": "AI agentlari",
+    "knowledgeDocs": "Bilim bazasi hujjatlari",
+    "aiCreditsWord": "AI kreditlari",
+    "messagesWord": "xabar"
   },
   "commission": {
     "detailTitle": "Komissiya tafsiloti",
@@ -644,5 +653,49 @@
     "statsLeads": "Jami lidlar",
     "statsWon": "Yutilgan",
     "statsCommission": "Jami komissiya"
+  },
+  "agents": {
+    "title": "Agent studiyasi",
+    "subtitle": "AI mijozlarga javob berishda foydalanadigan shaxsiyat, ohang va bilim bazasini belgilang. Kanallarni keyingi bosqichda ulang.",
+    "new": "Yangi agent",
+    "edit": "Agentni tahrirlash",
+    "name": "Agent nomi",
+    "language": "Til",
+    "persona": "Shaxsiyat (bu agent kim?)",
+    "personaPlaceholder": "masalan, Siz oilaviy pitsaxonaning samimiy qabulxona yordamchisisiz. Iliq kutib oling, qisqa gaplar bilan javob bering…",
+    "personaMin": "kamida 10 ta belgi",
+    "tone": "Ohang (ixtiyoriy)",
+    "tonePlaceholder": "iliq, qisqa, professional",
+    "maxReplies": "Suhbatga kuniga maks. AI javoblari",
+    "goals": "Maqsadlar (ixtiyoriy)",
+    "goalsPlaceholder": "Agent nimaga erishishi kerak? masalan, stol band qilish, telefon + mehmonlar sonini olish",
+    "guardrails": "Cheklovlar (ixtiyoriy)",
+    "guardrailsPlaceholder": "U hech qachon nima qilmasligi kerak? masalan, hech qachon narx aytmaslik, qaytarishga va'da bermaslik",
+    "capture": "Yigʻiladigan maydonlar (vergul bilan)",
+    "knowledge": "Bilim bazasiga tayanish",
+    "noDocs": "Hali hujjat yoʻq — javoblarni faktlarga asoslash uchun Bilim bazasiga qoʻshing.",
+    "active": "Faol",
+    "paused": "Toʻxtatilgan",
+    "saved": "Agent saqlandi",
+    "saveFailed": "Saqlab boʻlmadi",
+    "empty": "Hali agent yoʻq — AI mijozlar bilan qanday gaplashishini belgilash uchun bittasini yarating."
+  },
+  "knowledge": {
+    "title": "Bilimlar bazasi",
+    "subtitle": "AI javob berishda tayanadigan faktlar — menyular, ish vaqti, qoidalar, FAQ. Hujjatlarni Agent studiyasida agentga biriktiring.",
+    "new": "Yangi hujjat",
+    "edit": "Hujjatni tahrirlash",
+    "docTitle": "Sarlavha",
+    "titlePlaceholder": "masalan, Menyu va narxlar",
+    "language": "Til",
+    "content": "Mazmun",
+    "contentPlaceholder": "AI bilishi kerak boʻlgan faktlarni joylashtiring. Oddiy matn eng yaxshisi.",
+    "saved": "Hujjat saqlandi",
+    "saveFailed": "Saqlab boʻlmadi",
+    "loadFailed": "Hujjatni yuklab boʻlmadi",
+    "archived": "arxivlandi",
+    "updated": "yangilandi",
+    "toggleArchive": "Arxivlash / tiklash",
+    "empty": "Hali hujjat yoʻq — AI javob beradigan faktlarni qoʻshing."
   }
 }
