@@ -324,7 +324,7 @@ export default function TasksPage() {
                   <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
                     <span className="uppercase">{task.type}</span>
                     {task.lead && (
-                      <Link to={`/marketing/leads/${task.lead.id}`} className="text-primary hover:underline">
+                      <Link to={`/leads/${task.lead.id}`} className="text-primary hover:underline">
                         {task.lead.businessName}
                       </Link>
                     )}

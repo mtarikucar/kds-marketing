@@ -262,7 +262,7 @@ export default function LeadDetailPage() {
               />
             </div>
           )}
-          <Link to={`/marketing/leads/${id}/edit`} className="flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
+          <Link to={`/leads/${id}/edit`} className="flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
             <PencilSquareIcon className="w-4 h-4" /> Edit
           </Link>
           {isManager && (

@@ -436,7 +436,7 @@ export default function OffersPage() {
                       <td className="px-4 py-3">
                         {offer.lead ? (
                           <Link
-                            to={`/marketing/leads/${offer.lead.id}`}
+                            to={`/leads/${offer.lead.id}`}
                             className="font-medium text-primary hover:text-primary/80"
                           >
                             {offer.lead.businessName}

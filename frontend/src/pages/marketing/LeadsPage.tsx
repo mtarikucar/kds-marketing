@@ -355,7 +355,7 @@ export default function LeadsPage() {
                     )}
                     <td className="px-4 py-3">
                       <Link
-                        to={`/marketing/leads/${lead.id}`}
+                        to={`/leads/${lead.id}`}
                         className="font-medium text-primary hover:text-primary/80"
                       >
                         {lead.businessName}

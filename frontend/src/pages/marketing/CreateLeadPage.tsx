@@ -84,7 +84,7 @@ export default function CreateLeadPage() {
     onSuccess: (res) => {
       const leadId = isEdit ? id : res.data.id;
       toast.success(isEdit ? t('createLead.updateSuccess') : t('createLead.createSuccess'));
-      navigate(`/marketing/leads/${leadId}`);
+      navigate(`/leads/${leadId}`);
     },
     onError: (err: any) => {
       const message = err.response?.data?.message;
