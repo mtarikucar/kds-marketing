@@ -12,6 +12,7 @@ import {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { InstallationJobService } from './installation-job.service';
@@ -33,8 +34,9 @@ import { MarketingUserPayload } from '../types';
  * actor's workspace.
  */
 @MarketingRoute()
+@RequiresFeature('installations')
 @Controller('marketing/installations')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
 export class InstallationController {
   constructor(
     private readonly jobs: InstallationJobService,

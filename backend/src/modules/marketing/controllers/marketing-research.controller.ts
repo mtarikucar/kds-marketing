@@ -20,6 +20,7 @@ import {
   UpdateResearchProfileDto,
   MintIngestTokenDto,
 } from '../dto/research-profile.dto';
+import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingUserPayload } from '../types';
 
 /**
@@ -29,7 +30,7 @@ import { MarketingUserPayload } from '../types';
  */
 @MarketingRoute()
 @Controller('marketing/research')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
 @MarketingRoles('MANAGER')
 export class MarketingResearchController {
   constructor(
@@ -73,11 +74,13 @@ export class MarketingResearchController {
   }
 
   @Get('tokens')
+  @RequiresFeature('apiAccess')
   listTokens(@CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.tokens.list(actor.workspaceId);
   }
 
   @Post('tokens')
+  @RequiresFeature('apiAccess')
   mintToken(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: MintIngestTokenDto,
@@ -86,6 +89,7 @@ export class MarketingResearchController {
   }
 
   @Delete('tokens/:id')
+  @RequiresFeature('apiAccess')
   revokeToken(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,

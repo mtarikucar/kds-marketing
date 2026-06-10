@@ -18,6 +18,8 @@ import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/TargetsPage';
 import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
 import ResearchSettingsPage from './pages/marketing/ResearchSettingsPage';
+import BillingPage from './pages/marketing/BillingPage';
+import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
 import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
 import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
@@ -36,6 +38,7 @@ export default function App() {
       <Route path="/platform/login" element={<PlatformLoginPage />} />
       <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
       <Route path="/platform/workspaces/:id" element={<PlatformWorkspaceDetailPage />} />
+      <Route path="/platform/payments" element={<ManualPaymentsPage />} />
       <Route element={<MarketingProtectedRoute />}>
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -52,6 +55,7 @@ export default function App() {
           <Route path="/installations" element={<InstallationsPage />} />
           <Route path="/calls" element={<CallsPage />} />
           <Route path="/performance" element={<PerformancePage />} />
+          <Route path="/billing" element={<BillingPage />} />
         </Route>
         <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.MANAGER} />}>
           <Route element={<MarketingLayout />}>

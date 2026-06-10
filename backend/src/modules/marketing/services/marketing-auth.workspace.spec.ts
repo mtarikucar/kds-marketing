@@ -29,6 +29,14 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
       marketingDistributionConfig: {
         create: jest.fn().mockResolvedValue({}),
       },
+      package: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'pkg-trial', trialDays: 14 }),
+      },
+      workspaceSubscription: {
+        create: jest.fn().mockResolvedValue({}),
+      },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     jwt = { sign: jest.fn().mockReturnValue('signed'), verifyAsync: jest.fn() };
@@ -89,6 +97,15 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         data: { workspaceId: 'ws-new', strategy: 'DISABLED' },
       });
 
+      // Signup lands every workspace on the TRIAL package.
+      const trialSub = prisma.workspaceSubscription.create.mock.calls[0][0].data;
+      expect(trialSub).toMatchObject({
+        workspaceId: 'ws-new',
+        packageId: 'pkg-trial',
+        status: 'TRIALING',
+      });
+      expect(trialSub.trialEndsAt.getTime()).toBeGreaterThan(Date.now());
+
       // Token payload carries the workspace claim.
       expect(jwt.sign.mock.calls[0][0]).toMatchObject({
         sub: 'owner-1',
@@ -113,6 +130,22 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
 
       await svc.registerWorkspace(DTO);
       expect(prisma.workspace.create.mock.calls[0][0].data.slug).toBe('acme-inc-2');
+    });
+
+    it('survives an unseeded catalog: no TRIAL package → no subscription, signup still works', async () => {
+      prisma.marketingUser.findUnique.mockResolvedValue(null);
+      prisma.workspace.findUnique.mockResolvedValue(null);
+      prisma.package.findUnique.mockResolvedValue(null);
+      prisma.workspace.create.mockResolvedValue({ ...WORKSPACE, id: 'ws-new' });
+      prisma.marketingUser.create.mockResolvedValue({
+        id: 'owner-1', workspaceId: 'ws-new', email: DTO.email,
+        firstName: 'Ada', lastName: 'Lovelace', phone: null, avatar: null,
+        role: 'OWNER', tokenVersion: 0,
+      });
+
+      const res = await svc.registerWorkspace(DTO);
+      expect(res.user).toMatchObject({ workspaceId: 'ws-new' });
+      expect(prisma.workspaceSubscription.create).not.toHaveBeenCalled();
     });
 
     it('rejects an already-registered email before any insert', async () => {

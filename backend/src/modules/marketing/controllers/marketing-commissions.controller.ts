@@ -17,14 +17,16 @@ class UpdateCommissionAmountDto {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingCommissionsService } from '../services/marketing-commissions.service';
 import { CommissionFilterDto } from '../dto/commission-filter.dto';
 import { MarketingUserPayload } from '../types';
 
+@RequiresFeature('commissions')
 @Controller('marketing/commissions')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
 @MarketingRoute()
 export class MarketingCommissionsController {
   constructor(

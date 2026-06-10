@@ -18,7 +18,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "seed:operator": "ts-node prisma/seed-platform-operator.ts"
+    "seed:operator": "ts-node prisma/seed-platform-operator.ts",
+    "seed:packages": "ts-node prisma/seed-packages.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
@@ -31,14 +32,15 @@
     "@nestjs/throttler": "^6.4.0",
     "@prisma/client": "6.19.0",
     "bcryptjs": "^2.4.3",
-    "prisma": "6.19.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "handlebars": "^4.7.8",
     "helmet": "^8.1.0",
     "nodemailer": "^7.0.10",
+    "prisma": "6.19.0",
     "reflect-metadata": "^0.1.14",
     "rxjs": "^7.8.1",
+    "stripe": "^22.2.0",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

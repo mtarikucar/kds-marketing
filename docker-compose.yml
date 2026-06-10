@@ -37,6 +37,15 @@ services:
       RESEARCH_ROUTINE_TOKEN: ${RESEARCH_ROUTINE_TOKEN:-dev-research-routine-token-change-me}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-service-token-change-me}
       PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET:-dev-platform-jwt-secret-change-me-000}
+      # Billing providers (manual transfer is the dev default; PSPs need creds)
+      BANK_IBAN: ${BANK_IBAN:-TR000000000000000000000000}
+      BANK_ACCOUNT_NAME: ${BANK_ACCOUNT_NAME:-Dev Marketing Inc}
+      PAYTR_MERCHANT_ID: ${PAYTR_MERCHANT_ID:-}
+      PAYTR_MERCHANT_KEY: ${PAYTR_MERCHANT_KEY:-}
+      PAYTR_MERCHANT_SALT: ${PAYTR_MERCHANT_SALT:-}
+      PAYTR_TEST_MODE: ${PAYTR_TEST_MODE:-1}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       # Core service base URL — the marketing service calls
       # ${CORE_SERVICE_URL}/api/internal/provisioning/* for lead → tenant
       # provisioning. Point it at the core deployment. The default targets

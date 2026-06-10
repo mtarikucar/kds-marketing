@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingReportsService } from '../services/marketing-reports.service';
@@ -9,8 +10,9 @@ import { ReportFilterDto } from '../dto/report-filter.dto';
 import { MarketingUserPayload } from '../types';
 
 @MarketingRoute()
+@RequiresFeature('advancedReports')
 @Controller('marketing/reports')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
 export class MarketingReportsController {
   constructor(private readonly reportsService: MarketingReportsService) {}
 

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BillingModule } from '../billing/billing.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
@@ -44,6 +45,8 @@ import { LeadQuotaResolver } from './services/lead-quota.resolver';
 import { MarketingResearchService } from './services/marketing-research.service';
 import { MarketingIngestTokensService } from './services/marketing-ingest-tokens.service';
 import { MarketingResearchController } from './controllers/marketing-research.controller';
+import { MarketingBillingController } from './controllers/marketing-billing.controller';
+import { FeatureGuard } from './guards/feature.guard';
 
 // Event consumers (Step C decoupling: settlement → commission crediting).
 import { SettlementCommissionConsumer } from './events/settlement-commission.consumer';
@@ -67,6 +70,9 @@ import { SalesTargetService } from './services/sales-target.service';
 
 @Module({
   imports: [
+    // Entitlements (lead quota, seat/profile limits, feature gates) +
+    // the billing services the workspace-facing controller mounts.
+    BillingModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -121,6 +127,7 @@ import { SalesTargetService } from './services/sales-target.service';
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
+    MarketingBillingController,
   ],
   providers: [
     // Services
@@ -166,6 +173,7 @@ import { SalesTargetService } from './services/sales-target.service';
     MarketingGuard,
     MarketingRolesGuard,
     IngestTokenGuard,
+    FeatureGuard,
   ],
   exports: [
     MarketingAuthService,

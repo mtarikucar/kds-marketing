@@ -308,6 +308,32 @@ export class MarketingAuthService {
         data: { workspaceId: workspace.id, strategy: 'DISABLED' },
       });
 
+      // Start every workspace on the TRIAL package. A catalog that hasn't
+      // been seeded yet must not block signup — the workspace just lands on
+      // zero entitlements until ops runs seed:packages and assigns a plan.
+      const trialPackage = await tx.package.findUnique({
+        where: { code: 'TRIAL' },
+        select: { id: true, trialDays: true },
+      });
+      if (trialPackage) {
+        const now = new Date();
+        const trialEnd = new Date(
+          now.getTime() + Math.max(1, trialPackage.trialDays) * 24 * 60 * 60 * 1000,
+        );
+        await tx.workspaceSubscription.create({
+          data: {
+            workspaceId: workspace.id,
+            packageId: trialPackage.id,
+            status: 'TRIALING',
+            billingCycle: 'MONTHLY',
+            currency: dto.currency ?? 'USD',
+            currentPeriodStart: now,
+            currentPeriodEnd: trialEnd,
+            trialEndsAt: trialEnd,
+          },
+        });
+      }
+
       return ownerUser;
     });
 

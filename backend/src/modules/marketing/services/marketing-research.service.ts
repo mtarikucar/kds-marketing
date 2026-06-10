@@ -10,9 +10,7 @@ import {
   UpdateResearchProfileDto,
 } from '../dto/research-profile.dto';
 import { MarketingLeadsIngestService } from './marketing-leads-ingest.service';
-
-/** Research profiles per workspace until per-package limits land (Phase F). */
-const MAX_PROFILES_PER_WORKSPACE = 3;
+import { EntitlementsService } from '../../billing/entitlements.service';
 
 /**
  * CRUD for research profiles — the customer-authored "who to find and how
@@ -23,6 +21,7 @@ export class MarketingResearchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ingest: MarketingLeadsIngestService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   async list(workspaceId: string) {
@@ -33,13 +32,16 @@ export class MarketingResearchService {
   }
 
   async create(workspaceId: string, dto: CreateResearchProfileDto) {
-    const count = await this.prisma.researchProfile.count({
-      where: { workspaceId },
-    });
-    if (count >= MAX_PROFILES_PER_WORKSPACE) {
-      throw new BadRequestException(
-        `Profile limit reached (${MAX_PROFILES_PER_WORKSPACE})`,
-      );
+    const effective = await this.entitlements.getEffective(workspaceId);
+    if (effective.maxResearchProfiles !== -1) {
+      const count = await this.prisma.researchProfile.count({
+        where: { workspaceId },
+      });
+      if (count >= effective.maxResearchProfiles) {
+        throw new BadRequestException(
+          `Profile limit reached (${effective.maxResearchProfiles}) — upgrade your package for more research focuses`,
+        );
+      }
     }
     return this.prisma.researchProfile.create({
       data: {

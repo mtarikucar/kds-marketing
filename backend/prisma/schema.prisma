@@ -581,6 +581,106 @@ model UsageCounter {
   @@map("usage_counters")
 }
 
+/// A sellable package: daily lead quota + seat/profile limits + feature
+/// flags + dual-currency pricing. Rows are seeded (seed-packages.ts) and
+/// operator-managed; `features` keys must stay in lockstep with
+/// FEATURE_KEYS in entitlements.service.ts (drift tripwire spec).
+model Package {
+  id                  String   @id @default(uuid())
+  code                String   @unique // TRIAL, STARTER, GROWTH, SCALE, OPERATOR
+  name                String
+  description         String?
+  dailyLeadQuota      Int // -1 = unlimited
+  maxUsers            Int
+  maxResearchProfiles Int
+  features            Json // { autoAssign, telephony, installations, commissions, advancedReports, apiAccess }
+  priceMonthlyTRY     Decimal  @db.Decimal(10, 2)
+  priceMonthlyUSD     Decimal  @db.Decimal(10, 2)
+  priceYearlyTRY      Decimal? @db.Decimal(10, 2)
+  priceYearlyUSD      Decimal? @db.Decimal(10, 2)
+  trialDays           Int      @default(0)
+  isPublic            Boolean  @default(true)
+  sortOrder           Int      @default(0)
+  status              String   @default("ACTIVE") // ACTIVE, RETIRED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("packages")
+}
+
+/// One subscription row per workspace, mutated through its lifecycle.
+model WorkspaceSubscription {
+  id                 String    @id @default(uuid())
+  workspaceId        String    @unique
+  packageId          String
+  status             String // TRIALING, ACTIVE, PAST_DUE, CANCELLED, EXPIRED
+  billingCycle       String    @default("MONTHLY") // MONTHLY, YEARLY
+  currency           String // TRY | USD
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean   @default(false)
+  trialEndsAt        DateTime?
+  provider           String? // paytr | stripe | manual
+  providerRef        String? // stripe subscription id / paytr oid / bank ref
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, currentPeriodEnd])
+  @@map("workspace_subscriptions")
+}
+
+/// Purchasable boosts on top of the package. `grants` folds into the
+/// effective entitlements: limit.* keys SUM, feature.* keys OR.
+model WorkspaceAddOn {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  code             String // quota_boost_10, extra_profile
+  quantity         Int       @default(1)
+  grants           Json // { "limit.dailyLeadQuota": 10 } | { "limit.maxResearchProfiles": 1 }
+  status           String    @default("ACTIVE") // ACTIVE, CANCELLED, EXPIRED
+  currentPeriodEnd DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("workspace_addons")
+}
+
+/// One payment attempt/instruction. providerRef + idempotencyKey are the
+/// two idempotency rails: webhooks settle by providerRef, retried checkout
+/// calls collapse on idempotencyKey.
+model PaymentOrder {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  type           String // SUBSCRIPTION, UPGRADE, ADDON, RENEWAL
+  packageId      String?
+  addOnCode      String?
+  quantity       Int       @default(1)
+  billingCycle   String? // MONTHLY, YEARLY
+  amount         Decimal   @db.Decimal(10, 2)
+  currency       String // TRY | USD
+  provider       String // paytr | stripe | manual
+  providerRef    String?   @unique
+  idempotencyKey String    @unique
+  status         String    @default("PENDING") // PENDING, AWAITING_TRANSFER, SUCCEEDED, FAILED, CANCELLED, REFUNDED
+  /// Raw provider payloads for audits (webhook bodies, instruction text).
+  raw            Json?
+  approvedById   String? // PlatformOperator.id (manual path)
+  succeededAt    DateTime?
+  failedAt       DateTime?
+  failureReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([status, createdAt])
+  @@map("payment_orders")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.

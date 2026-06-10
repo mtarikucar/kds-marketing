@@ -60,6 +60,12 @@ export default function PlatformWorkspacesPage() {
             <h1 className="font-semibold">Platform Console</h1>
           </div>
           <div className="flex items-center gap-4 text-sm">
+            <button
+              onClick={() => navigate('/platform/payments')}
+              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+            >
+              Payments
+            </button>
             <span className="text-slate-300">{operator?.email}</span>
             <button
               onClick={() => logout()}

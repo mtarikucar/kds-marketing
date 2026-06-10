@@ -74,6 +74,11 @@ async function bootstrap() {
     app.set('trust proxy', 1);
   }
 
+  // Stripe webhook signatures are computed over the EXACT payload bytes —
+  // mount a raw parser on that one route BEFORE the JSON parser so the
+  // verifier sees the original body (re-serialized JSON never verifies).
+  app.use('/api/billing/webhooks/stripe', bodyParser.raw({ type: '*/*', limit: '500kb' }));
+
   // Tight generic body limit (the marketing API has no file/webhook payloads;
   // the bulk lead-ingest endpoint caps its batch size in the DTO).
   app.use(bodyParser.json({ limit: '200kb' }));

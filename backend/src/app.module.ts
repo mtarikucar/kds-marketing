@@ -9,6 +9,7 @@ import { CommonModule } from './common/common.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { MarketingModule } from './modules/marketing/marketing.module';
 import { PlatformModule } from './modules/platform/platform.module';
+import { BillingModule } from './modules/billing/billing.module';
 import { ProvisioningClientModule } from './core-client/provisioning-client.module';
 import { InternalApiModule } from './modules/internal/internal.module';
 
@@ -43,6 +44,8 @@ import { InternalApiModule } from './modules/internal/internal.module';
     CommonModule,
     OutboxModule,
     ProvisioningClientModule,
+    // Packages → entitlements → checkout/settlement (PayTR/Stripe/manual).
+    BillingModule,
     MarketingModule,
     // Platform (superadmin) realm: operator auth + workspace administration.
     PlatformModule,

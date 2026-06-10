@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
 import { CreateMarketingUserDto } from '../dto/create-marketing-user.dto';
 import { UpdateMarketingUserDto } from '../dto/update-marketing-user.dto';
 
@@ -16,6 +17,7 @@ export class MarketingUsersService {
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
+    private entitlements: EntitlementsService,
   ) {}
 
   private bcryptCost(): number {
@@ -33,6 +35,20 @@ export class MarketingUsersService {
 
     if (existing) {
       throw new ConflictException('Email already exists');
+    }
+
+    // Seat limit from the package (-1 = unlimited). SYSTEM sentinels don't
+    // occupy seats.
+    const effective = await this.entitlements.getEffective(workspaceId);
+    if (effective.maxUsers !== -1) {
+      const seats = await this.prisma.marketingUser.count({
+        where: { workspaceId, role: { not: 'SYSTEM' }, status: 'ACTIVE' },
+      });
+      if (seats >= effective.maxUsers) {
+        throw new BadRequestException(
+          `Seat limit reached (${effective.maxUsers}) — upgrade your package to add users`,
+        );
+      }
     }
 
     if (!['MANAGER', 'REP'].includes(dto.role)) {
