@@ -180,6 +180,12 @@ model Lead {
   productSnapshot Json?
   originTenantId  String?
 
+  // Phase F P2 — per-channel marketing opt-out. Campaigns AND the Conversation
+  // AI engine check these before sending. Default false = opted-in.
+  emailOptOut Boolean @default(false)
+  smsOptOut   Boolean @default(false)
+  waOptOut    Boolean @default(false)
+
   @@unique([workspaceId, externalRef])
   @@index([workspaceId])
   @@index([workspaceId, status])
@@ -768,6 +774,119 @@ model AgentProfile {
 
   @@index([workspaceId, status])
   @@map("agent_profiles")
+}
+
+/// A connected customer-messaging channel (web-chat, WhatsApp Cloud, NetGSM
+/// SMS, Instagram, Messenger). Secret credentials are AES-256-GCM sealed into
+/// `configSealed` (never the platform-PATCHable Workspace.settings); API reads
+/// return them masked. `configPublic` holds non-secret settings (display name,
+/// allowed web-chat origins, greeting). `externalId` is the provider-side
+/// identity inbound webhooks resolve the channel by (WA phone_number_id, FB/IG
+/// page id); `widgetKey` is the public web-chat embed key.
+model Channel {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  type           String // WEBCHAT | WHATSAPP | SMS | INSTAGRAM | MESSENGER
+  name           String
+  status         String    @default("ACTIVE") // ACTIVE | DISABLED
+  /// Which agent answers here (Conversation AI). Bare soft ref to AgentProfile.
+  agentProfileId String?
+  /// Public web-chat key embedded in widget.js (null for non-webchat).
+  widgetKey      String?   @unique
+  /// Provider-side identity inbound webhooks resolve by, scoped by type.
+  externalId     String?
+  /// AES-256-GCM sealed JSON of secret creds (tokens/keys). Never returned raw.
+  configSealed   String?   @db.Text
+  /// Non-secret settings: { displayName, allowedOrigins[], greeting, ... }.
+  configPublic   Json?
+  lastVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, type])
+  @@index([workspaceId, status])
+  @@index([type, externalId])
+  @@map("channels")
+}
+
+/// Maps a channel-specific contact identity (E.164 phone / WA id / FB PSID /
+/// IG-scoped id / web-chat visitor id) to a Lead, so an inbound message
+/// resolves to the right person + thread. One identity value per channel.
+model ContactIdentity {
+  id          String @id @default(uuid())
+  workspaceId String
+  channelId   String
+  kind        String // PHONE | WA | PSID | IGSID | WEBCHAT
+  value       String // normalized identity (E.164 / wa-id / psid / visitorId)
+  leadId      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([channelId, value])
+  @@index([workspaceId])
+  @@index([leadId])
+  @@map("contact_identities")
+}
+
+/// A messaging thread with one contact on one channel. Carries the AI-control
+/// state (aiPaused on human takeover; aiRepliesToday + aiRepliesDayKey enforce
+/// the per-conversation daily reply cap; followupCount caps proactive nudges)
+/// and the inbox view state (unreadCount, lastMessageAt, assignedToId).
+model Conversation {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  channelId         String
+  leadId            String
+  contactIdentityId String?
+  status            String    @default("OPEN") // OPEN | CLOSED | SNOOZED
+  aiPaused          Boolean   @default(false)
+  assignedToId      String?
+  subject           String?
+  unreadCount       Int       @default(0)
+  followupCount     Int       @default(0)
+  aiRepliesToday    Int       @default(0)
+  /// UTC day (YYYY-MM-DD) the aiRepliesToday counter belongs to; the engine
+  /// resets the counter when the day rolls over.
+  aiRepliesDayKey   String?
+  lastMessageAt     DateTime?
+  lastInboundAt     DateTime?
+  closedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status, lastMessageAt])
+  @@index([workspaceId, assignedToId])
+  @@index([channelId])
+  @@index([leadId])
+  @@map("conversations")
+}
+
+/// One message in a Conversation. `externalMessageId` is the provider's id,
+/// uniquely indexed so a redelivered inbound webhook dedupes to one row
+/// (nullable: web-chat / internal messages have none, and Postgres allows
+/// many NULLs under a unique index).
+model Message {
+  id                String  @id @default(uuid())
+  workspaceId       String
+  conversationId    String
+  direction         String // INBOUND | OUTBOUND
+  authorType        String // CUSTOMER | AI | AGENT | SYSTEM
+  /// MarketingUser id for AGENT-authored messages; null otherwise.
+  authorId          String?
+  body              String  @db.Text
+  externalMessageId String? @unique
+  status            String  @default("SENT") // RECEIVED | SENT | DELIVERED | READ | FAILED
+  error             String?
+  meta              Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("messages")
 }
 
 model OutboxEvent {

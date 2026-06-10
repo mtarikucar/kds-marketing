@@ -18,11 +18,14 @@ import {
   CreditCardIcon,
   SparklesIcon,
   BookOpenIcon,
+  InboxIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 const navItems = [
   { path: '/dashboard', labelKey: 'nav.dashboard', icon: HomeIcon },
+  { path: '/inbox', labelKey: 'nav.inbox', icon: InboxIcon },
   { path: '/leads', labelKey: 'nav.leads', icon: UserGroupIcon },
   { path: '/tasks', labelKey: 'nav.tasks', icon: ClipboardDocumentListIcon },
   { path: '/calendar', labelKey: 'nav.calendar', icon: CalendarIcon },
@@ -37,6 +40,7 @@ const navItems = [
 const aiItems = [
   { path: '/ai/agents', labelKey: 'nav.agentStudio', icon: SparklesIcon },
   { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', icon: BookOpenIcon },
+  { path: '/channels', labelKey: 'nav.channels', icon: ChatBubbleLeftRightIcon },
 ];
 
 const managerOnlyItems = [

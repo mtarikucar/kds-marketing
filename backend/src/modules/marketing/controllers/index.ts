@@ -13,3 +13,8 @@ export * from './marketing-distribution.controller';
 export * from './sales-call.controller';
 export * from './sales-target.controller';
 export * from './marketing-ai.controller';
+export * from './marketing-conversations.controller';
+export * from './marketing-channels.controller';
+export * from './webchat-public.controller';
+export * from './meta-webhook.controller';
+export * from './netgsm-public.controller';

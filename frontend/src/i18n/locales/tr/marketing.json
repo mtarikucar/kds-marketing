@@ -107,7 +107,9 @@
     "billing": "Faturalama",
     "aiGroup": "AI",
     "agentStudio": "AI Ajan Stüdyosu",
-    "knowledgeBase": "Bilgi Bankası"
+    "knowledgeBase": "Bilgi Bankası",
+    "inbox": "Gelen Kutusu",
+    "channels": "Kanallar"
   },
   "common": {
     "save": "Kaydet",
@@ -701,5 +703,42 @@
     "updated": "güncellendi",
     "toggleArchive": "Arşivle / geri yükle",
     "empty": "Henüz belge yok — AI'ınızın yanıt vereceği gerçekleri ekleyin."
+  },
+  "inbox": {
+    "open": "Açık",
+    "closed": "Kapalı",
+    "unknown": "Bilinmiyor",
+    "aiOff": "AI kapalı",
+    "empty": "Henüz konuşma yok.",
+    "selectPrompt": "Konuşmayı görmek için birini seçin.",
+    "resumeAi": "AI'ı sürdür",
+    "pauseAi": "AI'ı duraklat",
+    "close": "Kapat",
+    "failed": "başarısız",
+    "replyPlaceholder": "Yanıt yazın… (AI'ı duraklatır)",
+    "context": "Lead",
+    "openLead": "Lead'i aç →",
+    "noLead": "Bir konuşma seçin.",
+    "sendFailed": "Gönderilemedi"
+  },
+  "channels": {
+    "title": "Kanallar",
+    "subtitle": "Müşterilerinizin size yazdığı yerleri bağlayın — web sohbet, WhatsApp, SMS, Instagram, Messenger. Her birinde hangi AI ajanının yanıt vereceğini seçin.",
+    "new": "Kanal bağla",
+    "type": "Tür",
+    "name": "Ad",
+    "agent": "Yanıtlayan ajan",
+    "noAgent": "— yok (yalnızca manuel) —",
+    "webchatHint": "Kimlik bilgisi gerekmez — kaydettikten sonra herkese açık gömme kodu oluşturulur.",
+    "saved": "Kanal kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "verifyOk": "Kanal doğrulandı ✓",
+    "verifyFail": "Doğrulama başarısız — bilgileri kontrol edin",
+    "verify": "Doğrula",
+    "secretsSet": "ayarlı bilgiler",
+    "public": "herkese açık web sohbet",
+    "noSecrets": "henüz bilgi yok",
+    "embed": "Gömme kodu (</body> öncesine yapıştırın)",
+    "empty": "Henüz kanal yok — müşterilerin size yazabilmesi için bir tane bağlayın."
   }
 }

@@ -43,6 +43,11 @@ const OWNED_DELEGATES = [
   'scheduledJob',
   'knowledgeDoc',
   'agentProfile',
+  // P2 (GoHighLevel parity): omnichannel conversations.
+  'channel',
+  'contactIdentity',
+  'conversation',
+  'message',
 ] as const;
 
 /** Methods that can address many rows or create rows. */
@@ -96,6 +101,16 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'cancel by (kind, dedupKey) or by id — control-plane mutation; dedupKey embeds a row UUID',
   'scheduling/scheduled-job-runner.service.ts:scheduledJob.updateMany':
     'stuck-reaper resets RUNNING rows across all workspaces (crash recovery sweeper)',
+  // Inbound public webhooks have NO workspace context — the provider only
+  // gives a widget key or a page/phone id. These two lookups (the ONLY
+  // cross-workspace channel/message access) live in one resolver so the
+  // exemption surface is a single auditable file; both key on globally-unique
+  // handles ((type, externalId) the workspace registered; externalMessageId
+  // the provider minted) so they can't leak across tenants.
+  'channels/public-channel-resolver.service.ts:channel.findFirst':
+    'meta webhook resolves the channel by its provider page/phone id before any workspace context exists',
+  'channels/public-channel-resolver.service.ts:message.updateMany':
+    'netgsm DLR flips an outbound message status by its globally-unique provider job id',
 };
 
 function walkTs(dir: string): string[] {

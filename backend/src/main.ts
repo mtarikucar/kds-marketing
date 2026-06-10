@@ -113,6 +113,10 @@ async function bootstrap() {
   // verifier sees the original body (re-serialized JSON never verifies).
   app.use('/api/billing/webhooks/stripe', bodyParser.raw({ type: '*/*', limit: '500kb' }));
 
+  // Meta (WhatsApp/Instagram/Messenger) webhook — X-Hub-Signature-256 is an
+  // HMAC over the raw bytes, so the same raw-before-JSON treatment applies.
+  app.use('/api/public/channels/meta/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
+
   // Tight generic body limit (the marketing API has no file/webhook payloads;
   // the bulk lead-ingest endpoint caps its batch size in the DTO).
   app.use(bodyParser.json({ limit: '200kb' }));

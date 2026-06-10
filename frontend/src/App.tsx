@@ -20,6 +20,9 @@ import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
 import ResearchSettingsPage from './pages/marketing/ResearchSettingsPage';
 import AgentStudioPage from './pages/marketing/AgentStudioPage';
 import KnowledgeBasePage from './pages/marketing/KnowledgeBasePage';
+import InboxPage from './pages/marketing/InboxPage';
+import ChannelsSettingsPage from './pages/marketing/ChannelsSettingsPage';
+import WidgetChatPage from './pages/marketing/WidgetChatPage';
 import BillingPage from './pages/marketing/BillingPage';
 import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
@@ -36,6 +39,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<MarketingLoginPage />} />
       <Route path="/register" element={<RegisterWorkspacePage />} />
+      {/* Public web-chat surface — embedded in an iframe by widget.js. */}
+      <Route path="/widget" element={<WidgetChatPage />} />
       {/* Platform (superadmin) realm — separate auth store + token. */}
       <Route path="/platform/login" element={<PlatformLoginPage />} />
       <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
@@ -45,6 +50,7 @@ export default function App() {
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<MarketingDashboardPage />} />
+          <Route path="/inbox" element={<InboxPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/new" element={<CreateLeadPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
@@ -66,6 +72,7 @@ export default function App() {
             <Route path="/research" element={<ResearchSettingsPage />} />
             <Route path="/ai/agents" element={<AgentStudioPage />} />
             <Route path="/ai/knowledge" element={<KnowledgeBasePage />} />
+            <Route path="/channels" element={<ChannelsSettingsPage />} />
           </Route>
         </Route>
       </Route>

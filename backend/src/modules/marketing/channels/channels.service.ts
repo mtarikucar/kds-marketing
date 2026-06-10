@@ -1,0 +1,162 @@
+import {
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { randomBytes } from 'crypto';
+import { PrismaService } from '../../../prisma/prisma.service';
+import {
+  sealSecret,
+  openSecret,
+  isSecretBoxConfigured,
+} from '../../../common/crypto/secret-box.helper';
+import { ChannelAdapterRegistry } from './channel-adapter.registry';
+
+export interface CreateChannelInput {
+  type: string;
+  name: string;
+  agentProfileId?: string | null;
+  externalId?: string | null;
+  secrets?: Record<string, string>;
+  configPublic?: Record<string, unknown>;
+}
+export interface UpdateChannelInput {
+  name?: string;
+  status?: string;
+  agentProfileId?: string | null;
+  externalId?: string | null;
+  secrets?: Record<string, string>;
+  configPublic?: Record<string, unknown>;
+}
+
+/**
+ * Channel CRUD + verify. Secrets are AES-256-GCM sealed into `configSealed`
+ * (never returned raw — reads expose only WHICH keys are set). A web-chat
+ * channel gets a public `widgetKey` minted on create (embedded in widget.js).
+ * `verify` resolves the (decrypted) config and runs the adapter's healthCheck.
+ */
+@Injectable()
+export class ChannelsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly registry: ChannelAdapterRegistry,
+  ) {}
+
+  async list(workspaceId: string) {
+    const rows = await this.prisma.channel.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((c) => this.mask(c));
+  }
+
+  async get(workspaceId: string, id: string) {
+    const c = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
+    if (!c) throw new NotFoundException('Channel not found');
+    return this.mask(c);
+  }
+
+  async create(workspaceId: string, dto: CreateChannelInput) {
+    if (!this.registry.has(dto.type)) {
+      throw new NotFoundException(`Unsupported channel type: ${dto.type}`);
+    }
+    const data: any = {
+      workspaceId,
+      type: dto.type,
+      name: dto.name,
+      status: 'ACTIVE',
+      agentProfileId: dto.agentProfileId ?? null,
+      externalId: dto.externalId ?? null,
+      configPublic: dto.configPublic ?? undefined,
+    };
+    if (dto.type === 'WEBCHAT') {
+      data.widgetKey = `wc_${randomBytes(16).toString('hex')}`;
+    }
+    if (dto.secrets && Object.keys(dto.secrets).length) {
+      data.configSealed = this.seal(dto.secrets);
+    }
+    const c = await this.prisma.channel.create({ data: { ...data, workspaceId } });
+    return this.mask(c);
+  }
+
+  async update(workspaceId: string, id: string, dto: UpdateChannelInput) {
+    const existing = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
+    if (!existing) throw new NotFoundException('Channel not found');
+    const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.status !== undefined) data.status = dto.status;
+    if (dto.agentProfileId !== undefined) data.agentProfileId = dto.agentProfileId;
+    if (dto.externalId !== undefined) data.externalId = dto.externalId;
+    if (dto.configPublic !== undefined) data.configPublic = dto.configPublic;
+    if (dto.secrets && Object.keys(dto.secrets).length) {
+      // Merge onto existing secrets so a partial update (e.g. rotate one key)
+      // doesn't wipe the rest.
+      let current: Record<string, string> = {};
+      if (existing.configSealed && isSecretBoxConfigured()) {
+        try {
+          current = JSON.parse(openSecret(existing.configSealed));
+        } catch {
+          /* unreadable box — replace wholesale */
+        }
+      }
+      data.configSealed = this.seal({ ...current, ...dto.secrets });
+    }
+    const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
+    return this.mask(c);
+  }
+
+  async remove(workspaceId: string, id: string) {
+    const res = await this.prisma.channel.deleteMany({ where: { id, workspaceId } });
+    if (res.count === 0) throw new NotFoundException('Channel not found');
+    return { message: 'Channel deleted' };
+  }
+
+  async verify(workspaceId: string, id: string) {
+    const c = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
+    if (!c) throw new NotFoundException('Channel not found');
+    const adapter = this.registry.get(c.type);
+    const health = await adapter.healthCheck(this.registry.resolveConfig(c));
+    if (health.ok) {
+      await this.prisma.channel.update({
+        where: { id: c.id },
+        data: { lastVerifiedAt: new Date() },
+      });
+    }
+    return health;
+  }
+
+  private seal(secrets: Record<string, string>): string {
+    if (!isSecretBoxConfigured()) {
+      throw new ServiceUnavailableException(
+        'MARKETING_SECRET_KEY is not configured — cannot store channel credentials',
+      );
+    }
+    return sealSecret(JSON.stringify(secrets));
+  }
+
+  /** Public view: never the sealed blob — only which secret keys are present. */
+  private mask(c: any) {
+    let configuredSecrets: string[] = [];
+    if (c.configSealed && isSecretBoxConfigured()) {
+      try {
+        configuredSecrets = Object.keys(JSON.parse(openSecret(c.configSealed)));
+      } catch {
+        configuredSecrets = ['(unreadable)'];
+      }
+    }
+    return {
+      id: c.id,
+      type: c.type,
+      name: c.name,
+      status: c.status,
+      agentProfileId: c.agentProfileId,
+      widgetKey: c.widgetKey,
+      externalId: c.externalId,
+      configPublic: c.configPublic ?? null,
+      configuredSecrets,
+      lastVerifiedAt: c.lastVerifiedAt,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    };
+  }
+}
