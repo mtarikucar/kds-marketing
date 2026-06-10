@@ -101,6 +101,13 @@ import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
 import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-messaging.adapter';
 
+// Phase F P3 — workflow automation (trigger → executor → action handlers).
+import { MarketingWorkflowsController } from './controllers/marketing-workflows.controller';
+import { WorkflowsService } from './workflows/workflows.service';
+import { WorkflowActionHandler } from './workflows/workflow-action.handler';
+import { WorkflowExecutorService } from './workflows/workflow-executor.service';
+import { WorkflowTriggerService } from './workflows/workflow-trigger.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -168,6 +175,7 @@ import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-mes
     WebchatPublicController,
     MetaWebhookController,
     NetgsmPublicController,
+    MarketingWorkflowsController,
   ],
   providers: [
     // Services
@@ -240,6 +248,12 @@ import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-mes
     ConversationAiEngineService,
     PublicChannelResolverService,
     SseTokenGuard,
+    // Phase F P3 — workflow automation: the trigger listener + executor (each
+    // registers its bus/ScheduledJob hooks on init) + action handler + CRUD.
+    WorkflowsService,
+    WorkflowActionHandler,
+    WorkflowExecutorService,
+    WorkflowTriggerService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

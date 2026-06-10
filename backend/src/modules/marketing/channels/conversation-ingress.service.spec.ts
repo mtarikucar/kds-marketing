@@ -65,9 +65,10 @@ describe('ConversationIngressService', () => {
     });
     // phone-bearing channel seeds the lead phone/whatsapp
     expect(prisma.lead.create.mock.calls[0][0].data.whatsapp).toBe(inbound.externalUserId);
-    // started + received events
+    // a first-touch new lead emits lead.created (workflow trigger) + started + received
     const types = outbox.append.mock.calls.map((c) => c[0].type);
     expect(types).toEqual([
+      'marketing.lead.created.v1',
       'marketing.conversation.started.v1',
       'marketing.conversation.message.received.v1',
     ]);

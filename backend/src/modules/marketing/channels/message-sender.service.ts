@@ -10,8 +10,9 @@ export interface SendMessageInput {
   workspaceId: string;
   conversationId: string;
   text: string;
-  authorType: 'AI' | 'AGENT';
-  /** MarketingUser id for AGENT sends; null for AI. */
+  /** AI = engine reply, AGENT = human reply, SYSTEM = workflow/campaign send. */
+  authorType: 'AI' | 'AGENT' | 'SYSTEM';
+  /** MarketingUser id for AGENT sends; null for AI/SYSTEM. */
   authorId?: string | null;
 }
 

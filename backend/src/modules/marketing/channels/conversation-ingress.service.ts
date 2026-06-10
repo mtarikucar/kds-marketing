@@ -137,6 +137,7 @@ export class ConversationIngressService {
     let identity = await tx.contactIdentity.findUnique({
       where: { channelId_value: { channelId: channel.id, value: inbound.externalUserId } },
     });
+    const createdNewLead = !identity;
 
     if (!identity) {
       const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
@@ -226,6 +227,23 @@ export class ConversationIngressService {
 
     // 5. Emit domain events in the same tx (fire only on commit).
     const occurredAt = new Date().toISOString();
+    if (createdNewLead) {
+      // A first-touch from a channel is a new lead → workflow trigger source.
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.LeadCreated,
+          idempotencyKey: `lead-created:${identity.leadId}`,
+          payload: {
+            workspaceId,
+            leadId: identity.leadId,
+            source: SOURCE_BY_CHANNEL[channel.type] ?? 'OTHER',
+            channelType: channel.type,
+            occurredAt,
+          },
+        },
+        tx as any,
+      );
+    }
     if (isNewConversation) {
       await this.outbox.append(
         {

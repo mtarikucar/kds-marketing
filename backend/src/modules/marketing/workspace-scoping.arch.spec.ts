@@ -48,6 +48,10 @@ const OWNED_DELEGATES = [
   'contactIdentity',
   'conversation',
   'message',
+  // P3 (GoHighLevel parity): workflow automation.
+  'workflow',
+  'workflowRun',
+  'workflowStepRun',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

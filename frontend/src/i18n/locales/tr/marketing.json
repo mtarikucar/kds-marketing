@@ -109,7 +109,8 @@
     "agentStudio": "AI Ajan Stüdyosu",
     "knowledgeBase": "Bilgi Bankası",
     "inbox": "Gelen Kutusu",
-    "channels": "Kanallar"
+    "channels": "Kanallar",
+    "automations": "Otomasyonlar"
   },
   "common": {
     "save": "Kaydet",
@@ -740,5 +741,25 @@
     "noSecrets": "henüz bilgi yok",
     "embed": "Gömme kodu (</body> öncesine yapıştırın)",
     "empty": "Henüz kanal yok — müşterilerin size yazabilmesi için bir tane bağlayın."
+  },
+  "automations": {
+    "title": "Otomasyonlar",
+    "subtitle": "Bir şey olduğunda şunu yap. Tetikleyiciler adımları çalıştırır — gönder, bekle, dallan, görev oluştur, lead güncelle.",
+    "new": "Yeni otomasyon",
+    "aiAssist": "Anlat — AI adımları taslaklasın",
+    "aiPlaceholder": "örn. yeni bir lead geldiğinde 1 saat bekle, sonra WhatsApp tanıtımı gönder ve takip görevi oluştur",
+    "drafting": "Taslak hazırlanıyor…",
+    "draftBtn": "Taslak",
+    "name": "Ad",
+    "trigger": "Tetikleyici",
+    "filters": "Tetikleyici filtreleri (JSON, opsiyonel)",
+    "steps": "Adımlar (JSON)",
+    "badFilters": "Tetikleyici filtreleri geçerli JSON değil",
+    "badSteps": "Adımlar geçerli JSON değil",
+    "saved": "Otomasyon kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "drafted": "Taslak hazır — gözden geçir ve kaydet",
+    "draftFailed": "Taslak oluşturulamadı",
+    "empty": "Henüz otomasyon yok — birini anlat, AI taslaklasın."
   }
 }

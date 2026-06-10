@@ -889,6 +889,76 @@ model Message {
   @@map("messages")
 }
 
+/// An automation: a trigger (event + filters) and an ordered step list, both
+/// stored as the executable-simple DSL JSON (validated by workflow-dsl.schema
+/// at the API boundary). `version` bumps on every save so an in-flight run can
+/// pin the definition it started on.
+model Workflow {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  status      String  @default("DRAFT") // DRAFT | ACTIVE | PAUSED
+  description String?
+  /// DSL: { type, filters[] }.
+  trigger     Json
+  /// DSL: ordered step list (send_x, ai_x, branch, wait, and so on).
+  steps       Json
+  version     Int     @default(1)
+  /// Lightweight counters for the list UI ({ started, completed, failed }).
+  stats       Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("workflows")
+}
+
+/// One execution of a Workflow against one subject (usually a lead). `cursor`
+/// is the frame-stack program counter (so branch/wait resume mid-flow);
+/// `context` holds run variables; `depth` is the trigger-chain depth (a
+/// workflow that starts another) capped at 3. A raw partial-unique index
+/// (see the migration) enforces ONE active run per (workflow, lead).
+model WorkflowRun {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  workflowId     String
+  workflowVersion Int      @default(1)
+  leadId         String?
+  conversationId String?
+  status         String    @default("RUNNING") // RUNNING | WAITING | DONE | FAILED | STOPPED
+  cursor         Json
+  context        Json
+  depth          Int       @default(0)
+  lastError      String?
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([workflowId])
+  @@index([leadId])
+  @@map("workflow_runs")
+}
+
+/// Per-step audit trail of a run (what executed, its output, any error).
+model WorkflowStepRun {
+  id          String   @id @default(uuid())
+  workspaceId String
+  runId       String
+  stepIndex   Int
+  stepType    String
+  status      String // DONE | FAILED | SKIPPED
+  output      Json?
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([runId])
+  @@map("workflow_step_runs")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.
