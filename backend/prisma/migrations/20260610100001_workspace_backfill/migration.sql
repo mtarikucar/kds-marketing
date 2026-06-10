@@ -34,9 +34,12 @@ UPDATE "installation_crews" SET "workspaceId" = 'b6a7c000-0000-4000-8000-0000000
 UPDATE "installation_jobs" SET "workspaceId" = 'b6a7c000-0000-4000-8000-000000000001' WHERE "workspaceId" IS NULL;
 UPDATE "sales_targets" SET "workspaceId" = 'b6a7c000-0000-4000-8000-000000000001' WHERE "workspaceId" IS NULL;
 
--- Role taxonomy: workspace-scoped roles replace the sales-prefixed ones.
+-- Role taxonomy: workspace-scoped roles replace the legacy ones. Production
+-- data also carried an undocumented field role 'AGENT' (rep-equivalent) —
+-- discovered at cutover; map it too or those users rank below REP and 403
+-- on every role gate.
 UPDATE "marketing_users" SET "role" = 'MANAGER' WHERE "role" = 'SALES_MANAGER';
-UPDATE "marketing_users" SET "role" = 'REP' WHERE "role" = 'SALES_REP';
+UPDATE "marketing_users" SET "role" = 'REP' WHERE "role" IN ('SALES_REP', 'AGENT');
 
 -- The old GLOBAL research sentinel becomes the default workspace's SYSTEM
 -- user (Phase E resolves sentinels per-workspace by role, not by a global
