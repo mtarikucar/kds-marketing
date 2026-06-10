@@ -207,7 +207,7 @@ export default function LeadDetailPage() {
 
   const deleteMutation = useMutation({
     mutationFn: () => marketingApi.delete(`/leads/${id}`),
-    onSuccess: () => { toast.success('Lead deleted'); navigate('/marketing/leads'); },
+    onSuccess: () => { toast.success('Lead deleted'); navigate('/leads'); },
     onError: () => toast.error('Failed to delete lead'),
   });
 
@@ -234,7 +234,7 @@ export default function LeadDetailPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <Link to="/marketing/leads" className="p-2 hover:bg-gray-100 rounded-lg">
+          <Link to="/leads" className="p-2 hover:bg-gray-100 rounded-lg">
             <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
           </Link>
           <div>

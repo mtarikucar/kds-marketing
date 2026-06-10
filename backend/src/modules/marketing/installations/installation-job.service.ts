@@ -15,6 +15,7 @@ import {
   CreateInstallTaskDto,
   JobFilterDto,
 } from './dto/installation-job.dto';
+import { toUtcDateOnly } from './installation.util';
 import { paginated } from '../../../common/pagination';
 
 /** Crew slot is occupied by jobs in these statuses on a day. */
@@ -48,6 +49,14 @@ export class InstallationJobService {
    * Auto-create an installation job when a lead converts (idempotent: one
    * non-cancelled job per tenant from auto-creation). Site/contact are
    * snapshotted by the caller from the marketing-owned Lead.
+   *
+   * Idempotency is a check-then-act guarded by the single-threaded outbox
+   * worker (one consumer execution per event) plus the convertedTenantId
+   * lead-claim upstream, so concurrent duplicates are not produced in
+   * practice. A partial unique index on (tenantId) WHERE status<>'CANCELLED'
+   * is the belt-and-suspenders follow-up but is deferred: existing data may
+   * already hold multiple non-cancelled jobs per tenant, so adding it needs a
+   * dedup migration first.
    */
   async createForConversion(input: {
     tenantId: string;
@@ -63,17 +72,30 @@ export class InstallationJobService {
     });
     if (existing) return existing;
 
-    return this.prisma.installationJob.create({
-      data: {
-        tenantId: input.tenantId,
-        leadId: input.leadId ?? null,
-        contactName: input.contactName ?? null,
-        contactPhone: input.contactPhone ?? null,
-        siteAddress: input.siteAddress ?? null,
-        siteCity: input.siteCity ?? null,
-        status: 'REQUESTED',
-      },
-    });
+    try {
+      return await this.prisma.installationJob.create({
+        data: {
+          tenantId: input.tenantId,
+          leadId: input.leadId ?? null,
+          contactName: input.contactName ?? null,
+          contactPhone: input.contactPhone ?? null,
+          siteAddress: input.siteAddress ?? null,
+          siteCity: input.siteCity ?? null,
+          status: 'REQUESTED',
+        },
+      });
+    } catch (e) {
+      // Backs the partial unique index (tenantId WHERE status<>'CANCELLED'):
+      // if a concurrent consumer won the race, return its job instead of
+      // surfacing a 500 / minting a duplicate.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const won = await this.prisma.installationJob.findFirst({
+          where: { tenantId: input.tenantId, status: { not: 'CANCELLED' } },
+        });
+        if (won) return won;
+      }
+      throw e;
+    }
   }
 
   create(dto: CreateJobDto) {
@@ -101,24 +123,34 @@ export class InstallationJobService {
     if (!crew || !crew.active) {
       throw new BadRequestException('Crew not found or inactive');
     }
-    const date = new Date(dto.scheduledDate);
-
-    // Availability: crew's occupying jobs on that date (excluding this one) must
-    // be below capacity. Mirrors InstallationCrewService.availabilityOn.
-    const booked = await this.prisma.installationJob.count({
-      where: {
-        crewId: dto.crewId,
-        scheduledDate: date,
-        status: { in: OCCUPYING_STATUSES },
-        id: { not: id },
-      },
-    });
-    if (booked >= crew.dailyCapacity) {
-      throw new ConflictException('Crew is fully booked on that date');
-    }
+    // Date-only, timezone-stable key so the capacity count and the
+    // availability view agree on the calendar day (the @db.Date column).
+    const date = toUtcDateOnly(dto.scheduledDate);
 
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent schedulers for THIS crew so the capacity
+      // count-then-write below is atomic. Without the row lock, two parallel
+      // schedule() calls each read booked=0 for a capacity-1 crew and both
+      // write SCHEDULED → the crew is silently double-booked (there is no
+      // @@unique on (crewId, scheduledDate) to catch it). The lock is held to
+      // commit, so the second scheduler sees the first job in its count.
+      await tx.$queryRaw`SELECT id FROM installation_crews WHERE id = ${dto.crewId} FOR UPDATE`;
+
+      // Availability: crew's occupying jobs on that date (excluding this one)
+      // must be below capacity. Mirrors InstallationCrewService.availabilityOn.
+      const booked = await tx.installationJob.count({
+        where: {
+          crewId: dto.crewId,
+          scheduledDate: date,
+          status: { in: OCCUPYING_STATUSES },
+          id: { not: id },
+        },
+      });
+      if (booked >= crew.dailyCapacity) {
+        throw new ConflictException('Crew is fully booked on that date');
+      }
+
       const row = await tx.installationJob.update({
         where: { id },
         data: {
@@ -159,6 +191,17 @@ export class InstallationJobService {
     const data: Prisma.InstallationJobUpdateInput = { status };
     if (status === 'IN_PROGRESS') data.startedAt = now;
     if (status === 'DONE') data.completedAt = now;
+    // Free the crew slot on abandoned/terminal states. Capacity already
+    // excludes these statuses, but unfiltered list views order by crew/date,
+    // so a CANCELLED/NO_SHOW job left with crewId+window still reads as
+    // "attached" to the crew. Keep scheduledDate for history.
+    if (status === 'CANCELLED' || status === 'NO_SHOW') {
+      // `crewId` is a soft (no-FK) reference per the Phase-5 marketing
+      // decoupling, so disconnect-via-relation isn't available — clear
+      // the scalar directly. Same observable effect.
+      data.crewId = null;
+      data.scheduledWindow = null;
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.installationJob.update({ where: { id }, data });

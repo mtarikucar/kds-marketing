@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../../prisma/prisma.service";
 import {
@@ -24,8 +29,19 @@ import { EventTypes, PaymentSucceededPayload } from "../../outbox/event-types";
  *     also auto-creates the self-serve referral lead when none exists.
  */
 @Injectable()
-export class SettlementCommissionConsumer implements OnModuleInit {
+export class SettlementCommissionConsumer
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(SettlementCommissionConsumer.name);
+
+  // v3.0.1 round-4 audit fix — keep a stable handler ref so onModuleDestroy
+  // can detach it from the in-process bus. Pre-fix the inline `(event) =>
+  // this.handle(...)` was registered once but never removed; module-shutdown
+  // (HMR, test teardown, Nest application close) leaked the listener,
+  // double-firing handlers across hot reloads and growing the EventEmitter's
+  // listener count past the default-10 warn threshold.
+  private readonly paymentSucceededHandler = (event: DomainEvent<unknown>) =>
+    this.handle(event as DomainEvent<PaymentSucceededPayload>);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -33,9 +49,11 @@ export class SettlementCommissionConsumer implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.bus.on(EventTypes.PaymentSucceeded, (event) =>
-      this.handle(event as DomainEvent<PaymentSucceededPayload>),
-    );
+    this.bus.on(EventTypes.PaymentSucceeded, this.paymentSucceededHandler);
+  }
+
+  onModuleDestroy(): void {
+    this.bus.off(EventTypes.PaymentSucceeded, this.paymentSucceededHandler);
   }
 
   private async handle(

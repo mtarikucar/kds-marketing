@@ -93,19 +93,97 @@ export class SalesTargetService {
     });
   }
 
-  /** Whole-team attainment for a period (managers). */
+  /**
+   * Whole-team attainment for a period (managers).
+   *
+   * v3.0.1 round-4 audit fix — pre-fix this fanned out into one
+   * `salesTarget.findMany` + three `actualsFor` queries per rep. 50
+   * reps × 4 queries = 200 round trips. Now: one batched targets
+   * lookup + three batched aggregates over the whole rep set, pivoted
+   * in memory. 4 queries total regardless of headcount.
+   */
   async teamPerformance(period: string) {
     const reps = await this.prisma.marketingUser.findMany({
       where: { status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true, role: true },
       orderBy: { firstName: 'asc' },
     });
-    return Promise.all(
-      reps.map(async (rep) => ({
-        marketingUser: rep,
-        metrics: await this.performanceFor(rep.id, period),
-      })),
+    if (reps.length === 0) return [];
+    const repIds = reps.map((r) => r.id);
+    const { start, end } = this.periodRange(period);
+
+    // Batch the four "actuals + target" reads across every rep at once.
+    // Each call returns rows keyed by marketingUserId so we can pivot
+    // back into the per-rep MetricPerformance arrays cheaply.
+    const [targets, wonLeads, commissions, connectedCalls] = await Promise.all([
+      this.prisma.salesTarget.findMany({
+        where: { marketingUserId: { in: repIds }, period },
+      }),
+      this.prisma.lead.groupBy({
+        by: ['assignedToId'],
+        where: {
+          assignedToId: { in: repIds },
+          status: 'WON',
+          convertedAt: { gte: start, lt: end },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.commission.groupBy({
+        by: ['marketingUserId'],
+        where: { marketingUserId: { in: repIds }, period },
+        _sum: { amount: true },
+      }),
+      this.prisma.salesCall.groupBy({
+        by: ['marketingUserId'],
+        where: {
+          marketingUserId: { in: repIds },
+          status: 'CONNECTED',
+          startedAt: { gte: start, lt: end },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+
+    // Pivot index helpers.
+    const targetsByRepMetric = new Map<string, Map<TargetMetric, number>>();
+    for (const t of targets) {
+      let inner = targetsByRepMetric.get(t.marketingUserId);
+      if (!inner) {
+        inner = new Map();
+        targetsByRepMetric.set(t.marketingUserId, inner);
+      }
+      inner.set(t.metric as TargetMetric, Number(t.targetValue));
+    }
+    const wonByRep = new Map(
+      wonLeads
+        .filter((w) => w.assignedToId != null)
+        .map((w) => [w.assignedToId as string, w._count._all]),
     );
+    const commByRep = new Map(
+      commissions.map((c) => [c.marketingUserId, Number(c._sum.amount ?? 0)]),
+    );
+    const callsByRep = new Map(
+      connectedCalls.map((c) => [c.marketingUserId, c._count._all]),
+    );
+
+    return reps.map((rep) => {
+      const targets = targetsByRepMetric.get(rep.id) ?? new Map();
+      const actuals: Record<TargetMetric, number> = {
+        WON_LEADS: wonByRep.get(rep.id) ?? 0,
+        COMMISSION_AMOUNT: commByRep.get(rep.id) ?? 0,
+        CONNECTED_CALLS: callsByRep.get(rep.id) ?? 0,
+      };
+      const metrics: MetricPerformance[] = TARGET_METRICS.map((metric) => {
+        const targetValue = targets.get(metric) ?? null;
+        const actual = actuals[metric];
+        const attainmentPct =
+          targetValue && targetValue > 0
+            ? Math.round((actual / targetValue) * 10000) / 100
+            : null;
+        return { metric, target: targetValue, actual, attainmentPct };
+      });
+      return { marketingUser: rep, metrics };
+    });
   }
 
   private async actualsFor(

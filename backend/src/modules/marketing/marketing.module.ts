@@ -43,6 +43,7 @@ import { IngestTokenGuard } from './guards/ingest-token.guard';
 
 // Event consumers (Step C decoupling: settlement → commission crediting).
 import { SettlementCommissionConsumer } from './events/settlement-commission.consumer';
+import { HardwareQuoteConsumer } from './events/hardware-quote.consumer';
 
 // Phase 2 telephony — single-line Netgsm sales calls (click-to-dial + manual log).
 import { SalesCallController } from './controllers/sales-call.controller';
@@ -136,6 +137,10 @@ import { SalesTargetService } from './services/sales-target.service';
     // Event consumer: credits SIGNUP/RENEWAL/UPSELL commissions off
     // payment.succeeded.v1 (subscribes via DomainEventBus on init).
     SettlementCommissionConsumer,
+    // Event consumer: creates + auto-assigns a HARDWARE_QUOTE lead off
+    // marketing.lead.hardware_quote.v1 (emitted by the core catalog) — keeps
+    // the lead write out of the core module for the Phase-5 split.
+    HardwareQuoteConsumer,
     // Phase 2 telephony: sales-call log + single-line Netgsm provider.
     SalesCallService,
     TelephonyProviderRegistry,

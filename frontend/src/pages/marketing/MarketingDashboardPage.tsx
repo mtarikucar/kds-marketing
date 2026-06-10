@@ -143,7 +143,7 @@ export default function MarketingDashboardPage() {
           // pre-filtered list so the manager can act on it in one move.
           // Color thresholds are intentional: >10 unassigned = a real
           // backlog, 1-10 = "you should look", 0 = inbox-zero.
-          <Link to="/marketing/leads?assignmentStatus=unassigned" className="block">
+          <Link to="/leads?assignmentStatus=unassigned" className="block">
             <StatsCard
               title={t('dashboard.unassignedLeads')}
               value={stats?.unassignedLeads ?? 0}

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateCrewDto, UpdateCrewDto } from './dto/installation-crew.dto';
+import { toUtcDateOnly } from './installation.util';
 
 /** Active statuses that occupy a crew slot on a given day. */
 const OCCUPYING_STATUSES = ['SCHEDULED', 'IN_PROGRESS'];
@@ -50,7 +51,10 @@ export class InstallationCrewService {
    * (booked < dailyCapacity). The scheduling overlap check used by
    * InstallationJobService.schedule mirrors this per-crew.
    */
-  async availabilityOn(date: Date) {
+  async availabilityOn(dateInput: string | Date) {
+    // Canonicalize to the same date-only UTC key the scheduler writes, so the
+    // availability view and InstallationJobService.schedule agree on the day.
+    const date = toUtcDateOnly(dateInput);
     const crews = await this.prisma.installationCrew.findMany({
       where: { active: true },
       orderBy: { name: 'asc' },

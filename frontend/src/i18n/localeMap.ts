@@ -3,6 +3,8 @@
  * Provides Intl locale strings, date-fns locales (lazy loaded), and plural rules
  */
 
+import type { Locale as DateFnsLocale } from 'date-fns';
+
 export interface LocaleConfig {
   /** BCP 47 locale tag for Intl APIs */
   intlLocale: string;
@@ -18,6 +20,8 @@ export interface LocaleConfig {
   pluralForms: number;
   /** Currency code commonly used in this locale */
   defaultCurrency: string;
+  /** Date-fns locale loader (lazy loaded) */
+  dateFnsLocale: () => Promise<DateFnsLocale>;
 }
 
 /**
@@ -32,6 +36,10 @@ export const localeMap: Record<string, LocaleConfig> = {
     rtl: false,
     pluralForms: 2, // one, other
     defaultCurrency: 'USD',
+    dateFnsLocale: async () => {
+      const { enUS } = await import('date-fns/locale');
+      return enUS;
+    },
   },
   tr: {
     intlLocale: 'tr-TR',
@@ -41,6 +49,10 @@ export const localeMap: Record<string, LocaleConfig> = {
     rtl: false,
     pluralForms: 2, // one, other
     defaultCurrency: 'TRY',
+    dateFnsLocale: async () => {
+      const { tr } = await import('date-fns/locale');
+      return tr;
+    },
   },
   ru: {
     intlLocale: 'ru-RU',
@@ -50,6 +62,10 @@ export const localeMap: Record<string, LocaleConfig> = {
     rtl: false,
     pluralForms: 3, // one, few, many
     defaultCurrency: 'RUB',
+    dateFnsLocale: async () => {
+      const { ru } = await import('date-fns/locale');
+      return ru;
+    },
   },
   uz: {
     intlLocale: 'uz-UZ',
@@ -59,6 +75,10 @@ export const localeMap: Record<string, LocaleConfig> = {
     rtl: false,
     pluralForms: 2, // one, other
     defaultCurrency: 'UZS',
+    dateFnsLocale: async () => {
+      const { uz } = await import('date-fns/locale');
+      return uz;
+    },
   },
   ar: {
     intlLocale: 'ar-SA',
@@ -68,6 +88,10 @@ export const localeMap: Record<string, LocaleConfig> = {
     rtl: true,
     pluralForms: 6, // zero, one, two, few, many, other
     defaultCurrency: 'SAR',
+    dateFnsLocale: async () => {
+      const { arSA } = await import('date-fns/locale');
+      return arSA;
+    },
   },
 };
 

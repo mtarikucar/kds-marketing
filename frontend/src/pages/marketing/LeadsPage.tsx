@@ -46,7 +46,7 @@ export default function LeadsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   // URL-driven assignment filter so a manager can share a link like
-  // "/marketing/leads?assignmentStatus=unassigned" from the dashboard
+  // "/leads?assignmentStatus=unassigned" from the dashboard
   // card or paste it into Slack as a triage queue.
   const initialAssignment =
     (searchParams.get('assignmentStatus') as AssignmentStatus) || '';
@@ -164,7 +164,7 @@ export default function LeadsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">{t('leads.title')}</h1>
         <Link
-          to="/marketing/leads/new"
+          to="/leads/new"
           className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           <PlusIcon className="w-4 h-4" />

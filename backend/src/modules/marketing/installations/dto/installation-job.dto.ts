@@ -25,9 +25,8 @@ export const INSTALL_STATUSES = [
 export const INSTALL_TRANSITIONS = ['IN_PROGRESS', 'DONE', 'CANCELLED', 'NO_SHOW'] as const;
 
 export class CreateJobDto {
-  /** Soft reference to the converted tenant. */
-  @IsString()
-  @IsNotEmpty()
+  /** Soft reference to the converted tenant (core tenant id is a UUID). */
+  @IsUUID()
   tenantId!: string;
 
   @IsOptional()

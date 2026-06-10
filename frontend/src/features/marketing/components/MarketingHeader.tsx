@@ -87,7 +87,7 @@ export default function MarketingHeader() {
 
   const handleLogout = () => {
     logout();
-    navigate('/marketing/login');
+    navigate('/login');
   };
 
   const handleChangePassword = (e: React.FormEvent) => {

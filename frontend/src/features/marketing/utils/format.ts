@@ -21,3 +21,14 @@ export function fmtDateTime(d: string | Date | null | undefined): string {
   if (!d) return '';
   return new Date(d).toLocaleString(getLocale());
 }
+
+/**
+ * Format a call duration in seconds as `m:ss` (e.g. 95 → "1:35").
+ * Empty/nullish → "—". Used by the sales-call log.
+ */
+export function fmtDuration(sec: number | null | undefined): string {
+  if (sec == null) return '—';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
