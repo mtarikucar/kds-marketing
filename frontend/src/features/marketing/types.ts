@@ -234,3 +234,189 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   [LeadSource.OTHER]: 'Other',
   [LeadSource.AI_RESEARCH]: 'AI Research',
 };
+
+// ── Installation ops (Faz 3 backend; UI Faz 6) ────────────────────
+export enum InstallationStatus {
+  REQUESTED = 'REQUESTED',
+  SCHEDULED = 'SCHEDULED',
+  IN_PROGRESS = 'IN_PROGRESS',
+  DONE = 'DONE',
+  CANCELLED = 'CANCELLED',
+  NO_SHOW = 'NO_SHOW',
+}
+
+export enum InstallationWindow {
+  MORNING = 'MORNING',
+  AFTERNOON = 'AFTERNOON',
+  FULL_DAY = 'FULL_DAY',
+}
+
+export interface InstallationCrew {
+  id: string;
+  name: string;
+  active: boolean;
+  dailyCapacity: number;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InstallationTask {
+  id: string;
+  jobId: string;
+  title: string;
+  done: boolean;
+  position: number;
+  createdAt: string;
+}
+
+export interface InstallationJob {
+  id: string;
+  tenantId: string;
+  leadId?: string | null;
+  crewId?: string | null;
+  status: InstallationStatus;
+  scheduledDate?: string | null;
+  scheduledWindow?: string | null;
+  siteAddress?: string | null;
+  siteCity?: string | null;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  notes?: string | null;
+  requestedAt: string;
+  scheduledAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  tasks: InstallationTask[];
+}
+
+export interface CrewAvailability {
+  crew: InstallationCrew;
+  booked: number;
+  available: boolean;
+}
+
+export interface InstallationDashboard {
+  byStatus: Record<string, number>;
+  unscheduled: number;
+  overdueSla: number;
+  upcoming: InstallationJob[];
+}
+
+// Allowed status moves — mirrors the backend INSTALL_TRANSITIONS state machine.
+export const INSTALLATION_TRANSITIONS: Record<InstallationStatus, InstallationStatus[]> = {
+  [InstallationStatus.REQUESTED]: [InstallationStatus.CANCELLED],
+  [InstallationStatus.SCHEDULED]: [
+    InstallationStatus.IN_PROGRESS,
+    InstallationStatus.CANCELLED,
+    InstallationStatus.NO_SHOW,
+  ],
+  [InstallationStatus.IN_PROGRESS]: [InstallationStatus.DONE, InstallationStatus.CANCELLED],
+  [InstallationStatus.DONE]: [],
+  [InstallationStatus.CANCELLED]: [],
+  [InstallationStatus.NO_SHOW]: [InstallationStatus.CANCELLED],
+};
+
+export const INSTALLATION_STATUS_LABELS: Record<InstallationStatus, string> = {
+  REQUESTED: 'Requested',
+  SCHEDULED: 'Scheduled',
+  IN_PROGRESS: 'In Progress',
+  DONE: 'Done',
+  CANCELLED: 'Cancelled',
+  NO_SHOW: 'No-show',
+};
+
+export const INSTALLATION_WINDOW_LABELS: Record<InstallationWindow, string> = {
+  MORNING: 'Morning',
+  AFTERNOON: 'Afternoon',
+  FULL_DAY: 'Full Day',
+};
+
+// ── Telephony / sales calls (Faz 2 backend; UI Faz 6) ─────────────
+export enum CallStatus {
+  INITIATED = 'INITIATED',
+  CONNECTED = 'CONNECTED',
+  NO_ANSWER = 'NO_ANSWER',
+  BUSY = 'BUSY',
+  FAILED = 'FAILED',
+  CANCELLED = 'CANCELLED',
+}
+
+export interface SalesCall {
+  id: string;
+  marketingUserId: string;
+  marketingUser?: MarketingUserInfo;
+  leadId?: string | null;
+  direction: string;
+  toPhone: string;
+  providerId: string;
+  status: CallStatus;
+  externalCallId?: string | null;
+  durationSec?: number | null;
+  recordingUrl?: string | null;
+  notes?: string | null;
+  startedAt: string;
+  endedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StartCallResult {
+  call: SalesCall;
+  dialUri: string;
+  mode: string;
+}
+
+export const CALL_STATUS_LABELS: Record<CallStatus, string> = {
+  INITIATED: 'In progress',
+  CONNECTED: 'Connected',
+  NO_ANSWER: 'No answer',
+  BUSY: 'Busy',
+  FAILED: 'Failed',
+  CANCELLED: 'Cancelled',
+};
+
+// Outcomes a rep can log (INITIATED is the start state only).
+export const CALL_OUTCOMES = ['CONNECTED', 'NO_ANSWER', 'BUSY', 'FAILED', 'CANCELLED'] as const;
+
+// ── Sales targets / performance (Faz 4 backend; UI Faz 6) ─────────
+export enum TargetMetric {
+  WON_LEADS = 'WON_LEADS',
+  COMMISSION_AMOUNT = 'COMMISSION_AMOUNT',
+  CONNECTED_CALLS = 'CONNECTED_CALLS',
+}
+
+export interface SalesTarget {
+  id: string;
+  marketingUserId: string;
+  marketingUser?: MarketingUserInfo;
+  period: string;
+  metric: string;
+  targetValue: number | string;
+  setById: string;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MetricPerformance {
+  metric: string;
+  target: number | null;
+  actual: number;
+  attainmentPct: number | null;
+}
+
+export interface TeamPerformanceRow {
+  marketingUser: { id: string; firstName: string; lastName: string; role: string };
+  metrics: MetricPerformance[];
+}
+
+export const TARGET_METRIC_LABELS: Record<TargetMetric, string> = {
+  WON_LEADS: 'Won Leads',
+  COMMISSION_AMOUNT: 'Commission ($)',
+  CONNECTED_CALLS: 'Connected Calls',
+};
+
+export const TARGET_METRICS = ['WON_LEADS', 'COMMISSION_AMOUNT', 'CONNECTED_CALLS'] as const;

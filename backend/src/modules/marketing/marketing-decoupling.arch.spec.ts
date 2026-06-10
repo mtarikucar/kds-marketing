@@ -74,4 +74,42 @@ describe('marketing decoupling — split readiness (architecture fitness)', () =
     }
     expect(offenders).toEqual([]);
   });
+
+  /**
+   * Symmetric boundary guard (ported from the monorepo's v3.0.1 round-4
+   * audit fix, adapted to the standalone layout). The marketing module owns
+   * its tables; the infrastructure seams around it (modules/internal — the
+   * core-facing HTTP surface, modules/outbox — the event bus, core-client —
+   * the HTTP port to core) must never write marketing-owned tables directly.
+   * Writes belong to the marketing module's services and consumers, so a
+   * relayed event that needs a Lead write lands in a marketing consumer
+   * (e.g. HardwareQuoteConsumer), not in the intake controller.
+   */
+  it('blocks non-marketing modules from writing marketing-owned tables (symmetric guard)', () => {
+    const SRC_ROOT = path.join(BACKEND_ROOT, 'src');
+    // Marketing-owned Prisma delegates. Reads are tolerated — writes are
+    // the leak we're chasing.
+    const forbidden =
+      /\b(?:this\.prisma|tx|prisma)\.(lead|leadOffer|leadActivity|marketingUser|marketingTask|marketingNotification|commission|installationCrew|installationJob|installationTask|salesCall|salesTarget|marketingDistributionConfig)\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\b/;
+    const allowPath = /\/modules\/marketing\//;
+    const offenders: string[] = [];
+    function walk(dir: string): void {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (
+          entry.name.endsWith('.ts') &&
+          !entry.name.endsWith('.spec.ts') &&
+          !entry.name.endsWith('.d.ts')
+        ) {
+          if (allowPath.test(full)) continue;
+          if (forbidden.test(fs.readFileSync(full, 'utf8'))) {
+            offenders.push(path.relative(BACKEND_ROOT, full));
+          }
+        }
+      }
+    }
+    walk(SRC_ROOT);
+    expect(offenders.sort()).toEqual([]);
+  });
 });

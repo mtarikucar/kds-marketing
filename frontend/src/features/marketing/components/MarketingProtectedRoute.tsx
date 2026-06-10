@@ -33,7 +33,7 @@ export default function MarketingProtectedRoute({
   }, [accessToken, logout]);
 
   if (!isAuthenticated) {
-    return <Navigate to="/marketing/login" replace />;
+    return <Navigate to="/login" replace />;
   }
 
   if (requiredRole && user?.role !== requiredRole) {
@@ -41,7 +41,7 @@ export default function MarketingProtectedRoute({
     // bare 403 from the API. SALES_REP trying to reach manager-only
     // routes (users, performance reports, commission approvals) lands
     // here.
-    return <Navigate to="/marketing/dashboard" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   return <Outlet />;

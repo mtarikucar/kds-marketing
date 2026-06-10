@@ -59,7 +59,8 @@ export class InstallationController {
 
   @Get('crews/availability')
   crewAvailability(@Query('date') date: string) {
-    return this.crews.availabilityOn(new Date(date));
+    // Service normalizes the raw query string to a date-only UTC key.
+    return this.crews.availabilityOn(date);
   }
 
   // --- dashboard ---

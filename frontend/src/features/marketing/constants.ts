@@ -55,3 +55,23 @@ export const COMMISSION_STATUS_BADGE: Record<CommissionStatus, string> = {
   APPROVED: 'bg-emerald-100 text-emerald-800',
   PAID: 'bg-slate-100 text-slate-800',
 };
+
+// Keyed by string (not the enum) so callers can pass a raw API status
+// without importing the enum — matches how pages render badges.
+export const INSTALLATION_STATUS_BADGE: Record<string, string> = {
+  REQUESTED: 'bg-slate-100 text-slate-800',
+  SCHEDULED: 'bg-blue-100 text-blue-800',
+  IN_PROGRESS: 'bg-amber-100 text-amber-800',
+  DONE: 'bg-emerald-100 text-emerald-800',
+  CANCELLED: 'bg-red-100 text-red-800',
+  NO_SHOW: 'bg-orange-100 text-orange-800',
+};
+
+export const CALL_STATUS_BADGE: Record<string, string> = {
+  INITIATED: 'bg-blue-100 text-blue-800',
+  CONNECTED: 'bg-emerald-100 text-emerald-800',
+  NO_ANSWER: 'bg-amber-100 text-amber-800',
+  BUSY: 'bg-orange-100 text-orange-800',
+  FAILED: 'bg-red-100 text-red-800',
+  CANCELLED: 'bg-slate-100 text-slate-800',
+};

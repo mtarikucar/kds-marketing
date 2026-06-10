@@ -96,16 +96,20 @@ describe('SalesTargetService', () => {
   });
 
   describe('teamPerformance', () => {
+    // v3.0.1 round-4 — switched to batched groupBy queries instead of per-rep
+    // findMany + aggregate + count, so the mocks return the pivoted shape.
     it('returns per-metric attainment for every active rep', async () => {
       prisma.marketingUser.findMany.mockResolvedValue([
         { id: 'rep-1', firstName: 'Ada', lastName: 'Lovelace', role: 'SALES_REP' },
       ] as any);
       prisma.salesTarget.findMany.mockResolvedValue([
-        { metric: 'WON_LEADS', targetValue: new Prisma.Decimal(5) },
+        { marketingUserId: 'rep-1', metric: 'WON_LEADS', targetValue: new Prisma.Decimal(5) },
       ] as any);
-      prisma.lead.count.mockResolvedValue(4);
-      (prisma.commission.aggregate as any).mockResolvedValue({ _sum: { amount: null } });
-      prisma.salesCall.count.mockResolvedValue(0);
+      (prisma.lead.groupBy as any).mockResolvedValue([
+        { assignedToId: 'rep-1', _count: { _all: 4 } },
+      ]);
+      (prisma.commission.groupBy as any).mockResolvedValue([]);
+      (prisma.salesCall.groupBy as any).mockResolvedValue([]);
 
       const team = await svc.teamPerformance('2026-06');
 
@@ -122,6 +126,16 @@ describe('SalesTargetService', () => {
       expect(prisma.marketingUser.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { status: 'ACTIVE' } }),
       );
+    });
+
+    it('returns empty when no active reps (skip downstream queries)', async () => {
+      prisma.marketingUser.findMany.mockResolvedValue([] as any);
+      const team = await svc.teamPerformance('2026-06');
+      expect(team).toEqual([]);
+      // No fan-out fired.
+      expect(prisma.lead.groupBy).not.toHaveBeenCalled();
+      expect(prisma.commission.groupBy).not.toHaveBeenCalled();
+      expect(prisma.salesCall.groupBy).not.toHaveBeenCalled();
     });
   });
 });

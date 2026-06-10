@@ -103,6 +103,16 @@ model Lead {
   offers      LeadOffer[]
   commissions Commission[]    @relation("CommissionLead")
 
+  // v3.0.1 round-4 — hardware "Teklif Al" leads (source=HARDWARE_QUOTE)
+  // capture (a) the requesting tenant via soft-FK string and (b) a
+  // frozen snapshot of the catalog row + requested qty at request time.
+  // Snapshot is intentionally schema-less JSON so future tier requirements
+  // (delivery window, install type, etc.) extend without a migration.
+  // `originTenantId` stays a String (no FK) — core's tenant table lives in
+  // another database entirely.
+  productSnapshot Json?
+  originTenantId  String?
+
   @@index([assignedToId])
   @@index([status])
   @@index([city])
@@ -113,6 +123,7 @@ model Lead {
   @@index([priority])
   @@index([assignedToId, status])
   @@index([status, createdAt])
+  @@index([originTenantId])
   @@map("leads")
 }
 

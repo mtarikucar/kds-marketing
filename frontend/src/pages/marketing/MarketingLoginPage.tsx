@@ -10,7 +10,7 @@ export default function MarketingLoginPage() {
   const { login, isAuthenticated } = useMarketingAuthStore();
 
   if (isAuthenticated) {
-    return <Navigate to="/marketing/dashboard" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,7 +25,7 @@ export default function MarketingLoginPage() {
     try {
       const { data } = await marketingApi.post('/auth/login', { email, password });
       login(data.user, data.accessToken, data.refreshToken);
-      navigate('/marketing/dashboard');
+      navigate('/dashboard');
     } catch (err: any) {
       setError(err.response?.data?.message || err.message || t('login.wrongCreds'));
     } finally {

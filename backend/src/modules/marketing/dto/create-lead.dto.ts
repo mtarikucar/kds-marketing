@@ -28,6 +28,9 @@ export enum LeadSource {
   PHONE = 'PHONE',
   OTHER = 'OTHER',
   AI_RESEARCH = 'AI_RESEARCH',
+  // Hardware storefront "Teklif Al" on a QUOTE_ONLY device (yazarkasa / YN ÖKC).
+  // Lands an existing tenant's fiscal-device quote request in the lead board.
+  HARDWARE_QUOTE = 'HARDWARE_QUOTE',
 }
 
 export enum LeadPriority {

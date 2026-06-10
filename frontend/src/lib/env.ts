@@ -22,11 +22,24 @@ function resolveApiUrl(): string {
   if (fromEnv) return fromEnv;
 
   if (import.meta.env.PROD) {
-    // Loud but non-fatal: a redirect to login will still happen, but the
-    // root cause is one line instead of a dozen confused bug reports.
-    console.error(
-      '[env] VITE_API_URL is not set in production build. Falling back to ' +
-        `${DEV_FALLBACK_ORIGIN}/api — check the Dockerfile ARG/ENV wiring.`,
+    // v3.0.1 round-3 — hard-fail instead of console.error + silent
+    // localhost fallback. Pre-fix a production build that lost its
+    // env var pointed every request at localhost:3000 and surfaced
+    // as a CORS failure in the browser console; ops had no signal
+    // because a console.error inside a customer's browser is
+    // invisible to them. Throwing on module load makes the bundle
+    // crash on first import, which surfaces immediately in:
+    //   - the GitHub Actions step that smoke-checks the built bundle,
+    //   - any uptime probe that hits the SPA root,
+    //   - the developer running `vite preview` over a prod build.
+    // Dev mode (`vite`, MODE === 'development') still falls through
+    // to the localhost default so devs without an env file work out
+    // of the box.
+    throw new Error(
+      '[env] VITE_API_URL is not set in production build. Check the ' +
+        'Dockerfile ARG/ENV wiring and the docker-compose build args ' +
+        'for the marketing-spa service. Refusing to start with a ' +
+        'silently-wrong API base URL.',
     );
   }
   return `${DEV_FALLBACK_ORIGIN}/api`;

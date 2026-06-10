@@ -10,21 +10,29 @@ import {
   CurrencyDollarIcon,
   UsersIcon,
   ArrowRightOnRectangleIcon,
+  WrenchScrewdriverIcon,
+  PhoneIcon,
+  PresentationChartLineIcon,
+  FlagIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 const navItems = [
-  { path: '/marketing/dashboard', labelKey: 'nav.dashboard', icon: HomeIcon },
-  { path: '/marketing/leads', labelKey: 'nav.leads', icon: UserGroupIcon },
-  { path: '/marketing/tasks', labelKey: 'nav.tasks', icon: ClipboardDocumentListIcon },
-  { path: '/marketing/calendar', labelKey: 'nav.calendar', icon: CalendarIcon },
-  { path: '/marketing/offers', labelKey: 'nav.offers', icon: DocumentTextIcon },
-  { path: '/marketing/reports', labelKey: 'nav.reports', icon: ChartBarIcon },
-  { path: '/marketing/commissions', labelKey: 'nav.commissions', icon: CurrencyDollarIcon },
+  { path: '/dashboard', labelKey: 'nav.dashboard', icon: HomeIcon },
+  { path: '/leads', labelKey: 'nav.leads', icon: UserGroupIcon },
+  { path: '/tasks', labelKey: 'nav.tasks', icon: ClipboardDocumentListIcon },
+  { path: '/calendar', labelKey: 'nav.calendar', icon: CalendarIcon },
+  { path: '/offers', labelKey: 'nav.offers', icon: DocumentTextIcon },
+  { path: '/reports', labelKey: 'nav.reports', icon: ChartBarIcon },
+  { path: '/commissions', labelKey: 'nav.commissions', icon: CurrencyDollarIcon },
+  { path: '/installations', labelKey: 'nav.installations', icon: WrenchScrewdriverIcon },
+  { path: '/calls', labelKey: 'nav.calls', icon: PhoneIcon },
+  { path: '/performance', labelKey: 'nav.performance', icon: PresentationChartLineIcon },
 ];
 
 const managerOnlyItems = [
-  { path: '/marketing/users', labelKey: 'nav.users', icon: UsersIcon },
+  { path: '/users', labelKey: 'nav.users', icon: UsersIcon },
+  { path: '/targets', labelKey: 'nav.targets', icon: FlagIcon },
 ];
 
 export default function MarketingSidebar() {
