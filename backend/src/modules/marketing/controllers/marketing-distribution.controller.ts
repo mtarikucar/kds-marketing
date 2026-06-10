@@ -11,20 +11,20 @@ import { MarketingUserPayload } from '../types';
 @Controller('marketing/distribution-config')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
 @MarketingRoute()
-@MarketingRoles('SALES_MANAGER')
+@MarketingRoles('MANAGER')
 export class MarketingDistributionController {
   constructor(private readonly service: MarketingDistributionService) {}
 
   @Get()
-  get() {
-    return this.service.get();
+  get(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.service.get(actor.workspaceId);
   }
 
   @Patch()
   update(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: UpdateDistributionConfigDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.service.update(dto.strategy ?? 'DISABLED', user.id);
+    return this.service.update(actor.workspaceId, dto.strategy ?? 'DISABLED', actor.id);
   }
 }

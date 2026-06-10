@@ -31,73 +31,85 @@ export class MarketingLeadsController {
   constructor(private readonly leadsService: MarketingLeadsService) {}
 
   @Post()
-  create(@Body() dto: CreateLeadDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.leadsService.create(dto, user.id, user.role);
+  create(@Body() dto: CreateLeadDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadsService.create(actor.workspaceId, dto, actor.id, actor.role);
   }
 
   @Get()
-  findAll(@Query() filter: LeadFilterDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.leadsService.findAll(filter, user.id, user.role);
+  findAll(@Query() filter: LeadFilterDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadsService.findAll(actor.workspaceId, filter, actor.id, actor.role);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.leadsService.findOne(id, user.id, user.role);
+  findOne(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadsService.findOne(actor.workspaceId, id, actor.id, actor.role);
   }
 
   @Patch(':id')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateLeadDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.leadsService.update(id, dto, user.id, user.role);
+    return this.leadsService.update(actor.workspaceId, id, dto, actor.id, actor.role);
   }
 
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateLeadStatusDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.leadsService.updateStatus(id, dto.status, dto.lostReason, user.id, user.role);
+    return this.leadsService.updateStatus(
+      actor.workspaceId,
+      id,
+      dto.status,
+      dto.lostReason,
+      actor.id,
+      actor.role,
+    );
   }
 
   @Patch(':id/assign')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   assign(
     @Param('id') id: string,
     @Body() dto: AssignLeadDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.leadsService.assign(id, dto.assignedToId, user.id);
+    return this.leadsService.assign(actor.workspaceId, id, dto.assignedToId, actor.id);
   }
 
   // Listed BEFORE the generic Patch routes above is unnecessary — Nest
   // matches static paths before params anyway — but bulk-assign is a
   // POST so there's no ambiguity. Manager-only at the decorator layer.
   @Post('bulk-assign')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   bulkAssign(
     @Body() dto: BulkAssignLeadDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.leadsService.bulkAssign(dto.leadIds, dto.assignedToId, user.id);
+    return this.leadsService.bulkAssign(
+      actor.workspaceId,
+      dto.leadIds,
+      dto.assignedToId,
+      actor.id,
+    );
   }
 
   @Post(':id/convert')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   convert(
     @Param('id') id: string,
     @Body() dto: ConvertLeadDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.leadsService.convert(id, dto, user.id);
+    return this.leadsService.convert(actor.workspaceId, id, dto, actor.id);
   }
 
   @Delete(':id')
-  @MarketingRoles('SALES_MANAGER')
-  delete(@Param('id') id: string) {
-    return this.leadsService.delete(id);
+  @MarketingRoles('MANAGER')
+  delete(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadsService.delete(actor.workspaceId, id);
   }
 }

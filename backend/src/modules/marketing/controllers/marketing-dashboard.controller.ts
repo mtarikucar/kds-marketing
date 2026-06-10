@@ -15,27 +15,27 @@ export class MarketingDashboardController {
 
   @Get('stats')
   getStats(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.dashboardService.getStats(user.id, user.role);
+    return this.dashboardService.getStats(user.workspaceId, user.id, user.role);
   }
 
   @Get('leads-by-status')
   getLeadsByStatus(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.dashboardService.getLeadsByStatus(user.id, user.role);
+    return this.dashboardService.getLeadsByStatus(user.workspaceId, user.id, user.role);
   }
 
   @Get('today')
   getTodaySummary(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.dashboardService.getTodaySummary(user.id, user.role);
+    return this.dashboardService.getTodaySummary(user.workspaceId, user.id, user.role);
   }
 
   @Get('monthly')
   getMonthlyMetrics(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.dashboardService.getMonthlyMetrics(user.id, user.role);
+    return this.dashboardService.getMonthlyMetrics(user.workspaceId, user.id, user.role);
   }
 
   @Get('top-performers')
-  @MarketingRoles('SALES_MANAGER')
-  getTopPerformers() {
-    return this.dashboardService.getTopPerformers();
+  @MarketingRoles('MANAGER')
+  getTopPerformers(@CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.dashboardService.getTopPerformers(user.workspaceId);
   }
 }

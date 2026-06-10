@@ -45,12 +45,16 @@ export class SalesCallService {
    * Reserve the sales line and return a dial URI. Enforces the provider's
    * single-line concurrency: at most `maxConcurrentCalls` may be INITIATED at
    * once. A stale INITIATED call is auto-cancelled so the line never deadlocks.
+   *
+   * The provider/registry mechanics stay workspace-agnostic (the telephony
+   * line is infrastructure, not tenant data) — but every SalesCall row read
+   * or written here is scoped to the actor's workspace.
    */
-  async startCall(marketingUserId: string, dto: StartCallDto) {
+  async startCall(workspaceId: string, marketingUserId: string, dto: StartCallDto) {
     const provider = this.registry.get(this.providerId());
 
     const active = await this.prisma.salesCall.findMany({
-      where: { status: 'INITIATED' },
+      where: { workspaceId, status: 'INITIATED' },
       orderBy: { startedAt: 'desc' },
       select: { id: true, startedAt: true },
     });
@@ -58,7 +62,7 @@ export class SalesCallService {
     const stale = active.filter((c) => c.startedAt.getTime() < cutoff);
     if (stale.length) {
       await this.prisma.salesCall.updateMany({
-        where: { id: { in: stale.map((c) => c.id) } },
+        where: { id: { in: stale.map((c) => c.id) }, workspaceId },
         data: {
           status: 'CANCELLED',
           endedAt: new Date(),
@@ -74,8 +78,9 @@ export class SalesCallService {
     }
 
     if (dto.leadId) {
-      const lead = await this.prisma.lead.findUnique({
-        where: { id: dto.leadId },
+      // Scoped read — a lead id from another workspace must not be linkable.
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: dto.leadId, workspaceId },
         select: { id: true },
       });
       if (!lead) throw new NotFoundException('Lead not found');
@@ -87,6 +92,7 @@ export class SalesCallService {
     });
     const call = await this.prisma.salesCall.create({
       data: {
+        workspaceId,
         marketingUserId,
         leadId: dto.leadId ?? null,
         direction: 'OUTBOUND',
@@ -103,8 +109,11 @@ export class SalesCallService {
    * Record the outcome of an INITIATED call. Frees the line, mirrors onto the
    * lead timeline (if linked), and emits marketing.call.logged.v1.
    */
-  async logCall(id: string, marketingUserId: string, dto: LogCallDto) {
-    const call = await this.prisma.salesCall.findUnique({ where: { id } });
+  async logCall(workspaceId: string, id: string, marketingUserId: string, dto: LogCallDto) {
+    // Scoped pre-check; the update below is keyed by this resolved row. The
+    // mirrored leadActivity inherits scope through call.leadId, which was
+    // validated against the same workspace at startCall time.
+    const call = await this.prisma.salesCall.findFirst({ where: { id, workspaceId } });
     if (!call) throw new NotFoundException('Call not found');
     if (call.marketingUserId !== marketingUserId) {
       throw new ForbiddenException('You can only log your own calls');
@@ -162,36 +171,36 @@ export class SalesCallService {
     return updated;
   }
 
-  async list(filter: SalesCallFilterDto, user: MarketingUserPayload) {
+  async list(workspaceId: string, filter: SalesCallFilterDto, user: MarketingUserPayload) {
     const page = filter.page ?? 1;
     const limit = filter.limit ?? 20;
-    const where: Prisma.SalesCallWhereInput = {};
+    const filters: Prisma.SalesCallWhereInput = {};
 
     // Reps see only their own calls; managers may scope to any rep.
-    if (user.role === 'SALES_REP') {
-      where.marketingUserId = user.id;
+    if (user.role === 'REP') {
+      filters.marketingUserId = user.id;
     } else if (filter.marketingUserId) {
-      where.marketingUserId = filter.marketingUserId;
+      filters.marketingUserId = filter.marketingUserId;
     }
-    if (filter.leadId) where.leadId = filter.leadId;
-    if (filter.status) where.status = filter.status;
+    if (filter.leadId) filters.leadId = filter.leadId;
+    if (filter.status) filters.status = filter.status;
 
     const [data, total] = await this.prisma.$transaction([
       this.prisma.salesCall.findMany({
-        where,
+        where: { workspaceId, ...filters },
         orderBy: { startedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.salesCall.count({ where }),
+      this.prisma.salesCall.count({ where: { workspaceId, ...filters } }),
     ]);
     return paginated(data, total, page, limit);
   }
 
-  async get(id: string, user: MarketingUserPayload) {
-    const call = await this.prisma.salesCall.findUnique({ where: { id } });
+  async get(workspaceId: string, id: string, user: MarketingUserPayload) {
+    const call = await this.prisma.salesCall.findFirst({ where: { id, workspaceId } });
     if (!call) throw new NotFoundException('Call not found');
-    if (user.role === 'SALES_REP' && call.marketingUserId !== user.id) {
+    if (user.role === 'REP' && call.marketingUserId !== user.id) {
       throw new ForbiddenException('You can only view your own calls');
     }
     return call;

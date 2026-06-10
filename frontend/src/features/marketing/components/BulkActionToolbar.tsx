@@ -39,7 +39,7 @@ export default function BulkActionToolbar({
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const activeReps = useMemo(
-    () => reps.filter((r) => r.role === 'SALES_REP' && (r.status ?? 'ACTIVE') === 'ACTIVE'),
+    () => reps.filter((r) => r.role === 'REP' && (r.status ?? 'ACTIVE') === 'ACTIVE'),
     [reps],
   );
 

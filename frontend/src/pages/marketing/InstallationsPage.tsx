@@ -38,7 +38,7 @@ const errMsg = (err: any, fallback: string) => err?.response?.data?.message || f
 
 export default function InstallationsPage() {
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const queryClient = useQueryClient();
   const invalidateAll = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'installations'] });
@@ -463,7 +463,7 @@ function JobDrawer({
   onChanged: () => void;
 }) {
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const queryClient = useQueryClient();
 
   const [schedCrew, setSchedCrew] = useState('');

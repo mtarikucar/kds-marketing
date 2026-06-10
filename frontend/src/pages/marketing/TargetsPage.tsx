@@ -31,7 +31,7 @@ export default function TargetsPage() {
     queryFn: () => marketingApi.get('/users').then((r) => r.data),
     staleTime: 60_000,
   });
-  const repOptions = reps.filter((r) => r.role === 'SALES_REP');
+  const repOptions = reps.filter((r) => r.role === 'REP');
   const repName = (id: string) => {
     const r = reps.find((x) => x.id === id);
     return r ? `${r.firstName} ${r.lastName}` : id;

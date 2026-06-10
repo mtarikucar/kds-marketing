@@ -113,7 +113,7 @@ export const marketingUserSchema = z
       .min(1, 'required')
       .refine((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), { message: 'emailInvalid' }),
     phone: optionalPhone,
-    role: z.enum(['SALES_MANAGER', 'SALES_REP']),
+    role: z.enum(['MANAGER', 'REP']),
     password: z.string().optional(),
     passwordConfirm: z.string().optional(),
   })

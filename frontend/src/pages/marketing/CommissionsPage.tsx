@@ -14,7 +14,7 @@ const statusColors: Record<string, string> = {
 
 export default function CommissionsPage() {
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const queryClient = useQueryClient();
 
   const [period, setPeriod] = useState('');

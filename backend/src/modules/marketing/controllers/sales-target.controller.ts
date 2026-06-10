@@ -19,7 +19,7 @@ import { MarketingUserPayload } from '../types';
 
 /**
  * Phase 4: sales targets/quotas + performance-vs-target. Setting/removing
- * targets is SALES_MANAGER-only (the approval gate). Reps see only their own
+ * targets is MANAGER-only (the approval gate). Reps see only their own
  * targets/performance; managers see any rep or the whole team.
  */
 @MarketingRoute()
@@ -29,20 +29,20 @@ export class SalesTargetController {
   constructor(private readonly targets: SalesTargetService) {}
 
   @Post('targets')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   set(@Body() dto: SetTargetDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.targets.setTarget(dto, user.id);
+    return this.targets.setTarget(user.workspaceId, dto, user.id);
   }
 
   @Get('targets')
   list(@Query() filter: TargetFilterDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.targets.list(filter, user);
+    return this.targets.list(user.workspaceId, filter, user);
   }
 
   @Delete('targets/:id')
-  @MarketingRoles('SALES_MANAGER')
-  remove(@Param('id') id: string) {
-    return this.targets.remove(id);
+  @MarketingRoles('MANAGER')
+  remove(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.targets.remove(user.workspaceId, id);
   }
 
   @Get('performance')
@@ -53,13 +53,13 @@ export class SalesTargetController {
   ) {
     const p = period && /^\d{4}-\d{2}$/.test(period) ? period : this.currentPeriod();
     // Reps see only their own attainment; managers see a specific rep or the team.
-    if (user.role === 'SALES_REP') {
-      return this.targets.performanceFor(user.id, p);
+    if (user.role === 'REP') {
+      return this.targets.performanceFor(user.workspaceId, user.id, p);
     }
     if (marketingUserId) {
-      return this.targets.performanceFor(marketingUserId, p);
+      return this.targets.performanceFor(user.workspaceId, marketingUserId, p);
     }
-    return this.targets.teamPerformance(p);
+    return this.targets.teamPerformance(user.workspaceId, p);
   }
 
   private currentPeriod(): string {

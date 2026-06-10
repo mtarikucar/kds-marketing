@@ -15,7 +15,7 @@ export default function MarketingUsersPage() {
     firstName: '',
     lastName: '',
     phone: '',
-    role: 'SALES_REP',
+    role: 'REP',
   });
   const [error, setError] = useState('');
 
@@ -25,7 +25,7 @@ export default function MarketingUsersPage() {
     firstName: '',
     lastName: '',
     phone: '',
-    role: 'SALES_REP',
+    role: 'REP',
   });
 
   // Reset password state
@@ -42,7 +42,7 @@ export default function MarketingUsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'users'] });
       setShowForm(false);
-      setForm({ email: '', password: '', firstName: '', lastName: '', phone: '', role: 'SALES_REP' });
+      setForm({ email: '', password: '', firstName: '', lastName: '', phone: '', role: 'REP' });
       setError('');
       toast.success('User created');
     },
@@ -108,7 +108,7 @@ export default function MarketingUsersPage() {
       firstName: u.firstName || '',
       lastName: u.lastName || '',
       phone: u.phone || '',
-      role: u.role || 'SALES_REP',
+      role: u.role || 'REP',
     });
     setResetPasswordUserId(null);
     setNewPassword('');
@@ -196,8 +196,8 @@ export default function MarketingUsersPage() {
               onChange={(e) => setForm({ ...form, role: e.target.value })}
               className="px-3 py-2 border rounded-lg text-sm"
             >
-              <option value="SALES_REP">Sales Rep</option>
-              <option value="SALES_MANAGER">Sales Manager</option>
+              <option value="REP">Sales Rep</option>
+              <option value="MANAGER">Sales Manager</option>
             </select>
           </div>
           <div className="flex gap-2">
@@ -274,8 +274,8 @@ export default function MarketingUsersPage() {
                                 onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
                                 className="px-3 py-2 border rounded-lg text-sm"
                               >
-                                <option value="SALES_REP">Sales Rep</option>
-                                <option value="SALES_MANAGER">Sales Manager</option>
+                                <option value="REP">Sales Rep</option>
+                                <option value="MANAGER">Sales Manager</option>
                               </select>
                             </div>
                             <div className="flex gap-2">
@@ -335,9 +335,9 @@ export default function MarketingUsersPage() {
                         <td className="px-4 py-3 text-gray-600">{u.email}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-                            u.role === 'SALES_MANAGER' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                            u.role === 'OWNER' ? 'bg-amber-100 text-amber-800' : u.role === 'MANAGER' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
                           }`}>
-                            {u.role === 'SALES_MANAGER' ? 'Manager' : 'Sales Rep'}
+                            {u.role === 'OWNER' ? 'Owner' : u.role === 'MANAGER' ? 'Manager' : 'Sales Rep'}
                           </span>
                         </td>
                         <td className="px-4 py-3 hidden md:table-cell">

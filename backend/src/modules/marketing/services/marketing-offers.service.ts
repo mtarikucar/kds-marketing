@@ -23,18 +23,24 @@ export class MarketingOffersService {
     private readonly provisioning: CoreProvisioningPort,
   ) {}
 
-  async create(dto: CreateOfferDto, userId: string, userRole: string) {
-    // Validate lead exists
-    const lead = await this.prisma.lead.findUnique({
-      where: { id: dto.leadId },
+  async create(
+    workspaceId: string,
+    dto: CreateOfferDto,
+    userId: string,
+    userRole: string,
+  ) {
+    // Resolve the lead scoped first — the offer inherits the lead's
+    // workspace, so a cross-workspace leadId must read as "not found".
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: dto.leadId, workspaceId },
     });
 
     if (!lead) {
       throw new NotFoundException('Lead not found');
     }
 
-    // SALES_REP can only create offers for their own leads
-    if (userRole === 'SALES_REP' && lead.assignedToId !== userId) {
+    // REP can only create offers for their own leads
+    if (userRole === 'REP' && lead.assignedToId !== userId) {
       throw new ForbiddenException('You can only create offers for your own leads');
     }
 
@@ -46,6 +52,7 @@ export class MarketingOffersService {
 
     return this.prisma.leadOffer.create({
       data: {
+        workspaceId,
         planId: dto.planId,
         planCode: planSnapshot?.planCode ?? null,
         planName: planSnapshot?.planName ?? null,
@@ -66,17 +73,21 @@ export class MarketingOffersService {
     });
   }
 
-  async findAll(userId: string, userRole: string, page = 1, limit = 20) {
+  async findAll(
+    workspaceId: string,
+    userId: string,
+    userRole: string,
+    page = 1,
+    limit = 20,
+  ) {
     const skip = (page - 1) * limit;
-    const where: any = {};
-
-    if (userRole === 'SALES_REP') {
-      where.createdById = userId;
-    }
+    // REPs only see their own offers. The workspace clause is inlined at
+    // each call site so the scoping fitness test can verify it statically.
+    const repFilter = userRole === 'REP' ? { createdById: userId } : {};
 
     const [offers, total] = await Promise.all([
       this.prisma.leadOffer.findMany({
-        where,
+        where: { workspaceId, ...repFilter },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -85,7 +96,7 @@ export class MarketingOffersService {
           createdBy: { select: { id: true, firstName: true, lastName: true } },
         },
       }),
-      this.prisma.leadOffer.count({ where }),
+      this.prisma.leadOffer.count({ where: { workspaceId, ...repFilter } }),
     ]);
 
     return {
@@ -94,9 +105,9 @@ export class MarketingOffersService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
-    const offer = await this.prisma.leadOffer.findUnique({
-      where: { id },
+  async findOne(workspaceId: string, id: string, userId: string, userRole: string) {
+    const offer = await this.prisma.leadOffer.findFirst({
+      where: { id, workspaceId },
       include: {
         lead: {
           select: { id: true, businessName: true, contactPerson: true, email: true, phone: true },
@@ -107,19 +118,29 @@ export class MarketingOffersService {
 
     if (!offer) throw new NotFoundException('Offer not found');
 
-    if (userRole === 'SALES_REP' && offer.createdById !== userId) {
+    if (userRole === 'REP' && offer.createdById !== userId) {
       throw new ForbiddenException('You can only view your own offers');
     }
 
     return offer;
   }
 
-  async update(id: string, dto: UpdateOfferDto, userId: string, userRole: string) {
-    const offer = await this.prisma.leadOffer.findUnique({ where: { id } });
+  async update(
+    workspaceId: string,
+    id: string,
+    dto: UpdateOfferDto,
+    userId: string,
+    userRole: string,
+  ) {
+    // Scoped pre-check; the id-keyed update below is safe once the offer
+    // is known to live in the actor's workspace.
+    const offer = await this.prisma.leadOffer.findFirst({
+      where: { id, workspaceId },
+    });
 
     if (!offer) throw new NotFoundException('Offer not found');
 
-    if (userRole === 'SALES_REP' && offer.createdById !== userId) {
+    if (userRole === 'REP' && offer.createdById !== userId) {
       throw new ForbiddenException('You can only update your own offers');
     }
 
@@ -136,15 +157,15 @@ export class MarketingOffersService {
     });
   }
 
-  async markSent(id: string, userId: string, userRole: string) {
-    const offer = await this.prisma.leadOffer.findUnique({
-      where: { id },
+  async markSent(workspaceId: string, id: string, userId: string, userRole: string) {
+    const offer = await this.prisma.leadOffer.findFirst({
+      where: { id, workspaceId },
       include: { lead: { select: { status: true, convertedTenantId: true } } },
     });
 
     if (!offer) throw new NotFoundException('Offer not found');
 
-    if (userRole === 'SALES_REP' && offer.createdById !== userId) {
+    if (userRole === 'REP' && offer.createdById !== userId) {
       throw new ForbiddenException('You can only send your own offers');
     }
     if (offer.status !== 'DRAFT') {
@@ -182,8 +203,10 @@ export class MarketingOffersService {
     return updatedOffer;
   }
 
-  async delete(id: string) {
-    const offer = await this.prisma.leadOffer.findUnique({ where: { id } });
+  async delete(workspaceId: string, id: string) {
+    const offer = await this.prisma.leadOffer.findFirst({
+      where: { id, workspaceId },
+    });
     if (!offer) throw new NotFoundException('Offer not found');
 
     await this.prisma.leadOffer.delete({ where: { id } });

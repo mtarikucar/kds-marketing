@@ -5,7 +5,7 @@ import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 
 export default function ReportsPage() {
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const [tab, setTab] = useState<'sources' | 'regional' | 'conversion' | 'performance'>('sources');
 
   const { data: sources } = useQuery({

@@ -7,14 +7,19 @@ import { CommissionFilterDto } from '../dto/commission-filter.dto';
 export class MarketingCommissionsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(filter: CommissionFilterDto, userId: string, userRole: string) {
+  async findAll(
+    workspaceId: string,
+    filter: CommissionFilterDto,
+    userId: string,
+    userRole: string,
+  ) {
     const page = filter.page || 1;
     const limit = filter.limit || 20;
     const skip = (page - 1) * limit;
 
     const where: any = {};
 
-    if (userRole === 'SALES_REP') {
+    if (userRole === 'REP') {
       where.marketingUserId = userId;
     } else if (filter.marketingUserId) {
       where.marketingUserId = filter.marketingUserId;
@@ -24,9 +29,11 @@ export class MarketingCommissionsService {
     if (filter.period) where.period = filter.period;
     if (filter.type) where.type = filter.type;
 
+    // workspaceId is spread LAST so no filter combination can ever
+    // widen the query beyond the caller's workspace.
     const [commissions, total] = await Promise.all([
       this.prisma.commission.findMany({
-        where,
+        where: { ...where, workspaceId },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -36,7 +43,7 @@ export class MarketingCommissionsService {
           },
         },
       }),
-      this.prisma.commission.count({ where }),
+      this.prisma.commission.count({ where: { ...where, workspaceId } }),
     ]);
 
     return {
@@ -45,10 +52,10 @@ export class MarketingCommissionsService {
     };
   }
 
-  async getSummary(userId: string, userRole: string, period?: string) {
+  async getSummary(workspaceId: string, userId: string, userRole: string, period?: string) {
     const where: any = {};
 
-    if (userRole === 'SALES_REP') {
+    if (userRole === 'REP') {
       where.marketingUserId = userId;
     }
 
@@ -58,17 +65,17 @@ export class MarketingCommissionsService {
 
     const [pending, approved, paid] = await Promise.all([
       this.prisma.commission.aggregate({
-        where: { ...where, status: 'PENDING' },
+        where: { ...where, status: 'PENDING', workspaceId },
         _sum: { amount: true },
         _count: true,
       }),
       this.prisma.commission.aggregate({
-        where: { ...where, status: 'APPROVED' },
+        where: { ...where, status: 'APPROVED', workspaceId },
         _sum: { amount: true },
         _count: true,
       }),
       this.prisma.commission.aggregate({
-        where: { ...where, status: 'PAID' },
+        where: { ...where, status: 'PAID', workspaceId },
         _sum: { amount: true },
         _count: true,
       }),
@@ -90,8 +97,8 @@ export class MarketingCommissionsService {
     };
   }
 
-  async approve(id: string, actorId: string) {
-    // Serializable + read-modify-write inside one tx: two SALES_MANAGERs
+  async approve(workspaceId: string, id: string, actorId: string) {
+    // Serializable + read-modify-write inside one tx: two managers
     // clicking Approve at the same millisecond previously both passed
     // the status check then both wrote APPROVED + appended one audit
     // entry each from THEIR snapshot — meaning the auditLog lost the
@@ -99,7 +106,7 @@ export class MarketingCommissionsService {
     // tx retries against the now-APPROVED row and surfaces the proper
     // "already processed" error.
     return this.prisma.$transaction(async (tx) => {
-      const commission = await tx.commission.findUnique({ where: { id } });
+      const commission = await tx.commission.findFirst({ where: { id, workspaceId } });
       if (!commission) throw new NotFoundException('Commission not found');
       if (commission.status !== 'PENDING') {
         throw new BadRequestException('Only pending commissions can be approved');
@@ -126,7 +133,7 @@ export class MarketingCommissionsService {
       // Serializable's suspenders — even if isolation downgrades for
       // some reason, only the first writer transitions.
       const claim = await tx.commission.updateMany({
-        where: { id, status: 'PENDING' },
+        where: { id, workspaceId, status: 'PENDING' },
         data: {
           status: 'APPROVED',
           approvedAt: new Date(),
@@ -147,14 +154,14 @@ export class MarketingCommissionsService {
    * an `amount` entry to the audit log with the old + new value so
    * the manager who flips the number is on the record.
    */
-  async updateAmount(id: string, amount: number, actorId: string) {
+  async updateAmount(workspaceId: string, id: string, amount: number, actorId: string) {
     if (!Number.isFinite(amount) || amount < 0) {
       throw new BadRequestException('Amount must be a non-negative number');
     }
     // Same Serializable + compound-WHERE pattern as approve(): the
     // bare update used to lose audit-log entries on a manager-race.
     return this.prisma.$transaction(async (tx) => {
-      const commission = await tx.commission.findUnique({ where: { id } });
+      const commission = await tx.commission.findFirst({ where: { id, workspaceId } });
       if (!commission) throw new NotFoundException('Commission not found');
       if (commission.status !== 'PENDING') {
         throw new BadRequestException('Only pending commissions can be updated');
@@ -169,7 +176,7 @@ export class MarketingCommissionsService {
       // edge of IEEE-754 precision into a Decimal(10,2) column. The
       // canonical create path in marketing-leads already does this.
       const claim = await tx.commission.updateMany({
-        where: { id, status: 'PENDING' },
+        where: { id, workspaceId, status: 'PENDING' },
         data: { amount: new Prisma.Decimal(amount).toDecimalPlaces(2), auditLog },
       });
       if (claim.count === 0) {
@@ -179,10 +186,10 @@ export class MarketingCommissionsService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  async markPaid(id: string, actorId: string) {
+  async markPaid(workspaceId: string, id: string, actorId: string) {
     // Same Serializable + compound-WHERE pattern as approve().
     return this.prisma.$transaction(async (tx) => {
-      const commission = await tx.commission.findUnique({ where: { id } });
+      const commission = await tx.commission.findFirst({ where: { id, workspaceId } });
       if (!commission) throw new NotFoundException('Commission not found');
       if (commission.status !== 'APPROVED') {
         throw new BadRequestException('Only approved commissions can be marked as paid');
@@ -196,7 +203,7 @@ export class MarketingCommissionsService {
       });
 
       const claim = await tx.commission.updateMany({
-        where: { id, status: 'APPROVED' },
+        where: { id, workspaceId, status: 'APPROVED' },
         data: { status: 'PAID', paidAt: new Date(), paidById: actorId, auditLog },
       });
       if (claim.count === 0) {

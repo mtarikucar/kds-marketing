@@ -6,7 +6,7 @@ import { ReportFilterDto } from '../dto/report-filter.dto';
 export class MarketingReportsService {
   constructor(private prisma: PrismaService) {}
 
-  async getPerformanceReport(filter: ReportFilterDto) {
+  async getPerformanceReport(workspaceId: string, filter: ReportFilterDto) {
     const dateFilter: any = {};
     if (filter.dateFrom) dateFilter.gte = new Date(filter.dateFrom);
     if (filter.dateTo) dateFilter.lte = new Date(filter.dateTo);
@@ -18,20 +18,22 @@ export class MarketingReportsService {
 
     const dateWhere = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
 
-    // Batch queries: fetch all reps + grouped counts in parallel
+    // Batch queries: fetch all reps + grouped counts in parallel. Every
+    // query carries workspaceId inline; LeadActivity (no own column)
+    // inherits scope from its parent lead.
     const [reps, leadsByRepAndStatus, activitiesByRepAndType] = await Promise.all([
       this.prisma.marketingUser.findMany({
-        where: repWhere,
+        where: { ...repWhere, workspaceId },
         select: { id: true, firstName: true, lastName: true, role: true },
       }),
       this.prisma.lead.groupBy({
         by: ['assignedToId', 'status'],
-        where: { assignedTo: { is: repWhere }, ...dateWhere },
+        where: { assignedTo: { is: repWhere }, ...dateWhere, workspaceId },
         _count: { id: true },
       }),
       this.prisma.leadActivity.groupBy({
         by: ['createdById', 'type'],
-        where: { createdBy: { is: repWhere }, ...dateWhere },
+        where: { createdBy: { is: repWhere }, ...dateWhere, lead: { workspaceId } },
         _count: { id: true },
       }),
     ]);
@@ -77,7 +79,7 @@ export class MarketingReportsService {
     });
   }
 
-  async getLeadSourceReport(filter: ReportFilterDto) {
+  async getLeadSourceReport(workspaceId: string, filter: ReportFilterDto) {
     const where: any = {};
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
     if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
@@ -86,12 +88,12 @@ export class MarketingReportsService {
     const [totalsBySource, statusBySource] = await Promise.all([
       this.prisma.lead.groupBy({
         by: ['source'],
-        where,
+        where: { ...where, workspaceId },
         _count: { id: true },
       }),
       this.prisma.lead.groupBy({
         by: ['source', 'status'],
-        where: { ...where, status: { in: ['WON', 'LOST'] } },
+        where: { ...where, status: { in: ['WON', 'LOST'] }, workspaceId },
         _count: { id: true },
       }),
     ]);
@@ -120,7 +122,7 @@ export class MarketingReportsService {
       .filter((d) => d.total > 0);
   }
 
-  async getRegionalReport(filter: ReportFilterDto) {
+  async getRegionalReport(workspaceId: string, filter: ReportFilterDto) {
     const where: any = {};
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
     if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
@@ -128,14 +130,14 @@ export class MarketingReportsService {
     // Batch: total by city
     const totals = await this.prisma.lead.groupBy({
       by: ['city'],
-      where: { ...where, city: { not: null } },
+      where: { ...where, city: { not: null }, workspaceId },
       _count: { id: true },
     });
 
     // Batch: won by city (single query instead of N+1)
     const wonTotals = await this.prisma.lead.groupBy({
       by: ['city'],
-      where: { ...where, city: { not: null }, status: 'WON' },
+      where: { ...where, city: { not: null }, status: 'WON', workspaceId },
       _count: { id: true },
     });
 
@@ -150,7 +152,7 @@ export class MarketingReportsService {
     return data.sort((a, b) => b.total - a.total);
   }
 
-  async getConversionFunnel(filter: ReportFilterDto) {
+  async getConversionFunnel(workspaceId: string, filter: ReportFilterDto) {
     const where: any = {};
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
     if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
@@ -163,7 +165,7 @@ export class MarketingReportsService {
     // Use groupBy instead of N separate count queries
     const groups = await this.prisma.lead.groupBy({
       by: ['status'],
-      where,
+      where: { ...where, workspaceId },
       _count: { id: true },
     });
 

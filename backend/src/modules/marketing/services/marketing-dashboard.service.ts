@@ -5,10 +5,14 @@ import { PrismaService } from '../../../prisma/prisma.service';
 export class MarketingDashboardService {
   constructor(private prisma: PrismaService) {}
 
-  async getStats(userId: string, userRole: string) {
-    const where = userRole === 'SALES_REP' ? { assignedToId: userId } : {};
-    const isManager = userRole === 'SALES_MANAGER';
+  async getStats(workspaceId: string, userId: string, userRole: string) {
+    const where = userRole === 'REP' ? { assignedToId: userId } : {};
+    // Manager-wide widgets (e.g. the unassigned-leads dispatch queue) are for
+    // everyone ABOVE rep — OWNER included, not an equality on MANAGER.
+    const isManager = userRole !== 'REP';
 
+    // workspaceId is spread inline at every call site (not folded into the
+    // shared filter object) so each query is visibly workspace-scoped.
     const [
       totalLeads,
       newLeads,
@@ -18,27 +22,29 @@ export class MarketingDashboardService {
       pendingTasks,
       unassignedLeads,
     ] = await Promise.all([
-      this.prisma.lead.count({ where }),
-      this.prisma.lead.count({ where: { ...where, status: 'NEW' } }),
-      this.prisma.lead.count({ where: { ...where, status: 'WON' } }),
-      this.prisma.lead.count({ where: { ...where, status: 'LOST' } }),
+      this.prisma.lead.count({ where: { ...where, workspaceId } }),
+      this.prisma.lead.count({ where: { ...where, status: 'NEW', workspaceId } }),
+      this.prisma.lead.count({ where: { ...where, status: 'WON', workspaceId } }),
+      this.prisma.lead.count({ where: { ...where, status: 'LOST', workspaceId } }),
       this.prisma.leadOffer.count({
         where: {
+          workspaceId,
           status: { in: ['DRAFT', 'SENT'] },
-          ...(userRole === 'SALES_REP' ? { createdById: userId } : {}),
+          ...(userRole === 'REP' ? { createdById: userId } : {}),
         },
       }),
       this.prisma.marketingTask.count({
         where: {
+          workspaceId,
           status: { in: ['PENDING', 'IN_PROGRESS'] },
-          ...(userRole === 'SALES_REP' ? { assignedToId: userId } : {}),
+          ...(userRole === 'REP' ? { assignedToId: userId } : {}),
         },
       }),
       // Managers see how much of the pipeline is waiting on dispatch;
       // for a rep this is always 0 (their own bucket is all assigned).
       isManager
         ? this.prisma.lead.count({
-            where: { assignedToId: null, status: { notIn: ['WON', 'LOST'] } },
+            where: { workspaceId, assignedToId: null, status: { notIn: ['WON', 'LOST'] } },
           })
         : Promise.resolve(0),
     ]);
@@ -61,13 +67,13 @@ export class MarketingDashboardService {
     };
   }
 
-  async getLeadsByStatus(userId: string, userRole: string) {
-    const where = userRole === 'SALES_REP' ? { assignedToId: userId } : {};
+  async getLeadsByStatus(workspaceId: string, userId: string, userRole: string) {
+    const where = userRole === 'REP' ? { assignedToId: userId } : {};
 
     // Use groupBy instead of N separate count queries
     const grouped = await this.prisma.lead.groupBy({
       by: ['status'],
-      where,
+      where: { ...where, workspaceId },
       _count: { id: true },
     });
 
@@ -84,7 +90,7 @@ export class MarketingDashboardService {
     }));
   }
 
-  async getTodaySummary(userId: string, userRole: string) {
+  async getTodaySummary(workspaceId: string, userId: string, userRole: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -99,22 +105,27 @@ export class MarketingDashboardService {
       createdAt: { gte: today, lt: tomorrow },
     };
 
-    if (userRole === 'SALES_REP') {
+    if (userRole === 'REP') {
       taskWhere.assignedToId = userId;
       activityWhere.createdById = userId;
     }
 
     const [todayTasks, completedTasks, todayActivities, overdueTasks] = await Promise.all([
-      this.prisma.marketingTask.count({ where: taskWhere }),
+      this.prisma.marketingTask.count({ where: { ...taskWhere, workspaceId } }),
       this.prisma.marketingTask.count({
-        where: { ...taskWhere, status: 'COMPLETED' },
+        where: { ...taskWhere, status: 'COMPLETED', workspaceId },
       }),
-      this.prisma.leadActivity.count({ where: activityWhere }),
+      // LeadActivity has no workspaceId column — it inherits scope from
+      // its parent lead.
+      this.prisma.leadActivity.count({
+        where: { ...activityWhere, lead: { workspaceId } },
+      }),
       this.prisma.marketingTask.count({
         where: {
+          workspaceId,
           dueDate: { lt: today },
           status: { in: ['PENDING', 'IN_PROGRESS'] },
-          ...(userRole === 'SALES_REP' ? { assignedToId: userId } : {}),
+          ...(userRole === 'REP' ? { assignedToId: userId } : {}),
         },
       }),
     ]);
@@ -127,24 +138,26 @@ export class MarketingDashboardService {
     };
   }
 
-  async getMonthlyMetrics(userId: string, userRole: string) {
+  async getMonthlyMetrics(workspaceId: string, userId: string, userRole: string) {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-    const where = userRole === 'SALES_REP' ? { assignedToId: userId } : {};
+    const where = userRole === 'REP' ? { assignedToId: userId } : {};
 
     const [newLeads, wonLeads, activitiesCount] = await Promise.all([
       this.prisma.lead.count({
-        where: { ...where, createdAt: { gte: firstDay, lte: lastDay } },
+        where: { ...where, createdAt: { gte: firstDay, lte: lastDay }, workspaceId },
       }),
       this.prisma.lead.count({
-        where: { ...where, status: 'WON', convertedAt: { gte: firstDay, lte: lastDay } },
+        where: { ...where, status: 'WON', convertedAt: { gte: firstDay, lte: lastDay }, workspaceId },
       }),
       this.prisma.leadActivity.count({
         where: {
+          // Activity scope is inherited from the parent lead's workspace.
+          lead: { workspaceId },
           createdAt: { gte: firstDay, lte: lastDay },
-          ...(userRole === 'SALES_REP' ? { createdById: userId } : {}),
+          ...(userRole === 'REP' ? { createdById: userId } : {}),
         },
       }),
     ]);
@@ -157,13 +170,13 @@ export class MarketingDashboardService {
     };
   }
 
-  async getTopPerformers(limit = 10) {
+  async getTopPerformers(workspaceId: string, limit = 10) {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
 
     // Single query: get reps with counts
     const reps = await this.prisma.marketingUser.findMany({
-      where: { role: 'SALES_REP', status: 'ACTIVE' },
+      where: { workspaceId, role: 'REP', status: 'ACTIVE' },
       select: {
         id: true,
         firstName: true,
@@ -181,6 +194,7 @@ export class MarketingDashboardService {
       this.prisma.lead.groupBy({
         by: ['assignedToId'],
         where: {
+          workspaceId,
           assignedToId: { in: reps.map((r) => r.id) },
           status: 'WON',
           convertedAt: { gte: firstDay },
@@ -192,6 +206,7 @@ export class MarketingDashboardService {
       this.prisma.lead.groupBy({
         by: ['assignedToId'],
         where: {
+          workspaceId,
           assignedToId: { in: reps.map((r) => r.id) },
           status: { notIn: ['WON', 'LOST'] },
         },

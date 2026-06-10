@@ -14,8 +14,12 @@ import { InstallationJobService } from './installation-job.service';
  * Phase 3: auto-create an installation job when a lead converts to a customer.
  * Reacts to marketing.lead.converted.v1 (emitted by both convert() and the
  * orphan-reconciliation sweep). Snapshots the site/contact from the
- * marketing-owned Lead so the job never reads core tables. Idempotent — one
- * non-cancelled job per tenant (enforced in createForConversion).
+ * marketing-owned Lead so the job never reads core tables, and takes the
+ * job's workspaceId from that same lead row — the event originates from a
+ * lead in this service, so the lead IS the workspace-scope anchor. If the
+ * lead can't be resolved, the job is skipped (warn) rather than minted
+ * unscoped. Idempotent — one non-cancelled job per tenant (enforced in
+ * createForConversion).
  */
 @Injectable()
 export class InstallationConsumer implements OnModuleInit {
@@ -36,30 +40,37 @@ export class InstallationConsumer implements OnModuleInit {
   private async handle(event: DomainEvent<MarketingLeadConvertedPayload>): Promise<void> {
     const p = event.payload;
     try {
-      let contact: {
-        contactName?: string | null;
-        contactPhone?: string | null;
-        siteAddress?: string | null;
-        siteCity?: string | null;
-      } = {};
-      if (p.leadId) {
-        const lead = await this.prisma.lead.findUnique({
-          where: { id: p.leadId },
-          select: { contactPerson: true, phone: true, address: true, city: true },
-        });
-        if (lead) {
-          contact = {
-            contactName: lead.contactPerson,
-            contactPhone: lead.phone,
-            siteAddress: lead.address,
-            siteCity: lead.city,
-          };
-        }
+      if (!p.leadId) {
+        this.logger.warn(
+          `lead.converted event for tenant=${p.tenantId} carries no leadId — cannot resolve a workspace, skipping installation job`,
+        );
+        return;
       }
-      const job = await this.jobs.createForConversion({
+      // The lead row is the workspace anchor for the auto-created job
+      // (findUnique by unguessable id; its workspaceId is authoritative).
+      const lead = await this.prisma.lead.findUnique({
+        where: { id: p.leadId },
+        select: {
+          workspaceId: true,
+          contactPerson: true,
+          phone: true,
+          address: true,
+          city: true,
+        },
+      });
+      if (!lead) {
+        this.logger.warn(
+          `Lead ${p.leadId} not found for tenant=${p.tenantId} — skipping installation job`,
+        );
+        return;
+      }
+      const job = await this.jobs.createForConversion(lead.workspaceId, {
         tenantId: p.tenantId,
         leadId: p.leadId,
-        ...contact,
+        contactName: lead.contactPerson,
+        contactPhone: lead.phone,
+        siteAddress: lead.address,
+        siteCity: lead.city,
       });
       this.logger.log(
         `Installation job ready for tenant=${p.tenantId} (job=${job.id})`,

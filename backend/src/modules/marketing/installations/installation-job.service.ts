@@ -48,7 +48,8 @@ export class InstallationJobService {
   /**
    * Auto-create an installation job when a lead converts (idempotent: one
    * non-cancelled job per tenant from auto-creation). Site/contact are
-   * snapshotted by the caller from the marketing-owned Lead.
+   * snapshotted by the caller from the marketing-owned Lead, and the
+   * workspaceId comes from that same lead row (the consumer's scope anchor).
    *
    * Idempotency is a check-then-act guarded by the single-threaded outbox
    * worker (one consumer execution per event) plus the convertedTenantId
@@ -58,16 +59,19 @@ export class InstallationJobService {
    * already hold multiple non-cancelled jobs per tenant, so adding it needs a
    * dedup migration first.
    */
-  async createForConversion(input: {
-    tenantId: string;
-    leadId?: string | null;
-    contactName?: string | null;
-    contactPhone?: string | null;
-    siteAddress?: string | null;
-    siteCity?: string | null;
-  }) {
+  async createForConversion(
+    workspaceId: string,
+    input: {
+      tenantId: string;
+      leadId?: string | null;
+      contactName?: string | null;
+      contactPhone?: string | null;
+      siteAddress?: string | null;
+      siteCity?: string | null;
+    },
+  ) {
     const existing = await this.prisma.installationJob.findFirst({
-      where: { tenantId: input.tenantId, status: { not: 'CANCELLED' } },
+      where: { workspaceId, tenantId: input.tenantId, status: { not: 'CANCELLED' } },
       select: { id: true },
     });
     if (existing) return existing;
@@ -75,6 +79,7 @@ export class InstallationJobService {
     try {
       return await this.prisma.installationJob.create({
         data: {
+          workspaceId,
           tenantId: input.tenantId,
           leadId: input.leadId ?? null,
           contactName: input.contactName ?? null,
@@ -90,7 +95,7 @@ export class InstallationJobService {
       // surfacing a 500 / minting a duplicate.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         const won = await this.prisma.installationJob.findFirst({
-          where: { tenantId: input.tenantId, status: { not: 'CANCELLED' } },
+          where: { workspaceId, tenantId: input.tenantId, status: { not: 'CANCELLED' } },
         });
         if (won) return won;
       }
@@ -98,9 +103,19 @@ export class InstallationJobService {
     }
   }
 
-  create(dto: CreateJobDto) {
+  async create(workspaceId: string, dto: CreateJobDto) {
+    // leadId is a soft cross-reference — make sure it can't point into
+    // another workspace's lead before the job is born carrying it.
+    if (dto.leadId) {
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: dto.leadId, workspaceId },
+        select: { id: true },
+      });
+      if (!lead) throw new NotFoundException('Lead not found');
+    }
     return this.prisma.installationJob.create({
       data: {
+        workspaceId,
         tenantId: dto.tenantId,
         leadId: dto.leadId ?? null,
         siteAddress: dto.siteAddress ?? null,
@@ -114,12 +129,15 @@ export class InstallationJobService {
   }
 
   /** Assign a crew + date with an availability (capacity) check. */
-  async schedule(id: string, dto: ScheduleJobDto) {
-    const job = await this.getOrThrow(id);
+  async schedule(workspaceId: string, id: string, dto: ScheduleJobDto) {
+    const job = await this.getOrThrow(workspaceId, id);
     if (!SCHEDULABLE_FROM.includes(job.status)) {
       throw new BadRequestException(`Job in status ${job.status} cannot be scheduled`);
     }
-    const crew = await this.prisma.installationCrew.findUnique({ where: { id: dto.crewId } });
+    // Scoped read — a crew id from another workspace must not be assignable.
+    const crew = await this.prisma.installationCrew.findFirst({
+      where: { id: dto.crewId, workspaceId },
+    });
     if (!crew || !crew.active) {
       throw new BadRequestException('Crew not found or inactive');
     }
@@ -141,6 +159,7 @@ export class InstallationJobService {
       // must be below capacity. Mirrors InstallationCrewService.availabilityOn.
       const booked = await tx.installationJob.count({
         where: {
+          workspaceId,
           crewId: dto.crewId,
           scheduledDate: date,
           status: { in: OCCUPYING_STATUSES },
@@ -181,8 +200,8 @@ export class InstallationJobService {
   }
 
   /** Drive the status machine (IN_PROGRESS / DONE / CANCELLED / NO_SHOW). */
-  async setStatus(id: string, status: string) {
-    const job = await this.getOrThrow(id);
+  async setStatus(workspaceId: string, id: string, status: string) {
+    const job = await this.getOrThrow(workspaceId, id);
     const allowed = SET_TRANSITIONS[job.status] ?? [];
     if (!allowed.includes(status)) {
       throw new BadRequestException(`Cannot move job from ${job.status} to ${status}`);
@@ -225,33 +244,33 @@ export class InstallationJobService {
     });
   }
 
-  async list(filter: JobFilterDto) {
+  async list(workspaceId: string, filter: JobFilterDto) {
     const page = filter.page ?? 1;
     const limit = filter.limit ?? 20;
-    const where: Prisma.InstallationJobWhereInput = {};
-    if (filter.status) where.status = filter.status;
-    if (filter.crewId) where.crewId = filter.crewId;
+    const filters: Prisma.InstallationJobWhereInput = {};
+    if (filter.status) filters.status = filter.status;
+    if (filter.crewId) filters.crewId = filter.crewId;
     if (filter.scheduledFrom || filter.scheduledTo) {
-      where.scheduledDate = {};
-      if (filter.scheduledFrom) where.scheduledDate.gte = new Date(filter.scheduledFrom);
-      if (filter.scheduledTo) where.scheduledDate.lte = new Date(filter.scheduledTo);
+      filters.scheduledDate = {};
+      if (filter.scheduledFrom) filters.scheduledDate.gte = new Date(filter.scheduledFrom);
+      if (filter.scheduledTo) filters.scheduledDate.lte = new Date(filter.scheduledTo);
     }
     const [data, total] = await this.prisma.$transaction([
       this.prisma.installationJob.findMany({
-        where,
+        where: { workspaceId, ...filters },
         orderBy: [{ scheduledDate: 'asc' }, { requestedAt: 'desc' }],
         skip: (page - 1) * limit,
         take: limit,
         include: { tasks: { orderBy: { position: 'asc' } } },
       }),
-      this.prisma.installationJob.count({ where }),
+      this.prisma.installationJob.count({ where: { workspaceId, ...filters } }),
     ]);
     return paginated(data, total, page, limit);
   }
 
-  async get(id: string) {
-    const job = await this.prisma.installationJob.findUnique({
-      where: { id },
+  async get(workspaceId: string, id: string) {
+    const job = await this.prisma.installationJob.findFirst({
+      where: { id, workspaceId },
       include: { tasks: { orderBy: { position: 'asc' } } },
     });
     if (!job) throw new NotFoundException('Installation job not found');
@@ -259,18 +278,24 @@ export class InstallationJobService {
   }
 
   // --- tasks (checklist within a job) ---
+  // InstallationTask rows carry no workspaceId — they inherit scope from
+  // their parent job, so every method below FIRST resolves the job through
+  // a workspace-scoped read before touching its tasks.
 
-  async addTask(jobId: string, dto: CreateInstallTaskDto) {
-    await this.getOrThrow(jobId);
+  async addTask(workspaceId: string, jobId: string, dto: CreateInstallTaskDto) {
+    await this.getOrThrow(workspaceId, jobId);
     const position =
       dto.position ??
-      (await this.prisma.installationTask.count({ where: { jobId } }));
+      (await this.prisma.installationTask.count({
+        where: { jobId, job: { workspaceId } },
+      }));
     return this.prisma.installationTask.create({
       data: { jobId, title: dto.title, position },
     });
   }
 
-  async toggleTask(jobId: string, taskId: string) {
+  async toggleTask(workspaceId: string, jobId: string, taskId: string) {
+    await this.getOrThrow(workspaceId, jobId);
     const task = await this.prisma.installationTask.findUnique({ where: { id: taskId } });
     if (!task || task.jobId !== jobId) throw new NotFoundException('Task not found for this job');
     return this.prisma.installationTask.update({
@@ -279,7 +304,8 @@ export class InstallationJobService {
     });
   }
 
-  async removeTask(jobId: string, taskId: string) {
+  async removeTask(workspaceId: string, jobId: string, taskId: string) {
+    await this.getOrThrow(workspaceId, jobId);
     const task = await this.prisma.installationTask.findUnique({ where: { id: taskId } });
     if (!task || task.jobId !== jobId) throw new NotFoundException('Task not found for this job');
     await this.prisma.installationTask.delete({ where: { id: taskId } });
@@ -287,7 +313,7 @@ export class InstallationJobService {
   }
 
   /** Ops dashboard: status mix, backlog, SLA breaches, and the upcoming week. */
-  async dashboard() {
+  async dashboard(workspaceId: string) {
     const now = new Date();
     const weekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const slaCutoff = new Date(now.getTime() - SLA_DAYS * 24 * 60 * 60 * 1000);
@@ -299,15 +325,16 @@ export class InstallationJobService {
     // generic chokes on the literal-true shorthand.
     const byStatusRows = await this.prisma.installationJob.groupBy({
       by: ['status'],
+      where: { workspaceId },
       _count: { _all: true },
     });
     const [unscheduled, overdue, upcoming] = await this.prisma.$transaction([
-      this.prisma.installationJob.count({ where: { status: 'REQUESTED' } }),
+      this.prisma.installationJob.count({ where: { workspaceId, status: 'REQUESTED' } }),
       this.prisma.installationJob.count({
-        where: { status: 'REQUESTED', requestedAt: { lt: slaCutoff } },
+        where: { workspaceId, status: 'REQUESTED', requestedAt: { lt: slaCutoff } },
       }),
       this.prisma.installationJob.findMany({
-        where: { status: 'SCHEDULED', scheduledDate: { gte: now, lte: weekAhead } },
+        where: { workspaceId, status: 'SCHEDULED', scheduledDate: { gte: now, lte: weekAhead } },
         orderBy: { scheduledDate: 'asc' },
         take: 50,
       }),
@@ -320,8 +347,8 @@ export class InstallationJobService {
     return { byStatus, unscheduled, overdueSla: overdue, upcoming };
   }
 
-  private async getOrThrow(id: string) {
-    const job = await this.prisma.installationJob.findUnique({ where: { id } });
+  private async getOrThrow(workspaceId: string, id: string) {
+    const job = await this.prisma.installationJob.findFirst({ where: { id, workspaceId } });
     if (!job) throw new NotFoundException('Installation job not found');
     return job;
   }

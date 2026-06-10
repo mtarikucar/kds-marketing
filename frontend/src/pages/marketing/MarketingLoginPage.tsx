@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useNavigate, Navigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
@@ -91,6 +91,13 @@ export default function MarketingLoginPage() {
               {loading ? t('login.loading') : t('login.submit')}
             </button>
           </form>
+
+          <p className="text-center text-sm text-slate-500 mt-6">
+            {t('register.noAccount', "Don't have a workspace yet?")}{' '}
+            <Link to="/register" className="text-primary font-medium hover:underline">
+              {t('register.cta', 'Create one')}
+            </Link>
+          </p>
         </div>
       </div>
     </div>

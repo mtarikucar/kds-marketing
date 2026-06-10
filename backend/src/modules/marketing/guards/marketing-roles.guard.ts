@@ -7,6 +7,19 @@ import {
 import { Reflector } from '@nestjs/core';
 import { MARKETING_ROLES_KEY } from '../decorators/marketing-roles.decorator';
 
+/**
+ * Role rank for the hierarchical check: a requirement is satisfied by the
+ * required role OR anything above it, so @MarketingRoles('MANAGER') admits
+ * OWNER without every call site spelling both out. SYSTEM ranks below
+ * everything — the sentinel can never pass a role gate.
+ */
+const ROLE_RANK: Record<string, number> = {
+  OWNER: 3,
+  MANAGER: 2,
+  REP: 1,
+  SYSTEM: 0,
+};
+
 @Injectable()
 export class MarketingRolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
@@ -28,7 +41,12 @@ export class MarketingRolesGuard implements CanActivate {
       throw new ForbiddenException('No marketing user found');
     }
 
-    if (!requiredRoles.includes(user.role)) {
+    const userRank = ROLE_RANK[user.role] ?? 0;
+    const minRequired = Math.min(
+      ...requiredRoles.map((r) => ROLE_RANK[r] ?? Number.POSITIVE_INFINITY),
+    );
+
+    if (userRank < minRequired || userRank === 0) {
       throw new ForbiddenException('Insufficient permissions');
     }
 

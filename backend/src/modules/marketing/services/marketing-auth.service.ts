@@ -2,15 +2,34 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
+import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
+import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
+
+/** Subdomain-safe slug from a workspace name ("Acme Görmez A.Ş." → "acme-gormez-a-s"). */
+function slugify(name: string): string {
+  const turkishMap: Record<string, string> = {
+    ç: 'c', ğ: 'g', ı: 'i', ö: 'o', ş: 's', ü: 'u',
+  };
+  const base = name
+    .toLowerCase()
+    .replace(/[çğıöşü]/g, (ch) => turkishMap[ch] ?? ch)
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return base || 'workspace';
+}
 
 @Injectable()
 export class MarketingAuthService {
@@ -53,6 +72,13 @@ export class MarketingAuthService {
     if (user.status !== 'ACTIVE') {
       throw new UnauthorizedException('Account is inactive');
     }
+
+    // The research sentinel owns rows, never sessions.
+    if (user.role === 'SYSTEM') {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    await this.assertWorkspaceActive(user.workspaceId);
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       throw new UnauthorizedException('Account is temporarily locked');
@@ -116,13 +142,31 @@ export class MarketingAuthService {
     if (!user || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('User not found or inactive');
     }
+    if (user.role === 'SYSTEM') {
+      throw new UnauthorizedException('Session revoked');
+    }
     if (typeof payload.ver === 'number' && payload.ver !== user.tokenVersion) {
       throw new UnauthorizedException('Session revoked');
     }
 
+    await this.assertWorkspaceActive(user.workspaceId);
+
     // Rotate: issue a fresh pair (not just a new access token) so the
     // old refresh ages out even if the client keeps presenting it.
     return this.generateTokens(user);
+  }
+
+  /** SUSPENDED/CLOSED workspaces stop minting sessions at the door. In-flight
+   * access tokens age out within their 8h TTL; feature/quota enforcement
+   * (Phase F entitlements) covers the gap. */
+  private async assertWorkspaceActive(workspaceId: string) {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { status: true },
+    });
+    if (!workspace || workspace.status !== 'ACTIVE') {
+      throw new UnauthorizedException('Workspace is not active');
+    }
   }
 
   async logout(userId: string) {
@@ -137,6 +181,7 @@ export class MarketingAuthService {
 
   private generateTokens(user: {
     id: string;
+    workspaceId: string;
     email: string;
     firstName: string;
     lastName: string;
@@ -149,6 +194,7 @@ export class MarketingAuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
+      wsp: user.workspaceId,
       ver: user.tokenVersion,
       type: 'marketing' as const,
     };
@@ -173,6 +219,7 @@ export class MarketingAuthService {
       refreshToken,
       user: {
         id: user.id,
+        workspaceId: user.workspaceId,
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -183,11 +230,101 @@ export class MarketingAuthService {
     };
   }
 
+  /**
+   * Public self-serve signup: provisions a whole workspace in one tx —
+   * the org row (with default taxonomy), its OWNER account, the per-workspace
+   * SYSTEM research sentinel and a DISABLED distribution config. Later
+   * phases hang the trial subscription (F) and a draft research profile (E)
+   * off the same flow. Returns a logged-in token pair for the owner.
+   */
+  async registerWorkspace(dto: RegisterWorkspaceDto, ip?: string) {
+    const existing = await this.prisma.marketingUser.findUnique({
+      where: { email: dto.email },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('Email is already registered');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, this.bcryptCost());
+
+    const owner = await this.prisma.$transaction(async (tx) => {
+      // Deterministic-but-collision-safe slug: try the plain slug, then
+      // suffix -2, -3... (bounded; the unique index is the final arbiter).
+      const base = slugify(dto.workspaceName);
+      let slug = base;
+      for (let i = 2; ; i++) {
+        const taken = await tx.workspace.findUnique({
+          where: { slug },
+          select: { id: true },
+        });
+        if (!taken) break;
+        if (i > 50) throw new ConflictException('Could not allocate a workspace slug');
+        slug = `${base}-${i}`;
+      }
+
+      const workspace = await tx.workspace.create({
+        data: {
+          slug,
+          name: dto.workspaceName,
+          productName: dto.productName,
+          productUrl: dto.productUrl ?? null,
+          productDescription: dto.productDescription ?? null,
+          defaultLanguage: dto.language ?? 'en',
+          defaultCurrency: dto.currency ?? 'USD',
+          settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
+        },
+      });
+
+      const ownerUser = await tx.marketingUser.create({
+        data: {
+          workspaceId: workspace.id,
+          email: dto.email,
+          password: passwordHash,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          role: 'OWNER',
+        },
+      });
+
+      // Per-workspace research sentinel: ingested leads/activities are
+      // attributed to it. Unguessable address + random password; SYSTEM
+      // role is refused by login, refresh and the guard regardless.
+      await tx.marketingUser.create({
+        data: {
+          workspaceId: workspace.id,
+          email: `research+${workspace.id}@system.internal`,
+          password: await bcrypt.hash(
+            `${workspace.id}:${Date.now()}:${Math.random()}`,
+            this.bcryptCost(),
+          ),
+          firstName: 'AI',
+          lastName: 'Research',
+          role: 'SYSTEM',
+        },
+      });
+
+      await tx.marketingDistributionConfig.create({
+        data: { workspaceId: workspace.id, strategy: 'DISABLED' },
+      });
+
+      return ownerUser;
+    });
+
+    await this.prisma.marketingUser.update({
+      where: { id: owner.id },
+      data: { lastLogin: new Date(), lastLoginIp: ip },
+    });
+
+    return this.generateTokens(owner);
+  }
+
   async getProfile(userId: string) {
     const user = await this.prisma.marketingUser.findUnique({
       where: { id: userId },
       select: {
         id: true,
+        workspaceId: true,
         email: true,
         firstName: true,
         lastName: true,
@@ -204,7 +341,21 @@ export class MarketingAuthService {
       throw new BadRequestException('User not found');
     }
 
-    return user;
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: user.workspaceId },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        productName: true,
+        productUrl: true,
+        defaultLanguage: true,
+        defaultCurrency: true,
+        settings: true,
+      },
+    });
+
+    return { ...user, workspace };
   }
 
   async updateProfile(

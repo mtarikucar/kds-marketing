@@ -33,9 +33,37 @@ export class MarketingTasksService {
     return d;
   }
 
-  async create(dto: CreateTaskDto, userId: string) {
+  /** Cross-reference guard: the assignee must live in the actor's workspace. */
+  private async assertAssigneeInWorkspace(workspaceId: string, assignedToId: string) {
+    const assignee = await this.prisma.marketingUser.findFirst({
+      where: { id: assignedToId, workspaceId },
+      select: { id: true },
+    });
+    if (!assignee) throw new NotFoundException('Assigned user not found');
+  }
+
+  /** Cross-reference guard: the linked lead must live in the actor's workspace. */
+  private async assertLeadInWorkspace(workspaceId: string, leadId: string) {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: leadId, workspaceId },
+      select: { id: true },
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+  }
+
+  async create(workspaceId: string, dto: CreateTaskDto, userId: string) {
+    // The actor (userId) is in-workspace by construction (guard-checked);
+    // any other assignee and any lead reference must be validated.
+    if (dto.assignedToId && dto.assignedToId !== userId) {
+      await this.assertAssigneeInWorkspace(workspaceId, dto.assignedToId);
+    }
+    if (dto.leadId) {
+      await this.assertLeadInWorkspace(workspaceId, dto.leadId);
+    }
+
     const task = await this.prisma.marketingTask.create({
       data: {
+        workspaceId,
         title: dto.title,
         description: dto.description,
         type: dto.type,
@@ -52,6 +80,7 @@ export class MarketingTasksService {
 
     if (task.assignedToId !== userId) {
       this.notificationsService.create({
+        workspaceId,
         userId: task.assignedToId,
         type: 'TASK_ASSIGNED',
         title: 'New task assigned',
@@ -63,28 +92,28 @@ export class MarketingTasksService {
     return task;
   }
 
-  async findAll(filter: TaskFilterDto, userId: string, userRole: string) {
+  async findAll(workspaceId: string, filter: TaskFilterDto, userId: string, userRole: string) {
     const page = filter.page || 1;
     const limit = filter.limit || 20;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const filters: any = {};
 
-    if (userRole === 'SALES_REP') {
-      where.assignedToId = userId;
+    if (userRole === 'REP') {
+      filters.assignedToId = userId;
     } else if (filter.assignedToId) {
-      where.assignedToId = filter.assignedToId;
+      filters.assignedToId = filter.assignedToId;
     }
 
-    if (filter.status) where.status = filter.status;
-    if (filter.type) where.type = filter.type;
-    if (filter.priority) where.priority = filter.priority;
-    if (filter.leadId) where.leadId = filter.leadId;
+    if (filter.status) filters.status = filter.status;
+    if (filter.type) filters.type = filter.type;
+    if (filter.priority) filters.priority = filter.priority;
+    if (filter.leadId) filters.leadId = filter.leadId;
 
     if (filter.dateFrom || filter.dateTo) {
-      where.dueDate = {};
-      if (filter.dateFrom) where.dueDate.gte = new Date(filter.dateFrom);
-      if (filter.dateTo) where.dueDate.lte = new Date(filter.dateTo);
+      filters.dueDate = {};
+      if (filter.dateFrom) filters.dueDate.gte = new Date(filter.dateFrom);
+      if (filter.dateTo) filters.dueDate.lte = new Date(filter.dateTo);
     }
 
     const allowedSortFields = ['createdAt', 'updatedAt', 'dueDate', 'title', 'type', 'status', 'priority'];
@@ -97,7 +126,7 @@ export class MarketingTasksService {
 
     const [tasks, total] = await Promise.all([
       this.prisma.marketingTask.findMany({
-        where,
+        where: { workspaceId, ...filters },
         orderBy,
         skip,
         take: limit,
@@ -106,7 +135,7 @@ export class MarketingTasksService {
           assignedTo: { select: { id: true, firstName: true, lastName: true } },
         },
       }),
-      this.prisma.marketingTask.count({ where }),
+      this.prisma.marketingTask.count({ where: { workspaceId, ...filters } }),
     ]);
 
     return {
@@ -115,23 +144,19 @@ export class MarketingTasksService {
     };
   }
 
-  async findToday(userId: string, userRole: string) {
+  async findToday(workspaceId: string, userId: string, userRole: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const where: any = {
-      dueDate: { gte: today, lt: tomorrow },
-      status: { not: 'CANCELLED' },
-    };
-
-    if (userRole === 'SALES_REP') {
-      where.assignedToId = userId;
-    }
-
     return this.prisma.marketingTask.findMany({
-      where,
+      where: {
+        workspaceId,
+        dueDate: { gte: today, lt: tomorrow },
+        status: { not: 'CANCELLED' },
+        ...(userRole === 'REP' ? { assignedToId: userId } : {}),
+      },
       orderBy: { dueDate: 'asc' },
       include: {
         lead: { select: { id: true, businessName: true } },
@@ -140,19 +165,16 @@ export class MarketingTasksService {
     });
   }
 
-  async findOverdue(userId: string, userRole: string) {
+  async findOverdue(workspaceId: string, userId: string, userRole: string) {
     const now = new Date();
-    const where: any = {
-      dueDate: { lt: now },
-      status: { in: ['PENDING', 'IN_PROGRESS'] },
-    };
-
-    if (userRole === 'SALES_REP') {
-      where.assignedToId = userId;
-    }
 
     return this.prisma.marketingTask.findMany({
-      where,
+      where: {
+        workspaceId,
+        dueDate: { lt: now },
+        status: { in: ['PENDING', 'IN_PROGRESS'] },
+        ...(userRole === 'REP' ? { assignedToId: userId } : {}),
+      },
       orderBy: { dueDate: 'asc' },
       include: {
         lead: { select: { id: true, businessName: true } },
@@ -161,7 +183,13 @@ export class MarketingTasksService {
     });
   }
 
-  async findCalendar(dateFrom: string, dateTo: string, userId: string, userRole: string) {
+  async findCalendar(
+    workspaceId: string,
+    dateFrom: string,
+    dateTo: string,
+    userId: string,
+    userRole: string,
+  ) {
     const from = new Date(dateFrom);
     const to = new Date(dateTo);
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
@@ -177,16 +205,12 @@ export class MarketingTasksService {
       );
     }
 
-    const where: any = {
-      dueDate: { gte: from, lte: to },
-    };
-
-    if (userRole === 'SALES_REP') {
-      where.assignedToId = userId;
-    }
-
     return this.prisma.marketingTask.findMany({
-      where,
+      where: {
+        workspaceId,
+        dueDate: { gte: from, lte: to },
+        ...(userRole === 'REP' ? { assignedToId: userId } : {}),
+      },
       orderBy: { dueDate: 'asc' },
       take: 500,
       include: {
@@ -196,9 +220,9 @@ export class MarketingTasksService {
     });
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
-    const task = await this.prisma.marketingTask.findUnique({
-      where: { id },
+  async findOne(workspaceId: string, id: string, userId: string, userRole: string) {
+    const task = await this.prisma.marketingTask.findFirst({
+      where: { id, workspaceId },
       include: {
         lead: { select: { id: true, businessName: true, contactPerson: true } },
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
@@ -207,27 +231,35 @@ export class MarketingTasksService {
 
     if (!task) throw new NotFoundException('Task not found');
 
-    if (userRole === 'SALES_REP' && task.assignedToId !== userId) {
+    if (userRole === 'REP' && task.assignedToId !== userId) {
       throw new ForbiddenException('You can only view your own tasks');
     }
 
     return task;
   }
 
-  async update(id: string, dto: UpdateTaskDto, userId: string, userRole: string) {
-    const task = await this.prisma.marketingTask.findUnique({ where: { id } });
+  async update(workspaceId: string, id: string, dto: UpdateTaskDto, userId: string, userRole: string) {
+    const task = await this.prisma.marketingTask.findFirst({ where: { id, workspaceId } });
 
     if (!task) throw new NotFoundException('Task not found');
 
-    if (userRole === 'SALES_REP' && task.assignedToId !== userId) {
+    if (userRole === 'REP' && task.assignedToId !== userId) {
       throw new ForbiddenException('You can only update your own tasks');
+    }
+
+    // Re-validate cross-references when the update rewires them.
+    if (dto.assignedToId && dto.assignedToId !== userId) {
+      await this.assertAssigneeInWorkspace(workspaceId, dto.assignedToId);
+    }
+    if (dto.leadId) {
+      await this.assertLeadInWorkspace(workspaceId, dto.leadId);
     }
 
     const data: any = { ...dto };
     if (dto.dueDate) data.dueDate = new Date(dto.dueDate);
 
     return this.prisma.marketingTask.update({
-      where: { id },
+      where: { id: task.id },
       data,
       include: {
         lead: { select: { id: true, businessName: true } },
@@ -236,31 +268,31 @@ export class MarketingTasksService {
     });
   }
 
-  async complete(id: string, userId: string, userRole: string) {
-    const task = await this.prisma.marketingTask.findUnique({ where: { id } });
+  async complete(workspaceId: string, id: string, userId: string, userRole: string) {
+    const task = await this.prisma.marketingTask.findFirst({ where: { id, workspaceId } });
 
     if (!task) throw new NotFoundException('Task not found');
 
-    if (userRole === 'SALES_REP' && task.assignedToId !== userId) {
+    if (userRole === 'REP' && task.assignedToId !== userId) {
       throw new ForbiddenException('You can only complete your own tasks');
     }
 
     return this.prisma.marketingTask.update({
-      where: { id },
+      where: { id: task.id },
       data: { status: 'COMPLETED', completedAt: new Date() },
     });
   }
 
-  async delete(id: string, userId: string, userRole: string) {
-    const task = await this.prisma.marketingTask.findUnique({ where: { id } });
+  async delete(workspaceId: string, id: string, userId: string, userRole: string) {
+    const task = await this.prisma.marketingTask.findFirst({ where: { id, workspaceId } });
 
     if (!task) throw new NotFoundException('Task not found');
 
-    if (userRole === 'SALES_REP' && task.assignedToId !== userId) {
+    if (userRole === 'REP' && task.assignedToId !== userId) {
       throw new ForbiddenException('You can only delete your own tasks');
     }
 
-    await this.prisma.marketingTask.delete({ where: { id } });
+    await this.prisma.marketingTask.delete({ where: { id: task.id } });
     return { message: 'Task deleted successfully' };
   }
 }

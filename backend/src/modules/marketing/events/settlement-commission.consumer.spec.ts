@@ -45,11 +45,24 @@ describe('SettlementCommissionConsumer', () => {
     consumer = new SettlementCommissionConsumer(prisma as any, bus as any);
     // Forward the Serializable signup tx callback onto the same mock surface.
     (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
+    // Core events carry core tenant ids; the consumer resolves the single
+    // core-integrated workspace via findCoreIntegratedWorkspaceId().
+    prisma.workspace.findFirst.mockResolvedValue({ id: 'ws-core' } as any);
   });
 
   it('subscribes to payment.succeeded.v1 on module init', () => {
     consumer.onModuleInit();
     expect(bus.on).toHaveBeenCalledWith('payment.succeeded.v1', expect.any(Function));
+  });
+
+  it('skips the event entirely when no core-integrated workspace exists', async () => {
+    prisma.workspace.findFirst.mockResolvedValue(null);
+
+    await expect(handle(makeEvent({ kind: 'renewal' }))).resolves.toBeUndefined();
+
+    expect(prisma.commission.findFirst).not.toHaveBeenCalled();
+    expect(prisma.commission.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   describe('RENEWAL / UPSELL', () => {
@@ -60,9 +73,24 @@ describe('SettlementCommissionConsumer', () => {
 
       await handle(makeEvent({ kind: 'renewal' }));
 
+      // Dedup probe + lead resolution are workspace-scoped.
+      expect(prisma.commission.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ workspaceId: 'ws-core' }),
+        }),
+      );
+      expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            workspaceId: 'ws-core',
+            convertedTenantId: 'tenant-1',
+          }),
+        }),
+      );
       expect(prisma.commission.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
+            workspaceId: 'ws-core',
             type: 'RENEWAL',
             status: 'PENDING',
             tenantId: 'tenant-1',
@@ -86,7 +114,13 @@ describe('SettlementCommissionConsumer', () => {
       await handle(makeEvent({ kind: 'upsell' }));
 
       expect(prisma.commission.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ type: 'UPSELL', sourcePaymentId: 'pay-1' }) }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            workspaceId: 'ws-core',
+            type: 'UPSELL',
+            sourcePaymentId: 'pay-1',
+          }),
+        }),
       );
     });
 
@@ -134,6 +168,7 @@ describe('SettlementCommissionConsumer', () => {
       expect(prisma.lead.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
+            workspaceId: 'ws-core',
             source: 'REFERRAL',
             status: 'WON',
             assignedToId: 'rep-9',
@@ -145,6 +180,7 @@ describe('SettlementCommissionConsumer', () => {
       expect(prisma.commission.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
+            workspaceId: 'ws-core',
             type: 'SIGNUP',
             leadId: 'lead-new',
             marketingUserId: 'rep-9',
@@ -152,7 +188,11 @@ describe('SettlementCommissionConsumer', () => {
           }),
         }),
       );
-      expect(prisma.marketingNotification.create).toHaveBeenCalled();
+      expect(prisma.marketingNotification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ workspaceId: 'ws-core', userId: 'rep-9' }),
+        }),
+      );
     });
 
     it("uses the existing lead's rep (admin attribution wins) and does not auto-create", async () => {
@@ -166,7 +206,12 @@ describe('SettlementCommissionConsumer', () => {
       expect(prisma.lead.create).not.toHaveBeenCalled();
       expect(prisma.commission.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ type: 'SIGNUP', leadId: 'lead-admin', marketingUserId: 'rep-admin' }),
+          data: expect.objectContaining({
+            workspaceId: 'ws-core',
+            type: 'SIGNUP',
+            leadId: 'lead-admin',
+            marketingUserId: 'rep-admin',
+          }),
         }),
       );
     });

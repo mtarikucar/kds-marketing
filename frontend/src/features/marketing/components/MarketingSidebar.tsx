@@ -38,7 +38,7 @@ const managerOnlyItems = [
 export default function MarketingSidebar() {
   const { t } = useTranslation('marketing');
   const { user, logout } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
@@ -96,7 +96,7 @@ export default function MarketingSidebar() {
               {user?.firstName} {user?.lastName}
             </p>
             <p className="text-xs text-slate-500 truncate">
-              {user?.role === 'SALES_MANAGER' ? t('role.SALES_MANAGER') : t('role.SALES_REP')}
+              {user?.role === 'OWNER' ? t('role.OWNER', 'Owner') : user?.role === 'MANAGER' ? t('role.MANAGER') : t('role.REP')}
             </p>
           </div>
         </div>

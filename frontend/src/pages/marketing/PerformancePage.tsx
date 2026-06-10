@@ -49,7 +49,7 @@ function MetricCard({ m }: { m: MetricPerformance }) {
 
 export default function PerformancePage() {
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const [period, setPeriod] = useState(currentPeriod());
   const [repId, setRepId] = useState('');
@@ -97,7 +97,7 @@ export default function PerformancePage() {
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
             >
               <option value="">Whole team</option>
-              {reps.filter((r) => r.role === 'SALES_REP').map((r) => (
+              {reps.filter((r) => r.role === 'REP').map((r) => (
                 <option key={r.id} value={r.id}>{r.firstName} {r.lastName}</option>
               ))}
             </select>

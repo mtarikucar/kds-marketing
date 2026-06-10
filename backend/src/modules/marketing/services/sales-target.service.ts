@@ -26,8 +26,25 @@ export interface MetricPerformance {
 export class SalesTargetService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Cross-reference guard: targets are keyed by marketingUserId, so the
+   * target user must be resolved inside the actor's workspace before any
+   * row is written or attainment computed for them.
+   */
+  private async assertUserInWorkspace(workspaceId: string, marketingUserId: string) {
+    const user = await this.prisma.marketingUser.findFirst({
+      where: { id: marketingUserId, workspaceId },
+      select: { id: true },
+    });
+    if (!user) throw new NotFoundException('Marketing user not found');
+  }
+
   /** Manager sets (or updates) a rep's target for a period+metric. */
-  setTarget(dto: SetTargetDto, setById: string) {
+  async setTarget(workspaceId: string, dto: SetTargetDto, setById: string) {
+    await this.assertUserInWorkspace(workspaceId, dto.marketingUserId);
+    // The @@unique([marketingUserId, period, metric]) triple stays the upsert
+    // key (the user was just resolved in-workspace, so the addressed row can
+    // only be in-workspace too); the create side carries the workspaceId.
     return this.prisma.salesTarget.upsert({
       where: {
         marketingUserId_period_metric: {
@@ -37,6 +54,7 @@ export class SalesTargetService {
         },
       },
       create: {
+        workspaceId,
         marketingUserId: dto.marketingUserId,
         period: dto.period,
         metric: dto.metric,
@@ -52,34 +70,39 @@ export class SalesTargetService {
     });
   }
 
-  list(filter: TargetFilterDto, user: MarketingUserPayload) {
-    const where: Prisma.SalesTargetWhereInput = {};
-    if (user.role === 'SALES_REP') {
-      where.marketingUserId = user.id; // reps see only their own targets
+  list(workspaceId: string, filter: TargetFilterDto, user: MarketingUserPayload) {
+    const filters: Prisma.SalesTargetWhereInput = {};
+    if (user.role === 'REP') {
+      filters.marketingUserId = user.id; // reps see only their own targets
     } else if (filter.marketingUserId) {
-      where.marketingUserId = filter.marketingUserId;
+      filters.marketingUserId = filter.marketingUserId;
     }
-    if (filter.period) where.period = filter.period;
+    if (filter.period) filters.period = filter.period;
     return this.prisma.salesTarget.findMany({
-      where,
+      where: { workspaceId, ...filters },
       orderBy: [{ period: 'desc' }, { metric: 'asc' }],
     });
   }
 
-  async remove(id: string) {
-    const target = await this.prisma.salesTarget.findUnique({ where: { id } });
+  async remove(workspaceId: string, id: string) {
+    const target = await this.prisma.salesTarget.findFirst({ where: { id, workspaceId } });
     if (!target) throw new NotFoundException('Target not found');
-    await this.prisma.salesTarget.delete({ where: { id } });
+    await this.prisma.salesTarget.delete({ where: { id: target.id } });
     return { deleted: true };
   }
 
   /** Performance vs target for a rep + period across every metric. */
-  async performanceFor(marketingUserId: string, period: string): Promise<MetricPerformance[]> {
+  async performanceFor(
+    workspaceId: string,
+    marketingUserId: string,
+    period: string,
+  ): Promise<MetricPerformance[]> {
+    await this.assertUserInWorkspace(workspaceId, marketingUserId);
     const targets = await this.prisma.salesTarget.findMany({
-      where: { marketingUserId, period },
+      where: { workspaceId, marketingUserId, period },
     });
     const targetByMetric = new Map(targets.map((t) => [t.metric, t]));
-    const actuals = await this.actualsFor(marketingUserId, period);
+    const actuals = await this.actualsFor(workspaceId, marketingUserId, period);
 
     return TARGET_METRICS.map((metric) => {
       const target = targetByMetric.get(metric);
@@ -102,9 +125,9 @@ export class SalesTargetService {
    * lookup + three batched aggregates over the whole rep set, pivoted
    * in memory. 4 queries total regardless of headcount.
    */
-  async teamPerformance(period: string) {
+  async teamPerformance(workspaceId: string, period: string) {
     const reps = await this.prisma.marketingUser.findMany({
-      where: { status: 'ACTIVE' },
+      where: { workspaceId, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true, role: true },
       orderBy: { firstName: 'asc' },
     });
@@ -117,11 +140,12 @@ export class SalesTargetService {
     // back into the per-rep MetricPerformance arrays cheaply.
     const [targets, wonLeads, commissions, connectedCalls] = await Promise.all([
       this.prisma.salesTarget.findMany({
-        where: { marketingUserId: { in: repIds }, period },
+        where: { workspaceId, marketingUserId: { in: repIds }, period },
       }),
       this.prisma.lead.groupBy({
         by: ['assignedToId'],
         where: {
+          workspaceId,
           assignedToId: { in: repIds },
           status: 'WON',
           convertedAt: { gte: start, lt: end },
@@ -130,12 +154,13 @@ export class SalesTargetService {
       }),
       this.prisma.commission.groupBy({
         by: ['marketingUserId'],
-        where: { marketingUserId: { in: repIds }, period },
+        where: { workspaceId, marketingUserId: { in: repIds }, period },
         _sum: { amount: true },
       }),
       this.prisma.salesCall.groupBy({
         by: ['marketingUserId'],
         where: {
+          workspaceId,
           marketingUserId: { in: repIds },
           status: 'CONNECTED',
           startedAt: { gte: start, lt: end },
@@ -187,6 +212,7 @@ export class SalesTargetService {
   }
 
   private async actualsFor(
+    workspaceId: string,
     marketingUserId: string,
     period: string,
   ): Promise<Record<TargetMetric, number>> {
@@ -194,17 +220,19 @@ export class SalesTargetService {
     const [wonLeads, commissionAgg, connectedCalls] = await Promise.all([
       this.prisma.lead.count({
         where: {
+          workspaceId,
           assignedToId: marketingUserId,
           status: 'WON',
           convertedAt: { gte: start, lt: end },
         },
       }),
       this.prisma.commission.aggregate({
-        where: { marketingUserId, period },
+        where: { workspaceId, marketingUserId, period },
         _sum: { amount: true },
       }),
       this.prisma.salesCall.count({
         where: {
+          workspaceId,
           marketingUserId,
           status: 'CONNECTED',
           startedAt: { gte: start, lt: end },

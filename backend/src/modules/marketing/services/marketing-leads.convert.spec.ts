@@ -10,7 +10,9 @@ import {
  * Step D: convert() no longer writes tenant/user/subscription — it delegates to
  * CoreProvisioningPort and only finalizes marketing state. These tests lock the
  * decoupling (no core-table writes), the saga claim, the commission basis from
- * plan facts, and the orphan-reconciliation sweep.
+ * plan facts, and the orphan-reconciliation sweep — all workspace-scoped:
+ * convert() takes the caller's workspaceId; the reconcile cron resolves the
+ * single core-integrated workspace itself (no user context).
  */
 describe('MarketingLeadsService — convert + reconcile', () => {
   let prisma: MockPrismaClient;
@@ -21,6 +23,8 @@ describe('MarketingLeadsService — convert + reconcile', () => {
   };
   let outbox: { append: jest.Mock };
   let svc: MarketingLeadsService;
+
+  const WS = 'ws-1';
 
   const DTO = {
     tenantName: 'Test Bistro',
@@ -59,7 +63,11 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       outbox as any,
     );
     (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
-    prisma.lead.findUnique.mockResolvedValue({
+    // The reconcile cron resolves the core-integrated workspace via the
+    // helper (workspace.findFirst); convert() gets WS from the caller.
+    prisma.workspace.findFirst.mockResolvedValue({ id: WS } as any);
+    // Scoped pre-checks read via findFirst({ where: { id, workspaceId } }).
+    prisma.lead.findFirst.mockResolvedValue({
       id: 'lead-1',
       convertedTenantId: null,
       assignedToId: 'rep-1',
@@ -78,8 +86,12 @@ describe('MarketingLeadsService — convert + reconcile', () => {
 
   describe('convert', () => {
     it('provisions via the port and finalizes (claim + commission + event + email), touching NO core tables', async () => {
-      const res = await svc.convert('lead-1', DTO, 'user-1');
+      const res = await svc.convert(WS, 'lead-1', DTO, 'user-1');
 
+      // The pre-check resolves the lead scoped to the caller's workspace.
+      expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'lead-1', workspaceId: WS } }),
+      );
       expect(provisioning.provisionTenantForLead).toHaveBeenCalledWith(
         expect.objectContaining({
           leadId: 'lead-1',
@@ -90,7 +102,7 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       );
       expect(prisma.lead.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'lead-1', convertedTenantId: null },
+          where: { id: 'lead-1', workspaceId: WS, convertedTenantId: null },
           data: expect.objectContaining({ status: 'WON', convertedTenantId: 'tenant-1' }),
         }),
       );
@@ -98,6 +110,7 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       const commData = (prisma.commission.create as any).mock.calls[0][0].data;
       expect(commData.amount.toString()).toBe('194.85');
       expect(commData).toMatchObject({
+        workspaceId: WS,
         type: 'SIGNUP',
         tenantId: 'tenant-1',
         leadId: 'lead-1',
@@ -127,20 +140,20 @@ describe('MarketingLeadsService — convert + reconcile', () => {
 
     it('skips the welcome email (but still converts) when APP_URL is not configured', async () => {
       delete process.env.APP_URL;
-      const res = await svc.convert('lead-1', DTO, 'user-1');
+      const res = await svc.convert(WS, 'lead-1', DTO, 'user-1');
       expect(res).toMatchObject({ tenantId: 'tenant-1' });
       expect(email.sendEmail).not.toHaveBeenCalled();
     });
 
-    it('throws NotFound when the lead is missing', async () => {
-      prisma.lead.findUnique.mockResolvedValue(null);
-      await expect(svc.convert('x', DTO, 'u')).rejects.toBeInstanceOf(NotFoundException);
+    it('throws NotFound when the lead is missing (or lives in another workspace)', async () => {
+      prisma.lead.findFirst.mockResolvedValue(null);
+      await expect(svc.convert(WS, 'x', DTO, 'u')).rejects.toBeInstanceOf(NotFoundException);
       expect(provisioning.provisionTenantForLead).not.toHaveBeenCalled();
     });
 
     it('throws Conflict when the lead is already converted', async () => {
-      prisma.lead.findUnique.mockResolvedValue({ id: 'lead-1', convertedTenantId: 'tenant-x' } as any);
-      await expect(svc.convert('lead-1', DTO, 'u')).rejects.toBeInstanceOf(ConflictException);
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', convertedTenantId: 'tenant-x' } as any);
+      await expect(svc.convert(WS, 'lead-1', DTO, 'u')).rejects.toBeInstanceOf(ConflictException);
       expect(provisioning.provisionTenantForLead).not.toHaveBeenCalled();
     });
 
@@ -148,29 +161,29 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       provisioning.provisionTenantForLead.mockRejectedValue(
         new CoreProvisioningEmailInUseError('owner@test.com'),
       );
-      await expect(svc.convert('lead-1', DTO, 'u')).rejects.toBeInstanceOf(ConflictException);
+      await expect(svc.convert(WS, 'lead-1', DTO, 'u')).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('maps CoreProvisioningPlanInvalidError → BadRequest', async () => {
       provisioning.provisionTenantForLead.mockRejectedValue(
         new CoreProvisioningPlanInvalidError('plan-x'),
       );
-      await expect(svc.convert('lead-1', DTO, 'u')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(svc.convert(WS, 'lead-1', DTO, 'u')).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('aborts with Conflict when the concurrent claim loses (count=0) — no commission', async () => {
       prisma.lead.updateMany.mockResolvedValue({ count: 0 } as any);
-      await expect(svc.convert('lead-1', DTO, 'u')).rejects.toBeInstanceOf(ConflictException);
+      await expect(svc.convert(WS, 'lead-1', DTO, 'u')).rejects.toBeInstanceOf(ConflictException);
       expect(prisma.commission.create).not.toHaveBeenCalled();
     });
 
     it('skips the commission when the lead is unassigned (still emits the event)', async () => {
-      prisma.lead.findUnique.mockResolvedValue({
+      prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         convertedTenantId: null,
         assignedToId: null,
       } as any);
-      await svc.convert('lead-1', DTO, 'u');
+      await svc.convert(WS, 'lead-1', DTO, 'u');
       expect(prisma.commission.create).not.toHaveBeenCalled();
       expect(outbox.append).toHaveBeenCalled();
     });
@@ -181,17 +194,17 @@ describe('MarketingLeadsService — convert + reconcile', () => {
         created: false,
         adminTempPassword: '',
       });
-      await svc.convert('lead-1', DTO, 'u');
+      await svc.convert(WS, 'lead-1', DTO, 'u');
       expect(email.sendEmail).not.toHaveBeenCalled();
     });
   });
 
   describe('reconcileOrphanProvisionedConversions', () => {
-    it('finalizes an orphan (provisioned but lead still unconverted)', async () => {
+    it('finalizes an orphan (provisioned but lead still unconverted) under the core-integrated workspace', async () => {
       provisioning.listProvisionedLeads.mockResolvedValue([
         { leadId: 'lead-1', tenantId: 'tenant-1', planFacts: { monthlyPrice: 1299, commissionRate: 0.15, planCode: 'PRO' } },
       ]);
-      prisma.lead.findUnique.mockResolvedValue({
+      prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         assignedToId: 'rep-1',
         convertedTenantId: null,
@@ -200,11 +213,15 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       const res = await svc.reconcileOrphanProvisionedConversions();
 
       expect(res.reconciled).toBe(1);
+      // The orphan lookup itself is scoped to the resolved workspace.
+      expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'lead-1', workspaceId: WS } }),
+      );
       expect(prisma.lead.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'lead-1', convertedTenantId: null } }),
+        expect.objectContaining({ where: { id: 'lead-1', workspaceId: WS, convertedTenantId: null } }),
       );
       expect(prisma.commission.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ type: 'SIGNUP', tenantId: 'tenant-1', leadId: 'lead-1' }) }),
+        expect.objectContaining({ data: expect.objectContaining({ workspaceId: WS, type: 'SIGNUP', tenantId: 'tenant-1', leadId: 'lead-1' }) }),
       );
       expect(outbox.append).toHaveBeenCalled();
     });
@@ -213,7 +230,7 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       provisioning.listProvisionedLeads.mockResolvedValue([
         { leadId: 'lead-1', tenantId: 'tenant-1', planFacts: null },
       ]);
-      prisma.lead.findUnique.mockResolvedValue({
+      prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         assignedToId: 'rep-1',
         convertedTenantId: 'tenant-1',
@@ -229,6 +246,14 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       provisioning.listProvisionedLeads.mockResolvedValue([]);
       const res = await svc.reconcileOrphanProvisionedConversions();
       expect(res.reconciled).toBe(0);
+    });
+
+    it('skips the sweep entirely (warn) when no core-integrated workspace exists', async () => {
+      prisma.workspace.findFirst.mockResolvedValue(null);
+      const res = await svc.reconcileOrphanProvisionedConversions();
+      expect(res.reconciled).toBe(0);
+      expect(provisioning.listProvisionedLeads).not.toHaveBeenCalled();
+      expect(prisma.lead.updateMany).not.toHaveBeenCalled();
     });
   });
 });

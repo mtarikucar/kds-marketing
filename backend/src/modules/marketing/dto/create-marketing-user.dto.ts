@@ -10,8 +10,8 @@ import {
 } from 'class-validator';
 
 export enum MarketingUserRole {
-  SALES_MANAGER = 'SALES_MANAGER',
-  SALES_REP = 'SALES_REP',
+  MANAGER = 'MANAGER',
+  REP = 'REP',
 }
 
 // Caps mirror iter-43/46/47 — see MarketingLoginDto for the bcryptjs

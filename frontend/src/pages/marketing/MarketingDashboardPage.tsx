@@ -20,7 +20,7 @@ import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 export default function MarketingDashboardPage() {
   const { user } = useMarketingAuthStore();
   const { t } = useTranslation('marketing');
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const { data: stats } = useQuery({
     queryKey: ['marketing', 'dashboard', 'stats'],
@@ -63,7 +63,7 @@ export default function MarketingDashboardPage() {
           <p className="text-sm text-slate-500">{t('dashboard.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Manager rehberi — sadece SALES_MANAGER görür: lead atama,
+          {/* Manager rehberi — sadece MANAGER görür: lead atama,
               otomatik dağıtım, komisyon onay akışı, ekip yönetimi. */}
           {isManager && (
             <a

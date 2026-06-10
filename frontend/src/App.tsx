@@ -16,6 +16,10 @@ import InstallationsPage from './pages/marketing/InstallationsPage';
 import CallsPage from './pages/marketing/CallsPage';
 import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/TargetsPage';
+import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
+import PlatformLoginPage from './pages/platform/PlatformLoginPage';
+import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
+import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
 
 /**
  * Standalone marketing console served at the ROOT of its own (sub)domain. This is
@@ -26,6 +30,11 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<MarketingLoginPage />} />
+      <Route path="/register" element={<RegisterWorkspacePage />} />
+      {/* Platform (superadmin) realm — separate auth store + token. */}
+      <Route path="/platform/login" element={<PlatformLoginPage />} />
+      <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
+      <Route path="/platform/workspaces/:id" element={<PlatformWorkspaceDetailPage />} />
       <Route element={<MarketingProtectedRoute />}>
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -43,7 +52,7 @@ export default function App() {
           <Route path="/calls" element={<CallsPage />} />
           <Route path="/performance" element={<PerformancePage />} />
         </Route>
-        <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.SALES_MANAGER} />}>
+        <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.MANAGER} />}>
           <Route element={<MarketingLayout />}>
             <Route path="/users" element={<MarketingUsersPage />} />
             <Route path="/targets" element={<TargetsPage />} />

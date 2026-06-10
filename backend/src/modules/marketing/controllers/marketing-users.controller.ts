@@ -12,39 +12,54 @@ import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
+import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUsersService } from '../services/marketing-users.service';
 import { CreateMarketingUserDto } from '../dto/create-marketing-user.dto';
 import { UpdateMarketingUserDto } from '../dto/update-marketing-user.dto';
+import { MarketingUserPayload } from '../types';
 
 @MarketingRoute()
 @Controller('marketing/users')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
-@MarketingRoles('SALES_MANAGER')
+@MarketingRoles('MANAGER')
 export class MarketingUsersController {
   constructor(private readonly usersService: MarketingUsersService) {}
 
   @Post()
-  create(@Body() dto: CreateMarketingUserDto) {
-    return this.usersService.create(dto);
+  create(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: CreateMarketingUserDto,
+  ) {
+    return this.usersService.create(actor.workspaceId, dto);
   }
 
   @Get()
-  findAll() {
-    return this.usersService.findAll();
+  findAll(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.usersService.findAll(actor.workspaceId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(id);
+  findOne(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.usersService.findOne(actor.workspaceId, id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateMarketingUserDto) {
-    return this.usersService.update(id, dto);
+  update(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketingUserDto,
+  ) {
+    return this.usersService.update(actor.workspaceId, id, dto, actor.role);
   }
 
   @Delete(':id')
-  delete(@Param('id') id: string) {
-    return this.usersService.delete(id);
+  delete(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.usersService.delete(actor.workspaceId, id, actor.role);
   }
 }

@@ -17,6 +17,7 @@ import { MarketingLoginDto } from '../dto/login.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { RefreshTokenDto } from '../dto/refresh-token.dto';
+import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { MarketingUserPayload } from '../types';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
@@ -24,6 +25,9 @@ import { getClientIp } from '../../../common/helpers/client-ip.helper';
 // surface as tightly as the superadmin realm is appropriate.
 const LOGIN_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
 const REFRESH_THROTTLE = { default: { limit: 30, ttl: 60_000 } };
+// Workspace creation is heavier than a login (4 inserts + bcrypt) and is
+// the platform's public front door — keep it slow.
+const REGISTER_THROTTLE = { default: { limit: 3, ttl: 60_000 } };
 
 @Controller('marketing/auth')
 @UseGuards(MarketingGuard)
@@ -37,6 +41,14 @@ export class MarketingAuthController {
   login(@Body() dto: MarketingLoginDto, @Req() req: Request) {
     const ip = getClientIp(req);
     return this.authService.login(dto, ip);
+  }
+
+  @Post('register-workspace')
+  @MarketingPublic()
+  @Throttle(REGISTER_THROTTLE)
+  registerWorkspace(@Body() dto: RegisterWorkspaceDto, @Req() req: Request) {
+    const ip = getClientIp(req);
+    return this.authService.registerWorkspace(dto, ip);
   }
 
   @Post('refresh')

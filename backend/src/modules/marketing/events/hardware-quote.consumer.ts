@@ -9,6 +9,7 @@ import {
   MarketingHardwareQuotePayload,
 } from "./marketing-event-types";
 import { LeadAutoAssignerService } from "../services/lead-auto-assigner.service";
+import { findCoreIntegratedWorkspaceId } from "../services/core-workspace.helper";
 
 /**
  * Creates a marketing Lead (source=HARDWARE_QUOTE) when the core catalog emits
@@ -43,12 +44,25 @@ export class HardwareQuoteConsumer implements OnModuleInit {
   ): Promise<void> {
     const p = event.payload;
     try {
+      // Core-originated event — no user context. Hardware quotes can only
+      // come from the single core-integrated workspace; without one there
+      // is nowhere safe to file the lead, so skip rather than guess.
+      const workspaceId = await findCoreIntegratedWorkspaceId(this.prisma);
+      if (!workspaceId) {
+        this.logger.warn(
+          `No core-integrated workspace — skipping hardware-quote lead for tenant=${p.tenantId} (ref=${p.dedupRef})`,
+        );
+        return;
+      }
       // Auto-assign only matters for a brand-new lead; on an existing
       // (resubmitted) lead we keep the current owner + status untouched.
-      const autoOwner = await this.autoAssigner.pickAssignee();
+      const autoOwner = await this.autoAssigner.pickAssignee(workspaceId);
       await this.prisma.lead.upsert({
-        where: { externalRef: p.dedupRef },
+        where: {
+          workspaceId_externalRef: { workspaceId, externalRef: p.dedupRef },
+        },
         create: {
+          workspaceId,
           businessName: p.businessName,
           contactPerson: p.contactPerson,
           phone: p.phone,

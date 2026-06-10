@@ -22,7 +22,7 @@ interface ReferralStats {
  * the share-link, and the lifetime stats — leads-attributed and
  * total commission earned across every status.
  *
- * Regenerate is manager-only, hidden for SALES_REP. Rotation
+ * Regenerate is manager-only, hidden for REP. Rotation
  * intentionally bricks any in-flight cookies pointing at the old
  * code; the confirm() dialog spells that out.
  */
@@ -30,7 +30,7 @@ export default function ReferralCodeCard() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const { data, isLoading } = useQuery<ReferralStats>({
     queryKey: ['marketing', 'dashboard', 'referral-stats'],

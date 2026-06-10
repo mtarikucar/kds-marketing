@@ -109,9 +109,10 @@ export default function MarketingHeader() {
     ? `${user.firstName?.charAt(0) || ''}${user.lastName?.charAt(0) || ''}`.toUpperCase()
     : '?';
 
-  const roleBadgeLabel = user?.role === 'SALES_MANAGER' ? 'Manager' : 'Sales Rep';
+  const roleBadgeLabel =
+    user?.role === 'OWNER' ? 'Owner' : user?.role === 'MANAGER' ? 'Manager' : 'Sales Rep';
   const roleBadgeClasses =
-    user?.role === 'SALES_MANAGER'
+    user?.role === 'MANAGER' || user?.role === 'OWNER'
       ? 'bg-purple-100 text-purple-800'
       : 'bg-blue-100 text-blue-800';
 

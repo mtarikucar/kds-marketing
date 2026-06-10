@@ -11,8 +11,9 @@ export type DistributionStrategy = (typeof DISTRIBUTION_STRATEGIES)[number];
 
 /**
  * Picks a sales rep to own a freshly-created lead, based on the
- * singleton MarketingDistributionConfig row. Returns `null` when the
- * caller should fall back to manual assignment — either the strategy
+ * caller workspace's MarketingDistributionConfig row (one per
+ * workspace — no longer a singleton). Returns `null` when the caller
+ * should fall back to manual assignment — either the strategy
  * is DISABLED, no active reps exist, or the call raced with config
  * deletion. Callers must tolerate `null` and treat the lead as
  * unassigned in that case (the manager will dispatch it later).
@@ -24,14 +25,17 @@ export class LeadAutoAssignerService {
   constructor(private readonly prisma: PrismaService) {}
 
   async pickAssignee(
+    workspaceId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<string | null> {
     const db = tx ?? this.prisma;
-    const cfg = await db.marketingDistributionConfig.findFirst();
+    const cfg = await db.marketingDistributionConfig.findFirst({
+      where: { workspaceId },
+    });
     if (!cfg || cfg.strategy === 'DISABLED') return null;
 
     const activeReps = await db.marketingUser.findMany({
-      where: { role: 'SALES_REP', status: 'ACTIVE' },
+      where: { workspaceId, role: 'REP', status: 'ACTIVE' },
       select: { id: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -47,7 +51,8 @@ export class LeadAutoAssignerService {
       // pick the same next rep — acceptable: the cursor still moves
       // forward and self-corrects on the next call. We don't try to
       // serialize through SELECT FOR UPDATE because lead creation
-      // shouldn't block on a global lock.
+      // shouldn't block on a per-workspace lock. Keyed by the config
+      // row id, which the scoped findFirst above resolved in-workspace.
       await db.marketingDistributionConfig.update({
         where: { id: cfg.id },
         data: { lastAssignedToId: next.id },
@@ -59,6 +64,7 @@ export class LeadAutoAssignerService {
       const counts = await db.lead.groupBy({
         by: ['assignedToId'],
         where: {
+          workspaceId,
           assignedToId: { in: activeReps.map((r) => r.id) },
           // Terminal leads don't count toward "load" — a rep who closed
           // 50 deals shouldn't be considered the most loaded one.

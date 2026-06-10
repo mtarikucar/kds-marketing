@@ -3,10 +3,11 @@ import { persist } from 'zustand/middleware';
 
 export interface MarketingUser {
   id: string;
+  workspaceId: string;
   email: string;
   firstName: string;
   lastName: string;
-  role: 'SALES_MANAGER' | 'SALES_REP';
+  role: 'OWNER' | 'MANAGER' | 'REP';
   phone?: string;
   avatar?: string;
 }

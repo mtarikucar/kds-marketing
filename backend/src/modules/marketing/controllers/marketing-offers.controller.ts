@@ -26,41 +26,53 @@ export class MarketingOffersController {
   constructor(private readonly offersService: MarketingOffersService) {}
 
   @Post()
-  create(@Body() dto: CreateOfferDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.offersService.create(dto, user.id, user.role);
+  create(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: CreateOfferDto,
+  ) {
+    return this.offersService.create(actor.workspaceId, dto, actor.id, actor.role);
   }
 
   @Get()
   findAll(
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.offersService.findAll(user.id, user.role, page, limit);
+    return this.offersService.findAll(actor.workspaceId, actor.id, actor.role, page, limit);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.offersService.findOne(id, user.id, user.role);
+  findOne(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.findOne(actor.workspaceId, id, actor.id, actor.role);
   }
 
   @Patch(':id')
   update(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
     @Body() dto: UpdateOfferDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.offersService.update(id, dto, user.id, user.role);
+    return this.offersService.update(actor.workspaceId, id, dto, actor.id, actor.role);
   }
 
   @Post(':id/send')
-  markSent(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.offersService.markSent(id, user.id, user.role);
+  markSent(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.markSent(actor.workspaceId, id, actor.id, actor.role);
   }
 
   @Delete(':id')
-  @MarketingRoles('SALES_MANAGER')
-  delete(@Param('id') id: string) {
-    return this.offersService.delete(id);
+  @MarketingRoles('MANAGER')
+  delete(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.delete(actor.workspaceId, id);
   }
 }

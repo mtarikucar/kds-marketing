@@ -33,7 +33,7 @@ export class SalesCallController {
     @Body() dto: StartCallDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.calls.startCall(user.id, dto);
+    return this.calls.startCall(user.workspaceId, user.id, dto);
   }
 
   @Post(':id/log')
@@ -42,7 +42,7 @@ export class SalesCallController {
     @Body() dto: LogCallDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.calls.logCall(id, user.id, dto);
+    return this.calls.logCall(user.workspaceId, id, user.id, dto);
   }
 
   @Get()
@@ -50,7 +50,7 @@ export class SalesCallController {
     @Query() filter: SalesCallFilterDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.calls.list(filter, user);
+    return this.calls.list(user.workspaceId, filter, user);
   }
 
   @Get(':id')
@@ -58,6 +58,6 @@ export class SalesCallController {
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.calls.get(id, user);
+    return this.calls.get(user.workspaceId, id, user);
   }
 }

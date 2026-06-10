@@ -26,6 +26,12 @@ import { MarketingLeadsService } from './marketing-leads.service';
  *
  * All jobs are safe to re-run — they use `updateMany` with status
  * filters that are idempotent after the first run.
+ *
+ * Multi-tenancy: crons have no user context, so each one fans out over
+ * ACTIVE workspaces and runs its queries scoped per workspace; rows are
+ * never touched across workspaces in a single statement, and any
+ * notification created inside carries the workspace id of the row that
+ * triggered it.
  */
 const NOTIFICATION_TTL_DAYS = 30;
 
@@ -67,15 +73,27 @@ export class MarketingSchedulerService {
       this.prisma,
       'marketing-offer-expire',
       async () => {
-        const now = new Date();
-        const result = await this.prisma.leadOffer.updateMany({
-          where: { status: 'SENT', validUntil: { lt: now, not: null } },
-          data: { status: 'EXPIRED' },
+        const workspaces = await this.prisma.workspace.findMany({
+          where: { status: 'ACTIVE' },
+          select: { id: true },
         });
-        if (result.count > 0) {
-          this.logger.log(`offer-expire: marked ${result.count} offer(s) EXPIRED`);
+        const now = new Date();
+        let expired = 0;
+        for (const ws of workspaces) {
+          const result = await this.prisma.leadOffer.updateMany({
+            where: {
+              workspaceId: ws.id,
+              status: 'SENT',
+              validUntil: { lt: now, not: null },
+            },
+            data: { status: 'EXPIRED' },
+          });
+          expired += result.count;
         }
-        outcome = { expired: result.count };
+        if (expired > 0) {
+          this.logger.log(`offer-expire: marked ${expired} offer(s) EXPIRED`);
+        }
+        outcome = { expired };
       },
       this.logger,
     );
@@ -89,17 +107,25 @@ export class MarketingSchedulerService {
       this.prisma,
       'marketing-notification-cleanup',
       async () => {
+        const workspaces = await this.prisma.workspace.findMany({
+          where: { status: 'ACTIVE' },
+          select: { id: true },
+        });
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - NOTIFICATION_TTL_DAYS);
-        const result = await this.prisma.marketingNotification.deleteMany({
-          where: { createdAt: { lt: cutoff } },
-        });
-        if (result.count > 0) {
+        let deleted = 0;
+        for (const ws of workspaces) {
+          const result = await this.prisma.marketingNotification.deleteMany({
+            where: { workspaceId: ws.id, createdAt: { lt: cutoff } },
+          });
+          deleted += result.count;
+        }
+        if (deleted > 0) {
           this.logger.log(
-            `notification-cleanup: deleted ${result.count} notification(s) older than ${NOTIFICATION_TTL_DAYS}d`,
+            `notification-cleanup: deleted ${deleted} notification(s) older than ${NOTIFICATION_TTL_DAYS}d`,
           );
         }
-        outcome = { deleted: result.count };
+        outcome = { deleted };
       },
       this.logger,
     );
@@ -113,19 +139,31 @@ export class MarketingSchedulerService {
       this.prisma,
       'marketing-followup-reminder',
       async () => {
-        outcome = await this.fireFollowUpRemindersInner();
+        const workspaces = await this.prisma.workspace.findMany({
+          where: { status: 'ACTIVE' },
+          select: { id: true },
+        });
+        let reminded = 0;
+        for (const ws of workspaces) {
+          const wsOutcome = await this.fireFollowUpRemindersInner(ws.id);
+          reminded += wsOutcome.reminded;
+        }
+        outcome = { reminded };
       },
       this.logger,
     );
     return outcome;
   }
 
-  private async fireFollowUpRemindersInner(): Promise<{ reminded: number }> {
+  private async fireFollowUpRemindersInner(
+    workspaceId: string,
+  ): Promise<{ reminded: number }> {
     const now = new Date();
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60_000);
 
     const dueLeads = await this.prisma.lead.findMany({
       where: {
+        workspaceId,
         nextFollowUp: { gte: now, lte: tomorrow },
         status: { notIn: ['WON', 'LOST'] },
         assignedToId: { not: null },
@@ -148,6 +186,7 @@ export class MarketingSchedulerService {
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const dup = await this.prisma.marketingNotification.findFirst({
         where: {
+          workspaceId,
           userId: lead.assignedToId,
           type: 'FOLLOW_UP_REMINDER',
           createdAt: { gte: today },
@@ -160,6 +199,9 @@ export class MarketingSchedulerService {
 
       await this.prisma.marketingNotification.create({
         data: {
+          // The triggering lead was resolved via the workspace-scoped
+          // findMany above, so this is the lead's own workspace.
+          workspaceId,
           userId: lead.assignedToId,
           type: 'FOLLOW_UP_REMINDER',
           title: 'Follow-up due',

@@ -41,7 +41,7 @@ export default function LeadsPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const user = useMarketingAuthStore((s) => s.user);
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const [searchParams, setSearchParams] = useSearchParams();
 

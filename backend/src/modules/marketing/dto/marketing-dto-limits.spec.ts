@@ -69,7 +69,7 @@ describe('Marketing DTO length caps (iter-49)', () => {
       password: 'Passw0rd1',
       firstName: 'Alice',
       lastName: 'Rep',
-      role: MarketingUserRole.SALES_REP,
+      role: MarketingUserRole.REP,
     };
 
     it('accepts a typical create', async () => {

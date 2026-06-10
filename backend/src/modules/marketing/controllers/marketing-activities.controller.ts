@@ -26,22 +26,22 @@ export class MarketingActivitiesController {
   create(
     @Param('leadId') leadId: string,
     @Body() dto: CreateActivityDto,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.activitiesService.create(leadId, dto, user.id, user.role);
+    return this.activitiesService.create(actor.workspaceId, leadId, dto, actor.id, actor.role);
   }
 
   @Get('leads/:leadId/activities')
   findByLead(
     @Param('leadId') leadId: string,
-    @CurrentMarketingUser() user: MarketingUserPayload,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
-    return this.activitiesService.findByLead(leadId, user.id, user.role);
+    return this.activitiesService.findByLead(actor.workspaceId, leadId, actor.id, actor.role);
   }
 
   @Delete('activities/:id')
-  @MarketingRoles('SALES_MANAGER')
-  delete(@Param('id') id: string) {
-    return this.activitiesService.delete(id);
+  @MarketingRoles('MANAGER')
+  delete(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.activitiesService.delete(actor.workspaceId, id);
   }
 }

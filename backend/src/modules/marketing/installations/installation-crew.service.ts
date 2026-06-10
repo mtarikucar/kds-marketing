@@ -10,9 +10,10 @@ const OCCUPYING_STATUSES = ['SCHEDULED', 'IN_PROGRESS'];
 export class InstallationCrewService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: CreateCrewDto) {
+  create(workspaceId: string, dto: CreateCrewDto) {
     return this.prisma.installationCrew.create({
       data: {
+        workspaceId,
         name: dto.name,
         dailyCapacity: dto.dailyCapacity ?? 1,
         notes: dto.notes ?? null,
@@ -20,8 +21,8 @@ export class InstallationCrewService {
     });
   }
 
-  async update(id: string, dto: UpdateCrewDto) {
-    await this.getOrThrow(id);
+  async update(workspaceId: string, id: string, dto: UpdateCrewDto) {
+    await this.getOrThrow(workspaceId, id);
     return this.prisma.installationCrew.update({
       where: { id },
       data: {
@@ -33,17 +34,19 @@ export class InstallationCrewService {
     });
   }
 
-  list(activeOnly = false) {
+  list(workspaceId: string, activeOnly = false) {
     return this.prisma.installationCrew.findMany({
-      where: activeOnly ? { active: true } : {},
+      where: { workspaceId, ...(activeOnly ? { active: true } : {}) },
       orderBy: { name: 'asc' },
     });
   }
 
-  getOrThrow(id: string) {
-    return this.prisma.installationCrew.findUniqueOrThrow({ where: { id } }).catch(() => {
-      throw new NotFoundException('Crew not found');
+  async getOrThrow(workspaceId: string, id: string) {
+    const crew = await this.prisma.installationCrew.findFirst({
+      where: { id, workspaceId },
     });
+    if (!crew) throw new NotFoundException('Crew not found');
+    return crew;
   }
 
   /**
@@ -51,17 +54,18 @@ export class InstallationCrewService {
    * (booked < dailyCapacity). The scheduling overlap check used by
    * InstallationJobService.schedule mirrors this per-crew.
    */
-  async availabilityOn(dateInput: string | Date) {
+  async availabilityOn(workspaceId: string, dateInput: string | Date) {
     // Canonicalize to the same date-only UTC key the scheduler writes, so the
     // availability view and InstallationJobService.schedule agree on the day.
     const date = toUtcDateOnly(dateInput);
     const crews = await this.prisma.installationCrew.findMany({
-      where: { active: true },
+      where: { workspaceId, active: true },
       orderBy: { name: 'asc' },
     });
     const counts = await this.prisma.installationJob.groupBy({
       by: ['crewId'],
       where: {
+        workspaceId,
         scheduledDate: date,
         status: { in: OCCUPYING_STATUSES },
         crewId: { not: null },

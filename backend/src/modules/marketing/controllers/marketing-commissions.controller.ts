@@ -36,7 +36,7 @@ export class MarketingCommissionsController {
     @Query() filter: CommissionFilterDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.commissionsService.findAll(filter, user.id, user.role);
+    return this.commissionsService.findAll(user.workspaceId, filter, user.id, user.role);
   }
 
   @Get('summary')
@@ -44,28 +44,28 @@ export class MarketingCommissionsController {
     @CurrentMarketingUser() user: MarketingUserPayload,
     @Query('period') period?: string,
   ) {
-    return this.commissionsService.getSummary(user.id, user.role, period);
+    return this.commissionsService.getSummary(user.workspaceId, user.id, user.role, period);
   }
 
   @Patch(':id')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   updateAmount(
     @Param('id') id: string,
     @Body() dto: UpdateCommissionAmountDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.commissionsService.updateAmount(id, dto.amount, user.id);
+    return this.commissionsService.updateAmount(user.workspaceId, id, dto.amount, user.id);
   }
 
   @Patch(':id/approve')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   approve(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.commissionsService.approve(id, user.id);
+    return this.commissionsService.approve(user.workspaceId, id, user.id);
   }
 
   @Patch(':id/pay')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   markPaid(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.commissionsService.markPaid(id, user.id);
+    return this.commissionsService.markPaid(user.workspaceId, id, user.id);
   }
 }

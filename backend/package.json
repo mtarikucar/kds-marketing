@@ -17,7 +17,8 @@
     "test:cov": "jest --coverage --maxWorkers=2 --workerIdleMemoryLimit=512MB",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "seed:operator": "ts-node prisma/seed-platform-operator.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",

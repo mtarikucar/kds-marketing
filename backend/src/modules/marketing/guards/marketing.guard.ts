@@ -53,6 +53,7 @@ export class MarketingGuard implements CanActivate {
         where: { id: payload.sub },
         select: {
           id: true,
+          workspaceId: true,
           email: true,
           firstName: true,
           lastName: true,
@@ -64,6 +65,19 @@ export class MarketingGuard implements CanActivate {
 
       if (!marketingUser || marketingUser.status !== 'ACTIVE') {
         throw new UnauthorizedException('User not found or inactive');
+      }
+
+      // The research sentinel owns rows, never sessions: a SYSTEM token
+      // (which generateTokens refuses to mint anyway) is dead on arrival.
+      if (marketingUser.role === 'SYSTEM') {
+        throw new UnauthorizedException('System accounts cannot authenticate');
+      }
+
+      // Workspace claim must match the user's CURRENT workspace — a token
+      // minted before an ops-side workspace move would otherwise keep
+      // acting on the old workspace's data.
+      if (payload.wsp !== marketingUser.workspaceId) {
+        throw new UnauthorizedException('Session revoked');
       }
 
       if (typeof payload.ver === 'number' && payload.ver !== marketingUser.tokenVersion) {

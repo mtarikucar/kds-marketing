@@ -16,7 +16,7 @@ const CALL_STATUSES = Object.values(CallStatus);
 
 export default function CallsPage() {
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const [status, setStatus] = useState('');
   const [repId, setRepId] = useState('');
@@ -79,7 +79,7 @@ export default function CallsPage() {
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
           >
             <option value="">All reps</option>
-            {reps.filter((r) => r.role === 'SALES_REP').map((r) => (
+            {reps.filter((r) => r.role === 'REP').map((r) => (
               <option key={r.id} value={r.id}>{r.firstName} {r.lastName}</option>
             ))}
           </select>

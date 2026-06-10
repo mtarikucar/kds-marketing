@@ -19,7 +19,7 @@ interface RepRow extends MarketingUserInfo {
 interface AssignCellProps {
   leadId: string;
   currentAssignee?: MarketingUserInfo | null;
-  /** Disable editing — used to render a read-only label for SALES_REP. */
+  /** Disable editing — used to render a read-only label for REP. */
   readOnly?: boolean;
   /** Optional: invalidate parent queries on success (e.g. lead detail). */
   onAssigned?: () => void;
@@ -60,7 +60,7 @@ export default function AssignCell({
   });
 
   const activeReps = useMemo(
-    () => reps.filter((r) => r.role === 'SALES_REP' && (r.status ?? 'ACTIVE') === 'ACTIVE'),
+    () => reps.filter((r) => r.role === 'REP' && (r.status ?? 'ACTIVE') === 'ACTIVE'),
     [reps],
   );
 

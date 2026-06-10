@@ -11,6 +11,7 @@ import {
   DomainEvent,
 } from "../../outbox/domain-event-bus.service";
 import { EventTypes, PaymentSucceededPayload } from "../../outbox/event-types";
+import { findCoreIntegratedWorkspaceId } from "../services/core-workspace.helper";
 
 /**
  * Step C marketing decoupling — settlement commission crediting.
@@ -60,13 +61,24 @@ export class SettlementCommissionConsumer
     event: DomainEvent<PaymentSucceededPayload>,
   ): Promise<void> {
     const p = event.payload;
+    // payment.succeeded.v1 carries CORE tenant ids, not workspace ids — every
+    // row this consumer writes belongs to the single core-integrated
+    // workspace. Resolve it once per event; on a generic deployment with no
+    // core integration there is nowhere to credit, so warn and skip.
+    const workspaceId = await findCoreIntegratedWorkspaceId(this.prisma);
+    if (!workspaceId) {
+      this.logger.warn(
+        `No core-integrated workspace; skipping ${p.kind} commission for tenant=${p.tenantId} payment=${p.paymentId}`,
+      );
+      return;
+    }
     switch (p.kind) {
       case "upsell":
       case "renewal":
-        await this.creditLifetimeCommission(p);
+        await this.creditLifetimeCommission(workspaceId, p);
         break;
       case "signup":
-        await this.creditSignupCommissionForReferral(p);
+        await this.creditSignupCommissionForReferral(workspaceId, p);
         break;
       default:
         // Unknown kind — ignore rather than throw so a future producer adding
@@ -81,18 +93,19 @@ export class SettlementCommissionConsumer
    * double-credits the same payment.
    */
   private async creditLifetimeCommission(
+    workspaceId: string,
     p: PaymentSucceededPayload,
   ): Promise<void> {
     const type = p.kind === "upsell" ? "UPSELL" : "RENEWAL";
     try {
       const existing = await this.prisma.commission.findFirst({
-        where: { sourcePaymentId: p.paymentId, type },
+        where: { workspaceId, sourcePaymentId: p.paymentId, type },
         select: { id: true },
       });
       if (existing) return; // this payment already credited
 
       const lead = await this.prisma.lead.findFirst({
-        where: { convertedTenantId: p.tenantId },
+        where: { workspaceId, convertedTenantId: p.tenantId },
         select: { id: true, assignedToId: true },
       });
       if (!lead?.assignedToId) return;
@@ -104,6 +117,7 @@ export class SettlementCommissionConsumer
 
       await this.prisma.commission.create({
         data: {
+          workspaceId,
           amount,
           type,
           status: "PENDING",
@@ -142,6 +156,7 @@ export class SettlementCommissionConsumer
    * admin's attribution wins.
    */
   private async creditSignupCommissionForReferral(
+    workspaceId: string,
     p: PaymentSucceededPayload,
   ): Promise<void> {
     const marketerId = p.referredByMarketingUserId;
@@ -170,7 +185,7 @@ export class SettlementCommissionConsumer
         txOutcome = await this.prisma.$transaction(
           async (tx) => {
             const existingSignup = await tx.commission.findFirst({
-              where: { tenantId: p.tenantId, type: "SIGNUP" },
+              where: { workspaceId, tenantId: p.tenantId, type: "SIGNUP" },
               select: { id: true },
             });
             if (existingSignup) {
@@ -180,8 +195,10 @@ export class SettlementCommissionConsumer
               return { credited: false } as const;
             }
 
+            // Filtered unique: convertedTenantId is the unique key,
+            // workspaceId narrows it to the core-integrated workspace.
             const existingLead = await tx.lead.findUnique({
-              where: { convertedTenantId: p.tenantId },
+              where: { convertedTenantId: p.tenantId, workspaceId },
               select: { id: true, assignedToId: true },
             });
 
@@ -194,6 +211,7 @@ export class SettlementCommissionConsumer
             } else {
               const lead = await tx.lead.create({
                 data: {
+                  workspaceId,
                   businessName: p.tenantName,
                   contactPerson: p.tenantName,
                   businessType: "OTHER",
@@ -214,6 +232,7 @@ export class SettlementCommissionConsumer
 
             await tx.commission.create({
               data: {
+                workspaceId,
                 amount: commissionAmount,
                 type: "SIGNUP",
                 status: "PENDING",
@@ -261,6 +280,7 @@ export class SettlementCommissionConsumer
       try {
         await this.prisma.marketingNotification.create({
           data: {
+            workspaceId,
             userId: creditedMarketerId,
             type: "FOLLOW_UP_REMINDER",
             title: "Yeni referans kaydı",

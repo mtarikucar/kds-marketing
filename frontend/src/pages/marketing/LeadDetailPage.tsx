@@ -73,7 +73,7 @@ export default function LeadDetailPage() {
   const fmtDateTime = (d: string | Date | null | undefined) =>
     d ? new Date(d).toLocaleString(locale) : '';
   const user = useMarketingAuthStore((s) => s.user);
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   // UI state
   const [activeTab, setActiveTab] = useState<'activities' | 'offers' | 'tasks'>('activities');

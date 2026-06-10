@@ -24,6 +24,8 @@ function validateEnv(): void {
     'MARKETING_INGEST_TOKEN',
     // Service-to-service token for /api/internal/* (both directions).
     'INTERNAL_SERVICE_TOKEN',
+    // Platform (superadmin) realm — operator login + workspace admin.
+    'PLATFORM_JWT_SECRET',
     // Where the core service lives (CoreProvisioningPort HTTP client).
     'CORE_SERVICE_URL',
   ];

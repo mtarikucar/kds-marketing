@@ -1,6 +1,23 @@
 export enum MarketingRole {
-  SALES_MANAGER = 'SALES_MANAGER',
-  SALES_REP = 'SALES_REP',
+  OWNER = 'OWNER',
+  MANAGER = 'MANAGER',
+  REP = 'REP',
+}
+
+/** Mirror of the backend's hierarchical roles guard: a requirement is
+ * satisfied by the required role or anything above it. */
+export const MARKETING_ROLE_RANK: Record<string, number> = {
+  OWNER: 3,
+  MANAGER: 2,
+  REP: 1,
+};
+
+export function hasMarketingRole(
+  userRole: string | undefined,
+  required: MarketingRole,
+): boolean {
+  if (!userRole) return false;
+  return (MARKETING_ROLE_RANK[userRole] ?? 0) >= (MARKETING_ROLE_RANK[required] ?? Infinity);
 }
 
 export enum LeadStatus {

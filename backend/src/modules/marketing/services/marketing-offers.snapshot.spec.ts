@@ -15,7 +15,12 @@ describe("MarketingOffersService.create — plan snapshot", () => {
     prisma = mockPrismaClient();
     provisioning = { describePlan: jest.fn() };
     svc = new MarketingOffersService(prisma as any, provisioning as any);
-    prisma.lead.findUnique.mockResolvedValue({ id: "lead-1", assignedToId: "rep-1" } as any);
+    // create() resolves the lead via a workspace-scoped findFirst.
+    prisma.lead.findFirst.mockResolvedValue({
+      id: "lead-1",
+      workspaceId: "ws-1",
+      assignedToId: "rep-1",
+    } as any);
     prisma.leadOffer.create.mockResolvedValue({ id: "offer-1" } as any);
   });
 
@@ -28,15 +33,22 @@ describe("MarketingOffersService.create — plan snapshot", () => {
     });
 
     await svc.create(
+      "ws-1",
       { leadId: "lead-1", planId: "plan-pro", customPrice: 999 } as any,
       "rep-1",
-      "SALES_REP",
+      "REP",
     );
 
+    expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "lead-1", workspaceId: "ws-1" }),
+      }),
+    );
     expect(provisioning.describePlan).toHaveBeenCalledWith("plan-pro");
     expect(prisma.leadOffer.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          workspaceId: "ws-1",
           planId: "plan-pro",
           planCode: "PRO",
           planName: "Profesyonel",
@@ -49,7 +61,7 @@ describe("MarketingOffersService.create — plan snapshot", () => {
   });
 
   it("stores null snapshot fields and skips the port when no planId is given", async () => {
-    await svc.create({ leadId: "lead-1", customPrice: 500 } as any, "rep-1", "SALES_REP");
+    await svc.create("ws-1", { leadId: "lead-1", customPrice: 500 } as any, "rep-1", "REP");
 
     expect(provisioning.describePlan).not.toHaveBeenCalled();
     expect(prisma.leadOffer.create).toHaveBeenCalledWith(
@@ -67,7 +79,7 @@ describe("MarketingOffersService.create — plan snapshot", () => {
   it("stores nulls when the port cannot resolve the plan", async () => {
     provisioning.describePlan.mockResolvedValue(null);
 
-    await svc.create({ leadId: "lead-1", planId: "unknown" } as any, "rep-1", "SALES_REP");
+    await svc.create("ws-1", { leadId: "lead-1", planId: "unknown" } as any, "rep-1", "REP");
 
     expect(prisma.leadOffer.create).toHaveBeenCalledWith(
       expect.objectContaining({

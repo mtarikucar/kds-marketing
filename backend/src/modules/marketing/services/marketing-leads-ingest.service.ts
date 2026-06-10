@@ -24,47 +24,57 @@ export interface IngestResult {
 export class MarketingLeadsIngestService {
   private readonly logger = new Logger(MarketingLeadsIngestService.name);
 
-  // Cached after first lookup. The sentinel user is created by a one-off
-  // migration + seeder, so its id is effectively immutable per deploy.
-  private sentinelId: string | null = null;
+  // Cached per workspace after first lookup. The SYSTEM sentinel is
+  // created once per workspace at provisioning time, so its id is
+  // effectively immutable per deploy.
+  private readonly sentinelIdByWorkspace = new Map<string, string>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly autoAssigner: LeadAutoAssignerService,
   ) {}
 
-  private async resolveSentinel(): Promise<string> {
-    if (this.sentinelId) return this.sentinelId;
-    const row = await this.prisma.marketingUser.findUnique({
-      where: { email: 'ai-research@system.local' },
+  private async resolveSentinel(workspaceId: string): Promise<string> {
+    const cached = this.sentinelIdByWorkspace.get(workspaceId);
+    if (cached) return cached;
+    const row = await this.prisma.marketingUser.findFirst({
+      where: { workspaceId, role: 'SYSTEM' },
       select: { id: true },
     });
     if (!row) {
       throw new InternalServerErrorException(
-        'AI research sentinel user missing — run platform seed',
+        'AI research sentinel user missing for workspace — run platform seed',
       );
     }
-    this.sentinelId = row.id;
+    this.sentinelIdByWorkspace.set(workspaceId, row.id);
     return row.id;
   }
 
-  async ingest(dto: IngestLeadsDto): Promise<IngestResult> {
-    const sentinelId = await this.resolveSentinel();
+  async ingest(workspaceId: string, dto: IngestLeadsDto): Promise<IngestResult> {
+    const sentinelId = await this.resolveSentinel(workspaceId);
 
     let created = 0;
     let skipped = 0;
     const errors: Array<{ externalRef: string; error: string }> = [];
+
+    // Dedup in one scoped round-trip: externalRef is unique per
+    // workspace now ([workspaceId, externalRef]), so the lookup must
+    // never collapse refs across workspaces.
+    const existingRows = await this.prisma.lead.findMany({
+      where: {
+        workspaceId,
+        externalRef: { in: dto.leads.map((c) => c.externalRef) },
+      },
+      select: { externalRef: true },
+    });
+    const existingRefs = new Set(existingRows.map((r) => r.externalRef));
 
     // Sequential — daily routine is bounded at 50 rows so latency is fine,
     // and we avoid hammering the connection pool with a parallel burst
     // alongside whatever else the marketing module is doing.
     for (const c of dto.leads) {
       try {
-        const existing = await this.prisma.lead.findUnique({
-          where: { externalRef: c.externalRef },
-          select: { id: true },
-        });
-        if (existing) {
+        if (existingRefs.has(c.externalRef)) {
           skipped++;
           continue;
         }
@@ -72,10 +82,11 @@ export class MarketingLeadsIngestService {
           // Pick an owner via the configured distribution strategy
           // before insert so the row is born already assigned — keeps
           // the "atanmamış lead" dashboard count honest.
-          const autoOwner = await this.autoAssigner.pickAssignee(tx);
+          const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
           const lead = await tx.lead.create({
             data: {
               ...this.mapToLeadData(c),
+              workspaceId,
               ...(autoOwner ? { assignedToId: autoOwner } : {}),
             },
           });

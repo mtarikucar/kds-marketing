@@ -29,22 +29,22 @@ export class MarketingTasksController {
 
   @Post()
   create(@Body() dto: CreateTaskDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.create(dto, user.id);
+    return this.tasksService.create(user.workspaceId, dto, user.id);
   }
 
   @Get()
   findAll(@Query() filter: TaskFilterDto, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.findAll(filter, user.id, user.role);
+    return this.tasksService.findAll(user.workspaceId, filter, user.id, user.role);
   }
 
   @Get('today')
   findToday(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.findToday(user.id, user.role);
+    return this.tasksService.findToday(user.workspaceId, user.id, user.role);
   }
 
   @Get('overdue')
   findOverdue(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.findOverdue(user.id, user.role);
+    return this.tasksService.findOverdue(user.workspaceId, user.id, user.role);
   }
 
   @Get('calendar')
@@ -56,12 +56,12 @@ export class MarketingTasksController {
     if (!dateFrom || !dateTo || isNaN(Date.parse(dateFrom)) || isNaN(Date.parse(dateTo))) {
       throw new BadRequestException('Valid dateFrom and dateTo query parameters are required');
     }
-    return this.tasksService.findCalendar(dateFrom, dateTo, user.id, user.role);
+    return this.tasksService.findCalendar(user.workspaceId, dateFrom, dateTo, user.id, user.role);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.findOne(id, user.id, user.role);
+    return this.tasksService.findOne(user.workspaceId, id, user.id, user.role);
   }
 
   @Patch(':id')
@@ -70,17 +70,17 @@ export class MarketingTasksController {
     @Body() dto: UpdateTaskDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
-    return this.tasksService.update(id, dto, user.id, user.role);
+    return this.tasksService.update(user.workspaceId, id, dto, user.id, user.role);
   }
 
   @Patch(':id/complete')
   complete(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.complete(id, user.id, user.role);
+    return this.tasksService.complete(user.workspaceId, id, user.id, user.role);
   }
 
   @Delete(':id')
-  @MarketingRoles('SALES_MANAGER')
+  @MarketingRoles('MANAGER')
   delete(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.tasksService.delete(id, user.id, user.role);
+    return this.tasksService.delete(user.workspaceId, id, user.id, user.role);
   }
 }

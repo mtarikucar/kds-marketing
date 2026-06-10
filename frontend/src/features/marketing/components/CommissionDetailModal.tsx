@@ -87,7 +87,7 @@ interface Props {
 export default function CommissionDetailModal({ commissionId, onClose }: Props) {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'SALES_MANAGER';
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery<CommissionDetail>({

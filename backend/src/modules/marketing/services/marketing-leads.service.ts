@@ -12,6 +12,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EmailService } from '../../../common/services/email.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from './lead-auto-assigner.service';
+import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -60,16 +61,18 @@ export class MarketingLeadsService {
     private readonly outbox: OutboxService,
   ) {}
 
-  async create(dto: CreateLeadDto, userId: string, userRole: string) {
+  async create(workspaceId: string, dto: CreateLeadDto, userId: string, userRole: string) {
     // Idempotency: refuse to create a second OPEN lead for the same
     // email. Two reps logging the same prospect was the actual
     // user-pain (no unique constraint at the DB level because the
     // schema needs to allow a customer to come back later as a
     // separate opportunity, but blocking duplicates while the first
-    // is still in pipeline is the right tradeoff).
+    // is still in pipeline is the right tradeoff). Scoped: another
+    // workspace tracking the same prospect is not a duplicate here.
     if (dto.email) {
       const existing = await this.prisma.lead.findFirst({
         where: {
+          workspaceId,
           email: dto.email,
           status: { notIn: ['WON', 'LOST'] },
         },
@@ -87,17 +90,17 @@ export class MarketingLeadsService {
 
     // Resolve the owner once, in this priority:
     //   1. explicit dto.assignedToId (manager picks a rep at creation)
-    //   2. for SALES_REP creators → themselves (they own what they enter)
+    //   2. for REP creators → themselves (they own what they enter)
     //   3. auto-assigner (round-robin / least-loaded) when configured
     //   4. unassigned (null) — falls into the lead pool for the manager
     //
-    // SALES_REP guard: assigning to another rep is a manager-only
+    // REP guard: assigning to another rep is a manager-only
     // action — `PATCH /leads/:id/assign` enforces that, so we have to
     // enforce it here too. Without this check a rep could POST a new
     // lead with `assignedToId` set to another rep and bypass the patch
     // guard entirely. Self-assignment is fine and matches priority 2.
     if (
-      userRole === 'SALES_REP' &&
+      userRole === 'REP' &&
       dto.assignedToId &&
       dto.assignedToId !== userId
     ) {
@@ -105,16 +108,24 @@ export class MarketingLeadsService {
     }
     let resolvedAssignee: string | null = null;
     if (dto.assignedToId) {
+      // Cross-reference must stay in-workspace: a manager pasting a rep
+      // id from another workspace must not silently leak the lead there.
+      const rep = await this.prisma.marketingUser.findFirst({
+        where: { id: dto.assignedToId, workspaceId },
+        select: { id: true },
+      });
+      if (!rep) throw new NotFoundException('Sales rep not found');
       resolvedAssignee = dto.assignedToId;
-    } else if (userRole === 'SALES_REP') {
+    } else if (userRole === 'REP') {
       resolvedAssignee = userId;
     } else {
-      resolvedAssignee = await this.autoAssigner.pickAssignee();
+      resolvedAssignee = await this.autoAssigner.pickAssignee(workspaceId);
     }
 
     return this.prisma.lead.create({
       data: {
         ...dto,
+        workspaceId,
         nextFollowUp: dto.nextFollowUp ? new Date(dto.nextFollowUp) : undefined,
         assignedToId: resolvedAssignee,
       },
@@ -126,14 +137,14 @@ export class MarketingLeadsService {
     });
   }
 
-  async findAll(filter: LeadFilterDto, userId: string, userRole: string) {
+  async findAll(workspaceId: string, filter: LeadFilterDto, userId: string, userRole: string) {
     const page = filter.page || 1;
     const limit = filter.limit || 20;
     const skip = (page - 1) * limit;
 
     const where: Prisma.LeadWhereInput = {};
 
-    if (userRole === 'SALES_REP') {
+    if (userRole === 'REP') {
       // Reps always see only their leads — assignmentStatus has no
       // effect on their scope ("mine" is implicit for them).
       where.assignedToId = userId;
@@ -187,9 +198,11 @@ export class MarketingLeadsService {
       orderBy.createdAt = 'desc';
     }
 
+    // workspaceId is spread LAST so no filter combination can ever
+    // widen the query beyond the caller's workspace.
     const [leads, total] = await Promise.all([
       this.prisma.lead.findMany({
-        where,
+        where: { ...where, workspaceId },
         orderBy,
         skip,
         take: limit,
@@ -202,7 +215,7 @@ export class MarketingLeadsService {
           },
         },
       }),
-      this.prisma.lead.count({ where }),
+      this.prisma.lead.count({ where: { ...where, workspaceId } }),
     ]);
 
     return {
@@ -216,9 +229,9 @@ export class MarketingLeadsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
-    const lead = await this.prisma.lead.findUnique({
-      where: { id },
+  async findOne(workspaceId: string, id: string, userId: string, userRole: string) {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, workspaceId },
       include: {
         assignedTo: {
           select: { id: true, firstName: true, lastName: true, email: true, phone: true },
@@ -261,19 +274,20 @@ export class MarketingLeadsService {
       throw new NotFoundException('Lead not found');
     }
 
-    if (userRole === 'SALES_REP' && lead.assignedToId !== userId) {
+    if (userRole === 'REP' && lead.assignedToId !== userId) {
       throw new ForbiddenException('You can only view your own leads');
     }
 
     return lead;
   }
 
-  async update(id: string, dto: UpdateLeadDto, userId: string, userRole: string) {
-    const lead = await this.prisma.lead.findUnique({ where: { id } });
+  async update(workspaceId: string, id: string, dto: UpdateLeadDto, userId: string, userRole: string) {
+    // Workspace-safe id mutation: scoped pre-check, then update by id.
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) {
       throw new NotFoundException('Lead not found');
     }
-    if (userRole === 'SALES_REP' && lead.assignedToId !== userId) {
+    if (userRole === 'REP' && lead.assignedToId !== userId) {
       throw new ForbiddenException('You can only update your own leads');
     }
 
@@ -310,16 +324,17 @@ export class MarketingLeadsService {
   }
 
   async updateStatus(
+    workspaceId: string,
     id: string,
     status: string,
     lostReason: string | undefined,
     userId: string,
     userRole: string,
   ) {
-    const lead = await this.prisma.lead.findUnique({ where: { id } });
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) throw new NotFoundException('Lead not found');
 
-    if (userRole === 'SALES_REP' && lead.assignedToId !== userId) {
+    if (userRole === 'REP' && lead.assignedToId !== userId) {
       throw new ForbiddenException('You can only update your own leads');
     }
 
@@ -350,7 +365,7 @@ export class MarketingLeadsService {
     // then last-writer-wins the status — silently skipping any state
     // that was supposed to be sequential.
     const claim = await this.prisma.lead.updateMany({
-      where: { id, status: lead.status },
+      where: { id, workspaceId, status: lead.status },
       data: {
         status,
         ...(status === 'LOST' && lostReason ? { lostReason } : {}),
@@ -380,6 +395,7 @@ export class MarketingLeadsService {
     if (status === 'LOST') {
       await this.prisma.marketingTask.updateMany({
         where: {
+          workspaceId,
           leadId: id,
           status: { in: ['PENDING', 'IN_PROGRESS'] },
         },
@@ -393,6 +409,7 @@ export class MarketingLeadsService {
     if (updatedLead.assignedToId && updatedLead.assignedToId !== userId) {
       await this.prisma.marketingNotification.create({
         data: {
+          workspaceId,
           userId: updatedLead.assignedToId,
           type: 'INACTIVE_LEAD',
           title: 'Lead status updated',
@@ -406,12 +423,13 @@ export class MarketingLeadsService {
   }
 
   async assign(
+    workspaceId: string,
     id: string,
     assignedToId: string | null | undefined,
     actorId: string,
   ) {
-    const lead = await this.prisma.lead.findUnique({
-      where: { id },
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, workspaceId },
       include: {
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
       },
@@ -428,13 +446,15 @@ export class MarketingLeadsService {
       | { id: string; role: string; status: string; firstName: string; lastName: string }
       | null = null;
     if (target) {
-      rep = await this.prisma.marketingUser.findUnique({
-        where: { id: target },
+      // Scoped cross-reference: the target rep must live in the same
+      // workspace as the lead, or the row simply "does not exist" here.
+      rep = await this.prisma.marketingUser.findFirst({
+        where: { id: target, workspaceId },
         select: { id: true, role: true, status: true, firstName: true, lastName: true },
       });
       if (!rep) throw new NotFoundException('Sales rep not found');
-      if (rep.role !== 'SALES_REP') {
-        throw new BadRequestException('Target must be a SALES_REP');
+      if (rep.role !== 'REP') {
+        throw new BadRequestException('Target must be a REP');
       }
       if (rep.status !== 'ACTIVE') {
         throw new BadRequestException('Target rep is not active');
@@ -492,6 +512,7 @@ export class MarketingLeadsService {
     if (target && target !== actorId) {
       await this.prisma.marketingNotification.create({
         data: {
+          workspaceId,
           userId: target,
           type: 'FOLLOW_UP_REMINDER',
           title: 'New lead assigned to you',
@@ -512,6 +533,7 @@ export class MarketingLeadsService {
    * manager dumps 50 leads at once. `null` target unassigns the batch.
    */
   async bulkAssign(
+    workspaceId: string,
     leadIds: string[],
     assignedToId: string | null | undefined,
     actorId: string,
@@ -526,13 +548,14 @@ export class MarketingLeadsService {
       | { id: string; role: string; status: string; firstName: string; lastName: string }
       | null = null;
     if (target) {
-      rep = await this.prisma.marketingUser.findUnique({
-        where: { id: target },
+      // Scoped cross-reference — same reasoning as single assign().
+      rep = await this.prisma.marketingUser.findFirst({
+        where: { id: target, workspaceId },
         select: { id: true, role: true, status: true, firstName: true, lastName: true },
       });
       if (!rep) throw new NotFoundException('Sales rep not found');
-      if (rep.role !== 'SALES_REP') {
-        throw new BadRequestException('Target must be a SALES_REP');
+      if (rep.role !== 'REP') {
+        throw new BadRequestException('Target must be a REP');
       }
       if (rep.status !== 'ACTIVE') {
         throw new BadRequestException('Target rep is not active');
@@ -541,8 +564,9 @@ export class MarketingLeadsService {
 
     // Fetch all leads (with current owner) in one round-trip so we can
     // diff each one and write a meaningful per-lead activity entry.
+    // Scoped — ids from another workspace fall out as `skipped`.
     const leads = await this.prisma.lead.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, workspaceId },
       include: {
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
       },
@@ -562,7 +586,7 @@ export class MarketingLeadsService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.lead.updateMany({
-        where: { id: { in: changing.map((l) => l.id) } },
+        where: { id: { in: changing.map((l) => l.id) }, workspaceId },
         data: { assignedToId: target },
       });
       await tx.leadActivity.createMany({
@@ -599,6 +623,7 @@ export class MarketingLeadsService {
       if (target && target !== actorId) {
         await tx.marketingNotification.create({
           data: {
+            workspaceId,
             userId: target,
             type: 'FOLLOW_UP_REMINDER',
             title: `${changing.length} new lead${changing.length === 1 ? '' : 's'} assigned to you`,
@@ -627,19 +652,22 @@ export class MarketingLeadsService {
    * finalizes its own state: claim the lead → WON, accept the offer, cancel
    * open tasks, stamp the SIGNUP commission, and emit marketing.lead.converted.
    */
-  async convert(id: string, dto: ConvertLeadDto, userId: string) {
-    const lead = await this.prisma.lead.findUnique({ where: { id } });
+  async convert(workspaceId: string, id: string, dto: ConvertLeadDto, userId: string) {
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.convertedTenantId) {
       throw new ConflictException('Lead already converted');
     }
 
     // Resolve the offer (marketing-owned) to derive the plan + offer overrides.
+    // Scoped: an offer id from another workspace must not feed this convert.
     // The plan itself is validated + read by CORE inside the provisioning port;
     // marketing no longer touches SubscriptionPlan/Tenant/User/Subscription.
-    let offer: Awaited<ReturnType<typeof this.prisma.leadOffer.findUnique>> | null = null;
+    let offer: Awaited<ReturnType<typeof this.prisma.leadOffer.findFirst>> | null = null;
     if (dto.offerId) {
-      offer = await this.prisma.leadOffer.findUnique({ where: { id: dto.offerId } });
+      offer = await this.prisma.leadOffer.findFirst({
+        where: { id: dto.offerId, workspaceId },
+      });
       if (!offer || offer.leadId !== id) {
         throw new BadRequestException('Offer not found for this lead');
       }
@@ -701,7 +729,7 @@ export class MarketingLeadsService {
       // but only the first updateMany here flips convertedTenantId. The loser
       // gets count=0 and aborts with 409; no double commission, one tenant.
       const claim = await tx.lead.updateMany({
-        where: { id, convertedTenantId: null },
+        where: { id, workspaceId, convertedTenantId: null },
         data: {
           status: 'WON',
           convertedTenantId: provision.tenantId,
@@ -723,6 +751,7 @@ export class MarketingLeadsService {
       // Cancel any open tasks attached to this lead — the deal is closed.
       await tx.marketingTask.updateMany({
         where: {
+          workspaceId,
           leadId: id,
           status: { in: ['PENDING', 'IN_PROGRESS'] },
         },
@@ -732,6 +761,7 @@ export class MarketingLeadsService {
       if (lead.assignedToId) {
         const commission = await tx.commission.create({
           data: {
+            workspaceId,
             amount: commissionAmount,
             type: 'SIGNUP',
             status: 'PENDING',
@@ -827,6 +857,17 @@ export class MarketingLeadsService {
    * by an advisory-locked hourly cron (MarketingSchedulerService).
    */
   async reconcileOrphanProvisionedConversions(): Promise<{ reconciled: number }> {
+    // Cron — no user context. Provisioned conversions only exist on the
+    // single core-integrated workspace, so resolve it once up front and
+    // scope every lookup/finalize below to it.
+    const workspaceId = await findCoreIntegratedWorkspaceId(this.prisma);
+    if (!workspaceId) {
+      this.logger.warn(
+        'No core-integrated workspace — skipping orphan-conversion reconciliation sweep',
+      );
+      return { reconciled: 0 };
+    }
+
     const nowMs = Date.now();
     // Grace window: ignore ledger rows younger than 10 min (a convert may be
     // mid-flight); look back 24h (older orphans should already be handled).
@@ -837,8 +878,8 @@ export class MarketingLeadsService {
 
     let reconciled = 0;
     for (const rec of records) {
-      const lead = await this.prisma.lead.findUnique({
-        where: { id: rec.leadId },
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: rec.leadId, workspaceId },
         select: { id: true, assignedToId: true, convertedTenantId: true },
       });
       if (!lead || lead.convertedTenantId) continue; // gone or already finalized
@@ -851,6 +892,7 @@ export class MarketingLeadsService {
 
       try {
         await this.finalizeReconciledConversion(
+          workspaceId,
           lead.id,
           lead.assignedToId,
           rec.tenantId,
@@ -873,6 +915,7 @@ export class MarketingLeadsService {
 
   /** Marketing-only finalization for a reconciled orphan (claim + commission + event). */
   private async finalizeReconciledConversion(
+    workspaceId: string,
     leadId: string,
     assignedToId: string | null,
     tenantId: string,
@@ -882,14 +925,14 @@ export class MarketingLeadsService {
     const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     await this.prisma.$transaction(async (tx) => {
       const claim = await tx.lead.updateMany({
-        where: { id: leadId, convertedTenantId: null },
+        where: { id: leadId, workspaceId, convertedTenantId: null },
         data: { status: 'WON', convertedTenantId: tenantId, convertedAt: now },
       });
       if (claim.count === 0) {
         throw new ConflictException('Lead was finalized concurrently');
       }
       await tx.marketingTask.updateMany({
-        where: { leadId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+        where: { workspaceId, leadId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
         data: { status: 'CANCELLED' },
       });
 
@@ -897,6 +940,7 @@ export class MarketingLeadsService {
       if (assignedToId) {
         const commission = await tx.commission.create({
           data: {
+            workspaceId,
             amount: commissionAmount,
             type: 'SIGNUP',
             status: 'PENDING',
@@ -940,12 +984,13 @@ export class MarketingLeadsService {
     });
   }
 
-  async delete(id: string) {
-    const lead = await this.prisma.lead.findUnique({ where: { id } });
+  async delete(workspaceId: string, id: string) {
+    // Workspace-safe id mutation: scoped pre-check, then update by id.
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) throw new NotFoundException('Lead not found');
 
     await this.prisma.lead.update({
-      where: { id },
+      where: { id: lead.id },
       data: { status: 'LOST', lostReason: 'archived_by_manager' },
     });
     return { message: 'Lead archived successfully' };
