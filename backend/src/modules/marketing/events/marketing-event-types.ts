@@ -19,6 +19,13 @@ export const MarketingEventTypes = {
   // HardwareQuoteConsumer, which creates + auto-assigns the lead — so the
   // core module never writes the marketing-owned `leads` table directly.
   HardwareQuoteRequested: "marketing.lead.hardware_quote.v1",
+
+  // Phase F P2 — omnichannel conversations. ConversationMessageReceived is the
+  // inbound trigger the Conversation AI engine (P2) and workflow triggers (P3)
+  // both subscribe to; MessageSent is emitted after a successful outbound send.
+  ConversationStarted: "marketing.conversation.started.v1",
+  ConversationMessageReceived: "marketing.conversation.message.received.v1",
+  ConversationMessageSent: "marketing.conversation.message.sent.v1",
 } as const;
 
 export type MarketingEventType =
@@ -84,5 +91,41 @@ export interface MarketingInstallationCompletedPayload {
   jobId: string;
   tenantId: string;
   crewId: string | null;
+  occurredAt: string;
+}
+
+/**
+ * An inbound customer message landed on a conversation. The engine re-reads
+ * conversation/channel/agent/lead for fresh state, so the payload is minimal;
+ * `text` + `channelType` are carried so workflow filters can match without an
+ * extra read. `workspaceId` is the scope anchor (marketing events often have a
+ * null core `tenantId`).
+ */
+export interface MarketingConversationMessageReceivedPayload {
+  workspaceId: string;
+  conversationId: string;
+  channelId: string;
+  channelType: string;
+  leadId: string;
+  messageId: string;
+  text: string;
+  occurredAt: string;
+}
+
+export interface MarketingConversationStartedPayload {
+  workspaceId: string;
+  conversationId: string;
+  channelId: string;
+  channelType: string;
+  leadId: string;
+  occurredAt: string;
+}
+
+export interface MarketingConversationMessageSentPayload {
+  workspaceId: string;
+  conversationId: string;
+  channelId: string;
+  messageId: string;
+  authorType: string; // AI | AGENT
   occurredAt: string;
 }

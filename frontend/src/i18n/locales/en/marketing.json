@@ -107,7 +107,9 @@
     "billing": "Billing",
     "aiGroup": "AI",
     "agentStudio": "Agent Studio",
-    "knowledgeBase": "Knowledge Base"
+    "knowledgeBase": "Knowledge Base",
+    "inbox": "Inbox",
+    "channels": "Channels"
   },
   "common": {
     "save": "Save",
@@ -701,5 +703,42 @@
     "updated": "updated",
     "toggleArchive": "Archive / restore",
     "empty": "No documents yet — add the facts your AI should answer from."
+  },
+  "inbox": {
+    "open": "Open",
+    "closed": "Closed",
+    "unknown": "Unknown",
+    "aiOff": "AI off",
+    "empty": "No conversations yet.",
+    "selectPrompt": "Select a conversation to view the thread.",
+    "resumeAi": "Resume AI",
+    "pauseAi": "Pause AI",
+    "close": "Close",
+    "failed": "failed",
+    "replyPlaceholder": "Type a reply… (this pauses the AI)",
+    "context": "Lead",
+    "openLead": "Open lead →",
+    "noLead": "Select a conversation.",
+    "sendFailed": "Send failed"
+  },
+  "channels": {
+    "title": "Channels",
+    "subtitle": "Connect where your customers message you — web chat, WhatsApp, SMS, Instagram, Messenger. Pick which AI agent answers on each.",
+    "new": "Connect a channel",
+    "type": "Type",
+    "name": "Name",
+    "agent": "Answering agent",
+    "noAgent": "— none (manual only) —",
+    "webchatHint": "No credentials needed — a public embed snippet is generated after you save.",
+    "saved": "Channel saved",
+    "saveFailed": "Save failed",
+    "verifyOk": "Channel verified ✓",
+    "verifyFail": "Verification failed — check credentials",
+    "verify": "Verify",
+    "secretsSet": "credentials set",
+    "public": "public web chat",
+    "noSecrets": "no credentials yet",
+    "embed": "Embed snippet (paste before </body>)",
+    "empty": "No channels yet — connect one so customers can message you."
   }
 }

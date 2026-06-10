@@ -107,7 +107,9 @@
     "billing": "Hisob-kitob",
     "aiGroup": "AI",
     "agentStudio": "Agent studiyasi",
-    "knowledgeBase": "Bilimlar bazasi"
+    "knowledgeBase": "Bilimlar bazasi",
+    "inbox": "Kiruvchi",
+    "channels": "Kanallar"
   },
   "common": {
     "save": "Save",
@@ -697,5 +699,42 @@
     "updated": "yangilandi",
     "toggleArchive": "Arxivlash / tiklash",
     "empty": "Hali hujjat yoʻq — AI javob beradigan faktlarni qoʻshing."
+  },
+  "inbox": {
+    "open": "Ochiq",
+    "closed": "Yopiq",
+    "unknown": "Nomaʼlum",
+    "aiOff": "AI oʻchiq",
+    "empty": "Hali suhbatlar yoʻq.",
+    "selectPrompt": "Suhbatni koʻrish uchun birini tanlang.",
+    "resumeAi": "AIni davom ettirish",
+    "pauseAi": "AIni toʻxtatish",
+    "close": "Yopish",
+    "failed": "xato",
+    "replyPlaceholder": "Javob yozing… (AI toʻxtatiladi)",
+    "context": "Lid",
+    "openLead": "Lidni ochish →",
+    "noLead": "Suhbatni tanlang.",
+    "sendFailed": "Yuborib boʻlmadi"
+  },
+  "channels": {
+    "title": "Kanallar",
+    "subtitle": "Mijozlar sizga yozadigan joylarni ulang — veb-chat, WhatsApp, SMS, Instagram, Messenger. Har birida qaysi AI agent javob berishini tanlang.",
+    "new": "Kanal ulash",
+    "type": "Turi",
+    "name": "Nomi",
+    "agent": "Javob beruvchi agent",
+    "noAgent": "— yoʻq (faqat qoʻlda) —",
+    "webchatHint": "Maʼlumotlar kerak emas — saqlagandan soʻng ommaviy joylashtirish kodi yaratiladi.",
+    "saved": "Kanal saqlandi",
+    "saveFailed": "Saqlab boʻlmadi",
+    "verifyOk": "Kanal tasdiqlandi ✓",
+    "verifyFail": "Tasdiqlash muvaffaqiyatsiz — maʼlumotlarni tekshiring",
+    "verify": "Tekshirish",
+    "secretsSet": "kiritilgan maʼlumotlar",
+    "public": "ommaviy veb-chat",
+    "noSecrets": "hali maʼlumot yoʻq",
+    "embed": "Joylashtirish kodi (</body> oldidan joylang)",
+    "empty": "Hali kanal yoʻq — mijozlar yozishi uchun bittasini ulang."
   }
 }

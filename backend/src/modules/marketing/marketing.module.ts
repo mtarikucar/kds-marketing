@@ -80,6 +80,27 @@ import { KnowledgeService } from './ai/knowledge.service';
 import { AgentProfileService } from './ai/agent-profile.service';
 import { ContentAiService } from './ai/content-ai.service';
 
+// Phase F P2 — omnichannel conversations + web-chat + Conversation AI.
+import { MarketingConversationsController } from './controllers/marketing-conversations.controller';
+import { MarketingChannelsController } from './controllers/marketing-channels.controller';
+import { WebchatPublicController } from './controllers/webchat-public.controller';
+import { MetaWebhookController } from './controllers/meta-webhook.controller';
+import { NetgsmPublicController } from './controllers/netgsm-public.controller';
+import { SseTokenGuard } from './guards/sse-token.guard';
+import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
+import { MessageQuotaService } from './channels/message-quota.service';
+import { ChannelsService } from './channels/channels.service';
+import { ConversationsService } from './channels/conversations.service';
+import { ConversationIngressService } from './channels/conversation-ingress.service';
+import { ConversationStreamService } from './channels/conversation-stream.service';
+import { MessageSenderService } from './channels/message-sender.service';
+import { ConversationAiEngineService } from './channels/conversation-ai-engine.service';
+import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
+import { WebchatAdapter } from './channels/adapters/webchat.adapter';
+import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
+import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
+import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-messaging.adapter';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -141,6 +162,12 @@ import { ContentAiService } from './ai/content-ai.service';
     MarketingResearchController,
     MarketingBillingController,
     MarketingAiController,
+    // Phase F P2 — inbox + channel config (workspace) and the public webhooks.
+    MarketingConversationsController,
+    MarketingChannelsController,
+    WebchatPublicController,
+    MetaWebhookController,
+    NetgsmPublicController,
   ],
   providers: [
     // Services
@@ -195,6 +222,24 @@ import { ContentAiService } from './ai/content-ai.service';
     KnowledgeService,
     AgentProfileService,
     ContentAiService,
+    // Phase F P2 — omnichannel: adapter registry + adapters (self-register on
+    // init), message quota, the conversation services, and the AI engine
+    // (subscribes to inbound events + registers its ScheduledJob handlers).
+    ChannelAdapterRegistry,
+    WebchatAdapter,
+    WhatsappCloudAdapter,
+    NetgsmSmsAdapter,
+    MessengerAdapter,
+    InstagramAdapter,
+    MessageQuotaService,
+    ChannelsService,
+    ConversationStreamService,
+    MessageSenderService,
+    ConversationIngressService,
+    ConversationsService,
+    ConversationAiEngineService,
+    PublicChannelResolverService,
+    SseTokenGuard,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
