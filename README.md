@@ -1,11 +1,33 @@
-# KDS Marketing Service
+# KDS Marketing — multi-tenant AI lead-generation platform
 
-Standalone marketing service + panel, physically extracted from the Restaurant POS (HummyTummy) monorepo per the Phase-5 split runbook. It owns the full marketing bounded context: lead pipeline, activities, tasks, offers, commissions, sales calls (click-to-dial), installation ops, sales targets, and the marketing team's own auth realm.
+A standalone, product-agnostic SaaS (originally extracted from the
+Restaurant POS monorepo, then generalized): customer **workspaces** sign up,
+describe WHO they sell to (research profiles), and a nightly Claude research
+routine fills their pipeline with evidence-backed leads — metered by a daily
+quota that their **package** (TRIAL/STARTER/GROWTH/SCALE + boosts) decides.
+On top sits the full sales workbench: lead pipeline, activities, tasks,
+offers, commissions, click-to-call, installation ops, sales targets.
+
+Three realms, three credentials:
+- **Workspace users** (OWNER ⊃ MANAGER ⊃ REP) — JWT with a `wsp` claim;
+  every query is workspace-scoped (enforced by an architecture-fitness test)
+- **Platform operators** (`/platform/*`) — separate JWT realm; workspace
+  administration + manual bank-transfer approvals
+- **Machine principals** — per-workspace ingest tokens (sha256 at rest),
+  the research routine's `RESEARCH_ROUTINE_TOKEN`, core's
+  `INTERNAL_SERVICE_TOKEN`
+
+Payments: PayTR (TRY, iframe) · Stripe (USD, redirect) · manual bank
+transfer (operator-approved) — all settling through one idempotent path.
+
+Ops docs: `ops/CUTOVER.md` (monorepo → standalone switch),
+`ops/research-routine-prompt.md` (the routine's canonical prompt).
 
 ```
 kds-marketing/
 ├── backend/            NestJS service (port 3100 on the host; core owns 3000. Global prefix /api)
-├── frontend/           React + Vite marketing panel (routes under /marketing/*)
+├── frontend/           React + Vite panel (workspace console at /, platform console at /platform)
+├── ops/                cutover runbook + routine prompt
 └── docker-compose.yml  postgres + backend + frontend
 ```
 
