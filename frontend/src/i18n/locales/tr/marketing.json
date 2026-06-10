@@ -110,7 +110,8 @@
     "knowledgeBase": "Bilgi Bankası",
     "inbox": "Gelen Kutusu",
     "channels": "Kanallar",
-    "automations": "Otomasyonlar"
+    "automations": "Otomasyonlar",
+    "campaigns": "Kampanyalar"
   },
   "common": {
     "save": "Kaydet",
@@ -761,5 +762,32 @@
     "drafted": "Taslak hazır — gözden geçir ve kaydet",
     "draftFailed": "Taslak oluşturulamadı",
     "empty": "Henüz otomasyon yok — birini anlat, AI taslaklasın."
+  },
+  "campaigns": {
+    "title": "Kampanyalar",
+    "subtitle": "Lead'lerinizin filtrelenmiş bir dilimine e-posta, SMS veya WhatsApp gönderin. Opt-out'lar ve abonelikten çıkma bağlantısı sizin için halledilir.",
+    "new": "Yeni kampanya",
+    "name": "Ad",
+    "channel": "Kanal",
+    "audience": "Hedef kitle (tüm kurallara uyan lead'ler; boş = opt-in olan herkes)",
+    "field": "alan",
+    "value": "değer",
+    "addRule": "Kural ekle",
+    "aiGoal": "Hedef — örn. %20 bahar indirimi duyur",
+    "write": "Yaz",
+    "subject": "Konu",
+    "body": "Mesaj",
+    "saved": "Kampanya kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "composed": "Taslak hazır",
+    "composeFailed": "Yazılamadı",
+    "launched": "Gönderildi",
+    "launchFailed": "Başlatılamadı",
+    "sent": "gönderildi",
+    "opened": "açıldı",
+    "clicked": "tıklandı",
+    "unsub": "abonelikten çıktı",
+    "launch": "Başlat",
+    "empty": "Henüz kampanya yok — bir tane oluşturun, metni AI yazsın."
   }
 }

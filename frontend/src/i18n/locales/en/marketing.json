@@ -110,7 +110,8 @@
     "knowledgeBase": "Knowledge Base",
     "inbox": "Inbox",
     "channels": "Channels",
-    "automations": "Automations"
+    "automations": "Automations",
+    "campaigns": "Campaigns"
   },
   "common": {
     "save": "Save",
@@ -761,5 +762,32 @@
     "drafted": "Draft ready — review and save",
     "draftFailed": "Could not draft",
     "empty": "No automations yet — describe one and let AI draft it."
+  },
+  "campaigns": {
+    "title": "Campaigns",
+    "subtitle": "Blast email, SMS or WhatsApp to a filtered slice of your leads. Opt-outs and an unsubscribe link are handled for you.",
+    "new": "New campaign",
+    "name": "Name",
+    "channel": "Channel",
+    "audience": "Audience (leads matching all rules; empty = everyone opted-in)",
+    "field": "field",
+    "value": "value",
+    "addRule": "Add rule",
+    "aiGoal": "Goal — e.g. announce a 20% spring discount",
+    "write": "Write",
+    "subject": "Subject",
+    "body": "Message",
+    "saved": "Campaign saved",
+    "saveFailed": "Save failed",
+    "composed": "Draft ready",
+    "composeFailed": "Compose failed",
+    "launched": "Launched",
+    "launchFailed": "Launch failed",
+    "sent": "sent",
+    "opened": "opened",
+    "clicked": "clicked",
+    "unsub": "unsub",
+    "launch": "Launch",
+    "empty": "No campaigns yet — create one and let AI write the copy."
   }
 }
