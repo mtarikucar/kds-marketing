@@ -116,7 +116,8 @@
     "booking": "Band qilish",
     "reviews": "Sharhlar",
     "voice": "Ovozli AI",
-    "invoices": "Hisob-fakturalar"
+    "invoices": "Hisob-fakturalar",
+    "branding": "Brend"
   },
   "common": {
     "save": "Save",
@@ -897,5 +898,21 @@
     "send": "Yuborish / havolani nusxalash",
     "markPaid": "To'langan deb belgilash",
     "empty": "Hali hisob-faktura yo'q."
+  },
+  "branding": {
+    "title": "Brend",
+    "subtitle": "Mijozga yo'naltirilgan yuzalarda brendingiz — voronka sahifalari va veb-chat vidjeti.",
+    "brandName": "Brend nomi",
+    "accent": "Urg'u rangi",
+    "logo": "Logotip",
+    "uploadLogo": "Logotip yuklash",
+    "uploading": "Yuklanmoqda…",
+    "logoHint": "PNG, JPEG, WEBP yoki SVG, 1 MB dan kichik.",
+    "saved": "Brend saqlandi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "logoUploaded": "Logotip yuklandi",
+    "logoFailed": "Yuklab bo'lmadi",
+    "previewName": "Brendingiz",
+    "preview": "Brendingiz ommaviy sahifalarda va chat vidjetida shunday ko'rinadi."
   }
 }

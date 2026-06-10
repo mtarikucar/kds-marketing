@@ -69,6 +69,8 @@ const OWNED_DELEGATES = [
   // P9 (GoHighLevel parity): end-customer invoicing.
   'invoice',
   'workspacePspConfig',
+  // P10 (GoHighLevel parity): white-label-lite branding.
+  'workspaceBranding',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

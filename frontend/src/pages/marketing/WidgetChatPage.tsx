@@ -26,6 +26,8 @@ export default function WidgetChatPage() {
   const [conversationId, setConversationId] = useState<string>('');
   const [channelName, setChannelName] = useState<string>('Chat');
   const [greeting, setGreeting] = useState<string | null>(null);
+  const [accent, setAccent] = useState<string>('#1e40af');
+  const [logo, setLogo] = useState<string | null>(null);
   const [messages, setMessages] = useState<WidgetMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [ready, setReady] = useState(false);
@@ -45,6 +47,8 @@ export default function WidgetChatPage() {
         setVisitorId(data.visitorId);
         setChannelName(data.channel?.name ?? 'Chat');
         setGreeting(data.channel?.greeting ?? null);
+        if (data.branding?.accentColor) setAccent(data.branding.accentColor);
+        setLogo(data.branding?.logoUrl ?? null);
         if (saved.conversationId) setConversationId(saved.conversationId);
         localStorage.setItem(lsKey, JSON.stringify({ ...saved, visitorId: data.visitorId }));
         setReady(true);
@@ -109,7 +113,10 @@ export default function WidgetChatPage() {
 
   return (
     <div className="flex flex-col h-screen bg-white">
-      <div className="px-4 py-3 bg-primary text-primary-foreground font-medium">{channelName}</div>
+      <div className="px-4 py-3 text-white font-medium flex items-center gap-2" style={{ background: accent }}>
+        {logo && <img src={logo} alt="" className="h-6" />}
+        {channelName}
+      </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50">
         {greeting && messages.length === 0 && (
           <div className="flex justify-start">

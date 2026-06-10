@@ -18,6 +18,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { PublicChannelResolverService } from '../channels/public-channel-resolver.service';
 import { ConversationIngressService } from '../channels/conversation-ingress.service';
 import { ConversationStreamService } from '../channels/conversation-stream.service';
+import { BrandingService } from '../branding/branding.service';
 import { WebchatMessageDto, WebchatSessionDto } from '../dto/conversation.dto';
 
 /**
@@ -35,15 +36,18 @@ export class WebchatPublicController {
     private readonly resolver: PublicChannelResolverService,
     private readonly ingress: ConversationIngressService,
     private readonly stream: ConversationStreamService,
+    private readonly branding: BrandingService,
   ) {}
 
   @Post(':widgetKey/session')
   async session(@Param('widgetKey') widgetKey: string, @Body() dto: WebchatSessionDto) {
     const channel = await this.activeWebchat(widgetKey);
     const pub = (channel.configPublic ?? {}) as Record<string, unknown>;
+    const branding = await this.branding.get(channel.workspaceId);
     return {
       visitorId: dto.visitorId || randomUUID(),
-      channel: { name: channel.name, greeting: pub.greeting ?? null },
+      channel: { name: branding.brandName || channel.name, greeting: pub.greeting ?? null },
+      branding,
     };
   }
 

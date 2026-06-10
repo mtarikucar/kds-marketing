@@ -11,6 +11,7 @@ import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { SiteRendererService } from './site-renderer.service';
+import { BrandingService } from '../branding/branding.service';
 
 const DRAFT_GUIDE = `You design a landing page as STRICT JSON: { "title": string, "blocks": Block[] }. Output ONLY JSON.
 Block types:
@@ -30,6 +31,7 @@ export class SitesService {
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
     private readonly renderer: SiteRendererService,
+    private readonly branding: BrandingService,
   ) {}
 
   // ---- pages ----
@@ -105,7 +107,8 @@ export class SitesService {
       const defs = await this.prisma.formDef.findMany({ where: { workspaceId, id: { in: formIds } } });
       for (const d of defs) forms.set(d.id, d as any);
     }
-    return this.renderer.render(page, forms, publicBase);
+    const branding = await this.branding.get(workspaceId);
+    return this.renderer.render(page, forms, publicBase, branding);
   }
 
   async draft(workspaceId: string, prompt: string): Promise<{ title: string; blocks: unknown[] }> {

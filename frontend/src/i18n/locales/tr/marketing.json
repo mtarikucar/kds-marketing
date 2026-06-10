@@ -116,7 +116,8 @@
     "booking": "Randevu",
     "reviews": "Yorumlar",
     "voice": "Sesli AI",
-    "invoices": "Faturalar"
+    "invoices": "Faturalar",
+    "branding": "Marka"
   },
   "common": {
     "save": "Kaydet",
@@ -901,5 +902,21 @@
     "send": "Gönder / ödeme linki kopyala",
     "markPaid": "Ödendi işaretle",
     "empty": "Henüz fatura yok."
+  },
+  "branding": {
+    "title": "Marka",
+    "subtitle": "Müşteriye dönük yüzeylerde markanız — funnel sayfaları ve web sohbet widget'ı.",
+    "brandName": "Marka adı",
+    "accent": "Vurgu rengi",
+    "logo": "Logo",
+    "uploadLogo": "Logo yükle",
+    "uploading": "Yükleniyor…",
+    "logoHint": "PNG, JPEG, WEBP veya SVG, 1 MB altı.",
+    "saved": "Marka kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "logoUploaded": "Logo yüklendi",
+    "logoFailed": "Yükleme başarısız",
+    "previewName": "Markanız",
+    "preview": "Markanız herkese açık sayfalarda ve sohbet widget'ında böyle görünür."
   }
 }

@@ -1206,6 +1206,22 @@ model WorkspacePspConfig {
   @@map("workspace_psp_configs")
 }
 
+/// White-label-lite: the workspace's brand applied to its public-facing
+/// surfaces (funnel pages, web-chat widget, …). `logoUrl` points at an uploaded
+/// asset under UPLOADS_DIR (served at /api/public/uploads) or any https URL.
+model WorkspaceBranding {
+  id          String  @id @default(uuid())
+  workspaceId String  @unique
+  brandName   String?
+  accentColor String? // #RRGGBB
+  logoUrl     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("workspace_branding")
+}
+
 model OutboxEvent {
   // UUIDv7 generated at the application layer so events sort by creation time
   // without needing a sequence; safe across replicas.
