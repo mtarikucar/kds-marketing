@@ -4,7 +4,7 @@
 
 @layer base {
   :root {
-    /* Modern SaaS Design System - Slate + Orange */
+    /* Corporate Design System — Slate + Deep Blue */
 
     /* Background & Foreground */
     --background: 210 40% 98%;           /* slate-50 */
@@ -18,10 +18,10 @@
     --popover: 0 0% 100%;                /* white */
     --popover-foreground: 222 47% 11%;   /* slate-900 */
 
-    /* Primary - Orange accent */
-    --primary: 25 95% 53%;               /* orange-500 (#f97316) */
+    /* Primary — corporate deep blue */
+    --primary: 226 76% 48%;              /* #1d4ed8 */
     --primary-foreground: 0 0% 100%;     /* white */
-    --primary-hover: 21 90% 48%;         /* orange-600 (#ea580c) */
+    --primary-hover: 226 71% 40%;        /* #1e40af */
 
     /* Secondary */
     --secondary: 210 40% 96%;            /* slate-100 */
@@ -50,7 +50,7 @@
     /* Border & Input */
     --border: 214 32% 91%;               /* slate-200 */
     --input: 214 32% 91%;                /* slate-200 */
-    --ring: 25 95% 53%;                  /* orange-500 */
+    --ring: 226 76% 48%;                 /* primary */
 
     /* Border Radius */
     --radius: 0.5rem;

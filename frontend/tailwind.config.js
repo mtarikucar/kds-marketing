@@ -21,22 +21,24 @@ export default {
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
 
-        // Primary - Orange accent (Landing ile uyumlu)
+        // Primary — corporate deep blue (was the legacy orange). The ramp is
+        // anchored so 500 = main brand (#1d4ed8) and 600 = hover (#1e40af);
+        // the DEFAULT/hover CSS vars in index.css carry the same two values.
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
           hover: "hsl(var(--primary-hover))",
-          50: '#fff7ed',
-          100: '#ffedd5',
-          200: '#fed7aa',
-          300: '#fdba74',
-          400: '#fb923c',
-          500: '#f97316',  // Main brand color
-          600: '#ea580c',  // Hover state
-          700: '#c2410c',
-          800: '#9a3412',
-          900: '#7c2d12',
-          950: '#431407',
+          50: '#eff6ff',
+          100: '#dbeafe',
+          200: '#bfdbfe',
+          300: '#93c5fd',
+          400: '#3b82f6',
+          500: '#1d4ed8',  // Main brand color
+          600: '#1e40af',  // Hover state
+          700: '#1e3a8a',
+          800: '#172554',
+          900: '#101c40',
+          950: '#0a1228',
         },
 
         // Secondary

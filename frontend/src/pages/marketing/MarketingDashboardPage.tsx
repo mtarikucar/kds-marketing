@@ -86,7 +86,7 @@ export default function MarketingDashboardPage() {
             target="_blank"
             rel="noopener noreferrer"
             download="Pazarlamaci-Rehberi.pdf"
-            className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
+            className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100"
             data-testid="dashboard-guide-download"
           >
             <ArrowDownTrayIcon className="w-4 h-4" />

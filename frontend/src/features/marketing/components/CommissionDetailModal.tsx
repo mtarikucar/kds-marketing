@@ -64,7 +64,7 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 const TYPE_BADGE: Record<string, string> = {
-  SIGNUP: 'bg-indigo-100 text-indigo-800',
+  SIGNUP: 'bg-primary-100 text-primary-800',
   RENEWAL: 'bg-teal-100 text-teal-800',
   UPSELL: 'bg-fuchsia-100 text-fuchsia-800',
 };
