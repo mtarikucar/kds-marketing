@@ -19,12 +19,14 @@ import { KnowledgeService } from '../ai/knowledge.service';
 import { AgentProfileService } from '../ai/agent-profile.service';
 import { ContentAiService } from '../ai/content-ai.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
+import { AskAiService } from '../ai/ask-ai.service';
 import {
   CreateKnowledgeDto,
   UpdateKnowledgeDto,
   CreateAgentDto,
   UpdateAgentDto,
   ComposeContentDto,
+  AskAiDto,
 } from '../dto/ai.dto';
 
 /**
@@ -43,6 +45,7 @@ export class MarketingAiController {
     private readonly agents: AgentProfileService,
     private readonly content: ContentAiService,
     private readonly credits: AiCreditsService,
+    private readonly askAi: AskAiService,
   ) {}
 
   // ---- Knowledge base (Agent Studio grounding docs) ----
@@ -154,6 +157,14 @@ export class MarketingAiController {
     @Body() dto: ComposeContentDto,
   ) {
     return this.content.compose(actor.workspaceId, dto);
+  }
+
+  // ---- Ask AI (read-only NL analyst over the workspace's data) ----
+
+  @Post('ask')
+  @RequiresFeature('askAi')
+  ask(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: AskAiDto) {
+    return this.askAi.ask(actor.workspaceId, dto.question);
   }
 
   // ---- Credit meter (read-only; powers the billing gauge) ----

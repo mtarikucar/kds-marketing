@@ -79,6 +79,7 @@ import { AiCreditsService } from './ai/ai-credits.service';
 import { KnowledgeService } from './ai/knowledge.service';
 import { AgentProfileService } from './ai/agent-profile.service';
 import { ContentAiService } from './ai/content-ai.service';
+import { AskAiService } from './ai/ask-ai.service';
 
 // Phase F P2 — omnichannel conversations + web-chat + Conversation AI.
 import { MarketingConversationsController } from './controllers/marketing-conversations.controller';
@@ -258,6 +259,7 @@ import { ReviewsService } from './reviews/reviews.service';
     KnowledgeService,
     AgentProfileService,
     ContentAiService,
+    AskAiService,
     // Phase F P2 — omnichannel: adapter registry + adapters (self-register on
     // init), message quota, the conversation services, and the AI engine
     // (subscribes to inbound events + registers its ScheduledJob handlers).

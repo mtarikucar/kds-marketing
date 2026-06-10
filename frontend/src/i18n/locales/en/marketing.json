@@ -856,5 +856,16 @@
     "aiDraft": "AI draft",
     "saveReply": "Save reply",
     "empty": "No reviews yet — add a source and send review requests from an automation."
+  },
+  "askAi": {
+    "title": "Ask AI",
+    "intro": "Ask about your leads, tasks and campaigns in plain language.",
+    "placeholder": "Ask a question…",
+    "thinking": "Thinking…",
+    "locked": "Ask AI is not in your plan — upgrade to enable it.",
+    "failed": "Something went wrong.",
+    "ex1": "How many leads are in each status?",
+    "ex2": "Which leads in Istanbul are still NEW?",
+    "ex3": "What's the status of my campaigns?"
   }
 }
