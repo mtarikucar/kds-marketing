@@ -115,6 +115,15 @@ import { CampaignsService } from './campaigns/campaigns.service';
 import { CampaignSenderService } from './campaigns/campaign-sender.service';
 import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
 
+// Phase F P5 — funnels/sites + forms + booking.
+import { MarketingSitesController } from './controllers/marketing-sites.controller';
+import { MarketingBookingController } from './controllers/marketing-booking.controller';
+import { PublicSiteController } from './controllers/public-site.controller';
+import { SitesService } from './sites/sites.service';
+import { SiteRendererService } from './sites/site-renderer.service';
+import { FormsService } from './sites/forms.service';
+import { BookingService } from './sites/booking.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -185,6 +194,9 @@ import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
     MarketingWorkflowsController,
     MarketingCampaignsController,
     CampaignTrackingController,
+    MarketingSitesController,
+    MarketingBookingController,
+    PublicSiteController,
   ],
   providers: [
     // Services
@@ -268,6 +280,12 @@ import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
     CampaignsService,
     CampaignSenderService,
     CampaignTrackingService,
+    // Phase F P5 — funnels: page/form CRUD + AI draft, the safe block renderer,
+    // public form submit, and booking (registers the booking.reminder handler).
+    SitesService,
+    SiteRendererService,
+    FormsService,
+    BookingService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

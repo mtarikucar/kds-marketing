@@ -111,7 +111,9 @@
     "inbox": "Kiruvchi",
     "channels": "Kanallar",
     "automations": "Avtomatlashtirishlar",
-    "campaigns": "Kampaniyalar"
+    "campaigns": "Kampaniyalar",
+    "sites": "Voronkalar va sahifalar",
+    "booking": "Band qilish"
   },
   "common": {
     "save": "Save",
@@ -785,5 +787,52 @@
     "unsub": "obuna bekor",
     "launch": "Ishga tushirish",
     "empty": "Hali kampaniya yo'q — birini yarating, matnni AI yozadi."
+  },
+  "sites": {
+    "title": "Voronkalar va sahifalar",
+    "subtitle": "Lid yig'ish formali landing sahifalar yarating. Tasvirlang — AI bloklarni tuzadi.",
+    "new": "Yangi sahifa",
+    "aiPlaceholder": "Sahifani tasvirlang — masalan, kofe POS uchun demo-band qilish sahifasi",
+    "draftBtn": "Qoralama",
+    "pageTitle": "Sarlavha",
+    "slug": "Slug",
+    "blocks": "Bloklar (JSON)",
+    "badBlocks": "Bloklar yaroqli JSON emas",
+    "saved": "Sahifa saqlandi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "drafted": "Qoralama tayyor",
+    "draftFailed": "Tuzib bo'lmadi",
+    "publish": "Chop etish",
+    "unpublish": "Chopdan olish",
+    "copyUrl": "ommaviy URL",
+    "empty": "Hali sahifa yo'q — tasvirlang, AI tuzadi.",
+    "forms": "Lid yig'ish formalari",
+    "formName": "Forma nomi (ism/email/telefon)",
+    "addForm": "Qo'shish",
+    "formCreated": "Forma yaratildi",
+    "noForms": "Hali forma yo'q. Qo'shing va forma blokida ko'rsating: {\"type\":\"form\",\"formId\":\"…\"}.",
+    "delete": "O'chirish"
+  },
+  "booking": {
+    "title": "Band qilish",
+    "subtitle": "Lidlar slot band qilsin. Mavjudlik oynalari hozircha UTC.",
+    "new": "Yangi taqvim",
+    "name": "Nomi",
+    "slot": "Slot (daq)",
+    "buffer": "Bufer (daq)",
+    "availability": "Haftalik mavjudlik (UTC)",
+    "saved": "Taqvim saqlandi",
+    "saveFailed": "Saqlab bo'lmadi",
+    "copyUrl": "band qilish havolasi",
+    "empty": "Hali taqvim yo'q — lidlar band qilishi uchun bittasini yarating.",
+    "day": {
+      "0": "Yak",
+      "1": "Dush",
+      "2": "Sesh",
+      "3": "Chor",
+      "4": "Pay",
+      "5": "Jum",
+      "6": "Shan"
+    }
   }
 }

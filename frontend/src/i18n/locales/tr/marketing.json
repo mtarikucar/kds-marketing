@@ -111,7 +111,9 @@
     "inbox": "Gelen Kutusu",
     "channels": "Kanallar",
     "automations": "Otomasyonlar",
-    "campaigns": "Kampanyalar"
+    "campaigns": "Kampanyalar",
+    "sites": "Funnel & Sayfalar",
+    "booking": "Randevu"
   },
   "common": {
     "save": "Kaydet",
@@ -789,5 +791,52 @@
     "unsub": "abonelikten çıktı",
     "launch": "Başlat",
     "empty": "Henüz kampanya yok — bir tane oluşturun, metni AI yazsın."
+  },
+  "sites": {
+    "title": "Funnel & Sayfalar",
+    "subtitle": "Lead toplama formlu açılış sayfaları oluşturun. Tarif edin, AI blokları hazırlasın.",
+    "new": "Yeni sayfa",
+    "aiPlaceholder": "Sayfayı tarif edin — örn. kahve POS için demo-randevu sayfası",
+    "draftBtn": "Taslak",
+    "pageTitle": "Başlık",
+    "slug": "Slug",
+    "blocks": "Bloklar (JSON)",
+    "badBlocks": "Bloklar geçerli JSON değil",
+    "saved": "Sayfa kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "drafted": "Taslak hazır",
+    "draftFailed": "Taslak oluşturulamadı",
+    "publish": "Yayınla",
+    "unpublish": "Yayından kaldır",
+    "copyUrl": "genel URL",
+    "empty": "Henüz sayfa yok — tarif edin, AI hazırlasın.",
+    "forms": "Lead toplama formları",
+    "formName": "Form adı (ad/e-posta/telefon alanları)",
+    "addForm": "Ekle",
+    "formCreated": "Form oluşturuldu",
+    "noForms": "Henüz form yok. Ekleyin, sonra bir form bloğunda referans verin: {\"type\":\"form\",\"formId\":\"…\"}.",
+    "delete": "Sil"
+  },
+  "booking": {
+    "title": "Randevu",
+    "subtitle": "Lead'lerin slot ayırmasına izin verin. Müsaitlik pencereleri şimdilik UTC.",
+    "new": "Yeni takvim",
+    "name": "Ad",
+    "slot": "Slot (dk)",
+    "buffer": "Tampon (dk)",
+    "availability": "Haftalık müsaitlik (UTC)",
+    "saved": "Takvim kaydedildi",
+    "saveFailed": "Kaydedilemedi",
+    "copyUrl": "randevu bağlantısı",
+    "empty": "Henüz takvim yok — lead'lerin randevu alması için bir tane oluşturun.",
+    "day": {
+      "0": "Paz",
+      "1": "Pzt",
+      "2": "Sal",
+      "3": "Çar",
+      "4": "Per",
+      "5": "Cum",
+      "6": "Cmt"
+    }
   }
 }
