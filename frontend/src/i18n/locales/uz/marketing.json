@@ -914,5 +914,42 @@
     "logoFailed": "Yuklab bo'lmadi",
     "previewName": "Brendingiz",
     "preview": "Brendingiz ommaviy sahifalarda va chat vidjetida shunday ko'rinadi."
+  },
+  "onboarding": {
+    "title": "Sozlashni boshlang",
+    "subtitle": "Ish maydonini ishga tushirish uchun bir nechta qadam.",
+    "progress": "{{total}} tadan {{done}} ta bajarildi",
+    "dismiss": "Yopish",
+    "steps": {
+      "agent": {
+        "title": "Birinchi AI agentingizni yarating",
+        "desc": "AI mijozlarni qanday kutib olishi va javob berishini belgilang."
+      },
+      "knowledge": {
+        "title": "Bilim qo'shing",
+        "desc": "AI javob berishi uchun menyu, ish vaqti va qoidalarni bering."
+      },
+      "channel": {
+        "title": "Kanal ulang",
+        "desc": "Veb-chat, WhatsApp yoki SMS — mijozlar sizga yozadigan joy."
+      },
+      "leads": {
+        "title": "Birinchi lidingizni qo'shing",
+        "desc": "Pipeline'ni boshlash uchun lid import qiling yoki yarating."
+      },
+      "site": {
+        "title": "Lending sahifa chop eting",
+        "desc": "AI tayyorlagan voronka sahifasi bilan lid to'plang."
+      }
+    }
+  },
+  "needsAttention": {
+    "title": "E'tibor talab qiladi",
+    "subtitle": "Hozir sizni kutayotgan ishlar.",
+    "overdueTasks": "Muddati o'tgan vazifalar",
+    "unassignedLeads": "Tayinlanmagan lidlar",
+    "unread": "O'qilmagan suhbatlar",
+    "pendingTasks": "Ochiq vazifalar",
+    "openOffers": "Javob kutayotgan takliflar"
   }
 }
