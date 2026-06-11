@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { PhoneIcon, SparklesIcon, UserIcon } from '@heroicons/react/24/outline';
+import { PhoneIcon, SparklesIcon, UserIcon, ChevronLeftIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
 
 interface VoiceCall { id: string; fromNumber: string; toNumber: string; status: string; turns: number; createdAt: string }
@@ -29,8 +29,8 @@ export default function VoicePage() {
         <p className="text-sm text-slate-500">{t('voice.subtitle', 'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).')}</p>
       </div>
 
-      <div className="flex gap-4 h-[calc(100vh-12rem)]">
-        <div className="w-80 shrink-0 bg-white rounded-xl border border-slate-200 overflow-y-auto divide-y divide-slate-50">
+      <div className="flex gap-0 sm:gap-4 h-[calc(100vh-12rem)]">
+        <div className={`${selected ? 'hidden sm:block' : 'block'} w-full sm:w-80 sm:shrink-0 bg-white rounded-xl border border-slate-200 overflow-y-auto divide-y divide-slate-50`}>
           {(calls ?? []).map((c) => (
             <button key={c.id} onClick={() => setSelected(c.id)} className={`w-full text-left p-3 hover:bg-slate-50 ${selected === c.id ? 'bg-primary/5' : ''}`}>
               <div className="flex items-center justify-between">
@@ -43,11 +43,17 @@ export default function VoicePage() {
           {(calls ?? []).length === 0 && <div className="p-6 text-center text-xs text-slate-400">{t('voice.empty', 'No AI calls yet.')}</div>}
         </div>
 
-        <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-y-auto p-4">
+        <div className={`${selected ? 'block' : 'hidden sm:block'} w-full sm:w-auto sm:flex-1 bg-white rounded-xl border border-slate-200 overflow-y-auto p-4`}>
           {!selected ? (
             <div className="h-full flex items-center justify-center text-sm text-slate-400">{t('voice.selectPrompt', 'Select a call to see the transcript.')}</div>
           ) : (
             <div className="space-y-3">
+              <button
+                onClick={() => setSelected(null)}
+                className="sm:hidden flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
+              >
+                <ChevronLeftIcon className="w-4 h-4" /> {t('voice.back', 'Calls')}
+              </button>
               {(transcript ?? []).map((tt, i) => (
                 <div key={i} className={`flex ${tt.role === 'AI' ? 'justify-start' : tt.role === 'CUSTOMER' ? 'justify-end' : 'justify-center'}`}>
                   <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${tt.role === 'AI' ? 'bg-slate-100 text-slate-800' : tt.role === 'CUSTOMER' ? 'bg-primary text-primary-foreground' : 'bg-amber-50 text-amber-700 text-xs'}`}>
