@@ -13,7 +13,7 @@ Make every marketing-console page usable on phone and tablet. "Pay more attentio
 
 The console is already ~80% responsive:
 
-- **App shell is done** — `MarketingLayout` already has a `lg:hidden` slide-in sidebar drawer + hamburger and a `hidden lg:block` desktop sidebar; `MarketingHeader` adapts. No shell work needed.
+- **App shell — mostly there, two gaps (found in review).** `MarketingLayout` already has a `lg:hidden` slide-in drawer + hamburger and a `hidden lg:block` desktop sidebar, and `MarketingHeader` adapts. But: (a) the sidebar nav doesn't scroll, so a long nav list (a manager sees ~26 items) is cut off — worst in the mobile drawer; and (b) the layout uses `min-h-screen`, so the whole window scrolls instead of pinning the sidebar and scrolling only the content. Both addressed under **Shell rework** below.
 - **Reference patterns already exist in-repo** (copy these, don't invent):
   - **Responsive table:** `LeadsPage` — `overflow-x-auto` wrapper + `hidden sm:table-cell`/`hidden lg:table-cell` column-hiding.
   - **Responsive modal:** `CommissionDetailModal` — `items-end sm:items-center` (bottom-sheet on phone), `max-h-[92vh] overflow-y-auto` body.
@@ -30,6 +30,30 @@ The console is already ~80% responsive:
 | **D** | no-wrap rows of inline controls + fixed-width inputs | **InvoicesPage** line items (`w-20`/`w-28`), **CampaignsPage** filter rows, **BookingSettingsPage** time rows, `ClickToDialButton` (`w-44`) | `flex-wrap` / stack < `sm` |
 | **E** | `absolute w-64` popovers, no edge collision handling | `AssignCell` (`left-0`), `BulkActionToolbar` (`right-0`) | Constrain width / flip near viewport edge |
 | **F** | 7-col month grid won't shrink | **CalendarPage** | Mobile agenda/list view under `md`; keep grid `md+` |
+
+## Shell rework (added 2026-06-11, per review)
+
+Two real shell gaps surfaced in testing, plus a live-version indicator.
+
+### G1 — App-shell scroll model (desktop): fixed sidebar, content scrolls
+Today the outer layout is `min-h-screen`, so the **whole window** scrolls and the sidebar scrolls away with the content. Switch to a fixed-viewport app shell:
+- Outer wrapper: `h-screen overflow-hidden` (no window scroll).
+- Sidebar: full height, **pinned** (does not scroll with content).
+- `<main>`: the **sole** scroll region (`flex-1 overflow-y-auto`).
+
+### G2 — Sidebar internal scroll (fixes the mobile drawer cutoff)
+`MarketingSidebar` is `min-h-screen` with a non-scrolling `<nav>`, so overflowing items are unreachable — worst in the mobile drawer. Make the sidebar a fixed-height flex column:
+- aside: `h-screen` (`h-full` inside the drawer) instead of `min-h-screen`.
+- logo header fixed at top; **nav becomes `flex-1 overflow-y-auto`** (scrolls); user/logout/version block fixed at bottom.
+- The mobile drawer container (`fixed inset-y-0`) inherits full-height + internal scroll, so the whole nav is reachable on phones.
+
+### G3 — Live-version footer (so the deployed version is verifiable in-app)
+Source the version from the release tag at build time (not the stale `package.json` `1.0.0`):
+- `deploy.yml` frontend `build-args`: add `VITE_APP_VERSION=${{ needs.version.outputs.version }}` (the release tag, already used as the image tag).
+- `frontend/Dockerfile` build stage: add `ARG VITE_APP_VERSION` + `ENV VITE_APP_VERSION=$VITE_APP_VERSION` (mirrors the existing `VITE_API_URL` arg).
+- Frontend: read `import.meta.env.VITE_APP_VERSION` (Vite already exposes `VITE_*`; fallback `'dev'` for local). Display **muted, at the bottom of the sidebar footer** under the user/logout block — visible on desktop and inside the drawer on mobile.
+
+> Note: the fixed-height `<main>` changes the basis for pages using `h-[calc(100vh-…)]` (Inbox, Voice). Inside the new shell they switch to `h-full` / flex-fill — folded into the master-detail rework below.
 
 ## Master-detail design (Inbox + Voice) — chosen pattern: drill-down
 
@@ -55,15 +79,16 @@ No backend or data-flow change — purely which pane is visible at a given width
 ## Out of scope (YAGNI)
 
 - No new shared component library / big refactor — copy the existing reference patterns inline. (A tiny `useMediaQuery` hook is the only new shared utility, and only if needed for Inbox/Voice.)
-- No functional/behavioral changes, no palette changes, no POS app.
+- No functional/behavioral changes to existing features (the G3 version footer is the one small additive element), no palette changes, no POS app.
 - Custom domains / vanity routes unrelated.
 
 ## Verification
 
 - **Playwright** screenshots at **390px (phone)** and **820px (tablet)** for the high-risk pages: Inbox, Voice, Calendar, Reports, LeadDetail, Invoices — confirm no horizontal overflow, panes drill down correctly, tables scroll, controls wrap.
+- **Shell:** in the mobile drawer the full nav scrolls (no cutoff); on desktop the sidebar stays pinned while the content area scrolls; the version string renders in the sidebar footer.
 - `npm run build` green (TypeScript + Vite).
 - Spot-check a representative already-good page (LeadsPage) didn't regress.
 
 ## Release
 
-Frontend-only change. Ships as the next tag (`v2.10.0`) → existing tag-triggered CI → prod, **once the user authorizes the deploy** (same gate as the parity rollout). No env or migration changes.
+Frontend-only change. Ships as the next tag (`v2.10.0`) → existing tag-triggered CI → prod, **once the user authorizes the deploy** (same gate as the parity rollout). No env or migration changes. Touches `frontend/Dockerfile` + `.github/workflows/deploy.yml` (one build-arg) so the footer reflects the deployed tag — the version only becomes accurate from the `v2.10.0` build onward (an earlier-built image would show `dev`).
