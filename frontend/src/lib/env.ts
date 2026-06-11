@@ -61,6 +61,15 @@ export const API_URL = resolveApiUrl();
 export const ASSETS_ORIGIN = resolveAssetsOrigin();
 
 /**
+ * The deployed release version, baked in at build time from the git tag
+ * (CI passes VITE_APP_VERSION=<tag>; see deploy.yml build-args + Dockerfile
+ * ARG). Falls back to 'dev' for local builds. Surfaced in the sidebar
+ * footer so the live version is verifiable in-app.
+ */
+export const APP_VERSION =
+  (import.meta.env as Record<string, string | undefined>).VITE_APP_VERSION || 'dev';
+
+/**
  * Resolve a possibly-relative asset URL (e.g. `/uploads/products/foo.jpg`)
  * against the backend origin. Absolute URLs (`http://...`, `https://...`,
  * `data:`, `blob:`) pass through unchanged.

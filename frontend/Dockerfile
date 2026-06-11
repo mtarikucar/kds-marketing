@@ -21,6 +21,11 @@ WORKDIR /app
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 
+# Release version (the deploy tag, e.g. v2.10.0) — surfaced in the sidebar
+# footer so the live version is verifiable in-app. Passed from deploy.yml.
+ARG VITE_APP_VERSION
+ENV VITE_APP_VERSION=$VITE_APP_VERSION
+
 COPY package*.json ./
 RUN npm ci
 

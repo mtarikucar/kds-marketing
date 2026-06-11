@@ -94,6 +94,7 @@ jobs:
           build-args: |
             VITE_API_URL=${{ vars.PUBLIC_API_URL || 'https://marketing.hummytummy.com/api' }}
             VITE_APP_TITLE=${{ vars.APP_TITLE || 'Marketing Console' }}
+            VITE_APP_VERSION=${{ needs.version.outputs.version }}
           tags: |
             ${{ env.IMAGE_BASE }}/frontend:${{ needs.version.outputs.version }}
             ${{ env.IMAGE_BASE }}/frontend:current
