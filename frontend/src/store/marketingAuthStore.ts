@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 export interface MarketingUser {
   id: string;
@@ -63,6 +63,13 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
     }),
     {
       name: 'marketing-auth-storage',
+      // Per-tab isolation: sessionStorage instead of the default localStorage,
+      // so each browser tab has its OWN independent session. Logging out or
+      // switching user in one tab no longer changes who you are in the others
+      // (localStorage is shared across all tabs of an origin — that shared
+      // store was the cross-tab bleed). Survives same-tab reload (F5); a
+      // brand-new tab starts logged out and must sign in.
+      storage: createJSONStorage(() => sessionStorage),
       // The ACCESS token stays in memory only, but the REFRESH token must
       // be persisted: every full page load (deep link, F5) starts with an
       // empty store, and the api client's single-flight refresh is the only

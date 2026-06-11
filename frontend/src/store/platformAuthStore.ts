@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 export interface PlatformOperator {
   id: string;
@@ -37,6 +37,9 @@ export const usePlatformAuthStore = create<PlatformAuthState>()(
     }),
     {
       name: 'platform-auth-storage',
+      // Per-tab isolation (sessionStorage) — same rationale as the marketing
+      // store: one tab's login/logout must not change the operator in others.
+      storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         operator: state.operator,
         // isAuthenticated is NOT persisted: without a token a restored
