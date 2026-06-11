@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { ChevronLeftIcon, ChevronRightIcon, XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { PageHeader } from '../../features/marketing/components';
 import type { MarketingTask } from '../../features/marketing/types';
 
 function toLocalDateKey(date: Date): string {
@@ -46,7 +47,7 @@ const emptyForm = {
 
 export default function CalendarPage() {
   const queryClient = useQueryClient();
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation('marketing');
   const locale = i18n.language || 'tr';
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -147,7 +148,7 @@ export default function CalendarPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-gray-900">Calendar</h1>
+      <PageHeader title={t('calendar.title')} subtitle={t('calendar.subtitle')} />
 
       {/* Navigation */}
       <div className="flex items-center justify-between bg-white rounded-xl border border-gray-200 p-4">
@@ -164,7 +165,7 @@ export default function CalendarPage() {
       <div className="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
         {/* Day headers */}
         <div className="grid grid-cols-7 border-b">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+          {(t('calendar.weekdayShort', { returnObjects: true }) as string[]).map((day) => (
             <div key={day} className="px-2 py-2 text-center text-xs font-medium text-gray-500">
               {day}
             </div>

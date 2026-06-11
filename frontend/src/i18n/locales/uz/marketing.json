@@ -404,7 +404,8 @@
     "empty": "No tasks here.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
-    "deleteSuccess": "Task deleted"
+    "deleteSuccess": "Task deleted",
+    "emptyHint": "Lidlar sovib qolmasligi uchun kuzatuv vazifasini yarating."
   },
   "calendar": {
     "title": "Calendar",
@@ -723,7 +724,11 @@
     "context": "Lid",
     "openLead": "Lidni ochish →",
     "noLead": "Suhbatni tanlang.",
-    "sendFailed": "Yuborib boʻlmadi"
+    "sendFailed": "Yuborib boʻlmadi",
+    "title": "Kiruvchi xabarlar",
+    "subtitle": "Barcha mijoz suhbatlari bir joyda.",
+    "emptyHint": "Kanal ulanib, mijozlar sizga yozganda suhbatlar shu yerda paydo bo'ladi.",
+    "connectChannel": "Kanal ulash"
   },
   "channels": {
     "title": "Kanallar",
