@@ -404,7 +404,8 @@
     "empty": "No tasks here.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
-    "deleteSuccess": "Task deleted"
+    "deleteSuccess": "Task deleted",
+    "emptyHint": "Создайте задачу-напоминание, чтобы лиды не остыли."
   },
   "calendar": {
     "title": "Calendar",
@@ -723,7 +724,11 @@
     "context": "Лид",
     "openLead": "Открыть лид →",
     "noLead": "Выберите диалог.",
-    "sendFailed": "Не удалось отправить"
+    "sendFailed": "Не удалось отправить",
+    "title": "Входящие",
+    "subtitle": "Все переписки с клиентами в одном месте.",
+    "emptyHint": "Переписки появятся здесь, когда вы подключите канал и клиенты напишут вам.",
+    "connectChannel": "Подключить канал"
   },
   "channels": {
     "title": "Каналы",

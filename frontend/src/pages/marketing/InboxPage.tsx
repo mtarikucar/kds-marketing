@@ -12,7 +12,9 @@ import {
   ChevronLeftIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import { Link } from 'react-router-dom';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { PageHeader, EmptyState } from '../../features/marketing/components';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import { API_URL } from '../../lib/env';
 
@@ -44,7 +46,8 @@ interface MessageRow {
 export default function InboxPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
-  const { accessToken } = useMarketingAuthStore();
+  const { accessToken, user } = useMarketingAuthStore();
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [statusFilter, setStatusFilter] = useState('OPEN');
@@ -143,7 +146,9 @@ export default function InboxPage() {
   );
 
   return (
-    <div className="flex h-full gap-0 sm:gap-4">
+    <div className="flex flex-col h-full gap-4">
+      <PageHeader title={t('inbox.title')} subtitle={t('inbox.subtitle')} />
+      <div className="flex-1 min-h-0 flex gap-0 sm:gap-4">
       {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
       <div
         className={`${selectedId ? 'hidden sm:flex' : 'flex'} w-full sm:w-72 sm:shrink-0 bg-white rounded-xl border border-slate-200 flex-col overflow-hidden`}
@@ -186,8 +191,18 @@ export default function InboxPage() {
             </button>
           ))}
           {(conversations ?? []).length === 0 && (
-            <div className="p-6 text-center text-xs text-slate-400">
-              {t('inbox.empty', 'No conversations yet.')}
+            <div className="p-3">
+              <EmptyState
+                title={t('inbox.empty', 'No conversations yet.')}
+                description={t('inbox.emptyHint')}
+                action={
+                  isManager ? (
+                    <Link to="/channels" className="text-xs font-medium text-primary hover:underline">
+                      {t('inbox.connectChannel')}
+                    </Link>
+                  ) : undefined
+                }
+              />
             </div>
           )}
         </div>
@@ -323,6 +338,7 @@ export default function InboxPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

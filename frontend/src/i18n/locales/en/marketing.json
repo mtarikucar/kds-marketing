@@ -426,7 +426,8 @@
     "empty": "No tasks here.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
-    "deleteSuccess": "Task deleted"
+    "deleteSuccess": "Task deleted",
+    "emptyHint": "Create a follow-up so leads don't go cold."
   },
   "calendar": {
     "title": "Calendar",
@@ -727,7 +728,11 @@
     "context": "Lead",
     "openLead": "Open lead →",
     "noLead": "Select a conversation.",
-    "sendFailed": "Send failed"
+    "sendFailed": "Send failed",
+    "title": "Inbox",
+    "subtitle": "Every customer conversation in one place.",
+    "emptyHint": "Conversations appear here once a channel is connected and customers message you.",
+    "connectChannel": "Connect a channel"
   },
   "channels": {
     "title": "Channels",

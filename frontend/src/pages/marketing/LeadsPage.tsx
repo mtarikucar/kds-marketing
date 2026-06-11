@@ -13,6 +13,7 @@ import {
   LeadStatusBadge,
   AssignCell,
   BulkActionToolbar,
+  PageHeader,
 } from '../../features/marketing/components';
 import {
   LeadStatus,
@@ -161,16 +162,19 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">{t('leads.title')}</h1>
-        <Link
-          to="/leads/new"
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
-        >
-          <PlusIcon className="w-4 h-4" />
-          {t('leads.createButton')}
-        </Link>
-      </div>
+      <PageHeader
+        title={t('leads.title')}
+        subtitle={t('leads.subtitle')}
+        action={
+          <Link
+            to="/leads/new"
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            <PlusIcon className="w-4 h-4" />
+            {t('leads.createButton')}
+          </Link>
+        }
+      />
 
       {/* Search & Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">

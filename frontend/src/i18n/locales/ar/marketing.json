@@ -404,7 +404,8 @@
     "empty": "No tasks here.",
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
-    "deleteSuccess": "Task deleted"
+    "deleteSuccess": "Task deleted",
+    "emptyHint": "أنشئ مهمة متابعة حتى لا يفتر العملاء المحتملون."
   },
   "calendar": {
     "title": "Calendar",
@@ -723,7 +724,11 @@
     "context": "العميل",
     "openLead": "فتح العميل →",
     "noLead": "اختر محادثة.",
-    "sendFailed": "فشل الإرسال"
+    "sendFailed": "فشل الإرسال",
+    "title": "صندوق الوارد",
+    "subtitle": "كل محادثات العملاء في مكان واحد.",
+    "emptyHint": "تظهر المحادثات هنا بمجرد ربط قناة ومراسلة العملاء لك.",
+    "connectChannel": "اربط قناة"
   },
   "channels": {
     "title": "القنوات",

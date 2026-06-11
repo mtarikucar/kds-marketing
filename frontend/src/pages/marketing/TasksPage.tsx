@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Link, useSearchParams } from 'react-router-dom';
 import { PlusIcon, CheckIcon, ClockIcon, ExclamationTriangleIcon, PencilSquareIcon, TrashIcon, PlayIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { PageHeader } from '../../features/marketing/components';
 import type { MarketingTask } from '../../features/marketing/types';
 import { fmtDate } from '../../features/marketing/utils/format';
 
@@ -22,6 +24,7 @@ const statusIcons: Record<string, React.ElementType> = {
 
 export default function TasksPage() {
   const queryClient = useQueryClient();
+  const { t } = useTranslation('marketing');
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab');
   const [status, setStatus] = useState('');
@@ -137,16 +140,19 @@ export default function TasksPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Tasks</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90"
-        >
-          <PlusIcon className="w-4 h-4" />
-          New Task
-        </button>
-      </div>
+      <PageHeader
+        title={t('tasks.title')}
+        subtitle={t('tasks.subtitle')}
+        action={
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90"
+          >
+            <PlusIcon className="w-4 h-4" />
+            {t('tasks.createButton')}
+          </button>
+        }
+      />
 
       {/* Quick add form */}
       {showForm && (
@@ -207,16 +213,16 @@ export default function TasksPage() {
 
       {/* Tabs */}
       <div className="flex gap-2">
-        {(['all', 'today', 'overdue'] as const).map((t) => (
+        {(['all', 'today', 'overdue'] as const).map((tabKey) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium capitalize ${
-              tab === t ? 'bg-primary/15 text-primary' : 'text-gray-600 hover:bg-gray-100'
+            key={tabKey}
+            onClick={() => setTab(tabKey)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium ${
+              tab === tabKey ? 'bg-primary/15 text-primary' : 'text-gray-600 hover:bg-gray-100'
             }`}
           >
-            {t === 'overdue' && <ExclamationTriangleIcon className="w-4 h-4 inline mr-1" />}
-            {t}
+            {tabKey === 'overdue' && <ExclamationTriangleIcon className="w-4 h-4 inline mr-1" />}
+            {t(`tasks.tabs.${tabKey}`)}
           </button>
         ))}
       </div>
@@ -224,9 +230,12 @@ export default function TasksPage() {
       {/* Task list */}
       <div className="bg-white rounded-xl border border-gray-200 divide-y">
         {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Loading...</div>
+          <div className="p-8 text-center text-gray-500">{t('common.loading')}</div>
         ) : tasks.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">No tasks found</div>
+          <div className="p-8 text-center text-gray-500">
+            <p>{t('tasks.empty')}</p>
+            <p className="text-xs text-gray-400 mt-1">{t('tasks.emptyHint')}</p>
+          </div>
         ) : (
           tasks.map((task: MarketingTask) => {
             const isOverdue = new Date(task.dueDate) < new Date() && task.status !== 'COMPLETED';
