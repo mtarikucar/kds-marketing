@@ -160,8 +160,8 @@ export default function CalendarPage() {
         </button>
       </div>
 
-      {/* Calendar Grid */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {/* Calendar Grid — desktop/tablet (md+); phones get the agenda list below */}
+      <div className="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
         {/* Day headers */}
         <div className="grid grid-cols-7 border-b">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
@@ -222,6 +222,48 @@ export default function CalendarPage() {
             );
           })}
         </div>
+      </div>
+
+      {/* Mobile agenda — phones get a tappable day list instead of the 7-col grid */}
+      <div className="md:hidden bg-white rounded-xl border border-gray-200 overflow-hidden divide-y">
+        {calendarDays
+          .filter((d) => d.isCurrentMonth)
+          .map(({ date }) => {
+            const dateKey = toLocalDateKey(date);
+            const dayTasks = tasksByDate[dateKey] || [];
+            return (
+              <button
+                key={dateKey}
+                onClick={() => openDayModal(dateKey)}
+                className="w-full text-left flex items-start gap-3 p-3 hover:bg-gray-50"
+              >
+                <div className={`shrink-0 w-10 text-center ${isToday(date) ? 'text-primary' : 'text-gray-700'}`}>
+                  <div className="text-[10px] uppercase">{date.toLocaleString(locale, { weekday: 'short' })}</div>
+                  <div className="text-lg font-semibold">{date.getDate()}</div>
+                </div>
+                <div className="flex-1 min-w-0 py-0.5">
+                  {dayTasks.length === 0 ? (
+                    <p className="text-xs text-gray-300 pt-2">—</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {dayTasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className={`text-xs px-2 py-1 rounded truncate ${
+                            task.status === 'COMPLETED'
+                              ? 'bg-green-100 text-green-700 line-through'
+                              : 'bg-primary/15 text-primary'
+                          }`}
+                        >
+                          {task.title}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
       </div>
 
       {/* Day detail modal */}

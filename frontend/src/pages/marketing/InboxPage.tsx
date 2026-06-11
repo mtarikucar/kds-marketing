@@ -9,6 +9,8 @@ import {
   CheckCircleIcon,
   SparklesIcon,
   UserIcon,
+  ChevronLeftIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
@@ -46,6 +48,7 @@ export default function InboxPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [statusFilter, setStatusFilter] = useState('OPEN');
+  const [showContext, setShowContext] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const { data: conversations } = useQuery<ConversationRow[]>({
@@ -121,10 +124,30 @@ export default function InboxPage() {
   const lead = thread?.lead;
   const messages: MessageRow[] = thread?.messages ?? [];
 
+  // Lead-context body, reused by the inline pane (lg+) and the sheet (below lg).
+  const leadBody = lead ? (
+    <div className="space-y-2 text-sm">
+      <div className="font-medium text-slate-900">{lead.businessName}</div>
+      <div className="text-slate-600">{lead.contactPerson}</div>
+      {lead.phone && <div className="text-slate-500 text-xs">{lead.phone}</div>}
+      {lead.email && <div className="text-slate-500 text-xs">{lead.email}</div>}
+      <div className="text-xs">
+        <span className="inline-block px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{lead.status}</span>
+      </div>
+      <a href={`/leads/${lead.id}`} className="text-primary text-xs hover:underline inline-block mt-1">
+        {t('inbox.openLead', 'Open lead →')}
+      </a>
+    </div>
+  ) : (
+    <p className="text-xs text-slate-400">{t('inbox.noLead', 'Select a conversation.')}</p>
+  );
+
   return (
-    <div className="flex h-[calc(100vh-7rem)] gap-4">
-      {/* Pane 1 — conversation list */}
-      <div className="w-72 shrink-0 bg-white rounded-xl border border-slate-200 flex flex-col overflow-hidden">
+    <div className="flex h-full gap-0 sm:gap-4">
+      {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
+      <div
+        className={`${selectedId ? 'hidden sm:flex' : 'flex'} w-full sm:w-72 sm:shrink-0 bg-white rounded-xl border border-slate-200 flex-col overflow-hidden`}
+      >
         <div className="p-3 border-b border-slate-100 flex gap-1">
           {['OPEN', 'CLOSED'].map((s) => (
             <button
@@ -170,8 +193,10 @@ export default function InboxPage() {
         </div>
       </div>
 
-      {/* Pane 2 — thread + composer */}
-      <div className="flex-1 bg-white rounded-xl border border-slate-200 flex flex-col overflow-hidden">
+      {/* Pane 2 — thread + composer (full-width on phone when a conversation is open) */}
+      <div
+        className={`${selectedId ? 'flex' : 'hidden sm:flex'} w-full sm:w-auto sm:flex-1 bg-white rounded-xl border border-slate-200 flex-col overflow-hidden`}
+      >
         {!convo ? (
           <div className="flex-1 flex items-center justify-center text-sm text-slate-400">
             {t('inbox.selectPrompt', 'Select a conversation to view the thread.')}
@@ -179,11 +204,30 @@ export default function InboxPage() {
         ) : (
           <>
             <div className="p-3 border-b border-slate-100 flex items-center justify-between gap-2">
-              <div className="font-medium text-slate-900 text-sm">
-                {lead?.contactPerson || lead?.businessName}
-                <span className="ml-2 text-xs text-slate-400">{convo.channelType ?? thread?.channel?.type}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  onClick={() => {
+                    setSelectedId(null);
+                    setShowContext(false);
+                  }}
+                  title={t('inbox.back', 'Back')}
+                  className="sm:hidden -ml-1 p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 shrink-0"
+                >
+                  <ChevronLeftIcon className="w-5 h-5" />
+                </button>
+                <div className="font-medium text-slate-900 text-sm truncate">
+                  {lead?.contactPerson || lead?.businessName}
+                  <span className="ml-2 text-xs text-slate-400">{convo.channelType ?? thread?.channel?.type}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => setShowContext(true)}
+                  title={t('inbox.context', 'Lead')}
+                  className="lg:hidden p-2 rounded-lg text-slate-500 hover:bg-slate-100"
+                >
+                  <UserIcon className="w-5 h-5" />
+                </button>
                 <button
                   onClick={() => toggleAi.mutate(!convo.aiPaused)}
                   title={convo.aiPaused ? t('inbox.resumeAi', 'Resume AI') : t('inbox.pauseAi', 'Pause AI')}
@@ -251,28 +295,34 @@ export default function InboxPage() {
         )}
       </div>
 
-      {/* Pane 3 — lead context */}
-      <div className="w-64 shrink-0 bg-white rounded-xl border border-slate-200 p-4 overflow-y-auto">
+      {/* Pane 3 — lead context: inline only at lg+, a sheet below that */}
+      <div className="hidden lg:flex lg:w-64 lg:shrink-0 bg-white rounded-xl border border-slate-200 p-4 overflow-y-auto flex-col">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
           {t('inbox.context', 'Lead')}
         </h3>
-        {lead ? (
-          <div className="space-y-2 text-sm">
-            <div className="font-medium text-slate-900">{lead.businessName}</div>
-            <div className="text-slate-600">{lead.contactPerson}</div>
-            {lead.phone && <div className="text-slate-500 text-xs">{lead.phone}</div>}
-            {lead.email && <div className="text-slate-500 text-xs">{lead.email}</div>}
-            <div className="text-xs">
-              <span className="inline-block px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{lead.status}</span>
-            </div>
-            <a href={`/leads/${lead.id}`} className="text-primary text-xs hover:underline inline-block mt-1">
-              {t('inbox.openLead', 'Open lead →')}
-            </a>
-          </div>
-        ) : (
-          <p className="text-xs text-slate-400">{t('inbox.noLead', 'Select a conversation.')}</p>
-        )}
+        {leadBody}
       </div>
+
+      {/* Lead-context sheet — bottom sheet on phone, centered card on tablet (below lg) */}
+      {showContext && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center lg:hidden">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowContext(false)} />
+          <div className="relative bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-4 max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                {t('inbox.context', 'Lead')}
+              </h3>
+              <button
+                onClick={() => setShowContext(false)}
+                className="p-1 rounded text-slate-400 hover:text-slate-600"
+              >
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            </div>
+            {leadBody}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
