@@ -30,6 +30,7 @@ import {
   SwatchIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { APP_VERSION } from '../../../lib/env';
 
 const navItems = [
   { path: '/dashboard', labelKey: 'nav.dashboard', icon: HomeIcon },
@@ -66,7 +67,7 @@ const managerOnlyItems = [
   { path: '/billing', labelKey: 'nav.billing', icon: CreditCardIcon },
 ];
 
-export default function MarketingSidebar() {
+export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { t } = useTranslation('marketing');
   const { user, logout } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
@@ -79,9 +80,9 @@ export default function MarketingSidebar() {
     }`;
 
   return (
-    <aside className="flex flex-col w-64 bg-white border-r border-slate-200 min-h-screen">
+    <aside className="flex flex-col w-64 bg-white border-r border-slate-200 h-screen">
       {/* Logo */}
-      <div className="flex items-center gap-2 px-6 py-5 border-b border-slate-200">
+      <div className="flex items-center gap-2 px-6 py-5 border-b border-slate-200 shrink-0">
         <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
           <span className="text-primary-foreground font-bold text-sm">M</span>
         </div>
@@ -89,9 +90,9 @@ export default function MarketingSidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
         {navItems.map((item) => (
-          <NavLink key={item.path} to={item.path} className={linkClass}>
+          <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
             <item.icon className="w-5 h-5" />
             {t(item.labelKey)}
           </NavLink>
@@ -105,7 +106,7 @@ export default function MarketingSidebar() {
               </span>
             </div>
             {aiItems.map((item) => (
-              <NavLink key={item.path} to={item.path} className={linkClass}>
+              <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
                 <item.icon className="w-5 h-5" />
                 {t(item.labelKey)}
               </NavLink>
@@ -117,7 +118,7 @@ export default function MarketingSidebar() {
               </span>
             </div>
             {managerOnlyItems.map((item) => (
-              <NavLink key={item.path} to={item.path} className={linkClass}>
+              <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
                 <item.icon className="w-5 h-5" />
                 {t(item.labelKey)}
               </NavLink>
@@ -127,7 +128,7 @@ export default function MarketingSidebar() {
       </nav>
 
       {/* User info & logout */}
-      <div className="border-t border-slate-200 px-4 py-4">
+      <div className="border-t border-slate-200 px-4 py-4 shrink-0">
         <div className="flex items-center gap-3 mb-3">
           <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
             <span className="text-primary font-medium text-sm">
@@ -150,6 +151,9 @@ export default function MarketingSidebar() {
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
           {t('nav.logout')}
         </button>
+        <p className="mt-3 text-center text-[10px] text-slate-400 select-text">
+          {APP_VERSION}
+        </p>
       </div>
     </aside>
   );
