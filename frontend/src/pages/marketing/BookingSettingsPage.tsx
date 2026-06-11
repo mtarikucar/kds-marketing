@@ -76,7 +76,7 @@ export default function BookingSettingsPage() {
             <label className={labelCls}>{t('booking.availability', 'Weekly availability (UTC)')}</label>
             <div className="space-y-1.5">
               {DAYS.map((d, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm">
+                <div key={i} className="flex flex-wrap items-center gap-2 text-sm">
                   <label className="w-28 flex items-center gap-2"><input type="checkbox" checked={dayOn(i)} onChange={(e) => setDay(i, e.target.checked)} />{t(`booking.day.${i}`, d)}</label>
                   {dayOn(i) && (
                     <>

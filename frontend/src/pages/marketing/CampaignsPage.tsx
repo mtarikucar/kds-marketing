@@ -125,7 +125,7 @@ export default function CampaignsPage() {
             <label className={labelCls}>{t('campaigns.audience', 'Audience (leads matching all rules; empty = everyone opted-in)')}</label>
             <div className="space-y-2">
               {form.filters.map((f, i) => (
-                <div key={i} className="flex gap-2">
+                <div key={i} className="flex flex-wrap gap-2">
                   <select value={f.field} onChange={(e) => { const fs = [...form.filters]; fs[i] = { ...f, field: e.target.value }; setForm({ ...form, filters: fs }); }} className={inputCls}>
                     <option value="">{t('campaigns.field', 'field')}</option>
                     {FILTER_FIELDS.map((x) => <option key={x} value={x}>{x}</option>)}
@@ -133,7 +133,7 @@ export default function CampaignsPage() {
                   <select value={f.op} onChange={(e) => { const fs = [...form.filters]; fs[i] = { ...f, op: e.target.value }; setForm({ ...form, filters: fs }); }} className={inputCls}>
                     {OPS.map((x) => <option key={x} value={x}>{x}</option>)}
                   </select>
-                  <input value={f.value} onChange={(e) => { const fs = [...form.filters]; fs[i] = { ...f, value: e.target.value }; setForm({ ...form, filters: fs }); }} className={inputCls} placeholder={t('campaigns.value', 'value')} />
+                  <input value={f.value} onChange={(e) => { const fs = [...form.filters]; fs[i] = { ...f, value: e.target.value }; setForm({ ...form, filters: fs }); }} className={`${inputCls} flex-1 min-w-[8rem]`} placeholder={t('campaigns.value', 'value')} />
                   <button onClick={() => setForm({ ...form, filters: form.filters.filter((_, j) => j !== i) })} className="p-2 text-red-400 hover:bg-red-50 rounded-lg shrink-0"><TrashIcon className="w-4 h-4" /></button>
                 </div>
               ))}

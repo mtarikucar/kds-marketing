@@ -90,8 +90,8 @@ export default function InvoicesPage() {
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="space-y-2">
             {items.map((it, i) => (
-              <div key={i} className="flex gap-2">
-                <input value={it.description} onChange={(e) => { const a = [...items]; a[i] = { ...it, description: e.target.value }; setItems(a); }} className={`${inputCls} flex-1`} placeholder={t('invoices.itemDesc', 'Description')} />
+              <div key={i} className="flex flex-wrap gap-2">
+                <input value={it.description} onChange={(e) => { const a = [...items]; a[i] = { ...it, description: e.target.value }; setItems(a); }} className={`${inputCls} w-full sm:w-auto sm:flex-1`} placeholder={t('invoices.itemDesc', 'Description')} />
                 <input type="number" value={it.qty} onChange={(e) => { const a = [...items]; a[i] = { ...it, qty: Number(e.target.value) }; setItems(a); }} className={`${inputCls} w-20`} placeholder="Qty" />
                 <input type="number" value={it.price} onChange={(e) => { const a = [...items]; a[i] = { ...it, price: e.target.value }; setItems(a); }} className={`${inputCls} w-28`} placeholder={t('invoices.unitPrice', 'Unit price')} />
                 <button onClick={() => setItems(items.filter((_, j) => j !== i))} className="p-2 text-red-400 hover:bg-red-50 rounded-lg shrink-0"><TrashIcon className="w-4 h-4" /></button>
