@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PlusIcon, FunnelIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import marketingApi from '../../features/marketing/api/marketingApi';
@@ -30,9 +30,11 @@ type OfferForm = typeof emptyForm;
 
 export default function OffersPage() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
 
-  // Filter state
-  const [status, setStatus] = useState('');
+  // Filter state — seed status from the URL (?status=SENT) so the dashboard
+  // "Offers awaiting reply" deep-link lands pre-filtered.
+  const [status, setStatus] = useState(searchParams.get('status') ?? '');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);

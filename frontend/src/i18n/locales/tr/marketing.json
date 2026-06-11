@@ -918,5 +918,42 @@
     "logoFailed": "Yükleme başarısız",
     "previewName": "Markanız",
     "preview": "Markanız herkese açık sayfalarda ve sohbet widget'ında böyle görünür."
+  },
+  "onboarding": {
+    "title": "Kuruluma başla",
+    "subtitle": "Çalışma alanını çalışır hâle getirmek için birkaç adım.",
+    "progress": "{{total}} adımdan {{done}} tamamlandı",
+    "dismiss": "Kapat",
+    "steps": {
+      "agent": {
+        "title": "İlk AI temsilcini oluştur",
+        "desc": "AI'ın müşterileri nasıl karşılayıp yanıtlayacağını tanımla."
+      },
+      "knowledge": {
+        "title": "Bilgi ekle",
+        "desc": "AI'ın yanıt vereceği menü, çalışma saatleri ve politikaları ekle."
+      },
+      "channel": {
+        "title": "Kanal bağla",
+        "desc": "Web sohbeti, WhatsApp veya SMS — müşterilerin sana yazdığı yer."
+      },
+      "leads": {
+        "title": "İlk lead'ini ekle",
+        "desc": "Pipeline'ı başlatmak için bir lead içe aktar veya oluştur."
+      },
+      "site": {
+        "title": "Açılış sayfası yayınla",
+        "desc": "AI'ın hazırladığı funnel sayfasıyla lead topla."
+      }
+    }
+  },
+  "needsAttention": {
+    "title": "İlgi bekliyor",
+    "subtitle": "Şu anda seni bekleyen işler.",
+    "overdueTasks": "Geciken görevler",
+    "unassignedLeads": "Atanmamış lead'ler",
+    "unread": "Okunmamış konuşmalar",
+    "pendingTasks": "Açık görevler",
+    "openOffers": "Yanıt bekleyen teklifler"
   }
 }

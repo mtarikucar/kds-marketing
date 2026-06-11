@@ -918,5 +918,42 @@
     "logoFailed": "Upload failed",
     "previewName": "Your brand",
     "preview": "This is how your brand appears on public pages and the chat widget."
+  },
+  "onboarding": {
+    "title": "Get set up",
+    "subtitle": "A few steps to get your workspace working for you.",
+    "progress": "{{done}} of {{total}} done",
+    "dismiss": "Dismiss",
+    "steps": {
+      "agent": {
+        "title": "Create your first AI agent",
+        "desc": "Define how your AI greets and answers customers."
+      },
+      "knowledge": {
+        "title": "Add knowledge",
+        "desc": "Give the AI your menu, hours and policies to answer from."
+      },
+      "channel": {
+        "title": "Connect a channel",
+        "desc": "Web chat, WhatsApp or SMS — where customers message you."
+      },
+      "leads": {
+        "title": "Add your first lead",
+        "desc": "Import or create a lead to start your pipeline."
+      },
+      "site": {
+        "title": "Publish a landing page",
+        "desc": "Capture leads with an AI-drafted funnel page."
+      }
+    }
+  },
+  "needsAttention": {
+    "title": "Needs attention",
+    "subtitle": "Items waiting on you right now.",
+    "overdueTasks": "Overdue tasks",
+    "unassignedLeads": "Unassigned leads",
+    "unread": "Unread conversations",
+    "pendingTasks": "Open tasks",
+    "openOffers": "Offers awaiting reply"
   }
 }

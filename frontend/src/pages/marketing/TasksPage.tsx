@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PlusIcon, CheckIcon, ClockIcon, ExclamationTriangleIcon, PencilSquareIcon, TrashIcon, PlayIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import type { MarketingTask } from '../../features/marketing/types';
@@ -22,8 +22,14 @@ const statusIcons: Record<string, React.ElementType> = {
 
 export default function TasksPage() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
   const [status, setStatus] = useState('');
-  const [tab, setTab] = useState<'all' | 'today' | 'overdue'>('all');
+  // Seed the tab from the URL (?tab=overdue) so the dashboard "Overdue tasks"
+  // deep-link lands on the right view.
+  const [tab, setTab] = useState<'all' | 'today' | 'overdue'>(
+    initialTab === 'today' || initialTab === 'overdue' ? initialTab : 'all',
+  );
   const [showForm, setShowForm] = useState(false);
   const [newTask, setNewTask] = useState({
     title: '',

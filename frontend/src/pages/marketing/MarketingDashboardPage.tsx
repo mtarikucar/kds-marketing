@@ -12,7 +12,7 @@ import {
   InboxIcon,
 } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
-import { StatsCard } from '../../features/marketing/components';
+import { StatsCard, GettingStarted, NeedsAttention } from '../../features/marketing/components';
 import { LeadStatus } from '../../features/marketing/types';
 import { LEAD_STATUS_BADGE } from '../../features/marketing/constants';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
@@ -47,6 +47,24 @@ export default function MarketingDashboardPage() {
     queryFn: () => marketingApi.get('/dashboard/top-performers').then((r) => r.data),
     enabled: isManager,
   });
+
+  // Entitlements (shared key with BillingPage). The Inbox/conversations API is
+  // gated by the conversationAi feature and 403s without it — so only surface
+  // the unread card (and call /conversations) when the feature is enabled.
+  const { data: summary } = useQuery({
+    queryKey: ['marketing', 'billing', 'summary'],
+    queryFn: () => marketingApi.get('/billing/summary').then((r) => r.data),
+  });
+  const conversationAiEnabled = !!summary?.entitlements?.features?.conversationAi;
+
+  const { data: convos } = useQuery({
+    // Same key InboxPage uses → shared cache + live EventSource invalidation.
+    queryKey: ['marketing', 'conversations', 'OPEN'],
+    queryFn: () => marketingApi.get('/conversations', { params: { status: 'OPEN' } }).then((r) => r.data),
+    enabled: conversationAiEnabled,
+    refetchInterval: 60_000,
+  });
+  const unreadCount = (convos ?? []).reduce((n: number, c: any) => n + (c.unreadCount ?? 0), 0);
 
   // The guide PDFs are shipped from frontend/public, so their URLs are just
   // the Vite base path + filename. Resolving at runtime keeps the
@@ -94,6 +112,16 @@ export default function MarketingDashboardPage() {
           </a>
         </div>
       </div>
+
+      {/* First-run orientation: setup checklist (managers) + actionable items. */}
+      {isManager && <GettingStarted />}
+      <NeedsAttention
+        stats={stats}
+        today={today}
+        isManager={isManager}
+        conversationAiEnabled={conversationAiEnabled}
+        unreadCount={unreadCount}
+      />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

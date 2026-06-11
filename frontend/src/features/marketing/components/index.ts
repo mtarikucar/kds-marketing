@@ -9,3 +9,5 @@ export { default as AssignCell } from './AssignCell';
 export { default as BulkActionToolbar } from './BulkActionToolbar';
 export { default as DistributionConfigCard } from './DistributionConfigCard';
 export { default as ClickToDialButton } from './ClickToDialButton';
+export { default as GettingStarted } from './GettingStarted';
+export { default as NeedsAttention } from './NeedsAttention';
