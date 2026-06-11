@@ -53,8 +53,8 @@ export default function ReportsPage() {
 
       {/* Lead Sources */}
       {tab === 'sources' && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+          <table className="w-full text-sm min-w-[560px]">
             <thead>
               <tr className="bg-gray-50 text-left text-gray-500">
                 <th className="px-4 py-3 font-medium">Source</th>
@@ -88,8 +88,8 @@ export default function ReportsPage() {
 
       {/* Regional */}
       {tab === 'regional' && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+          <table className="w-full text-sm min-w-[400px]">
             <thead>
               <tr className="bg-gray-50 text-left text-gray-500">
                 <th className="px-4 py-3 font-medium">City</th>
@@ -145,8 +145,8 @@ export default function ReportsPage() {
 
       {/* Performance (Manager only) */}
       {tab === 'performance' && isManager && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+          <table className="w-full text-sm min-w-[760px]">
             <thead>
               <tr className="bg-gray-50 text-left text-gray-500">
                 <th className="px-4 py-3 font-medium">Rep</th>

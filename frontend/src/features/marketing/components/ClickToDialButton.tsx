@@ -66,7 +66,7 @@ export default function ClickToDialButton({
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           placeholder="+90 5xx xxx xx xx"
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-44"
+          className="px-3 py-2 border border-gray-300 rounded-lg text-sm flex-1 min-w-0 sm:flex-none sm:w-44"
         />
         <button
           onClick={() => {

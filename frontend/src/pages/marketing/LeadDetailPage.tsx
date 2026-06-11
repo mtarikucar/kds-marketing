@@ -434,7 +434,7 @@ export default function LeadDetailPage() {
 
               {showOfferForm && (
                 <div className="mb-6 p-4 bg-gray-50 rounded-lg space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Custom Price</label>
                       <input type="number" value={offerPrice} onChange={(e) => setOfferPrice(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="0.00" />
@@ -485,7 +485,7 @@ export default function LeadDetailPage() {
                         </span>
                         <span className="text-xs text-gray-400">{fmtDate(offer.createdAt)}</span>
                       </div>
-                      <div className="grid grid-cols-3 gap-2 text-sm mb-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm mb-3">
                         {offer.customPrice && <div><span className="text-gray-500">Price:</span> <span className="font-medium">{offer.customPrice}</span></div>}
                         {offer.discount && <div><span className="text-gray-500">Discount:</span> <span className="font-medium">{offer.discount}%</span></div>}
                         {offer.trialDays && <div><span className="text-gray-500">Trial:</span> <span className="font-medium">{offer.trialDays} days</span></div>}
@@ -622,7 +622,7 @@ export default function LeadDetailPage() {
                   <p className="text-xs text-red-600 mt-1">Invalid email format.</p>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm text-gray-600 mb-1">First Name *</label>
                   <input type="text" value={convertFirstName} onChange={(e) => setConvertFirstName(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm" />
