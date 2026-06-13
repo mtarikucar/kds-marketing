@@ -1,7 +1,8 @@
-import { Controller, Get, Header, Res } from '@nestjs/common';
+import { Controller, Get, Header, Res, UseGuards } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { MetricsService } from './metrics.service';
+import { MetricsAuthGuard } from './metrics-auth.guard';
 
 /**
  * Prometheus scrape endpoint — `GET /api/metrics`.
@@ -11,6 +12,7 @@ import { MetricsService } from './metrics.service';
  * the Swagger surface (it's ops infra, not part of the product API).
  */
 @ApiExcludeController()
+@UseGuards(MetricsAuthGuard)
 @Controller('metrics')
 export class MetricsController {
   constructor(private readonly metrics: MetricsService) {}

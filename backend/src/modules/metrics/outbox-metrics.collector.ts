@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Gauge } from 'prom-client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MetricsService } from './metrics.service';
+import { withTimeout } from '../../common/util/with-timeout';
+
+// Cap each collect-time query so a hung DB can never wedge a /metrics scrape.
+const COLLECT_TIMEOUT_MS = 1500;
 
 /**
  * Business gauges for the durable outbox (Monitoring & Alerting) — extends the
@@ -49,11 +53,16 @@ export class OutboxMetricsCollector {
 
   private async setFromCount(gauge: Gauge<string>, status: string): Promise<void> {
     try {
-      const n = await this.prisma.outboxEvent.count({ where: { status } });
+      const n = await withTimeout(
+        this.prisma.outboxEvent.count({ where: { status } }),
+        COLLECT_TIMEOUT_MS,
+        `outbox gauge (${status})`,
+      );
       // The mocked-Prisma e2e seam returns undefined; only set a real number so
       // gauge.set never throws on a non-numeric value.
       if (typeof n === 'number') gauge.set(n);
     } catch (err) {
+      // Timeout or DB error: keep the gauge's prior value, never hang or 500.
       this.logger.warn(
         `outbox gauge (${status}) scrape failed: ${(err as Error).message}`,
       );

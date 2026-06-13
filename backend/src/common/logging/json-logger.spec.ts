@@ -79,4 +79,34 @@ describe('JsonLogger (LOG_FORMAT=json)', () => {
     expect(parsed.context).toBe('AuthGuard');
     expect(parsed.trace).toBeUndefined();
   });
+
+  it('never drops a stack passed as the 2nd arg of a context-less error call', () => {
+    // A real multi-line stack must be preserved as `trace`, not mis-filed as
+    // context (which would lose the cause of a 5xx).
+    new JsonLogger().error('boom', 'Error: boom\n    at fn (file.ts:1:1)');
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed.context).toBeUndefined();
+    expect(String(parsed.trace)).toContain('at fn');
+  });
+
+  it('does not throw or lose the envelope on a circular message object', () => {
+    const circular: any = { a: 1 };
+    circular.self = circular;
+    expect(() => new JsonLogger().log(circular, 'Ctx')).not.toThrow();
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed.context).toBe('Ctx');
+    expect(parsed.level).toBe('log');
+  });
+
+  it('serializes a BigInt in the message instead of throwing', () => {
+    expect(() => new JsonLogger().log({ big: 10n } as any, 'Ctx')).not.toThrow();
+    expect(writes[0]).toContain('"big":"10"');
+  });
+
+  it('routes fatal() through the JSON formatter (stderr)', () => {
+    (new JsonLogger() as any).fatal('the sky is falling', 'Boot');
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed.level).toBe('fatal');
+    expect(parsed.context).toBe('Boot');
+  });
 });

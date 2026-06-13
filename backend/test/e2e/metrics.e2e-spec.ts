@@ -40,6 +40,21 @@ describe('Metrics (e2e)', () => {
     expect(res.text).toContain('# TYPE payment_orders_total gauge');
   });
 
+  it('gates the scrape behind METRICS_SCRAPE_TOKEN when configured', async () => {
+    process.env.METRICS_SCRAPE_TOKEN = 'e2e-scrape-secret';
+    try {
+      const noToken = await request(app.getHttpServer()).get('/api/metrics');
+      expect(noToken.status).toBe(401);
+
+      const withToken = await request(app.getHttpServer())
+        .get('/api/metrics')
+        .set('Authorization', 'Bearer e2e-scrape-secret');
+      expect(withToken.status).toBe(200);
+    } finally {
+      delete process.env.METRICS_SCRAPE_TOKEN;
+    }
+  });
+
   it('records a handled request under its matched route PATTERN (not the raw URL), with method + status labels', async () => {
     // Any request that reaches a controller is metered; the exact outcome
     // doesn't matter here — what matters is the label set: method, the matched

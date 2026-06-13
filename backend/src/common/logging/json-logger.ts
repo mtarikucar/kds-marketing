@@ -37,8 +37,12 @@ export class JsonLogger extends ConsoleLogger implements LoggerService {
   }
 
   error(message: unknown, stackOrContext?: string, context?: string): void {
-    // Nest calls error(message, stack?, context?). When only two args are
-    // passed the second is the context, not a stack — match ConsoleLogger.
+    // Nest calls error(message, stack?, context?). With only two args the
+    // second is the bound CONTEXT for the common `logger.error('msg')` case
+    // (the Logger wrapper appends its context), but a context-less caller may
+    // pass a stack there instead. Disambiguate conservatively: only treat it as
+    // context when it looks like a context identifier; otherwise keep it as the
+    // trace so a 5xx stack is never silently dropped.
     if (context === undefined && this.isLikelyContext(stackOrContext)) {
       this.emit('error', message, stackOrContext);
     } else {
@@ -58,10 +62,19 @@ export class JsonLogger extends ConsoleLogger implements LoggerService {
     this.emit('verbose', message, context);
   }
 
+  fatal(message: unknown, context?: string): void {
+    // ConsoleLogger gained fatal(); route it through JSON too so a fatal isn't
+    // silently emitted in the pretty format while everything else is JSON.
+    this.emit('fatal' as LogLevel, message, context);
+  }
+
   private isLikelyContext(s?: string): boolean {
-    // A stack trace spans multiple lines / contains "at "; a context is a short
-    // single token. Heuristic mirrors Nest's own argument disambiguation.
-    return !!s && !s.includes('\n') && s.length < 80;
+    // A context is a short single token (e.g. 'PrismaService'); a stack trace
+    // contains whitespace ("    at …") and usually newlines, and an error
+    // message stringified from a non-Error throw is rarely a bare identifier.
+    // Requiring NO whitespace keeps stacks/messages out of the context slot
+    // (preserved as `trace`) while still recognizing real context labels.
+    return !!s && !/\s/.test(s) && s.length <= 40;
   }
 
   private emit(
@@ -72,12 +85,14 @@ export class JsonLogger extends ConsoleLogger implements LoggerService {
   ): void {
     if (!this.json) {
       // Delegate to the pretty console logger for local dev ergonomics.
-      (super[level] as (m: unknown, c?: string) => void).call(
-        this,
-        message,
-        context,
-      );
-      if (trace && level === 'error') super.error(trace);
+      const fn = (super[level as keyof ConsoleLogger] ?? super.log) as (
+        m: unknown,
+        c?: string,
+      ) => void;
+      fn.call(this, message, context);
+      if (trace && (level === 'error' || (level as string) === 'fatal')) {
+        super.error(trace);
+      }
       return;
     }
 
@@ -91,7 +106,30 @@ export class JsonLogger extends ConsoleLogger implements LoggerService {
     };
     if (trace) line.trace = trace;
 
-    const stream = level === 'error' || level === 'warn' ? process.stderr : process.stdout;
-    stream.write(JSON.stringify(line) + '\n');
+    const stream =
+      level === 'error' || level === 'warn' || (level as string) === 'fatal'
+        ? process.stderr
+        : process.stdout;
+    // A logger must be infallible: never let a circular/BigInt message throw
+    // back into the (often already error-handling) caller.
+    stream.write(this.safeStringify(line) + '\n');
   }
+
+  private safeStringify(line: Record<string, unknown>): string {
+    try {
+      return JSON.stringify(line, bigIntReplacer);
+    } catch {
+      // Last resort: drop the un-serializable message but keep the envelope so
+      // the line (level/context/requestId) is still indexable.
+      return JSON.stringify({
+        ...line,
+        message: '[unserializable message]',
+      });
+    }
+  }
+}
+
+/** Make BigInt JSON-safe (JSON.stringify throws on BigInt by default). */
+function bigIntReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value;
 }

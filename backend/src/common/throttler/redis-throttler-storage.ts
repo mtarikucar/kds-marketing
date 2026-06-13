@@ -133,19 +133,22 @@ export class RedisThrottlerStorage
         timeToBlockExpire,
       };
     } catch (err) {
-      // Fail open: a limiter outage must not become an API outage.
+      // Default policy is FAIL OPEN: a limiter outage must not become an API
+      // outage. The trade-off is that brute-force protection (e.g. the login
+      // limit) is lifted while Redis is unreachable. Deploys that prefer to keep
+      // the limiter strict during an outage can set THROTTLER_FAIL_CLOSED=1 to
+      // fail CLOSED instead (every request 429s until Redis recovers). Either
+      // way the condition is surfaced (once) so it's alertable on the log line.
+      const failClosed = process.env.THROTTLER_FAIL_CLOSED === '1';
       if (!this.warnedDown) {
         this.logger.warn(
-          `Redis throttler increment failed, failing open: ${(err as Error).message}`,
+          `Redis throttler increment failed, failing ${failClosed ? 'CLOSED' : 'OPEN'}: ${(err as Error).message}`,
         );
         this.warnedDown = true;
       }
-      return {
-        totalHits: 0,
-        timeToExpire: ttl,
-        isBlocked: false,
-        timeToBlockExpire: 0,
-      };
+      return failClosed
+        ? { totalHits: limit + 1, timeToExpire: ttl, isBlocked: true, timeToBlockExpire: blockDuration }
+        : { totalHits: 0, timeToExpire: ttl, isBlocked: false, timeToBlockExpire: 0 };
     }
   }
 

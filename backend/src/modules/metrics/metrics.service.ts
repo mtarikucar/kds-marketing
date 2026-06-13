@@ -29,6 +29,15 @@ export class MetricsService {
   readonly httpRequestDuration: Histogram<string>;
 
   constructor() {
+    // Stamp every series with the replica id (container hostname) so counters
+    // from different replicas behind one scrape target don't collide. Named
+    // `replica` (not `instance`) to avoid clobbering Prometheus' own target
+    // `instance` label. Opt-out/override via METRICS_REPLICA.
+    const replica = process.env.METRICS_REPLICA ?? process.env.HOSTNAME;
+    if (replica) {
+      this.registry.setDefaultLabels({ replica });
+    }
+
     if (process.env.NODE_ENV !== 'test') {
       collectDefaultMetrics({ register: this.registry });
     }

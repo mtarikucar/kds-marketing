@@ -57,6 +57,17 @@ function validateEnv(): void {
     );
   }
 
+  // Rate limiter: without REDIS_URL the ThrottlerModule falls back to a
+  // per-process in-memory store, so under more than one replica the global
+  // limit is diluted (a "5/min" rule becomes 5×N). Single-replica deploys are
+  // fine — hence a warning, not a hard exit.
+  if (isProd && !process.env.REDIS_URL) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[env] REDIS_URL is not set — the rate limiter uses per-replica in-memory buckets; the global limit will be diluted under >1 replica. Set REDIS_URL to a shared Redis for a correct distributed limit.',
+    );
+  }
+
   // MARKETING_SECRET_KEY is the AES-256-GCM master key that seals channel/PSP
   // secrets (consumed from Phase F P2 on). It's optional in P1, but if it's
   // present it MUST decode to exactly 32 bytes or the box throws at first

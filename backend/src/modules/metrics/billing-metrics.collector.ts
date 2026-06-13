@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Gauge } from 'prom-client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MetricsService } from './metrics.service';
+import { withTimeout } from '../../common/util/with-timeout';
+
+// Cap the collect-time query so a hung DB can never wedge a /metrics scrape.
+const COLLECT_TIMEOUT_MS = 1500;
 
 /**
  * Settlement-outcome gauge (Monitoring & Alerting) — the last of the backlog-#2
@@ -39,10 +43,14 @@ export class BillingMetricsCollector {
 
   private async collectInto(gauge: Gauge<string>): Promise<void> {
     try {
-      const grouped = await this.prisma.paymentOrder.groupBy({
-        by: ['status'],
-        _count: { _all: true },
-      });
+      const grouped = await withTimeout(
+        this.prisma.paymentOrder.groupBy({
+          by: ['status'],
+          _count: { _all: true },
+        }),
+        COLLECT_TIMEOUT_MS,
+        'payment_orders gauge',
+      );
       // The mocked-Prisma e2e seam returns undefined; only act on a real array.
       if (!Array.isArray(grouped)) return;
       gauge.reset();

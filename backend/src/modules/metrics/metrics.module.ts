@@ -5,6 +5,7 @@ import { MetricsController } from './metrics.controller';
 import { MetricsInterceptor } from './metrics.interceptor';
 import { OutboxMetricsCollector } from './outbox-metrics.collector';
 import { BillingMetricsCollector } from './billing-metrics.collector';
+import { MetricsAuthGuard } from './metrics-auth.guard';
 
 /**
  * Monitoring surface (backlog #2): the `/api/metrics` scrape endpoint plus the
@@ -19,6 +20,7 @@ import { BillingMetricsCollector } from './billing-metrics.collector';
   controllers: [MetricsController],
   providers: [
     MetricsService,
+    MetricsAuthGuard,
     OutboxMetricsCollector,
     BillingMetricsCollector,
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
