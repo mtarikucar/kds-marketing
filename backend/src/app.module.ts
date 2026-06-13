@@ -12,6 +12,7 @@ import { PlatformModule } from './modules/platform/platform.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { ProvisioningClientModule } from './core-client/provisioning-client.module';
 import { InternalApiModule } from './modules/internal/internal.module';
+import { HealthModule } from './modules/health/health.module';
 
 /**
  * Standalone marketing service composition root (Phase-5 physical split).
@@ -40,6 +41,8 @@ import { InternalApiModule } from './modules/internal/internal.module';
       },
     ]),
     PrismaModule,
+    // Liveness + readiness probes (public, unauthenticated).
+    HealthModule,
     // @Global: EmailService (marketing tenant-welcome email).
     CommonModule,
     OutboxModule,

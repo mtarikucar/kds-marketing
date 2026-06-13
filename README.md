@@ -101,7 +101,10 @@ npm install
 npx prisma generate
 npx prisma migrate deploy     # apply 0_init to your marketing DB
 npm run start:dev             # http://localhost:3100/api
-npm test                      # 17 suites / 145 tests
+npm test                      # unit: 56 suites / 419 tests
+npm run test:e2e              # e2e: full-app HTTP pipeline (mocked Prisma seam)
+# health probes: GET /api/health (liveness) · GET /api/health/ready (readiness)
+# architecture conformance audit + backlog: docs/ARCHITECTURE-CONFORMANCE.md
 ```
 
 ### Frontend
