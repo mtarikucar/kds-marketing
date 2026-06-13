@@ -35,6 +35,11 @@ describe('Metrics (e2e)', () => {
     expect(res.text).toContain('# TYPE outbox_events_failed gauge');
   });
 
+  it('exposes the settlement-outcome gauge', async () => {
+    const res = await request(app.getHttpServer()).get('/api/metrics');
+    expect(res.text).toContain('# TYPE payment_orders_total gauge');
+  });
+
   it('records a handled request under its matched route PATTERN (not the raw URL), with method + status labels', async () => {
     // Any request that reaches a controller is metered; the exact outcome
     // doesn't matter here — what matters is the label set: method, the matched
