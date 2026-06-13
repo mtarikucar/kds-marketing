@@ -5,8 +5,8 @@
 > attributes, cites the evidence in-tree, and tracks the hardening backlog.
 > It is a **living document** — update the status column when a gap closes.
 >
-> Last reviewed: 2026-06-13 · Baseline: 62 unit suites / 446 tests + 10 e2e
-> suites / 51 tests (+ an opt-in real-DB lifecycle suite, 5 tests), all green.
+> Last reviewed: 2026-06-13 · Baseline: 65 unit suites / 456 tests + 10 e2e
+> suites / 53 tests (+ an opt-in real-DB lifecycle suite, 5 tests), all green.
 
 ## How to read this
 
@@ -164,7 +164,11 @@ Ordered by impact ÷ risk. Each is a discrete, independently shippable PR.
 | 7 | ✅ **Done** — real-DB e2e harness (`createRealDbTestApp`, opt-in via `E2E_REAL_DB=1`) + the full lead lifecycle (ingest → assign → convert → commission) as one real-Postgres flow. | Testability, Data Consistency | M | lead-lifecycle.realdb.e2e + `npm run test:e2e:realdb`. |
 | 8 | ✅ **Done** — global exception filter; envelope = `{ statusCode, message, requestId, path, timestamp }`, additive (preserves success-path envelopes). | Reliability, Observability | S | all-exceptions.filter.ts + error-envelope.e2e. |
 
-**Backlog status: all items (1–8) closed.** Remaining nice-to-haves not in the original list: outbox-worker unit coverage, `/metrics` business gauges (outbox depth, settlement outcomes), and a CI service-container wiring for the opt-in real-DB suite.
+**Backlog status: all items (1–8) closed**, plus the follow-on nice-to-haves:
+outbox-worker unit coverage ✅, `/metrics` business gauges (`outbox_events_pending`
+/ `outbox_events_failed` ✅, `payment_orders_total{status}` ✅), and a CI
+`backend-realdb` job wiring Postgres + Redis service containers to run the
+opt-in real-DB suite ✅.
 
 ---
 
