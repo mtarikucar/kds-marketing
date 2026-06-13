@@ -5,8 +5,8 @@
 > attributes, cites the evidence in-tree, and tracks the hardening backlog.
 > It is a **living document** — update the status column when a gap closes.
 >
-> Last reviewed: 2026-06-13 · Baseline: 55 unit suites / 414 tests + 4 e2e
-> suites / 30 tests, all green.
+> Last reviewed: 2026-06-13 · Baseline: 62 unit suites / 446 tests + 10 e2e
+> suites / 51 tests (+ an opt-in real-DB lifecycle suite, 5 tests), all green.
 
 ## How to read this
 
@@ -29,7 +29,7 @@ holes are.
 | 1 | **Reusability** | Strong | Adapter registries (`channel-adapter.registry.ts`, `telephony-provider.registry.ts`), shared `common/` helpers (crypto, pagination, transforms, PII mask), port interfaces in `core-contracts/`. |
 | 2 | **Maintainability** | Strong | Bounded-context module layout, dense intent-comments, consistent NestJS idioms, `nest build` clean. |
 | 3 | **Scalability — vertical** | Strong | Stateless request handlers; Prisma connection pooling; `--maxWorkers` tuned. |
-| 3 | **Scalability — horizontal** | Partial | App is stateless and replica-safe **except** the rate limiter uses an in-memory `ThrottlerModule` store — per-replica buckets dilute the global limit. Outbox claim is `FOR UPDATE SKIP LOCKED` (multi-worker safe). → backlog #6. |
+| 3 | **Scalability — horizontal** | Strong | Stateless + replica-safe; the rate limiter now uses a Redis `ThrottlerStorage` (global bucket across replicas) when `REDIS_URL` is set, falling back to in-memory otherwise. Outbox claim is `FOR UPDATE SKIP LOCKED` (multi-worker safe). |
 | 4 | **Modularity** | Strong | One Nest module per context (`marketing`, `billing`, `platform`, `internal`, `outbox`, `health`); cross-module access only via `@Global` providers + ports. |
 | 5 | **Separation of Concerns** | Strong | Controllers→services→Prisma; transport in `core-client`, contracts in `core-contracts`, ACL in `marketing/acl`. HTTP wiring isolated in `app.config.ts`. |
 | 6 | **Single Source of Truth** | Strong | Wire contracts vendored byte-identical in `core-contracts/`; HTTP bootstrap unified in `app.config.ts` (shared by `main.ts` + e2e harness). |
@@ -37,7 +37,7 @@ holes are.
 | 8 | **Testability** | Strong | 414 unit tests + **new** e2e harness (`test/`) booting the real app via `configureApp` with a mocked DB seam; arch-fitness + tripwire tests. |
 | 9 | **Reliability** | Strong | Idempotent settlement, durable outbox with retry/DLQ, fail-fast env validation, **new** readiness probe drains unhealthy replicas. |
 | 10 | **Idempotency** | Strong | Settlement two-phase flip, commission `sourcePaymentId` partial-unique, lead-convert keyed on `leadId`, ingest dedupe on `externalRef`, outbox `idempotencyKey`. |
-| 11 | **Observability** | Partial | Wide `Logger` usage (48 files) + **new** `X-Request-ID` correlation middleware + health/readiness. Still missing: structured JSON logs, metrics, the request-id threaded into log lines. → backlog #1, #2. |
+| 11 | **Observability** | Strong | Structured JSON logger with the `X-Request-ID` threaded into every line via AsyncLocalStorage; `/api/metrics` Prometheus endpoint (request count/latency); `X-Request-ID` correlation middleware; health/readiness probes. |
 | 12 | **Security** | Strong | Three isolated JWT realms, role hierarchy guard, per-workspace ingest tokens (sha256 at rest), AES-256-GCM secret box, helmet CSP, CORS allowlist, timing-safe token compare, throttling, prod query-log suppression. |
 | 13 | **Performance** | Strong | Tight body limits, indexed scoped reads, entitlements cache, `SKIP LOCKED` outbox. |
 | 14 | **Fault Tolerance** | Strong | Liveness≠readiness split, transport-neutral core errors, outbox retry/backoff, settlement no-ops on replay. |
@@ -53,9 +53,9 @@ holes are.
 | 24 | **Deployability** | Strong | `migrate deploy` on boot, shutdown hooks, **new** k8s-style probes for rollout gating. |
 | 25 | **Resilience** | Strong | See Fault Tolerance + readiness draining + throttle. |
 | 26 | **Naming Consistency** | Strong | `marketing-*`, `*.service`, `*.controller`, `*.guard`, `*.consumer`, `*.adapter` conventions held across 270 files. |
-| 27 | **Documentation** | Partial | Excellent README + in-code rationale; **this audit** added. Missing: generated OpenAPI/Swagger. → backlog #5. |
-| 28 | **Monitoring & Alerting** | Partial | Health endpoints + logs give probes/log-based alerts; no metrics endpoint for Prometheus/SLO alerting. → backlog #2. |
-| 29 | **Auditability** | Partial | Implicit audit data (commission `auditLog`, offer snapshots, operator approval stamps) + **new** request-id; no dedicated append-only audit table. → backlog #3. |
+| 27 | **Documentation** | Strong | Excellent README + in-code rationale + this audit + generated OpenAPI/Swagger at `/api/docs`. |
+| 28 | **Monitoring & Alerting** | Strong | Health endpoints + structured logs + `/api/metrics` (Prometheus request count/latency histogram) enabling SLO/burn-rate alerts. |
+| 29 | **Auditability** | Strong | Dedicated append-only `audit_log` table + `@Audit()` interceptor on material state changes (workspace/lead status, payment + commission approvals), each row carrying actor/resource/requestId/outcome; plus the prior implicit audit data. |
 | 30 | **Multi-Tenancy Safety** | Strong | `workspace-scoping.arch.spec.ts` statically forbids unscoped multi-row/create queries; `wsp` claim verified against the live user row; SYSTEM sentinel can't authenticate. |
 
 ---
@@ -121,20 +121,50 @@ holes are.
   isolation) and the error envelope. Closes backlog #4. E2e now **7 suites /
   41 tests**; unit **56 / 419**.
 
+## 3c. Delivered — session 3 (closing the observability/scale/audit backlog)
+
+- **Structured, correlated logging** (`common/logging/`): a `JsonLogger`
+  installed via `app.useLogger()` turns every existing `Logger` call into a JSON
+  line stamped with the request's `X-Request-ID`, pulled implicitly from an
+  AsyncLocalStorage scope opened by the correlation middleware. (Backlog #1.)
+- **Prometheus metrics** (`modules/metrics/`): `/api/metrics` + a global
+  interceptor recording request count and a latency histogram, labelled by
+  method / matched-route-pattern / status (raw URLs collapse to one label to
+  bound cardinality). (Backlog #2.)
+- **Append-only audit trail** (`modules/audit/` + `audit_log` migration): an
+  append-only `AuditLogService` (no update/delete; non-fatal) and a declarative
+  `@Audit()` interceptor that resolves the actor across all three realms and
+  records actor/resource/requestId/ip/outcome. Applied to workspace-status,
+  manual payment approve/reject, lead-status, and commission approve/pay.
+  (Backlog #3.)
+- **Distributed rate-limit store** (`common/throttler/`): a Redis
+  `ThrottlerStorage` (atomic Lua increment+block) wired via `forRootAsync`,
+  gated on `REDIS_URL`, fail-open on a Redis blip. Makes the throttle bucket
+  global across replicas. (Backlog #6.)
+- **Real-DB e2e + full lead lifecycle** (`test/utils` + `lead-lifecycle.realdb.e2e`):
+  an opt-in (`E2E_REAL_DB=1`) harness that boots the app against real Postgres,
+  and a single flow exercising ingest → assign → convert → commission with only
+  the cross-context CORE provisioning port stubbed. (Backlog #7.)
+
+All of the above ship with unit and/or e2e coverage; the audit migration and the
+lifecycle flow were verified against a live Postgres.
+
 ## 4. Backlog — remaining phases (prioritized)
 
 Ordered by impact ÷ risk. Each is a discrete, independently shippable PR.
 
 | # | Item | Quality served | Effort | Notes |
 |---|------|----------------|--------|-------|
-| 1 | Thread `req.id` into a structured (JSON) logger; replace ad-hoc `console.log` in `prisma.service.ts`/`main.ts` | Observability, Auditability | M | Adopt a Nest `LoggerService` (pino) bound to AsyncLocalStorage. |
-| 2 | `/metrics` Prometheus endpoint (request count/latency, outbox depth, settlement outcomes) | Monitoring & Alerting | M | Enables SLO alerts. |
-| 3 | Dedicated append-only `audit_log` table + interceptor for material state changes (lead status, role change, commission approval, workspace status) | Auditability, Security | M | Formalizes today's implicit audit data. |
+| 1 | ✅ **Done** — structured JSON logger (`JsonLogger`) installed via `app.useLogger()`; `req.id` threaded through AsyncLocalStorage so every line is correlated; `prisma.service.ts` `console.log`s routed through it. | Observability, Auditability | M | `common/logging/` + json-logger.spec. |
+| 2 | ✅ **Done** — `/api/metrics` Prometheus endpoint; global interceptor records `http_requests_total` + `http_request_duration_seconds` by method/route-pattern/status (cardinality-safe). | Monitoring & Alerting | M | `modules/metrics/` + unit + e2e. |
+| 3 | ✅ **Done** — append-only `audit_log` table + `@Audit()` decorator/interceptor on material state changes (workspace status, manual payment approve/reject, lead status, commission approve/pay). Append-only + non-fatal service. | Auditability, Security | M | `modules/audit/` + migration + unit + e2e. |
 | 4 | ✅ **Done** — e2e for `platform` realm + `internal-research` (principal isolation). `outbox` worker still pending. | Testability, Reliability | M | platform-auth.e2e + internal-research.e2e. |
-| 5 | OpenAPI/Swagger generation (`@nestjs/swagger`) from existing DTOs | Documentation | S | DTOs are already class-validator decorated. |
-| 6 | Distributed rate-limit store (Redis `ThrottlerStorage`) | Horizontal Scalability | S | Removes per-replica bucket dilution. |
-| 7 | Real-DB e2e mode: throwaway Postgres schema in CI + the full lead lifecycle (ingest → assign → convert → commission) as one e2e flow | Testability, Data Consistency | M | `test-app.ts` is already structured for the override swap. |
+| 5 | ✅ **Done** — OpenAPI/Swagger at `/api/docs`. | Documentation | S | swagger.ts + openapi.e2e. |
+| 6 | ✅ **Done** — Redis `ThrottlerStorage` (atomic Lua), gated on `REDIS_URL`, fail-open; the per-replica bucket dilution is gone when Redis is configured. | Horizontal Scalability | S | `common/throttler/` + integration spec. |
+| 7 | ✅ **Done** — real-DB e2e harness (`createRealDbTestApp`, opt-in via `E2E_REAL_DB=1`) + the full lead lifecycle (ingest → assign → convert → commission) as one real-Postgres flow. | Testability, Data Consistency | M | lead-lifecycle.realdb.e2e + `npm run test:e2e:realdb`. |
 | 8 | ✅ **Done** — global exception filter; envelope = `{ statusCode, message, requestId, path, timestamp }`, additive (preserves success-path envelopes). | Reliability, Observability | S | all-exceptions.filter.ts + error-envelope.e2e. |
+
+**Backlog status: all items (1–8) closed.** Remaining nice-to-haves not in the original list: outbox-worker unit coverage, `/metrics` business gauges (outbox depth, settlement outcomes), and a CI service-container wiring for the opt-in real-DB suite.
 
 ---
 

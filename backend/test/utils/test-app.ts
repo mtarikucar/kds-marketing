@@ -94,6 +94,44 @@ export async function closeTestApp(app?: INestApplication): Promise<void> {
 }
 
 /**
+ * REAL-DATABASE harness (backlog #7). Identical wiring to {@link createTestApp},
+ * but the PrismaService is NOT mocked — it talks to the Postgres at the ambient
+ * `DATABASE_URL` (provisioned by the SessionStart hook / CI service). Used by the
+ * full lead-lifecycle flow to assert real cross-table data consistency.
+ *
+ * Opt-in: specs guard on `E2E_REAL_DB === '1'` and skip otherwise, so the default
+ * (DB-less, mocked) suite — and CI without a database — is unaffected.
+ */
+export function realDbEnabled(): boolean {
+  return process.env.E2E_REAL_DB === '1';
+}
+
+export async function createRealDbTestApp(
+  customize?: (builder: TestingModuleBuilder) => void,
+): Promise<{ app: NestExpressApplication; prisma: PrismaService }> {
+  // Apply the test secrets but KEEP the real DATABASE_URL (don't clobber it with
+  // the fake one in TEST_ENV); force the in-memory throttler store.
+  for (const [k, v] of Object.entries(TEST_ENV)) {
+    if (k === 'DATABASE_URL') continue;
+    process.env[k] = v;
+  }
+  delete process.env.REDIS_URL;
+
+  const builder = Test.createTestingModule({ imports: [AppModule] });
+  if (customize) customize(builder);
+  const moduleRef = await builder.compile();
+
+  const app = moduleRef.createNestApplication<NestExpressApplication>({
+    bodyParser: false,
+  });
+  configureApp(app);
+  await app.init();
+
+  const prisma = app.get(PrismaService);
+  return { app, prisma };
+}
+
+/**
  * Mint a marketing-realm access token the way MarketingAuthService does, signed
  * with the test secret + HS256 so {@link MarketingGuard} accepts it. The caller
  * must also arrange `prisma.marketingUser.findUnique` to return a matching

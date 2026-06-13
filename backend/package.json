@@ -16,6 +16,7 @@
     "test:watch": "jest --watch --maxWorkers=2 --workerIdleMemoryLimit=512MB",
     "test:cov": "jest --coverage --maxWorkers=2 --workerIdleMemoryLimit=512MB",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
+    "test:e2e:realdb": "E2E_REAL_DB=1 jest --config ./test/jest-e2e.json --runInBand",
     "test:all": "npm test && npm run test:e2e",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
