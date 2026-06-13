@@ -13,6 +13,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { ProvisioningClientModule } from './core-client/provisioning-client.module';
 import { InternalApiModule } from './modules/internal/internal.module';
 import { HealthModule } from './modules/health/health.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 /**
  * Standalone marketing service composition root (Phase-5 physical split).
@@ -43,6 +44,8 @@ import { HealthModule } from './modules/health/health.module';
     PrismaModule,
     // Liveness + readiness probes (public, unauthenticated).
     HealthModule,
+    // Prometheus /api/metrics scrape endpoint + request count/latency.
+    MetricsModule,
     // @Global: EmailService (marketing tenant-welcome email).
     CommonModule,
     OutboxModule,
