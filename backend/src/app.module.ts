@@ -16,6 +16,7 @@ import { ProvisioningClientModule } from './core-client/provisioning-client.modu
 import { InternalApiModule } from './modules/internal/internal.module';
 import { HealthModule } from './modules/health/health.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { AuditModule } from './modules/audit/audit.module';
 
 /**
  * Standalone marketing service composition root (Phase-5 physical split).
@@ -52,6 +53,8 @@ import { MetricsModule } from './modules/metrics/metrics.module';
     HealthModule,
     // Prometheus /api/metrics scrape endpoint + request count/latency.
     MetricsModule,
+    // Append-only audit trail + the @Audit() interceptor.
+    AuditModule,
     // @Global: EmailService (marketing tenant-welcome email).
     CommonModule,
     OutboxModule,

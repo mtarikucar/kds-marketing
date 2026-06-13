@@ -118,6 +118,37 @@ export function signMarketingToken(payload: {
   });
 }
 
+/**
+ * Mint a platform-realm operator token the way PlatformAuthService does (HS256
+ * over PLATFORM_JWT_SECRET, `type: 'platform'`), so {@link PlatformGuard}
+ * accepts it. The caller must arrange `prisma.platformOperator.findUnique` to
+ * return a matching ACTIVE operator.
+ */
+export function signPlatformToken(payload: {
+  sub: string;
+  ver?: number;
+}): string {
+  const jwt = new JwtService({
+    secret: TEST_ENV.PLATFORM_JWT_SECRET,
+    signOptions: { algorithm: 'HS256', expiresIn: '8h' },
+  });
+  return jwt.sign({ sub: payload.sub, type: 'platform', ver: payload.ver ?? 0 });
+}
+
+/** The operator row PlatformGuard re-reads after verifying a token. */
+export function mockPlatformOperator(
+  over: Partial<Record<string, unknown>> = {},
+) {
+  return {
+    id: 'op-1',
+    email: 'operator@example.com',
+    name: 'Olga Operator',
+    status: 'ACTIVE',
+    tokenVersion: 0,
+    ...over,
+  };
+}
+
 /** The user row MarketingGuard re-reads after verifying a token. */
 export function mockMarketingUser(over: Partial<Record<string, unknown>> = {}) {
   return {

@@ -920,19 +920,19 @@ model Workflow {
 /// workflow that starts another) capped at 3. A raw partial-unique index
 /// (see the migration) enforces ONE active run per (workflow, lead).
 model WorkflowRun {
-  id             String    @id @default(uuid())
-  workspaceId    String
-  workflowId     String
-  workflowVersion Int      @default(1)
-  leadId         String?
-  conversationId String?
-  status         String    @default("RUNNING") // RUNNING | WAITING | DONE | FAILED | STOPPED
-  cursor         Json
-  context        Json
-  depth          Int       @default(0)
-  lastError      String?
-  startedAt      DateTime  @default(now())
-  completedAt    DateTime?
+  id              String    @id @default(uuid())
+  workspaceId     String
+  workflowId      String
+  workflowVersion Int       @default(1)
+  leadId          String?
+  conversationId  String?
+  status          String    @default("RUNNING") // RUNNING | WAITING | DONE | FAILED | STOPPED
+  cursor          Json
+  context         Json
+  depth           Int       @default(0)
+  lastError       String?
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1096,9 +1096,9 @@ model Booking {
 
 /// A place reviews are collected (v1: a Google Business "leave a review" URL).
 model ReviewSource {
-  id          String  @id @default(uuid())
+  id          String @id @default(uuid())
   workspaceId String
-  type        String  @default("GOOGLE") // GOOGLE
+  type        String @default("GOOGLE") // GOOGLE
   name        String
   placeUrl    String
 
@@ -1253,4 +1253,48 @@ model OutboxEvent {
   @@index([type, createdAt])
   @@index([tenantId, createdAt])
   @@map("outbox_events")
+}
+
+/// Append-only audit trail (Auditability / Security) — backlog #3.
+///
+/// Formalizes what used to live implicitly across the schema (commission
+/// approval stamps, offer snapshots, operator action timestamps) into one
+/// queryable, tamper-evident log of material state changes: who did what to
+/// which resource, when, from where, and whether it succeeded.
+///
+/// APPEND-ONLY by contract: AuditLogService only ever inserts — there is no
+/// update/delete path in the service layer. Rows are written out-of-band by the
+/// AuditInterceptor and MUST NOT participate in the request's transaction, so a
+/// failed audit write can never roll back (or be rolled back by) the business
+/// action it records.
+model AuditLog {
+  id         String   @id @default(uuid())
+  occurredAt DateTime @default(now())
+
+  // WHO — the principal that performed the action, by realm. actorId/email are
+  // null for SYSTEM/anonymous actions (e.g. an unauthenticated webhook).
+  actorType  String // PLATFORM_OPERATOR | MARKETING_USER | SERVICE | SYSTEM
+  actorId    String?
+  actorEmail String?
+
+  // WHAT — a stable dotted action name plus the targeted resource.
+  action       String // e.g. "workspace.status.update", "commission.approve"
+  resourceType String // e.g. "workspace", "order", "commission", "lead"
+  resourceId   String?
+
+  // WHERE — tenant scope (when the action is workspace-scoped) + tracing.
+  workspaceId String?
+  requestId   String?
+  ip          String?
+
+  // OUTCOME + detail. metadata holds a small whitelisted slice of the request
+  // (e.g. the new status), never secrets or full bodies.
+  outcome  String @default("SUCCESS") // SUCCESS | FAILURE
+  metadata Json?
+
+  @@index([workspaceId, occurredAt])
+  @@index([resourceType, resourceId])
+  @@index([actorId, occurredAt])
+  @@index([action, occurredAt])
+  @@map("audit_log")
 }

@@ -23,6 +23,7 @@ import { UpdateLeadStatusDto } from '../dto/update-lead-status.dto';
 import { AssignLeadDto } from '../dto/assign-lead.dto';
 import { BulkAssignLeadDto } from '../dto/bulk-assign-lead.dto';
 import { MarketingUserPayload } from '../types';
+import { Audit } from '../../audit/audit.decorator';
 
 @Controller('marketing/leads')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
@@ -55,6 +56,12 @@ export class MarketingLeadsController {
   }
 
   @Patch(':id/status')
+  @Audit({
+    action: 'lead.status.update',
+    resourceType: 'lead',
+    resourceIdParam: 'id',
+    captureBody: ['status', 'lostReason'],
+  })
   updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateLeadStatusDto,
