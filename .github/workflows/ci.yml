@@ -36,6 +36,49 @@ jobs:
       - run: npm run test:e2e
       - run: npm run build
 
+  # Opt-in real-database lane: provisions Postgres + Redis service containers and
+  # runs the lead-lifecycle flow (ingest → assign → convert → commission) plus the
+  # Redis throttler-store integration spec against the real thing. Kept separate
+  # from the fast mocked lane so a DB hiccup never blocks the core gate.
+  backend-realdb:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: marketing
+          POSTGRES_PASSWORD: marketing
+          POSTGRES_DB: marketing
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U marketing"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://marketing:marketing@localhost:5432/marketing?schema=public
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      # E2E_REAL_DB=1 turns on the real-DB harness (the lead-lifecycle suite);
+      # the other e2e suites keep their mocked Prisma seam and run unaffected.
+      - run: npm run test:e2e:realdb
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

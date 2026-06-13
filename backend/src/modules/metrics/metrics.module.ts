@@ -3,10 +3,12 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { MetricsService } from './metrics.service';
 import { MetricsController } from './metrics.controller';
 import { MetricsInterceptor } from './metrics.interceptor';
+import { OutboxMetricsCollector } from './outbox-metrics.collector';
 
 /**
  * Monitoring surface (backlog #2): the `/api/metrics` scrape endpoint plus the
- * global interceptor that records request count + latency for every route.
+ * global interceptor that records request count + latency for every route, and
+ * the business gauges (outbox pending / DLQ depth).
  *
  * The interceptor is registered as an APP_INTERCEPTOR here (not in
  * app.config.ts) so it ships with the module and is dependency-injected the
@@ -16,6 +18,7 @@ import { MetricsInterceptor } from './metrics.interceptor';
   controllers: [MetricsController],
   providers: [
     MetricsService,
+    OutboxMetricsCollector,
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
   ],
 })

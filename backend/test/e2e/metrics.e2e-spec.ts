@@ -29,6 +29,12 @@ describe('Metrics (e2e)', () => {
     expect(res.text).toContain('# TYPE http_request_duration_seconds histogram');
   });
 
+  it('exposes the outbox business gauges (pending + DLQ depth)', async () => {
+    const res = await request(app.getHttpServer()).get('/api/metrics');
+    expect(res.text).toContain('# TYPE outbox_events_pending gauge');
+    expect(res.text).toContain('# TYPE outbox_events_failed gauge');
+  });
+
   it('records a handled request under its matched route PATTERN (not the raw URL), with method + status labels', async () => {
     // Any request that reaches a controller is metered; the exact outcome
     // doesn't matter here — what matters is the label set: method, the matched
