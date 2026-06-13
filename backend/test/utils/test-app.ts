@@ -43,6 +43,10 @@ export function applyTestEnv(): void {
   for (const [k, v] of Object.entries(TEST_ENV)) {
     process.env[k] = v;
   }
+  // Force the in-memory throttler store regardless of the host environment, so
+  // the rate-limit e2e is deterministic (per-app buckets that reset each boot)
+  // and matches CI, which has no Redis. The Redis store is covered separately.
+  delete process.env.REDIS_URL;
 }
 
 export interface TestApp {
