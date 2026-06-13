@@ -7,7 +7,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { APP_VERSION } from '../../../lib/env';
-import { NAV_GROUPS, type NavGroup, type NavItem } from '../navigation';
+import { NAV_GROUPS, visibleNav, type NavItem } from '../navigation';
 import { useEntitlements } from '../hooks/useEntitlements';
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -27,11 +27,8 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
   // Collapsible groups (only Growth, today) remember their open state per group id.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  /** Apply role + entitlement gating; returns the items this user actually sees. */
-  const visibleItems = (group: NavGroup): NavItem[] =>
-    group.items.filter(
-      (item) => (item.managerOnly ? isManager : true) && has(item.feature),
-    );
+  // Role + entitlement gated, with emptied groups already dropped.
+  const groups = visibleNav(NAV_GROUPS, { isManager, has });
 
   const renderItem = (item: NavItem) => (
     <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
@@ -64,10 +61,8 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
 
       {/* Navigation */}
       <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-4">
-        {NAV_GROUPS.map((group) => {
-          const items = visibleItems(group);
-          if (items.length === 0) return null; // empty group → no header clutter
-
+        {groups.map((group) => {
+          const items = group.items;
           const isCollapsed = group.collapsible && collapsed[group.id];
 
           return (

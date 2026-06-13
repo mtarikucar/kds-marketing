@@ -140,3 +140,26 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
 ];
+
+export interface NavVisibilityOpts {
+  isManager: boolean;
+  /** Entitlement check; `has(undefined)` is true (core item). */
+  has: (feature?: FeatureKey) => boolean;
+}
+
+/**
+ * Pure nav gating used by the sidebar (extracted so it's unit-testable without
+ * rendering): drop items the user's role/entitlement can't see, then drop any
+ * group left empty. This is the function that turns the flat 26-link menu into
+ * a focused, package-appropriate one.
+ */
+export function visibleNav(groups: NavGroup[], opts: NavVisibilityOpts): NavGroup[] {
+  return groups
+    .map((g) => ({
+      ...g,
+      items: g.items.filter(
+        (i) => (i.managerOnly ? opts.isManager : true) && opts.has(i.feature),
+      ),
+    }))
+    .filter((g) => g.items.length > 0);
+}
