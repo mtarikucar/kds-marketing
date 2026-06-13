@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
+import { runWithRequestContext } from '../logging/request-context';
 
 /**
  * Correlation-id middleware (Observability / Auditability / Traceability).
@@ -32,5 +33,9 @@ export function requestIdMiddleware(
   req.id = id;
   req.requestId = id;
   res.setHeader('X-Request-ID', id);
-  next();
+
+  // Enter an AsyncLocalStorage scope for the rest of the request so any logger
+  // downstream can stamp this id without it being passed around. Wrapping
+  // `next()` keeps the store alive across every async hop that follows.
+  runWithRequestContext({ requestId: id }, () => next());
 }

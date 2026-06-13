@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { configureApp } from './app.config';
+import { JsonLogger } from './common/logging/json-logger';
 
 /**
  * Fail-fast env validation BEFORE Nest touches anything — missing secrets
@@ -94,7 +95,15 @@ process.on('uncaughtException', (error: Error) => {
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
+    // Buffer boot logs until the structured logger is installed, so even
+    // startup lines come out as correlated JSON in production.
+    bufferLogs: true,
   });
+
+  // Structured, correlation-aware logging for the whole app: every
+  // `new Logger(ctx)` call now emits a JSON line carrying the request's
+  // X-Request-ID (from AsyncLocalStorage). Dev stays pretty unless LOG_FORMAT=json.
+  app.useLogger(new JsonLogger());
 
   // All HTTP wiring (request-id, raw-body webhooks, helmet, CORS, global pipe,
   // `api` prefix) lives in one place so the e2e harness boots an identical app.
