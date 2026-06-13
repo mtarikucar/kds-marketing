@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 
 /**
  * Single source of truth for the HTTP wiring (DRY).
@@ -103,4 +104,7 @@ export function configureApp(app: NestExpressApplication): void {
 
   // Uniform error envelope + correlation id on every error response.
   app.useGlobalFilters(new AllExceptionsFilter());
+
+  // One correlated access-log line per request (health probes excluded).
+  app.useGlobalInterceptors(new HttpLoggingInterceptor());
 }
