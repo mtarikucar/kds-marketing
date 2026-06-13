@@ -27,7 +27,11 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 @Controller('marketing/leads')
 @MarketingRoute()
 @UseGuards(IngestTokenGuard)
-@Throttle({ long: { limit: 6, ttl: 60_000 } })
+// Must key the override on `default` — the global ThrottlerModule registers a
+// single UNNAMED throttler, which @nestjs/throttler names `default`. A mismatched
+// key (e.g. `long`) is silently ignored, leaving this public bulk-ingest endpoint
+// on the loose 300/min global limit instead of 6/min.
+@Throttle({ default: { limit: 6, ttl: 60_000 } })
 export class MarketingLeadsIngestController {
   constructor(private readonly svc: MarketingLeadsIngestService) {}
 

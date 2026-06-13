@@ -13,6 +13,7 @@ import {
   UpdateWorkspaceAdminDto,
   UpdateWorkspaceStatusDto,
 } from '../dto/platform.dto';
+import { Audit } from '../../audit/audit.decorator';
 
 @Controller('platform/workspaces')
 @UseGuards(PlatformGuard)
@@ -30,6 +31,12 @@ export class WorkspacesAdminController {
   }
 
   @Patch(':id/status')
+  @Audit({
+    action: 'workspace.status.update',
+    resourceType: 'workspace',
+    resourceIdParam: 'id',
+    captureBody: ['status'],
+  })
   updateStatus(@Param('id') id: string, @Body() dto: UpdateWorkspaceStatusDto) {
     return this.workspaces.updateStatus(id, dto.status);
   }

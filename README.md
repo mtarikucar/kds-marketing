@@ -101,7 +101,10 @@ npm install
 npx prisma generate
 npx prisma migrate deploy     # apply 0_init to your marketing DB
 npm run start:dev             # http://localhost:3100/api
-npm test                      # 17 suites / 145 tests
+npm test                      # unit: 56 suites / 419 tests
+npm run test:e2e              # e2e: full-app HTTP pipeline (mocked Prisma seam)
+# health probes: GET /api/health (liveness) · GET /api/health/ready (readiness)
+# architecture conformance audit + backlog: docs/ARCHITECTURE-CONFORMANCE.md
 ```
 
 ### Frontend
@@ -122,13 +125,20 @@ npm run build                 # tsc + vite build
 | `PORT` | no (3000) | HTTP port — convention is 3100 on the host (docker publishes 3100→3000; `.env.example` sets 3100) so core can keep 3000 |
 | `CORS_ORIGIN` | prod | Comma-separated allowed frontend origins |
 | `MARKETING_JWT_SECRET` / `MARKETING_JWT_REFRESH_SECRET` | yes | Marketing auth realm; ≥ 32 chars, must differ from each other (and from core realms if mirrored) |
-| `MARKETING_INGEST_TOKEN` | yes | Static token for `POST /api/marketing/leads/ingest` (`x-ingest-token`) |
+| `PLATFORM_JWT_SECRET` | yes | Platform (superadmin) realm JWT secret |
 | `INTERNAL_SERVICE_TOKEN` | yes | Shared service token for `/api/internal/*` in both directions (`x-internal-token`); must match core's value |
+| `RESEARCH_ROUTINE_TOKEN` | yes | Token for the nightly research routine surface (`/api/internal/research/*`, `x-research-token`) — separate principal from `INTERNAL_SERVICE_TOKEN`. (Lead ingest itself uses per-workspace tokens minted in the panel — no env.) |
+| `REDIS_URL` | prod (≥2 replicas) | Distributed rate-limit store; unset → per-replica in-memory buckets (dilutes the global limit under >1 replica). `rediss://` for TLS, embed auth in the URL |
 | `CORE_SERVICE_URL` | yes | Base URL of the core service, no trailing slash — core's compose publishes its backend on host port 3000, e.g. `http://host.docker.internal:3000` |
+| `MARKETING_SECRET_KEY` | when sealing secrets | AES-256-GCM master key (base64 32 bytes) sealing per-workspace channel/PSP secrets; format-validated at boot if set |
+| `LOG_FORMAT` | no | `json` (default in prod, X-Request-ID correlated) or `pretty` (default in a dev TTY) |
+| `METRICS_SCRAPE_TOKEN` | recommended in prod | Bearer token gating `GET /api/metrics`; also restrict that path at the edge |
 | `EMAIL_HOST` / `EMAIL_PORT` / `EMAIL_USER` / `EMAIL_PASSWORD` / `EMAIL_FROM` / `APP_NAME` / `FRONTEND_URL` | no | SMTP for the tenant-welcome email; unset → mock mode (emails logged, not sent) |
 | `NETGSM_SALES_LINE` | no | Informational sales line for click-to-dial health checks |
 | `OUTBOX_RETENTION_DAYS` | no (14) | Retention for dispatched outbox rows |
 | `TRUST_PROXY` | no (1) | Express trust-proxy hops |
+
+Ops endpoints (unauthenticated except `/api/metrics` when `METRICS_SCRAPE_TOKEN` is set): `GET /api/health` (liveness), `GET /api/health/ready` (readiness, 503 when the DB is down), `GET /api/metrics` (Prometheus).
 
 Frontend: `VITE_API_URL` (e.g. `http://localhost:3100/api`) — baked in at build time.
 

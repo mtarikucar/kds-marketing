@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Link, useSearchParams } from 'react-router-dom';
-import { PlusIcon, CheckIcon, ClockIcon, ExclamationTriangleIcon, PencilSquareIcon, TrashIcon, PlayIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, CheckIcon, ExclamationTriangleIcon, PencilSquareIcon, TrashIcon, PlayIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { PageHeader } from '../../features/marketing/components';
 import type { MarketingTask } from '../../features/marketing/types';
@@ -16,18 +16,14 @@ const priorityColors: Record<string, string> = {
   URGENT: 'text-red-600',
 };
 
-const statusIcons: Record<string, React.ElementType> = {
-  PENDING: ClockIcon,
-  IN_PROGRESS: ClockIcon,
-  COMPLETED: CheckIcon,
-};
-
 export default function TasksPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab');
-  const [status, setStatus] = useState('');
+  // No status-filter control is wired in this view yet; the query just reads the
+  // (constant) initial value. Keep the slot so adding a filter later is trivial.
+  const [status] = useState('');
   // Seed the tab from the URL (?tab=overdue) so the dashboard "Overdue tasks"
   // deep-link lands on the right view.
   const [tab, setTab] = useState<'all' | 'today' | 'overdue'>(

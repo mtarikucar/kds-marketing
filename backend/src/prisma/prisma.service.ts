@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from "@nestjs/common";
 import { PrismaClient } from "@prisma/client";
 
 @Injectable()
@@ -6,6 +11,8 @@ export class PrismaService
   extends PrismaClient
   implements OnModuleInit, OnModuleDestroy
 {
+  private readonly logger = new Logger(PrismaService.name);
+
   constructor() {
     // v2.8.97 — query log is gated on an EXPLICIT env flag rather than
     // `NODE_ENV === 'development'`. Prisma's `query` log level emits
@@ -31,12 +38,12 @@ export class PrismaService
 
   async onModuleInit() {
     await this.$connect();
-    console.log("✅ Database connected");
+    this.logger.log("Database connected");
   }
 
   async onModuleDestroy() {
     await this.$disconnect();
-    console.log("🔌 Database disconnected");
+    this.logger.log("Database disconnected");
   }
 
   async cleanDatabase() {

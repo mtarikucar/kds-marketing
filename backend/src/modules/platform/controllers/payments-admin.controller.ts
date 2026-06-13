@@ -13,6 +13,7 @@ import { PlatformGuard, PlatformOperatorPayload } from '../guards/platform.guard
 import { CurrentOperator } from '../decorators/current-operator.decorator';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { BillingSettlementService } from '../../billing/billing-settlement.service';
+import { Audit } from '../../audit/audit.decorator';
 
 class RejectPaymentDto {
   @IsOptional() @IsString() @MaxLength(500)
@@ -64,6 +65,11 @@ export class PaymentsAdminController {
   }
 
   @Post(':orderId/approve')
+  @Audit({
+    action: 'payment.manual.approve',
+    resourceType: 'order',
+    resourceIdParam: 'orderId',
+  })
   async approve(
     @CurrentOperator() operator: PlatformOperatorPayload,
     @Param('orderId') orderId: string,
@@ -79,6 +85,12 @@ export class PaymentsAdminController {
   }
 
   @Post(':orderId/reject')
+  @Audit({
+    action: 'payment.manual.reject',
+    resourceType: 'order',
+    resourceIdParam: 'orderId',
+    captureBody: ['reason'],
+  })
   async reject(
     @CurrentOperator() operator: PlatformOperatorPayload,
     @Param('orderId') orderId: string,

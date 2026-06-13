@@ -14,10 +14,6 @@ export default function RegisterWorkspacePage() {
   const { t, i18n } = useTranslation('marketing');
   const { login, isAuthenticated } = useMarketingAuthStore();
 
-  if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
   const [form, setForm] = useState({
     workspaceName: '',
     productName: '',
@@ -29,6 +25,12 @@ export default function RegisterWorkspacePage() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Guard AFTER all hooks (Rules of Hooks): an already-authenticated visitor is
+  // redirected before the form renders, but the hook order stays stable.
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [key]: e.target.value }));

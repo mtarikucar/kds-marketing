@@ -13,3 +13,4 @@ export { default as GettingStarted } from './GettingStarted';
 export { default as NeedsAttention } from './NeedsAttention';
 export { default as PageHeader } from './PageHeader';
 export { default as EmptyState } from './EmptyState';
+export { default as Breadcrumbs } from './Breadcrumbs';

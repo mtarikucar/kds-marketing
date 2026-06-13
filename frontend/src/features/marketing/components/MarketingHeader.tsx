@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDate } from '../utils/format';
+import Breadcrumbs from './Breadcrumbs';
 
 interface Notification {
   id: string;
@@ -124,8 +125,8 @@ export default function MarketingHeader() {
   return (
     <>
       <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-semibold text-gray-900 lg:hidden">Marketing Panel</h1>
+        <div className="flex min-w-0 items-center gap-4">
+          <Breadcrumbs />
         </div>
 
         <div className="flex items-center gap-3">

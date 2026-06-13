@@ -215,6 +215,18 @@ jobs:
                   proxy_set_header X-Forwarded-Proto $scheme;
               }
 
+              # Ops-only Prometheus scrape surface — must NOT be public. Exact-match
+              # block sits above the /api prefix so it wins. Allow the loopback
+              # scraper (and the private docker bridge); deny the internet. The app
+              # also gates it with METRICS_SCRAPE_TOKEN as defense-in-depth.
+              location = /api/metrics {
+                  allow 127.0.0.1;
+                  allow 172.16.0.0/12;
+                  deny all;
+                  proxy_pass http://localhost:3211;
+                  proxy_set_header Host $host;
+              }
+
               location /api {
                   proxy_pass http://localhost:3211;
                   proxy_http_version 1.1;

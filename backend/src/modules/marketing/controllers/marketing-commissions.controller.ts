@@ -23,6 +23,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingCommissionsService } from '../services/marketing-commissions.service';
 import { CommissionFilterDto } from '../dto/commission-filter.dto';
 import { MarketingUserPayload } from '../types';
+import { Audit } from '../../audit/audit.decorator';
 
 @RequiresFeature('commissions')
 @Controller('marketing/commissions')
@@ -61,12 +62,22 @@ export class MarketingCommissionsController {
 
   @Patch(':id/approve')
   @MarketingRoles('MANAGER')
+  @Audit({
+    action: 'commission.approve',
+    resourceType: 'commission',
+    resourceIdParam: 'id',
+  })
   approve(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.commissionsService.approve(user.workspaceId, id, user.id);
   }
 
   @Patch(':id/pay')
   @MarketingRoles('MANAGER')
+  @Audit({
+    action: 'commission.pay',
+    resourceType: 'commission',
+    resourceIdParam: 'id',
+  })
   markPaid(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.commissionsService.markPaid(user.workspaceId, id, user.id);
   }

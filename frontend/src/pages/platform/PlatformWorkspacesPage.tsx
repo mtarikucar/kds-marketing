@@ -29,16 +29,15 @@ export default function PlatformWorkspacesPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
 
-  if (!isAuthenticated) {
-    return <Navigate to="/platform/login" replace />;
-  }
-
   const { data: workspaces, isLoading } = useQuery<WorkspaceRow[]>({
     queryKey: ['platform', 'workspaces', { search, status }],
     queryFn: () =>
       platformApi
         .get('/workspaces', { params: { search: search || undefined, status: status || undefined } })
         .then((r) => r.data),
+    // Don't fetch until authenticated — preserves the original
+    // no-request-before-redirect behavior now that the guard sits below.
+    enabled: isAuthenticated,
   });
 
   const statusMutation = useMutation({
@@ -50,6 +49,11 @@ export default function PlatformWorkspacesPage() {
     },
     onError: (e: any) => toast.error(e.response?.data?.message ?? 'Update failed'),
   });
+
+  // Guard AFTER all hooks (Rules of Hooks).
+  if (!isAuthenticated) {
+    return <Navigate to="/platform/login" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">

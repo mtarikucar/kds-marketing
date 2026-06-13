@@ -77,7 +77,7 @@ export default function MarketingDashboardPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">{t('dashboard.title')}</h1>
+          <h1 className="font-heading text-2xl font-bold text-slate-900">{t('dashboard.title')}</h1>
           <p className="text-sm text-slate-500">{t('dashboard.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -190,8 +190,8 @@ export default function MarketingDashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Today's Summary */}
-        <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <h2 className="text-lg font-semibold text-slate-900 mb-4">{t('dashboard.today')}</h2>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <h2 className="font-heading text-lg font-semibold text-slate-900 mb-4">{t('dashboard.today')}</h2>
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-sm text-slate-600">{t('tasks.tabs.today')}</span>
@@ -213,8 +213,8 @@ export default function MarketingDashboardPage() {
         </div>
 
         {/* Monthly Metrics */}
-        <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <h2 className="text-lg font-semibold text-slate-900 mb-4">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <h2 className="font-heading text-lg font-semibold text-slate-900 mb-4">
             {t('dashboard.thisMonth')} ({monthly?.month})
           </h2>
           <div className="space-y-3">
@@ -235,8 +235,8 @@ export default function MarketingDashboardPage() {
       </div>
 
       {/* Leads by Status */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4">{t('dashboard.byStatus')}</h2>
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h2 className="font-heading text-lg font-semibold text-slate-900 mb-4">{t('dashboard.byStatus')}</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           {leadsByStatus?.map((item: { status: string; count: number }) => (
             <div key={item.status} className="text-center p-3 rounded-lg bg-slate-50">
@@ -255,8 +255,8 @@ export default function MarketingDashboardPage() {
 
       {/* Top Performers (Manager only) */}
       {isManager && topPerformers && topPerformers.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <h2 className="text-lg font-semibold text-slate-900 mb-4">{t('dashboard.topPerformers')}</h2>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <h2 className="font-heading text-lg font-semibold text-slate-900 mb-4">{t('dashboard.topPerformers')}</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

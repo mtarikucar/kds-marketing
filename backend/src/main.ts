@@ -1,9 +1,8 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import helmet from 'helmet';
-import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
+import { configureApp } from './app.config';
+import { JsonLogger } from './common/logging/json-logger';
 
 /**
  * Fail-fast env validation BEFORE Nest touches anything — missing secrets
@@ -58,6 +57,17 @@ function validateEnv(): void {
     );
   }
 
+  // Rate limiter: without REDIS_URL the ThrottlerModule falls back to a
+  // per-process in-memory store, so under more than one replica the global
+  // limit is diluted (a "5/min" rule becomes 5×N). Single-replica deploys are
+  // fine — hence a warning, not a hard exit.
+  if (isProd && !process.env.REDIS_URL) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[env] REDIS_URL is not set — the rate limiter uses per-replica in-memory buckets; the global limit will be diluted under >1 replica. Set REDIS_URL to a shared Redis for a correct distributed limit.',
+    );
+  }
+
   // MARKETING_SECRET_KEY is the AES-256-GCM master key that seals channel/PSP
   // secrets (consumed from Phase F P2 on). It's optional in P1, but if it's
   // present it MUST decode to exactly 32 bytes or the box throws at first
@@ -96,84 +106,19 @@ process.on('uncaughtException', (error: Error) => {
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
+    // Buffer boot logs until the structured logger is installed, so even
+    // startup lines come out as correlated JSON in production.
+    bufferLogs: true,
   });
 
-  // Trust proxy so `req.ip` and rate-limiter tracking see the real client IP
-  // behind the load balancer. Default 1 = one LB hop (same as the source).
-  const trustProxy = process.env.TRUST_PROXY;
-  if (trustProxy) {
-    const parsed = Number(trustProxy);
-    app.set('trust proxy', Number.isFinite(parsed) ? parsed : trustProxy);
-  } else {
-    app.set('trust proxy', 1);
-  }
+  // Structured, correlation-aware logging for the whole app: every
+  // `new Logger(ctx)` call now emits a JSON line carrying the request's
+  // X-Request-ID (from AsyncLocalStorage). Dev stays pretty unless LOG_FORMAT=json.
+  app.useLogger(new JsonLogger());
 
-  // Stripe webhook signatures are computed over the EXACT payload bytes —
-  // mount a raw parser on that one route BEFORE the JSON parser so the
-  // verifier sees the original body (re-serialized JSON never verifies).
-  app.use('/api/billing/webhooks/stripe', bodyParser.raw({ type: '*/*', limit: '500kb' }));
-
-  // Meta (WhatsApp/Instagram/Messenger) webhook — X-Hub-Signature-256 is an
-  // HMAC over the raw bytes, so the same raw-before-JSON treatment applies.
-  app.use('/api/public/channels/meta/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
-
-  // Tight generic body limit (the marketing API has no file/webhook payloads;
-  // the bulk lead-ingest endpoint caps its batch size in the DTO).
-  app.use(bodyParser.json({ limit: '200kb' }));
-  app.use(bodyParser.urlencoded({ limit: '100kb', extended: true }));
-
-  // Security headers. API-only service — CSP kept from the source defaults.
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          scriptSrc: ["'self'"],
-          imgSrc: ["'self'", 'data:', 'https:'],
-          connectSrc: ["'self'", 'https:'],
-          frameAncestors: ["'none'"],
-          objectSrc: ["'none'"],
-          baseUri: ["'self'"],
-          formAction: ["'self'"],
-        },
-      },
-      crossOriginEmbedderPolicy: false,
-      crossOriginResourcePolicy: { policy: 'cross-origin' },
-    }),
-  );
-
-  // SAME global prefix as the monorepo backend, so every existing route
-  // (/api/marketing/..., /api/internal/...) is unchanged and the marketing
-  // frontend works as-is.
-  app.setGlobalPrefix('api');
-
-  const allowedOrigins = process.env.CORS_ORIGIN
-    ? process.env.CORS_ORIGIN.split(',')
-    : ['http://localhost:5173', 'http://localhost:5179'];
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error('Not allowed by CORS'), false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    exposedHeaders: ['X-Total-Count', 'X-Request-ID'],
-  });
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: false,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    }),
-  );
+  // All HTTP wiring (request-id, raw-body webhooks, helmet, CORS, global pipe,
+  // `api` prefix) lives in one place so the e2e harness boots an identical app.
+  configureApp(app);
 
   // Nest calls onModuleDestroy on SIGTERM/SIGINT so Prisma drains cleanly on
   // rolling restarts.

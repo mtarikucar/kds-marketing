@@ -120,7 +120,7 @@ export default function ReportsPage() {
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold mb-4">Conversion Funnel</h3>
           <div className="space-y-3">
-            {conversion?.map((item: any, idx: number) => {
+            {conversion?.map((item: any) => {
               const maxCount = conversion[0]?.count || 1;
               const widthPercent = (item.count / maxCount) * 100;
               return (

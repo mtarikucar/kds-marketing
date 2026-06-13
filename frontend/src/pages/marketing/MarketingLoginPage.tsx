@@ -8,14 +8,17 @@ export default function MarketingLoginPage() {
   const navigate = useNavigate();
   const { t } = useTranslation('marketing');
   const { login, isAuthenticated } = useMarketingAuthStore();
-
-  if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
-  }
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Guard AFTER all hooks (Rules of Hooks): every render calls the same hooks in
+  // the same order; an already-authenticated visitor is then redirected before
+  // any form renders.
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
