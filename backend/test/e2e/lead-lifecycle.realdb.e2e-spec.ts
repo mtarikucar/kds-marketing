@@ -156,22 +156,35 @@ describeRealDb('Lead lifecycle — real DB (e2e)', () => {
 
   afterAll(async () => {
     if (!realDbEnabled() || !prisma) return;
-    // Tear down everything we created (soft-ref tables → order is cosmetic).
-    await prisma.commission.deleteMany({ where: { workspaceId } });
-    if (leadId) {
-      await prisma.leadActivity.deleteMany({ where: { leadId } }).catch(() => {});
-      await prisma.outboxEvent
-        .deleteMany({ where: { idempotencyKey: `lead-converted:${leadId}` } })
-        .catch(() => {});
+    // Teardown in FK-safe order, each step tolerant so one failure can't strand
+    // the rest (which would leak rows into the shared DB and collide next run).
+    //   - Commission.marketingUser is onDelete:Restrict → delete commissions
+    //     BEFORE users.
+    //   - Lead→LeadActivity is onDelete:Cascade → deleting leads removes the
+    //     activities that hold a Restrict FK to the SYSTEM user, so users delete
+    //     cleanly afterward (no need to gate on leadId).
+    const del = async (fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+      } catch {
+        /* best-effort cleanup — never let teardown throw */
+      }
+    };
+    try {
+      await del(() => prisma.commission.deleteMany({ where: { workspaceId } }));
+      await del(() => prisma.lead.deleteMany({ where: { workspaceId } }));
+      await del(() => prisma.usageCounter.deleteMany({ where: { workspaceId } }));
+      await del(() => prisma.ingestToken.deleteMany({ where: { workspaceId } }));
+      await del(() =>
+        prisma.outboxEvent.deleteMany({ where: { tenantId: `tenant-${SEED}` } }),
+      );
+      await del(() => prisma.workspaceSubscription.deleteMany({ where: { workspaceId } }));
+      await del(() => prisma.marketingUser.deleteMany({ where: { workspaceId } }));
+      await del(() => prisma.package.deleteMany({ where: { id: packageId } }));
+      await del(() => prisma.workspace.deleteMany({ where: { id: workspaceId } }));
+    } finally {
+      await closeTestApp(app);
     }
-    await prisma.lead.deleteMany({ where: { workspaceId } });
-    await prisma.usageCounter.deleteMany({ where: { workspaceId } });
-    await prisma.ingestToken.deleteMany({ where: { workspaceId } });
-    await prisma.marketingUser.deleteMany({ where: { workspaceId } });
-    await prisma.workspaceSubscription.deleteMany({ where: { workspaceId } });
-    await prisma.package.deleteMany({ where: { id: packageId } });
-    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
-    await closeTestApp(app);
   });
 
   const managerAuth = () =>
