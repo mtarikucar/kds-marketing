@@ -13,14 +13,13 @@ export default function ManualPaymentsPage() {
   const { isAuthenticated } = usePlatformAuthStore();
   const queryClient = useQueryClient();
 
-  if (!isAuthenticated) {
-    return <Navigate to="/platform/login" replace />;
-  }
-
   const { data: orders, isLoading } = useQuery({
     queryKey: ['platform', 'payments', 'awaiting'],
     queryFn: () => platformApi.get('/payments').then((r) => r.data),
     refetchInterval: 30_000,
+    // Don't fetch (or poll) until authenticated — preserves the original
+    // no-request-before-redirect behavior now that the guard sits below.
+    enabled: isAuthenticated,
   });
 
   const approve = useMutation({
@@ -41,6 +40,11 @@ export default function ManualPaymentsPage() {
       toast.success('Order rejected');
     },
   });
+
+  // Guard AFTER all hooks (Rules of Hooks).
+  if (!isAuthenticated) {
+    return <Navigate to="/platform/login" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">

@@ -7,14 +7,16 @@ export default function PlatformLoginPage() {
   const navigate = useNavigate();
   const { login, isAuthenticated } = usePlatformAuthStore();
 
-  if (isAuthenticated) {
-    return <Navigate to="/platform/workspaces" replace />;
-  }
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Guard AFTER all hooks (Rules of Hooks): an already-authenticated operator is
+  // redirected before the form renders, but the hook order stays stable.
+  if (isAuthenticated) {
+    return <Navigate to="/platform/workspaces" replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

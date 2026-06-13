@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { StarIcon, TrashIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { SparklesIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
 
 interface Review { id: string; rating?: number | null; text?: string | null; status: string; replyDraft?: string | null; replyText?: string | null; createdAt: string }

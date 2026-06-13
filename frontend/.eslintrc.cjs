@@ -49,12 +49,5 @@ module.exports = {
     '@typescript-eslint/ban-ts-comment': 'warn',
     'no-empty': 'warn',
     'prefer-const': 'warn',
-    // KNOWN DEBT, surfaced not suppressed: several platform/marketing pages call
-    // hooks after an early `if (!isAuthenticated) return <Navigate/>`. The
-    // correct fix relocates the guard below the hook calls — but that changes
-    // when the queries fire (a behavior change across ~8 pages), so it's left as
-    // a deliberate, reviewable follow-up rather than auto-rewritten. Keep it a
-    // warning so it stays visible without blocking the gate.
-    'react-hooks/rules-of-hooks': 'warn',
   },
 };

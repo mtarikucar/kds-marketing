@@ -8,7 +8,6 @@ import { z } from 'zod';
  * round-trip, not to relax server-side checks.
  */
 
-const HHMM_OR_EMPTY = z.string().regex(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$|^$/);
 // E.164-ish: optional +, 8-15 digits. Mirrors the backend PHONE_REGEX.
 const PHONE_REGEX = /^\+?[1-9]\d{7,14}$/;
 

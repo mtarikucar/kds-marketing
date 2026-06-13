@@ -21,9 +21,8 @@ import {
   LEAD_SOURCE_LABELS,
   ActivityType,
   TaskType,
-  OfferStatus,
 } from '../../features/marketing/types';
-import type { Lead, LeadActivity, LeadOffer, MarketingTask, MarketingUserInfo } from '../../features/marketing/types';
+import type { Lead, LeadActivity, LeadOffer, MarketingTask } from '../../features/marketing/types';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 
 const offerStatusColors: Record<string, string> = {
@@ -70,8 +69,6 @@ export default function LeadDetailPage() {
   const locale = i18n.language || 'tr';
   const fmtDate = (d: string | Date | null | undefined) =>
     d ? new Date(d).toLocaleDateString(locale) : '';
-  const fmtDateTime = (d: string | Date | null | undefined) =>
-    d ? new Date(d).toLocaleString(locale) : '';
   const user = useMarketingAuthStore((s) => s.user);
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 

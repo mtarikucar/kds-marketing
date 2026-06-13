@@ -7,15 +7,17 @@ export default function PlatformWorkspaceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { isAuthenticated } = usePlatformAuthStore();
 
-  if (!isAuthenticated) {
-    return <Navigate to="/platform/login" replace />;
-  }
-
   const { data: ws, isLoading } = useQuery({
     queryKey: ['platform', 'workspace', id],
     queryFn: () => platformApi.get(`/workspaces/${id}`).then((r) => r.data),
-    enabled: !!id,
+    // Gate on auth too (guard now sits below) so no fetch fires pre-redirect.
+    enabled: isAuthenticated && !!id,
   });
+
+  // Guard AFTER all hooks (Rules of Hooks).
+  if (!isAuthenticated) {
+    return <Navigate to="/platform/login" replace />;
+  }
 
   if (isLoading) {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-400">Loading…</div>;
