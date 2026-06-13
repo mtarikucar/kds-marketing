@@ -127,6 +127,9 @@ jobs:
           BANK_ACCOUNT_NAME: ${{ secrets.BANK_ACCOUNT_NAME }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          # Optional: gates /api/metrics. If unset the endpoint relies on the
+          # edge network restriction alone (host-nginx should not proxy it).
+          METRICS_SCRAPE_TOKEN: ${{ secrets.METRICS_SCRAPE_TOKEN }}
         run: |
           set -euo pipefail
           required=(MARKETING_POSTGRES_PASSWORD MARKETING_JWT_SECRET
@@ -149,6 +152,8 @@ jobs:
           IMAGE_TAG=${VERSION}
           DATABASE_URL=postgresql://marketing:${MARKETING_POSTGRES_PASSWORD}@postgres:5432/marketing?schema=public
           MARKETING_POSTGRES_PASSWORD=${MARKETING_POSTGRES_PASSWORD}
+          # Distributed rate-limit store (the redis service in docker-compose.prod.yml).
+          REDIS_URL=redis://redis:6379
           MARKETING_JWT_SECRET=${MARKETING_JWT_SECRET}
           MARKETING_JWT_REFRESH_SECRET=${MARKETING_JWT_REFRESH_SECRET}
           PLATFORM_JWT_SECRET=${PLATFORM_JWT_SECRET}
@@ -164,6 +169,7 @@ jobs:
           PAYTR_TEST_MODE=0
           STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
           STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+          METRICS_SCRAPE_TOKEN=${METRICS_SCRAPE_TOKEN}
           ENV
 
       - name: Ship env + compose (atomic)

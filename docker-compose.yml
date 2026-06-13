@@ -16,6 +16,18 @@ services:
       timeout: 5s
       retries: 10
 
+  # Distributed rate-limit store. With it the throttle bucket is global across
+  # replicas; without REDIS_URL the app falls back to per-process buckets.
+  redis:
+    image: redis:7-alpine
+    container_name: kds-marketing-redis
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ./backend
@@ -24,12 +36,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     # Apply the schema migrations, then start the service.
     command: sh -c "npx prisma migrate deploy && node dist/main"
     environment:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/marketing?schema=public
+      REDIS_URL: redis://redis:6379
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:5179}
       # ── Secrets: override these in a real deployment (.env next to this file) ──
       MARKETING_JWT_SECRET: ${MARKETING_JWT_SECRET:-dev-marketing-jwt-secret-change-me-0001}

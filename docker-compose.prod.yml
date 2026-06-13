@@ -31,12 +31,31 @@ services:
     networks:
       - marketing_net
 
+  # Distributed rate-limit backing store. Without it the ThrottlerModule falls
+  # back to per-process buckets, so a multi-replica deploy would dilute the
+  # global limit (5/min becomes 5*N). No persistence needed — these are
+  # ephemeral, short-TTL counters — so AOF/RDB are off and memory is capped.
+  redis:
+    image: redis:7-alpine
+    container_name: kds_marketing_redis
+    restart: always
+    command: ['redis-server', '--save', '', '--appendonly', 'no', '--maxmemory', '128mb', '--maxmemory-policy', 'allkeys-lru']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - marketing_net
+
   backend:
     image: ghcr.io/mtarikucar/kds-marketing/backend:${IMAGE_TAG:-current}
     container_name: kds_marketing_api
     restart: always
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     command: sh -c "npx prisma migrate deploy && node dist/main"
     env_file:
