@@ -5,6 +5,7 @@ import * as bodyParser from 'body-parser';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
+import { setupSwagger } from './swagger';
 
 /**
  * Single source of truth for the HTTP wiring (DRY).
@@ -107,4 +108,7 @@ export function configureApp(app: NestExpressApplication): void {
 
   // One correlated access-log line per request (health probes excluded).
   app.useGlobalInterceptors(new HttpLoggingInterceptor());
+
+  // OpenAPI docs at /api/docs (+ /api/docs-json).
+  setupSwagger(app);
 }
