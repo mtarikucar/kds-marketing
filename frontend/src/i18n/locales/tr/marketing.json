@@ -88,6 +88,12 @@
     "REP": "Satış Temsilcisi"
   },
   "nav": {
+    "group": {
+      "pipeline": "Pipeline",
+      "sales": "Satış",
+      "growth": "Büyüme",
+      "settings": "Ayarlar"
+    },
     "dashboard": "Gösterge Paneli",
     "leads": "Lead'ler",
     "offers": "Teklifler",

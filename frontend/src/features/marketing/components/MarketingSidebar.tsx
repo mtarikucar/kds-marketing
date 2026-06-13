@@ -1,157 +1,131 @@
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  HomeIcon,
-  UserGroupIcon,
-  ClipboardDocumentListIcon,
-  CalendarIcon,
-  DocumentTextIcon,
-  ChartBarIcon,
-  CurrencyDollarIcon,
-  UsersIcon,
   ArrowRightOnRectangleIcon,
-  WrenchScrewdriverIcon,
-  PhoneIcon,
-  PresentationChartLineIcon,
-  FlagIcon,
-  BeakerIcon,
-  CreditCardIcon,
-  SparklesIcon,
-  BookOpenIcon,
-  InboxIcon,
-  ChatBubbleLeftRightIcon,
-  BoltIcon,
-  MegaphoneIcon,
-  GlobeAltIcon,
-  CalendarDaysIcon,
-  StarIcon,
-  MicrophoneIcon,
-  BanknotesIcon,
-  SwatchIcon,
+  ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { APP_VERSION } from '../../../lib/env';
+import { NAV_GROUPS, type NavGroup, type NavItem } from '../navigation';
+import { useEntitlements } from '../hooks/useEntitlements';
 
-const navItems = [
-  { path: '/dashboard', labelKey: 'nav.dashboard', icon: HomeIcon },
-  { path: '/inbox', labelKey: 'nav.inbox', icon: InboxIcon },
-  { path: '/leads', labelKey: 'nav.leads', icon: UserGroupIcon },
-  { path: '/tasks', labelKey: 'nav.tasks', icon: ClipboardDocumentListIcon },
-  { path: '/calendar', labelKey: 'nav.calendar', icon: CalendarIcon },
-  { path: '/offers', labelKey: 'nav.offers', icon: DocumentTextIcon },
-  { path: '/reports', labelKey: 'nav.reports', icon: ChartBarIcon },
-  { path: '/commissions', labelKey: 'nav.commissions', icon: CurrencyDollarIcon },
-  { path: '/installations', labelKey: 'nav.installations', icon: WrenchScrewdriverIcon },
-  { path: '/calls', labelKey: 'nav.calls', icon: PhoneIcon },
-  { path: '/performance', labelKey: 'nav.performance', icon: PresentationChartLineIcon },
-];
-
-const aiItems = [
-  { path: '/ai/agents', labelKey: 'nav.agentStudio', icon: SparklesIcon },
-  { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', icon: BookOpenIcon },
-  { path: '/channels', labelKey: 'nav.channels', icon: ChatBubbleLeftRightIcon },
-  { path: '/automations', labelKey: 'nav.automations', icon: BoltIcon },
-  { path: '/campaigns', labelKey: 'nav.campaigns', icon: MegaphoneIcon },
-  { path: '/sites', labelKey: 'nav.sites', icon: GlobeAltIcon },
-  { path: '/booking', labelKey: 'nav.booking', icon: CalendarDaysIcon },
-  { path: '/reviews', labelKey: 'nav.reviews', icon: StarIcon },
-  { path: '/voice', labelKey: 'nav.voice', icon: MicrophoneIcon },
-  { path: '/invoices', labelKey: 'nav.invoices', icon: BanknotesIcon },
-  { path: '/branding', labelKey: 'nav.branding', icon: SwatchIcon },
-];
-
-const managerOnlyItems = [
-  { path: '/users', labelKey: 'nav.users', icon: UsersIcon },
-  { path: '/targets', labelKey: 'nav.targets', icon: FlagIcon },
-  { path: '/research', labelKey: 'nav.research', icon: BeakerIcon },
-  { path: '/billing', labelKey: 'nav.billing', icon: CreditCardIcon },
-];
+const linkClass = ({ isActive }: { isActive: boolean }) =>
+  [
+    'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+    isActive
+      ? 'bg-primary/10 text-primary'
+      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+  ].join(' ');
 
 export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { t } = useTranslation('marketing');
   const { user, logout } = useMarketingAuthStore();
+  const { has } = useEntitlements();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
-  const linkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-3 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
-      isActive
-        ? 'bg-primary/10 text-primary'
-        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-    }`;
+  // Collapsible groups (only Growth, today) remember their open state per group id.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  /** Apply role + entitlement gating; returns the items this user actually sees. */
+  const visibleItems = (group: NavGroup): NavItem[] =>
+    group.items.filter(
+      (item) => (item.managerOnly ? isManager : true) && has(item.feature),
+    );
+
+  const renderItem = (item: NavItem) => (
+    <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
+      {({ isActive }) => (
+        <>
+          {/* Active accent bar — the primary wayfinding cue. */}
+          <span
+            className={`absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary transition-opacity ${
+              isActive ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+          <item.icon className="h-5 w-5 shrink-0" />
+          <span className="truncate">{t(item.labelKey, item.label)}</span>
+        </>
+      )}
+    </NavLink>
+  );
 
   return (
-    <aside className="flex flex-col w-64 bg-white border-r border-slate-200 h-screen">
-      {/* Logo */}
-      <div className="flex items-center gap-2 px-6 py-5 border-b border-slate-200 shrink-0">
-        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-          <span className="text-primary-foreground font-bold text-sm">M</span>
+    <aside className="flex h-screen w-64 flex-col border-r border-slate-200 bg-white">
+      {/* Brand */}
+      <div className="flex shrink-0 items-center gap-2.5 border-b border-slate-200 px-5 py-4">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary-600 shadow-sm">
+          <span className="text-sm font-bold text-primary-foreground">M</span>
         </div>
-        <span className="font-semibold text-slate-900">{t('login.title')}</span>
+        <span className="font-heading text-base font-semibold text-slate-900">
+          {t('login.title')}
+        </span>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
-        {navItems.map((item) => (
-          <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
-            <item.icon className="w-5 h-5" />
-            {t(item.labelKey)}
-          </NavLink>
-        ))}
+      <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-4">
+        {NAV_GROUPS.map((group) => {
+          const items = visibleItems(group);
+          if (items.length === 0) return null; // empty group → no header clutter
 
-        {isManager && (
-          <>
-            <div className="pt-4 pb-2 px-4">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                {t('nav.aiGroup', 'AI')}
-              </span>
-            </div>
-            {aiItems.map((item) => (
-              <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
-                <item.icon className="w-5 h-5" />
-                {t(item.labelKey)}
-              </NavLink>
-            ))}
+          const isCollapsed = group.collapsible && collapsed[group.id];
 
-            <div className="pt-4 pb-2 px-4">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                {t('nav.managementGroup')}
-              </span>
+          return (
+            <div key={group.id} className="space-y-1">
+              {group.collapsible ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCollapsed((c) => ({ ...c, [group.id]: !c[group.id] }))
+                  }
+                  className="flex w-full items-center justify-between px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-600"
+                >
+                  <span>{t(group.labelKey, group.label)}</span>
+                  <ChevronDownIcon
+                    className={`h-4 w-4 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                  />
+                </button>
+              ) : (
+                <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  {t(group.labelKey, group.label)}
+                </p>
+              )}
+              {!isCollapsed && items.map(renderItem)}
             </div>
-            {managerOnlyItems.map((item) => (
-              <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>
-                <item.icon className="w-5 h-5" />
-                {t(item.labelKey)}
-              </NavLink>
-            ))}
-          </>
-        )}
+          );
+        })}
       </nav>
 
-      {/* User info & logout */}
-      <div className="border-t border-slate-200 px-4 py-4 shrink-0">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
-            <span className="text-primary font-medium text-sm">
-              {user?.firstName?.[0]}{user?.lastName?.[0]}
+      {/* User card + logout */}
+      <div className="shrink-0 border-t border-slate-200 px-3 py-3">
+        <div className="mb-2 flex items-center gap-3 rounded-lg px-2 py-1.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+            <span className="text-sm font-semibold text-primary">
+              {user?.firstName?.[0]}
+              {user?.lastName?.[0]}
             </span>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-slate-900 truncate">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-slate-900">
               {user?.firstName} {user?.lastName}
             </p>
-            <p className="text-xs text-slate-500 truncate">
-              {user?.role === 'OWNER' ? t('role.OWNER', 'Owner') : user?.role === 'MANAGER' ? t('role.MANAGER') : t('role.REP')}
+            <p className="truncate text-xs text-slate-500">
+              {user?.role === 'OWNER'
+                ? t('role.OWNER', 'Owner')
+                : user?.role === 'MANAGER'
+                  ? t('role.MANAGER')
+                  : t('role.REP')}
             </p>
           </div>
         </div>
         <button
           onClick={logout}
-          className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-red-50 hover:text-red-600"
         >
-          <ArrowRightOnRectangleIcon className="w-4 h-4" />
+          <ArrowRightOnRectangleIcon className="h-4 w-4" />
           {t('nav.logout')}
         </button>
-        <p className="mt-3 text-center text-[10px] text-slate-400 select-text">
+        <p className="mt-2 select-text text-center text-[10px] text-slate-400">
           {APP_VERSION}
         </p>
       </div>

@@ -88,6 +88,12 @@
     "REP": "Sales Rep"
   },
   "nav": {
+    "group": {
+      "pipeline": "Pipeline",
+      "sales": "Sales",
+      "growth": "Growth",
+      "settings": "Settings"
+    },
     "dashboard": "Dashboard",
     "leads": "Leads",
     "offers": "Offers",
