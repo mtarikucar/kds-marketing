@@ -3,6 +3,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 /**
  * Single source of truth for the HTTP wiring (DRY).
@@ -99,4 +100,7 @@ export function configureApp(app: NestExpressApplication): void {
       },
     }),
   );
+
+  // Uniform error envelope + correlation id on every error response.
+  app.useGlobalFilters(new AllExceptionsFilter());
 }
