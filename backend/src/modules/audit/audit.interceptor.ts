@@ -47,9 +47,15 @@ export class AuditInterceptor implements NestInterceptor {
 
   private baseEntry(req: AuditableRequest, options: AuditOptions) {
     const actor = this.resolveActor(req);
-    const resourceId = options.resourceIdParam
-      ? (req.params?.[options.resourceIdParam] ?? null)
+    // Express 5 types a route param as `string | string[]` (path-to-regexp v8
+    // can repeat a segment); our routes use single-segment params, so collapse
+    // an unexpected array to its first element to keep resourceId a scalar.
+    const rawResourceId = options.resourceIdParam
+      ? req.params?.[options.resourceIdParam]
       : null;
+    const resourceId = Array.isArray(rawResourceId)
+      ? (rawResourceId[0] ?? null)
+      : (rawResourceId ?? null);
 
     let metadata: Record<string, unknown> | null = null;
     if (options.captureBody?.length && req.body) {
