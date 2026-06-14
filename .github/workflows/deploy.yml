@@ -123,6 +123,10 @@ jobs:
           PLATFORM_JWT_SECRET: ${{ secrets.PLATFORM_JWT_SECRET }}
           RESEARCH_ROUTINE_TOKEN: ${{ secrets.RESEARCH_ROUTINE_TOKEN }}
           INTERNAL_SERVICE_TOKEN: ${{ secrets.INTERNAL_SERVICE_TOKEN }}
+          # Routine trigger layer: x-routine-token for the internal data API +
+          # AES master key that seals panel-stored claude.ai trigger tokens.
+          ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
+          MARKETING_SECRET_KEY: ${{ secrets.MARKETING_SECRET_KEY }}
           BANK_IBAN: ${{ secrets.BANK_IBAN }}
           BANK_ACCOUNT_NAME: ${{ secrets.BANK_ACCOUNT_NAME }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
@@ -159,6 +163,8 @@ jobs:
           PLATFORM_JWT_SECRET=${PLATFORM_JWT_SECRET}
           RESEARCH_ROUTINE_TOKEN=${RESEARCH_ROUTINE_TOKEN}
           INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+          ROUTINE_TOKEN=${ROUTINE_TOKEN}
+          MARKETING_SECRET_KEY=${MARKETING_SECRET_KEY}
           CORE_SERVICE_URL=http://host.docker.internal:3000
           CORS_ORIGIN=https://marketing.hummytummy.com
           FRONTEND_URL=https://marketing.hummytummy.com

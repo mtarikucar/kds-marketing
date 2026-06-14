@@ -1381,3 +1381,31 @@ model AuditLog {
   @@index([action, occurredAt])
   @@map("audit_log")
 }
+
+/// Platform-level configuration for the 4 cloud routines (review-draft,
+/// content-pack, insight-digest, lead-scoring). Each row holds the trigger
+/// URL + sealed token so the operator pastes claude.ai "Call via API"
+/// credentials once and the backend owns when each routine runs.
+model RoutineConfig {
+  id                 String    @id @default(uuid())
+  /// review-draft | content-pack | insight-digest | lead-scoring
+  key                String    @unique
+  enabled            Boolean   @default(false)
+  /// Cron expression for the backend scheduler (null = no schedule; manual/event only).
+  cron               String?
+  /// React to domain events (review-draft: new private feedback; lead-scoring: lead ingest).
+  onEvent            Boolean   @default(false)
+  /// claude.ai "Call via API" trigger endpoint.
+  triggerUrl         String?
+  /// AES-256-GCM sealed token (v1:<iv>:<tag>:<ct>). Written once per PATCH; never read back to callers.
+  triggerTokenSealed String?   @db.Text
+  /// Minimum seconds between event-driven triggers (debounce bursts).
+  eventCooldownSec   Int       @default(300)
+  lastTriggeredAt    DateTime?
+  lastTriggerStatus  String? // ok | error
+  lastTriggerError   String?   @db.Text
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@map("routine_configs")
+}

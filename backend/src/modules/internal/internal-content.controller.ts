@@ -16,6 +16,9 @@ import { SubmitContentDraftsDto } from './content-drafts.dto';
 const DUE_AFTER_DAYS = 6;
 const COUNT_MAX = { social: 10, email: 5, sms: 5 } as const;
 
+/** Same window the GET uses to mark a profile as weekly-due (in ms). */
+const DUE_AFTER_MS = DUE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+
 /**
  * The content-pack routine's surface:
  *
@@ -105,12 +108,40 @@ export class InternalContentController {
       throw new NotFoundException('Workspace not found');
     }
 
-    const profile = await this.prisma.contentProfile.findFirst({
-      where: { id: dto.profileId, workspaceId },
-      select: { id: true },
+    // ── idempotency guard ──────────────────────────────────────────────────
+    // ATOMICALLY claim the profile before inserting drafts. If an overlapping
+    // re-fire races us, only one will win the updateMany (the other sees count=0
+    // because lastRunAt is already within the due window). This prevents double-
+    // insert without requiring a DB transaction on the draft createMany.
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - DUE_AFTER_MS);
+    const byChannel = dto.drafts.reduce<Record<string, number>>((acc, d) => {
+      acc[d.channel] = (acc[d.channel] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const claimed = await this.prisma.contentProfile.updateMany({
+      where: {
+        id: dto.profileId,
+        workspaceId,
+        OR: [{ lastRunAt: null }, { lastRunAt: { lt: cutoff } }],
+      },
+      data: {
+        lastRunAt: now,
+        lastRunStats: { ...byChannel, at: now.toISOString() } as Prisma.InputJsonValue,
+      },
     });
-    if (!profile) {
-      throw new NotFoundException('Content profile not found');
+
+    if (claimed.count === 0) {
+      // Profile was already run this window (or doesn't exist / wrong tenant).
+      // Check existence to distinguish "not found" from "already run".
+      const profile = await this.prisma.contentProfile.findFirst({
+        where: { id: dto.profileId, workspaceId },
+        select: { id: true },
+      });
+      if (!profile) throw new NotFoundException('Content profile not found');
+      // Already run this window — idempotent no-op.
+      return { created: 0 };
     }
 
     const result = await this.prisma.contentDraft.createMany({
@@ -122,22 +153,6 @@ export class InternalContentController {
         body: d.body,
       })),
     });
-
-    // Best-effort stamp; never fail the submission over it. Scoped by
-    // {id, workspaceId} so a routine can never stamp another tenant's profile.
-    const byChannel = dto.drafts.reduce<Record<string, number>>((acc, d) => {
-      acc[d.channel] = (acc[d.channel] ?? 0) + 1;
-      return acc;
-    }, {});
-    await this.prisma.contentProfile
-      .updateMany({
-        where: { id: dto.profileId, workspaceId },
-        data: {
-          lastRunAt: new Date(),
-          lastRunStats: { ...byChannel, at: new Date().toISOString() } as Prisma.InputJsonValue,
-        },
-      })
-      .catch(() => undefined);
 
     return { created: result.count };
   }

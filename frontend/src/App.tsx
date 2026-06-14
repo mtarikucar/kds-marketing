@@ -36,6 +36,7 @@ import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
 import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
 import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
+import PlatformRoutinesPage from './pages/platform/PlatformRoutinesPage';
 import { useReferralCapture } from './features/marketing/hooks/useReferralCapture';
 
 /**
@@ -61,6 +62,7 @@ export default function App() {
       <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
       <Route path="/platform/workspaces/:id" element={<PlatformWorkspaceDetailPage />} />
       <Route path="/platform/payments" element={<ManualPaymentsPage />} />
+      <Route path="/platform/routines" element={<PlatformRoutinesPage />} />
       <Route element={<MarketingProtectedRoute />}>
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
