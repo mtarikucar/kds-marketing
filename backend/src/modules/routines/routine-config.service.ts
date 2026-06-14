@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
@@ -26,6 +26,7 @@ export interface UpdateRoutineConfigDto {
   triggerUrl?: string | null;
   /** Write-only. Never returned to callers. When present, sealed and stored. */
   triggerToken?: string;
+  eventCooldownSec?: number;
 }
 
 /** Public shape returned by list() — triggerTokenSealed is omitted, hasToken added. */
@@ -100,6 +101,9 @@ export class RoutineConfigService implements OnModuleInit {
    * NOTE: scheduleRunner.reload(key) wired in backend-B
    */
   async update(key: string, dto: UpdateRoutineConfigDto): Promise<RoutineConfigPublic> {
+    if (!(ROUTINE_KEYS as readonly string[]).includes(key)) {
+      throw new NotFoundException('unknown routine key');
+    }
     const { triggerToken, ...rest } = dto;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

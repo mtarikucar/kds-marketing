@@ -218,6 +218,26 @@ describe('RoutineConfigService', () => {
       // No seal call since no triggerToken in dto
       expect(sealSecret).not.toHaveBeenCalled();
     });
+
+    it('persists eventCooldownSec when provided', async () => {
+      prisma.routineConfig.update.mockResolvedValue(
+        makeBaseConfig('review-draft', { eventCooldownSec: 60 }),
+      );
+
+      await service.update('review-draft', { eventCooldownSec: 60 });
+
+      const updateCall = prisma.routineConfig.update.mock.calls[0][0];
+      expect(updateCall.data.eventCooldownSec).toBe(60);
+    });
+
+    it('throws NotFoundException for unknown routine key', async () => {
+      const { NotFoundException } = await import('@nestjs/common');
+      await expect(
+        service.update('nonexistent-key', { enabled: true }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(prisma.routineConfig.update).not.toHaveBeenCalled();
+    });
   });
 
   // ── recordTrigger ─────────────────────────────────────────────────────────

@@ -1,8 +1,11 @@
 import {
   IsBoolean,
+  IsInt,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 /**
@@ -34,6 +37,7 @@ export class UpdateRoutineConfigDto {
 
   @IsOptional()
   @IsString()
+  @IsUrl({ require_protocol: true, protocols: ['https'] })
   @MaxLength(2000)
   triggerUrl?: string | null;
 
@@ -45,4 +49,10 @@ export class UpdateRoutineConfigDto {
   @IsString()
   @MaxLength(4000)
   triggerToken?: string;
+
+  /** Minimum seconds between event-triggered fires. Defaults to 300. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  eventCooldownSec?: number;
 }
