@@ -165,4 +165,88 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.prisma.$executeRaw).not.toHaveBeenCalled();
     expect(h.credits.reserve).not.toHaveBeenCalled();
   });
+
+  // --- BUG 1 REGRESSION: scheduleFollowup throws after send() succeeds ---
+  it('BUG 1: scheduleFollowup rejection after a successful send does NOT throw; reply sent exactly once, credit NOT refunded', async () => {
+    const h = build({
+      agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } },
+    });
+    // Make scheduleFollowup's underlying scheduledJobs.schedule reject.
+    h.scheduledJobs.schedule.mockRejectedValue(new Error('DB connection lost'));
+
+    // reply() must resolve (not throw) even though scheduleFollowup fails.
+    await expect(run(h)).resolves.toBeUndefined();
+
+    // The message was sent exactly once.
+    expect(h.sender.send).toHaveBeenCalledTimes(1);
+    // The credit must NOT be refunded (sent = true, so the finally branch is skipped).
+    expect(h.credits.refund).not.toHaveBeenCalled();
+  });
+
+  // --- BUG 2 REGRESSION: credit reserve throws → slot must be released ---
+  it('BUG 2: credits.reserve() exhaustion after slot claimed → slot released, no send', async () => {
+    const { ForbiddenException } = await import('@nestjs/common');
+    const h = build();
+    // credits.reserve throws the exhausted error AFTER the slot was claimed
+    // (claimed returns 1 from $executeRaw mock).
+    h.credits.reserve.mockRejectedValue(new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED' }));
+
+    // reply() throws (the ForbiddenException re-propagates since it's not the
+    // scheduleFollowup path — but the finally must still release the slot).
+    await expect(run(h)).rejects.toBeDefined();
+
+    // The slot was claimed (1 call for the conditional UPDATE).
+    expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(2); // 1 claim + 1 release
+    // No message sent.
+    expect(h.sender.send).not.toHaveBeenCalled();
+    // The credit refund is NOT called since creditReserved=false.
+    expect(h.credits.refund).not.toHaveBeenCalled();
+  });
+
+  // --- BUG 9 REGRESSION: tool loop exhausts all iterations on tool_use ---
+  it('BUG 9: tool_use on final iteration → final no-tools completion called; its text is returned', async () => {
+    // complete() returns tool_use on every tool-bearing call, then text on the
+    // final no-tools call.
+    const toolUseResponse = {
+      text: '',
+      toolUses: [{ type: 'tool_use', id: 't1', name: 'capture_lead_fields', input: { name: 'Ali' } }],
+      stopReason: 'tool_use',
+      usage: { input: 1, output: 1 },
+    };
+    const finalTextResponse = {
+      text: 'Great, I have saved your details!',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: { input: 1, output: 1 },
+    };
+
+    let callCount = 0;
+    const h = build({
+      complete: undefined, // we'll override per-call below
+    });
+    // Prisma lead mock for captureLeadFields (called during tool execution)
+    h.prisma.lead = {
+      findFirst: jest.fn().mockResolvedValue({ contactPerson: null, email: null, phone: null, city: null, notes: null }),
+      updateMany: jest.fn().mockResolvedValue({}),
+    };
+    h.anthropic.complete.mockImplementation(() => {
+      callCount++;
+      // The first MAX_TOOL_ITERATIONS calls always return tool_use (exhausting the loop).
+      // The final call (no tools param) returns text.
+      if (callCount <= 3) return Promise.resolve(toolUseResponse);
+      return Promise.resolve(finalTextResponse);
+    });
+
+    await run(h);
+
+    // 3 tool-bearing calls + 1 final no-tools call.
+    expect(h.anthropic.complete).toHaveBeenCalledTimes(4);
+    // The final no-tools call must NOT include a `tools` key.
+    const lastCall = h.anthropic.complete.mock.calls[3][0];
+    expect(lastCall.tools).toBeUndefined();
+    // The text from the final call was sent.
+    expect(h.sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Great, I have saved your details!' }),
+    );
+  });
 });

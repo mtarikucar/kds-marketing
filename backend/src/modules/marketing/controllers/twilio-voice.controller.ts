@@ -1,4 +1,4 @@
-import { Controller, Post, Req, Res, Logger } from '@nestjs/common';
+import { Controller, Post, Req, Res, Headers, Logger } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -68,14 +68,18 @@ export class TwilioVoiceController {
   }
 
   @Post('gather')
-  async gather(@Req() req: Request, @Res() res: Response): Promise<void> {
+  async gather(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Headers('i-twilio-idempotency-token') idempotencyToken?: string,
+  ): Promise<void> {
     const b = req.body ?? {};
     const callSid = String(b.CallSid ?? '');
     const channel = await this.channelForCall(callSid);
     if (!channel) { res.type('text/xml').send(TWIML_HANGUP); return; }
     const cfg = this.registry.resolveConfig(channel);
     if (!this.verify(req, cfg.secrets.authToken ?? '')) { res.status(403).send('bad signature'); return; }
-    const twiml = await this.voice.handleTurn(callSid, String(b.SpeechResult ?? ''));
+    const twiml = await this.voice.handleTurn(callSid, String(b.SpeechResult ?? ''), idempotencyToken);
     res.type('text/xml').send(twiml);
   }
 

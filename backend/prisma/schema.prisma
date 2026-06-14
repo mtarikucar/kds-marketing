@@ -1212,15 +1212,16 @@ model Review {
 /// An inbound AI-answered phone call (Twilio). The agent persona comes from the
 /// VOICE Channel's agentProfileId; turns are transcribed into VoiceTranscript.
 model VoiceCall {
-  id             String  @id @default(uuid())
-  workspaceId    String
-  channelId      String
-  leadId         String?
-  externalCallId String  @unique
-  fromNumber     String
-  toNumber       String
-  status         String  @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
-  turns          Int     @default(0)
+  id              String  @id @default(uuid())
+  workspaceId     String
+  channelId       String
+  leadId          String?
+  externalCallId  String  @unique
+  fromNumber      String
+  toNumber        String
+  status          String  @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
+  turns           Int     @default(0)
+  lastGatherToken String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
