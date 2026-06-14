@@ -1,7 +1,17 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RoutineTokenGuard } from './routine-token.guard';
+import { SubmitReviewDraftsDto } from './routine-reviews.dto';
 
 const DEFAULT_DAILY_CAP = 50;
 
@@ -79,5 +89,40 @@ export class InternalReviewsController {
     }
 
     return { generatedAt: new Date().toISOString(), jobs };
+  }
+
+  @Post(':workspaceId/drafts')
+  @HttpCode(200)
+  async submit(
+    @Param('workspaceId') workspaceId: string,
+    @Body() dto: SubmitReviewDraftsDto,
+  ): Promise<{ written: number; skipped: number }> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { id: true, status: true },
+    });
+    if (!workspace || workspace.status !== 'ACTIVE') {
+      throw new NotFoundException('Workspace not found');
+    }
+
+    let written = 0;
+    for (const d of dto.drafts) {
+      // Guarded write: only fill a STILL-empty draft, scoped to this workspace.
+      // Putting replyDraft/replyText/workspaceId in the WHERE means a draft a
+      // human (or the interactive button) wrote since the GET is never
+      // clobbered, and a cross-workspace write is impossible.
+      const res = await this.prisma.review.updateMany({
+        where: {
+          id: d.reviewId,
+          workspaceId,
+          replyDraft: null,
+          replyText: null,
+        },
+        data: { replyDraft: d.replyDraft },
+      });
+      written += res.count;
+    }
+
+    return { written, skipped: dto.drafts.length - written };
   }
 }

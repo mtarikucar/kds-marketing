@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { InternalReviewsController } from './internal-reviews.controller';
 
 describe('InternalReviewsController', () => {
@@ -71,6 +72,38 @@ describe('InternalReviewsController', () => {
       ]);
       await ctrl.pendingDrafts();
       expect(prisma.review.findMany.mock.calls[0][0].take).toBe(10);
+    });
+  });
+
+  describe('POST :workspaceId/drafts', () => {
+    it('404s an unknown / inactive workspace', async () => {
+      prisma.workspace.findUnique.mockResolvedValue(null);
+      await expect(
+        ctrl.submit('wsX', { drafts: [{ reviewId: 'r', replyDraft: 'hi' }] }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('writes only still-empty drafts and counts written/skipped', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      prisma.review.updateMany
+        .mockResolvedValueOnce({ count: 1 }) // rev1 written
+        .mockResolvedValueOnce({ count: 0 }); // rev2 already filled -> skipped
+
+      const res = await ctrl.submit('ws1', {
+        drafts: [
+          { reviewId: 'rev1', replyDraft: 'a' },
+          { reviewId: 'rev2', replyDraft: 'b' },
+        ],
+      });
+
+      expect(res).toEqual({ written: 1, skipped: 1 });
+      // guarded WHERE prevents clobber + cross-workspace writes
+      expect(prisma.review.updateMany.mock.calls[0][0].where).toMatchObject({
+        id: 'rev1',
+        workspaceId: 'ws1',
+        replyDraft: null,
+        replyText: null,
+      });
     });
   });
 });
