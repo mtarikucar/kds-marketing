@@ -49,4 +49,29 @@ describe('workflow DSL', () => {
     const dsl = WorkflowDslSchema.parse({ trigger: { type: 'task.completed' }, steps: okSteps });
     expect(dsl.trigger.filters).toEqual([]);
   });
+
+  describe('ai_classify routes', () => {
+    const classifyAt = (routes: Record<string, number>) => [
+      {
+        type: 'ai_classify',
+        prompt: 'classify',
+        categories: ['hot', 'cold'],
+        routes,
+      },
+      { type: 'stop_workflow' },
+    ];
+
+    it('accepts routes whose keys are declared categories and targets are in-bounds', () => {
+      expect(() => parseWorkflowParts(okTrigger, classifyAt({ hot: 1 }))).not.toThrow();
+    });
+
+    it('rejects a route key that is not a declared category', () => {
+      expect(() => parseWorkflowParts(okTrigger, classifyAt({ lukewarm: 1 }))).toThrow();
+    });
+
+    it('rejects a route target that overruns steps.length', () => {
+      // 2 steps → valid indexes are 0,1; 5 is out of bounds.
+      expect(() => parseWorkflowParts(okTrigger, classifyAt({ hot: 5 }))).toThrow();
+    });
+  });
 });

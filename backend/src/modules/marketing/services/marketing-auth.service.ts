@@ -15,6 +15,12 @@ import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 
+// Constant-time login: an unknown email must cost roughly one bcrypt compare,
+// same as a wrong password, so response timing can't be used to enumerate
+// which emails exist. Computed once at module load (a real hash, not a literal,
+// so the compare exercises the genuine cost factor) — never used as a credential.
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password', 12);
+
 /** Subdomain-safe slug from a workspace name ("Acme Görmez A.Ş." → "acme-gormez-a-s"). */
 function slugify(name: string): string {
   const turkishMap: Record<string, string> = {
@@ -66,6 +72,10 @@ export class MarketingAuthService {
     });
 
     if (!user) {
+      // Burn ~one bcrypt compare so a missing email costs the same as a wrong
+      // password — closes the timing side-channel that would otherwise let an
+      // attacker enumerate registered emails.
+      await bcrypt.compare(dto.password, DUMMY_BCRYPT_HASH);
       throw new UnauthorizedException('Invalid credentials');
     }
 

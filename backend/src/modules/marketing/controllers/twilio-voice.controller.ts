@@ -43,7 +43,16 @@ export class TwilioVoiceController {
 
   private verify(req: Request, authToken: string): boolean {
     const sig = req.headers['x-twilio-signature'];
-    if (typeof sig !== 'string' || !this.config.get<string>('PUBLIC_BASE_URL')) return false;
+    if (!this.config.get<string>('PUBLIC_BASE_URL')) {
+      // Misconfiguration (not a forged request): the signature is computed over
+      // the full public URL, so without PUBLIC_BASE_URL every Twilio webhook
+      // fails verification. Surface it loudly so it isn't mistaken for an attack.
+      this.logger.error(
+        'PUBLIC_BASE_URL is not set — Twilio signature verification cannot run and ALL voice webhooks will be rejected. Set PUBLIC_BASE_URL to the public origin Twilio calls.',
+      );
+      return false;
+    }
+    if (typeof sig !== 'string') return false;
     return validTwilioSignature(authToken, this.fullUrl(req), req.body ?? {}, sig);
   }
 

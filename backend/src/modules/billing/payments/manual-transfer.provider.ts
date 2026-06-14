@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PaymentOrder } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -41,14 +41,22 @@ export class ManualTransferProvider implements BillingPaymentProvider {
     // Short, human-typeable wire reference; full order id stays in the DB.
     const reference = `MKT-${order.id.replace(/-/g, '').slice(0, 10).toUpperCase()}`;
 
-    await this.prisma.paymentOrder.update({
-      where: { id: order.id },
+    // Guard the flip on status='PENDING' via updateMany so a re-issued
+    // checkout can't re-stamp instructions over an order that's already moved
+    // on (settled, failed, or awaiting a transfer from an earlier issue).
+    // count===0 means it's no longer pending — refuse loudly rather than
+    // overwrite providerRef/raw on a row another path now owns.
+    const { count } = await this.prisma.paymentOrder.updateMany({
+      where: { id: order.id, status: 'PENDING' },
       data: {
         status: 'AWAITING_TRANSFER',
         providerRef: reference,
         raw: { instructionsIssuedAt: new Date().toISOString() },
       },
     });
+    if (count === 0) {
+      throw new ConflictException('order is no longer pending');
+    }
 
     const amountFormatted = `${order.amount.toFixed(2)} ${order.currency}`;
     return {

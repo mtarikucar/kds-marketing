@@ -1,13 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
 import { PrismaModule } from './prisma/prisma.module';
 import { CommonModule } from './common/common.module';
 import { ThrottlerRedisModule } from './common/throttler/throttler-redis.module';
 import { RedisThrottlerStorage } from './common/throttler/redis-throttler-storage';
+import { PrincipalThrottlerGuard } from './common/throttler/principal-throttler.guard';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { MarketingModule } from './modules/marketing/marketing.module';
 import { PlatformModule } from './modules/platform/platform.module';
@@ -69,7 +70,7 @@ import { AuditModule } from './modules/audit/audit.module';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: PrincipalThrottlerGuard,
     },
   ],
 })

@@ -291,6 +291,21 @@ export class MarketingLeadsService {
       throw new ForbiddenException('You can only update your own leads');
     }
 
+    // Mirror create()'s "one OPEN lead per email per workspace" rule on
+    // email change: editing a lead's email to one already held by another
+    // open lead would otherwise sneak past the create-time dedup. Scoped to
+    // this workspace, ignoring WON/LOST and this same row.
+    if (dto.email !== undefined && dto.email && dto.email !== lead.email) {
+      const clash = await this.prisma.lead.findFirst({
+        where: { workspaceId, email: dto.email, status: { notIn: ['WON', 'LOST'] }, id: { not: id } },
+        select: { id: true, businessName: true, assignedTo: { select: { firstName: true, lastName: true } } },
+      });
+      if (clash) {
+        const owner = clash.assignedTo ? `${clash.assignedTo.firstName} ${clash.assignedTo.lastName}` : 'unassigned';
+        throw new ConflictException(`A lead with this email already exists (${clash.businessName}, owned by ${owner})`);
+      }
+    }
+
     // Build update explicitly — the DTO now omits assignedToId and
     // status, but being explicit keeps us safe from future DTO drift.
     const data: Prisma.LeadUpdateInput = {
@@ -719,7 +734,11 @@ export class MarketingLeadsService {
           .mul(provision.planFacts.commissionRate)
           .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
       : new Prisma.Decimal(0);
-    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // Period must use the same UTC basis as attainment bucketing (sales-target
+    // periodRange uses Date.UTC) and the settlement consumer (occurredAt.slice(0,7)).
+    // Local getMonth()/getFullYear() would file a late-month conversion into the
+    // wrong month near the UTC boundary.
+    const period = now.toISOString().slice(0, 7);
 
     let commissionId: string | null = null;
     const result = await this.prisma.$transaction(async (tx) => {
@@ -922,7 +941,11 @@ export class MarketingLeadsService {
     commissionAmount: Prisma.Decimal,
   ): Promise<void> {
     const now = new Date();
-    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // Period must use the same UTC basis as attainment bucketing (sales-target
+    // periodRange uses Date.UTC) and the settlement consumer (occurredAt.slice(0,7)).
+    // Local getMonth()/getFullYear() would file a late-month conversion into the
+    // wrong month near the UTC boundary.
+    const period = now.toISOString().slice(0, 7);
     await this.prisma.$transaction(async (tx) => {
       const claim = await tx.lead.updateMany({
         where: { id: leadId, workspaceId, convertedTenantId: null },

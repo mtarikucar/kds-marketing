@@ -49,6 +49,15 @@ export class OutboxMetricsCollector {
         await collector.setFromCount(this, 'failed');
       },
     });
+
+    new Gauge({
+      name: 'outbox_events_dispatching',
+      help: 'OutboxEvent rows in status=dispatching (claimed, in flight). A sustained climb means rows are being orphaned faster than the reclaim sweep recovers them.',
+      registers: [this.metrics.registry],
+      async collect() {
+        await collector.setFromCount(this, 'dispatching');
+      },
+    });
   }
 
   private async setFromCount(gauge: Gauge<string>, status: string): Promise<void> {

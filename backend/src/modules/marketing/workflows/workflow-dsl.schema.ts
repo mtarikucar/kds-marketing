@@ -52,13 +52,23 @@ const StepSchema = z.discriminatedUnion('type', [
     /** Context key the generated text is saved under for later steps. */
     saveAs: z.string().max(60).default('ai_output'),
   }),
-  z.object({
-    type: z.literal('ai_classify'),
-    prompt: z.string().min(1).max(4000),
-    categories: z.array(z.string().max(60)).min(2).max(10),
-    /** category → step index to jump to. */
-    routes: z.record(z.string(), z.number().int().nonnegative()).optional(),
-  }),
+  z
+    .object({
+      type: z.literal('ai_classify'),
+      prompt: z.string().min(1).max(4000),
+      categories: z.array(z.string().max(60)).min(2).max(10),
+      /** category → step index to jump to. */
+      routes: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    })
+    // Every route key must be one of the declared categories — a route keyed on
+    // a non-category can never fire (aiClassify only looks up routes[picked]
+    // where picked ∈ categories), so it's a config error worth rejecting.
+    .refine(
+      (s) =>
+        !s.routes ||
+        Object.keys(s.routes).every((k) => s.categories.includes(k)),
+      { message: 'ai_classify routes keys must all be declared categories', path: ['routes'] },
+    ),
   z.object({
     type: z.literal('branch'),
     filters: z.array(FilterSchema).max(20),
@@ -109,11 +119,25 @@ export const TriggerSchema = z.object({
 });
 export type WorkflowTrigger = z.infer<typeof TriggerSchema>;
 
-export const WorkflowDslSchema = z.object({
-  version: z.number().int().default(1),
-  trigger: TriggerSchema,
-  steps: z.array(StepSchema).min(1).max(100), // hard 100-step/run cap
-});
+export const WorkflowDslSchema = z
+  .object({
+    version: z.number().int().default(1),
+    trigger: TriggerSchema,
+    steps: z.array(StepSchema).min(1).max(100), // hard 100-step/run cap
+  })
+  // Every ai_classify route target must point at a real step index (< steps.length).
+  // steps.length is only reachable here at the top level, so the in-bounds check
+  // lives here (the per-step refine above only constrains keys ⊆ categories).
+  .refine(
+    (dsl) =>
+      dsl.steps.every(
+        (s) =>
+          s.type !== 'ai_classify' ||
+          !s.routes ||
+          Object.values(s.routes).every((idx) => idx < dsl.steps.length),
+      ),
+    { message: 'ai_classify route targets must be valid step indexes (< steps.length)', path: ['steps'] },
+  );
 export type WorkflowDsl = z.infer<typeof WorkflowDslSchema>;
 
 /** Max trigger-chain depth (a workflow that starts another). */

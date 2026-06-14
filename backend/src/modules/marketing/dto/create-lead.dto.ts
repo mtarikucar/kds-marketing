@@ -55,18 +55,22 @@ export enum LeadPriority {
 export class CreateLeadDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(255)
   businessName: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(255)
   contactPerson: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   phone?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   whatsapp?: string;
 
   @IsOptional()
@@ -75,14 +79,17 @@ export class CreateLeadDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   address?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   city?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   region?: string;
 
   @IsString()
@@ -107,6 +114,7 @@ export class CreateLeadDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   currentSystem?: string;
 
   @IsEnum(LeadSource)
@@ -114,6 +122,7 @@ export class CreateLeadDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   notes?: string;
 
   @IsOptional()

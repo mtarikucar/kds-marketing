@@ -144,15 +144,23 @@ export default function PlatformWorkspacesPage() {
                   <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                     {w.status === 'ACTIVE' ? (
                       <button
-                        onClick={() => statusMutation.mutate({ id: w.id, status: 'SUSPENDED' })}
-                        className="px-2.5 py-1 text-xs rounded-lg border border-amber-200 text-amber-700 hover:bg-amber-50"
+                        onClick={() => {
+                          if (!window.confirm(`Suspend workspace "${w.name}"? Users will lose access until it is reactivated.`)) return;
+                          statusMutation.mutate({ id: w.id, status: 'SUSPENDED' });
+                        }}
+                        disabled={statusMutation.isPending}
+                        className="px-2.5 py-1 text-xs rounded-lg border border-amber-200 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                       >
                         Suspend
                       </button>
                     ) : w.status === 'SUSPENDED' ? (
                       <button
-                        onClick={() => statusMutation.mutate({ id: w.id, status: 'ACTIVE' })}
-                        className="px-2.5 py-1 text-xs rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                        onClick={() => {
+                          if (!window.confirm(`Activate workspace "${w.name}"? Users will regain access immediately.`)) return;
+                          statusMutation.mutate({ id: w.id, status: 'ACTIVE' });
+                        }}
+                        disabled={statusMutation.isPending}
+                        className="px-2.5 py-1 text-xs rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
                       >
                         Activate
                       </button>

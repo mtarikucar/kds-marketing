@@ -14,7 +14,7 @@ import { Request } from 'express';
 import type Stripe from 'stripe';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { BillingSettlementService } from '../billing-settlement.service';
-import { verifyCallbackHash } from './paytr.provider';
+import { amountToKurus, verifyCallbackHash } from './paytr.provider';
 import { StripeProvider } from './stripe.provider';
 
 // stripe-node v19+ stopped re-exporting the resource-type namespace from the
@@ -148,9 +148,51 @@ export class BillingWebhooksController {
 
     try {
       if (status === 'success') {
-        // Replays return { settled: false, reason: 'already settled' } —
-        // by design; PayTR still gets its OK below.
-        await this.settlement.settleSuccess(order.id, { raw: body });
+        // Amount tamper guard: the hash only covers merchant_oid+salt+status+
+        // total_amount, so a verified callback proves PayTR sent THIS amount —
+        // but not that it equals what we asked to charge. Compare the paid
+        // kuruş against the order's expected kuruş before settling, so a
+        // mismatched-amount callback (replayed from another order, or a
+        // gateway/pricing drift like the "199$ collected as 199TL" incident)
+        // can never silently grant entitlements. parseInt over the kuruş
+        // strings normalises any zero-padding/formatting differences.
+        const expectedKurus = amountToKurus(order.amount);
+        const paidKurus = Number.parseInt(totalAmount, 10);
+        if (paidKurus !== Number.parseInt(expectedKurus, 10)) {
+          this.logger.error(
+            `PayTR amount mismatch for order ${order.id} (oid=${merchantOid}): paid ${totalAmount} kuruş, expected ${expectedKurus} kuruş — NOT settling; flagged for review`,
+          );
+          // Persist a review marker on the still-unsettled order; guard the
+          // where on the pre-settlement statuses so we never clobber a row
+          // some other path has already legitimately settled.
+          await this.prisma.paymentOrder
+            .updateMany({
+              where: {
+                id: order.id,
+                status: { in: ['PENDING', 'AWAITING_TRANSFER'] },
+              },
+              data: {
+                raw: {
+                  needsReview: true,
+                  reason: 'paytr_amount_mismatch',
+                  paidKurus: totalAmount,
+                  expectedKurus,
+                  callback: body as object,
+                },
+              },
+            })
+            .catch((err) =>
+              this.logger.error(
+                `failed to persist amount-mismatch review marker for order ${order.id}: ${(err as Error)?.message}`,
+              ),
+            );
+          // Still answer OK at the end — a non-OK only makes PayTR retry the
+          // same bad amount; ops triages the flagged order instead.
+        } else {
+          // Replays return { settled: false, reason: 'already settled' } —
+          // by design; PayTR still gets its OK below.
+          await this.settlement.settleSuccess(order.id, { raw: body });
+        }
       } else {
         await this.settlement.settleFailure(
           order.id,

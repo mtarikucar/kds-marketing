@@ -58,4 +58,19 @@ describe('MarketingRolesGuard — hierarchical workspace roles', () => {
     reflector.getAllAndOverride.mockReturnValue(['MANAGER']);
     expect(() => guard.canActivate(ctxWithUser(undefined))).toThrow(ForbiddenException);
   });
+
+  // Multi-role co-listing: the HIGHEST required role sets the bar, so a
+  // lower co-listed role can't weaken a stricter co-requirement.
+  it("['MANAGER','REP'] rejects REP but admits MANAGER (highest wins)", () => {
+    reflector.getAllAndOverride.mockReturnValue(['MANAGER', 'REP']);
+    expect(() => guard.canActivate(ctxWithUser('REP'))).toThrow(ForbiddenException);
+    expect(guard.canActivate(ctxWithUser('MANAGER'))).toBe(true);
+  });
+
+  it("['MANAGER','SYSTEM'] rejects SYSTEM & REP but admits MANAGER", () => {
+    reflector.getAllAndOverride.mockReturnValue(['MANAGER', 'SYSTEM']);
+    expect(() => guard.canActivate(ctxWithUser('SYSTEM'))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(ctxWithUser('REP'))).toThrow(ForbiddenException);
+    expect(guard.canActivate(ctxWithUser('MANAGER'))).toBe(true);
+  });
 });

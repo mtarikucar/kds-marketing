@@ -197,6 +197,21 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       await svc.convert(WS, 'lead-1', DTO, 'u');
       expect(email.sendEmail).not.toHaveBeenCalled();
     });
+
+    it('files the commission in the UTC month, not local time: 2026-06-30T22:30Z → period 2026-06', async () => {
+      // 22:30 UTC on Jun 30 is already Jul 1 in TZ ahead of UTC (e.g. +03:00).
+      // Local getMonth()/getFullYear() would bucket this as 2026-07; the
+      // commission period must stay on the UTC basis shared by attainment
+      // bucketing (Date.UTC) and the settlement consumer (occurredAt.slice(0,7)).
+      jest.useFakeTimers().setSystemTime(new Date('2026-06-30T22:30:00.000Z'));
+      try {
+        await svc.convert(WS, 'lead-1', DTO, 'user-1');
+        const commData = (prisma.commission.create as any).mock.calls[0][0].data;
+        expect(commData.period).toBe('2026-06');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('reconcileOrphanProvisionedConversions', () => {

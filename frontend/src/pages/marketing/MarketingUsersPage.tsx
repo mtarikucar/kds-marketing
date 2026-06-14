@@ -5,6 +5,11 @@ import { PlusIcon, PencilIcon, KeyIcon } from '@heroicons/react/24/outline';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { fmtDateTime } from '../../features/marketing/utils/format';
 import { DistributionConfigCard } from '../../features/marketing/components';
+import {
+  marketingUserSchema,
+  passwordSchema,
+  collectZodErrors,
+} from '../../features/marketing/schemas';
 
 export default function MarketingUsersPage() {
   const queryClient = useQueryClient();
@@ -31,6 +36,7 @@ export default function MarketingUsersPage() {
   // Reset password state
   const [resetPasswordUserId, setResetPasswordUserId] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
+  const [resetError, setResetError] = useState('');
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['marketing', 'users'],
@@ -102,6 +108,50 @@ export default function MarketingUsersPage() {
     },
   });
 
+  // The shared zod schemas emit i18n keys as messages; this page renders a
+  // plain English error string, so map the few keys we can surface here.
+  const SCHEMA_MESSAGES: Record<string, string> = {
+    required: 'Please fill in all required fields.',
+    emailInvalid: 'Please enter a valid email address.',
+    passwordMin: 'Password must be at least 8 characters.',
+    passwordWeak: 'Password must include upper, lower case letters and a number.',
+    passwordMismatch: 'Passwords do not match.',
+    phoneInvalid: 'Please enter a valid phone number.',
+  };
+  const messageFor = (key: string) => SCHEMA_MESSAGES[key] ?? 'Invalid input.';
+
+  const handleCreate = () => {
+    // Validate before hitting the API so password/email mistakes surface
+    // instantly instead of bouncing off the backend 400.
+    const parsed = marketingUserSchema.safeParse({
+      firstName: form.firstName,
+      lastName: form.lastName,
+      email: form.email,
+      phone: form.phone || undefined,
+      role: form.role,
+      password: form.password,
+      passwordConfirm: form.password,
+    });
+    if (!parsed.success) {
+      const errors = collectZodErrors(parsed);
+      const firstKey = errors.password || errors.email || Object.values(errors)[0];
+      setError(messageFor(firstKey));
+      return;
+    }
+    setError('');
+    createMutation.mutate(form);
+  };
+
+  const handleResetPassword = (id: string) => {
+    const parsed = passwordSchema.safeParse(newPassword);
+    if (!parsed.success) {
+      setResetError(messageFor(parsed.error.issues[0]?.message ?? ''));
+      return;
+    }
+    setResetError('');
+    resetPasswordMutation.mutate({ id, password: newPassword });
+  };
+
   const startEditing = (u: any) => {
     setEditingUserId(u.id);
     setEditForm({
@@ -121,12 +171,14 @@ export default function MarketingUsersPage() {
   const startResetPassword = (id: string) => {
     setResetPasswordUserId(id);
     setNewPassword('');
+    setResetError('');
     setEditingUserId(null);
   };
 
   const cancelResetPassword = () => {
     setResetPasswordUserId(null);
     setNewPassword('');
+    setResetError('');
   };
 
   return (
@@ -202,7 +254,7 @@ export default function MarketingUsersPage() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => createMutation.mutate(form)}
+              onClick={handleCreate}
               disabled={!form.email || !form.password || !form.firstName || !form.lastName || createMutation.isPending}
               className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
             >
@@ -311,7 +363,7 @@ export default function MarketingUsersPage() {
                               className="px-3 py-2 border rounded-lg text-sm w-48"
                             />
                             <button
-                              onClick={() => resetPasswordMutation.mutate({ id: u.id, password: newPassword })}
+                              onClick={() => handleResetPassword(u.id)}
                               disabled={!newPassword || resetPasswordMutation.isPending}
                               className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
                             >
@@ -324,6 +376,9 @@ export default function MarketingUsersPage() {
                               Cancel
                             </button>
                           </div>
+                          {resetError && (
+                            <p className="text-xs text-red-600 mt-1">{resetError}</p>
+                          )}
                         </td>
                         <td className="px-4 py-3" />
                       </>

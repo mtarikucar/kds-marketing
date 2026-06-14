@@ -194,8 +194,15 @@ export class PaytrProvider implements BillingPaymentProvider {
     // succeeds the customer can pay, and the webhook resolves the order by
     // providerRef alone. If our process dies between the API call and a
     // late write, the payment would otherwise be unmatchable.
-    await this.prisma.paymentOrder.update({
-      where: { id: order.id },
+    //
+    // Guard the write on status='PENDING' via updateMany: a re-issued checkout
+    // on an order that's already moved on (SUCCEEDED/FAILED/another provider's
+    // ref) must NOT silently repoint providerRef and steal a settled order's
+    // webhook routing. count===0 means the order is no longer pending — fall
+    // through without overwriting; the webhook still lands on whatever ref the
+    // winning checkout wrote.
+    await this.prisma.paymentOrder.updateMany({
+      where: { id: order.id, status: 'PENDING' },
       data: { providerRef: merchantOid },
     });
 

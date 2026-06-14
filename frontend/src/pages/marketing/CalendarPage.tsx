@@ -56,8 +56,13 @@ export default function CalendarPage() {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
-  const dateFrom = new Date(year, month, 1).toISOString();
-  const dateTo = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
+  // Send LOCAL date-only bounds (YYYY-MM-DD), not UTC instants. The grid
+  // buckets tasks by `toLocalDateKey`, so the fetch window has to be the same
+  // local calendar month — using `.toISOString()` here shifted the bounds by
+  // the timezone offset and could drop the first/last day's tasks for users
+  // east/west of UTC.
+  const dateFrom = toLocalDateKey(new Date(year, month, 1));
+  const dateTo = toLocalDateKey(new Date(year, month + 1, 0));
 
   const { data: tasks } = useQuery({
     queryKey: ['marketing', 'tasks', 'calendar', year, month],
@@ -183,7 +188,7 @@ export default function CalendarPage() {
               <div
                 key={idx}
                 onClick={() => openDayModal(dateKey)}
-                className={`min-h-[80px] p-1 border-b border-r cursor-pointer transition-colors hover:bg-primary/10/50 ${
+                className={`min-h-[80px] p-1 border-b border-r cursor-pointer transition-colors hover:bg-primary/5 ${
                   !isCurrentMonth ? 'bg-gray-50' : ''
                 }`}
               >

@@ -76,9 +76,26 @@ export function configureApp(app: NestExpressApplication): void {
   // frontend works as-is.
   app.setGlobalPrefix('api');
 
+  const isProd = process.env.NODE_ENV === 'production';
   const allowedOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',')
+        .map((o) => o.trim())
+        .filter((o) => o.length > 0)
+        // Credentialed CORS + '*' is forbidden by the spec and by browsers;
+        // reject it explicitly so a careless env value can't try.
+        .filter((o) => o !== '*')
+        // In production every allowed origin must be https — an http origin
+        // would let a network attacker read credentialed responses.
+        .filter((o) => !isProd || o.startsWith('https://'))
     : ['http://localhost:5173', 'http://localhost:5179'];
+
+  // Fail fast rather than boot a production service that rejects every browser
+  // origin (or was misconfigured to allow none meaningfully).
+  if (isProd && allowedOrigins.length === 0) {
+    throw new Error(
+      'CORS_ORIGIN must list at least one https origin in production',
+    );
+  }
 
   app.enableCors({
     origin: (origin, callback) => {
@@ -96,7 +113,10 @@ export function configureApp(app: NestExpressApplication): void {
     new ValidationPipe({
       whitelist: true,
       transform: true,
-      forbidNonWhitelisted: false,
+      // Reject unknown properties outright (400) instead of silently stripping
+      // them — closes the mass-assignment surface where a client smuggles extra
+      // keys hoping one maps to a sensitive field.
+      forbidNonWhitelisted: true,
       transformOptions: {
         enableImplicitConversion: true,
       },

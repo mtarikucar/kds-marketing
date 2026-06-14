@@ -74,7 +74,7 @@ export default function LeadsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentStatus]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [
       'marketing',
       'leads',
@@ -325,6 +325,20 @@ export default function LeadsPage() {
                     className="px-4 py-8 text-center text-gray-500"
                   >
                     {t('common.loading')}
+                  </td>
+                </tr>
+              ) : isError ? (
+                <tr>
+                  <td colSpan={isManager ? 8 : 7} className="px-4 py-8 text-center">
+                    <p className="text-sm text-red-600">
+                      {t('leads.loadFailed', 'Could not load leads.')}
+                    </p>
+                    <button
+                      onClick={() => refetch()}
+                      className="mt-2 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+                    >
+                      {t('common.retry', 'Retry')}
+                    </button>
                   </td>
                 </tr>
               ) : data?.data.length === 0 ? (

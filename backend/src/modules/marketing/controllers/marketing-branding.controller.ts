@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Body, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
@@ -33,7 +33,16 @@ export class MarketingBrandingController {
   }
 
   @Post('logo')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 1_100_000 } }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 1_100_000 },
+      // Reject non-raster (notably image/svg+xml — stored-XSS) before buffering.
+      fileFilter: (_req, file, cb) => {
+        const ok = ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype);
+        cb(ok ? null : new BadRequestException('Logo must be PNG, JPEG or WEBP'), ok);
+      },
+    }),
+  )
   uploadLogo(@CurrentMarketingUser() a: MarketingUserPayload, @UploadedFile() file: any) {
     return this.branding.saveLogo(a.workspaceId, file);
   }

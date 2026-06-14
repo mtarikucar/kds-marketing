@@ -8,6 +8,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from '../channels/message-sender.service';
 import { ReviewsService } from '../reviews/reviews.service';
+import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 import { WorkflowFilter, WorkflowStep, FILTER_OPS } from './workflow-dsl.schema';
 
 export interface WorkflowContext {
@@ -254,14 +255,21 @@ export class WorkflowActionHandler {
   }
 
   private async webhook(step: any, ctx: WorkflowContext): Promise<string> {
+    // step.url is operator-controlled, so route the call through the SSRF guard
+    // (scheme allow-list + private/metadata-IP rejection + redirect re-validation).
     try {
-      const res = await fetch(step.url, {
+      const res = await safeFetch(step.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ payload: step.payload ?? null, lead: ctx.lead, trigger: ctx.trigger }),
+        timeoutMs: 10_000,
       });
       return `webhook ${res.status}`;
     } catch (e: any) {
+      if (e instanceof SsrfBlockedError) {
+        this.logger.warn(`webhook blocked for workspace=${ctx.workspaceId}: ${e.message}`);
+        return `webhook blocked: ${e.message.slice(0, 120)}`;
+      }
       return `webhook failed: ${(e?.message ?? e).toString().slice(0, 120)}`;
     }
   }
@@ -304,14 +312,20 @@ export class WorkflowActionHandler {
     }
   }
 
-  /** Safe token replace + HTML-escape. {{lead.contactPerson}} → escaped value. */
+  /**
+   * Safe token replace. {{lead.contactPerson}} → raw value.
+   *
+   * Escaping must match the sink. Every consumer of interpolate() is a
+   * PLAIN-TEXT channel — sendPlainEmail's `text:` body, and SMS / WhatsApp /
+   * webchat message bodies — none of which are HTML, so HTML-escaping here only
+   * corrupts legitimate content (e.g. "Ben & Jerry's" → "Ben &amp; Jerry&#39;s").
+   * The whitelist token replace (resolveField only resolves lead/trigger/context
+   * roots, never arbitrary code) is the injection-safe part and stays.
+   */
   private interpolate(template: string, ctx: WorkflowContext): string {
     return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, field) => {
       const v = this.resolveField(field, ctx);
-      const s = v == null ? '' : String(v);
-      return s.replace(/[&<>"']/g, (c) =>
-        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
-      );
+      return v == null ? '' : String(v);
     });
   }
 }

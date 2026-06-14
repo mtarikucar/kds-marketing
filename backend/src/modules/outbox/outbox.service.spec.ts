@@ -2,7 +2,13 @@ import { Logger } from '@nestjs/common';
 import { OutboxService } from './outbox.service';
 
 function mockPrisma() {
-  return { outboxEvent: { create: jest.fn().mockResolvedValue(undefined) } } as any;
+  return {
+    outboxEvent: {
+      // Default: no pre-existing row, so a supplied-key append still creates.
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue(undefined),
+    },
+  } as any;
 }
 
 describe('OutboxService.append', () => {
@@ -64,12 +70,55 @@ describe('OutboxService.append', () => {
   });
 
   it('writes through a provided tx client, not the base prisma', async () => {
-    const tx = { outboxEvent: { create: jest.fn().mockResolvedValue(undefined) } } as any;
+    const tx = {
+      outboxEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue(undefined),
+      },
+    } as any;
     await service.append(
       { type: 'payment.succeeded.v1', payload: {}, idempotencyKey: 'k' },
       tx,
     );
     expect(tx.outboxEvent.create).toHaveBeenCalledTimes(1);
     expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('short-circuits to the existing id when the supplied idempotencyKey is already present', async () => {
+    prisma.outboxEvent.findFirst.mockResolvedValue({ id: 'existing-id' });
+    const id = await service.append({
+      type: 'payment.succeeded.v1',
+      payload: { a: 1 },
+      idempotencyKey: 'dup-key',
+    });
+    expect(id).toBe('existing-id');
+    expect(prisma.outboxEvent.findFirst).toHaveBeenCalledWith({
+      where: { idempotencyKey: 'dup-key' },
+      select: { id: true },
+    });
+    expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('resolves to the winner id on a P2002 race for a supplied key', async () => {
+    // No row on the pre-check, but a concurrent append wins the insert →
+    // create throws P2002; we re-read and return the winner.
+    prisma.outboxEvent.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'winner-id' });
+    prisma.outboxEvent.create.mockRejectedValue({ code: 'P2002' });
+
+    const id = await service.append({
+      type: 'payment.succeeded.v1',
+      payload: {},
+      idempotencyKey: 'racy-key',
+    });
+    expect(id).toBe('winner-id');
+    expect(prisma.outboxEvent.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT pre-check findFirst when no idempotencyKey is supplied', async () => {
+    await service.append({ type: 'metric.emit.v1', payload: {} });
+    expect(prisma.outboxEvent.findFirst).not.toHaveBeenCalled();
+    expect(prisma.outboxEvent.create).toHaveBeenCalledTimes(1);
   });
 });

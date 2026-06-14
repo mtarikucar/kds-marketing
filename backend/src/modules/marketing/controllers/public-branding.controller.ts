@@ -20,7 +20,16 @@ export class PublicBrandingController {
   async upload(@Param('file') file: string, @Res() res: Response): Promise<void> {
     const found = await this.branding.readUpload(file);
     if (!found) throw new NotFoundException('Not found');
-    res.set({ 'Content-Type': found.contentType, 'Cache-Control': 'public, max-age=86400' });
+    // Harden the serve path: never sniff, force inline non-executable handling,
+    // and a locked-down CSP + sandbox neutralizes any LEGACY stored SVG that
+    // predates dropping svg from the upload allow-list.
+    res.set({
+      'Content-Type': found.contentType,
+      'Cache-Control': 'public, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': 'inline; filename="logo"',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    });
     res.send(found.data);
   }
 }

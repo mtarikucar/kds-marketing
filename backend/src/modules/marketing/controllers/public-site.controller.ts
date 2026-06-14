@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { SitesService } from '../sites/sites.service';
 import { FormsService } from '../sites/forms.service';
 import { BookingService } from '../sites/booking.service';
+import { BookSlotDto, SlotsQueryDto } from '../dto/public-site.dto';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
@@ -38,10 +39,18 @@ export class PublicSiteController {
   }
 
   @Post('f/:formId')
-  async submit(@Param('formId') formId: string, @Body() body: Record<string, string>, @Res() res: Response): Promise<void> {
+  async submit(@Param('formId') formId: string, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
+    // Dynamic-field form (schema is workspace-authored) — can't use a DTO, so
+    // hard-cap the untrusted shape: ≤50 keys, key ≤100 chars, value ≤2000 chars.
+    const safe: Record<string, string> = {};
+    for (const [k, v] of Object.entries(body ?? {})) {
+      if (Object.keys(safe).length >= 50) break;
+      if (typeof k !== 'string' || k.length > 100) continue;
+      safe[k] = String(v).slice(0, 2000);
+    }
     let redirectUrl: string | null = null;
     try {
-      ({ redirectUrl } = await this.forms.submit(formId, body ?? {}));
+      ({ redirectUrl } = await this.forms.submit(formId, safe));
     } catch {
       res.status(404).type('html').send('<h1>Form not found</h1>');
       return;
@@ -60,17 +69,17 @@ export class PublicSiteController {
   @Get('book/:ws/:cal/slots')
   async slots(
     @Param('ws') ws: string, @Param('cal') cal: string,
-    @Query('from') from: string, @Query('to') to: string,
+    @Query() q: SlotsQueryDto,
   ): Promise<{ calendarId: string; slots: string[] }> {
     const c = await this.booking.publicCalendar(ws, cal); // resolves slug → calendar
-    const slots = await this.booking.availability(ws, c.id, from || new Date().toISOString(), to || new Date(Date.now() + 14 * 86400_000).toISOString());
+    const slots = await this.booking.availability(ws, c.id, q.from || new Date().toISOString(), q.to || new Date(Date.now() + 14 * 86400_000).toISOString());
     return { calendarId: c.id, slots };
   }
 
   @Post('book/:ws/:cal/reserve')
   async reserve(
     @Param('ws') ws: string, @Param('cal') cal: string,
-    @Body() body: { start: string; name: string; email?: string; phone?: string; notes?: string },
+    @Body() body: BookSlotDto,
   ) {
     const c = await this.booking.publicCalendar(ws, cal);
     return this.booking.book(ws, c.id, body);

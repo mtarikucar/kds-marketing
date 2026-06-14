@@ -66,14 +66,11 @@ export class BillingSettlementService {
     }
 
     try {
-      if (order.type === 'ADDON') {
-        await this.grantAddOn(order);
-      } else {
-        await this.activateSubscription(order);
-      }
+      await this.grantEntitlement(order);
     } catch (e) {
       // The order IS paid — never roll the flip back. Log loudly; the
-      // platform console shows succeeded-but-ungranted orders for ops.
+      // platform console shows succeeded-but-ungranted orders for ops, and
+      // reconcileUngrantedOrders() re-grants them out of band.
       this.logger.error(
         `entitlement grant failed for paid order ${order.id}: ${(e as Error)?.message}`,
       );
@@ -81,6 +78,32 @@ export class BillingSettlementService {
 
     this.entitlements.invalidate(order.workspaceId);
     return { settled: true };
+  }
+
+  /**
+   * Dispatch a SUCCEEDED order to its grant. Extracted from settleSuccess so
+   * the out-of-band reconciliation sweep can re-run the exact same grant logic
+   * for an order whose grant failed after the flip. Deliberately NOT wrapped
+   * in the status-flip transaction: the flip must commit even if the grant
+   * later throws (the money is real), and re-granting must be possible without
+   * re-flipping an already-SUCCEEDED order.
+   */
+  private async grantEntitlement(order: {
+    type: string;
+    workspaceId: string;
+    packageId: string | null;
+    billingCycle: string | null;
+    currency: string;
+    provider: string;
+    providerRef: string | null;
+    addOnCode: string | null;
+    quantity: number;
+  }) {
+    if (order.type === 'ADDON') {
+      await this.grantAddOn(order);
+    } else {
+      await this.activateSubscription(order);
+    }
   }
 
   async settleFailure(
@@ -101,6 +124,61 @@ export class BillingSettlementService {
       },
     });
     return { settled: flip.count > 0 };
+  }
+
+  /**
+   * Out-of-band recovery sweep for SUCCEEDED orders whose entitlement grant
+   * failed AFTER the status flip (settleSuccess never rolls the flip back, so
+   * a transient grant failure leaves a paid-but-ungranted order). Re-grants
+   * idempotently: the subscription upsert is keyed on workspaceId, so re-running
+   * it is safe. ADDON is EXCLUDED — grantAddOn does an unconditional create and
+   * is NOT idempotent, so an auto-sweep would double-grant the boost; addon
+   * misgrants stay operator-triaged.
+   *
+   * Two-step lookup (no JOIN): we can't express "orders whose workspace has no
+   * subscription" cleanly in one Prisma query without a relation, so load the
+   * oldest SUCCEEDED subscription-family orders, then probe each workspace's
+   * subscription and skip the ones that already have one. Workspaces that DO
+   * have a subscription are assumed granted (the common case); the sweep only
+   * spends an upsert on the genuinely-ungranted tail.
+   *
+   * TODO(ops): wire a scheduler to call this every ~5min AND once at boot — a
+   * grant that failed during a deploy must not wait for the next manual run.
+   * Intentionally not cron-wired here (no scheduler dep added to this module).
+   */
+  async reconcileUngrantedOrders(limit = 100): Promise<number> {
+    const candidates = await this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'SUCCEEDED',
+        type: { in: ['SUBSCRIPTION', 'UPGRADE', 'RENEWAL'] },
+      },
+      orderBy: { succeededAt: 'asc' },
+      take: limit,
+    });
+
+    let regranted = 0;
+    for (const order of candidates) {
+      const existing = await this.prisma.workspaceSubscription.findUnique({
+        where: { workspaceId: order.workspaceId },
+        select: { id: true },
+      });
+      if (existing) continue; // already granted — nothing to recover
+
+      try {
+        await this.grantEntitlement(order);
+        this.entitlements.invalidate(order.workspaceId);
+        regranted++;
+        this.logger.warn(
+          `reconcile: re-granted ungranted SUCCEEDED order ${order.id} (${order.type}) for workspace ${order.workspaceId}`,
+        );
+      } catch (e) {
+        // One bad order must not abort the rest of the sweep.
+        this.logger.error(
+          `reconcile: re-grant failed for order ${order.id}: ${(e as Error)?.message}`,
+        );
+      }
+    }
+    return regranted;
   }
 
   /** New subscription, upgrade or renewal — same upsert. */
@@ -159,6 +237,17 @@ export class BillingSettlementService {
       select: { id: true, workspaceId: true, currentPeriodEnd: true },
     });
     if (!sub) return false;
+    // Clamp stale/out-of-order renewals: Stripe can re-deliver invoice.paid,
+    // and webhook retries aren't ordered. A period end that's not strictly
+    // after the current one would either no-op or, worse, SHORTEN the paid
+    // period (and shift currentPeriodStart backwards onto an already-past
+    // end). Treat it as an idempotent replay — ack without mutating.
+    if (newPeriodEnd <= sub.currentPeriodEnd) {
+      this.logger.warn(
+        `ignoring stale renewal for subscription ${sub.id}: new period end ${newPeriodEnd.toISOString()} <= current ${sub.currentPeriodEnd.toISOString()}`,
+      );
+      return true;
+    }
     await this.prisma.workspaceSubscription.update({
       where: { id: sub.id },
       data: {

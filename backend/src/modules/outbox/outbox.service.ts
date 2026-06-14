@@ -78,18 +78,55 @@ export class OutboxService {
       );
     }
     const client = tx ?? this.prisma;
+
+    // Application-level dedup guard — ONLY when the producer supplied a
+    // deterministic key. The DB unique index on idempotencyKey is the hard
+    // backstop against a true concurrent race, but it is operator-gated and
+    // NOT added here (adding a UNIQUE on a live table needs a CONCURRENTLY
+    // migration + a backfill/dedup pass first). Until then this guard
+    // collapses the common sequential-retry case (webhook re-delivery, retried
+    // HTTP call) into a single row by short-circuiting on an existing key.
+    if (opts.idempotencyKey) {
+      const existing = await client.outboxEvent.findFirst({
+        where: { idempotencyKey: opts.idempotencyKey },
+        select: { id: true },
+      });
+      if (existing) return existing.id;
+    }
+
     const id = uuidv7();
-    await client.outboxEvent.create({
-      data: {
-        id,
-        type: opts.type,
-        tenantId: opts.tenantId ?? null,
-        payload: opts.payload as any,
-        idempotencyKey: opts.idempotencyKey ?? id,
-        status: "queued",
-        nextAttemptAt: new Date(),
-      },
-    });
+    try {
+      await client.outboxEvent.create({
+        data: {
+          id,
+          type: opts.type,
+          tenantId: opts.tenantId ?? null,
+          payload: opts.payload as any,
+          idempotencyKey: opts.idempotencyKey ?? id,
+          status: "queued",
+          nextAttemptAt: new Date(),
+        },
+      });
+    } catch (e) {
+      // P2002 = unique constraint violation. If a supplied key collided we
+      // lost a concurrent race against another append of the SAME logical
+      // event (only possible once the operator adds the DB unique index, the
+      // hard backstop noted above) — re-read and return the winner's id so the
+      // caller still gets a stable handle. Without a supplied key the only
+      // unique column is the PK `id`, whose UUIDv7 collision is effectively
+      // impossible, so rethrow anything else untouched.
+      if (
+        opts.idempotencyKey &&
+        (e as { code?: string })?.code === "P2002"
+      ) {
+        const winner = await client.outboxEvent.findFirst({
+          where: { idempotencyKey: opts.idempotencyKey },
+          select: { id: true },
+        });
+        if (winner) return winner.id;
+      }
+      throw e;
+    }
     return id;
   }
 }

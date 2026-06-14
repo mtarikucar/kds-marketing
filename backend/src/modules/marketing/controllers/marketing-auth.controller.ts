@@ -23,11 +23,13 @@ import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
 // Marketing realm carries platform-wide sales data; treating its auth
 // surface as tightly as the superadmin realm is appropriate.
-const LOGIN_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
-const REFRESH_THROTTLE = { default: { limit: 30, ttl: 60_000 } };
+// blockDuration extends the lockout past the ttl window once the limit trips,
+// so a burst attacker is cooled down rather than resuming each fresh window.
+const LOGIN_THROTTLE = { default: { limit: 5, ttl: 60_000, blockDuration: 5 * 60_000 } };
+const REFRESH_THROTTLE = { default: { limit: 30, ttl: 60_000, blockDuration: 60_000 } };
 // Workspace creation is heavier than a login (4 inserts + bcrypt) and is
 // the platform's public front door — keep it slow.
-const REGISTER_THROTTLE = { default: { limit: 3, ttl: 60_000 } };
+const REGISTER_THROTTLE = { default: { limit: 3, ttl: 60_000, blockDuration: 10 * 60_000 } };
 
 @Controller('marketing/auth')
 @UseGuards(MarketingGuard)

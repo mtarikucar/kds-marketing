@@ -5,11 +5,12 @@ import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 
+// SVG is intentionally excluded: it can carry inline <script>/onload and is
+// served from our origin, making it a stored-XSS vector. Raster formats only.
 const ALLOWED_EXT: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
-  'image/svg+xml': 'svg',
 };
 
 export interface Branding {
@@ -54,7 +55,7 @@ export class BrandingService {
   async saveLogo(workspaceId: string, file?: { mimetype: string; buffer: Buffer; size: number }): Promise<Branding> {
     if (!file) throw new BadRequestException('No file uploaded');
     const ext = ALLOWED_EXT[file.mimetype];
-    if (!ext) throw new BadRequestException('Logo must be PNG, JPEG, WEBP or SVG');
+    if (!ext) throw new BadRequestException('Logo must be PNG, JPEG or WEBP');
     if (file.size > 1_000_000) throw new BadRequestException('Logo must be under 1 MB');
     const dir = this.uploadsDir();
     await fs.mkdir(dir, { recursive: true });

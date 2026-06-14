@@ -70,7 +70,8 @@ export class MessageSenderService {
 
     if (result.status === 'FAILED') {
       await this.quota.refund(workspaceId, channel.type);
-      this.logger.warn(`send failed convo=${conversationId} ch=${channel.type}: ${result.error}`);
+      const scrubbed = String(result.error ?? '').replace(/password=[^&\s]+/gi, 'password=***');
+      this.logger.warn(`send failed convo=${conversationId} ch=${channel.type}: ${scrubbed}`);
     }
 
     const message = await this.prisma.message.create({

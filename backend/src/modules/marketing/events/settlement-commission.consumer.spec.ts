@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SettlementCommissionConsumer } from './settlement-commission.consumer';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
@@ -233,6 +234,30 @@ describe('SettlementCommissionConsumer', () => {
         handle(makeEvent({ kind: 'signup', referredByMarketingUserId: 'rep-9' })),
       ).resolves.toBeUndefined();
       expect(prisma.marketingNotification.create).not.toHaveBeenCalled();
+    });
+
+    it('treats a P2002 unique-violation on the SIGNUP insert as a quiet dedup (no rethrow, no error-log)', async () => {
+      // SIGNUP rows set sourcePaymentId, so two deliveries that both clear the
+      // pre-check race the (sourcePaymentId, type) partial-unique — the loser
+      // surfaces as P2002 from inside the tx, not 40001.
+      const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      const p2002 = new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002',
+        clientVersion: 'test',
+      } as any);
+      (prisma.$transaction as any).mockRejectedValue(p2002);
+
+      await expect(
+        handle(makeEvent({ kind: 'signup', referredByMarketingUserId: 'rep-9' })),
+      ).resolves.toBeUndefined();
+
+      expect(errorSpy).not.toHaveBeenCalled(); // quiet dedup, not an error
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('dedup'));
+      expect(prisma.marketingNotification.create).not.toHaveBeenCalled();
+
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
     });
 
     it('ignores a signup event that carries no referrer', async () => {

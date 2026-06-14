@@ -36,6 +36,7 @@ import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
 import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
 import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
+import { useReferralCapture } from './features/marketing/hooks/useReferralCapture';
 
 /**
  * Standalone marketing console served at the ROOT of its own (sub)domain. This is
@@ -43,6 +44,12 @@ import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetai
  * (its /marketing routes were removed; nginx 301-redirects /marketing/* here).
  */
 export default function App() {
+  // Capture `?ref=CODE` into a 30-day cookie once, regardless of landing route.
+  // NOTE: cookie CONSUMPTION on register/checkout (reading the cookie back and
+  // attaching the code to the create-workspace / order payload) is a separate
+  // backend-contract task — not wired here.
+  useReferralCapture();
+
   return (
     <Routes>
       <Route path="/login" element={<MarketingLoginPage />} />

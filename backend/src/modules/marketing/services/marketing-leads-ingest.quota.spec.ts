@@ -126,6 +126,32 @@ describe('MarketingLeadsIngestService — daily quota clipping', () => {
     expect(res.quota).toMatchObject({ used: 1, remaining: 2 });
   });
 
+  it('refunds reserved-but-uncreated slots even when the create loop throws mid-flight', async () => {
+    // First row succeeds; the second rejects with a value that throws when its
+    // .code/.message are read, so the error escapes the per-row catch and exits
+    // the loop. The try/finally must still settle: refund is keyed on the ACTUAL
+    // created count (1), returning the 2 reserved-but-uncreated slots of 3.
+    const hostile: any = {};
+    Object.defineProperty(hostile, 'code', {
+      get() {
+        throw new Error('boom');
+      },
+    });
+    prisma.lead.create
+      .mockImplementationOnce(async ({ data }: any) => ({ id: 'ok', ...data }))
+      .mockImplementationOnce(async () => {
+        throw hostile;
+      });
+
+    await expect(
+      svc.ingest(WS, { leads: [1, 2, 3].map(candidate) } as any),
+    ).rejects.toBeTruthy();
+
+    // +3 reserve, -2 settle (3 granted − 1 created) → 1 used. The refund fired
+    // from the finally despite the throw, so no quota leaked.
+    expect(counterValue).toBe(1);
+  });
+
   it('quota 0 (suspended workspace / zero plan) clips everything without touching leads', async () => {
     quotaResolver.getDailyLeadQuota.mockResolvedValue(0);
     const res = await svc.ingest(WS, { leads: [1, 2].map(candidate) } as any);

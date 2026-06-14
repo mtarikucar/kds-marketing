@@ -42,8 +42,11 @@ export class MarketingRolesGuard implements CanActivate {
     }
 
     const userRank = ROLE_RANK[user.role] ?? 0;
-    const minRequired = Math.min(
-      ...requiredRoles.map((r) => ROLE_RANK[r] ?? Number.POSITIVE_INFINITY),
+    // When several roles are co-listed, the HIGHEST one sets the bar — a
+    // lower co-listed role (or an unknown role mapping to 0) must not be
+    // able to lower the threshold a stricter co-requirement establishes.
+    const minRequired = Math.max(
+      ...requiredRoles.map((r) => ROLE_RANK[r] ?? 0),
     );
 
     if (userRank < minRequired || userRank === 0) {

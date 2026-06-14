@@ -193,76 +193,84 @@ export class MarketingLeadsIngestService {
     // Sequential — daily routine is bounded at 50 rows so latency is fine,
     // and we avoid hammering the connection pool with a parallel burst
     // alongside whatever else the marketing module is doing.
-    for (const c of admitted) {
-      try {
-        if (existingRefs.has(c.externalRef)) {
-          skipped++;
-          continue;
-        }
-        await this.prisma.$transaction(async (tx) => {
-          // Pick an owner via the configured distribution strategy
-          // before insert so the row is born already assigned — keeps
-          // the "atanmamış lead" dashboard count honest.
-          const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
-          const lead = await tx.lead.create({
-            data: {
-              ...this.mapToLeadData(c),
-              workspaceId,
-              ...(autoOwner ? { assignedToId: autoOwner } : {}),
-            },
-          });
-          await tx.leadActivity.create({
-            data: {
-              leadId: lead.id,
-              type: 'NOTE',
-              title: 'Created by AI research routine',
-              description: c.evidence,
-              createdById: sentinelId,
-            },
-          });
-          if (autoOwner) {
+    //
+    // try/finally so the quota settle ALWAYS runs: a mid-loop throw (a
+    // non-P2002 error escaping the per-row try, or anything unexpected from
+    // the connection pool) must still return the reserved-but-uncreated
+    // slots — the refund is keyed on the ACTUAL `created` count, so the
+    // budget is restored to exactly what was provisioned.
+    try {
+      for (const c of admitted) {
+        try {
+          if (existingRefs.has(c.externalRef)) {
+            skipped++;
+            continue;
+          }
+          await this.prisma.$transaction(async (tx) => {
+            // Pick an owner via the configured distribution strategy
+            // before insert so the row is born already assigned — keeps
+            // the "atanmamış lead" dashboard count honest.
+            const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
+            const lead = await tx.lead.create({
+              data: {
+                ...this.mapToLeadData(c),
+                workspaceId,
+                ...(autoOwner ? { assignedToId: autoOwner } : {}),
+              },
+            });
             await tx.leadActivity.create({
               data: {
                 leadId: lead.id,
-                type: 'STATUS_CHANGE',
-                title: `Auto-assigned on ingest`,
+                type: 'NOTE',
+                title: 'Created by AI research routine',
+                description: c.evidence,
                 createdById: sentinelId,
-                metadata: {
-                  kind: 'assignment',
-                  fromUserId: null,
-                  fromUserName: null,
-                  toUserId: autoOwner,
-                  auto: true,
-                },
               },
             });
+            if (autoOwner) {
+              await tx.leadActivity.create({
+                data: {
+                  leadId: lead.id,
+                  type: 'STATUS_CHANGE',
+                  title: `Auto-assigned on ingest`,
+                  createdById: sentinelId,
+                  metadata: {
+                    kind: 'assignment',
+                    fromUserId: null,
+                    fromUserName: null,
+                    toUserId: autoOwner,
+                    auto: true,
+                  },
+                },
+              });
+            }
+          });
+          created++;
+        } catch (e: any) {
+          // P2002 on the lead unique = TOCTOU race with a concurrent
+          // ingest (or a duplicate inside the same batch). Treat as skip.
+          if (e?.code === 'P2002') {
+            skipped++;
+            continue;
           }
-        });
-        created++;
-      } catch (e: any) {
-        // P2002 on the lead unique = TOCTOU race with a concurrent
-        // ingest (or a duplicate inside the same batch). Treat as skip.
-        if (e?.code === 'P2002') {
-          skipped++;
-          continue;
+          errors.push({
+            externalRef: c.externalRef,
+            error: e?.message ?? String(e),
+          });
         }
-        errors.push({
-          externalRef: c.externalRef,
-          error: e?.message ?? String(e),
-        });
       }
-    }
-
-    // Settle: reserved-but-not-created slots (TOCTOU dupes, row errors) are
-    // returned to the day's budget so a flaky batch can't starve a customer.
-    const unsettled = grant - created;
-    if (unsettled > 0 && limit !== -1) {
-      await this.bumpCounter(workspaceId, utcPeriodKey(), -unsettled).catch(
-        (e) =>
-          this.logger.error(
-            `quota settle failed for ${workspaceId}: ${e?.message ?? e}`,
-          ),
-      );
+    } finally {
+      // Settle: reserved-but-not-created slots (TOCTOU dupes, row errors) are
+      // returned to the day's budget so a flaky batch can't starve a customer.
+      const unsettled = grant - created;
+      if (unsettled > 0 && limit !== -1) {
+        await this.bumpCounter(workspaceId, utcPeriodKey(), -unsettled).catch(
+          (e) =>
+            this.logger.error(
+              `quota settle failed for ${workspaceId}: ${e?.message ?? e}`,
+            ),
+        );
+      }
     }
 
     const used =
