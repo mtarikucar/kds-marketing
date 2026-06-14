@@ -105,6 +105,14 @@ export class InternalContentController {
       throw new NotFoundException('Workspace not found');
     }
 
+    const profile = await this.prisma.contentProfile.findFirst({
+      where: { id: dto.profileId, workspaceId },
+      select: { id: true },
+    });
+    if (!profile) {
+      throw new NotFoundException('Content profile not found');
+    }
+
     const result = await this.prisma.contentDraft.createMany({
       data: dto.drafts.map((d) => ({
         workspaceId,

@@ -561,19 +561,19 @@ model ResearchProfile {
 /// Opt-in content-generation profile (one+ per workspace) driving the weekly
 /// content-pack routine. Mirrors ResearchProfile.
 model ContentProfile {
-  id          String  @id @default(uuid())
+  id          String @id @default(uuid())
   workspaceId String
   name        String
-  status      String  @default("ACTIVE") // ACTIVE | PAUSED
+  status      String @default("ACTIVE") // ACTIVE | PAUSED
 
   /// Customer-authored themes/topics to write about.
-  themes      String  @db.Text
+  themes   String  @db.Text
   /// Optional voice/tone guidance.
-  voice       String? @db.Text
+  voice    String? @db.Text
   /// Per-channel piece counts, e.g. { "social": 5, "email": 2, "sms": 1 }.
-  counts      Json
+  counts   Json
   /// Output language (ISO 639-1).
-  language    String  @default("en")
+  language String  @default("en")
 
   lastRunAt    DateTime?
   /// { social, email, sms, at } from the latest routine run.
@@ -592,7 +592,7 @@ model ContentDraft {
   id               String  @id @default(uuid())
   workspaceId      String
   contentProfileId String?
-  channel          String  // social | email | sms
+  channel          String // social | email | sms
   subject          String? @db.Text
   body             String  @db.Text
   status           String  @default("DRAFT") // DRAFT | USED | DISCARDED

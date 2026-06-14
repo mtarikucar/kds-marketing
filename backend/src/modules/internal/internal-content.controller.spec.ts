@@ -10,7 +10,7 @@ describe('InternalContentController', () => {
   beforeEach(() => {
     prisma = {
       workspace: { findMany: jest.fn(), findUnique: jest.fn() },
-      contentProfile: { findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      contentProfile: { findMany: jest.fn(), findFirst: jest.fn().mockResolvedValue({ id: 'cp1' }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       contentDraft: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     ctrl = new InternalContentController(prisma as any);
@@ -54,6 +54,14 @@ describe('InternalContentController', () => {
       prisma.workspace.findUnique.mockResolvedValue(null);
       await expect(
         ctrl.submit('wsX', { profileId: 'cp1', drafts: [{ channel: 'social', body: 'x' }] }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('404s when the profile does not belong to the workspace', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      prisma.contentProfile.findFirst.mockResolvedValue(null);
+      await expect(
+        ctrl.submit('ws1', { profileId: 'cpX', drafts: [{ channel: 'social', body: 'x' }] }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
