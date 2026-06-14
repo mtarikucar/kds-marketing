@@ -33,14 +33,26 @@ export type RoutineConfigPublic = Omit<RoutineConfig, 'triggerTokenSealed'> & {
   hasToken: boolean;
 };
 
+/** Minimal interface to break the circular dependency at the type level. */
+export interface IRoutineScheduleRunner {
+  reload(key: string): Promise<void>;
+}
+
 @Injectable()
 export class RoutineConfigService implements OnModuleInit {
   private readonly logger = new Logger(RoutineConfigService.name);
+  /** Injected lazily to break the circular dep: RoutineConfigService ↔ RoutineScheduleRunner. */
+  private scheduleRunner: IRoutineScheduleRunner | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {}
+
+  /** Called by RoutinesModule after both providers are resolved. */
+  setScheduleRunner(runner: IRoutineScheduleRunner): void {
+    this.scheduleRunner = runner;
+  }
 
   async onModuleInit(): Promise<void> {
     await this.ensureSeeded();
@@ -106,6 +118,11 @@ export class RoutineConfigService implements OnModuleInit {
       where: { key },
       data,
     });
+
+    // Keep the dynamic scheduler in sync whenever a config changes.
+    if (this.scheduleRunner) {
+      await this.scheduleRunner.reload(key);
+    }
 
     return this.toPublic(updated);
   }

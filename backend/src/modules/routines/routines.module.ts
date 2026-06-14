@@ -1,22 +1,38 @@
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { RoutineConfigService } from './routine-config.service';
 import { RoutineTriggerService } from './routine-trigger.service';
+import { RoutineScheduleRunner } from './routine-schedule-runner.service';
 
 /**
  * RoutinesModule — backbone for the routine trigger + schedule layer.
  *
- * Provides and exports RoutineConfigService and RoutineTriggerService.
+ * Provides and exports all routine services.
  *
- * Backend-B additions (NOT in this commit):
- *   - RoutineScheduleRunner (dynamic CronJob management)
- *   - RoutineEventListener  (DomainEventBus subscriptions)
- *   - RoutineAdminController (platform endpoints)
+ * Circular wiring: RoutineConfigService ↔ RoutineScheduleRunner share a
+ * reload() call after every config update. To avoid a DI circular dep,
+ * the module itself wires the runner into the config service after both
+ * are constructed, via the `setScheduleRunner` setter.
  *
  * PrismaModule is @Global so no explicit import needed.
  * ConfigModule is @Global so no explicit import needed.
+ * OutboxModule is @Global so no explicit import needed (DomainEventBus is global).
+ *
+ * NOTE: RoutineEventListener is added in the next commit (backend-B unit 2).
  */
 @Module({
-  providers: [RoutineConfigService, RoutineTriggerService],
-  exports: [RoutineConfigService, RoutineTriggerService],
+  imports: [ScheduleModule.forRoot()],
+  providers: [RoutineConfigService, RoutineTriggerService, RoutineScheduleRunner],
+  exports: [RoutineConfigService, RoutineTriggerService, RoutineScheduleRunner],
 })
-export class RoutinesModule {}
+export class RoutinesModule implements OnModuleInit {
+  constructor(
+    private readonly routineConfigService: RoutineConfigService,
+    private readonly routineScheduleRunner: RoutineScheduleRunner,
+  ) {}
+
+  onModuleInit(): void {
+    // Break the circular dep by wiring after construction.
+    this.routineConfigService.setScheduleRunner(this.routineScheduleRunner);
+  }
+}
