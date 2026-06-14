@@ -558,6 +558,52 @@ model ResearchProfile {
   @@map("research_profiles")
 }
 
+/// Opt-in content-generation profile (one+ per workspace) driving the weekly
+/// content-pack routine. Mirrors ResearchProfile.
+model ContentProfile {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  status      String  @default("ACTIVE") // ACTIVE | PAUSED
+
+  /// Customer-authored themes/topics to write about.
+  themes      String  @db.Text
+  /// Optional voice/tone guidance.
+  voice       String? @db.Text
+  /// Per-channel piece counts, e.g. { "social": 5, "email": 2, "sms": 1 }.
+  counts      Json
+  /// Output language (ISO 639-1).
+  language    String  @default("en")
+
+  lastRunAt    DateTime?
+  /// { social, email, sms, at } from the latest routine run.
+  lastRunStats Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("content_profiles")
+}
+
+/// A single AI-generated copy draft (social/email/sms) produced by the
+/// content-pack routine. Draft-only: never auto-sent. Humans review/use it.
+model ContentDraft {
+  id               String  @id @default(uuid())
+  workspaceId      String
+  contentProfileId String?
+  channel          String  // social | email | sms
+  subject          String? @db.Text
+  body             String  @db.Text
+  status           String  @default("DRAFT") // DRAFT | USED | DISCARDED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("content_drafts")
+}
+
 /// Per-workspace ingest credential. Only the sha256 hash is stored; the raw
 /// token (mkt_live_<hex>) is shown exactly once at mint time. Replaces the
 /// global MARKETING_INGEST_TOKEN env.
