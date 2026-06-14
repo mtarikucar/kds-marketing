@@ -38,6 +38,31 @@ describe('InternalInsightsController', () => {
       expect(res.periodEnd).toEqual(expect.any(String));
     });
 
+    it('counts RECEIVED reviews (status+updatedAt filter), not all-time requests (createdAt filter)', async () => {
+      prisma.workspace.findMany.mockResolvedValue([WS]);
+      prisma.lead.count.mockResolvedValueOnce(1).mockResolvedValueOnce(10); // leadsNew, leadsTotal
+      prisma.review.count.mockResolvedValue(5);
+      prisma.review.aggregate.mockResolvedValue({ _avg: { rating: 3.5 } });
+      prisma.campaign.count.mockResolvedValue(0);
+
+      await ctrl.jobs();
+
+      // review.count where clause must include status filter and updatedAt (not createdAt)
+      const reviewCountWhere = prisma.review.count.mock.calls[0][0].where;
+      expect(reviewCountWhere.status).toBeDefined();
+      expect(reviewCountWhere.status.in).toEqual(
+        expect.arrayContaining(['PUBLIC_ROUTED', 'PRIVATE_FEEDBACK', 'REPLIED']),
+      );
+      expect(reviewCountWhere.updatedAt).toBeDefined();
+      expect(reviewCountWhere.createdAt).toBeUndefined();
+
+      // review.aggregate where clause must also use status+updatedAt
+      const reviewAggWhere = prisma.review.aggregate.mock.calls[0][0].where;
+      expect(reviewAggWhere.status).toBeDefined();
+      expect(reviewAggWhere.updatedAt).toBeDefined();
+      expect(reviewAggWhere.createdAt).toBeUndefined();
+    });
+
     it('omits a workspace with no activity (all-zero gate)', async () => {
       prisma.workspace.findMany.mockResolvedValue([WS]);
       const res = await ctrl.jobs();
@@ -69,11 +94,22 @@ describe('InternalInsightsController', () => {
 
     it('creates an InsightDigest scoped to the path workspace and returns its id', async () => {
       prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      // No recent digest → proceed to create
+      prisma.insightDigest.findFirst.mockResolvedValue(null);
       const res = await ctrl.submit('ws1', validBody);
       expect(res).toEqual({ id: 'dg1' });
       expect(prisma.insightDigest.create.mock.calls[0][0].data).toMatchObject({
         workspaceId: 'ws1', body: 'great week',
       });
+    });
+
+    it('returns existing id without creating when a recent digest exists (idempotency)', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      // Recent digest found within the DUE_AFTER_DAYS window
+      prisma.insightDigest.findFirst.mockResolvedValue({ id: 'existing-dg' });
+      const res = await ctrl.submit('ws1', validBody);
+      expect(res).toEqual({ id: 'existing-dg' });
+      expect(prisma.insightDigest.create).not.toHaveBeenCalled();
     });
   });
 });

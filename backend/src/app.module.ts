@@ -18,6 +18,7 @@ import { InternalApiModule } from './modules/internal/internal.module';
 import { HealthModule } from './modules/health/health.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { RoutinesModule } from './modules/routines/routines.module';
 
 /**
  * Standalone marketing service composition root (Phase-5 physical split).
@@ -66,6 +67,8 @@ import { AuditModule } from './modules/audit/audit.module';
     // Platform (superadmin) realm: operator auth + workspace administration.
     PlatformModule,
     InternalApiModule,
+    // Routine trigger + schedule layer (cloud routine management).
+    RoutinesModule,
   ],
   providers: [
     {

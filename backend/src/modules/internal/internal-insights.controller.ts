@@ -18,6 +18,15 @@ const DUE_AFTER_DAYS = 6;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * Review statuses that represent a received (responded-to) review, not just a
+ * request. A Review row is created at REQUEST time (status 'REQUESTED',
+ * createdAt=now) before any response; the rating/answer arrives later via
+ * submitRating which bumps only updatedAt and sets one of these statuses.
+ * Counting by createdAt+no-status-filter inflates the KPI with pending requests.
+ */
+const RECEIVED_STATUSES = ['PUBLIC_ROUTED', 'PRIVATE_FEEDBACK', 'REPLIED'] as const;
+
+/**
  * The insight-digest routine's surface:
  *
  *   GET  /api/internal/insights/jobs
@@ -61,10 +70,24 @@ export class InternalInsightsController {
         await Promise.all([
           this.prisma.lead.count({ where: { workspaceId: ws.id, createdAt: { gte: periodStart } } }),
           this.prisma.lead.count({ where: { workspaceId: ws.id } }),
-          this.prisma.review.count({ where: { workspaceId: ws.id, createdAt: { gte: periodStart } } }),
+          // Count RECEIVED reviews (status set by submitRating), not requests.
+          // A Review is created at request time (REQUESTED, createdAt=now);
+          // submitRating sets the status and bumps updatedAt — use updatedAt + status filter.
+          this.prisma.review.count({
+            where: {
+              workspaceId: ws.id,
+              status: { in: [...RECEIVED_STATUSES] },
+              updatedAt: { gte: periodStart },
+            },
+          }),
           this.prisma.review.aggregate({
             _avg: { rating: true },
-            where: { workspaceId: ws.id, createdAt: { gte: periodStart }, rating: { not: null } },
+            where: {
+              workspaceId: ws.id,
+              status: { in: [...RECEIVED_STATUSES] },
+              updatedAt: { gte: periodStart },
+              rating: { not: null },
+            },
           }),
           this.prisma.campaign.count({ where: { workspaceId: ws.id, status: 'SENT', completedAt: { gte: periodStart } } }),
         ]);
@@ -105,6 +128,17 @@ export class InternalInsightsController {
     if (!workspace || workspace.status !== 'ACTIVE') {
       throw new NotFoundException('Workspace not found');
     }
+
+    // ── idempotency guard ──────────────────────────────────────────────────
+    // Best-effort: if a digest was already created in the last DUE_AFTER_DAYS,
+    // return its id instead of inserting a duplicate. Narrows the dup window on
+    // overlapping re-fires without needing a unique constraint migration.
+    const recentCutoff = new Date(Date.now() - DUE_AFTER_DAYS * DAY_MS);
+    const existing = await this.prisma.insightDigest.findFirst({
+      where: { workspaceId, createdAt: { gte: recentCutoff } },
+      select: { id: true },
+    });
+    if (existing) return { id: existing.id };
 
     const digest = await this.prisma.insightDigest.create({
       data: {
