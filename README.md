@@ -128,6 +128,9 @@ npm run build                 # tsc + vite build
 | `PLATFORM_JWT_SECRET` | yes | Platform (superadmin) realm JWT secret |
 | `INTERNAL_SERVICE_TOKEN` | yes | Shared service token for `/api/internal/*` in both directions (`x-internal-token`); must match core's value |
 | `RESEARCH_ROUTINE_TOKEN` | yes | Token for the nightly research routine surface (`/api/internal/research/*`, `x-research-token`) — separate principal from `INTERNAL_SERVICE_TOKEN`. (Lead ingest itself uses per-workspace tokens minted in the panel — no env.) |
+| `ROUTINE_TOKEN` | no | Token for the nightly cloud-routine surface (`/api/internal/reviews/*`, `x-routine-token`) — separate principal from `RESEARCH_ROUTINE_TOKEN`. Guard fails closed when unset (routine endpoints 401). |
+| `ROUTINE_REVIEW_DAILY_CAP` | no | Per-workspace nightly cap on reviews the review-draft routine drafts (default 50). |
+| `ROUTINE_LEADSCORE_DAILY_CAP` | no | Per-workspace nightly cap on leads the lead-scoring routine scores (default 100). |
 | `REDIS_URL` | prod (≥2 replicas) | Distributed rate-limit store; unset → per-replica in-memory buckets (dilutes the global limit under >1 replica). `rediss://` for TLS, embed auth in the URL |
 | `CORE_SERVICE_URL` | yes | Base URL of the core service, no trailing slash — core's compose publishes its backend on host port 3000, e.g. `http://host.docker.internal:3000` |
 | `MARKETING_SECRET_KEY` | when sealing secrets | AES-256-GCM master key (base64 32 bytes) sealing per-workspace channel/PSP secrets; format-validated at boot if set |

@@ -1007,6 +1007,24 @@ export class MarketingLeadsService {
     });
   }
 
+  /**
+   * Routine-applied advisory AI score. Guarded: only stamps an as-yet-unscored
+   * lead in the given workspace (no re-score, no cross-tenant write). Returns the
+   * number of rows written (0 if the lead was already scored / not in this workspace).
+   */
+  async applyAiScore(
+    workspaceId: string,
+    leadId: string,
+    score: number,
+    reason: string,
+  ): Promise<number> {
+    const res = await this.prisma.lead.updateMany({
+      where: { id: leadId, workspaceId, scoredAt: null },
+      data: { aiScore: score, aiScoreReason: reason, scoredAt: new Date() },
+    });
+    return res.count;
+  }
+
   async delete(workspaceId: string, id: string) {
     // Workspace-safe id mutation: scoped pre-check, then update by id.
     const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
