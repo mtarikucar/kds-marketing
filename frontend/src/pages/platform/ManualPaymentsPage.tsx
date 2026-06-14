@@ -33,12 +33,13 @@ export default function ManualPaymentsPage() {
   });
 
   const reject = useMutation({
-    mutationFn: (orderId: string) =>
-      platformApi.post(`/payments/${orderId}/reject`, { reason: 'no matching transfer' }),
+    mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) =>
+      platformApi.post(`/payments/${orderId}/reject`, { reason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['platform', 'payments'] });
       toast.success('Order rejected');
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? 'Reject failed'),
   });
 
   // Guard AFTER all hooks (Rules of Hooks).
@@ -93,14 +94,29 @@ export default function ManualPaymentsPage() {
                   </td>
                   <td className="px-4 py-3 text-right space-x-2">
                     <button
-                      onClick={() => approve.mutate(o.id)}
+                      onClick={() => {
+                        const workspace = o.workspace?.name ?? o.workspaceId;
+                        const amount = `${Number(o.amount).toLocaleString()} ${o.currency}`;
+                        if (!window.confirm(`Approve ${amount} for "${workspace}" (ref ${o.providerRef})? This activates the package.`)) return;
+                        approve.mutate(o.id);
+                      }}
                       disabled={approve.isPending}
                       className="px-3 py-1.5 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
                     >
                       Approve
                     </button>
                     <button
-                      onClick={() => reject.mutate(o.id)}
+                      onClick={() => {
+                        const workspace = o.workspace?.name ?? o.workspaceId;
+                        const reason = window.prompt(`Reject the transfer for "${workspace}" (ref ${o.providerRef})?\nEnter a reason — this is recorded on the order:`);
+                        if (reason === null) return; // cancelled
+                        const trimmed = reason.trim();
+                        if (!trimmed) {
+                          toast.error('A reason is required to reject');
+                          return;
+                        }
+                        reject.mutate({ orderId: o.id, reason: trimmed });
+                      }}
                       disabled={reject.isPending}
                       className="px-3 py-1.5 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
                     >

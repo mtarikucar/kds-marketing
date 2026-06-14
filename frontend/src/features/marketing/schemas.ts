@@ -52,6 +52,17 @@ export const leadSchema = z.object({
 
 export type LeadFormValues = z.infer<typeof leadSchema>;
 
+// Shared password rule for the marketing flows that set a password directly
+// (user reset, lead → customer convert). Mirrors the backend: 8+ chars with
+// upper/lower/digit. The marketingUserSchema applies the same rule inline for
+// its create/edit superRefine.
+export const passwordSchema = z
+  .string()
+  .min(8, 'passwordMin')
+  .refine((v) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v), {
+    message: 'passwordWeak',
+  });
+
 export const offerSchema = z
   .object({
     leadId: z.string().min(1, 'required'),

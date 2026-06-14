@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import type { LeadOffer, Lead, PaginatedResponse } from '../../features/marketing/types';
 import { fmtDate } from '../../features/marketing/utils/format';
+import { formatMoney } from '../../lib/money';
 
 const statusColors: Record<string, string> = {
   DRAFT: 'bg-gray-100 text-gray-800',
@@ -49,7 +50,7 @@ export default function OffersPage() {
   const [editForm, setEditForm] = useState<OfferForm>({ ...emptyForm });
 
   // Fetch offers
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'offers', { status, dateFrom, dateTo, page }],
     queryFn: () =>
       marketingApi
@@ -394,6 +395,18 @@ export default function OffersPage() {
                     Loading...
                   </td>
                 </tr>
+              ) : isError ? (
+                <tr>
+                  <td colSpan={9} className="px-4 py-8 text-center">
+                    <p className="text-sm text-red-600">Could not load offers.</p>
+                    <button
+                      onClick={() => refetch()}
+                      className="mt-2 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+                    >
+                      Retry
+                    </button>
+                  </td>
+                </tr>
               ) : offers.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
@@ -404,7 +417,7 @@ export default function OffersPage() {
                 offers.map((offer) =>
                   editingId === offer.id ? (
                     // Inline edit row
-                    <tr key={offer.id} className="bg-primary/10/40">
+                    <tr key={offer.id} className="bg-primary/5">
                       <td colSpan={9} className="px-4 py-4">
                         <div className="space-y-3">
                           <p className="text-xs font-medium text-gray-500">
@@ -457,7 +470,7 @@ export default function OffersPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell">
-                        {offer.customPrice != null ? `$${offer.customPrice}` : '-'}
+                        {offer.customPrice != null ? formatMoney(offer.customPrice) : '-'}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell">
                         {offer.discount != null ? `${offer.discount}%` : '-'}

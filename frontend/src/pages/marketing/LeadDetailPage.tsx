@@ -24,6 +24,8 @@ import {
 } from '../../features/marketing/types';
 import type { Lead, LeadActivity, LeadOffer, MarketingTask } from '../../features/marketing/types';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
+import { passwordSchema } from '../../features/marketing/schemas';
+import { formatMoney } from '../../lib/money';
 
 const offerStatusColors: Record<string, string> = {
   DRAFT: 'bg-gray-100 text-gray-800',
@@ -51,10 +53,11 @@ type DetailLead = Lead & {
 // validation happens on the server when /convert is called.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Mirrors the backend admin-password rule for the /convert endpoint.
-// Anything shorter would be rejected with a 400 anyway — catching it
-// in the form means the user doesn't have to wait for a round-trip.
-const MIN_PASSWORD_LENGTH = 6;
+// Mirrors the backend admin-password rule for the /convert endpoint
+// (8+ chars with upper/lower/digit, via the shared passwordSchema). Catching
+// it in the form means the user doesn't wait for a 400 round-trip.
+const isPasswordValid = (v: string) => passwordSchema.safeParse(v).success;
+const PASSWORD_HINT = 'Min 8 chars, with upper, lower case & a number';
 
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -121,9 +124,19 @@ export default function LeadDetailPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
 
-  const { data: lead, isLoading } = useQuery({
+  const {
+    data: lead,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['marketing', 'lead', id],
     queryFn: () => marketingApi.get<DetailLead>(`/leads/${id}`).then((r) => r.data),
+    // A genuine 404 (deleted lead) is the answer, not a transient failure —
+    // don't burn retries on it; let the not-found branch render.
+    retry: (failureCount, err: any) =>
+      err?.response?.status === 404 ? false : failureCount < 2,
   });
 
   // Mutations
@@ -209,6 +222,23 @@ export default function LeadDetailPage() {
   });
 
   if (isLoading) return <div className="text-center py-12 text-gray-500">Loading...</div>;
+  // Distinguish a real 404 (lead deleted / wrong id) from a transient fetch
+  // failure: the former is a terminal "not found", the latter deserves a retry
+  // instead of falsely claiming the lead doesn't exist.
+  const isNotFound = (error as any)?.response?.status === 404;
+  if (isError && !isNotFound) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-sm text-red-600">Could not load this lead.</p>
+        <button
+          onClick={() => refetch()}
+          className="mt-3 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (!lead) return <div className="text-center py-12 text-gray-500">Lead not found</div>;
 
   const canConvert = ['OFFER_SENT', 'WAITING'].includes(lead.status) && !lead.convertedTenantId;
@@ -301,7 +331,19 @@ export default function LeadDetailPage() {
               {lead.email && (
                 <div className="flex items-center gap-2">
                   <EnvelopeIcon className="w-4 h-4 text-gray-400" />
-                  <a href={`mailto:${lead.email}`} className="text-primary hover:underline">{lead.email}</a>
+                  {/* Only build a mailto: for a well-formed address, and encode
+                      it — an unvalidated email could carry header-injection
+                      payload (newlines, extra recipients) into the link. */}
+                  {EMAIL_RE.test(lead.email) ? (
+                    <a
+                      href={`mailto:${encodeURIComponent(lead.email)}`}
+                      className="text-primary hover:underline"
+                    >
+                      {lead.email}
+                    </a>
+                  ) : (
+                    <span className="text-gray-600">{lead.email}</span>
+                  )}
                 </div>
               )}
               {(lead.city || lead.address) && (
@@ -483,7 +525,7 @@ export default function LeadDetailPage() {
                         <span className="text-xs text-gray-400">{fmtDate(offer.createdAt)}</span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm mb-3">
-                        {offer.customPrice && <div><span className="text-gray-500">Price:</span> <span className="font-medium">{offer.customPrice}</span></div>}
+                        {offer.customPrice && <div><span className="text-gray-500">Price:</span> <span className="font-medium">{formatMoney(offer.customPrice)}</span></div>}
                         {offer.discount && <div><span className="text-gray-500">Discount:</span> <span className="font-medium">{offer.discount}%</span></div>}
                         {offer.trialDays && <div><span className="text-gray-500">Trial:</span> <span className="font-medium">{offer.trialDays} days</span></div>}
                       </div>
@@ -634,20 +676,18 @@ export default function LeadDetailPage() {
                 <input
                   type="password"
                   required
-                  minLength={MIN_PASSWORD_LENGTH}
+                  minLength={8}
                   value={convertPassword}
                   onChange={(e) => setConvertPassword(e.target.value)}
                   className={`w-full px-3 py-2 border rounded-lg text-sm ${
-                    convertPassword && convertPassword.length < MIN_PASSWORD_LENGTH
+                    convertPassword && !isPasswordValid(convertPassword)
                       ? 'border-red-400 focus:ring-red-300'
                       : ''
                   }`}
-                  placeholder={`Min ${MIN_PASSWORD_LENGTH} characters`}
+                  placeholder={PASSWORD_HINT}
                 />
-                {convertPassword && convertPassword.length < MIN_PASSWORD_LENGTH && (
-                  <p className="text-xs text-red-600 mt-1">
-                    Password must be at least {MIN_PASSWORD_LENGTH} characters.
-                  </p>
+                {convertPassword && !isPasswordValid(convertPassword) && (
+                  <p className="text-xs text-red-600 mt-1">{PASSWORD_HINT}.</p>
                 )}
               </div>
               {sentOffers.length > 0 && (
@@ -657,7 +697,7 @@ export default function LeadDetailPage() {
                     <option value="">No offer</option>
                     {sentOffers.map((o) => (
                       <option key={o.id} value={o.id}>
-                        {o.customPrice ? `${o.customPrice} TL` : 'Standard'} {o.discount ? `(${o.discount}% off)` : ''} — {fmtDate(o.createdAt)}
+                        {o.customPrice ? formatMoney(o.customPrice) : 'Standard'} {o.discount ? `(${o.discount}% off)` : ''} — {fmtDate(o.createdAt)}
                       </option>
                     ))}
                   </select>
@@ -686,7 +726,7 @@ export default function LeadDetailPage() {
                   !convertFirstName ||
                   !convertLastName ||
                   !convertPassword ||
-                  convertPassword.length < MIN_PASSWORD_LENGTH ||
+                  !isPasswordValid(convertPassword) ||
                   convertMutation.isPending
                 }
                 className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"

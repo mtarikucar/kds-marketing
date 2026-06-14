@@ -60,7 +60,12 @@ export default function BillingPage() {
   const [bank, setBank] = useState<BankInstructions | null>(null);
   const [iframeUrl, setIframeUrl] = useState<string | null>(null);
 
-  const { data: summary } = useQuery({
+  const {
+    data: summary,
+    isLoading: summaryLoading,
+    isError: summaryError,
+    refetch: refetchSummary,
+  } = useQuery({
     queryKey: ['marketing', 'billing', 'summary'],
     queryFn: () => marketingApi.get('/billing/summary').then((r) => r.data),
   });
@@ -157,6 +162,22 @@ export default function BillingPage() {
         </p>
       </div>
 
+      {/* Surface a failed summary fetch inline — the plan/usage cards below
+          otherwise render a misleading wall of "—" as if there were no plan. */}
+      {summaryError && !summaryLoading && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-3">
+          <p className="text-sm text-red-700">
+            {t('billing.summaryFailed', 'Could not load your billing summary.')}
+          </p>
+          <button
+            onClick={() => refetchSummary()}
+            className="px-3 py-1.5 text-sm font-medium text-red-700 bg-white border border-red-300 rounded-lg hover:bg-red-100"
+          >
+            {t('common.retry', 'Retry')}
+          </button>
+        </div>
+      )}
+
       {/* Current plan + usage */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -221,7 +242,19 @@ export default function BillingPage() {
       {/* PayTR iframe */}
       {iframeUrl && (
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <iframe src={iframeUrl} className="w-full min-h-[600px] rounded-lg" title="PayTR checkout" />
+          {/* PayTR's 3DS step navigates the iframe to the bank's ACS page and
+              needs scripts, same-origin, form posts and the ability to break
+              out to the top window on completion — hence this exact sandbox
+              allowlist. referrerPolicy keeps our URL (which may carry the order
+              ref) out of the bank's Referer. Verify any change here against a
+              real PayTR sandbox transaction before shipping. */}
+          <iframe
+            src={iframeUrl}
+            className="w-full min-h-[600px] rounded-lg"
+            title="PayTR checkout"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-top-navigation"
+            referrerPolicy="no-referrer"
+          />
         </div>
       )}
 

@@ -571,7 +571,7 @@ function JobDrawer({
               <p className="text-sm font-semibold text-gray-700">Checklist</p>
               <div className="space-y-1">
                 {job.tasks.length === 0 && <p className="text-sm text-gray-400">No tasks yet</p>}
-                {job.tasks.sort((a, b) => a.position - b.position).map((t) => (
+                {[...job.tasks].sort((a, b) => a.position - b.position).map((t) => (
                   <div key={t.id} className="flex items-center gap-2 group">
                     <input type="checkbox" checked={t.done} onChange={() => toggleTask.mutate(t.id)} className="rounded" />
                     <span className={`flex-1 text-sm ${t.done ? 'line-through text-gray-400' : 'text-gray-700'}`}>{t.title}</span>

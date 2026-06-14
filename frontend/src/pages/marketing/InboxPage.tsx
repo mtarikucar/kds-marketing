@@ -39,9 +39,10 @@ interface MessageRow {
 
 /**
  * Omnichannel Inbox — 3 panes: conversation list, the live thread + composer,
- * and the lead context card. A single EventSource to the workspace stream keeps
- * everything live (any event re-fetches the affected queries). An agent reply
- * pauses the AI (human takeover); the AI can be resumed per thread.
+ * and the lead context card. A single authenticated SSE stream (fetch + Bearer
+ * header) to the workspace keeps everything live (any event re-fetches the
+ * affected queries). An agent reply pauses the AI (human takeover); the AI can
+ * be resumed per thread.
  */
 export default function InboxPage() {
   const { t } = useTranslation('marketing');
@@ -54,7 +55,12 @@ export default function InboxPage() {
   const [showContext, setShowContext] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
-  const { data: conversations } = useQuery<ConversationRow[]>({
+  const {
+    data: conversations,
+    isLoading: conversationsLoading,
+    isError: conversationsError,
+    refetch: refetchConversations,
+  } = useQuery<ConversationRow[]>({
     queryKey: ['marketing', 'conversations', statusFilter],
     queryFn: () =>
       marketingApi.get('/conversations', { params: { status: statusFilter } }).then((r) => r.data),
@@ -68,27 +74,95 @@ export default function InboxPage() {
   });
 
   // Live updates: subscribe once; on any event refresh the list + open thread.
+  //
+  // We deliberately do NOT use EventSource here: the native EventSource API
+  // cannot set request headers, so the only way to authenticate it is to put
+  // the access token in the query string (`?access_token=…`). That leaks the
+  // bearer token into proxy/access logs, browser history and the Referer
+  // header — a real credential-exposure bug. Instead we open the stream with
+  // fetch() + an Authorization header (the backend SSE guard accepts a Bearer
+  // header) and parse the text/event-stream frames by hand. An AbortController
+  // tears the connection down on unmount / token change, and a 3s timer
+  // reconnects if the stream drops (matching EventSource's auto-reconnect).
   useEffect(() => {
     if (!accessToken) return;
-    const es = new EventSource(
-      `${API_URL}/marketing/conversations/stream?access_token=${encodeURIComponent(accessToken)}`,
-    );
-    es.onmessage = (evt) => {
+
+    const controller = new AbortController();
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+
+    const handleFrame = (frame: string) => {
+      // An SSE frame may carry multiple `data:` lines; concatenate them.
+      const dataLines = frame
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart());
+      if (dataLines.length === 0) return;
+      const payload = dataLines.join('\n');
       try {
-        const data = JSON.parse(evt.data);
+        const data = JSON.parse(payload);
         if (data?.kind === 'heartbeat') return;
         queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
         if (data?.conversationId) {
-          queryClient.invalidateQueries({ queryKey: ['marketing', 'conversation', data.conversationId] });
+          queryClient.invalidateQueries({
+            queryKey: ['marketing', 'conversation', data.conversationId],
+          });
         }
       } catch {
         /* ignore malformed frame */
       }
     };
-    es.onerror = () => {
-      /* EventSource auto-reconnects; nothing to do */
+
+    const connect = async () => {
+      try {
+        const res = await fetch(`${API_URL}/marketing/conversations/stream`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'text/event-stream',
+          },
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          // Normalize CRLF → LF so the `\n\n` frame split works no matter
+          // whether the server emits `\n\n` or `\r\n\r\n` boundaries.
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          // Frames are separated by a blank line.
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            if (frame.trim()) handleFrame(frame);
+          }
+        }
+        // Stream ended cleanly (server closed) → schedule a reconnect.
+        if (!closed) scheduleReconnect();
+      } catch {
+        // Aborted on cleanup throws here too; only reconnect if still mounted.
+        if (!closed) scheduleReconnect();
+      }
     };
-    return () => es.close();
+
+    const scheduleReconnect = () => {
+      if (closed) return;
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      controller.abort();
+    };
   }, [accessToken, queryClient]);
 
   // Mark read + scroll on open / new messages.
@@ -167,6 +241,21 @@ export default function InboxPage() {
           ))}
         </div>
         <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
+          {conversationsError && (
+            <div className="p-3">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">
+                <p className="text-sm text-red-700">
+                  {t('inbox.loadFailed', 'Could not load conversations.')}
+                </p>
+                <button
+                  onClick={() => refetchConversations()}
+                  className="mt-3 px-3 py-1.5 text-sm font-medium text-red-700 bg-white border border-red-300 rounded-lg hover:bg-red-100"
+                >
+                  {t('common.retry', 'Retry')}
+                </button>
+              </div>
+            </div>
+          )}
           {(conversations ?? []).map((c) => (
             <button
               key={c.id}
@@ -190,7 +279,7 @@ export default function InboxPage() {
               <p className="text-xs text-slate-400 truncate mt-0.5">{c.lastMessage?.body ?? ''}</p>
             </button>
           ))}
-          {(conversations ?? []).length === 0 && (
+          {!conversationsError && !conversationsLoading && (conversations ?? []).length === 0 && (
             <div className="p-3">
               <EmptyState
                 title={t('inbox.empty', 'No conversations yet.')}

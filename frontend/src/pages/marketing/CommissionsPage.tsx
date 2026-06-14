@@ -5,6 +5,7 @@ import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import type { Commission } from '../../features/marketing/types';
 import { fmtDate } from '../../features/marketing/utils/format';
+import { formatMoney, asWorkspaceCurrency } from '../../lib/money';
 
 const statusColors: Record<string, string> = {
   PENDING: 'bg-yellow-100 text-yellow-800',
@@ -20,7 +21,12 @@ export default function CommissionsPage() {
   const [period, setPeriod] = useState('');
   const [status, setStatus] = useState('');
 
-  const { data: commissions, isLoading } = useQuery({
+  const {
+    data: commissions,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ['marketing', 'commissions', { period, status }],
     queryFn: () =>
       marketingApi
@@ -69,6 +75,9 @@ export default function CommissionsPage() {
   });
 
   const items: Commission[] = commissions?.data || [];
+  // Workspace currency drives the money formatting; defaults to TRY when the
+  // summary hasn't loaded or returns an unexpected value.
+  const currency = asWorkspaceCurrency(summary?.currency);
 
   return (
     <div className="space-y-4">
@@ -108,21 +117,21 @@ export default function CommissionsPage() {
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <p className="text-sm text-gray-500">Pending</p>
             <p className="text-2xl font-bold text-yellow-600 mt-1">
-              ${Number(summary.pending.total).toFixed(2)}
+              {formatMoney(summary.pending.total, currency)}
             </p>
             <p className="text-xs text-gray-400 mt-1">{summary.pending.count} entries</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <p className="text-sm text-gray-500">Approved</p>
             <p className="text-2xl font-bold text-blue-600 mt-1">
-              ${Number(summary.approved.total).toFixed(2)}
+              {formatMoney(summary.approved.total, currency)}
             </p>
             <p className="text-xs text-gray-400 mt-1">{summary.approved.count} entries</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <p className="text-sm text-gray-500">Paid</p>
             <p className="text-2xl font-bold text-green-600 mt-1">
-              ${Number(summary.paid.total).toFixed(2)}
+              {formatMoney(summary.paid.total, currency)}
             </p>
             <p className="text-xs text-gray-400 mt-1">{summary.paid.count} entries</p>
           </div>
@@ -149,6 +158,18 @@ export default function CommissionsPage() {
                 <tr>
                   <td colSpan={isManager ? 7 : 6} className="px-4 py-8 text-center text-gray-500">Loading...</td>
                 </tr>
+              ) : isError ? (
+                <tr>
+                  <td colSpan={isManager ? 7 : 6} className="px-4 py-8 text-center">
+                    <p className="text-sm text-red-600">Could not load commissions.</p>
+                    <button
+                      onClick={() => refetch()}
+                      className="mt-2 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+                    >
+                      Retry
+                    </button>
+                  </td>
+                </tr>
               ) : items.length === 0 ? (
                 <tr>
                   <td colSpan={isManager ? 7 : 6} className="px-4 py-8 text-center text-gray-500">No commissions found</td>
@@ -158,7 +179,7 @@ export default function CommissionsPage() {
                   <tr key={c.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">{c.period}</td>
                     <td className="px-4 py-3 text-gray-600">{c.type}</td>
-                    <td className="px-4 py-3 font-medium">${Number(c.amount).toFixed(2)}</td>
+                    <td className="px-4 py-3 font-medium">{formatMoney(c.amount, currency)}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[c.status] || 'bg-gray-100'}`}>
                         {c.status}
