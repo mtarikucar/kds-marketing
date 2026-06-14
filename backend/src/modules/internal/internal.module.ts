@@ -6,6 +6,7 @@ import { InternalReferralController } from './internal-referral.controller';
 import { InternalEventsController } from './internal-events.controller';
 import { InternalResearchController } from './internal-research.controller';
 import { InternalReviewsController } from './internal-reviews.controller';
+import { InternalContentController } from './internal-content.controller';
 import { MarketingModule } from '../marketing/marketing.module';
 
 /**
@@ -27,6 +28,7 @@ import { MarketingModule } from '../marketing/marketing.module';
     InternalEventsController,
     InternalResearchController,
     InternalReviewsController,
+    InternalContentController,
   ],
   providers: [InternalTokenGuard, ResearchTokenGuard, RoutineTokenGuard],
 })
