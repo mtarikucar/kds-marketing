@@ -5,14 +5,18 @@ import {
   ValidateNested,
   IsString,
   IsNotEmpty,
+  IsUUID,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ReviewDraftDto {
+  @IsUUID()
   @IsString()
   @IsNotEmpty()
   reviewId: string;
 
+  @MaxLength(2000)
   @IsString()
   @IsNotEmpty()
   replyDraft: string;
