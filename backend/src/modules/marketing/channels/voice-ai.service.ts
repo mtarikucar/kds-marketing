@@ -72,10 +72,33 @@ export class VoiceAiService {
   }
 
   /** Each subsequent hit carries the caller's transcribed speech. */
-  async handleTurn(callSid: string, speech: string): Promise<string> {
+  async handleTurn(callSid: string, speech: string, idempotencyToken?: string): Promise<string> {
     const call = await this.prisma.voiceCall.findUnique({ where: { externalCallId: callSid } });
     if (!call || call.status !== 'IN_PROGRESS') return this.hangupTwiml('Thank you, goodbye.');
     if (!this.anthropic.isEnabled()) return this.hangupTwiml('Sorry, the assistant is unavailable right now.');
+
+    // BUG 10 FIX: atomic idempotency check using Twilio's i-twilio-idempotency-token.
+    // Twilio re-POSTs the gather callback on read-timeout (the Anthropic call can
+    // exceed Twilio's ~15s budget). Without dedup, a retry would meter a second
+    // voice credit, write duplicate transcripts, and increment turns twice.
+    // We claim the token atomically: if this exact token was already processed
+    // (lastGatherToken equals token) the updateMany returns 0 rows → short-circuit.
+    if (idempotencyToken) {
+      const claim = await this.prisma.voiceCall.updateMany({
+        where: {
+          externalCallId: callSid,
+          workspaceId: call.workspaceId,
+          OR: [{ lastGatherToken: null }, { lastGatherToken: { not: idempotencyToken } }],
+        },
+        data: { lastGatherToken: idempotencyToken },
+      });
+      if (claim.count === 0) {
+        // This exact gather was already processed — return a benign empty gather
+        // without reserving a credit, writing transcripts, or incrementing turns.
+        this.logger.debug(`voice gather duplicate suppressed call=${callSid} token=${idempotencyToken}`);
+        return this.gatherTwiml('');
+      }
+    }
 
     const channel = await this.prisma.channel.findFirst({ where: { id: call.channelId, workspaceId: call.workspaceId } });
     const agent = channel?.agentProfileId

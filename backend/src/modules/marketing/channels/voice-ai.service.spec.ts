@@ -65,6 +65,33 @@ describe('VoiceAiService', () => {
     expect(twiml).toContain('<Gather');
   });
 
+  // --- BUG 10 REGRESSION: Twilio gather idempotency ---
+  it('BUG 10: same callSid + same idempotency token twice → second call short-circuits (no second credit, no second transcript, turns not incremented again)', async () => {
+    const token = 'idem-tok-001';
+
+    // First call: the token claim succeeds (updateMany returns count=1).
+    prisma.voiceCall.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const twiml1 = await svc.handleTurn('CA123', 'Hello there', token);
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(prisma.voiceTranscript.create).toHaveBeenCalledTimes(2); // CUSTOMER + AI
+    expect(prisma.voiceCall.update).toHaveBeenCalledTimes(1); // turns incremented
+
+    // Reset call counts between the two requests.
+    jest.clearAllMocks();
+    prisma.voiceCall.findUnique.mockResolvedValue({ id: 'vc1', status: 'IN_PROGRESS', workspaceId: WS, channelId: 'ch1' });
+
+    // Second call: same token — updateMany returns count=0 (already claimed).
+    prisma.voiceCall.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const twiml2 = await svc.handleTurn('CA123', 'Hello there', token);
+
+    // Short-circuit: no credit metered, no transcript written, turns not bumped.
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(prisma.voiceTranscript.create).not.toHaveBeenCalled();
+    expect(prisma.voiceCall.update).not.toHaveBeenCalled();
+    // Returns a valid TwiML response (not a hangup).
+    expect(twiml2).toContain('<Response>');
+  });
+
   describe('Twilio signature', () => {
     const token = 'tok-123';
     const url = 'https://m.example/api/public/channels/twilio/voice';
