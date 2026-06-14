@@ -151,6 +151,12 @@ model Lead {
   // customers may independently surface the same business.
   externalRef   String?
 
+  /// AI fit/value score (0-100) + reason from the lead-scoring routine. Advisory;
+  /// separate from rep-set priority/status. scoredAt null = not yet scored.
+  aiScore       Int?
+  aiScoreReason String?   @db.Text
+  scoredAt      DateTime?
+
   // Assigned sales rep
   assignedToId String?
   assignedTo   MarketingUser? @relation("AssignedRep", fields: [assignedToId], references: [id], onDelete: SetNull)
@@ -202,6 +208,7 @@ model Lead {
   @@index([workspaceId, assignedToId])
   @@index([status, createdAt])
   @@index([originTenantId])
+  @@index([workspaceId, scoredAt])
   @@map("leads")
 }
 
