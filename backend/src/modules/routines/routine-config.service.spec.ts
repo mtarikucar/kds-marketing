@@ -152,6 +152,13 @@ describe('RoutineConfigService', () => {
         expect(item.hasToken).toBe(false);
       }
     });
+
+    it('returns [] (never throws) when findMany resolves undefined', async () => {
+      // Regression: a stale/mocked client can yield undefined; list() must not
+      // crash (this was crashing app boot via the scheduler's onModuleInit).
+      prisma.routineConfig.findMany.mockResolvedValue(undefined as never);
+      await expect(service.list()).resolves.toEqual([]);
+    });
   });
 
   // ── get ──────────────────────────────────────────────────────────────────

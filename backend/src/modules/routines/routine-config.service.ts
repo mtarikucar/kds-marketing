@@ -56,7 +56,14 @@ export class RoutineConfigService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    await this.ensureSeeded();
+    // Never let a boot-time DB hiccup crash the whole app — seed best-effort.
+    try {
+      await this.ensureSeeded();
+    } catch (err) {
+      this.logger.error(
+        `RoutineConfig seed failed (continuing): ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -81,7 +88,7 @@ export class RoutineConfigService implements OnModuleInit {
    */
   async list(): Promise<RoutineConfigPublic[]> {
     const rows = await this.prisma.routineConfig.findMany();
-    return rows.map(this.toPublic);
+    return (rows ?? []).map((row) => this.toPublic(row));
   }
 
   /**

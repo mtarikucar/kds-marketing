@@ -31,7 +31,15 @@ export class RoutineScheduleRunner implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.reloadAll();
+    // A scheduler must NEVER crash app boot. If config load / cron registration
+    // fails, log and continue — schedules sync later via reload() on a config edit.
+    try {
+      await this.reloadAll();
+    } catch (err) {
+      this.logger.error(
+        `routine scheduler reloadAll failed (continuing): ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
