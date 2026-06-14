@@ -4,16 +4,18 @@ import { InternalLeadScoringController } from './internal-lead-scoring.controlle
 describe('InternalLeadScoringController', () => {
   let prisma: any;
   let config: any;
+  let leads: any;
   let ctrl: InternalLeadScoringController;
   const WS = { id: 'ws1', slug: 'a', productName: 'P', productDescription: 'D' };
 
   beforeEach(() => {
     prisma = {
       workspace: { findMany: jest.fn(), findUnique: jest.fn() },
-      lead: { findMany: jest.fn(), updateMany: jest.fn() },
+      lead: { findMany: jest.fn() },
     };
     config = { get: jest.fn().mockReturnValue(undefined) }; // env absent -> default cap
-    ctrl = new InternalLeadScoringController(prisma as any, config as any);
+    leads = { applyAiScore: jest.fn() };
+    ctrl = new InternalLeadScoringController(prisma as any, config as any, leads as any);
   });
 
   describe('GET jobs', () => {
@@ -57,7 +59,7 @@ describe('InternalLeadScoringController', () => {
 
     it('guarded-updates only still-unscored leads and counts scored/skipped', async () => {
       prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
-      prisma.lead.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+      leads.applyAiScore.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
       const res = await ctrl.submit('ws1', {
         scores: [
           { leadId: 'l1', score: 80, reason: 'hot' },
@@ -65,8 +67,7 @@ describe('InternalLeadScoringController', () => {
         ],
       });
       expect(res).toEqual({ scored: 1, skipped: 1 });
-      expect(prisma.lead.updateMany.mock.calls[0][0].where).toMatchObject({ id: 'l1', workspaceId: 'ws1', scoredAt: null });
-      expect(prisma.lead.updateMany.mock.calls[0][0].data).toMatchObject({ aiScore: 80, aiScoreReason: 'hot' });
+      expect(leads.applyAiScore).toHaveBeenCalledWith('ws1', 'l1', 80, 'hot');
     });
   });
 });

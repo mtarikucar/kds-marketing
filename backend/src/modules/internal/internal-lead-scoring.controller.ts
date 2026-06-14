@@ -12,6 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RoutineTokenGuard } from './routine-token.guard';
 import { SubmitLeadScoresDto } from './lead-scores.dto';
+import { MarketingLeadsService } from '../marketing/services/marketing-leads.service';
 
 const DEFAULT_DAILY_CAP = 100;
 const SKIP_STATUSES = ['WON', 'LOST'];
@@ -37,6 +38,7 @@ export class InternalLeadScoringController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly leads: MarketingLeadsService,
   ) {}
 
   private dailyCap(): number {
@@ -118,13 +120,8 @@ export class InternalLeadScoringController {
 
     let scored = 0;
     for (const s of dto.scores) {
-      // Guarded write: only an as-yet-unscored lead in THIS workspace. Re-scoring
-      // and cross-tenant writes are both impossible.
-      const res = await this.prisma.lead.updateMany({
-        where: { id: s.leadId, workspaceId, scoredAt: null },
-        data: { aiScore: s.score, aiScoreReason: s.reason, scoredAt: new Date() },
-      });
-      scored += res.count;
+      const count = await this.leads.applyAiScore(workspaceId, s.leadId, s.score, s.reason);
+      scored += count;
     }
 
     return { scored, skipped: dto.scores.length - scored };

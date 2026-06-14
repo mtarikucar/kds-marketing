@@ -340,6 +340,9 @@ import { BrandingService } from './branding/branding.service';
     // InternalApiModule's research-jobs surface shares the quota-clipped
     // ingest path (one implementation of the clipping invariant).
     MarketingLeadsIngestService,
+    // InternalApiModule's lead-scoring surface delegates writes through this
+    // service so the controller never touches marketing-owned tables directly.
+    MarketingLeadsService,
   ],
 })
 export class MarketingModule {}
