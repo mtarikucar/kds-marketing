@@ -10,7 +10,14 @@
  *   - reload(key) removes job for config with no cron
  *   - reload(key) invalid cron is caught and logged (does not throw)
  *   - reload(key) deletes existing job before re-adding
+ *   - addCronJob failure is caught and logged (does not throw)
  */
+
+// ── mock withAdvisoryXactLock ────────────────────────────────────────────────
+const mockWithAdvisoryXactLock = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../common/scheduling/advisory-lock', () => ({
+  withAdvisoryXactLock: (...args: unknown[]) => mockWithAdvisoryXactLock(...args),
+}));
 
 import { RoutineScheduleRunner } from './routine-schedule-runner.service';
 
@@ -75,7 +82,7 @@ function makeSchedulerRegistry() {
 
 function makePrismaService() {
   return {
-    $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]),
+    $transaction: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -290,6 +297,27 @@ describe('RoutineScheduleRunner', () => {
         'routine:review-draft',
         expect.any(Object),
       );
+    });
+
+    it('catches and logs addCronJob failure without throwing', async () => {
+      const config = makeConfig({ key: 'review-draft', enabled: true, cron: '0 * * * *' });
+      const configSvc = makeConfigService([config]);
+      const triggerSvc = makeTriggerService();
+      const schedulerRegistry = makeSchedulerRegistry();
+      const prisma = makePrismaService();
+      schedulerRegistry.addCronJob.mockImplementationOnce(() => {
+        throw new Error('duplicate job name race');
+      });
+
+      const runner = new RoutineScheduleRunner(
+        configSvc as any,
+        triggerSvc as any,
+        schedulerRegistry as any,
+        prisma as any,
+      );
+
+      // Should NOT throw
+      await expect(runner.reload('review-draft')).resolves.toBeUndefined();
     });
   });
 });

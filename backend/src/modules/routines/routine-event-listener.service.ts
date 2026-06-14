@@ -1,7 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
 import { DomainEventBus } from '../outbox/domain-event-bus.service';
 import { MarketingEventTypes } from '../marketing/events/marketing-event-types';
 import { RoutineTriggerService } from './routine-trigger.service';
+import { withAdvisoryXactLock } from '../../common/scheduling/advisory-lock';
 
 /**
  * Subscribes to domain events that should reactively trigger routines.
@@ -10,6 +12,10 @@ import { RoutineTriggerService } from './routine-trigger.service';
  *   → triggers 'review-draft' (draft a reply to private feedback).
  * - `marketing.lead.created.v1`
  *   → triggers 'lead-scoring' (score the new lead).
+ *
+ * Handlers are wrapped in withAdvisoryXactLock for multi-replica safety:
+ * only one replica will fire the trigger per event, preventing duplicate
+ * API calls when all replicas receive the same domain event.
  *
  * Handlers never throw — they catch and log errors. The enabled/cooldown
  * gating lives in RoutineTriggerService.trigger(), so this service just
@@ -22,6 +28,7 @@ export class RoutineEventListener implements OnModuleInit {
   constructor(
     private readonly domainEventBus: DomainEventBus,
     private readonly routineTriggerService: RoutineTriggerService,
+    private readonly prisma: PrismaService,
   ) {}
 
   onModuleInit(): void {
@@ -38,7 +45,12 @@ export class RoutineEventListener implements OnModuleInit {
       if (status !== 'PRIVATE_FEEDBACK') return;
 
       this.logger.debug('Review PRIVATE_FEEDBACK received — triggering review-draft');
-      await this.routineTriggerService.trigger('review-draft', 'event');
+      await withAdvisoryXactLock(
+        this.prisma,
+        'routine-event:review-draft',
+        () => this.routineTriggerService.trigger('review-draft', 'event').then(() => undefined),
+        { logger: this.logger },
+      );
     } catch (err) {
       this.logger.error(
         `review.received handler error: ${(err as Error)?.message ?? err}`,
@@ -50,7 +62,12 @@ export class RoutineEventListener implements OnModuleInit {
   private async onLeadCreated(_event: unknown): Promise<void> {
     try {
       this.logger.debug('lead.created event received — triggering lead-scoring');
-      await this.routineTriggerService.trigger('lead-scoring', 'event');
+      await withAdvisoryXactLock(
+        this.prisma,
+        'routine-event:lead-scoring',
+        () => this.routineTriggerService.trigger('lead-scoring', 'event').then(() => undefined),
+        { logger: this.logger },
+      );
     } catch (err) {
       this.logger.error(
         `lead.created handler error: ${(err as Error)?.message ?? err}`,

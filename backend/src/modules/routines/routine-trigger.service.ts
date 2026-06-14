@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RoutineConfigService } from './routine-config.service';
+import { safeFetch, SsrfBlockedError } from '../../common/util/safe-fetch';
 
 export type TriggerSource = 'manual' | 'schedule' | 'event';
 
@@ -62,21 +63,32 @@ export class RoutineTriggerService {
       return { ok: false, error: msg };
     }
 
-    // ── resolve token + fire ─────────────────────────────────────────────────
-    const token = this.routineConfigService.resolveToken(config);
+    // ── fail-closed: sealed token that can't decrypt → error (never fire tokenless) ──
+    if (config.triggerTokenSealed != null) {
+      const token = this.routineConfigService.resolveToken(config);
+      if (token === null) {
+        const msg = 'trigger token could not be decrypted';
+        this.logger.error(`routine ${key}: ${msg}`);
+        await this.routineConfigService.recordTrigger(key, 'error', msg);
+        return { ok: false, error: msg };
+      }
+      return this.fire(config.triggerUrl, token, source, key);
+    }
 
-    return this.fire(config.triggerUrl, token, source, key);
+    // ── no sealed token → fire tokenless ────────────────────────────────────
+    return this.fire(config.triggerUrl, null, source, key);
   }
 
   /**
    * The ONLY method coupled to claude.ai's "Call via API" contract:
    *   POST <triggerUrl>
-   *   Authorization: Bearer <token>
+   *   Authorization: Bearer <token>   (omitted when token is null)
    *   Content-Type: application/json
    *   Body: { source }
    *
-   * Mirrors the AbortSignal.timeout + try/catch pattern from
-   * http-core-provisioning.client.ts.
+   * Uses safeFetch (SSRF-hardened) so the URL is validated BEFORE the token
+   * is sent — internal/private hosts are blocked before any credential leaves
+   * the process.
    */
   async fire(
     url: string,
@@ -93,14 +105,17 @@ export class RoutineTriggerService {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await safeFetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify({ source }),
-        signal: AbortSignal.timeout(this.FIRE_TIMEOUT_MS),
+        timeoutMs: this.FIRE_TIMEOUT_MS,
       });
     } catch (err) {
-      const msg = `routine trigger network error: ${(err as Error).message}`;
+      const blocked = err instanceof SsrfBlockedError;
+      const msg = blocked
+        ? `routine trigger blocked by SSRF guard: ${(err as Error).message}`
+        : `routine trigger network error: ${(err as Error).message}`;
       this.logger.error(`routine ${key} fire failed: ${(err as Error).message}`);
       await this.routineConfigService.recordTrigger(key, 'error', msg);
       return { ok: false, error: msg };

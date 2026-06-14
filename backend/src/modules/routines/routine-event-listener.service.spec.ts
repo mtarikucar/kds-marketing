@@ -9,6 +9,16 @@
  *   - subscriptions are registered on onModuleInit
  */
 
+// ── mock withAdvisoryXactLock — pass-through so trigger() is called ──────────
+const mockWithAdvisoryXactLock = jest.fn().mockImplementation(
+  async (_prisma: unknown, _jobName: string, run: () => Promise<void>) => {
+    await run();
+  },
+);
+jest.mock('../../common/scheduling/advisory-lock', () => ({
+  withAdvisoryXactLock: (...args: unknown[]) => mockWithAdvisoryXactLock(...args),
+}));
+
 import { DomainEvent } from '../outbox/domain-event-bus.service';
 import { RoutineEventListener } from './routine-event-listener.service';
 
@@ -32,6 +42,12 @@ function makeDomainEventBus() {
 function makeTriggerService() {
   return {
     trigger: jest.fn().mockResolvedValue({ ok: true }),
+  };
+}
+
+function makePrismaService() {
+  return {
+    $transaction: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -62,6 +78,12 @@ function makeLeadEvent(): Partial<DomainEvent> {
 describe('RoutineEventListener', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: lock is acquired (pass-through)
+    mockWithAdvisoryXactLock.mockImplementation(
+      async (_prisma: unknown, _jobName: string, run: () => Promise<void>) => {
+        await run();
+      },
+    );
   });
 
   // ── subscription registration ─────────────────────────────────────────────
@@ -70,8 +92,9 @@ describe('RoutineEventListener', () => {
     it('subscribes to review.received and lead.created events', () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       expect(bus.on).toHaveBeenCalledWith(
@@ -91,8 +114,9 @@ describe('RoutineEventListener', () => {
     it('triggers review-draft when status is PRIVATE_FEEDBACK', async () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       await bus.dispatch('marketing.review.received.v1', makeReviewEvent('PRIVATE_FEEDBACK'));
@@ -104,8 +128,9 @@ describe('RoutineEventListener', () => {
     it('does NOT trigger for non-private review status', async () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       await bus.dispatch('marketing.review.received.v1', makeReviewEvent('PUBLIC'));
@@ -116,8 +141,9 @@ describe('RoutineEventListener', () => {
     it('does NOT trigger for PUBLISHED review status', async () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       await bus.dispatch('marketing.review.received.v1', makeReviewEvent('PUBLISHED'));
@@ -128,15 +154,34 @@ describe('RoutineEventListener', () => {
     it('catches and suppresses errors thrown by trigger service', async () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
       triggerSvc.trigger.mockRejectedValueOnce(new Error('network failure'));
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       // Should not throw
       await expect(
         bus.dispatch('marketing.review.received.v1', makeReviewEvent('PRIVATE_FEEDBACK')),
       ).resolves.toBeUndefined();
+    });
+
+    it('skips trigger when advisory lock is held elsewhere', async () => {
+      // Simulate lock not acquired (skip run)
+      mockWithAdvisoryXactLock.mockImplementationOnce(async () => {
+        // lock skipped — do not call run()
+      });
+
+      const bus = makeDomainEventBus();
+      const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
+
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
+      listener.onModuleInit();
+
+      await bus.dispatch('marketing.review.received.v1', makeReviewEvent('PRIVATE_FEEDBACK'));
+
+      expect(triggerSvc.trigger).not.toHaveBeenCalled();
     });
   });
 
@@ -146,8 +191,9 @@ describe('RoutineEventListener', () => {
     it('triggers lead-scoring for any lead.created event', async () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       await bus.dispatch('marketing.lead.created.v1', makeLeadEvent());
@@ -159,9 +205,10 @@ describe('RoutineEventListener', () => {
     it('catches and suppresses errors thrown by trigger service', async () => {
       const bus = makeDomainEventBus();
       const triggerSvc = makeTriggerService();
+      const prisma = makePrismaService();
       triggerSvc.trigger.mockRejectedValueOnce(new Error('trigger down'));
 
-      const listener = new RoutineEventListener(bus as any, triggerSvc as any);
+      const listener = new RoutineEventListener(bus as any, triggerSvc as any, prisma as any);
       listener.onModuleInit();
 
       await expect(

@@ -7,16 +7,23 @@
  *   - event source within cooldown window is skipped
  *   - event source outside cooldown window fires
  *   - no triggerUrl → records error, returns ok:false
- *   - fetch success → records 'ok', returns ok:true
- *   - fetch network throw → records error, returns ok:false
- *   - fetch non-2xx → records error, returns ok:false
+ *   - safeFetch success → records 'ok', returns ok:true
+ *   - safeFetch network throw → records error, returns ok:false
+ *   - safeFetch non-2xx → records error, returns ok:false
+ *   - sealed token + decrypt failure → fail-closed (error, no fire)
+ *   - no sealed token → fires tokenless
  */
 
-import { RoutineTriggerService } from './routine-trigger.service';
+// ── safeFetch mock ──────────────────────────────────────────────────────────
+const mockSafeFetch = jest.fn();
+jest.mock('../../common/util/safe-fetch', () => ({
+  safeFetch: (...args: unknown[]) => mockSafeFetch(...args),
+  SsrfBlockedError: class SsrfBlockedError extends Error {
+    constructor(msg: string) { super(msg); this.name = 'SsrfBlockedError'; }
+  },
+}));
 
-// ── global fetch mock ────────────────────────────────────────────────────────
-const mockFetch = jest.fn();
-global.fetch = mockFetch as unknown as typeof fetch;
+import { RoutineTriggerService } from './routine-trigger.service';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function makeConfig(overrides: Partial<Record<string, unknown>> = {}) {
@@ -61,12 +68,12 @@ describe('RoutineTriggerService', () => {
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
 
       const result = await service.trigger('review-draft', 'manual');
 
       expect(result.ok).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
     });
 
     it('schedule source skips when enabled=false', async () => {
@@ -78,7 +85,7 @@ describe('RoutineTriggerService', () => {
 
       expect(result.ok).toBe(false);
       expect(result.skipped).toBeDefined();
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockSafeFetch).not.toHaveBeenCalled();
       expect(configSvc.recordTrigger).not.toHaveBeenCalled();
     });
 
@@ -91,7 +98,7 @@ describe('RoutineTriggerService', () => {
 
       expect(result.ok).toBe(false);
       expect(result.skipped).toBeDefined();
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockSafeFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -108,7 +115,7 @@ describe('RoutineTriggerService', () => {
 
       expect(result.ok).toBe(false);
       expect(result.skipped).toMatch(/cooldown/i);
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockSafeFetch).not.toHaveBeenCalled();
     });
 
     it('event source fires when lastTriggeredAt is outside cooldown', async () => {
@@ -117,12 +124,12 @@ describe('RoutineTriggerService', () => {
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
 
       const result = await service.trigger('review-draft', 'event');
 
       expect(result.ok).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
     });
 
     it('event source fires when lastTriggeredAt is null (never triggered)', async () => {
@@ -130,12 +137,12 @@ describe('RoutineTriggerService', () => {
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
 
       const result = await service.trigger('review-draft', 'event');
 
       expect(result.ok).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -156,23 +163,60 @@ describe('RoutineTriggerService', () => {
         'error',
         expect.stringMatching(/no trigger url/i),
       );
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockSafeFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── fail-closed token ─────────────────────────────────────────────────────
+
+  describe('trigger() fail-closed token', () => {
+    it('returns error without firing when sealed token cannot be decrypted', async () => {
+      const cfg = makeConfig({ triggerTokenSealed: 'sealed:tok' });
+      const configSvc = makeConfigService(cfg, null); // resolveToken returns null
+      const service = new RoutineTriggerService(configSvc as any);
+
+      const result = await service.trigger('review-draft', 'manual');
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/trigger token could not be decrypted/i);
+      expect(configSvc.recordTrigger).toHaveBeenCalledWith(
+        'review-draft',
+        'error',
+        expect.stringMatching(/trigger token could not be decrypted/i),
+      );
+      expect(mockSafeFetch).not.toHaveBeenCalled();
+    });
+
+    it('fires tokenless when triggerTokenSealed is null', async () => {
+      const cfg = makeConfig({ triggerTokenSealed: null });
+      const configSvc = makeConfigService(cfg, null); // no token
+      const service = new RoutineTriggerService(configSvc as any);
+
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+
+      const result = await service.trigger('review-draft', 'manual');
+
+      expect(result.ok).toBe(true);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+      // No Authorization header
+      const callArgs = mockSafeFetch.mock.calls[0][1];
+      expect(callArgs.headers?.Authorization).toBeUndefined();
     });
   });
 
   // ── fire() HTTP behavior ──────────────────────────────────────────────────
 
   describe('fire() via trigger()', () => {
-    it('calls fetch POST with Authorization header and JSON body', async () => {
+    it('calls safeFetch POST with Authorization header and JSON body', async () => {
       const cfg = makeConfig({ triggerUrl: 'https://claude.ai/api/trigger/abc' });
       const configSvc = makeConfigService(cfg, 'my-token');
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
 
       await service.trigger('review-draft', 'manual');
 
-      expect(mockFetch).toHaveBeenCalledWith(
+      expect(mockSafeFetch).toHaveBeenCalledWith(
         'https://claude.ai/api/trigger/abc',
         expect.objectContaining({
           method: 'POST',
@@ -181,6 +225,7 @@ describe('RoutineTriggerService', () => {
             'Content-Type': 'application/json',
           }),
           body: JSON.stringify({ source: 'manual' }),
+          timeoutMs: 30_000,
         }),
       );
     });
@@ -190,7 +235,7 @@ describe('RoutineTriggerService', () => {
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
 
       const result = await service.trigger('review-draft', 'manual');
 
@@ -203,7 +248,7 @@ describe('RoutineTriggerService', () => {
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      mockSafeFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
       const result = await service.trigger('review-draft', 'manual');
 
@@ -221,7 +266,7 @@ describe('RoutineTriggerService', () => {
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 502, text: jest.fn().mockResolvedValue('Bad Gateway') });
+      mockSafeFetch.mockResolvedValueOnce({ ok: false, status: 502, text: jest.fn().mockResolvedValue('Bad Gateway') });
 
       const result = await service.trigger('review-draft', 'manual');
 

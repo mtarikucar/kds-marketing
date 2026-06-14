@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { PrismaService } from '../../prisma/prisma.service';
-import { withAdvisoryLock } from '../../common/scheduling/advisory-lock';
+import { withAdvisoryXactLock } from '../../common/scheduling/advisory-lock';
 import { RoutineConfigService } from './routine-config.service';
 import { RoutineTriggerService } from './routine-trigger.service';
 
@@ -15,8 +15,9 @@ import { RoutineTriggerService } from './routine-trigger.service';
  * `reload(key)` is called after every config update (by RoutineConfigService)
  * so the scheduler stays in sync with the DB without a restart.
  *
- * Each cron tick is wrapped in `withAdvisoryLock` so only one replica fires
- * the trigger in a multi-replica deploy.
+ * Each cron tick is wrapped in `withAdvisoryXactLock` so only one replica fires
+ * the trigger in a multi-replica deploy (connection-safe: lock tied to one
+ * connection, auto-released at transaction commit/rollback).
  */
 @Injectable()
 export class RoutineScheduleRunner implements OnModuleInit {
@@ -81,12 +82,15 @@ export class RoutineScheduleRunner implements OnModuleInit {
     let job: CronJob;
     try {
       job = new CronJob(cron, () => {
-        // Fire inside advisory lock — multi-replica safe
-        void withAdvisoryLock(
+        // Fire inside advisory xact lock — connection-safe, multi-replica safe.
+        // Attach .catch() so a rejected promise never becomes an unhandled rejection.
+        void withAdvisoryXactLock(
           this.prisma,
           lockName,
           () => this.routineTriggerService.trigger(key, 'schedule').then(() => undefined),
-          this.logger,
+          { logger: this.logger },
+        ).catch((err: Error) =>
+          this.logger.error(`routine ${key} schedule tick failed: ${err.message}`),
         );
       });
     } catch (err) {
@@ -96,8 +100,15 @@ export class RoutineScheduleRunner implements OnModuleInit {
       return;
     }
 
-    this.schedulerRegistry.addCronJob(jobName, job);
-    job.start();
+    try {
+      this.schedulerRegistry.addCronJob(jobName, job);
+      job.start();
+    } catch (err) {
+      this.logger.error(
+        `Failed to register cron job ${jobName}: ${(err as Error).message}`,
+      );
+      return;
+    }
     this.logger.log(`Registered cron job ${jobName} with expression: ${cron}`);
   }
 }
