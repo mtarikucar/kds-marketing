@@ -57,17 +57,36 @@ describe('InternalContentController', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('404s when the profile does not belong to the workspace', async () => {
+    it('404s when the profile does not belong to the workspace (claim returns 0 + findFirst null)', async () => {
       prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      // Claim updateMany returns 0 (profile unknown / already run this window)
+      prisma.contentProfile.updateMany.mockResolvedValue({ count: 0 });
+      // findFirst also returns null → profile not found
       prisma.contentProfile.findFirst.mockResolvedValue(null);
       await expect(
         ctrl.submit('ws1', { profileId: 'cpX', drafts: [{ channel: 'social', body: 'x' }] }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('createMany the drafts and stamps the profile lastRunAt', async () => {
+    it('returns { created: 0 } without inserting when profile already run this window (idempotency)', async () => {
       prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      // Claim returns 0 because lastRunAt is within the due window
+      prisma.contentProfile.updateMany.mockResolvedValue({ count: 0 });
+      // findFirst returns the profile → it exists but was already run
+      prisma.contentProfile.findFirst.mockResolvedValue({ id: 'cp1' });
+
+      const res = await ctrl.submit('ws1', { profileId: 'cp1', drafts: [{ channel: 'social', body: 'x' }] });
+
+      expect(res).toEqual({ created: 0 });
+      expect(prisma.contentDraft.createMany).not.toHaveBeenCalled();
+    });
+
+    it('claims the profile atomically then createMany the drafts', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'ACTIVE' });
+      // Claim succeeds (count=1) → proceed to insert
+      prisma.contentProfile.updateMany.mockResolvedValue({ count: 1 });
       prisma.contentDraft.createMany.mockResolvedValue({ count: 2 });
+
       const res = await ctrl.submit('ws1', {
         profileId: 'cp1',
         drafts: [
@@ -75,12 +94,18 @@ describe('InternalContentController', () => {
           { channel: 'email', subject: 's', body: 'b' },
         ],
       });
+
       expect(res).toEqual({ created: 2 });
       const rows = prisma.contentDraft.createMany.mock.calls[0][0].data;
       expect(rows).toHaveLength(2);
       expect(rows[0]).toMatchObject({ workspaceId: 'ws1', contentProfileId: 'cp1', channel: 'social', body: 'a' });
-      // profile stamp scoped by {id, workspaceId}
-      expect(prisma.contentProfile.updateMany.mock.calls[0][0].where).toEqual({ id: 'cp1', workspaceId: 'ws1' });
+
+      // Claim updateMany where must include the idempotency OR clause scoped by {id, workspaceId}
+      const claimWhere = prisma.contentProfile.updateMany.mock.calls[0][0].where;
+      expect(claimWhere).toMatchObject({ id: 'cp1', workspaceId: 'ws1' });
+      expect(claimWhere.OR).toBeDefined();
+      expect(claimWhere.OR[0]).toEqual({ lastRunAt: null });
+      expect(claimWhere.OR[1].lastRunAt.lt).toBeInstanceOf(Date);
     });
   });
 });

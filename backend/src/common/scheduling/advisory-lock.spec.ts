@@ -47,7 +47,7 @@ describe('withAdvisoryXactLock', () => {
     );
   });
 
-  it('defaults to 35000ms timeout', async () => {
+  it('defaults to 45000ms timeout (above the 30s FIRE_TIMEOUT_MS + recordTrigger write)', async () => {
     const prisma = makePrisma(true);
     const run = jest.fn().mockResolvedValue(undefined);
 
@@ -55,7 +55,7 @@ describe('withAdvisoryXactLock', () => {
 
     expect(prisma.$transaction).toHaveBeenCalledWith(
       expect.any(Function),
-      { timeout: 35_000 },
+      { timeout: 45_000 },
     );
   });
 });

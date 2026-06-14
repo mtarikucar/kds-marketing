@@ -60,7 +60,11 @@ function djb2(s: string): number {
  * its caveat), this uses pg_try_advisory_xact_lock INSIDE an interactive
  * transaction, so the lock is tied to ONE connection and auto-released at COMMIT/
  * ROLLBACK. Non-blocking: a loser (lock held elsewhere) skips. Only for short run()
- * bodies (the tx is held for run()'s duration; default 35s timeout).
+ * bodies (the tx is held for run()'s duration; default 45s timeout).
+ *
+ * The 45s default is chosen to be comfortably above the routine fire timeout
+ * (FIRE_TIMEOUT_MS = 30s) plus the small recordTrigger write, so a slow HTTP
+ * fire cannot abort the transaction mid-flight and lose the lastTriggeredAt stamp.
  */
 export async function withAdvisoryXactLock(
   prisma: PrismaService,
@@ -78,6 +82,6 @@ export async function withAdvisoryXactLock(
       }
       await run();
     },
-    { timeout: opts?.timeoutMs ?? 35_000 },
+    { timeout: opts?.timeoutMs ?? 45_000 },
   );
 }
