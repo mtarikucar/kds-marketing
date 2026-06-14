@@ -52,18 +52,25 @@ function makeTriggerService() {
 }
 
 function makeSchedulerRegistry() {
-  const jobs = new Map<string, { start: jest.Mock; stop: jest.Mock }>();
-  return {
+  const jobs = new Map<string, any>();
+  const registry = {
     doesExist: jest.fn().mockImplementation((_type: string, name: string) => jobs.has(name)),
     addCronJob: jest.fn().mockImplementation((_name: string, job: any) => {
       jobs.set(_name, job);
     }),
     deleteCronJob: jest.fn().mockImplementation((name: string) => {
+      const job = jobs.get(name);
+      if (job && typeof job.stop === 'function') {
+        job.stop();
+      }
       jobs.delete(name);
     }),
     getCronJob: jest.fn().mockImplementation((name: string) => jobs.get(name)),
     _jobs: jobs,
   };
+  // Auto-register so afterEach can stop any surviving jobs.
+  registries.push(registry);
+  return registry;
 }
 
 function makePrismaService() {
@@ -74,9 +81,26 @@ function makePrismaService() {
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
+// Registries created in each test — collected so afterEach can drain timers.
+const registries: Array<{ _jobs: Map<string, any> }> = [];
+
 describe('RoutineScheduleRunner', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    // Stop every CronJob that was registered during the test so the worker
+    // process exits cleanly (no "A worker process has failed to exit" warning).
+    for (const registry of registries) {
+      for (const job of registry._jobs.values()) {
+        if (typeof job.stop === 'function') {
+          job.stop();
+        }
+      }
+      registry._jobs.clear();
+    }
+    registries.length = 0;
   });
 
   // ── reloadAll ─────────────────────────────────────────────────────────────

@@ -1,5 +1,4 @@
 import { Module, OnModuleInit } from '@nestjs/common';
-import { ScheduleModule } from '@nestjs/schedule';
 import { RoutineConfigService } from './routine-config.service';
 import { RoutineTriggerService } from './routine-trigger.service';
 import { RoutineScheduleRunner } from './routine-schedule-runner.service';
@@ -20,7 +19,7 @@ import { RoutineEventListener } from './routine-event-listener.service';
  * OutboxModule is @Global so DomainEventBus is injectable without importing.
  */
 @Module({
-  imports: [ScheduleModule.forRoot()],
+  imports: [],
   providers: [
     RoutineConfigService,
     RoutineTriggerService,
