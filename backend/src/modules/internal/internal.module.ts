@@ -7,6 +7,7 @@ import { InternalEventsController } from './internal-events.controller';
 import { InternalResearchController } from './internal-research.controller';
 import { InternalReviewsController } from './internal-reviews.controller';
 import { InternalContentController } from './internal-content.controller';
+import { InternalInsightsController } from './internal-insights.controller';
 import { MarketingModule } from '../marketing/marketing.module';
 
 /**
@@ -29,6 +30,7 @@ import { MarketingModule } from '../marketing/marketing.module';
     InternalResearchController,
     InternalReviewsController,
     InternalContentController,
+    InternalInsightsController,
   ],
   providers: [InternalTokenGuard, ResearchTokenGuard, RoutineTokenGuard],
 })
