@@ -178,34 +178,41 @@ export class ConversationAiEngineService implements OnModuleInit {
       }
     }
 
-    // Per-conversation daily reply cap (resets at UTC midnight). Claim a slot
-    // atomically: a single conditional UPDATE resets on a day rollover,
-    // increments within the day, and rejects (0 rows) at the cap or on a lost
-    // race. Physical table is `conversations` (@@map); columns keep their names.
-    const claimed = await this.prisma.$executeRaw`
-      UPDATE "conversations"
-         SET "aiRepliesToday" = CASE WHEN "aiRepliesDayKey" = ${today} THEN "aiRepliesToday" + 1 ELSE 1 END,
-             "aiRepliesDayKey" = ${today}
-       WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
-         AND ("aiRepliesDayKey" <> ${today} OR "aiRepliesDayKey" IS NULL OR "aiRepliesToday" < ${agent.maxRepliesPerConvoDaily})`;
-    if (claimed === 0) {
-      this.logger.debug(`convo=${conversationId} hit daily AI reply cap (or lost race)`);
-      return;
-    }
-
     const lead = await this.prisma.lead.findFirst({
       where: { id: convo.leadId, workspaceId },
       select: { businessName: true, contactPerson: true, phone: true, email: true, city: true, status: true },
     });
 
-    // Reserve a credit BEFORE the call; refund if we end up not sending.
+    // BUG 2 FIX: Both the slot claim and the credit reserve must be inside the
+    // same try/finally so that a credits.reserve() throw still releases the slot.
     const cost = creditCost('conversation.reply');
-    await this.credits.reserve(workspaceId, cost);
+    let sent = false;
+    let slotClaimed = false;
+    let creditReserved = false;
 
     this.stream.push(workspaceId, { kind: 'ai_typing', conversationId, payload: { typing: true } });
 
-    let sent = false;
     try {
+      // Per-conversation daily reply cap (resets at UTC midnight). Claim a slot
+      // atomically: a single conditional UPDATE resets on a day rollover,
+      // increments within the day, and rejects (0 rows) at the cap or on a lost
+      // race. Physical table is `conversations` (@@map); columns keep their names.
+      const claimed = await this.prisma.$executeRaw`
+        UPDATE "conversations"
+           SET "aiRepliesToday" = CASE WHEN "aiRepliesDayKey" = ${today} THEN "aiRepliesToday" + 1 ELSE 1 END,
+               "aiRepliesDayKey" = ${today}
+         WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
+           AND ("aiRepliesDayKey" <> ${today} OR "aiRepliesDayKey" IS NULL OR "aiRepliesToday" < ${agent.maxRepliesPerConvoDaily})`;
+      if (claimed === 0) {
+        this.logger.debug(`convo=${conversationId} hit daily AI reply cap (or lost race)`);
+        return;
+      }
+      slotClaimed = true;
+
+      // Reserve a credit BEFORE the call; refund if we end up not sending.
+      await this.credits.reserve(workspaceId, cost);
+      creditReserved = true;
+
       const kb = await this.knowledge.search(
         workspaceId,
         customerText,
@@ -221,17 +228,30 @@ export class ConversationAiEngineService implements OnModuleInit {
       } else if (outcome.text.trim()) {
         await this.sender.send({ workspaceId, conversationId, text: outcome.text.trim(), authorType: 'AI' });
         sent = true;
-        await this.scheduleFollowup(workspaceId, conversationId, agent);
+        // BUG 1 FIX: scheduleFollowup is non-fatal — a throw here MUST NOT
+        // propagate after send() succeeds, which would cause onInbound() to
+        // schedule a retry and send a duplicate reply + charge a second credit.
+        await this.scheduleFollowup(workspaceId, conversationId, agent).catch((e) =>
+          this.logger.warn(`followup scheduling failed (non-fatal): ${(e as Error).message}`),
+        );
       }
     } finally {
       if (!sent) {
         // No reply went out — release the slot we claimed and refund the credit.
-        await this.prisma.$executeRaw`
-          UPDATE "conversations"
-             SET "aiRepliesToday" = GREATEST("aiRepliesToday" - 1, 0)
-           WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
-             AND "aiRepliesDayKey" = ${today}`;
-        await this.credits.refund(workspaceId, cost);
+        if (creditReserved) {
+          await this.credits.refund(workspaceId, cost).catch((e: any) =>
+            this.logger.error(`credit refund failed: ${(e as Error).message}`),
+          );
+        }
+        if (slotClaimed) {
+          await this.prisma.$executeRaw`
+            UPDATE "conversations"
+               SET "aiRepliesToday" = GREATEST("aiRepliesToday" - 1, 0)
+             WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
+               AND "aiRepliesDayKey" = ${today}`.catch((e: any) =>
+            this.logger.error(`slot release failed: ${(e as Error).message}`),
+          );
+        }
       }
       this.stream.push(workspaceId, { kind: 'ai_typing', conversationId, payload: { typing: false } });
     }
@@ -281,6 +301,21 @@ export class ConversationAiEngineService implements OnModuleInit {
       messages.push({ role: 'assistant', content: assistantContent });
       messages.push({ role: 'user', content: toolResults });
     }
+
+    // BUG 9 FIX: if the loop exhausted MAX_TOOL_ITERATIONS and the very last
+    // iteration was a tool_use (no text produced), finalText is still ''. Make
+    // one final no-tools completion so the model must produce a user-facing reply.
+    if (!finalText) {
+      const final = await this.anthropic.complete({
+        system,
+        messages,
+        maxTokens: 700,
+        tier: tierFor('conversation.reply'),
+        cacheSystem: true,
+      });
+      finalText = final.text;
+    }
+
     return { text: finalText, handoff: false };
   }
 
