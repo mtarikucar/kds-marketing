@@ -19,8 +19,8 @@ Routine **#3 of 4**, reusing the shared `ROUTINE_TOKEN` + `RoutineTokenGuard`.
 - **Cadence:** weekly. Cron `0 5 * * 1` UTC (Mondays, 1h after content-pack).
 - **Period:** trailing 7 days (`periodStart = now − 7d`, `periodEnd = now`).
 - **Idempotency / weekly-due:** the GET excludes a workspace that already has an
-  `InsightDigest` created in the last 6 days. POST inserts the digest → next
-  nightly run skips it. (Same weekly-due idea as content-pack, but keyed off the
+  `InsightDigest` created in the last 6 days. POST inserts the digest → the next
+  weekly run skips it. (Same weekly-due idea as content-pack, but keyed off the
   digest table instead of a profile.)
 - **KPIs (computed by the backend):** a small, bounded set:
   `leadsNew` (Lead created in period), `leadsTotal` (pipeline size),
