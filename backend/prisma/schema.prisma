@@ -604,6 +604,23 @@ model ContentDraft {
   @@map("content_drafts")
 }
 
+/// A weekly AI-written insights digest for a workspace: a KPI snapshot plus a
+/// narrative + recommendations. Produced by the insight-digest routine.
+model InsightDigest {
+  id          String   @id @default(uuid())
+  workspaceId String
+  periodStart DateTime
+  periodEnd   DateTime
+  /// KPI snapshot, e.g. { leadsNew, leadsTotal, reviewsNew, avgRating, campaignsSent }.
+  metrics     Json
+  body        String   @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@map("insight_digests")
+}
+
 /// Per-workspace ingest credential. Only the sha256 hash is stored; the raw
 /// token (mkt_live_<hex>) is shown exactly once at mint time. Replaces the
 /// global MARKETING_INGEST_TOKEN env.
