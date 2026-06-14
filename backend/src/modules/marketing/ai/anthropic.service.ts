@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 
-export type AiModelTier = 'default' | 'light';
+export type AiModelTier = 'default' | 'light' | 'conversation';
 
 export interface AiCallOpts {
   system: string;
@@ -63,9 +63,16 @@ export class AnthropicService {
   }
 
   private modelFor(tier: AiModelTier): string {
-    return tier === 'light'
-      ? this.config.get<string>('AI_MODEL_LIGHT') || 'claude-haiku-4-5'
-      : this.config.get<string>('AI_MODEL_DEFAULT') || 'claude-opus-4-8';
+    if (tier === 'light') {
+      return this.config.get<string>('AI_MODEL_LIGHT') || 'claude-haiku-4-5';
+    }
+    if (tier === 'conversation') {
+      // Inbound customer replies are short + KB-grounded — a fast/cheap tier
+      // handles them well. Defaults to Haiku; override with AI_MODEL_CONVERSATION
+      // (e.g. claude-sonnet-4-6 or claude-opus-4-8) to A/B without a code change.
+      return this.config.get<string>('AI_MODEL_CONVERSATION') || 'claude-haiku-4-5';
+    }
+    return this.config.get<string>('AI_MODEL_DEFAULT') || 'claude-opus-4-8';
   }
 
   private buildSystem(system: string, cache: boolean): Anthropic.MessageCreateParams['system'] {
