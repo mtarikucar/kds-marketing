@@ -8,7 +8,7 @@ import { withAdvisoryXactLock } from '../../common/scheduling/advisory-lock';
 /**
  * Subscribes to domain events that should reactively trigger routines.
  *
- * - `marketing.review.received.v1` with status PRIVATE_FEEDBACK
+ * - `marketing.review.received.v1` with public===false (private feedback)
  *   → triggers 'review-draft' (draft a reply to private feedback).
  * - `marketing.lead.created.v1`
  *   → triggers 'lead-scoring' (score the new lead).
@@ -20,6 +20,10 @@ import { withAdvisoryXactLock } from '../../common/scheduling/advisory-lock';
  * Handlers never throw — they catch and log errors. The enabled/cooldown
  * gating lives in RoutineTriggerService.trigger(), so this service just
  * calls trigger and lets the service decide whether to fire.
+ *
+ * Event payload shape (marketing.review.received.v1):
+ *   { workspaceId, reviewId, leadId, rating, public, occurredAt }
+ * private = public:false (rating < 4); public = public:true (rating >= 4).
  */
 @Injectable()
 export class RoutineEventListener implements OnModuleInit {
@@ -39,12 +43,14 @@ export class RoutineEventListener implements OnModuleInit {
 
   // ── handlers ───────────────────────────────────────────────────────────────
 
-  private async onReviewReceived(event: { payload: { status?: string } }): Promise<void> {
+  private async onReviewReceived(event: { payload: { public?: boolean } }): Promise<void> {
     try {
-      const status = (event.payload as { status?: string })?.status;
-      if (status !== 'PRIVATE_FEEDBACK') return;
+      // Gate on the real payload field: public===false means private feedback.
+      // The emitter (reviews.service.ts submitRating) sends { workspaceId, reviewId,
+      // leadId, rating, public, occurredAt } — there is no 'status' field.
+      if ((event.payload as { public?: boolean })?.public !== false) return;
 
-      this.logger.debug('Review PRIVATE_FEEDBACK received — triggering review-draft');
+      this.logger.debug('Review private feedback received (public:false) — triggering review-draft');
       await withAdvisoryXactLock(
         this.prisma,
         'routine-event:review-draft',
