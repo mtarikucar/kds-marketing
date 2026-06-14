@@ -43,12 +43,16 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
       };
     }
     const gsmno = to.replace(/[^\d]/g, '');
-    const url =
-      `https://api.netgsm.com.tr/sms/send/get?usercode=${encodeURIComponent(usercode)}` +
-      `&password=${encodeURIComponent(password)}&gsmno=${encodeURIComponent(gsmno)}` +
-      `&message=${encodeURIComponent(text)}&msgheader=${encodeURIComponent(msgheader)}`;
+    // Credentials go in the POST body (form-encoded), never the URL/query string,
+    // so they don't leak into proxy/access logs or error messages.
+    const url = 'https://api.netgsm.com.tr/sms/send/get';
+    const form = new URLSearchParams({ usercode, password, gsmno, message: text, msgheader });
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+      });
       const bodyText = (await res.text()).trim();
       const [code, jobId] = bodyText.split(/\s+/);
       // 00 = OK, 01/02 = OK for some account types; anything else is an error code.
@@ -57,7 +61,9 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
       }
       return { externalMessageId: null, status: 'FAILED', error: `NetGSM ${bodyText}` };
     } catch (e: any) {
-      return { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };
+      // Defensive scrub: never echo the password if it surfaced in an error.
+      const scrubbed = (e?.message ?? String(e)).replace(/password=[^&\s]+/gi, 'password=***');
+      return { externalMessageId: null, status: 'FAILED', error: scrubbed };
     }
   }
 

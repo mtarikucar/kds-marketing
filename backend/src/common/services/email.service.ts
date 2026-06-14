@@ -6,6 +6,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import * as Handlebars from "handlebars";
 import { maskEmail } from "../helpers/pii-mask.helper";
+import { withTimeout } from "../util/with-timeout";
 
 // Register Handlebars helpers
 Handlebars.registerHelper("currentYear", () => new Date().getFullYear());
@@ -62,6 +63,11 @@ export class EmailService {
         user,
         pass,
       },
+      // Bound every phase of the SMTP exchange so a stalled server can't hang
+      // the awaiting caller (auth bursts + cron mailings sit on this path).
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
 
     // Verify connection
@@ -108,13 +114,17 @@ export class EmailService {
         this.configService.get<string>("EMAIL_FROM") ||
         this.configService.get<string>("EMAIL_USER");
 
-      // Send email
-      const info = await this.transporter.sendMail({
-        from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
-        to,
-        subject,
-        html,
-      });
+      // Send email (app-level timeout backstops nodemailer's socket timeouts).
+      const info = await withTimeout(
+        this.transporter.sendMail({
+          from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
+          to,
+          subject,
+          html,
+        }),
+        25_000,
+        `sendMail to ${maskEmail(to)}`,
+      );
 
       // PII: mask recipient in the structured log stream — message id is
       // the actual debugging hook, not the full address (see iter-30
@@ -126,7 +136,7 @@ export class EmailService {
     } catch (error) {
       this.logger.error(
         `Failed to send email to ${maskEmail(options.to)}`,
-        error as any,
+        error instanceof Error ? error.stack : String(error),
       );
       return false;
     }
@@ -155,15 +165,22 @@ export class EmailService {
       const from =
         this.configService.get<string>("EMAIL_FROM") ||
         this.configService.get<string>("EMAIL_USER");
-      await this.transporter.sendMail({
-        from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
-        to,
-        subject,
-        text: body,
-      });
+      await withTimeout(
+        this.transporter.sendMail({
+          from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
+          to,
+          subject,
+          text: body,
+        }),
+        25_000,
+        `sendMail to ${maskEmail(to)}`,
+      );
       return true;
     } catch (error) {
-      this.logger.error(`Failed to send plain email to ${to}:`, error);
+      this.logger.error(
+        `Failed to send plain email to ${maskEmail(to)}`,
+        error instanceof Error ? error.stack : String(error),
+      );
       return false;
     }
   }

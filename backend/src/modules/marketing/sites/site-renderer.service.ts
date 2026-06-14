@@ -45,7 +45,7 @@ export class SiteRendererService {
     const header =
       branding && (branding.logoUrl || branding.brandName)
         ? `<header style="padding:14px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px">` +
-          (branding.logoUrl ? `<img src="${esc(branding.logoUrl)}" alt="${esc(branding.brandName || '')}" style="height:32px">` : '') +
+          (branding.logoUrl ? `<img src="${safeUrl(branding.logoUrl)}" alt="${esc(branding.brandName || '')}" style="height:32px">` : '') +
           (branding.brandName ? `<strong>${esc(branding.brandName)}</strong>` : '') +
           `</header>`
         : '';

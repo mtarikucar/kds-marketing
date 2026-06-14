@@ -255,15 +255,23 @@ export class SettlementCommissionConsumer
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
       } catch (err: any) {
-        // Postgres 40001 (serialization_failure) → another delivery won the
-        // race; the SIGNUP row already exists. Treat as a dedup hit.
+        // Concurrent-delivery dedup. Two race outcomes both mean "another
+        // delivery already credited this SIGNUP":
+        //   - Serialization conflict: Postgres 40001 / Prisma P2034 (the
+        //     Serializable tx couldn't serialize against a concurrent writer).
+        //   - Unique violation: Prisma P2002. SIGNUP rows DO set sourcePaymentId
+        //     (= p.paymentId), so they're covered by the (sourcePaymentId, type)
+        //     partial-unique index — when both deliveries clear the pre-check
+        //     and race the insert, the loser surfaces as P2002 rather than 40001.
+        // Either way it's a quiet dedup hit: log at info and return.
         if (
           err?.code === "P2034" ||
+          err?.code === "P2002" ||
           err?.code === "40001" ||
           (err?.message ?? "").includes("could not serialize")
         ) {
           this.logger.log(
-            `SIGNUP commission insert raced (serialization conflict) for tenant=${p.tenantId}; treating as already credited`,
+            `SIGNUP commission insert raced (dedup conflict) for tenant=${p.tenantId}; treating as already credited`,
           );
           return;
         }

@@ -67,6 +67,13 @@ export class ConversationIngressService {
   async ingest(channel: IngressChannel, inbound: InboundMessage): Promise<IngressResult | null> {
     const workspaceId = channel.workspaceId;
 
+    // Cap oversize inbound text once, for ALL channels, BEFORE dedup/persist/emit
+    // so a hostile provider can't blow up storage or downstream prompts.
+    const MAX_INBOUND_CHARS = 8000;
+    if (inbound.text && inbound.text.length > MAX_INBOUND_CHARS) {
+      inbound = { ...inbound, text: inbound.text.slice(0, MAX_INBOUND_CHARS) };
+    }
+
     // Fast-path dedup: a redelivered message resolves to the existing row.
     if (inbound.externalMessageId) {
       const existing = await this.prisma.message.findUnique({

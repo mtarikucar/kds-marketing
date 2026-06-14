@@ -17,6 +17,8 @@ describe('ConversationAiEngineService.reply', () => {
     agent?: any;
     enabled?: boolean;
     complete?: any;
+    history?: any;
+    claimed?: number;
   } = {}) {
     const convo = {
       id: CONVO,
@@ -51,8 +53,13 @@ describe('ConversationAiEngineService.reply', () => {
       },
       channel: { findFirst: jest.fn().mockResolvedValue(channel) },
       agentProfile: { findFirst: jest.fn().mockResolvedValue(agent) },
-      message: { findMany: jest.fn().mockResolvedValue([{ direction: 'INBOUND', body: 'Merhaba' }]) },
+      message: {
+        findMany: jest.fn().mockResolvedValue(overrides.history ?? [{ direction: 'INBOUND', body: 'Merhaba' }]),
+      },
       lead: { findFirst: jest.fn().mockResolvedValue({ businessName: 'Acme', contactPerson: 'Ayşe' }) },
+      // Atomic daily-reply-cap claim: returns rows-affected (1 = slot claimed,
+      // 0 = at cap / lost race). Default 1; the cap-hit test overrides to 0.
+      $executeRaw: jest.fn().mockResolvedValue(overrides.claimed ?? 1),
     };
     const anthropic = {
       isEnabled: jest.fn().mockReturnValue(overrides.enabled ?? true),
@@ -75,16 +82,17 @@ describe('ConversationAiEngineService.reply', () => {
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
 
-  it('happy path: sends one AI reply, meters a credit, bumps the daily counter', async () => {
+  it('happy path: claims a daily slot atomically, sends one AI reply, meters a credit', async () => {
     const h = build();
     await run(h);
     expect(h.credits.reserve).toHaveBeenCalledTimes(1);
+    // The daily-reply cap is now an atomic conditional UPDATE (one claim).
+    expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(1);
     expect(h.sender.send).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: WS, conversationId: CONVO, authorType: 'AI' }),
     );
-    expect(h.prisma.conversation.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ aiRepliesToday: 1, aiRepliesDayKey: today }) }),
-    );
+    // No post-send read-modify-write counter bump remains.
+    expect(h.prisma.conversation.update).not.toHaveBeenCalled();
     expect(h.credits.refund).not.toHaveBeenCalled();
   });
 
@@ -101,10 +109,13 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.sender.send).not.toHaveBeenCalled();
   });
 
-  it('gate: per-conversation daily reply cap reached → no reply', async () => {
-    const h = build({ convo: { aiRepliesToday: 30, aiRepliesDayKey: today }, agent: { maxRepliesPerConvoDaily: 30 } });
+  it('gate: per-conversation daily reply cap reached → atomic claim returns 0, no reply, no credit', async () => {
+    const h = build({ claimed: 0, agent: { maxRepliesPerConvoDaily: 30 } });
     await run(h);
+    expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(1);
     expect(h.sender.send).not.toHaveBeenCalled();
+    // The claim was rejected before reserving a credit.
+    expect(h.credits.reserve).not.toHaveBeenCalled();
   });
 
   it('gate: AI disabled (no key) → no reply, no credit', async () => {
@@ -129,5 +140,29 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.prisma.conversation.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ aiPaused: true }) }),
     );
+  });
+
+  it('handoff keyword in an EARLIER unanswered inbound (not just the latest) escalates before claiming a slot', async () => {
+    // Burst since the last OUTBOUND: the keyword is in the first inbound, the
+    // latest inbound is innocuous — the whole burst must still be scanned.
+    const h = build({
+      agent: { handoffRules: { keywords: ['human'] } },
+      // findMany is ordered createdAt DESC (newest first); the service reverses
+      // it to chronological. So provide newest-first here: the innocuous reply
+      // is most recent, the handoff word is the earlier unanswered inbound.
+      history: [
+        { direction: 'INBOUND', body: 'thanks' },
+        { direction: 'INBOUND', body: 'I want a human please' },
+        { direction: 'OUTBOUND', body: 'How can I help?' },
+      ],
+    });
+    await run(h);
+    expect(h.prisma.conversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ aiPaused: true }) }),
+    );
+    expect(h.sender.send).not.toHaveBeenCalled();
+    // Escalation happens BEFORE the slot claim / credit reserve.
+    expect(h.prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(h.credits.reserve).not.toHaveBeenCalled();
   });
 });

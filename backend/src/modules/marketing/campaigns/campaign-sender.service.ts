@@ -117,13 +117,21 @@ export class CampaignSenderService implements OnModuleInit {
       const channelType = channel === 'SMS' ? 'SMS' : 'WHATSAPP';
       const ch = await this.prisma.channel.findFirst({ where: { workspaceId, type: channelType, status: 'ACTIVE' } });
       if (!ch) return { ok: false, error: `no active ${channelType} channel` };
+      // Reserve→send must be paired: if the adapter THROWS (network/provider
+      // error), the reserved quota would otherwise leak. Refund on throw too,
+      // mirroring the explicit result.status==='FAILED' refund below.
       await this.quota.reserve(workspaceId, channelType);
-      const result = await this.registry.get(channelType).send({ config: this.registry.resolveConfig(ch), to, text: body });
-      if (result.status === 'FAILED') {
+      try {
+        const result = await this.registry.get(channelType).send({ config: this.registry.resolveConfig(ch), to, text: body });
+        if (result.status === 'FAILED') {
+          await this.quota.refund(workspaceId, channelType);
+          return { ok: false, error: result.error };
+        }
+        return { ok: true, messageId: result.externalMessageId };
+      } catch (e: any) {
         await this.quota.refund(workspaceId, channelType);
-        return { ok: false, error: result.error };
+        return { ok: false, error: e?.message ?? String(e) };
       }
-      return { ok: true, messageId: result.externalMessageId };
     } catch (e: any) {
       return { ok: false, error: e?.message ?? String(e) };
     }

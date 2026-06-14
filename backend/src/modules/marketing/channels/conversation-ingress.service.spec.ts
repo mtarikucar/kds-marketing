@@ -86,6 +86,20 @@ describe('ConversationIngressService', () => {
     expect(prisma.lead.create).not.toHaveBeenCalled();
   });
 
+  it('caps oversize inbound text to 8000 chars before persist + emit', async () => {
+    const huge: InboundMessage = { ...inbound, externalMessageId: 'wamid.BIG', text: 'a'.repeat(8000 + 500) };
+
+    await svc.ingest(channel, huge);
+
+    // Persisted body is capped.
+    expect(prisma.message.create.mock.calls[0][0].data.body).toHaveLength(8000);
+    // Emitted ConversationMessageReceived text is capped too.
+    const received = outbox.append.mock.calls.find((c) => c[0].type === 'marketing.conversation.message.received.v1');
+    expect(received[0].payload.text).toHaveLength(8000);
+    // SSE fan-out body is capped.
+    expect(stream.push.mock.calls[0][1].payload.body).toHaveLength(8000);
+  });
+
   it('known identity reuses the lead + its open conversation (no new lead)', async () => {
     prisma.contactIdentity.findUnique.mockResolvedValue({ id: 'ci-2', leadId: 'lead-2' });
     prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-2' });

@@ -128,7 +128,7 @@ describe('paytr crypto primitives', () => {
 describe('PaytrProvider', () => {
   const fetchMock = jest.fn();
   let env: Record<string, string | undefined>;
-  let prisma: { paymentOrder: { update: jest.Mock } };
+  let prisma: { paymentOrder: { update: jest.Mock; updateMany: jest.Mock } };
   let provider: PaytrProvider;
 
   beforeEach(() => {
@@ -143,7 +143,12 @@ describe('PaytrProvider', () => {
     const config = {
       get: jest.fn((key: string) => env[key]),
     } as unknown as ConfigService;
-    prisma = { paymentOrder: { update: jest.fn().mockResolvedValue({}) } };
+    prisma = {
+      paymentOrder: {
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
     provider = new PaytrProvider(config, prisma as never);
   });
 
@@ -189,13 +194,15 @@ describe('PaytrProvider', () => {
         returnUrl: 'https://app.example.com/billing',
       });
 
-      expect(prisma.paymentOrder.update).toHaveBeenCalledWith({
-        where: { id: ORDER_ID },
+      // Guarded write: only repoints a still-PENDING order's providerRef, so a
+      // re-checkout can't overwrite a ref the winning checkout already wrote.
+      expect(prisma.paymentOrder.updateMany).toHaveBeenCalledWith({
+        where: { id: ORDER_ID, status: 'PENDING' },
         data: { providerRef: MERCHANT_OID },
       });
       // The write must land before the HTTP call: if the process dies
       // mid-call the webhook can still resolve the order by providerRef.
-      expect(prisma.paymentOrder.update.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(prisma.paymentOrder.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         fetchMock.mock.invocationCallOrder[0],
       );
       expect(MERCHANT_OID).toMatch(/^[A-Za-z0-9]+$/);
@@ -289,7 +296,7 @@ describe('PaytrProvider', () => {
           returnUrl: 'https://app.example.com/billing',
         }),
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
-      expect(prisma.paymentOrder.update).not.toHaveBeenCalled();
+      expect(prisma.paymentOrder.updateMany).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     });
 

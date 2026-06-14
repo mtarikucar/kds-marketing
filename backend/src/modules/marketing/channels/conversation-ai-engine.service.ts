@@ -144,13 +144,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     });
     if (!agent || agent.status !== 'ACTIVE') return;
 
-    // Per-conversation daily reply cap (resets at UTC midnight).
     const today = new Date().toISOString().slice(0, 10);
-    const repliesToday = convo.aiRepliesDayKey === today ? convo.aiRepliesToday : 0;
-    if (repliesToday >= agent.maxRepliesPerConvoDaily) {
-      this.logger.debug(`convo=${conversationId} hit daily AI reply cap`);
-      return;
-    }
 
     const history = await this.prisma.message.findMany({
       where: { workspaceId, conversationId },
@@ -161,14 +155,42 @@ export class ConversationAiEngineService implements OnModuleInit {
     const lastCustomer = [...history].reverse().find((m) => m.direction === 'INBOUND');
     const customerText = lastCustomer?.body ?? '';
 
-    // Handoff keyword gate (before spending a credit).
+    // The unanswered inbound burst = every INBOUND message since the last
+    // OUTBOUND. A handoff word in ANY of these (not just the latest) escalates.
+    const lastOutboundIdx = (() => {
+      for (let i = history.length - 1; i >= 0; i--) if (history[i].direction === 'OUTBOUND') return i;
+      return -1;
+    })();
+    const burstText = history
+      .slice(lastOutboundIdx + 1)
+      .filter((m) => m.direction === 'INBOUND')
+      .map((m) => m.body ?? '')
+      .join('\n');
+
+    // Handoff keyword gate — BEFORE the slot claim so an escalation doesn't
+    // consume a daily-reply slot or a credit.
     const handoff = (agent.handoffRules ?? {}) as { keywords?: string[] };
     if (Array.isArray(handoff.keywords) && handoff.keywords.length) {
-      const hay = customerText.toLowerCase();
+      const hay = burstText.toLowerCase();
       if (handoff.keywords.some((k) => k && hay.includes(String(k).toLowerCase()))) {
         await this.escalate(workspaceId, conversationId, 'matched a handoff keyword');
         return;
       }
+    }
+
+    // Per-conversation daily reply cap (resets at UTC midnight). Claim a slot
+    // atomically: a single conditional UPDATE resets on a day rollover,
+    // increments within the day, and rejects (0 rows) at the cap or on a lost
+    // race. Physical table is `conversations` (@@map); columns keep their names.
+    const claimed = await this.prisma.$executeRaw`
+      UPDATE "conversations"
+         SET "aiRepliesToday" = CASE WHEN "aiRepliesDayKey" = ${today} THEN "aiRepliesToday" + 1 ELSE 1 END,
+             "aiRepliesDayKey" = ${today}
+       WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
+         AND ("aiRepliesDayKey" <> ${today} OR "aiRepliesDayKey" IS NULL OR "aiRepliesToday" < ${agent.maxRepliesPerConvoDaily})`;
+    if (claimed === 0) {
+      this.logger.debug(`convo=${conversationId} hit daily AI reply cap (or lost race)`);
+      return;
     }
 
     const lead = await this.prisma.lead.findFirst({
@@ -199,14 +221,18 @@ export class ConversationAiEngineService implements OnModuleInit {
       } else if (outcome.text.trim()) {
         await this.sender.send({ workspaceId, conversationId, text: outcome.text.trim(), authorType: 'AI' });
         sent = true;
-        await this.prisma.conversation.update({
-          where: { id: conversationId },
-          data: { aiRepliesToday: repliesToday + 1, aiRepliesDayKey: today },
-        });
         await this.scheduleFollowup(workspaceId, conversationId, agent);
       }
     } finally {
-      if (!sent) await this.credits.refund(workspaceId, cost);
+      if (!sent) {
+        // No reply went out — release the slot we claimed and refund the credit.
+        await this.prisma.$executeRaw`
+          UPDATE "conversations"
+             SET "aiRepliesToday" = GREATEST("aiRepliesToday" - 1, 0)
+           WHERE "id" = ${conversationId} AND "workspaceId" = ${workspaceId}
+             AND "aiRepliesDayKey" = ${today}`;
+        await this.credits.refund(workspaceId, cost);
+      }
       this.stream.push(workspaceId, { kind: 'ai_typing', conversationId, payload: { typing: false } });
     }
   }
@@ -268,12 +294,28 @@ export class ConversationAiEngineService implements OnModuleInit {
       select: { leadId: true },
     });
     if (!convo) return;
+    // Load the current lead so we only fill EMPTY contact fields — the model
+    // can't overwrite a value the customer already gave (or a human corrected).
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: convo.leadId, workspaceId },
+      select: { contactPerson: true, email: true, phone: true, city: true, notes: true },
+    });
+    if (!lead) return;
+
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneRe = /^\+?[0-9 ()-]{6,20}$/;
+    const empty = (v: string | null | undefined) => !v || !v.trim();
+
     const data: any = {};
-    if (fields.name) data.contactPerson = fields.name.slice(0, 200);
-    if (fields.email) data.email = fields.email.slice(0, 200);
-    if (fields.phone) data.phone = fields.phone.slice(0, 50);
-    if (fields.city) data.city = fields.city.slice(0, 120);
-    if (fields.notes) data.notes = fields.notes.slice(0, 2000);
+    if (fields.name && empty(lead.contactPerson)) data.contactPerson = fields.name.slice(0, 200);
+    if (fields.email && empty(lead.email) && emailRe.test(fields.email.trim())) data.email = fields.email.trim().slice(0, 200);
+    if (fields.phone && empty(lead.phone) && phoneRe.test(fields.phone.trim())) data.phone = fields.phone.trim().slice(0, 50);
+    if (fields.city && empty(lead.city)) data.city = fields.city.slice(0, 120);
+    if (fields.notes) {
+      // Notes may append (don't clobber prior context).
+      const appended = empty(lead.notes) ? fields.notes : `${lead.notes}\n${fields.notes}`;
+      data.notes = appended.slice(0, 2000);
+    }
     if (Object.keys(data).length === 0) return;
     await this.prisma.lead.updateMany({ where: { id: convo.leadId, workspaceId }, data });
   }

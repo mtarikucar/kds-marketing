@@ -7,7 +7,8 @@ import { PlatformGuard, PlatformOperatorPayload } from '../guards/platform.guard
 import { CurrentOperator } from '../decorators/current-operator.decorator';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
-const LOGIN_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
+// blockDuration extends the lockout past the ttl window once the limit trips.
+const LOGIN_THROTTLE = { default: { limit: 5, ttl: 60_000, blockDuration: 5 * 60_000 } };
 
 @Controller('platform/auth')
 export class PlatformAuthController {

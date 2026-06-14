@@ -21,6 +21,16 @@ export class FormsService {
   ) {}
 
   async submit(formId: string, data: Record<string, string>): Promise<{ redirectUrl: string | null }> {
+    // Defensive backstop (independent of the controller): cap the untrusted
+    // dynamic-field map to ≤50 fields, key ≤100 chars, value ≤2000 chars.
+    const capped: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data ?? {})) {
+      if (Object.keys(capped).length >= 50) break;
+      if (typeof k !== 'string' || k.length > 100) continue;
+      capped[k] = String(v).slice(0, 2000);
+    }
+    data = capped;
+
     const form = await this.prisma.formDef.findUnique({ where: { id: formId } });
     if (!form) throw new NotFoundException('Form not found');
     const workspaceId = form.workspaceId;

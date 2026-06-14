@@ -38,7 +38,11 @@ const callbackHash = (oid: string, status: string, total: string): string =>
 describe('BillingWebhooksController', () => {
   let env: Record<string, string | undefined>;
   let prisma: {
-    paymentOrder: { findUnique: jest.Mock; update: jest.Mock };
+    paymentOrder: {
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+    };
   };
   let settlement: {
     settleSuccess: jest.Mock;
@@ -64,6 +68,7 @@ describe('BillingWebhooksController', () => {
       paymentOrder: {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
     settlement = {
@@ -92,6 +97,9 @@ describe('BillingWebhooksController', () => {
       prisma.paymentOrder.findUnique.mockResolvedValue({
         id: ORDER_ID,
         status: 'PENDING',
+        // amountToKurus('199.00') === '19900' — matches successBody()'s
+        // total_amount so the happy-path callbacks still pass the amount guard.
+        amount: '199.00',
       });
     });
 
@@ -106,6 +114,44 @@ describe('BillingWebhooksController', () => {
         raw: body,
       });
       expect(settlement.settleFailure).not.toHaveBeenCalled();
+    });
+
+    it('settles when the verified total_amount matches the order amount', async () => {
+      // order.amount '199.00' → 19900 kuruş == total_amount '19900'.
+      const body = successBody();
+      await expect(controller.paytr(body)).resolves.toBe('OK');
+      expect(settlement.settleSuccess).toHaveBeenCalledWith(ORDER_ID, {
+        raw: body,
+      });
+      expect(prisma.paymentOrder.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does NOT settle on an amount mismatch — flags for review, still answers OK', async () => {
+      // Hash is valid over the (tampered) 18000, so verification passes but the
+      // paid amount (180.00) is below the order's 199.00 → must not settle.
+      const body = {
+        merchant_oid: MERCHANT_OID,
+        status: 'success',
+        total_amount: '18000',
+        hash: callbackHash(MERCHANT_OID, 'success', '18000'),
+      };
+      await expect(controller.paytr(body)).resolves.toBe('OK');
+
+      expect(settlement.settleSuccess).not.toHaveBeenCalled();
+      expect(prisma.paymentOrder.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: ORDER_ID,
+          status: { in: ['PENDING', 'AWAITING_TRANSFER'] },
+        },
+        data: expect.objectContaining({
+          raw: expect.objectContaining({
+            needsReview: true,
+            reason: 'paytr_amount_mismatch',
+            paidKurus: '18000',
+            expectedKurus: '19900',
+          }),
+        }),
+      });
     });
 
     it('settles failure with the PayTR reason on status!=success', async () => {

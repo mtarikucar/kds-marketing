@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Put, Body, Param, UseGuards } from '@nestjs/common';
-import { IsArray, IsObject, IsOptional, IsString, IsIn, IsInt, MaxLength } from 'class-validator';
+import { IsObject, IsOptional, IsIn } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
@@ -8,20 +8,8 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { CreateInvoiceDto, UpdateInvoiceDto } from '../dto/invoice.dto';
 
-class CreateInvoiceDto {
-  @IsOptional() @IsString() @MaxLength(64) leadId?: string;
-  @IsArray() items: { description: string; qty: number; unitPrice: number }[];
-  @IsOptional() @IsString() @MaxLength(8) currency?: string;
-  @IsOptional() @IsString() @MaxLength(1000) notes?: string;
-  @IsOptional() @IsString() dueDate?: string;
-}
-class UpdateInvoiceDto {
-  @IsOptional() @IsArray() items?: unknown[];
-  @IsOptional() @IsString() @MaxLength(8) currency?: string;
-  @IsOptional() @IsString() @MaxLength(1000) notes?: string;
-  @IsOptional() @IsString() dueDate?: string;
-}
 class PspConfigDto {
   @IsIn(['STRIPE', 'MANUAL']) provider: string;
   @IsOptional() @IsObject() secrets?: Record<string, string>;

@@ -40,7 +40,11 @@ describe('OutboxWorkerService.drainOnce', () => {
   });
 
   it('dispatches a claimed row onto the bus and flips it to dispatched', async () => {
-    (prisma.$queryRaw as jest.Mock).mockResolvedValue([row()]);
+    // drainOnce now runs reclaimStale() first (one $queryRaw) then the claim
+    // ($queryRaw again) — the reclaim finds nothing here.
+    (prisma.$queryRaw as jest.Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([row()]);
 
     const count = await drain();
 
@@ -48,21 +52,26 @@ describe('OutboxWorkerService.drainOnce', () => {
     expect(bus.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'evt-1', type: 'lead.converted.v1' }),
     );
-    expect(prisma.outboxEvent.update).toHaveBeenCalledWith(
+    // Terminal flip is now a guarded updateMany (status='dispatching') so a
+    // reclaim that beat us can't be clobbered.
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'evt-1' },
+        where: { id: 'evt-1', status: 'dispatching' },
         data: expect.objectContaining({ status: 'dispatched', lastError: null }),
       }),
     );
   });
 
   it('requeues with backoff (not DLQ) when dispatch fails below the attempt cap', async () => {
-    (prisma.$queryRaw as jest.Mock).mockResolvedValue([row({ attempts: 2 })]);
+    (prisma.$queryRaw as jest.Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([row({ attempts: 2 })]);
     bus.dispatch.mockRejectedValue(new Error('consumer exploded'));
 
     await drain();
 
-    const call = (prisma.outboxEvent.update as jest.Mock).mock.calls[0][0];
+    const call = (prisma.outboxEvent.updateMany as jest.Mock).mock.calls[0][0];
+    expect(call.where).toEqual({ id: 'evt-1', status: 'dispatching' });
     expect(call.data.status).toBe('queued');
     expect(call.data.lastError).toContain('consumer exploded');
     expect(call.data.nextAttemptAt).toBeInstanceOf(Date);
@@ -72,29 +81,66 @@ describe('OutboxWorkerService.drainOnce', () => {
 
   it('lands a row in the DLQ (status=failed, no further retry) once attempts hit the cap', async () => {
     // MAX_ATTEMPTS = 8; a row claimed at attempts=8 that fails is terminal.
-    (prisma.$queryRaw as jest.Mock).mockResolvedValue([row({ attempts: 8 })]);
+    (prisma.$queryRaw as jest.Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([row({ attempts: 8 })]);
     bus.dispatch.mockRejectedValue(new Error('still broken'));
 
     await drain();
 
-    const call = (prisma.outboxEvent.update as jest.Mock).mock.calls[0][0];
+    const call = (prisma.outboxEvent.updateMany as jest.Mock).mock.calls[0][0];
     expect(call.data.status).toBe('failed');
     expect(call.data.nextAttemptAt).toBeNull();
   });
 
   it('truncates an over-long error message to keep the lastError column bounded', async () => {
-    (prisma.$queryRaw as jest.Mock).mockResolvedValue([row()]);
+    (prisma.$queryRaw as jest.Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([row()]);
     bus.dispatch.mockRejectedValue(new Error('x'.repeat(2000)));
 
     await drain();
 
-    const call = (prisma.outboxEvent.update as jest.Mock).mock.calls[0][0];
+    const call = (prisma.outboxEvent.updateMany as jest.Mock).mock.calls[0][0];
     expect(call.data.lastError.length).toBeLessThanOrEqual(500);
   });
 
   it('returns 0 and dispatches nothing when the claim finds no rows', async () => {
+    // Both $queryRaw calls (reclaim + claim) come back empty.
     (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
     expect(await drain()).toBe(0);
     expect(bus.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('OutboxWorkerService.reclaimStale', () => {
+  let prisma: DeepMockProxy<PrismaClient>;
+  let bus: { dispatch: jest.Mock };
+  let worker: OutboxWorkerService;
+
+  const reclaim = () =>
+    (worker as unknown as { reclaimStale(): Promise<number> }).reclaimStale();
+
+  beforeEach(() => {
+    prisma = mockDeep<PrismaClient>();
+    bus = { dispatch: jest.fn() };
+    worker = new OutboxWorkerService(
+      prisma as unknown as PrismaService,
+      bus as unknown as DomainEventBus,
+    );
+  });
+
+  it('requeues rows stuck in dispatching and returns the count', async () => {
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([
+      { id: 'stuck-1' },
+      { id: 'stuck-2' },
+    ]);
+    expect(await reclaim()).toBe(2);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 0 when nothing is stale', async () => {
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
+    expect(await reclaim()).toBe(0);
   });
 });

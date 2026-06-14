@@ -199,6 +199,7 @@ model Lead {
   @@index([nextFollowUp])
   @@index([priority])
   @@index([assignedToId, status])
+  @@index([workspaceId, assignedToId])
   @@index([status, createdAt])
   @@index([originTenantId])
   @@map("leads")
@@ -226,7 +227,7 @@ model LeadActivity {
 
   createdAt DateTime @default(now())
 
-  @@index([leadId])
+  @@index([leadId, createdAt])
   @@index([createdById])
   @@index([createdAt])
   @@index([type])
@@ -248,7 +249,9 @@ model MarketingTask {
   lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   assignedToId String
-  assignedTo   MarketingUser @relation(fields: [assignedToId], references: [id], onDelete: Cascade)
+  // Restrict (not Cascade): hard-deleting a rep must not silently delete their
+  // open work items — reassign first. (Reps are deactivated, not row-deleted.)
+  assignedTo   MarketingUser @relation(fields: [assignedToId], references: [id], onDelete: Restrict)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -319,7 +322,9 @@ model Commission {
   // Step-F decoupling: soft (no-FK) reference to the core-owned tenant.
   tenantId    String?
   leadId      String?
-  lead        Lead?   @relation("CommissionLead", fields: [leadId], references: [id], onDelete: SetNull)
+  // Restrict (not SetNull): a commission is a money record — its link to the
+  // deal that earned it must not be silently severed by a lead deletion.
+  lead        Lead?   @relation("CommissionLead", fields: [leadId], references: [id], onDelete: Restrict)
   notes       String? @db.Text
 
   marketingUserId String
@@ -372,7 +377,7 @@ model MarketingNotification {
 
   createdAt DateTime @default(now())
 
-  @@index([workspaceId])
+  @@index([workspaceId, createdAt])
   @@index([userId, isRead])
   @@index([createdAt])
   @@map("marketing_notifications")
@@ -639,6 +644,7 @@ model WorkspaceSubscription {
   updatedAt DateTime @updatedAt
 
   @@index([status, currentPeriodEnd])
+  @@index([packageId])
   @@map("workspace_subscriptions")
 }
 
@@ -1246,12 +1252,18 @@ model OutboxEvent {
   // Earliest moment the worker should attempt redelivery after a failure.
   // Exponential backoff lives in OutboxWorkerService.
   nextAttemptAt  DateTime?
+  // Stamped when the worker claims a row (queued -> dispatching). A row whose
+  // claimedAt is older than the reclaim window was orphaned by a crash between
+  // the claim commit and the terminal flip; the reclaim sweep re-queues it.
+  claimedAt      DateTime?
   createdAt      DateTime  @default(now())
 
   // Worker scans `status='queued' AND nextAttemptAt <= now()` in id order.
   @@index([status, nextAttemptAt])
   @@index([type, createdAt])
   @@index([tenantId, createdAt])
+  // Reclaim sweep scans `status='dispatching' AND claimedAt < cutoff`.
+  @@index([status, claimedAt])
   @@map("outbox_events")
 }
 

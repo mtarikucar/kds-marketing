@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateOfferDto } from '../dto/create-offer.dto';
 import { UpdateOfferDto } from '../dto/update-offer.dto';
@@ -144,8 +145,20 @@ export class MarketingOffersService {
       throw new ForbiddenException('You can only update your own offers');
     }
 
-    const data: any = { ...dto };
-    if (dto.validUntil) data.validUntil = new Date(dto.validUntil);
+    // Explicit allow-list (no `{ ...dto }` mass-assignment). `status` is
+    // DELIBERATELY excluded: state transitions are owned by markSent()/
+    // convert(), so a client-supplied status here must never leak into the
+    // write and skip those guarded flows.
+    const data: Prisma.LeadOfferUpdateInput = {
+      ...(dto.planId !== undefined && { planId: dto.planId }),
+      ...(dto.customPrice !== undefined && { customPrice: dto.customPrice }),
+      ...(dto.discount !== undefined && { discount: dto.discount }),
+      ...(dto.trialDays !== undefined && { trialDays: dto.trialDays }),
+      ...(dto.notes !== undefined && { notes: dto.notes }),
+      ...(dto.validUntil !== undefined && {
+        validUntil: dto.validUntil ? new Date(dto.validUntil) : null,
+      }),
+    };
 
     return this.prisma.leadOffer.update({
       where: { id },

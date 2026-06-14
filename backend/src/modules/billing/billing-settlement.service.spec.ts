@@ -30,6 +30,7 @@ describe('BillingSettlementService — idempotent settlement', () => {
     prisma = {
       paymentOrder: {
         findUnique: jest.fn().mockResolvedValue({ ...ORDER }),
+        findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       workspaceSubscription: {
@@ -116,6 +117,37 @@ describe('BillingSettlementService — idempotent settlement', () => {
         currentPeriodEnd: periodEnd,
       }),
     });
+  });
+
+  it('reconcileUngrantedOrders re-grants a SUCCEEDED subscription order whose workspace lacks a subscription', async () => {
+    prisma.paymentOrder.findMany.mockResolvedValue([
+      { ...ORDER, status: 'SUCCEEDED' },
+    ]);
+    // No subscription on the workspace → this order is genuinely ungranted.
+    prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+
+    const regranted = await svc.reconcileUngrantedOrders();
+
+    expect(regranted).toBe(1);
+    // Only subscription-family orders are swept (ADDON excluded — not idempotent).
+    expect(prisma.paymentOrder.findMany.mock.calls[0][0].where).toMatchObject({
+      status: 'SUCCEEDED',
+      type: { in: ['SUBSCRIPTION', 'UPGRADE', 'RENEWAL'] },
+    });
+    expect(prisma.workspaceSubscription.upsert).toHaveBeenCalledTimes(1);
+    expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('reconcileUngrantedOrders skips orders whose workspace already has a subscription', async () => {
+    prisma.paymentOrder.findMany.mockResolvedValue([
+      { ...ORDER, status: 'SUCCEEDED' },
+    ]);
+    prisma.workspaceSubscription.findUnique.mockResolvedValue({ id: 'sub-1' });
+
+    const regranted = await svc.reconcileUngrantedOrders();
+
+    expect(regranted).toBe(0);
+    expect(prisma.workspaceSubscription.upsert).not.toHaveBeenCalled();
   });
 
   it('settleFailure flips only PENDING/AWAITING_TRANSFER rows', async () => {

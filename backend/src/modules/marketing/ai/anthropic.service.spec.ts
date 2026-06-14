@@ -1,11 +1,12 @@
 const mockCreate = jest.fn();
 const mockStream = jest.fn();
+const mockCtor = jest.fn().mockImplementation(() => ({
+  messages: { create: mockCreate, stream: mockStream },
+}));
 
 jest.mock('@anthropic-ai/sdk', () => ({
   __esModule: true,
-  default: jest.fn().mockImplementation(() => ({
-    messages: { create: mockCreate, stream: mockStream },
-  })),
+  default: mockCtor,
 }));
 
 import { AnthropicService } from './anthropic.service';
@@ -25,6 +26,28 @@ describe('AnthropicService', () => {
   beforeEach(() => {
     mockCreate.mockReset();
     mockStream.mockReset();
+    mockCtor.mockClear();
+  });
+
+  describe('client construction', () => {
+    it('bounds the request budget under the 15-min job STUCK_AFTER_MS', async () => {
+      mockCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+
+      const svc = make({ ANTHROPIC_API_KEY: 'sk-x' });
+      // Client is lazily constructed on first call.
+      await svc.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] });
+
+      const opts = mockCtor.mock.calls[0][0];
+      expect(opts.apiKey).toBe('sk-x');
+      expect(opts.timeout).toBeLessThanOrEqual(120_000);
+      expect(opts.maxRetries).toBeLessThanOrEqual(2);
+      // Worst-case wall clock = timeout * (1 + maxRetries) must stay < 15 min.
+      expect(opts.timeout * (1 + opts.maxRetries)).toBeLessThan(15 * 60 * 1000);
+    });
   });
 
   describe('isEnabled', () => {

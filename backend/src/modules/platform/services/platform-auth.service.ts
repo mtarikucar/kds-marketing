@@ -42,15 +42,24 @@ export class PlatformAuthService {
 
     const ok = await bcrypt.compare(dto.password, operator.password);
     if (!ok) {
-      const nextCount = operator.failedLogins + 1;
-      const locking = nextCount >= MAX_FAILED_LOGINS;
-      await this.prisma.platformOperator.update({
+      // Atomic increment: two concurrent bad-password attempts must each count.
+      // The prior read-modify-write computed nextCount from a stale in-memory
+      // value, so parallel guesses could collide and undercount toward the
+      // lock. `increment` pushes the +1 into the UPDATE so the DB serialises
+      // them. failedLogins is reset to 0 only on a SUCCESSFUL login (below) —
+      // never here — so the counter survives across attempts until the lock
+      // trips or a correct password clears it.
+      const { failedLogins } = await this.prisma.platformOperator.update({
         where: { id: operator.id },
-        data: {
-          failedLogins: locking ? 0 : nextCount,
-          lockedUntil: locking ? new Date(Date.now() + LOCK_DURATION_MS) : null,
-        },
+        data: { failedLogins: { increment: 1 } },
+        select: { failedLogins: true },
       });
+      if (failedLogins >= MAX_FAILED_LOGINS) {
+        await this.prisma.platformOperator.update({
+          where: { id: operator.id },
+          data: { lockedUntil: new Date(Date.now() + LOCK_DURATION_MS) },
+        });
+      }
       throw new UnauthorizedException('Invalid credentials');
     }
 

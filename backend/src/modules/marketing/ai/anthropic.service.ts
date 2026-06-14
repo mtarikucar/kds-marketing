@@ -54,7 +54,10 @@ export class AnthropicService {
     if (!this.client) {
       const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
       if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
-      this.client = new Anthropic({ apiKey });
+      // Bound the per-request + retry budget so a slow/hung call can't outlive
+      // the 15-min job STUCK_AFTER_MS watchdog: 120s timeout × (1 + 2 retries)
+      // = ~6.5min worst case, comfortably under the 900s stuck threshold.
+      this.client = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 2 });
     }
     return this.client;
   }

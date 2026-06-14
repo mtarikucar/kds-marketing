@@ -37,6 +37,13 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly PRUNE_INTERVAL_MS = 60 * 60_000; // every hour
   // Cap deletions per batch so a backlog doesn't lock the table.
   private readonly PRUNE_BATCH = 5_000;
+  // Reclaim window: a row stuck in 'dispatching' longer than this was almost
+  // certainly orphaned by a crash/restart between the claim flip and the
+  // terminal update (the in-process bus has no durable ack). The sweep flips
+  // it back to 'queued' so the next drain retries it. Configurable via env.
+  private readonly RECLAIM_AFTER_MS = Number(
+    process.env.OUTBOX_RECLAIM_AFTER_MS ?? String(5 * 60_000),
+  );
 
   private timer: NodeJS.Timeout | null = null;
   private pruneTimer: NodeJS.Timeout | null = null;
@@ -146,7 +153,43 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Recover orphaned claims: rows left in 'dispatching' past RECLAIM_AFTER_MS
+   * (the worker died between the claim flip and the terminal update) are
+   * flipped back to 'queued' with an immediate nextAttemptAt so the next claim
+   * picks them up. FOR UPDATE SKIP LOCKED keeps this safe under multiple
+   * replicas. attempts is intentionally NOT bumped here — the failed dispatch
+   * already incremented it (or never ran), and the per-attempt cap still
+   * eventually DLQs a row that keeps orphaning.
+   */
+  private async reclaimStale(): Promise<number> {
+    const cutoff = new Date(Date.now() - this.RECLAIM_AFTER_MS);
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE "outbox_events"
+         SET "status" = 'queued', "nextAttemptAt" = ${new Date()}
+       WHERE "id" IN (
+         SELECT "id" FROM "outbox_events"
+          WHERE "status" = 'dispatching'
+            AND "claimedAt" IS NOT NULL
+            AND "claimedAt" < ${cutoff}
+          ORDER BY "id"
+          FOR UPDATE SKIP LOCKED
+          LIMIT ${this.BATCH}
+       )
+       RETURNING "id";
+    `;
+    if (rows.length > 0) {
+      this.logger.warn(
+        `outbox reclaim: requeued ${rows.length} row(s) stuck in 'dispatching' older than ${this.RECLAIM_AFTER_MS}ms (orphaned by a crash/restart)`,
+      );
+    }
+    return rows.length;
+  }
+
   private async drainOnce(): Promise<number> {
+    // First, recover any claims orphaned by a prior crash so they re-enter the
+    // queue before we claim a fresh batch below.
+    await this.reclaimStale();
     // Claim a batch atomically. Using raw SQL because Prisma can't express
     // FOR UPDATE SKIP LOCKED on the same statement that returns the rows.
     // Postgres syntax: UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP
@@ -164,7 +207,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       }>
     >`
       UPDATE "outbox_events"
-         SET "status" = 'dispatching', "attempts" = "attempts" + 1
+         SET "status" = 'dispatching', "attempts" = "attempts" + 1, "claimedAt" = ${now}
        WHERE "id" IN (
          SELECT "id" FROM "outbox_events"
           WHERE "status" = 'queued'
@@ -186,8 +229,13 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
           idempotencyKey: r.idempotencyKey,
           createdAt: r.createdAt,
         });
-        await this.prisma.outboxEvent.update({
-          where: { id: r.id },
+        // Guard the terminal flip on status='dispatching': if the reclaim
+        // sweep already requeued this row (we ran long past RECLAIM_AFTER_MS),
+        // its status is back to 'queued' and we must NOT overwrite that with
+        // 'dispatched' — updateMany with the guard makes the late writer a
+        // no-op instead of resurrecting a row another worker now owns.
+        await this.prisma.outboxEvent.updateMany({
+          where: { id: r.id, status: "dispatching" },
           data: {
             status: "dispatched",
             dispatchedAt: new Date(),
@@ -199,8 +247,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         const final = r.attempts >= this.MAX_ATTEMPTS;
         // Backoff: 0.5s, 1s, 2s, 4s, ... capped at 5min.
         const backoffMs = Math.min(500 * 2 ** r.attempts, 5 * 60_000);
-        await this.prisma.outboxEvent.update({
-          where: { id: r.id },
+        // Same dispatching-guard as the success path: only the worker that
+        // still owns the claim writes the failure/requeue outcome. If the
+        // reclaim sweep beat us here the row is already 'queued' again.
+        await this.prisma.outboxEvent.updateMany({
+          where: { id: r.id, status: "dispatching" },
           data: {
             status: final ? "failed" : "queued",
             lastError: msg,

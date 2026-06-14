@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { timingSafeEqual } from 'crypto';
@@ -18,14 +19,23 @@ import type { Request } from 'express';
  * Defense-in-depth: the primary control is still a network restriction at the
  * edge (the public vhost should not proxy /api/metrics). This guard ensures the
  * endpoint isn't wide open even if the proxy is misconfigured. When the env is
- * UNSET the guard allows access — so local/dev and existing internal-only
- * scrapers keep working — but production should always set the token.
+ * UNSET the guard allows access in dev/internal contexts — but in PRODUCTION an
+ * unset token fails CLOSED (503), so a forgotten env can never silently expose
+ * the metrics surface to the world.
  */
 @Injectable()
 export class MetricsAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const expected = process.env.METRICS_SCRAPE_TOKEN;
-    if (!expected) return true; // open when unconfigured (dev / internal-only)
+    if (!expected) {
+      // Fail CLOSED in production: an unset token there is a misconfiguration,
+      // not a license to serve the metrics surface unauthenticated. Dev /
+      // internal-only stays open so local scrapers keep working.
+      if (process.env.NODE_ENV === 'production') {
+        throw new ServiceUnavailableException('metrics auth not configured');
+      }
+      return true;
+    }
 
     const req = context.switchToHttp().getRequest<Request>();
     const auth = req.headers['authorization'];

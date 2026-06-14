@@ -24,9 +24,13 @@ export async function withAdvisoryLock(
   logger?: Logger,
 ): Promise<void> {
   const lockId = djb2(jobName);
-  const acquired = await prisma.$queryRawUnsafe<{ locked: boolean }[]>(
-    `SELECT pg_try_advisory_lock(${lockId}) AS locked`,
-  );
+  // Parameterized (no Unsafe): lockId is always an integer, but binding it keeps
+  // the query off the raw-SQL surface and is defensive if the key derivation
+  // ever changes. Session-level + non-blocking is intentional — losers skip this
+  // tick rather than block, so do NOT swap this for pg_advisory_xact_lock.
+  const acquired = await prisma.$queryRaw<{ locked: boolean }[]>`
+    SELECT pg_try_advisory_lock(${lockId}) AS locked
+  `;
   if (!acquired[0]?.locked) {
     logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
     return;
@@ -36,7 +40,7 @@ export async function withAdvisoryLock(
   } finally {
     // Release explicitly — Postgres also releases at session end, but
     // long-lived connection pools mean "session end" is hours away.
-    await prisma.$queryRawUnsafe(`SELECT pg_advisory_unlock(${lockId})`);
+    await prisma.$queryRaw`SELECT pg_advisory_unlock(${lockId})`;
   }
 }
 

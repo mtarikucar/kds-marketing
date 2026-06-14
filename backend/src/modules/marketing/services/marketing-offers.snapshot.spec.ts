@@ -92,3 +92,45 @@ describe("MarketingOffersService.create — plan snapshot", () => {
     );
   });
 });
+
+/**
+ * update() uses an explicit field allow-list and DELIBERATELY drops `status`:
+ * offer state transitions are owned by markSent()/convert(), so a client must
+ * not be able to flip an offer's status through the generic PATCH and bypass
+ * those guarded flows.
+ */
+describe("MarketingOffersService.update — status is not mass-assigned", () => {
+  let prisma: MockPrismaClient;
+  let provisioning: { describePlan: jest.Mock };
+  let svc: MarketingOffersService;
+
+  beforeEach(() => {
+    prisma = mockPrismaClient();
+    provisioning = { describePlan: jest.fn() };
+    svc = new MarketingOffersService(prisma as any, provisioning as any);
+    // update() resolves the offer via a workspace-scoped findFirst.
+    prisma.leadOffer.findFirst.mockResolvedValue({
+      id: "offer-1",
+      workspaceId: "ws-1",
+      createdById: "rep-1",
+      status: "DRAFT",
+    } as any);
+    prisma.leadOffer.update.mockResolvedValue({ id: "offer-1" } as any);
+  });
+
+  it("ignores a client-supplied status (no `status` key reaches prisma.update)", async () => {
+    await svc.update(
+      "ws-1",
+      "offer-1",
+      { notes: "revised", status: "ACCEPTED" } as any,
+      "rep-1",
+      "REP",
+    );
+
+    expect(prisma.leadOffer.update).toHaveBeenCalledTimes(1);
+    const updateArgs = (prisma.leadOffer.update as any).mock.calls[0][0];
+    expect(updateArgs.data).not.toHaveProperty("status");
+    // Allowed fields still flow through.
+    expect(updateArgs.data).toMatchObject({ notes: "revised" });
+  });
+});

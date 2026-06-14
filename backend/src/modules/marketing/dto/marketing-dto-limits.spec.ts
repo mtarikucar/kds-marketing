@@ -11,6 +11,10 @@ import {
 } from './create-marketing-user.dto';
 import { UpdateProfileDto } from './update-profile.dto';
 import { IngestLeadCandidateDto } from './ingest-leads.dto';
+import { ChangePasswordDto } from './change-password.dto';
+import { UpdateMarketingUserDto } from './update-marketing-user.dto';
+import { CreateLeadDto, LeadSource } from './create-lead.dto';
+import { BookSlotDto } from './public-site.dto';
 
 /**
  * Iter-49 regression: marketing is the third auth realm in the
@@ -192,6 +196,122 @@ describe('Marketing DTO length caps (iter-49)', () => {
         ...base,
         phone: '+05551234567',
       });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('ChangePasswordDto', () => {
+    const base = { currentPassword: 'OldPass1', newPassword: 'NewPass1' };
+
+    it('accepts a normal change', async () => {
+      expect(await validateDto(ChangePasswordDto, base)).toEqual([]);
+    });
+
+    it('rejects newPassword > 128 (bcryptjs DoS cap)', async () => {
+      const msgs = await validateDto(ChangePasswordDto, {
+        ...base,
+        newPassword: 'Aa1' + 'b'.repeat(126),
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects a weak newPassword (no complexity)', async () => {
+      const msgs = await validateDto(ChangePasswordDto, {
+        ...base,
+        newPassword: 'weak',
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('UpdateMarketingUserDto', () => {
+    it('accepts an empty patch', async () => {
+      expect(await validateDto(UpdateMarketingUserDto, {})).toEqual([]);
+    });
+
+    it('accepts a blank password (means unchanged → undefined)', async () => {
+      expect(
+        await validateDto(UpdateMarketingUserDto, { password: '' }),
+      ).toEqual([]);
+    });
+
+    it('rejects a weak password', async () => {
+      const msgs = await validateDto(UpdateMarketingUserDto, {
+        password: 'weak',
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects password > 128', async () => {
+      const msgs = await validateDto(UpdateMarketingUserDto, {
+        password: 'Aa1' + 'b'.repeat(126),
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('CreateLeadDto', () => {
+    const base = {
+      businessName: 'Acme Coffee',
+      contactPerson: 'Alice',
+      businessType: 'CAFE',
+      source: LeadSource.WEBSITE,
+    };
+
+    it('accepts a typical lead', async () => {
+      expect(await validateDto(CreateLeadDto, base)).toEqual([]);
+    });
+
+    it('rejects businessName > 255', async () => {
+      const msgs = await validateDto(CreateLeadDto, {
+        ...base,
+        businessName: 'a'.repeat(256),
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects notes > 2000', async () => {
+      const msgs = await validateDto(CreateLeadDto, {
+        ...base,
+        notes: 'a'.repeat(2001),
+      });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * Public booking surface (no auth): the untrusted reserve body is validated +
+   * length-capped at the edge so a forged request can't carry a malformed
+   * timestamp/email or oversize name into the booking service.
+   */
+  describe('BookSlotDto (public, untrusted)', () => {
+    const base = {
+      start: '2026-07-01T10:00:00.000Z',
+      name: 'Alice',
+      email: 'alice@example.com',
+      phone: '+90 555 111 22 33',
+    };
+
+    it('accepts a valid reservation', async () => {
+      expect(await validateDto(BookSlotDto, base)).toEqual([]);
+    });
+
+    it('accepts the minimal shape (start + name only)', async () => {
+      expect(await validateDto(BookSlotDto, { start: base.start, name: 'Bob' })).toEqual([]);
+    });
+
+    it('rejects a non-ISO start', async () => {
+      const msgs = await validateDto(BookSlotDto, { ...base, start: 'next tuesday' });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects a malformed email', async () => {
+      const msgs = await validateDto(BookSlotDto, { ...base, email: 'not-an-email' });
+      expect(msgs.length).toBeGreaterThan(0);
+    });
+
+    it('rejects an oversize name (> 120)', async () => {
+      const msgs = await validateDto(BookSlotDto, { ...base, name: 'a'.repeat(121) });
       expect(msgs.length).toBeGreaterThan(0);
     });
   });
