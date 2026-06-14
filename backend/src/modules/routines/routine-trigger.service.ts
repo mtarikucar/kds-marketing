@@ -44,8 +44,25 @@ export class RoutineTriggerService {
       return { ok: false, skipped: reason };
     }
 
+    // ── onEvent flag gating (event sources only) ─────────────────────────────
+    // config.onEvent is the operator toggle for reactive/event-driven firing.
+    // Disabled onEvent means the routine only runs on schedule/manual, never
+    // on domain events.
+    if (source === 'event' && !config.onEvent) {
+      const reason = `routine ${key}: onEvent disabled`;
+      this.logger.debug(reason);
+      return { ok: false, skipped: reason };
+    }
+
     // ── event cooldown ───────────────────────────────────────────────────────
-    if (source === 'event' && config.lastTriggeredAt) {
+    // Only apply the cooldown when the LAST fire SUCCEEDED. If it errored, we
+    // allow an immediate retry so a transient failure doesn't suppress the next
+    // event for the full cooldown window.
+    if (
+      source === 'event' &&
+      config.lastTriggeredAt &&
+      config.lastTriggerStatus === 'ok'
+    ) {
       const elapsedSec = (Date.now() - config.lastTriggeredAt.getTime()) / 1000;
       if (elapsedSec < config.eventCooldownSec) {
         const remaining = Math.ceil(config.eventCooldownSec - elapsedSec);

@@ -4,7 +4,9 @@
  * Covers:
  *   - manual source fires even when enabled=false
  *   - schedule/event sources skip when enabled=false
- *   - event source within cooldown window is skipped
+ *   - event source skips when onEvent=false (BUG 5)
+ *   - event source within cooldown window (last fire ok) is skipped
+ *   - event source within cooldown window (last fire errored) is NOT skipped (BUG 6)
  *   - event source outside cooldown window fires
  *   - no triggerUrl → records error, returns ok:false
  *   - safeFetch success → records 'ok', returns ok:true
@@ -102,12 +104,57 @@ describe('RoutineTriggerService', () => {
     });
   });
 
+  // ── onEvent flag gating ───────────────────────────────────────────────────
+
+  describe('trigger() onEvent flag (BUG 5)', () => {
+    it('event source skips when onEvent=false even if enabled=true', async () => {
+      const cfg = makeConfig({ enabled: true, onEvent: false, lastTriggeredAt: null });
+      const configSvc = makeConfigService(cfg);
+      const service = new RoutineTriggerService(configSvc as any);
+
+      const result = await service.trigger('review-draft', 'event');
+
+      expect(result.ok).toBe(false);
+      expect(result.skipped).toMatch(/onEvent disabled/i);
+      expect(mockSafeFetch).not.toHaveBeenCalled();
+    });
+
+    it('event source fires when onEvent=true and enabled=true', async () => {
+      const cfg = makeConfig({ enabled: true, onEvent: true, lastTriggeredAt: null });
+      const configSvc = makeConfigService(cfg);
+      const service = new RoutineTriggerService(configSvc as any);
+
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+
+      const result = await service.trigger('review-draft', 'event');
+
+      expect(result.ok).toBe(true);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('schedule source fires regardless of onEvent (onEvent only gates events)', async () => {
+      const cfg = makeConfig({ enabled: true, onEvent: false });
+      const configSvc = makeConfigService(cfg);
+      const service = new RoutineTriggerService(configSvc as any);
+
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+
+      const result = await service.trigger('review-draft', 'schedule');
+
+      expect(result.ok).toBe(true);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ── event cooldown ────────────────────────────────────────────────────────
 
   describe('trigger() event cooldown', () => {
-    it('event source skips when lastTriggeredAt is within cooldown', async () => {
+    it('event source skips when lastTriggeredAt is within cooldown and last fire succeeded', async () => {
       const lastTriggeredAt = new Date(Date.now() - 60_000); // 60s ago, cooldown=300s
-      const cfg = makeConfig({ enabled: true, onEvent: true, lastTriggeredAt, eventCooldownSec: 300 });
+      const cfg = makeConfig({
+        enabled: true, onEvent: true, lastTriggeredAt,
+        lastTriggerStatus: 'ok', eventCooldownSec: 300,
+      });
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
@@ -118,9 +165,30 @@ describe('RoutineTriggerService', () => {
       expect(mockSafeFetch).not.toHaveBeenCalled();
     });
 
+    it('event source fires when lastTriggeredAt is within cooldown but last fire ERRORED (BUG 6)', async () => {
+      // A failed fire should not block the next event — allow immediate retry.
+      const lastTriggeredAt = new Date(Date.now() - 60_000); // 60s ago, within 300s cooldown
+      const cfg = makeConfig({
+        enabled: true, onEvent: true, lastTriggeredAt,
+        lastTriggerStatus: 'error', eventCooldownSec: 300,
+      });
+      const configSvc = makeConfigService(cfg);
+      const service = new RoutineTriggerService(configSvc as any);
+
+      mockSafeFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+
+      const result = await service.trigger('review-draft', 'event');
+
+      expect(result.ok).toBe(true);
+      expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('event source fires when lastTriggeredAt is outside cooldown', async () => {
       const lastTriggeredAt = new Date(Date.now() - 400_000); // 400s ago > 300s cooldown
-      const cfg = makeConfig({ enabled: true, onEvent: true, lastTriggeredAt, eventCooldownSec: 300 });
+      const cfg = makeConfig({
+        enabled: true, onEvent: true, lastTriggeredAt,
+        lastTriggerStatus: 'ok', eventCooldownSec: 300,
+      });
       const configSvc = makeConfigService(cfg);
       const service = new RoutineTriggerService(configSvc as any);
 
