@@ -31,7 +31,7 @@ interface UpdateRoutineBody {
 
 interface TriggerResult {
   ok: boolean;
-  skipped?: boolean;
+  skipped?: string;
   error?: string;
 }
 
@@ -107,7 +107,7 @@ function RoutineCard({ routine }: RoutineCardProps) {
       if (result.ok) {
         toast.success(`${ROUTINE_LABELS[routine.key] ?? routine.key} triggered`);
       } else if (result.skipped) {
-        toast.warning(`Skipped — ${result.error ?? 'routine is disabled or in cooldown'}`);
+        toast.warning(`Skipped — ${result.skipped}`);
       } else {
         toast.error(`Trigger failed: ${result.error ?? 'unknown error'}`);
       }
