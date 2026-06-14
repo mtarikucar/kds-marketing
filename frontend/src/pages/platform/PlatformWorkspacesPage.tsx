@@ -70,6 +70,12 @@ export default function PlatformWorkspacesPage() {
             >
               Payments
             </button>
+            <button
+              onClick={() => navigate('/platform/routines')}
+              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+            >
+              Routines
+            </button>
             <span className="text-slate-300">{operator?.email}</span>
             <button
               onClick={() => logout()}
