@@ -66,7 +66,9 @@ export class InternalReviewsController {
           status: 'PRIVATE_FEEDBACK',
           replyText: null,
           replyDraft: null,
+          // not-null AND non-empty: an empty-text review has nothing to reply to
           text: { not: null },
+          NOT: { text: '' },
         },
         orderBy: { createdAt: 'asc' },
         take: cap,
