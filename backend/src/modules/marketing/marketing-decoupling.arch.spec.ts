@@ -92,6 +92,11 @@ describe('marketing decoupling — split readiness (architecture fitness)', () =
     const forbidden =
       /\b(?:this\.prisma|tx|prisma)\.(lead|leadOffer|leadActivity|marketingUser|marketingTask|marketingNotification|commission|installationCrew|installationJob|installationTask|salesCall|salesTarget|marketingDistributionConfig)\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\b/;
     const allowPath = /\/modules\/marketing\//;
+    // Deliberate exceptions: routine controllers that are the authorised surface
+    // for a specific, guarded write (e.g. the lead-scoring routine stamps
+    // aiScore/aiScoreReason/scoredAt via a guarded updateMany that checks
+    // scoredAt:null + workspaceId — not accidental cross-module coupling).
+    const allowFile = /internal-lead-scoring\.controller\.ts$/;
     const offenders: string[] = [];
     function walk(dir: string): void {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -103,6 +108,7 @@ describe('marketing decoupling — split readiness (architecture fitness)', () =
           !entry.name.endsWith('.d.ts')
         ) {
           if (allowPath.test(full)) continue;
+          if (allowFile.test(full)) continue;
           if (forbidden.test(fs.readFileSync(full, 'utf8'))) {
             offenders.push(path.relative(BACKEND_ROOT, full));
           }
