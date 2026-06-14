@@ -8,6 +8,7 @@ import { InternalResearchController } from './internal-research.controller';
 import { InternalReviewsController } from './internal-reviews.controller';
 import { InternalContentController } from './internal-content.controller';
 import { InternalInsightsController } from './internal-insights.controller';
+import { InternalLeadScoringController } from './internal-lead-scoring.controller';
 import { MarketingModule } from '../marketing/marketing.module';
 
 /**
@@ -31,6 +32,7 @@ import { MarketingModule } from '../marketing/marketing.module';
     InternalReviewsController,
     InternalContentController,
     InternalInsightsController,
+    InternalLeadScoringController,
   ],
   providers: [InternalTokenGuard, ResearchTokenGuard, RoutineTokenGuard],
 })
