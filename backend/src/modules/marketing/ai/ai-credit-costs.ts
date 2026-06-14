@@ -6,8 +6,8 @@ import { AiModelTier } from './anthropic.service';
  * without an explicit cost decision. ~1 credit ≈ one default-tier action.
  */
 export const AI_CREDIT_COSTS = {
-  'conversation.reply': { credits: 1, tier: 'default' as AiModelTier },
-  'conversation.followup': { credits: 1, tier: 'default' as AiModelTier },
+  'conversation.reply': { credits: 1, tier: 'conversation' as AiModelTier },
+  'conversation.followup': { credits: 1, tier: 'conversation' as AiModelTier },
   'content.compose': { credits: 1, tier: 'default' as AiModelTier },
   'workflow.ai_generate': { credits: 1, tier: 'default' as AiModelTier },
   'workflow.ai_classify': { credits: 1, tier: 'light' as AiModelTier },
