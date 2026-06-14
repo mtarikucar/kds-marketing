@@ -19,7 +19,7 @@ describe('InternalReviewsController', () => {
       workspace: { findMany: jest.fn(), findUnique: jest.fn() },
       review: { findMany: jest.fn(), updateMany: jest.fn() },
     };
-    config = { get: jest.fn().mockReturnValue(undefined) }; // -> default cap
+    config = { get: jest.fn().mockReturnValue(undefined) }; // env var absent -> falls back to DEFAULT_DAILY_CAP
     ctrl = new InternalReviewsController(prisma as any, config as any);
   });
 
@@ -76,6 +76,13 @@ describe('InternalReviewsController', () => {
   });
 
   describe('POST :workspaceId/drafts', () => {
+    it('404s a non-ACTIVE (suspended) workspace', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ id: 'ws1', status: 'SUSPENDED' });
+      await expect(
+        ctrl.submit('ws1', { drafts: [{ reviewId: 'r', replyDraft: 'hi' }] }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
     it('404s an unknown / inactive workspace', async () => {
       prisma.workspace.findUnique.mockResolvedValue(null);
       await expect(
