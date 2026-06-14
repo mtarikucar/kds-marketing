@@ -17,6 +17,7 @@ import { PrismaService } from "../../prisma/prisma.service";
  * across different jobs are mathematically possible but harmless — the loser
  * just retries next tick. The 32-bit hash space gives ~4B distinct slots.
  */
+// NOTE: for short-running work where connection-safety matters, prefer withAdvisoryXactLock below.
 export async function withAdvisoryLock(
   prisma: PrismaService,
   jobName: string,
@@ -51,4 +52,32 @@ function djb2(s: string): number {
     hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0;
   }
   return hash;
+}
+
+/**
+ * Connection-safe advisory lock for SHORT-running work. Unlike withAdvisoryLock
+ * (session lock acquired/released on possibly-different pooled connections — see
+ * its caveat), this uses pg_try_advisory_xact_lock INSIDE an interactive
+ * transaction, so the lock is tied to ONE connection and auto-released at COMMIT/
+ * ROLLBACK. Non-blocking: a loser (lock held elsewhere) skips. Only for short run()
+ * bodies (the tx is held for run()'s duration; default 35s timeout).
+ */
+export async function withAdvisoryXactLock(
+  prisma: PrismaService,
+  jobName: string,
+  run: () => Promise<void>,
+  opts?: { timeoutMs?: number; logger?: Logger },
+): Promise<void> {
+  const lockId = djb2(jobName);
+  await prisma.$transaction(
+    async (tx) => {
+      const rows = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
+      if (!rows[0]?.locked) {
+        opts?.logger?.debug(`skip ${jobName}: advisory xact lock held elsewhere`);
+        return;
+      }
+      await run();
+    },
+    { timeout: opts?.timeoutMs ?? 35_000 },
+  );
 }
