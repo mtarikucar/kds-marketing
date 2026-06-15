@@ -25,7 +25,7 @@ import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
 import ResearchSettingsPage from './pages/marketing/research/ResearchSettingsPage';
 import AgentStudioPage from './pages/marketing/AgentStudioPage';
 import KnowledgeBasePage from './pages/marketing/KnowledgeBasePage';
-import InboxPage from './pages/marketing/InboxPage';
+import InboxPage from './pages/marketing/inbox/InboxPage';
 import ChannelsSettingsPage from './pages/marketing/ChannelsSettingsPage';
 import AutomationsPage from './pages/marketing/AutomationsPage';
 import CampaignsPage from './pages/marketing/CampaignsPage';
