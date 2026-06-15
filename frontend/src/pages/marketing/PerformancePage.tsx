@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { TrendingUp, Users } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import { TARGET_METRICS, TARGET_METRIC_LABELS } from '../../features/marketing/types';
@@ -8,12 +9,37 @@ import type {
   TeamPerformanceRow,
   MarketingUserInfo,
 } from '../../features/marketing/types';
+import {
+  PageHeader,
+  Card,
+  CardContent,
+  FilterBar,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  StatCard,
+  Progress,
+  Table,
+  THead,
+  TBody,
+  TR,
+  TH,
+  TD,
+  Skeleton,
+  EmptyState,
+  Label,
+} from '../../components/ui';
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 interface RepRow extends MarketingUserInfo {
   role: string;
 }
 
 const currentPeriod = () => new Date().toISOString().slice(0, 7);
+
 const metricLabel = (m: string) =>
   TARGET_METRIC_LABELS[m as keyof typeof TARGET_METRIC_LABELS] || m;
 
@@ -23,29 +49,55 @@ function fmtValue(metric: string, v: number | null | undefined): string {
   return String(v);
 }
 
-function attainColor(pct: number | null): string {
-  if (pct == null) return 'bg-slate-300';
-  if (pct >= 100) return 'bg-emerald-500';
-  if (pct >= 70) return 'bg-amber-500';
-  return 'bg-red-500';
+function attainmentTone(pct: number | null): 'success' | 'warning' | 'danger' | 'primary' {
+  if (pct == null) return 'primary';
+  if (pct >= 100) return 'success';
+  if (pct >= 70) return 'warning';
+  return 'danger';
 }
+
+// ─── Metric Card (individual rep view) ───────────────────────────────────────
 
 function MetricCard({ m }: { m: MetricPerformance }) {
   const pct = m.attainmentPct;
+  const tone = attainmentTone(pct);
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-2">
-      <p className="text-sm text-gray-500">{metricLabel(m.metric)}</p>
-      <p className="text-2xl font-bold text-gray-900">
-        {fmtValue(m.metric, m.actual)}
-        <span className="text-sm font-normal text-gray-400"> / {fmtValue(m.metric, m.target)}</span>
-      </p>
-      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full ${attainColor(pct)}`} style={{ width: `${Math.min(pct ?? 0, 100)}%` }} />
-      </div>
-      <p className="text-xs text-gray-400">{pct != null ? `${pct}% of target` : 'No target set'}</p>
-    </div>
+    <StatCard
+      label={metricLabel(m.metric)}
+      value={fmtValue(m.metric, m.actual)}
+      icon={<TrendingUp className="h-5 w-5" />}
+      delta={
+        m.target != null
+          ? {
+              value: `${pct != null ? pct : 0}% of ${fmtValue(m.metric, m.target)} target`,
+              direction: pct == null ? 'flat' : pct >= 100 ? 'up' : pct >= 70 ? 'flat' : 'down',
+            }
+          : undefined
+      }
+      tone={tone === 'primary' ? 'neutral' : tone}
+    />
   );
 }
+
+// ─── Skeleton rows ────────────────────────────────────────────────────────────
+
+function TableSkeleton({ cols, rows = 4 }: { cols: number; rows?: number }) {
+  return (
+    <TBody>
+      {Array.from({ length: rows }).map((_, i) => (
+        <TR key={i}>
+          {Array.from({ length: cols }).map((__, j) => (
+            <TD key={j}>
+              <Skeleton className="h-4 w-full" />
+            </TD>
+          ))}
+        </TR>
+      ))}
+    </TBody>
+  );
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function PerformancePage() {
   const { user } = useMarketingAuthStore();
@@ -74,87 +126,144 @@ export default function PerformancePage() {
   const team = (isTeam ? (data as TeamPerformanceRow[]) : []) || [];
   const metrics = (!isTeam ? (data as MetricPerformance[]) : []) || [];
 
+  const repOptions = reps.filter((r) => r.role === 'REP');
+
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-gray-900">Performance</h1>
+    <div className="space-y-6">
+      <PageHeader
+        title="Performance"
+        description={isManager ? 'Track target attainment for your team.' : 'Your metric attainment against targets.'}
+      />
 
-      <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-end gap-3 flex-wrap">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Period</label>
-          <input
-            type="month"
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-          />
-        </div>
-        {isManager && (
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Rep</label>
-            <select
-              value={repId}
-              onChange={(e) => setRepId(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-            >
-              <option value="">Whole team</option>
-              {reps.filter((r) => r.role === 'REP').map((r) => (
-                <option key={r.id} value={r.id}>{r.firstName} {r.lastName}</option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
+      {/* ── Filters ── */}
+      <Card>
+        <CardContent className="py-3">
+          <FilterBar>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="perf-period" className="text-xs text-muted-foreground">
+                Period
+              </Label>
+              <input
+                id="perf-period"
+                type="month"
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="h-9 rounded-lg border border-border-strong bg-surface px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
 
+            {isManager && (
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="perf-rep" className="text-xs text-muted-foreground">
+                  Rep
+                </Label>
+                <Select value={repId} onValueChange={setRepId}>
+                  <SelectTrigger id="perf-rep" className="w-48">
+                    <SelectValue placeholder="Whole team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Whole team</SelectItem>
+                    {repOptions.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.firstName} {r.lastName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </FilterBar>
+        </CardContent>
+      </Card>
+
+      {/* ── Content ── */}
       {isLoading ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-500">Loading…</div>
+        isTeam ? (
+          <Card>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableSkeleton cols={1 + TARGET_METRICS.length} />
+              </Table>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-28 rounded-xl" />
+            ))}
+          </div>
+        )
       ) : isTeam ? (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-left text-gray-500">
-                  <th className="px-4 py-3 font-medium">Rep</th>
-                  {TARGET_METRICS.map((m) => <th key={m} className="px-4 py-3 font-medium">{metricLabel(m)}</th>)}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {team.length === 0 ? (
-                  <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-500">No reps</td></tr>
-                ) : (
-                  team.map((row) => (
-                    <tr key={row.marketingUser.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900">{row.marketingUser.firstName} {row.marketingUser.lastName}</td>
+        <Card>
+          <CardContent className="p-0 overflow-x-auto">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Rep</TH>
+                  {TARGET_METRICS.map((m) => (
+                    <TH key={m} numeric>
+                      {metricLabel(m)}
+                    </TH>
+                  ))}
+                </TR>
+              </THead>
+              {team.length === 0 ? null : (
+                <TBody>
+                  {team.map((row) => (
+                    <TR key={row.marketingUser.id}>
+                      <TD className="font-medium text-foreground">
+                        {row.marketingUser.firstName} {row.marketingUser.lastName}
+                      </TD>
                       {TARGET_METRICS.map((mk) => {
                         const m = row.metrics.find((x) => x.metric === mk);
                         const pct = m?.attainmentPct ?? null;
+                        const tone = attainmentTone(pct);
                         return (
-                          <td key={mk} className="px-4 py-3">
-                            <span className="text-gray-700">
+                          <TD key={mk} numeric>
+                            <span className="text-foreground tabular-nums">
                               {fmtValue(mk, m?.actual ?? 0)}
-                              {m?.target != null && <span className="text-gray-400"> / {fmtValue(mk, m.target)}</span>}
+                              {m?.target != null && (
+                                <span className="text-muted-foreground">
+                                  {' '}/ {fmtValue(mk, m.target)}
+                                </span>
+                              )}
                             </span>
                             {pct != null && (
-                              <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-1 w-24">
-                                <div className={`h-full ${attainColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-                              </div>
+                              <Progress
+                                value={Math.min(pct, 100)}
+                                tone={tone === 'primary' ? 'primary' : tone}
+                                className="mt-1 w-24"
+                              />
                             )}
-                          </td>
+                          </TD>
                         );
                       })}
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                    </TR>
+                  ))}
+                </TBody>
+              )}
+            </Table>
+            {team.length === 0 && (
+              <EmptyState
+                icon={<Users className="h-10 w-10" />}
+                title="No reps"
+                description="Add reps to your team to see performance here."
+                className="m-4"
+              />
+            )}
+          </CardContent>
+        </Card>
+      ) : metrics.length === 0 ? (
+        <EmptyState
+          icon={<TrendingUp className="h-10 w-10" />}
+          title="No performance data"
+          description="Performance data will appear once targets are configured for this period."
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {metrics.length === 0 ? (
-            <div className="sm:col-span-3 bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-500">No performance data</div>
-          ) : (
-            metrics.map((m) => <MetricCard key={m.metric} m={m} />)
-          )}
+          {metrics.map((m) => (
+            <MetricCard key={m.metric} m={m} />
+          ))}
         </div>
       )}
     </div>
