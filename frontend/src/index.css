@@ -4,56 +4,87 @@
 
 @layer base {
   :root {
-    /* Corporate Design System — Slate + Deep Blue */
-
-    /* Background & Foreground */
-    --background: 210 40% 98%;           /* slate-50 */
-    --foreground: 222 47% 11%;           /* slate-900 */
-
-    /* Card */
-    --card: 0 0% 100%;                   /* white */
-    --card-foreground: 222 47% 11%;      /* slate-900 */
-
-    /* Popover */
-    --popover: 0 0% 100%;                /* white */
-    --popover-foreground: 222 47% 11%;   /* slate-900 */
-
-    /* Primary — corporate deep blue */
-    --primary: 226 76% 48%;              /* #1d4ed8 */
-    --primary-foreground: 0 0% 100%;     /* white */
-    --primary-hover: 226 71% 40%;        /* #1e40af */
-
-    /* Secondary */
-    --secondary: 210 40% 96%;            /* slate-100 */
-    --secondary-foreground: 222 47% 11%; /* slate-900 */
-
-    /* Muted */
-    --muted: 210 40% 96%;                /* slate-100 */
-    --muted-foreground: 215 16% 47%;     /* slate-500 */
-
-    /* Accent */
-    --accent: 210 40% 96%;               /* slate-100 */
-    --accent-foreground: 222 47% 11%;    /* slate-900 */
-
-    /* Destructive */
-    --destructive: 0 84% 60%;            /* red-500 */
-    --destructive-foreground: 0 0% 100%; /* white */
-
-    /* Success */
-    --success: 142 76% 36%;              /* green-600 */
-    --success-foreground: 0 0% 100%;     /* white */
-
-    /* Warning */
-    --warning: 45 93% 47%;               /* yellow-500 */
-    --warning-foreground: 26 83% 14%;    /* amber-900 */
-
-    /* Border & Input */
-    --border: 214 32% 91%;               /* slate-200 */
-    --input: 214 32% 91%;                /* slate-200 */
-    --ring: 226 76% 48%;                 /* primary */
-
-    /* Border Radius */
+    color-scheme: light;
+    /* Console tokens (light). Legacy keys kept for back-compat; new semantic
+       tokens (surface*, border-strong, danger, info, *-subtle, chart) added. */
+    --background: #fbfbfc;
+    --foreground: #14151a;
+    --surface: #ffffff;
+    --surface-muted: #f4f5f7;
+    --surface-raised: #ffffff;
+    --card: #ffffff;
+    --card-foreground: #14151a;
+    --popover: #ffffff;
+    --popover-foreground: #14151a;
+    --primary: #4f46e5;
+    --primary-foreground: #ffffff;
+    --primary-hover: #4338ca;
+    --secondary: #f4f5f7;
+    --secondary-foreground: #14151a;
+    --muted: #f4f5f7;
+    --muted-foreground: #5b5e68;
+    --accent: #f1f3f5;
+    --accent-foreground: #14151a;
+    --destructive: #e11d48;
+    --destructive-foreground: #ffffff;
+    --danger: #e11d48;
+    --danger-subtle: #fff1f2;
+    --danger-foreground: #ffffff;
+    --success: #059669;
+    --success-subtle: #ecfdf5;
+    --success-foreground: #ffffff;
+    --warning: #d97706;
+    --warning-subtle: #fffbeb;
+    --warning-foreground: #ffffff;
+    --info: #0284c7;
+    --info-subtle: #f0f9ff;
+    --info-foreground: #ffffff;
+    --border: #e7e8ec;
+    --border-strong: #d5d7de;
+    --input: #d5d7de;
+    --ring: #4f46e5;
+    --chart-1:#4f46e5;--chart-2:#059669;--chart-3:#f59e0b;--chart-4:#e11d48;
+    --chart-5:#0284c7;--chart-6:#7c3aed;--chart-7:#0d9488;--chart-8:#64748b;
     --radius: 0.5rem;
+  }
+  :root.dark {
+    color-scheme: dark;
+    --background: #0b0c11;
+    --foreground: #ecedf1;
+    --surface: #12131a;
+    --surface-muted: #171922;
+    --surface-raised: #1b1d27;
+    --card: #12131a;
+    --card-foreground: #ecedf1;
+    --popover: #1b1d27;
+    --popover-foreground: #ecedf1;
+    --primary: #6e68f2;
+    --primary-foreground: #ffffff;
+    --primary-hover: #837cf6;
+    --secondary: #171922;
+    --secondary-foreground: #ecedf1;
+    --muted: #171922;
+    --muted-foreground: #9498a6;
+    --accent: #1b1d27;
+    --accent-foreground: #ecedf1;
+    --destructive: #fb7185;
+    --destructive-foreground: #0b0c11;
+    --danger: #fb7185;
+    --danger-subtle: #2a0f16;
+    --danger-foreground: #0b0c11;
+    --success: #10b981;
+    --success-subtle: #06281f;
+    --success-foreground: #06281f;
+    --warning: #f59e0b;
+    --warning-subtle: #2a1e05;
+    --warning-foreground: #2a1e05;
+    --info: #38bdf8;
+    --info-subtle: #06222e;
+    --info-foreground: #06222e;
+    --border: #262936;
+    --border-strong: #343847;
+    --input: #343847;
+    --ring: #6e68f2;
   }
 }
 
