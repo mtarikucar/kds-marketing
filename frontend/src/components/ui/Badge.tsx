@@ -1,29 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority';
-import { extendTailwindMerge } from 'tailwind-merge';
-import { clsx, type ClassValue } from 'clsx';
-
-/**
- * Custom tailwind-merge that knows our semantic text-color tokens are color
- * utilities, not font-size utilities — prevents twMerge from treating
- * `text-success` as conflicting with `text-caption` (a custom font-size token).
- */
-const twMerge = extendTailwindMerge({
-  override: {
-    classGroups: {
-      // Register semantic color tokens so they aren't treated as font-size
-      // utilities and don't get stripped by twMerge when combined with
-      // custom size tokens like `text-caption` / `text-micro`.
-      'text-color': [
-        'text-success', 'text-warning', 'text-danger', 'text-info',
-        'text-primary', 'text-muted-foreground', 'text-foreground', 'text-accent',
-      ],
-    },
-  },
-});
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+import { cn } from './cn';
 
 const badge = cva('inline-flex items-center gap-1 rounded-full font-medium', {
   variants: {
@@ -40,7 +16,9 @@ const badge = cva('inline-flex items-center gap-1 rounded-full font-medium', {
   defaultVariants: { tone: 'neutral', size: 'md' },
 });
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badge> {}
+export interface BadgeProps
+  extends React.HTMLAttributes<HTMLSpanElement>,
+    VariantProps<typeof badge> {}
 
 export function Badge({ className, tone, size, ...props }: BadgeProps) {
   return <span className={cn(badge({ tone, size }), className)} {...props} />;
