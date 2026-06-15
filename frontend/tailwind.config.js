@@ -14,6 +14,18 @@ export default {
       },
     },
     extend: {
+      // Console type scale (additive — Tailwind's default text-* sizes remain).
+      // Without this block these utilities emit NO CSS; the headings/labels
+      // across the ui library depend on them.
+      fontSize: {
+        micro: ['0.75rem', { lineHeight: '1rem', letterSpacing: '0.04em' }],
+        caption: ['0.8125rem', { lineHeight: '1.125rem' }],
+        'body-lg': ['1.0625rem', { lineHeight: '1.6rem' }],
+        h3: ['1.125rem', { lineHeight: '1.5rem', fontWeight: '600' }],
+        h2: ['1.375rem', { lineHeight: '1.75rem', fontWeight: '650' }],
+        h1: ['1.75rem', { lineHeight: '2.1rem', fontWeight: '700' }],
+        display: ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.02em', fontWeight: '700' }],
+      },
       colors: {
         // Semantic colors using CSS variables (now hex, no hsl() wrapper).
         border: {

@@ -10,11 +10,14 @@ export interface CalloutProps extends HTMLAttributes<HTMLDivElement> {
   children?: ReactNode;
 }
 
+// Subtle tinted surface + colored accent border; body text stays `text-foreground`
+// for legibility (the `*-foreground` tokens are sized for the SOLID `*` color,
+// not the pale/dark `*-subtle` surface). The title carries the vivid tone color.
 const toneClasses: Record<CalloutTone, string> = {
-  info: 'bg-info-subtle border-info text-info-foreground',
-  success: 'bg-success-subtle border-success text-success-foreground',
-  warning: 'bg-warning-subtle border-warning text-warning-foreground',
-  danger: 'bg-danger-subtle border-danger text-danger-foreground',
+  info: 'bg-info-subtle border-info text-foreground',
+  success: 'bg-success-subtle border-success text-foreground',
+  warning: 'bg-warning-subtle border-warning text-foreground',
+  danger: 'bg-danger-subtle border-danger text-foreground',
 };
 
 const titleColorClasses: Record<CalloutTone, string> = {

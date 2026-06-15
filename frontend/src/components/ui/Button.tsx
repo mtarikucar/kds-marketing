@@ -40,7 +40,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       );
     }
     return (
-      <Comp ref={ref} className={cn(button({ variant, size }), className)} disabled={disabled || loading} {...props}>
+      <Comp
+        ref={ref}
+        className={cn(button({ variant, size }), className)}
+        disabled={disabled || loading}
+        aria-busy={loading || undefined}
+        {...props}
+      >
         {loading && <Spinner className="h-4 w-4" />}
         {children}
       </Comp>

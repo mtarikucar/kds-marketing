@@ -61,6 +61,13 @@ export function Combobox({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Keyboard-clear the selection (the X affordance is mouse-only and
+      // aria-hidden, since it can't be a nested <button> inside the trigger).
+      if ((e.key === 'Backspace' || e.key === 'Delete') && value && !query) {
+        e.preventDefault();
+        onChange('');
+        return;
+      }
       if (!open) {
         if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
           e.preventDefault();
@@ -93,7 +100,7 @@ export function Combobox({
           break;
       }
     },
-    [open, activeIndex, filtered, handleSelect, handleOpen],
+    [open, activeIndex, filtered, handleSelect, handleOpen, value, query, onChange],
   );
 
   const handleClear = useCallback(
