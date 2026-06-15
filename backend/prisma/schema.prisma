@@ -192,6 +192,11 @@ model Lead {
   smsOptOut   Boolean @default(false)
   waOptOut    Boolean @default(false)
 
+  // Epic A1 — workspace-defined custom fields. Shape is { "<defKey>": value };
+  // values are validated/coerced against CustomFieldDef by CustomFieldsService
+  // before write. GIN-indexed (jsonb_path_ops) for segment/audience filtering.
+  customFields Json @default("{}")
+
   @@unique([workspaceId, externalRef])
   @@index([workspaceId])
   @@index([workspaceId, status])
@@ -209,7 +214,31 @@ model Lead {
   @@index([status, createdAt])
   @@index([originTenantId])
   @@index([workspaceId, scoredAt])
+  @@index([customFields], type: Gin)
   @@map("leads")
+}
+
+/// Epic A1 — workspace-scoped typed custom-field definitions. Values live in
+/// Lead.customFields (JSONB). `key` + `type` are immutable after creation (values
+/// are keyed by `key`); deleting = archive (values retained). `entity` is
+/// enum-ready (LEAD today; CONTACT|OPPORTUNITY later) but only LEAD is wired.
+model CustomFieldDef {
+  id          String   @id @default(uuid())
+  workspaceId String
+  entity      String   @default("LEAD") // LEAD (enum-ready: CONTACT | OPPORTUNITY)
+  key         String // slug, immutable, unique per (workspace, entity)
+  label       String
+  type        String // TEXT|TEXTAREA|NUMBER|DATE|DATETIME|BOOL|SELECT|MULTISELECT|URL|PHONE|EMAIL
+  options     Json? // [{ value, label }] for SELECT/MULTISELECT
+  required    Boolean  @default(false)
+  position    Int      @default(0)
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, entity, key])
+  @@index([workspaceId, entity, archived])
+  @@map("custom_field_defs")
 }
 
 model LeadActivity {
