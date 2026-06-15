@@ -1,6 +1,8 @@
 import { cva, type VariantProps } from 'class-variance-authority';
+import { X } from 'lucide-react';
 import { extendTailwindMerge } from 'tailwind-merge';
 import { clsx, type ClassValue } from 'clsx';
+import { cn as cnBase } from './cn';
 
 /**
  * Custom tailwind-merge that knows our semantic text-color tokens are color
@@ -25,7 +27,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const badge = cva('inline-flex items-center gap-1 rounded-full font-medium', {
+const tag = cva('inline-flex items-center gap-1 rounded-full font-medium', {
   variants: {
     tone: {
       neutral: 'bg-surface-muted text-muted-foreground',
@@ -40,8 +42,28 @@ const badge = cva('inline-flex items-center gap-1 rounded-full font-medium', {
   defaultVariants: { tone: 'neutral', size: 'md' },
 });
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badge> {}
+export interface TagProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof tag> {
+  label: string;
+  onRemove?: () => void;
+}
 
-export function Badge({ className, tone, size, ...props }: BadgeProps) {
-  return <span className={cn(badge({ tone, size }), className)} {...props} />;
+export function Tag({ className, tone, size, label, onRemove, ...props }: TagProps) {
+  return (
+    <span className={cn(tag({ tone, size }), className)} {...props}>
+      {label}
+      {onRemove && (
+        <button
+          type="button"
+          aria-label={`Remove ${label}`}
+          onClick={onRemove}
+          className={cnBase(
+            'ms-0.5 inline-flex items-center justify-center rounded-full hover:opacity-70',
+            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          )}
+        >
+          <X className="h-3 w-3" aria-hidden="true" />
+        </button>
+      )}
+    </span>
+  );
 }
