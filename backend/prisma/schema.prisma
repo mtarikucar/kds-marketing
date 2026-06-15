@@ -1409,3 +1409,21 @@ model RoutineConfig {
 
   @@map("routine_configs")
 }
+
+/// Epic B4 — Slack incoming-webhook notifications. On a subscribed domain event
+/// the workspace's ACTIVE integrations POST a formatted message to `webhookUrl`
+/// (a Slack-issued URL; no OAuth). `events` empty = all supported events.
+model SlackIntegration {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  webhookUrl     String
+  channel        String?
+  events         Json      @default("[]")
+  status         String    @default("ACTIVE") // ACTIVE | DISABLED
+  lastNotifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("slack_integrations")
+}

@@ -146,6 +146,10 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// Epic B4 — Slack incoming-webhook notifications.
+import { SlackController } from './integrations/slack.controller';
+import { SlackService } from './integrations/slack.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -227,6 +231,7 @@ import { BrandingService } from './branding/branding.service';
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    SlackController,
   ],
   providers: [
     // Services
@@ -328,6 +333,8 @@ import { BrandingService } from './branding/branding.service';
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic B4 — Slack notify.
+    SlackService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
