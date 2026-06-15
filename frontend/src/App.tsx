@@ -11,7 +11,7 @@ import MarketingDashboardPage from './pages/marketing/MarketingDashboardPage';
 import LeadsPage from './pages/marketing/leads/LeadsPage';
 import CreateLeadPage from './pages/marketing/CreateLeadPage';
 import LeadDetailPage from './pages/marketing/leadDetail/LeadDetailPage';
-import TasksPage from './pages/marketing/TasksPage';
+import TasksPage from './pages/marketing/tasks/TasksPage';
 import CalendarPage from './pages/marketing/CalendarPage';
 import OffersPage from './pages/marketing/OffersPage';
 import ReportsPage from './pages/marketing/ReportsPage';
