@@ -152,6 +152,11 @@ export class TagsService {
     return rows.map((r) => ({ id: r.tag.id, name: r.tag.name, color: r.tag.color }));
   }
 
+  async getLeadTags(workspaceId: string, leadId: string) {
+    await this.assertLead(workspaceId, leadId);
+    return this.listLeadTags(leadId);
+  }
+
   async assignToLead(
     workspaceId: string,
     leadId: string,
