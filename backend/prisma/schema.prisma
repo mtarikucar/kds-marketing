@@ -1409,3 +1409,68 @@ model RoutineConfig {
 
   @@map("routine_configs")
 }
+
+/// Epic E — an A/B (split) experiment over a funnel/site page. `variants` is a
+/// JSON array of { key, label, weight, blocks? }; selection is weighted-random
+/// and each impression/conversion is an ExperimentEvent for results aggregation.
+model Experiment {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  pageId      String?
+  variants    Json     @default("[]")
+  status      String   @default("DRAFT") // DRAFT | RUNNING | STOPPED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  events ExperimentEvent[]
+
+  @@index([workspaceId, status])
+  @@map("experiments")
+}
+
+model ExperimentEvent {
+  id           String   @id @default(uuid())
+  experimentId String
+  workspaceId  String
+  variantKey   String
+  kind         String // IMPRESSION | CONVERSION
+  createdAt    DateTime @default(now())
+
+  experiment Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+
+  @@index([experimentId, variantKey, kind])
+  @@map("experiment_events")
+}
+
+/// Epic E — a workspace-authored survey (richer than a lead-capture FormDef).
+/// `questions` is a JSON array of { key, label, type, required?, options? }.
+model Survey {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  questions   Json     @default("[]")
+  status      String   @default("DRAFT") // DRAFT | PUBLISHED | CLOSED
+  redirectUrl String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  responses SurveyResponse[]
+
+  @@index([workspaceId, status])
+  @@map("surveys")
+}
+
+model SurveyResponse {
+  id          String   @id @default(uuid())
+  surveyId    String
+  workspaceId String
+  leadId      String?
+  answers     Json
+  createdAt   DateTime @default(now())
+
+  survey Survey @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  @@index([surveyId, createdAt])
+  @@map("survey_responses")
+}

@@ -146,6 +146,13 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// Epic E — funnel A/B experiments + surveys.
+import { ExperimentsController } from './funnels/experiments.controller';
+import { ExperimentsService } from './funnels/experiments.service';
+import { SurveysController } from './funnels/surveys.controller';
+import { SurveysService } from './funnels/surveys.service';
+import { PublicFunnelsController } from './funnels/public-funnels.controller';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -227,6 +234,9 @@ import { BrandingService } from './branding/branding.service';
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    ExperimentsController,
+    SurveysController,
+    PublicFunnelsController,
   ],
   providers: [
     // Services
@@ -328,6 +338,9 @@ import { BrandingService } from './branding/branding.service';
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic E — funnel A/B + surveys.
+    ExperimentsService,
+    SurveysService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
