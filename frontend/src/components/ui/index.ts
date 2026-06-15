@@ -103,3 +103,14 @@ export {
 } from './Avatar';
 export { Breadcrumbs, type BreadcrumbsProps, type BreadcrumbItem } from './Breadcrumbs';
 export { Pagination, type PaginationProps } from './Pagination';
+export {
+  Table,
+  THead,
+  TBody,
+  TR,
+  TH,
+  TD,
+  type THProps,
+  type TDProps,
+} from './Table';
+export { DataTable, type DataTableProps } from './DataTable';
