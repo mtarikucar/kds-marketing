@@ -58,20 +58,20 @@ export default function DistributionConfigCard() {
   });
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
+    <div className="bg-surface rounded-xl border border-border p-5">
       <div className="flex items-start justify-between gap-2 mb-4">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900">
+          <h3 className="text-sm font-semibold text-foreground">
             {t('distribution.title')}
           </h3>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-xs text-muted-foreground mt-0.5">
             {t('distribution.subtitle')}
           </p>
         </div>
       </div>
 
       {isLoading ? (
-        <p className="text-sm text-gray-400">{t('common.loading')}</p>
+        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <>
           <div className="space-y-2">
@@ -81,7 +81,7 @@ export default function DistributionConfigCard() {
                 className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer border transition-colors ${
                   strategy === s
                     ? 'border-primary/40 bg-primary/5'
-                    : 'border-gray-200 hover:bg-gray-50'
+                    : 'border-border hover:bg-surface-muted'
                 }`}
               >
                 <input
@@ -95,7 +95,7 @@ export default function DistributionConfigCard() {
                   }}
                   className="text-primary focus:ring-primary"
                 />
-                <span className="text-sm text-gray-900">
+                <span className="text-sm text-foreground">
                   {t(`distribution.strategy.${s}`)}
                 </span>
               </label>
@@ -103,9 +103,9 @@ export default function DistributionConfigCard() {
           </div>
 
           {cfg?.lastAssignedTo && cfg.strategy === 'ROUND_ROBIN' && (
-            <p className="text-xs text-gray-400 mt-3">
+            <p className="text-xs text-muted-foreground mt-3">
               {t('distribution.lastAssignedTo')}:{' '}
-              <span className="text-gray-600">
+              <span className="text-foreground">
                 {cfg.lastAssignedTo.firstName} {cfg.lastAssignedTo.lastName}
               </span>
             </p>
@@ -116,7 +116,7 @@ export default function DistributionConfigCard() {
               type="button"
               onClick={() => save.mutate(strategy)}
               disabled={!dirty || save.isPending}
-              className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
             >
               {save.isPending ? t('common.loading') : t('distribution.save')}
             </button>

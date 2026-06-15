@@ -70,8 +70,8 @@ export default function ReferralCodeCard() {
 
   if (isLoading) {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-6">
-        <div className="h-24 animate-pulse rounded-lg bg-slate-100" />
+      <div className="rounded-2xl border border-border bg-surface p-6">
+        <div className="h-24 animate-pulse rounded-lg bg-surface-muted" />
       </div>
     );
   }
@@ -100,13 +100,13 @@ export default function ReferralCodeCard() {
             </span>
           </div>
           <div className="mt-2 flex items-center gap-3">
-            <code className="rounded-lg bg-white border border-primary-200 px-3 py-2 font-mono text-2xl font-bold tracking-wider text-primary-900">
+            <code className="rounded-lg bg-surface border border-primary-200 px-3 py-2 font-mono text-2xl font-bold tracking-wider text-primary-900">
               {code}
             </code>
             <button
               type="button"
               onClick={() => copy(code, 'code')}
-              className="inline-flex items-center gap-1 rounded-md bg-white border border-slate-200 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-1 rounded-md bg-surface border border-border px-3 py-2 text-xs text-foreground hover:bg-surface-muted"
               data-testid="referral-copy-code"
             >
               <Copy className="w-3.5 h-3.5" />
@@ -118,7 +118,7 @@ export default function ReferralCodeCard() {
               <button
                 type="button"
                 onClick={() => copy(shareLink, 'link')}
-                className="inline-flex items-center gap-1 rounded-md bg-white border border-slate-200 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
+                className="inline-flex items-center gap-1 rounded-md bg-surface border border-border px-3 py-2 text-xs text-foreground hover:bg-surface-muted"
                 data-testid="referral-copy-link"
               >
                 <LinkIcon className="w-3.5 h-3.5" />
@@ -129,9 +129,9 @@ export default function ReferralCodeCard() {
             )}
           </div>
           {shareLink && (
-            <p className="mt-3 text-xs text-slate-500 break-all">{shareLink}</p>
+            <p className="mt-3 text-xs text-muted-foreground break-all">{shareLink}</p>
           )}
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-muted-foreground">
             {t(
               'referral.hint',
               'Bu link/kod ile yapılan abonelik satışlarından komisyon kazanırsınız (ilk satış + yenilemeler + yükseltmeler).',
@@ -140,27 +140,27 @@ export default function ReferralCodeCard() {
         </div>
 
         <div className="grid grid-cols-3 gap-3 lg:flex-shrink-0">
-          <div className="rounded-lg bg-white border border-primary-100 px-4 py-3 text-center">
-            <div className="text-2xl font-bold text-slate-900">
+          <div className="rounded-lg bg-surface border border-primary-100 px-4 py-3 text-center">
+            <div className="text-2xl font-bold text-foreground">
               {data?.referralLeadCount ?? 0}
             </div>
-            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
               {t('referral.statsLeads', 'Toplam Lead')}
             </div>
           </div>
-          <div className="rounded-lg bg-white border border-primary-100 px-4 py-3 text-center">
+          <div className="rounded-lg bg-surface border border-primary-100 px-4 py-3 text-center">
             <div className="text-2xl font-bold text-emerald-700">
               {data?.referralWonCount ?? 0}
             </div>
-            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
               {t('referral.statsWon', 'Kazanılan')}
             </div>
           </div>
-          <div className="rounded-lg bg-white border border-primary-100 px-4 py-3 text-center">
+          <div className="rounded-lg bg-surface border border-primary-100 px-4 py-3 text-center">
             <div className="text-2xl font-bold text-primary-700">
               ₺{amount.toFixed(2)}
             </div>
-            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
               {t('referral.statsCommission', 'Toplam Komisyon')}
             </div>
           </div>
@@ -184,7 +184,7 @@ export default function ReferralCodeCard() {
               }
             }}
             disabled={regenerate.isPending}
-            className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900 disabled:opacity-50"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             {t('referral.regenerate', 'Kodumu yenile')}

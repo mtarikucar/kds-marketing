@@ -115,7 +115,7 @@ export default function ActivityTimeline({ activities }: ActivityTimelineProps) 
                         </span>
                       )}
                       {activity.outcome && (
-                        <span className={outcomeColors[activity.outcome] || 'text-gray-500'}>
+                        <span className={outcomeColors[activity.outcome] || 'text-muted-foreground'}>
                           {activity.outcome}
                         </span>
                       )}
