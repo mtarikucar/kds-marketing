@@ -56,21 +56,28 @@ const sheet = cva(
 
 export interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
-    VariantProps<typeof sheet> {}
+    VariantProps<typeof sheet> {
+  /** Hide the built-in top-end close button (e.g. when the panel's own content
+   *  provides dismissal, like a nav drawer that closes on item select). The
+   *  panel is still closable via Escape and overlay click. */
+  hideClose?: boolean;
+}
 
 export const SheetContent = forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = 'right', className, children, ...props }, ref) => (
+>(({ side = 'right', className, children, hideClose, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content ref={ref} className={cn(sheet({ side }), className)} {...props}>
       {children}
-      <DialogPrimitive.Close asChild>
-        <IconButton aria-label="Close" variant="ghost" size="sm" className="absolute end-4 top-4">
-          <X className="h-4 w-4" />
-        </IconButton>
-      </DialogPrimitive.Close>
+      {!hideClose && (
+        <DialogPrimitive.Close asChild>
+          <IconButton aria-label="Close" variant="ghost" size="sm" className="absolute end-4 top-4">
+            <X className="h-4 w-4" />
+          </IconButton>
+        </DialogPrimitive.Close>
+      )}
     </DialogPrimitive.Content>
   </SheetPortal>
 ));

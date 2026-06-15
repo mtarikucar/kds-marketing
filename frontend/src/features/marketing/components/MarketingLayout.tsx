@@ -6,7 +6,7 @@ import MarketingHeader from './MarketingHeader';
 import AskAiPanel from './AskAiPanel';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { IconButton } from '@/components/ui/IconButton';
-import { Sheet, SheetContent } from '@/components/ui/Sheet';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/Sheet';
 
 export default function MarketingLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -22,7 +22,9 @@ export default function MarketingLayout() {
       {/* Sidebar - mobile (Sheet drawer, hidden on lg+) */}
       <div className="lg:hidden">
         <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-          <SheetContent side="left" className="p-0">
+          <SheetContent side="left" hideClose className="w-64 max-w-[85vw] p-0">
+            {/* Accessible name for the dialog (the sidebar's brand is decorative). */}
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
             <MarketingSidebar onNavigate={() => setSidebarOpen(false)} />
           </SheetContent>
         </Sheet>
