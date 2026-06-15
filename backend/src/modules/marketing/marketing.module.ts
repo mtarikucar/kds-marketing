@@ -146,6 +146,10 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// Epic F — 2FA/MFA (TOTP).
+import { TwoFactorController } from './controllers/two-factor.controller';
+import { TwoFactorService } from './services/two-factor.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -227,6 +231,7 @@ import { BrandingService } from './branding/branding.service';
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    TwoFactorController,
   ],
   providers: [
     // Services
@@ -328,6 +333,8 @@ import { BrandingService } from './branding/branding.service';
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic F — 2FA.
+    TwoFactorService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

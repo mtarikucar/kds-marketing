@@ -11,6 +11,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
+import { hashBackupCode, verifyTotp } from '../util/totp';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -124,6 +125,52 @@ export class MarketingAuthService {
       },
     });
 
+    // Epic F — 2FA enforcement. Password verified; if 2FA is on, withhold the
+    // session and issue a short-lived challenge the client completes at
+    // /auth/2fa/verify. Users without 2FA are unaffected.
+    if (user.twoFactorEnabled) {
+      const challengeToken = this.jwtService.sign(
+        { sub: user.id, type: 'marketing', tokenType: '2fa-challenge' },
+        { secret: this.accessSecret(), expiresIn: '5m', algorithm: 'HS256' },
+      );
+      return { twoFactorRequired: true, challengeToken };
+    }
+
+    return this.generateTokens(user);
+  }
+
+  /** Epic F — complete a 2FA login: verify a TOTP or single-use backup code. */
+  async verify2fa(challengeToken: string, code: string) {
+    let payload: { sub?: string; type?: string; tokenType?: string };
+    try {
+      payload = await this.jwtService.verifyAsync(challengeToken, {
+        secret: this.accessSecret(),
+        algorithms: ['HS256'],
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired 2FA challenge');
+    }
+    if (payload.type !== 'marketing' || payload.tokenType !== '2fa-challenge') {
+      throw new UnauthorizedException('Invalid 2FA challenge');
+    }
+    const user = await this.prisma.marketingUser.findUnique({ where: { id: payload.sub } });
+    if (!user || user.status !== 'ACTIVE' || !user.twoFactorEnabled) {
+      throw new UnauthorizedException('Invalid 2FA challenge');
+    }
+
+    let ok = !!user.twoFactorSecret && verifyTotp(user.twoFactorSecret, code);
+    if (!ok) {
+      const hashes = (user.twoFactorBackupCodes as string[]) ?? [];
+      const h = hashBackupCode(code);
+      if (hashes.includes(h)) {
+        ok = true;
+        await this.prisma.marketingUser.update({
+          where: { id: user.id },
+          data: { twoFactorBackupCodes: hashes.filter((x) => x !== h) },
+        });
+      }
+    }
+    if (!ok) throw new UnauthorizedException('Invalid 2FA code');
     return this.generateTokens(user);
   }
 
