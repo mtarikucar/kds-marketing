@@ -275,6 +275,26 @@ model LeadTag {
   @@map("lead_tags")
 }
 
+/// Epic A3 — a saved, reusable lead audience. `definition` is a typed predicate
+/// tree (group: {op, children[]}; leaf: {field, cmp, value}) over native Lead
+/// columns, `cf:<key>` custom fields, and `tag` membership. DYNAMIC = evaluated
+/// live by SegmentCompilerService; the same compiler resolves campaign audiences.
+model Segment {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  name            String
+  description     String?
+  kind            String    @default("DYNAMIC") // DYNAMIC (v1)
+  definition      Json
+  lastCount       Int?
+  lastEvaluatedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@map("segments")
+}
+
 model LeadActivity {
   id          String  @id @default(uuid())
   type        String // CALL, VISIT, NOTE, EMAIL, WHATSAPP, STATUS_CHANGE, DEMO, MEETING
