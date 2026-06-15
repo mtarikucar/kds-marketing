@@ -1,10 +1,7 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import {
-  ArrowRightOnRectangleIcon,
-  ChevronDownIcon,
-} from '@heroicons/react/24/outline';
+import { ChevronDown, LogOut } from 'lucide-react';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { APP_VERSION } from '../../../lib/env';
 import { NAV_GROUPS, visibleNav, type NavItem } from '../navigation';
@@ -15,7 +12,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
     'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
     isActive
       ? 'bg-primary/10 text-primary'
-      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+      : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
   ].join(' ');
 
 export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
@@ -36,7 +33,7 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
         <>
           {/* Active accent bar — the primary wayfinding cue. */}
           <span
-            className={`absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary transition-opacity ${
+            className={`absolute inset-y-1 start-0 w-0.5 rounded-full bg-primary transition-opacity ${
               isActive ? 'opacity-100' : 'opacity-0'
             }`}
           />
@@ -48,13 +45,13 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
   );
 
   return (
-    <aside className="flex h-screen w-64 flex-col border-r border-slate-200 bg-white">
+    <aside className="flex h-screen w-64 flex-col border-e border-border bg-surface">
       {/* Brand */}
-      <div className="flex shrink-0 items-center gap-2.5 border-b border-slate-200 px-5 py-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary-600 shadow-sm">
+      <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-5 py-4">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary-hover shadow-sm">
           <span className="text-sm font-bold text-primary-foreground">M</span>
         </div>
-        <span className="font-heading text-base font-semibold text-slate-900">
+        <span className="font-display text-base font-semibold text-foreground">
           {t('login.title')}
         </span>
       </div>
@@ -73,15 +70,15 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
                   onClick={() =>
                     setCollapsed((c) => ({ ...c, [group.id]: !c[group.id] }))
                   }
-                  className="flex w-full items-center justify-between px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-600"
+                  className="flex w-full items-center justify-between px-3 pb-1 text-micro font-semibold uppercase text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span>{t(group.labelKey, group.label)}</span>
-                  <ChevronDownIcon
+                  <ChevronDown
                     className={`h-4 w-4 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
                   />
                 </button>
               ) : (
-                <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <p className="px-3 pb-1 text-micro font-semibold uppercase text-muted-foreground">
                   {t(group.labelKey, group.label)}
                 </p>
               )}
@@ -92,7 +89,7 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
       </nav>
 
       {/* User card + logout */}
-      <div className="shrink-0 border-t border-slate-200 px-3 py-3">
+      <div className="shrink-0 border-t border-border px-3 py-3">
         <div className="mb-2 flex items-center gap-3 rounded-lg px-2 py-1.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
             <span className="text-sm font-semibold text-primary">
@@ -101,10 +98,10 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
             </span>
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-slate-900">
+            <p className="truncate text-sm font-medium text-foreground">
               {user?.firstName} {user?.lastName}
             </p>
-            <p className="truncate text-xs text-slate-500">
+            <p className="truncate text-xs text-muted-foreground">
               {user?.role === 'OWNER'
                 ? t('role.OWNER', 'Owner')
                 : user?.role === 'MANAGER'
@@ -115,12 +112,12 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
         </div>
         <button
           onClick={logout}
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-red-50 hover:text-red-600"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-danger-subtle hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <ArrowRightOnRectangleIcon className="h-4 w-4" />
+          <LogOut className="h-4 w-4" />
           {t('nav.logout')}
         </button>
-        <p className="mt-2 select-text text-center text-[10px] text-slate-400">
+        <p className="mt-2 select-text text-center text-[10px] text-muted-foreground">
           {APP_VERSION}
         </p>
       </div>
