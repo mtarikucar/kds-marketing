@@ -368,6 +368,46 @@ model ApiKey {
   @@map("api_keys")
 }
 
+/// Epic B2 — an outbound webhook subscription. `events` is the JSON array of
+/// domain event types this endpoint wants. `secret` is the HMAC signing key
+/// (returned once on create); deliveries carry `X-Webhook-Signature`.
+model WebhookEndpoint {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  url            String
+  events         Json      @default("[]")
+  secret         String
+  description    String?
+  status         String    @default("ACTIVE") // ACTIVE | DISABLED
+  failureCount   Int       @default(0)
+  lastDeliveryAt DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("webhook_endpoints")
+}
+
+/// Epic B2 — one attempt-tracked delivery of a domain event to an endpoint.
+model WebhookDelivery {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  endpointId   String
+  eventId      String
+  eventType    String
+  status       String    @default("PENDING") // PENDING | SUCCESS | FAILED
+  responseCode Int?
+  attempts     Int       @default(0)
+  error        String?
+  createdAt    DateTime  @default(now())
+  deliveredAt  DateTime?
+
+  @@index([endpointId, status])
+  @@index([workspaceId, createdAt])
+  @@map("webhook_deliveries")
+}
+
 model LeadActivity {
   id          String  @id @default(uuid())
   type        String // CALL, VISIT, NOTE, EMAIL, WHATSAPP, STATUS_CHANGE, DEMO, MEETING
