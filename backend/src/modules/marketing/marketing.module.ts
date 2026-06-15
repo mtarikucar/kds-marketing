@@ -146,6 +146,11 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// Epic F — custom roles + granular permissions.
+import { RolesController } from './roles/roles.controller';
+import { RolesService } from './roles/roles.service';
+import { PermissionsGuard } from './roles/permissions.guard';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -227,6 +232,7 @@ import { BrandingService } from './branding/branding.service';
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    RolesController,
   ],
   providers: [
     // Services
@@ -328,6 +334,9 @@ import { BrandingService } from './branding/branding.service';
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic F — custom roles + permissions.
+    RolesService,
+    PermissionsGuard,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

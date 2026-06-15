@@ -107,6 +107,11 @@ model MarketingUser {
   // logout and on password change so outstanding tokens are invalidated.
   tokenVersion Int @default(0)
 
+  // Epic F — optional custom role (granular permissions). When set, its
+  // permission set overrides the legacy `role` string; otherwise the legacy
+  // OWNER/MANAGER/REP → permission mapping applies. Additive, non-breaking.
+  customRoleId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1408,4 +1413,20 @@ model RoutineConfig {
   updatedAt          DateTime  @updatedAt
 
   @@map("routine_configs")
+}
+
+/// Epic F — a workspace-defined custom role with a granular permission set
+/// (array of permission keys from the catalog). Assigned to MarketingUsers via
+/// `customRoleId`; overrides the legacy OWNER/MANAGER/REP mapping.
+model CustomRole {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  permissions Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("custom_roles")
 }
