@@ -1,8 +1,53 @@
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Navigate, Link } from 'react-router-dom';
+import { useForm, type SubmitHandler } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { toast } from 'sonner';
+import { Inbox } from 'lucide-react';
+import type { ColumnDef } from '@tanstack/react-table';
 import { usePlatformAuthStore } from '../../store/platformAuthStore';
 import platformApi from '../../features/platform/api/platformApi';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable } from '@/components/ui/DataTable';
+import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/Dialog';
+import { Field } from '@/components/ui/Field';
+import { Textarea } from '@/components/ui/Textarea';
+
+interface ManualOrder {
+  id: string;
+  providerRef: string;
+  workspaceId: string;
+  workspace?: { name?: string; slug?: string };
+  package?: { name: string };
+  billingCycle?: string;
+  addOnCode?: string;
+  amount: number | string;
+  currency: string;
+  createdAt: string;
+}
+
+const rejectSchema = z.object({
+  reason: z.string().trim().min(1, 'A reason is required to reject'),
+});
+type RejectFormValues = z.infer<typeof rejectSchema>;
+
+function fmtAmount(o: ManualOrder): string {
+  return `${Number(o.amount).toLocaleString()} ${o.currency}`;
+}
+function workspaceName(o: ManualOrder): string {
+  return o.workspace?.name ?? o.workspaceId;
+}
 
 /**
  * Manual bank-transfer queue: orders sit in AWAITING_TRANSFER until the
@@ -13,12 +58,15 @@ export default function ManualPaymentsPage() {
   const { isAuthenticated } = usePlatformAuthStore();
   const queryClient = useQueryClient();
 
-  const { data: orders, isLoading } = useQuery({
+  const [approveTarget, setApproveTarget] = useState<ManualOrder | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<ManualOrder | null>(null);
+
+  const { data: orders, isLoading } = useQuery<ManualOrder[]>({
     queryKey: ['platform', 'payments', 'awaiting'],
     queryFn: () => platformApi.get('/payments').then((r) => r.data),
     refetchInterval: 30_000,
     // Don't fetch (or poll) until authenticated — preserves the original
-    // no-request-before-redirect behavior now that the guard sits below.
+    // no-request-before-redirect behavior now that the guard sits in the layout.
     enabled: isAuthenticated,
   });
 
@@ -28,6 +76,7 @@ export default function ManualPaymentsPage() {
       queryClient.invalidateQueries({ queryKey: ['platform', 'payments'] });
       if (data.settled) toast.success('Payment approved — package activated');
       else toast.warning(`Not settled: ${data.reason}`);
+      setApproveTarget(null);
     },
     onError: (e: any) => toast.error(e.response?.data?.message ?? 'Approve failed'),
   });
@@ -38,97 +87,187 @@ export default function ManualPaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['platform', 'payments'] });
       toast.success('Order rejected');
+      setRejectTarget(null);
     },
     onError: (e: any) => toast.error(e.response?.data?.message ?? 'Reject failed'),
   });
 
-  // Guard AFTER all hooks (Rules of Hooks).
-  if (!isAuthenticated) {
-    return <Navigate to="/platform/login" replace />;
-  }
+  const rejectForm = useForm<RejectFormValues>({
+    resolver: zodResolver(rejectSchema),
+    mode: 'onBlur',
+    defaultValues: { reason: '' },
+  });
+
+  // Reset the reason field whenever a new reject target opens.
+  useEffect(() => {
+    if (rejectTarget) rejectForm.reset({ reason: '' });
+  }, [rejectTarget, rejectForm]);
+
+  const onReject: SubmitHandler<RejectFormValues> = (values) => {
+    if (!rejectTarget) return;
+    reject.mutate({ orderId: rejectTarget.id, reason: values.reason.trim() });
+  };
+
+  const columns = useMemo<ColumnDef<ManualOrder, unknown>[]>(
+    () => [
+      {
+        accessorKey: 'providerRef',
+        header: 'Reference',
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs">{getValue<string>()}</span>
+        ),
+      },
+      {
+        id: 'workspace',
+        header: 'Workspace',
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            <div className="font-medium text-foreground">{workspaceName(row.original)}</div>
+            <div className="text-xs text-muted-foreground">{row.original.workspace?.slug}</div>
+          </div>
+        ),
+      },
+      {
+        id: 'item',
+        header: 'Item',
+        cell: ({ row }) => {
+          const o = row.original;
+          return (
+            <span className="text-muted-foreground">
+              {o.package ? `${o.package.name} (${o.billingCycle})` : o.addOnCode}
+            </span>
+          );
+        },
+      },
+      {
+        id: 'amount',
+        header: 'Amount',
+        cell: ({ row }) => (
+          <span className="font-medium tabular-nums text-foreground">{fmtAmount(row.original)}</span>
+        ),
+      },
+      {
+        accessorKey: 'createdAt',
+        header: 'Requested',
+        cell: ({ getValue }) => (
+          <span className="text-xs text-muted-foreground">
+            {new Date(getValue<string>()).toLocaleString()}
+          </span>
+        ),
+      },
+      {
+        id: 'actions',
+        header: () => <span className="sr-only">Actions</span>,
+        cell: ({ row }) => {
+          const o = row.original;
+          return (
+            <div className="flex justify-end gap-2">
+              <Button
+                size="sm"
+                disabled={approve.isPending}
+                onClick={() => setApproveTarget(o)}
+              >
+                Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={reject.isPending}
+                onClick={() => setRejectTarget(o)}
+              >
+                Reject
+              </Button>
+            </div>
+          );
+        },
+      },
+    ],
+    [approve.isPending, reject.isPending],
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-slate-900 text-white">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Link to="/platform/workspaces" className="text-slate-300 hover:text-white text-sm">← Workspaces</Link>
-          <h1 className="font-semibold">Manual payments</h1>
-        </div>
-      </header>
+    <div className="space-y-5">
+      <PageHeader
+        title="Manual payments"
+        description="Bank-transfer orders awaiting operator approval."
+      />
 
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-left">
-              <tr>
-                <th className="px-4 py-3 font-medium">Reference</th>
-                <th className="px-4 py-3 font-medium">Workspace</th>
-                <th className="px-4 py-3 font-medium">Item</th>
-                <th className="px-4 py-3 font-medium">Amount</th>
-                <th className="px-4 py-3 font-medium">Requested</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {isLoading && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
+      <DataTable
+        columns={columns}
+        data={orders ?? []}
+        isLoading={isLoading}
+        emptyState={
+          <EmptyState
+            icon={<Inbox className="h-10 w-10" />}
+            title="No transfers waiting"
+            description="Manual bank-transfer orders will appear here when submitted."
+          />
+        }
+      />
+
+      {/* Approve confirmation */}
+      <ConfirmDialog
+        open={!!approveTarget}
+        onOpenChange={(open) => {
+          if (!open) setApproveTarget(null);
+        }}
+        title="Approve payment"
+        description={
+          approveTarget
+            ? `Approve ${fmtAmount(approveTarget)} for "${workspaceName(approveTarget)}" (ref ${approveTarget.providerRef})? This activates the package.`
+            : undefined
+        }
+        confirmLabel="Approve"
+        loading={approve.isPending}
+        onConfirm={() => approveTarget && approve.mutate(approveTarget.id)}
+      />
+
+      {/* Reject dialog — reason is required and recorded on the order. */}
+      <Dialog
+        open={!!rejectTarget}
+        onOpenChange={(open) => {
+          if (!open) setRejectTarget(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject transfer</DialogTitle>
+            <DialogDescription>
+              {rejectTarget
+                ? `Reject the transfer for "${workspaceName(rejectTarget)}" (ref ${rejectTarget.providerRef})? The reason is recorded on the order.`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={rejectForm.handleSubmit(onReject)} className="space-y-4">
+            <Field label="Reason" error={rejectForm.formState.errors.reason?.message} required>
+              {({ id, describedBy, invalid }) => (
+                <Textarea
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  rows={3}
+                  placeholder="Why is this transfer being rejected?"
+                  {...rejectForm.register('reason')}
+                />
               )}
-              {!isLoading && (orders?.length ?? 0) === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No transfers waiting</td></tr>
-              )}
-              {orders?.map((o: any) => (
-                <tr key={o.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs">{o.providerRef}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">{o.workspace?.name ?? o.workspaceId}</div>
-                    <div className="text-xs text-slate-400">{o.workspace?.slug}</div>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">
-                    {o.package ? `${o.package.name} (${o.billingCycle})` : o.addOnCode}
-                  </td>
-                  <td className="px-4 py-3 font-medium text-slate-900">
-                    {Number(o.amount).toLocaleString()} {o.currency}
-                  </td>
-                  <td className="px-4 py-3 text-slate-500 text-xs">
-                    {new Date(o.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-right space-x-2">
-                    <button
-                      onClick={() => {
-                        const workspace = o.workspace?.name ?? o.workspaceId;
-                        const amount = `${Number(o.amount).toLocaleString()} ${o.currency}`;
-                        if (!window.confirm(`Approve ${amount} for "${workspace}" (ref ${o.providerRef})? This activates the package.`)) return;
-                        approve.mutate(o.id);
-                      }}
-                      disabled={approve.isPending}
-                      className="px-3 py-1.5 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => {
-                        const workspace = o.workspace?.name ?? o.workspaceId;
-                        const reason = window.prompt(`Reject the transfer for "${workspace}" (ref ${o.providerRef})?\nEnter a reason — this is recorded on the order:`);
-                        if (reason === null) return; // cancelled
-                        const trimmed = reason.trim();
-                        if (!trimmed) {
-                          toast.error('A reason is required to reject');
-                          return;
-                        }
-                        reject.mutate({ orderId: o.id, reason: trimmed });
-                      }}
-                      disabled={reject.isPending}
-                      className="px-3 py-1.5 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                    >
-                      Reject
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </main>
+            </Field>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRejectTarget(null)}
+                disabled={reject.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" variant="destructive" loading={reject.isPending}>
+                Reject
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

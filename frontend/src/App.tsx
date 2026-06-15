@@ -41,7 +41,8 @@ import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
 import PlatformLoginPage from './pages/platform/PlatformLoginPage';
 import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
 import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
-import PlatformRoutinesPage from './pages/platform/PlatformRoutinesPage';
+import PlatformRoutinesPage from './pages/platform/routines/PlatformRoutinesPage';
+import PlatformLayout from './features/platform/components/PlatformLayout';
 import { useReferralCapture } from './features/marketing/hooks/useReferralCapture';
 
 /**
@@ -62,12 +63,16 @@ export default function App() {
       <Route path="/register" element={<RegisterWorkspacePage />} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
       <Route path="/widget" element={<WidgetChatPage />} />
-      {/* Platform (superadmin) realm — separate auth store + token. */}
+      {/* Platform (superadmin) realm — separate auth store + token. The login
+          page sits OUTSIDE the layout; PlatformLayout carries the realm auth
+          guard (redirects to /platform/login when unauthenticated) + shell. */}
       <Route path="/platform/login" element={<PlatformLoginPage />} />
-      <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
-      <Route path="/platform/workspaces/:id" element={<PlatformWorkspaceDetailPage />} />
-      <Route path="/platform/payments" element={<ManualPaymentsPage />} />
-      <Route path="/platform/routines" element={<PlatformRoutinesPage />} />
+      <Route element={<PlatformLayout />}>
+        <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
+        <Route path="/platform/workspaces/:id" element={<PlatformWorkspaceDetailPage />} />
+        <Route path="/platform/payments" element={<ManualPaymentsPage />} />
+        <Route path="/platform/routines" element={<PlatformRoutinesPage />} />
+      </Route>
       <Route element={<MarketingProtectedRoute />}>
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
