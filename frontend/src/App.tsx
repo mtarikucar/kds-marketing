@@ -1,49 +1,63 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
-const UiKitchenSinkPage = lazy(
-  () => import('./pages/_dev/UiKitchenSinkPage'),
-);
+// ── Eager (layout / guard) imports ────────────────────────────────────────────
 import { MarketingLayout, MarketingProtectedRoute } from './features/marketing/components';
 import { MarketingRole } from './features/marketing/types';
-import MarketingLoginPage from './pages/marketing/MarketingLoginPage';
-import MarketingDashboardPage from './pages/marketing/MarketingDashboardPage';
-import LeadsPage from './pages/marketing/leads/LeadsPage';
-import CreateLeadPage from './pages/marketing/CreateLeadPage';
-import LeadDetailPage from './pages/marketing/leadDetail/LeadDetailPage';
-import TasksPage from './pages/marketing/tasks/TasksPage';
-import CalendarPage from './pages/marketing/calendar/CalendarPage';
-import OffersPage from './pages/marketing/offers/OffersPage';
-import ReportsPage from './pages/marketing/ReportsPage';
-import CommissionsPage from './pages/marketing/CommissionsPage';
-import MarketingUsersPage from './pages/marketing/users';
-import InstallationsPage from './pages/marketing/installations/InstallationsPage';
-import CallsPage from './pages/marketing/CallsPage';
-import PerformancePage from './pages/marketing/PerformancePage';
-import TargetsPage from './pages/marketing/targets';
-import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
-import ResearchSettingsPage from './pages/marketing/research/ResearchSettingsPage';
-import AgentStudioPage from './pages/marketing/AgentStudioPage';
-import KnowledgeBasePage from './pages/marketing/KnowledgeBasePage';
-import InboxPage from './pages/marketing/inbox/InboxPage';
-import ChannelsSettingsPage from './pages/marketing/ChannelsSettingsPage';
-import AutomationsPage from './pages/marketing/AutomationsPage';
-import CampaignsPage from './pages/marketing/CampaignsPage';
-import SitesPage from './pages/marketing/SitesPage';
-import BookingSettingsPage from './pages/marketing/BookingSettingsPage';
-import ReviewsPage from './pages/marketing/ReviewsPage';
-import VoicePage from './pages/marketing/VoicePage';
-import InvoicesPage from './pages/marketing/invoices';
-import BrandingSettingsPage from './pages/marketing/BrandingSettingsPage';
-import WidgetChatPage from './pages/marketing/WidgetChatPage';
-import BillingPage from './pages/marketing/billing';
-import ManualPaymentsPage from './pages/platform/ManualPaymentsPage';
-import PlatformLoginPage from './pages/platform/PlatformLoginPage';
-import PlatformWorkspacesPage from './pages/platform/PlatformWorkspacesPage';
-import PlatformWorkspaceDetailPage from './pages/platform/PlatformWorkspaceDetailPage';
-import PlatformRoutinesPage from './pages/platform/routines/PlatformRoutinesPage';
 import PlatformLayout from './features/platform/components/PlatformLayout';
 import { useReferralCapture } from './features/marketing/hooks/useReferralCapture';
+
+// ── Route fallback ─────────────────────────────────────────────────────────────
+import { RouteFallback } from './components/RouteFallback';
+
+// ── Lazy page imports — marketing realm ───────────────────────────────────────
+const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
+const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
+const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
+const MarketingDashboardPage   = lazy(() => import('./pages/marketing/MarketingDashboardPage'));
+const InboxPage                = lazy(() => import('./pages/marketing/inbox/InboxPage'));
+const LeadsPage                = lazy(() => import('./pages/marketing/leads/LeadsPage'));
+const CreateLeadPage           = lazy(() => import('./pages/marketing/CreateLeadPage'));
+const LeadDetailPage           = lazy(() => import('./pages/marketing/leadDetail/LeadDetailPage'));
+const TasksPage                = lazy(() => import('./pages/marketing/tasks/TasksPage'));
+const CalendarPage             = lazy(() => import('./pages/marketing/calendar/CalendarPage'));
+const OffersPage               = lazy(() => import('./pages/marketing/offers/OffersPage'));
+const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
+const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
+const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
+const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
+const PerformancePage          = lazy(() => import('./pages/marketing/PerformancePage'));
+const BillingPage              = lazy(() => import('./pages/marketing/billing'));
+// Manager-only pages
+const MarketingUsersPage       = lazy(() => import('./pages/marketing/users'));
+const TargetsPage              = lazy(() => import('./pages/marketing/targets'));
+const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
+const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
+const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
+const ChannelsSettingsPage     = lazy(() => import('./pages/marketing/ChannelsSettingsPage'));
+const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
+const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
+const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
+const BookingSettingsPage      = lazy(() => import('./pages/marketing/BookingSettingsPage'));
+const ReviewsPage              = lazy(() => import('./pages/marketing/ReviewsPage'));
+const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'));
+const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
+const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
+
+// ── Lazy page imports — platform (superadmin) realm ───────────────────────────
+const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
+const PlatformWorkspacesPage     = lazy(() => import('./pages/platform/PlatformWorkspacesPage'));
+const PlatformWorkspaceDetailPage = lazy(() => import('./pages/platform/PlatformWorkspaceDetailPage'));
+const ManualPaymentsPage         = lazy(() => import('./pages/platform/ManualPaymentsPage'));
+const PlatformRoutinesPage       = lazy(() => import('./pages/platform/routines/PlatformRoutinesPage'));
+
+// ── Dev-only lazy page ────────────────────────────────────────────────────────
+const UiKitchenSinkPage = lazy(() => import('./pages/_dev/UiKitchenSinkPage'));
+
+// Helper: wrap a lazy page in a Suspense boundary with the shared fallback.
+function S({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
 
 /**
  * Standalone marketing console served at the ROOT of its own (sub)domain. This is
@@ -59,58 +73,62 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/login" element={<MarketingLoginPage />} />
-      <Route path="/register" element={<RegisterWorkspacePage />} />
+      <Route path="/login"    element={<S><MarketingLoginPage /></S>} />
+      <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
-      <Route path="/widget" element={<WidgetChatPage />} />
+      <Route path="/widget"   element={<S><WidgetChatPage /></S>} />
+
       {/* Platform (superadmin) realm — separate auth store + token. The login
           page sits OUTSIDE the layout; PlatformLayout carries the realm auth
           guard (redirects to /platform/login when unauthenticated) + shell. */}
-      <Route path="/platform/login" element={<PlatformLoginPage />} />
+      <Route path="/platform/login" element={<S><PlatformLoginPage /></S>} />
       <Route element={<PlatformLayout />}>
-        <Route path="/platform/workspaces" element={<PlatformWorkspacesPage />} />
-        <Route path="/platform/workspaces/:id" element={<PlatformWorkspaceDetailPage />} />
-        <Route path="/platform/payments" element={<ManualPaymentsPage />} />
-        <Route path="/platform/routines" element={<PlatformRoutinesPage />} />
+        <Route path="/platform/workspaces"    element={<S><PlatformWorkspacesPage /></S>} />
+        <Route path="/platform/workspaces/:id" element={<S><PlatformWorkspaceDetailPage /></S>} />
+        <Route path="/platform/payments"      element={<S><ManualPaymentsPage /></S>} />
+        <Route path="/platform/routines"      element={<S><PlatformRoutinesPage /></S>} />
       </Route>
+
+      {/* Marketing realm — guarded by MarketingProtectedRoute (auth check). */}
       <Route element={<MarketingProtectedRoute />}>
         <Route element={<MarketingLayout />}>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<MarketingDashboardPage />} />
-          <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/leads" element={<LeadsPage />} />
-          <Route path="/leads/new" element={<CreateLeadPage />} />
-          <Route path="/leads/:id" element={<LeadDetailPage />} />
-          <Route path="/leads/:id/edit" element={<CreateLeadPage />} />
-          <Route path="/tasks" element={<TasksPage />} />
-          <Route path="/calendar" element={<CalendarPage />} />
-          <Route path="/offers" element={<OffersPage />} />
-          <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/commissions" element={<CommissionsPage />} />
-          <Route path="/installations" element={<InstallationsPage />} />
-          <Route path="/calls" element={<CallsPage />} />
-          <Route path="/performance" element={<PerformancePage />} />
-          <Route path="/billing" element={<BillingPage />} />
+          <Route path="/"          element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
+          <Route path="/inbox"     element={<S><InboxPage /></S>} />
+          <Route path="/leads"     element={<S><LeadsPage /></S>} />
+          <Route path="/leads/new" element={<S><CreateLeadPage /></S>} />
+          <Route path="/leads/:id" element={<S><LeadDetailPage /></S>} />
+          <Route path="/leads/:id/edit" element={<S><CreateLeadPage /></S>} />
+          <Route path="/tasks"          element={<S><TasksPage /></S>} />
+          <Route path="/calendar"       element={<S><CalendarPage /></S>} />
+          <Route path="/offers"         element={<S><OffersPage /></S>} />
+          <Route path="/reports"        element={<S><ReportsPage /></S>} />
+          <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
+          <Route path="/installations"  element={<S><InstallationsPage /></S>} />
+          <Route path="/calls"          element={<S><CallsPage /></S>} />
+          <Route path="/performance"    element={<S><PerformancePage /></S>} />
+          <Route path="/billing"        element={<S><BillingPage /></S>} />
         </Route>
         <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.MANAGER} />}>
           <Route element={<MarketingLayout />}>
-            <Route path="/users" element={<MarketingUsersPage />} />
-            <Route path="/targets" element={<TargetsPage />} />
-            <Route path="/research" element={<ResearchSettingsPage />} />
-            <Route path="/ai/agents" element={<AgentStudioPage />} />
-            <Route path="/ai/knowledge" element={<KnowledgeBasePage />} />
-            <Route path="/channels" element={<ChannelsSettingsPage />} />
-            <Route path="/automations" element={<AutomationsPage />} />
-            <Route path="/campaigns" element={<CampaignsPage />} />
-            <Route path="/sites" element={<SitesPage />} />
-            <Route path="/booking" element={<BookingSettingsPage />} />
-            <Route path="/reviews" element={<ReviewsPage />} />
-            <Route path="/voice" element={<VoicePage />} />
-            <Route path="/invoices" element={<InvoicesPage />} />
-            <Route path="/branding" element={<BrandingSettingsPage />} />
+            <Route path="/users"       element={<S><MarketingUsersPage /></S>} />
+            <Route path="/targets"     element={<S><TargetsPage /></S>} />
+            <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
+            <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
+            <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
+            <Route path="/channels"    element={<S><ChannelsSettingsPage /></S>} />
+            <Route path="/automations" element={<S><AutomationsPage /></S>} />
+            <Route path="/campaigns"   element={<S><CampaignsPage /></S>} />
+            <Route path="/sites"       element={<S><SitesPage /></S>} />
+            <Route path="/booking"     element={<S><BookingSettingsPage /></S>} />
+            <Route path="/reviews"     element={<S><ReviewsPage /></S>} />
+            <Route path="/voice"       element={<S><VoicePage /></S>} />
+            <Route path="/invoices"    element={<S><InvoicesPage /></S>} />
+            <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
           </Route>
         </Route>
       </Route>
+
       {import.meta.env.DEV && (
         <Route
           path="/_dev/ui"
