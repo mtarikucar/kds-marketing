@@ -30,6 +30,7 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
       {} as any, // autoAssigner — unused by update()
       {} as any, // provisioning — unused by update()
       {} as any, // outbox — unused by update()
+      { validateAndNormalize: jest.fn().mockResolvedValue({}) } as any, // customFields
     );
     prisma.lead.update.mockResolvedValue({ id: 'lead-1' } as any);
   });

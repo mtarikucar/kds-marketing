@@ -12,6 +12,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EmailService } from '../../../common/services/email.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from './lead-auto-assigner.service';
+import { CustomFieldsService } from './custom-fields.service';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
@@ -59,6 +60,7 @@ export class MarketingLeadsService {
     @Inject(CORE_PROVISIONING_PORT)
     private readonly provisioning: CoreProvisioningPort,
     private readonly outbox: OutboxService,
+    private readonly customFields: CustomFieldsService,
   ) {}
 
   async create(workspaceId: string, dto: CreateLeadDto, userId: string, userRole: string) {
@@ -122,12 +124,23 @@ export class MarketingLeadsService {
       resolvedAssignee = await this.autoAssigner.pickAssignee(workspaceId);
     }
 
+    // Epic A1 — validate/coerce custom field values against the workspace's
+    // definitions (enforces SELECT options + required on create, drops unknowns).
+    const customFields = await this.customFields.validateAndNormalize(
+      workspaceId,
+      'LEAD',
+      dto.customFields,
+      'create',
+    );
+
+    const { customFields: _ignoredCustomFields, ...leadData } = dto;
     return this.prisma.lead.create({
       data: {
-        ...dto,
+        ...leadData,
         workspaceId,
         nextFollowUp: dto.nextFollowUp ? new Date(dto.nextFollowUp) : undefined,
         assignedToId: resolvedAssignee,
+        customFields: customFields as Prisma.InputJsonValue,
       },
       include: {
         assignedTo: {
@@ -329,13 +342,49 @@ export class MarketingLeadsService {
       }),
     };
 
-    return this.prisma.lead.update({
+    // Epic A1 — merge validated custom field values onto the existing map (a
+    // partial update only touches the keys it sends; required is not enforced).
+    let cfChangedKeys: string[] | null = null;
+    if (dto.customFields !== undefined) {
+      const validated = await this.customFields.validateAndNormalize(
+        workspaceId,
+        'LEAD',
+        dto.customFields,
+        'update',
+      );
+      const existing =
+        (lead.customFields as Record<string, unknown> | null) ?? {};
+      data.customFields = {
+        ...existing,
+        ...validated,
+      } as Prisma.InputJsonValue;
+      cfChangedKeys = Object.keys(validated);
+    }
+
+    const updated = await this.prisma.lead.update({
       where: { id },
       data,
       include: {
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
       },
     });
+
+    // Best-effort change event for downstream workflow triggers (Epic A3+).
+    // Never fail the update if the outbox append fails.
+    if (cfChangedKeys && cfChangedKeys.length > 0) {
+      try {
+        await this.outbox.append({
+          type: 'marketing.lead.customField.changed.v1',
+          idempotencyKey: `lead-cf:${id}:${updated.updatedAt.getTime()}`,
+          payload: { leadId: id, workspaceId, keys: cfChangedKeys },
+        });
+      } catch (e) {
+        this.logger.warn(
+          `customField.changed outbox append failed for lead ${id}: ${(e as Error).message}`,
+        );
+      }
+    }
+    return updated;
   }
 
   async updateStatus(

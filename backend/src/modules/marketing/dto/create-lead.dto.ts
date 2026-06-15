@@ -6,6 +6,7 @@ import {
   IsInt,
   IsEnum,
   IsDateString,
+  IsObject,
   Matches,
   MaxLength,
   Min,
@@ -136,4 +137,12 @@ export class CreateLeadDto {
   @IsOptional()
   @IsString()
   assignedToId?: string;
+
+  /**
+   * Epic A1 — workspace-defined custom field values, keyed by CustomFieldDef.key.
+   * Validated/coerced against the workspace's definitions before persist.
+   */
+  @IsOptional()
+  @IsObject()
+  customFields?: Record<string, unknown>;
 }
