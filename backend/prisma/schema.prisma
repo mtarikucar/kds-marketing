@@ -348,6 +348,26 @@ model ImportJobRow {
   @@map("import_job_rows")
 }
 
+/// Epic B1 — workspace-scoped programmatic API key. The raw key (mk_live_…) is
+/// shown once on create; only the SHA-256 `keyHash` is stored and the `prefix`
+/// is shown thereafter. `scopes` gates read/write on the public REST API.
+model ApiKey {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  keyHash     String    @unique
+  prefix      String
+  scopes      Json      @default("[\"read\", \"write\"]")
+  status      String    @default("ACTIVE") // ACTIVE | REVOKED
+  lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@index([workspaceId, status])
+  @@map("api_keys")
+}
+
 model LeadActivity {
   id          String  @id @default(uuid())
   type        String // CALL, VISIT, NOTE, EMAIL, WHATSAPP, STATUS_CHANGE, DEMO, MEETING
