@@ -8,6 +8,7 @@ export * from './segment-compiler.service';
 export * from './segments.service';
 export * from './lead-dedupe.service';
 export * from './import.service';
+export * from './api-keys.service';
 export * from './marketing-offers.service';
 export * from './marketing-dashboard.service';
 export * from './marketing-reports.service';
