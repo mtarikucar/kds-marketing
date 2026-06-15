@@ -13,7 +13,7 @@ import CreateLeadPage from './pages/marketing/CreateLeadPage';
 import LeadDetailPage from './pages/marketing/leadDetail/LeadDetailPage';
 import TasksPage from './pages/marketing/tasks/TasksPage';
 import CalendarPage from './pages/marketing/calendar/CalendarPage';
-import OffersPage from './pages/marketing/OffersPage';
+import OffersPage from './pages/marketing/offers/OffersPage';
 import ReportsPage from './pages/marketing/ReportsPage';
 import CommissionsPage from './pages/marketing/CommissionsPage';
 import MarketingUsersPage from './pages/marketing/MarketingUsersPage';
