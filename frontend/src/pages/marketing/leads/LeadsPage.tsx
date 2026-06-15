@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Plus } from 'lucide-react';
 
+import { listLeads, bulkAssignLeads } from '../../../features/marketing/api/leads.service';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { BulkActionToolbar } from '../../../features/marketing/components';
 import {
@@ -96,19 +97,15 @@ export default function LeadsPage() {
       { search, status, source, businessType, assignmentStatus, page },
     ],
     queryFn: () =>
-      marketingApi
-        .get<PaginatedResponse<Lead>>('/leads', {
-          params: {
-            search: search || undefined,
-            status: status || undefined,
-            source: source || undefined,
-            businessType: businessType || undefined,
-            assignmentStatus: assignmentStatus || undefined,
-            page,
-            limit: LIMIT,
-          },
-        })
-        .then((r) => r.data),
+      listLeads({
+        search: search || undefined,
+        status: status || undefined,
+        source: source || undefined,
+        businessType: businessType || undefined,
+        assignmentStatus: assignmentStatus || undefined,
+        page,
+        limit: LIMIT,
+      }),
   });
 
   // Reps used by both AssignCell popovers (per row) and BulkActionToolbar.
@@ -128,12 +125,9 @@ export default function LeadsPage() {
   // Bulk assign mutation — preserved verbatim (keys + invalidations).
   const bulkAssign = useMutation({
     mutationFn: (repId: string | null) =>
-      marketingApi.post('/leads/bulk-assign', {
-        leadIds: Array.from(selected),
-        assignedToId: repId ?? null,
-      }),
+      bulkAssignLeads(Array.from(selected), repId ?? null),
     onSuccess: (res) => {
-      const assigned = res.data?.assigned ?? 0;
+      const assigned = res?.assigned ?? 0;
       queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
       queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
       toast.success(t('leads.bulkAssign.success', { count: assigned }));

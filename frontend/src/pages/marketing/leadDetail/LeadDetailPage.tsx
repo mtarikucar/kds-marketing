@@ -8,7 +8,19 @@ import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
-import marketingApi from '../../../features/marketing/api/marketingApi';
+import {
+  getLead,
+  updateLeadStatus,
+  createLeadActivity,
+  createOffer,
+  sendOffer,
+  deleteOffer,
+  createTask,
+  completeTask,
+  deleteTask,
+  convertLead,
+  deleteLead,
+} from '../../../features/marketing/api/leads.service';
 import { LeadStatusBadge, AssignCell } from '../../../features/marketing/components';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import ContactInfo from './ContactInfo';
@@ -17,7 +29,6 @@ import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
 import ConvertDialog from './ConvertDialog';
 import { useConvertDialog } from './useConvertDialog';
-import type { DetailLead } from './types';
 
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -47,7 +58,7 @@ export default function LeadDetailPage() {
     refetch,
   } = useQuery({
     queryKey: ['marketing', 'lead', id],
-    queryFn: () => marketingApi.get<DetailLead>(`/leads/${id}`).then((r) => r.data),
+    queryFn: () => getLead(id!),
     // A genuine 404 (deleted lead) is the answer, not a transient failure —
     // don't burn retries on it; let the not-found branch render.
     retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
@@ -55,7 +66,7 @@ export default function LeadDetailPage() {
 
   // Mutations
   const statusMutation = useMutation({
-    mutationFn: (status: string) => marketingApi.patch(`/leads/${id}/status`, { status }),
+    mutationFn: (status: string) => updateLeadStatus(id!, status),
     onSuccess: () => {
       invalidate();
       toast.success('Status updated');
@@ -65,7 +76,7 @@ export default function LeadDetailPage() {
 
   const activityMutation = useMutation({
     mutationFn: (data: { type: string; title: string; description?: string }) =>
-      marketingApi.post(`/leads/${id}/activities`, data),
+      createLeadActivity(id!, data),
     onSuccess: () => {
       invalidate();
       toast.success('Activity added');
@@ -74,7 +85,7 @@ export default function LeadDetailPage() {
   });
 
   const createOfferMutation = useMutation({
-    mutationFn: (data: any) => marketingApi.post('/offers', data),
+    mutationFn: (data: any) => createOffer(data),
     onSuccess: () => {
       invalidate();
       toast.success('Offer created');
@@ -83,7 +94,7 @@ export default function LeadDetailPage() {
   });
 
   const sendOfferMutation = useMutation({
-    mutationFn: (offerId: string) => marketingApi.post(`/offers/${offerId}/send`),
+    mutationFn: (offerId: string) => sendOffer(offerId),
     onSuccess: () => {
       invalidate();
       toast.success('Offer sent');
@@ -92,7 +103,7 @@ export default function LeadDetailPage() {
   });
 
   const deleteOfferMutation = useMutation({
-    mutationFn: (offerId: string) => marketingApi.delete(`/offers/${offerId}`),
+    mutationFn: (offerId: string) => deleteOffer(offerId),
     onSuccess: () => {
       invalidate();
       toast.success('Offer deleted');
@@ -101,7 +112,7 @@ export default function LeadDetailPage() {
   });
 
   const createTaskMutation = useMutation({
-    mutationFn: (data: any) => marketingApi.post('/tasks', data),
+    mutationFn: (data: any) => createTask(data),
     onSuccess: () => {
       invalidate();
       toast.success('Task created');
@@ -110,7 +121,7 @@ export default function LeadDetailPage() {
   });
 
   const completeTaskMutation = useMutation({
-    mutationFn: (taskId: string) => marketingApi.patch(`/tasks/${taskId}/complete`),
+    mutationFn: (taskId: string) => completeTask(taskId),
     onSuccess: () => {
       invalidate();
       toast.success('Task completed');
@@ -119,7 +130,7 @@ export default function LeadDetailPage() {
   });
 
   const deleteTaskMutation = useMutation({
-    mutationFn: (taskId: string) => marketingApi.delete(`/tasks/${taskId}`),
+    mutationFn: (taskId: string) => deleteTask(taskId),
     onSuccess: () => {
       invalidate();
       toast.success('Task deleted');
@@ -128,7 +139,7 @@ export default function LeadDetailPage() {
   });
 
   const convertMutation = useMutation({
-    mutationFn: (data: any) => marketingApi.post(`/leads/${id}/convert`, data),
+    mutationFn: (data: any) => convertLead(id!, data),
     onSuccess: () => {
       invalidate();
       convert.close();
@@ -138,7 +149,7 @@ export default function LeadDetailPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => marketingApi.delete(`/leads/${id}`),
+    mutationFn: () => deleteLead(id!),
     onSuccess: () => {
       toast.success('Lead deleted');
       navigate('/leads');
