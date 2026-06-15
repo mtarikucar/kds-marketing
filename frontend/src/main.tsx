@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query';
 import { Toaster, toast } from 'sonner';
 import App from './App';
+import { ThemeProvider } from './components/theme/ThemeProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useMarketingAuthStore } from './store/marketingAuthStore';
 import { usePlatformAuthStore } from './store/platformAuthStore';
@@ -54,15 +55,17 @@ wireCacheReset(usePlatformAuthStore.subscribe, (s) => s.isAuthenticated);
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        {/* Top-level boundary catches render errors anywhere in the app
-            (incl. the standalone platform/login routes that sit outside
-            MarketingLayout's per-route boundary; the two compose). */}
-        <ErrorBoundary>
-          <App />
-        </ErrorBoundary>
-        <Toaster position="top-right" richColors />
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          {/* Top-level boundary catches render errors anywhere in the app
+              (incl. the standalone platform/login routes that sit outside
+              MarketingLayout's per-route boundary; the two compose). */}
+          <ErrorBoundary>
+            <App />
+          </ErrorBoundary>
+          <Toaster position="top-right" richColors />
+        </BrowserRouter>
+      </ThemeProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );
