@@ -1,32 +1,31 @@
-import type { ComponentType, SVGProps } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import {
-  HomeIcon,
-  UserGroupIcon,
-  ClipboardDocumentListIcon,
-  CalendarIcon,
-  DocumentTextIcon,
-  ChartBarIcon,
-  CurrencyDollarIcon,
-  UsersIcon,
-  WrenchScrewdriverIcon,
-  PhoneIcon,
-  PresentationChartLineIcon,
-  FlagIcon,
-  BeakerIcon,
-  CreditCardIcon,
-  SparklesIcon,
-  BookOpenIcon,
-  InboxIcon,
-  ChatBubbleLeftRightIcon,
-  BoltIcon,
-  MegaphoneIcon,
-  GlobeAltIcon,
-  CalendarDaysIcon,
-  StarIcon,
-  MicrophoneIcon,
-  BanknotesIcon,
-  SwatchIcon,
-} from '@heroicons/react/24/outline';
+  Home,
+  Users,
+  ClipboardList,
+  Calendar,
+  FileText,
+  BarChart3,
+  DollarSign,
+  Wrench,
+  Phone,
+  LineChart,
+  Flag,
+  FlaskConical,
+  CreditCard,
+  Sparkles,
+  BookOpen,
+  Inbox,
+  MessagesSquare,
+  Zap,
+  Megaphone,
+  Globe,
+  CalendarDays,
+  Star,
+  Mic,
+  Banknote,
+  Palette,
+} from 'lucide-react';
 
 /**
  * Single source of truth for the workspace console's navigation.
@@ -60,7 +59,7 @@ export type FeatureKey =
   | 'voiceAi'
   | 'invoicing';
 
-type IconType = ComponentType<SVGProps<SVGSVGElement>>;
+type IconType = LucideIcon;
 
 export interface NavItem {
   path: string;
@@ -89,11 +88,11 @@ export const NAV_GROUPS: NavGroup[] = [
     labelKey: 'nav.group.pipeline',
     label: 'Pipeline',
     items: [
-      { path: '/dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: HomeIcon },
-      { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: UserGroupIcon },
-      { path: '/tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardDocumentListIcon },
-      { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: CalendarIcon },
-      { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: DocumentTextIcon },
+      { path: '/dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home },
+      { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
+      { path: '/tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList },
+      { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
+      { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: FileText },
     ],
   },
   {
@@ -101,11 +100,11 @@ export const NAV_GROUPS: NavGroup[] = [
     labelKey: 'nav.group.sales',
     label: 'Sales',
     items: [
-      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: PhoneIcon, feature: 'telephony' },
-      { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: CurrencyDollarIcon, feature: 'commissions' },
-      { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: WrenchScrewdriverIcon, feature: 'installations' },
-      { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: ChartBarIcon },
-      { path: '/performance', labelKey: 'nav.performance', label: 'Performance', icon: PresentationChartLineIcon },
+      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
+      { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
+      { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
+      { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
+      { path: '/performance', labelKey: 'nav.performance', label: 'Performance', icon: LineChart },
     ],
   },
   {
@@ -114,17 +113,17 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Growth',
     collapsible: true,
     items: [
-      { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: InboxIcon, feature: 'conversationAi' },
-      { path: '/channels', labelKey: 'nav.channels', label: 'Channels', icon: ChatBubbleLeftRightIcon, feature: 'conversationAi', managerOnly: true },
-      { path: '/ai/agents', labelKey: 'nav.agentStudio', label: 'Agent Studio', icon: SparklesIcon, feature: 'agentStudio', managerOnly: true },
-      { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', label: 'Knowledge', icon: BookOpenIcon, feature: 'askAi', managerOnly: true },
-      { path: '/automations', labelKey: 'nav.automations', label: 'Automations', icon: BoltIcon, feature: 'workflows', managerOnly: true },
-      { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: MegaphoneIcon, feature: 'campaigns', managerOnly: true },
-      { path: '/sites', labelKey: 'nav.sites', label: 'Sites', icon: GlobeAltIcon, feature: 'funnels', managerOnly: true },
-      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDaysIcon, feature: 'funnels', managerOnly: true },
-      { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: StarIcon, feature: 'reviews', managerOnly: true },
-      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: MicrophoneIcon, feature: 'voiceAi', managerOnly: true },
-      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: BanknotesIcon, feature: 'invoicing', managerOnly: true },
+      { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, feature: 'conversationAi' },
+      { path: '/channels', labelKey: 'nav.channels', label: 'Channels', icon: MessagesSquare, feature: 'conversationAi', managerOnly: true },
+      { path: '/ai/agents', labelKey: 'nav.agentStudio', label: 'Agent Studio', icon: Sparkles, feature: 'agentStudio', managerOnly: true },
+      { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', label: 'Knowledge', icon: BookOpen, feature: 'askAi', managerOnly: true },
+      { path: '/automations', labelKey: 'nav.automations', label: 'Automations', icon: Zap, feature: 'workflows', managerOnly: true },
+      { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
+      { path: '/sites', labelKey: 'nav.sites', label: 'Sites', icon: Globe, feature: 'funnels', managerOnly: true },
+      { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
+      { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
+      { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
+      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
     ],
   },
   {
@@ -132,11 +131,11 @@ export const NAV_GROUPS: NavGroup[] = [
     labelKey: 'nav.group.settings',
     label: 'Settings',
     items: [
-      { path: '/users', labelKey: 'nav.users', label: 'Team', icon: UsersIcon, managerOnly: true },
-      { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: FlagIcon, managerOnly: true },
-      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: BeakerIcon, managerOnly: true },
-      { path: '/branding', labelKey: 'nav.branding', label: 'Branding', icon: SwatchIcon, managerOnly: true },
-      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCardIcon, managerOnly: true },
+      { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
+      { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
+      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
+      { path: '/branding', labelKey: 'nav.branding', label: 'Branding', icon: Palette, managerOnly: true },
+      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
     ],
   },
 ];

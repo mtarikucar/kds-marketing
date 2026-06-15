@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ChevronRight } from 'lucide-react';
 import { NAV_GROUPS } from '../navigation';
 
 /**
@@ -35,11 +35,11 @@ export default function Breadcrumbs() {
         ? t('breadcrumb.edit', 'Edit')
         : t('breadcrumb.detail', 'Detail');
 
-  const Chevron = () => <ChevronRightIcon className="h-4 w-4 shrink-0 text-slate-300" />;
+  const Chevron = () => <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />;
 
   return (
     <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-      <span className="hidden truncate text-slate-400 sm:inline">
+      <span className="hidden truncate text-muted-foreground sm:inline">
         {t(match.groupLabelKey, match.groupLabel)}
       </span>
       <span className="hidden sm:inline">
@@ -49,15 +49,15 @@ export default function Breadcrumbs() {
         <>
           <Link
             to={match.path}
-            className="truncate text-slate-500 transition-colors hover:text-slate-800"
+            className="truncate text-muted-foreground transition-colors hover:text-foreground"
           >
             {t(match.labelKey, match.label)}
           </Link>
           <Chevron />
-          <span className="truncate font-medium text-slate-900">{subLabel}</span>
+          <span className="truncate font-medium text-foreground">{subLabel}</span>
         </>
       ) : (
-        <span className="truncate font-medium text-slate-900">
+        <span className="truncate font-medium text-foreground">
           {t(match.labelKey, match.label)}
         </span>
       )}
