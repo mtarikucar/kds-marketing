@@ -87,21 +87,27 @@ export class SegmentsService {
 
   async preview(workspaceId: string, definition: unknown) {
     await this.compiler.validate(workspaceId, definition as SegmentNode);
-    const where = this.compiler.compile(workspaceId, definition as SegmentNode);
+    const filter = this.compiler.compile(workspaceId, definition as SegmentNode);
     const [count, sample] = await Promise.all([
-      this.prisma.lead.count({ where }),
-      this.prisma.lead.findMany({ where, take: 10, select: SAMPLE_SELECT }),
+      this.prisma.lead.count({ where: { workspaceId, AND: [filter] } }),
+      this.prisma.lead.findMany({
+        where: { workspaceId, AND: [filter] },
+        take: 10,
+        select: SAMPLE_SELECT,
+      }),
     ]);
     return { count, sample };
   }
 
   async count(workspaceId: string, id: string) {
     const seg = await this.getOwned(workspaceId, id);
-    const where = this.compiler.compile(
+    const filter = this.compiler.compile(
       workspaceId,
       seg.definition as unknown as SegmentNode,
     );
-    const count = await this.prisma.lead.count({ where });
+    const count = await this.prisma.lead.count({
+      where: { workspaceId, AND: [filter] },
+    });
     await this.prisma.segment.update({
       where: { id },
       data: { lastCount: count, lastEvaluatedAt: new Date() },
@@ -111,19 +117,19 @@ export class SegmentsService {
 
   async members(workspaceId: string, id: string, page = 1, pageSize = 50) {
     const seg = await this.getOwned(workspaceId, id);
-    const where = this.compiler.compile(
+    const filter = this.compiler.compile(
       workspaceId,
       seg.definition as unknown as SegmentNode,
     );
     const skip = (Math.max(1, page) - 1) * pageSize;
     const [items, total] = await Promise.all([
       this.prisma.lead.findMany({
-        where,
+        where: { workspaceId, AND: [filter] },
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.lead.count({ where }),
+      this.prisma.lead.count({ where: { workspaceId, AND: [filter] } }),
     ]);
     return { items, total, page, pageSize };
   }
