@@ -32,3 +32,6 @@ export {
 export { Checkbox } from './Checkbox';
 export { RadioGroup, RadioGroupItem } from './RadioGroup';
 export { Switch } from './Switch';
+export { Combobox, type ComboboxProps, type ComboboxOption } from './Combobox';
+export { DatePicker, type DatePickerProps } from './DatePicker';
+export { Slider, type SliderProps } from './Slider';
