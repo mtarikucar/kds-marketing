@@ -5,6 +5,7 @@ export * from './marketing-tasks.controller';
 export * from './marketing-custom-fields.controller';
 export * from './marketing-tags.controller';
 export * from './marketing-segments.controller';
+export * from './marketing-imports.controller';
 export * from './marketing-offers.controller';
 export * from './marketing-dashboard.controller';
 export * from './marketing-reports.controller';
