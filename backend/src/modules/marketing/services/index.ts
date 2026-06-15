@@ -2,6 +2,7 @@ export * from './marketing-auth.service';
 export * from './marketing-leads.service';
 export * from './marketing-activities.service';
 export * from './marketing-tasks.service';
+export * from './custom-fields.service';
 export * from './marketing-offers.service';
 export * from './marketing-dashboard.service';
 export * from './marketing-reports.service';
