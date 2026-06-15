@@ -146,6 +146,10 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// Epic G — analytics (read-only lead aggregations).
+import { AnalyticsController } from './analytics/analytics.controller';
+import { AnalyticsService } from './analytics/analytics.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -227,6 +231,7 @@ import { BrandingService } from './branding/branding.service';
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    AnalyticsController,
   ],
   providers: [
     // Services
@@ -328,6 +333,8 @@ import { BrandingService } from './branding/branding.service';
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic G — analytics.
+    AnalyticsService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
