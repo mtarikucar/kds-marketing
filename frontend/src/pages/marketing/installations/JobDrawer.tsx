@@ -13,6 +13,7 @@ import type { InstallationJob, InstallationCrew } from '../../../features/market
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   Badge,
@@ -117,6 +118,7 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
       <SheetContent side="right" className="w-full max-w-md overflow-y-auto">
         <SheetHeader>
           <SheetTitle>Installation Job</SheetTitle>
+          <SheetDescription className="sr-only">Installation job details and status management</SheetDescription>
         </SheetHeader>
 
         {isLoading || !job ? (

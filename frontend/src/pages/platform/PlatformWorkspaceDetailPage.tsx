@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { usePlatformAuthStore } from '../../store/platformAuthStore';
 import platformApi from '../../features/platform/api/platformApi';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -9,6 +9,16 @@ import { Badge, type BadgeProps } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import type { BreadcrumbItem } from '@/components/ui/Breadcrumbs';
+
+/** SPA-nav render helper for breadcrumbs — avoids full page reload. */
+function renderBreadcrumbLink(item: BreadcrumbItem, _children: React.ReactNode) {
+  return (
+    <Link to={item.href!} className="text-muted-foreground hover:text-foreground transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded">
+      {item.label}
+    </Link>
+  );
+}
 
 const STATUS_TONE: Record<string, NonNullable<BadgeProps['tone']>> = {
   ACTIVE: 'success',
@@ -58,7 +68,7 @@ export default function PlatformWorkspaceDetailPage() {
   if (!ws) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Workspace" breadcrumbs={breadcrumbs} />
+        <PageHeader title="Workspace" breadcrumbs={breadcrumbs} renderBreadcrumbLink={renderBreadcrumbLink} />
         <EmptyState title="Not found" description="This workspace does not exist or is no longer available." />
       </div>
     );
@@ -69,6 +79,7 @@ export default function PlatformWorkspaceDetailPage() {
       <PageHeader
         title={ws.name}
         breadcrumbs={breadcrumbs}
+        renderBreadcrumbLink={renderBreadcrumbLink}
         actions={
           <Badge tone={STATUS_TONE[ws.status] ?? 'neutral'}>{ws.status}</Badge>
         }

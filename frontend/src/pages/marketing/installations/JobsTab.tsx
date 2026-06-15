@@ -24,6 +24,7 @@ import {
   Button,
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -320,6 +321,7 @@ export function JobsTab({
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Create Installation Job</DialogTitle>
+            <DialogDescription className="sr-only">Fill in the details to create a new installation job</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <Field

@@ -14,6 +14,7 @@ import {
   Button,
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -213,6 +214,7 @@ export function CrewsTab({ isManager, crews, onInvalidate }: Props) {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Add Crew</DialogTitle>
+            <DialogDescription className="sr-only">Fill in the details to add a new crew</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreateSubmit(onCreateSubmit)} className="space-y-4">
             <Field label="Crew name" error={createErrors.name?.message} required>
@@ -275,6 +277,7 @@ export function CrewsTab({ isManager, crews, onInvalidate }: Props) {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Crew</DialogTitle>
+            <DialogDescription className="sr-only">Update the details for this crew</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleEditSubmit(onEditSubmit)} className="space-y-4">
             <Field label="Crew name" error={editErrors.name?.message} required>

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { cn } from './cn';
 
@@ -8,6 +9,21 @@ import { cn } from './cn';
  *
  * NOTE: A separate Breadcrumbs also exists under features/marketing/components/
  * for the existing marketing pages — this one is the new generic UI primitive.
+ *
+ * ### SPA navigation
+ * Pass a `renderLink` prop to swap the default `<a href>` for a client-side
+ * router link (e.g. react-router-dom `Link`). The render prop receives the
+ * item and the inner children so the caller controls the element:
+ *
+ * ```tsx
+ * import { Link } from 'react-router-dom';
+ * <Breadcrumbs
+ *   items={items}
+ *   renderLink={(item, children) => (
+ *     <Link to={item.href!} className="...">{children}</Link>
+ *   )}
+ * />
+ * ```
  */
 export interface BreadcrumbItem {
   label: string;
@@ -18,9 +34,21 @@ export interface BreadcrumbItem {
 export interface BreadcrumbsProps {
   items: BreadcrumbItem[];
   className?: string;
+  /**
+   * Optional render-prop for SPA link navigation. When provided, non-last
+   * items that have an `href` use this renderer instead of a plain `<a>`.
+   * The prop receives the item object and the child ReactNode (the label text)
+   * so the caller can wrap it in a router Link with proper styling.
+   */
+  renderLink?: (item: BreadcrumbItem, children: ReactNode) => ReactNode;
 }
 
-export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
+const linkClassName = cn(
+  'text-muted-foreground hover:text-foreground transition-colors duration-fast',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded',
+);
+
+export function Breadcrumbs({ items, className, renderLink }: BreadcrumbsProps) {
   return (
     <nav aria-label="Breadcrumb" className={cn('flex', className)}>
       <ol className="inline-flex items-center gap-1.5 text-sm">
@@ -38,15 +66,16 @@ export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
               ) : (
                 <>
                   {item.href ? (
-                    <a
-                      href={item.href}
-                      className={cn(
-                        'text-muted-foreground hover:text-foreground transition-colors duration-fast',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded',
-                      )}
-                    >
-                      {item.label}
-                    </a>
+                    renderLink ? (
+                      renderLink(item, <span className={linkClassName}>{item.label}</span>)
+                    ) : (
+                      <a
+                        href={item.href}
+                        className={linkClassName}
+                      >
+                        {item.label}
+                      </a>
+                    )
                   ) : (
                     <span className="text-muted-foreground">{item.label}</span>
                   )}

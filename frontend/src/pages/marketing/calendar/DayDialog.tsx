@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
   Button,
   Field,
@@ -134,6 +135,9 @@ export function DayDialog({
       <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{displayDate}</DialogTitle>
+          <DialogDescription className="sr-only">
+            View and create tasks for {displayDate}
+          </DialogDescription>
         </DialogHeader>
 
         {/* Existing tasks list */}

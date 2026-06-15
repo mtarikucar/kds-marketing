@@ -9,6 +9,7 @@ import { fmtDate, fmtDateTime } from '../utils/format';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -179,6 +180,9 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
           <DialogTitle>
             {t('commission.detailTitle', 'Komisyon detayı')}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            {t('commission.detailDescription', 'Commission details and payment information')}
+          </DialogDescription>
         </DialogHeader>
 
         {/* Body */}

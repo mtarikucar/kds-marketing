@@ -7,6 +7,10 @@ import { Button } from './Button';
  * pressed (it does not auto-close — let the caller close after the async work, or
  * close in the handler). `tone="danger"` renders a destructive confirm button for
  * irreversible actions. Inherits Dialog's focus-trap, Escape and aria-modal.
+ *
+ * A `DialogDescription` is ALWAYS rendered so Radix's "Missing Description"
+ * advisory never fires. When no explicit `description` is passed the element
+ * is visually hidden via `sr-only` but still present in the accessibility tree.
  */
 export interface ConfirmDialogProps {
   open: boolean;
@@ -36,7 +40,15 @@ export function ConfirmDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          {description && <DialogDescription>{description}</DialogDescription>}
+          {description ? (
+            <DialogDescription>{description}</DialogDescription>
+          ) : (
+            /* Always provide a description for screen readers even when not visually displayed.
+               This prevents Radix's "Missing Description" advisory from firing. */
+            <DialogDescription className="sr-only">
+              {confirmLabel} confirmation dialog
+            </DialogDescription>
+          )}
         </DialogHeader>
         <DialogFooter>
           <DialogClose asChild>

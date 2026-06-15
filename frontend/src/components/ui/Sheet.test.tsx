@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect } from 'vitest';
-import { Sheet, SheetTrigger, SheetContent, SheetTitle } from './Sheet';
+import { Sheet, SheetTrigger, SheetContent, SheetTitle, SheetDescription } from './Sheet';
 
 function SheetDemo({ side }: { side?: 'left' | 'right' | 'top' | 'bottom' }) {
   return (
@@ -9,6 +9,7 @@ function SheetDemo({ side }: { side?: 'left' | 'right' | 'top' | 'bottom' }) {
       <SheetTrigger>Open sheet</SheetTrigger>
       <SheetContent side={side}>
         <SheetTitle>Navigation</SheetTitle>
+        <SheetDescription className="sr-only">Navigation panel</SheetDescription>
       </SheetContent>
     </Sheet>
   );
