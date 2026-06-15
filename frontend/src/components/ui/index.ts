@@ -89,3 +89,17 @@ export {
 } from './Tooltip';
 export { ConfirmDialog, type ConfirmDialogProps } from './ConfirmDialog';
 export { toast, Toaster, type ExternalToast, type ToasterProps } from './Toast';
+export { Tabs, TabsList, TabsTrigger, TabsContent } from './Tabs';
+export { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from './Accordion';
+export { ScrollArea, ScrollBar } from './ScrollArea';
+export {
+  Avatar,
+  AvatarRoot,
+  AvatarImage,
+  AvatarFallback,
+  AvatarGroup,
+  type AvatarProps,
+  type AvatarGroupProps,
+} from './Avatar';
+export { Breadcrumbs, type BreadcrumbsProps, type BreadcrumbItem } from './Breadcrumbs';
+export { Pagination, type PaginationProps } from './Pagination';
