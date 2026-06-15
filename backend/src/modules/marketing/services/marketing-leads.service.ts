@@ -13,6 +13,7 @@ import { EmailService } from '../../../common/services/email.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from './lead-auto-assigner.service';
 import { CustomFieldsService } from './custom-fields.service';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
@@ -141,6 +142,8 @@ export class MarketingLeadsService {
         nextFollowUp: dto.nextFollowUp ? new Date(dto.nextFollowUp) : undefined,
         assignedToId: resolvedAssignee,
         customFields: customFields as Prisma.InputJsonValue,
+        phoneNormalized: normalizePhone(dto.phone),
+        emailNormalized: normalizeEmail(dto.email),
       },
       include: {
         assignedTo: {
@@ -340,6 +343,8 @@ export class MarketingLeadsService {
       ...(dto.nextFollowUp !== undefined && {
         nextFollowUp: dto.nextFollowUp ? new Date(dto.nextFollowUp) : null,
       }),
+      ...(dto.phone !== undefined && { phoneNormalized: normalizePhone(dto.phone) }),
+      ...(dto.email !== undefined && { emailNormalized: normalizeEmail(dto.email) }),
     };
 
     // Epic A1 — merge validated custom field values onto the existing map (a

@@ -198,6 +198,14 @@ model Lead {
   // before write. GIN-indexed (jsonb_path_ops) for segment/audience filtering.
   customFields Json @default("{}")
 
+  // Epic A4 — duplicate detection + merge. Normalized match keys are maintained
+  // on every write; `mergedIntoId` tombstones a lead folded into a canonical one
+  // (kept, not deleted, so old links still resolve).
+  phoneNormalized String?
+  emailNormalized String?
+  mergedIntoId    String?
+  mergedAt        DateTime?
+
   @@unique([workspaceId, externalRef])
   @@index([workspaceId])
   @@index([workspaceId, status])
@@ -216,6 +224,9 @@ model Lead {
   @@index([originTenantId])
   @@index([workspaceId, scoredAt])
   @@index([customFields], type: Gin)
+  @@index([workspaceId, phoneNormalized])
+  @@index([workspaceId, emailNormalized])
+  @@index([mergedIntoId])
   @@map("leads")
 }
 
