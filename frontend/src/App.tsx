@@ -1,4 +1,9 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+
+const UiKitchenSinkPage = lazy(
+  () => import('./pages/_dev/UiKitchenSinkPage'),
+);
 import { MarketingLayout, MarketingProtectedRoute } from './features/marketing/components';
 import { MarketingRole } from './features/marketing/types';
 import MarketingLoginPage from './pages/marketing/MarketingLoginPage';
@@ -101,6 +106,16 @@ export default function App() {
           </Route>
         </Route>
       </Route>
+      {import.meta.env.DEV && (
+        <Route
+          path="/_dev/ui"
+          element={
+            <Suspense fallback={null}>
+              <UiKitchenSinkPage />
+            </Suspense>
+          }
+        />
+      )}
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

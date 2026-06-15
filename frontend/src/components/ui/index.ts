@@ -8,8 +8,33 @@
  * so existing pages keep working untouched until migrated.
  */
 export { Button, type ButtonProps } from './Button';
-export { Card, CardHeader, CardTitle, CardContent } from './Card';
-export { Badge } from './Badge';
+export { IconButton, type IconButtonProps } from './IconButton';
+export {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from './Card';
+export { Badge, type BadgeProps } from './Badge';
+export { Tag, type TagProps } from './Tag';
+export { Separator, type SeparatorProps } from './Separator';
+export { Callout, type CalloutProps, type CalloutTone } from './Callout';
+export {
+  StatCard,
+  type StatCardProps,
+  type StatCardDelta,
+  type StatCardTone,
+} from './StatCard';
+export { EmptyState, type EmptyStateProps } from './EmptyState';
+export { Progress, type ProgressProps, type ProgressTone } from './Progress';
+export {
+  SegmentedControl,
+  type SegmentedControlProps,
+  type SegmentedControlOption,
+} from './SegmentedControl';
+export { ThemeToggle } from './ThemeToggle';
 export { Skeleton } from './Skeleton';
 export { Spinner } from './Spinner';
 export { cn } from './cn';
