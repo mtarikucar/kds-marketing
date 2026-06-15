@@ -151,6 +151,8 @@ import { CoursesController } from './memberships/courses.controller';
 import { CoursesService } from './memberships/courses.service';
 import { EnrollmentController } from './memberships/enrollment.controller';
 import { EnrollmentService } from './memberships/enrollment.service';
+import { CommunitiesController } from './memberships/communities.controller';
+import { CommunitiesService } from './memberships/communities.service';
 
 @Module({
   imports: [
@@ -235,6 +237,7 @@ import { EnrollmentService } from './memberships/enrollment.service';
     PublicBrandingController,
     CoursesController,
     EnrollmentController,
+    CommunitiesController,
   ],
   providers: [
     // Services
@@ -339,6 +342,7 @@ import { EnrollmentService } from './memberships/enrollment.service';
     // Epic C — memberships.
     CoursesService,
     EnrollmentService,
+    CommunitiesService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

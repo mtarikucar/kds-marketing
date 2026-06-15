@@ -1471,6 +1471,75 @@ model LessonProgress {
   @@map("lesson_progress")
 }
 
+/// Epic C3 — a community space. Members are Leads; posts/comments may be
+/// authored by a staff MarketingUser (authorUserId) or a member Lead
+/// (authorLeadId), both soft refs.
+model Community {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String?  @db.Text
+  status      String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members CommunityMember[]
+  posts   CommunityPost[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("communities")
+}
+
+model CommunityMember {
+  id          String   @id @default(uuid())
+  communityId String
+  leadId      String
+  role        String   @default("MEMBER") // MEMBER | MODERATOR
+  joinedAt    DateTime @default(now())
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, leadId])
+  @@index([communityId])
+  @@map("community_members")
+}
+
+model CommunityPost {
+  id           String   @id @default(uuid())
+  communityId  String
+  workspaceId  String
+  authorUserId String?
+  authorLeadId String?
+  title        String?
+  body         String   @db.Text
+  pinned       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  community Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  comments  CommunityComment[]
+
+  @@index([communityId, pinned, createdAt])
+  @@map("community_posts")
+}
+
+model CommunityComment {
+  id           String   @id @default(uuid())
+  postId       String
+  workspaceId  String
+  authorUserId String?
+  authorLeadId String?
+  body         String   @db.Text
+  createdAt    DateTime @default(now())
+
+  post CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, createdAt])
+  @@map("community_comments")
+}
+
 model CourseModule {
   id       String @id @default(uuid())
   courseId String
