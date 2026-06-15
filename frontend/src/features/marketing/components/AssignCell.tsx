@@ -2,12 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import {
-  UserPlusIcon,
-  PencilSquareIcon,
-  XMarkIcon,
-  MagnifyingGlassIcon,
-} from '@heroicons/react/24/outline';
+import { UserPlus, PencilLine, X, Search } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
 import type { MarketingUserInfo } from '../types';
 
@@ -127,7 +122,7 @@ export default function AssignCell({
 
   if (readOnly) {
     return (
-      <span className="text-gray-600">
+      <span className="text-muted-foreground text-sm">
         {currentAssignee
           ? `${currentAssignee.firstName} ${currentAssignee.lastName}`
           : t('leads.assignment.unassigned')}
@@ -149,7 +144,7 @@ export default function AssignCell({
         }}
         className={
           currentAssignee
-            ? 'inline-flex items-center gap-1.5 text-gray-700 hover:text-primary group'
+            ? 'inline-flex items-center gap-1.5 text-foreground hover:text-primary group text-sm'
             : 'inline-flex items-center gap-1 text-primary hover:text-primary/80 text-sm font-medium'
         }
       >
@@ -158,11 +153,11 @@ export default function AssignCell({
             <span>
               {currentAssignee.firstName} {currentAssignee.lastName}
             </span>
-            <PencilSquareIcon className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <PencilLine className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
           </>
         ) : (
           <>
-            <UserPlusIcon className="w-4 h-4" />
+            <UserPlus className="w-4 h-4" aria-hidden="true" />
             {t('leads.assignment.assignButton')}
           </>
         )}
@@ -171,23 +166,23 @@ export default function AssignCell({
       {open && (
         <div
           ref={popoverRef}
-          className="absolute z-30 mt-1 left-0 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-2"
+          className="absolute z-30 mt-1 left-0 w-64 bg-surface-raised border border-border rounded-lg shadow-lg p-2"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="relative mb-2">
-            <MagnifyingGlassIcon className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" aria-hidden="true" />
             <input
               type="text"
               autoFocus
               placeholder={t('leads.assignment.searchRep')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-8 pr-2 py-1.5 border border-gray-300 rounded-md text-sm outline-none focus:ring-1 focus:ring-primary"
+              className="w-full pl-8 pr-2 py-1.5 border border-border-strong rounded-md text-sm bg-surface text-foreground outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
           <div className="max-h-56 overflow-y-auto">
             {filtered.length === 0 ? (
-              <p className="text-xs text-gray-400 px-2 py-3 text-center">
+              <p className="text-xs text-muted-foreground px-2 py-3 text-center">
                 {t('leads.assignment.noReps')}
               </p>
             ) : (
@@ -199,7 +194,7 @@ export default function AssignCell({
                     type="button"
                     onClick={() => assignMutation.mutate(r.id)}
                     disabled={isCurrent || assignMutation.isPending}
-                    className={`w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50 disabled:bg-primary/5 disabled:text-primary disabled:cursor-default`}
+                    className="w-full text-left px-2 py-1.5 rounded text-sm text-foreground hover:bg-surface-muted disabled:bg-primary/5 disabled:text-primary disabled:cursor-default"
                   >
                     {r.firstName} {r.lastName}
                   </button>
@@ -212,9 +207,9 @@ export default function AssignCell({
               type="button"
               onClick={() => assignMutation.mutate(null)}
               disabled={assignMutation.isPending}
-              className="mt-1 w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-xs text-red-600 hover:bg-red-50 border-t border-gray-100"
+              className="mt-1 w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-xs text-danger hover:bg-danger-subtle border-t border-border"
             >
-              <XMarkIcon className="w-3.5 h-3.5" />
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
               {t('leads.assignment.unassign')}
             </button>
           )}

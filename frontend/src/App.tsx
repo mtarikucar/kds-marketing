@@ -8,7 +8,7 @@ import { MarketingLayout, MarketingProtectedRoute } from './features/marketing/c
 import { MarketingRole } from './features/marketing/types';
 import MarketingLoginPage from './pages/marketing/MarketingLoginPage';
 import MarketingDashboardPage from './pages/marketing/MarketingDashboardPage';
-import LeadsPage from './pages/marketing/LeadsPage';
+import LeadsPage from './pages/marketing/leads/LeadsPage';
 import CreateLeadPage from './pages/marketing/CreateLeadPage';
 import LeadDetailPage from './pages/marketing/LeadDetailPage';
 import TasksPage from './pages/marketing/TasksPage';
