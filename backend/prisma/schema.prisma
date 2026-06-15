@@ -1409,3 +1409,57 @@ model RoutineConfig {
 
   @@map("routine_configs")
 }
+
+/// Epic C1 — a workspace-authored course. Content lives in CourseModule →
+/// Lesson. Members are Leads (soft ref via Enrollment). Publishing requires
+/// at least one lesson (enforced in the service).
+model Course {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  title         String
+  slug          String
+  description   String?  @db.Text
+  status        String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  priceCents    Int? // null = free
+  currency      String?
+  coverImageUrl String?
+  position      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  modules CourseModule[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("courses")
+}
+
+model CourseModule {
+  id       String @id @default(uuid())
+  courseId String
+  title    String
+  position Int    @default(0)
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId, position])
+  @@map("course_modules")
+}
+
+model Lesson {
+  id          String  @id @default(uuid())
+  moduleId    String
+  title       String
+  type        String  @default("VIDEO") // VIDEO | TEXT | PDF | QUIZ
+  content     String? @db.Text
+  videoUrl    String?
+  durationSec Int?
+  position    Int     @default(0)
+  isPreview   Boolean @default(false)
+
+  module CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([moduleId, position])
+  @@map("lessons")
+}
