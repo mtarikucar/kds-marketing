@@ -1,14 +1,39 @@
 import { useState } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import {
-  SparklesIcon,
-  TrashIcon,
-  PauseCircleIcon,
-  PlayCircleIcon,
-} from '@heroicons/react/24/outline';
+import { Sparkles, Trash2, PauseCircle, PlayCircle, Plus, Pencil } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
+import { Badge } from '@/components/ui/Badge';
+import { Card, CardContent } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Field } from '@/components/ui/Field';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/Dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/Select';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface AgentProfile {
   id: string;
@@ -32,7 +57,23 @@ interface KnowledgeRow {
   status: string;
 }
 
-const EMPTY_FORM = {
+// ── Schema ────────────────────────────────────────────────────────────────────
+
+const agentSchema = z.object({
+  name: z.string().min(1, 'Required').max(120),
+  persona: z.string().min(10, 'At least 10 characters').max(4000),
+  tone: z.string().max(200).optional(),
+  goals: z.string().max(2000).optional(),
+  guardrails: z.string().max(2000).optional(),
+  language: z.string().min(1),
+  captureFields: z.string().optional(),
+  maxRepliesPerConvoDaily: z.coerce.number().min(1).max(500),
+  kbDocIds: z.array(z.string()),
+});
+
+type AgentFormValues = z.infer<typeof agentSchema>;
+
+const DEFAULT_VALUES: AgentFormValues = {
   name: '',
   persona: '',
   tone: '',
@@ -41,8 +82,18 @@ const EMPTY_FORM = {
   language: 'tr',
   captureFields: '',
   maxRepliesPerConvoDaily: 30,
-  kbDocIds: [] as string[],
+  kbDocIds: [],
 };
+
+const LANGUAGES = [
+  { value: 'tr', label: 'Türkçe' },
+  { value: 'en', label: 'English' },
+  { value: 'ru', label: 'Русский' },
+  { value: 'uz', label: 'Oʻzbekcha' },
+  { value: 'ar', label: 'العربية' },
+];
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 /**
  * Agent Studio: the persona + grounding config Conversation/Voice AI run on.
@@ -53,9 +104,9 @@ export default function AgentStudioPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const { data: agents } = useQuery<AgentProfile[]>({
     queryKey: ['marketing', 'ai', 'agents'],
@@ -70,30 +121,46 @@ export default function AgentStudioPage() {
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'ai', 'agents'] });
 
-  const buildPayload = () => ({
-    name: form.name,
-    persona: form.persona,
-    tone: form.tone || undefined,
-    goals: form.goals || undefined,
-    guardrails: form.guardrails || undefined,
-    language: form.language,
-    maxRepliesPerConvoDaily: form.maxRepliesPerConvoDaily,
-    kbDocIds: form.kbDocIds,
-    captureFields: form.captureFields
-      ? form.captureFields.split(',').map((c) => c.trim()).filter(Boolean)
-      : [],
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<AgentFormValues>({
+    resolver: zodResolver(agentSchema),
+    defaultValues: DEFAULT_VALUES,
   });
 
+  const kbDocIds = watch('kbDocIds');
+  const personaValue = watch('persona');
+
   const saveAgent = useMutation({
-    mutationFn: () =>
-      editingId
-        ? marketingApi.patch(`/ai/agents/${editingId}`, buildPayload())
-        : marketingApi.post('/ai/agents', buildPayload()),
+    mutationFn: (values: AgentFormValues) => {
+      const payload = {
+        name: values.name,
+        persona: values.persona,
+        tone: values.tone || undefined,
+        goals: values.goals || undefined,
+        guardrails: values.guardrails || undefined,
+        language: values.language,
+        maxRepliesPerConvoDaily: values.maxRepliesPerConvoDaily,
+        kbDocIds: values.kbDocIds,
+        captureFields: values.captureFields
+          ? values.captureFields.split(',').map((c) => c.trim()).filter(Boolean)
+          : [],
+      };
+      return editingId
+        ? marketingApi.patch(`/ai/agents/${editingId}`, payload)
+        : marketingApi.post('/ai/agents', payload);
+    },
     onSuccess: () => {
       invalidate();
-      setShowForm(false);
+      setOpen(false);
       setEditingId(null);
-      setForm(EMPTY_FORM);
+      reset(DEFAULT_VALUES);
       toast.success(t('agents.saved', 'Agent saved'));
     },
     onError: (e: any) =>
@@ -110,12 +177,21 @@ export default function AgentStudioPage() {
 
   const deleteAgent = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/ai/agents/${id}`),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      setDeleteTarget(null);
+    },
   });
 
-  const startEdit = (a: AgentProfile) => {
+  const openCreate = () => {
+    setEditingId(null);
+    reset(DEFAULT_VALUES);
+    setOpen(true);
+  };
+
+  const openEdit = (a: AgentProfile) => {
     setEditingId(a.id);
-    setForm({
+    reset({
       name: a.name,
       persona: a.persona,
       tone: a.tone ?? '',
@@ -126,187 +202,329 @@ export default function AgentStudioPage() {
       maxRepliesPerConvoDaily: a.maxRepliesPerConvoDaily ?? 30,
       kbDocIds: a.kbDocIds ?? [],
     });
-    setShowForm(true);
+    setOpen(true);
   };
 
-  const toggleDoc = (id: string) =>
-    setForm((f) => ({
-      ...f,
-      kbDocIds: f.kbDocIds.includes(id)
-        ? f.kbDocIds.filter((x) => x !== id)
-        : [...f.kbDocIds, id],
-    }));
-
-  const inputCls =
-    'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none';
-  const labelCls = 'block text-xs font-medium text-slate-500 mb-1';
+  const toggleDoc = (id: string) => {
+    setValue(
+      'kbDocIds',
+      kbDocIds.includes(id) ? kbDocIds.filter((x) => x !== id) : [...kbDocIds, id],
+    );
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            {t('agents.title', 'Agent Studio')}
-          </h1>
-          <p className="text-sm text-slate-500">
-            {t(
-              'agents.subtitle',
-              'Define the persona, tone and grounding your AI uses to answer customers. Connect channels in the next step.',
-            )}
-          </p>
-        </div>
-        <button
-          onClick={() => {
-            setEditingId(null);
-            setForm(EMPTY_FORM);
-            setShowForm(true);
-          }}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90"
-        >
-          {t('agents.new', 'New agent')}
-        </button>
-      </div>
+      <PageHeader
+        title={t('agents.title', 'Agent Studio')}
+        description={t(
+          'agents.subtitle',
+          'Define the persona, tone and grounding your AI uses to answer customers. Connect channels in the next step.',
+        )}
+        actions={
+          <Button onClick={openCreate} size="md">
+            <Plus className="h-4 w-4" />
+            {t('agents.new', 'New agent')}
+          </Button>
+        }
+      />
 
-      {showForm && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <h2 className="font-semibold text-slate-900">
-            {editingId ? t('agents.edit', 'Edit agent') : t('agents.new', 'New agent')}
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>{t('agents.name', 'Agent name')}</label>
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} placeholder="Reception bot" maxLength={120} />
-            </div>
-            <div>
-              <label className={labelCls}>{t('agents.language', 'Language')}</label>
-              <select value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} className={inputCls}>
-                <option value="tr">Türkçe</option>
-                <option value="en">English</option>
-                <option value="ru">Русский</option>
-                <option value="uz">Oʻzbekcha</option>
-                <option value="ar">العربية</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className={labelCls}>{t('agents.persona', 'Persona (who is this agent?)')}</label>
-            <textarea
-              value={form.persona}
-              onChange={(e) => setForm({ ...form, persona: e.target.value })}
-              className={`${inputCls} min-h-24`}
-              maxLength={4000}
-              placeholder={t('agents.personaPlaceholder', 'e.g. You are the friendly front-desk assistant for a family pizzeria. Greet warmly, answer in short sentences…')}
-            />
-            <p className="text-xs text-slate-400 mt-1">
-              {form.persona.length}/4000 · {t('agents.personaMin', 'min 10 characters')}
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>{t('agents.tone', 'Tone (optional)')}</label>
-              <input value={form.tone} onChange={(e) => setForm({ ...form, tone: e.target.value })} className={inputCls} maxLength={200} placeholder={t('agents.tonePlaceholder', 'warm, concise, professional')} />
-            </div>
-            <div>
-              <label className={labelCls}>{t('agents.maxReplies', 'Max AI replies / conversation / day')}</label>
-              <input type="number" min={1} max={500} value={form.maxRepliesPerConvoDaily}
-                onChange={(e) => setForm({ ...form, maxRepliesPerConvoDaily: Number(e.target.value) })} className={inputCls} />
-            </div>
-          </div>
-          <div>
-            <label className={labelCls}>{t('agents.goals', 'Goals (optional)')}</label>
-            <textarea value={form.goals} onChange={(e) => setForm({ ...form, goals: e.target.value })} className={`${inputCls} min-h-16`} maxLength={2000}
-              placeholder={t('agents.goalsPlaceholder', 'What should the agent try to achieve? e.g. book a table, capture phone + party size')} />
-          </div>
-          <div>
-            <label className={labelCls}>{t('agents.guardrails', 'Guardrails (optional)')}</label>
-            <textarea value={form.guardrails} onChange={(e) => setForm({ ...form, guardrails: e.target.value })} className={`${inputCls} min-h-16`} maxLength={2000}
-              placeholder={t('agents.guardrailsPlaceholder', 'What must it never do? e.g. never quote prices, never promise refunds')} />
-          </div>
-          <div>
-            <label className={labelCls}>{t('agents.capture', 'Fields to capture (comma separated)')}</label>
-            <input value={form.captureFields} onChange={(e) => setForm({ ...form, captureFields: e.target.value })} className={inputCls}
-              placeholder="name, phone, partySize" />
-          </div>
-          <div>
-            <label className={labelCls}>{t('agents.knowledge', 'Knowledge base grounding')}</label>
-            {(docs ?? []).length === 0 ? (
-              <p className="text-xs text-slate-400">
-                {t('agents.noDocs', 'No knowledge docs yet — add some in the Knowledge Base to ground replies in facts.')}
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {(docs ?? []).map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => toggleDoc(d.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                      form.kbDocIds.includes(d.id)
-                        ? 'bg-primary/10 text-primary border-primary'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    {d.title}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => { setShowForm(false); setEditingId(null); }} className="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
-              {t('common.cancel', 'Cancel')}
-            </button>
-            <button
-              onClick={() => saveAgent.mutate()}
-              disabled={saveAgent.isPending || form.name.length === 0 || form.persona.length < 10}
-              className="px-4 py-2 text-sm rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 disabled:opacity-50"
-            >
-              {saveAgent.isPending ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-            </button>
-          </div>
-        </div>
-      )}
-
+      {/* Agent list */}
       <div className="space-y-3">
         {(agents ?? []).map((a) => (
-          <div key={a.id} className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <SparklesIcon className="w-5 h-5 text-primary" />
-                <div>
-                  <div className="font-medium text-slate-900 flex items-center gap-2">
-                    {a.name}
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${
-                      a.status === 'ACTIVE'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-slate-100 text-slate-500 border-slate-200'
-                    }`}>
-                      {a.status === 'ACTIVE' ? t('agents.active', 'Active') : t('agents.paused', 'Paused')}
-                    </span>
+          <Card key={a.id}>
+            <CardContent className="pt-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Sparkles className="h-5 w-5 text-primary shrink-0" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-foreground truncate">{a.name}</span>
+                      <Badge tone={a.status === 'ACTIVE' ? 'success' : 'neutral'} size="sm">
+                        {a.status === 'ACTIVE'
+                          ? t('agents.active', 'Active')
+                          : t('agents.paused', 'Paused')}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{a.persona}</p>
                   </div>
-                  <p className="text-sm text-slate-500 mt-1 line-clamp-2">{a.persona}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label={a.status === 'ACTIVE' ? 'Pause agent' : 'Activate agent'}
+                    onClick={() => toggleAgent.mutate(a)}
+                  >
+                    {a.status === 'ACTIVE' ? (
+                      <PauseCircle className="h-5 w-5" />
+                    ) : (
+                      <PlayCircle className="h-5 w-5" />
+                    )}
+                  </IconButton>
+                  <Button variant="outline" size="sm" onClick={() => openEdit(a)}>
+                    <Pencil className="h-3.5 w-3.5" />
+                    {t('common.edit', 'Edit')}
+                  </Button>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Delete agent"
+                    className="text-danger hover:bg-danger-subtle"
+                    onClick={() => setDeleteTarget(a.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
                 </div>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button onClick={() => toggleAgent.mutate(a)} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100">
-                  {a.status === 'ACTIVE' ? <PauseCircleIcon className="w-5 h-5" /> : <PlayCircleIcon className="w-5 h-5" />}
-                </button>
-                <button onClick={() => startEdit(a)} className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
-                  {t('common.edit', 'Edit')}
-                </button>
-                <button onClick={() => deleteAgent.mutate(a.id)} className="p-2 rounded-lg text-red-400 hover:bg-red-50">
-                  <TrashIcon className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         ))}
-        {(agents ?? []).length === 0 && !showForm && (
-          <div className="bg-white rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-400 text-sm">
-            {t('agents.empty', 'No agents yet — create one to define how your AI talks to customers.')}
-          </div>
+
+        {(agents ?? []).length === 0 && (
+          <EmptyState
+            icon={<Sparkles className="h-10 w-10" />}
+            title={t('agents.empty', 'No agents yet')}
+            description={t(
+              'agents.emptyDesc',
+              'Create one to define how your AI talks to customers.',
+            )}
+            action={
+              <Button onClick={openCreate} size="md">
+                <Plus className="h-4 w-4" />
+                {t('agents.new', 'New agent')}
+              </Button>
+            }
+          />
         )}
       </div>
+
+      {/* Create / Edit Dialog */}
+      <Dialog open={open} onOpenChange={(v) => { if (!v) { setOpen(false); setEditingId(null); } }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingId ? t('agents.edit', 'Edit agent') : t('agents.new', 'New agent')}
+            </DialogTitle>
+            <DialogDescription>
+              {t('agents.formDesc', 'Configure the AI persona and grounding.')}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            id="agent-form"
+            onSubmit={handleSubmit((v) => saveAgent.mutate(v))}
+            className="space-y-4"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field
+                label={t('agents.name', 'Agent name')}
+                error={errors.name?.message}
+                required
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    placeholder="Reception bot"
+                    maxLength={120}
+                    {...register('name')}
+                  />
+                )}
+              </Field>
+
+              <Field label={t('agents.language', 'Language')} error={errors.language?.message} required>
+                {({ id }) => (
+                  <Controller
+                    name="language"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger id={id}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LANGUAGES.map((l) => (
+                            <SelectItem key={l.value} value={l.value}>
+                              {l.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                )}
+              </Field>
+            </div>
+
+            <Field
+              label={t('agents.persona', 'Persona (who is this agent?)')}
+              error={errors.persona?.message}
+              hint={`${personaValue?.length ?? 0}/4000 · ${t('agents.personaMin', 'min 10 characters')}`}
+              required
+            >
+              {({ id, describedBy, invalid }) => (
+                <Textarea
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="min-h-24"
+                  maxLength={4000}
+                  placeholder={t(
+                    'agents.personaPlaceholder',
+                    'e.g. You are the friendly front-desk assistant for a family pizzeria. Greet warmly, answer in short sentences…',
+                  )}
+                  {...register('persona')}
+                />
+              )}
+            </Field>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label={t('agents.tone', 'Tone (optional)')} error={errors.tone?.message}>
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    maxLength={200}
+                    placeholder={t('agents.tonePlaceholder', 'warm, concise, professional')}
+                    {...register('tone')}
+                  />
+                )}
+              </Field>
+
+              <Field
+                label={t('agents.maxReplies', 'Max AI replies / conversation / day')}
+                error={errors.maxRepliesPerConvoDaily?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    type="number"
+                    min={1}
+                    max={500}
+                    {...register('maxRepliesPerConvoDaily')}
+                  />
+                )}
+              </Field>
+            </div>
+
+            <Field label={t('agents.goals', 'Goals (optional)')} error={errors.goals?.message}>
+              {({ id, describedBy, invalid }) => (
+                <Textarea
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="min-h-16"
+                  maxLength={2000}
+                  placeholder={t(
+                    'agents.goalsPlaceholder',
+                    'What should the agent try to achieve? e.g. book a table, capture phone + party size',
+                  )}
+                  {...register('goals')}
+                />
+              )}
+            </Field>
+
+            <Field
+              label={t('agents.guardrails', 'Guardrails (optional)')}
+              error={errors.guardrails?.message}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Textarea
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="min-h-16"
+                  maxLength={2000}
+                  placeholder={t(
+                    'agents.guardrailsPlaceholder',
+                    'What must it never do? e.g. never quote prices, never promise refunds',
+                  )}
+                  {...register('guardrails')}
+                />
+              )}
+            </Field>
+
+            <Field
+              label={t('agents.capture', 'Fields to capture (comma separated)')}
+              error={errors.captureFields?.message}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  placeholder="name, phone, partySize"
+                  {...register('captureFields')}
+                />
+              )}
+            </Field>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t('agents.knowledge', 'Knowledge base grounding')}
+              </p>
+              {(docs ?? []).length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'agents.noDocs',
+                    'No knowledge docs yet — add some in the Knowledge Base to ground replies in facts.',
+                  )}
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {(docs ?? []).map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => toggleDoc(d.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
+                        kbDocIds.includes(d.id)
+                          ? 'bg-primary/10 text-primary border-primary'
+                          : 'bg-surface text-muted-foreground border-border hover:bg-surface-muted'
+                      }`}
+                    >
+                      {d.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </form>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setOpen(false); setEditingId(null); }}
+              disabled={saveAgent.isPending}
+            >
+              {t('common.cancel', 'Cancel')}
+            </Button>
+            <Button
+              type="submit"
+              form="agent-form"
+              loading={saveAgent.isPending}
+            >
+              {t('common.save', 'Save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}
+        title={t('agents.deleteTitle', 'Delete agent?')}
+        description={t('agents.deleteDesc', 'This cannot be undone.')}
+        confirmLabel={t('common.delete', 'Delete')}
+        tone="danger"
+        loading={deleteAgent.isPending}
+        onConfirm={() => deleteTarget && deleteAgent.mutate(deleteTarget)}
+      />
     </div>
   );
 }

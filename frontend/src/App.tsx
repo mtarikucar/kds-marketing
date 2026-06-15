@@ -22,7 +22,7 @@ import CallsPage from './pages/marketing/CallsPage';
 import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/targets';
 import RegisterWorkspacePage from './pages/marketing/RegisterWorkspacePage';
-import ResearchSettingsPage from './pages/marketing/ResearchSettingsPage';
+import ResearchSettingsPage from './pages/marketing/research/ResearchSettingsPage';
 import AgentStudioPage from './pages/marketing/AgentStudioPage';
 import KnowledgeBasePage from './pages/marketing/KnowledgeBasePage';
 import InboxPage from './pages/marketing/InboxPage';

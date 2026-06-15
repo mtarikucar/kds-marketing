@@ -1,9 +1,39 @@
 import { useState } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { BookOpenIcon, TrashIcon, ArchiveBoxIcon } from '@heroicons/react/24/outline';
+import { BookOpen, Trash2, Archive, Plus, Pencil } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
+import { Badge } from '@/components/ui/Badge';
+import { Card, CardContent } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Field } from '@/components/ui/Field';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/Dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/Select';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface KnowledgeRow {
   id: string;
@@ -14,7 +44,27 @@ interface KnowledgeRow {
   updatedAt: string;
 }
 
-const EMPTY_FORM = { title: '', content: '', language: 'tr' };
+// ── Schema ────────────────────────────────────────────────────────────────────
+
+const docSchema = z.object({
+  title: z.string().min(1, 'Required').max(200),
+  content: z.string().min(1, 'Required').max(50000),
+  language: z.string().min(1),
+});
+
+type DocFormValues = z.infer<typeof docSchema>;
+
+const DEFAULT_VALUES: DocFormValues = { title: '', content: '', language: 'tr' };
+
+const LANGUAGES = [
+  { value: 'tr', label: 'Türkçe' },
+  { value: 'en', label: 'English' },
+  { value: 'ru', label: 'Русский' },
+  { value: 'uz', label: 'Oʻzbekcha' },
+  { value: 'ar', label: 'العربية' },
+];
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 /**
  * Knowledge Base: the facts the AI grounds its answers on (menus, policies,
@@ -25,9 +75,9 @@ export default function KnowledgeBasePage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const { data: docs } = useQuery<KnowledgeRow[]>({
     queryKey: ['marketing', 'ai', 'knowledge'],
@@ -37,18 +87,32 @@ export default function KnowledgeBasePage() {
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'ai', 'knowledge'] });
 
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    watch,
+    formState: { errors },
+  } = useForm<DocFormValues>({
+    resolver: zodResolver(docSchema),
+    defaultValues: DEFAULT_VALUES,
+  });
+
+  const contentValue = watch('content');
+
   const saveDoc = useMutation({
-    mutationFn: () => {
-      const payload = { title: form.title, content: form.content, language: form.language };
+    mutationFn: (values: DocFormValues) => {
+      const payload = { title: values.title, content: values.content, language: values.language };
       return editingId
         ? marketingApi.patch(`/ai/knowledge/${editingId}`, payload)
         : marketingApi.post('/ai/knowledge', payload);
     },
     onSuccess: () => {
       invalidate();
-      setShowForm(false);
+      setOpen(false);
       setEditingId(null);
-      setForm(EMPTY_FORM);
+      reset(DEFAULT_VALUES);
       toast.success(t('knowledge.saved', 'Document saved'));
     },
     onError: (e: any) =>
@@ -65,136 +129,246 @@ export default function KnowledgeBasePage() {
 
   const deleteDoc = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/ai/knowledge/${id}`),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      setDeleteTarget(null);
+    },
   });
 
-  const startEdit = async (d: KnowledgeRow) => {
+  const openCreate = () => {
+    setEditingId(null);
+    reset(DEFAULT_VALUES);
+    setOpen(true);
+  };
+
+  const openEdit = async (d: KnowledgeRow) => {
     try {
       const full = await marketingApi.get(`/ai/knowledge/${d.id}`).then((r) => r.data);
       setEditingId(d.id);
-      setForm({ title: full.title, content: full.content, language: full.language });
-      setShowForm(true);
+      reset({ title: full.title, content: full.content, language: full.language });
+      setOpen(true);
     } catch (e: any) {
-      toast.error(e.response?.data?.message ?? t('knowledge.loadFailed', 'Could not load document'));
+      toast.error(
+        e.response?.data?.message ?? t('knowledge.loadFailed', 'Could not load document'),
+      );
     }
   };
 
-  const inputCls =
-    'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none';
-  const labelCls = 'block text-xs font-medium text-slate-500 mb-1';
-
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            {t('knowledge.title', 'Knowledge Base')}
-          </h1>
-          <p className="text-sm text-slate-500">
-            {t(
-              'knowledge.subtitle',
-              'The facts your AI answers from — menus, hours, policies, FAQs. Attach docs to an agent in Agent Studio.',
-            )}
-          </p>
-        </div>
-        <button
-          onClick={() => {
-            setEditingId(null);
-            setForm(EMPTY_FORM);
-            setShowForm(true);
-          }}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90"
-        >
-          {t('knowledge.new', 'New document')}
-        </button>
-      </div>
+      <PageHeader
+        title={t('knowledge.title', 'Knowledge Base')}
+        description={t(
+          'knowledge.subtitle',
+          'The facts your AI answers from — menus, hours, policies, FAQs. Attach docs to an agent in Agent Studio.',
+        )}
+        actions={
+          <Button onClick={openCreate} size="md">
+            <Plus className="h-4 w-4" />
+            {t('knowledge.new', 'New document')}
+          </Button>
+        }
+      />
 
-      {showForm && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <h2 className="font-semibold text-slate-900">
-            {editingId ? t('knowledge.edit', 'Edit document') : t('knowledge.new', 'New document')}
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label className={labelCls}>{t('knowledge.docTitle', 'Title')}</label>
-              <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className={inputCls} maxLength={200} placeholder={t('knowledge.titlePlaceholder', 'e.g. Menu & prices')} />
-            </div>
-            <div>
-              <label className={labelCls}>{t('knowledge.language', 'Language')}</label>
-              <select value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} className={inputCls}>
-                <option value="tr">Türkçe</option>
-                <option value="en">English</option>
-                <option value="ru">Русский</option>
-                <option value="uz">Oʻzbekcha</option>
-                <option value="ar">العربية</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className={labelCls}>{t('knowledge.content', 'Content')}</label>
-            <textarea
-              value={form.content}
-              onChange={(e) => setForm({ ...form, content: e.target.value })}
-              className={`${inputCls} min-h-48 font-mono`}
-              maxLength={50000}
-              placeholder={t('knowledge.contentPlaceholder', 'Paste the facts the AI should know. Plain text works best.')}
-            />
-            <p className="text-xs text-slate-400 mt-1">{form.content.length}/50000</p>
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => { setShowForm(false); setEditingId(null); }} className="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
-              {t('common.cancel', 'Cancel')}
-            </button>
-            <button
-              onClick={() => saveDoc.mutate()}
-              disabled={saveDoc.isPending || form.title.length === 0 || form.content.length === 0}
-              className="px-4 py-2 text-sm rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 disabled:opacity-50"
-            >
-              {saveDoc.isPending ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-            </button>
-          </div>
-        </div>
-      )}
-
+      {/* Document list */}
       <div className="space-y-3">
         {(docs ?? []).map((d) => (
-          <div key={d.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <BookOpenIcon className="w-5 h-5 text-primary shrink-0" />
-              <div className="min-w-0">
-                <div className="font-medium text-slate-900 flex items-center gap-2">
-                  <span className="truncate">{d.title}</span>
-                  <span className="text-xs uppercase text-slate-400">{d.language}</span>
-                  {d.status === 'ARCHIVED' && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-400">
-                      {t('knowledge.archived', 'archived')}
-                    </span>
-                  )}
+          <Card key={d.id}>
+            <CardContent className="pt-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <BookOpen className="h-5 w-5 text-primary shrink-0" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-foreground truncate">{d.title}</span>
+                      <span className="text-xs uppercase text-muted-foreground">{d.language}</span>
+                      {d.status === 'ARCHIVED' && (
+                        <Badge tone="neutral" size="sm">
+                          {t('knowledge.archived', 'archived')}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {t('knowledge.updated', 'updated')}{' '}
+                      {new Date(d.updatedAt).toLocaleDateString()}
+                    </p>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {t('knowledge.updated', 'updated')} {new Date(d.updatedAt).toLocaleDateString()}
-                </p>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button variant="outline" size="sm" onClick={() => openEdit(d)}>
+                    <Pencil className="h-3.5 w-3.5" />
+                    {t('common.edit', 'Edit')}
+                  </Button>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t('knowledge.toggleArchive', 'Archive / restore')}
+                    onClick={() => archiveDoc.mutate(d)}
+                  >
+                    <Archive className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Delete document"
+                    className="text-danger hover:bg-danger-subtle"
+                    onClick={() => setDeleteTarget(d.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button onClick={() => startEdit(d)} className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
-                {t('common.edit', 'Edit')}
-              </button>
-              <button onClick={() => archiveDoc.mutate(d)} title={t('knowledge.toggleArchive', 'Archive / restore')} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100">
-                <ArchiveBoxIcon className="w-4 h-4" />
-              </button>
-              <button onClick={() => deleteDoc.mutate(d.id)} className="p-2 rounded-lg text-red-400 hover:bg-red-50">
-                <TrashIcon className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         ))}
-        {(docs ?? []).length === 0 && !showForm && (
-          <div className="bg-white rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-400 text-sm">
-            {t('knowledge.empty', 'No documents yet — add the facts your AI should answer from.')}
-          </div>
+
+        {(docs ?? []).length === 0 && (
+          <EmptyState
+            icon={<BookOpen className="h-10 w-10" />}
+            title={t('knowledge.empty', 'No documents yet')}
+            description={t(
+              'knowledge.emptyDesc',
+              'Add the facts your AI should answer from.',
+            )}
+            action={
+              <Button onClick={openCreate} size="md">
+                <Plus className="h-4 w-4" />
+                {t('knowledge.new', 'New document')}
+              </Button>
+            }
+          />
         )}
       </div>
+
+      {/* Create / Edit Dialog */}
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          if (!v) {
+            setOpen(false);
+            setEditingId(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingId
+                ? t('knowledge.edit', 'Edit document')
+                : t('knowledge.new', 'New document')}
+            </DialogTitle>
+            <DialogDescription>
+              {t('knowledge.formDesc', 'Paste the facts the AI should know.')}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            id="knowledge-form"
+            onSubmit={handleSubmit((v) => saveDoc.mutate(v))}
+            className="space-y-4"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2">
+                <Field
+                  label={t('knowledge.docTitle', 'Title')}
+                  error={errors.title?.message}
+                  required
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid}
+                      maxLength={200}
+                      placeholder={t('knowledge.titlePlaceholder', 'e.g. Menu & prices')}
+                      {...register('title')}
+                    />
+                  )}
+                </Field>
+              </div>
+
+              <Field
+                label={t('knowledge.language', 'Language')}
+                error={errors.language?.message}
+                required
+              >
+                {({ id }) => (
+                  <Controller
+                    name="language"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger id={id}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LANGUAGES.map((l) => (
+                            <SelectItem key={l.value} value={l.value}>
+                              {l.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                )}
+              </Field>
+            </div>
+
+            <Field
+              label={t('knowledge.content', 'Content')}
+              error={errors.content?.message}
+              hint={`${contentValue?.length ?? 0}/50000`}
+              required
+            >
+              {({ id, describedBy, invalid }) => (
+                <Textarea
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="min-h-48 font-mono"
+                  maxLength={50000}
+                  placeholder={t(
+                    'knowledge.contentPlaceholder',
+                    'Paste the facts the AI should know. Plain text works best.',
+                  )}
+                  {...register('content')}
+                />
+              )}
+            </Field>
+          </form>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setOpen(false);
+                setEditingId(null);
+              }}
+              disabled={saveDoc.isPending}
+            >
+              {t('common.cancel', 'Cancel')}
+            </Button>
+            <Button type="submit" form="knowledge-form" loading={saveDoc.isPending}>
+              {t('common.save', 'Save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTarget(null);
+        }}
+        title={t('knowledge.deleteTitle', 'Delete document?')}
+        description={t('knowledge.deleteDesc', 'This cannot be undone.')}
+        confirmLabel={t('common.delete', 'Delete')}
+        tone="danger"
+        loading={deleteDoc.isPending}
+        onConfirm={() => deleteTarget && deleteDoc.mutate(deleteTarget)}
+      />
     </div>
   );
 }
