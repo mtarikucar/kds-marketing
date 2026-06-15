@@ -8,6 +8,7 @@ export * from './marketing-segments.controller';
 export * from './marketing-imports.controller';
 export * from './marketing-api-keys.controller';
 export * from './marketing-webhooks.controller';
+export * from './public-api-v1.controller';
 export * from './marketing-offers.controller';
 export * from './marketing-dashboard.controller';
 export * from './marketing-reports.controller';
