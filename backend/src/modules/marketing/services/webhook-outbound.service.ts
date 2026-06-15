@@ -1,5 +1,11 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { createHmac } from 'crypto';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
+import { createHmac, randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
@@ -87,6 +93,116 @@ export class WebhookOutboundService implements OnModuleInit {
 
   private sign(secret: string, body: string): string {
     return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+  }
+
+  // ---- management (workspace realm) -------------------------------------
+
+  private readonly ENDPOINT_PUBLIC = {
+    id: true,
+    url: true,
+    events: true,
+    description: true,
+    status: true,
+    failureCount: true,
+    lastDeliveryAt: true,
+    createdAt: true,
+  } as const;
+
+  private validateEvents(events: string[]): void {
+    const bad = events.filter((e) => !WEBHOOK_EVENTS.includes(e));
+    if (bad.length) {
+      throw new BadRequestException(`Unsupported event type(s): ${bad.join(', ')}`);
+    }
+  }
+
+  async createEndpoint(
+    workspaceId: string,
+    input: { url: string; events?: string[]; description?: string },
+    createdById?: string,
+  ) {
+    const events = input.events ?? [];
+    this.validateEvents(events);
+    const secret = `whsec_${randomBytes(24).toString('base64url')}`;
+    const ep = await this.prisma.webhookEndpoint.create({
+      data: {
+        workspaceId,
+        url: input.url,
+        events,
+        description: input.description,
+        secret,
+        createdById: createdById ?? null,
+      },
+    });
+    // secret returned exactly once
+    return { id: ep.id, url: ep.url, events: ep.events, status: ep.status, secret };
+  }
+
+  listEndpoints(workspaceId: string) {
+    return this.prisma.webhookEndpoint.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: 'desc' },
+      select: this.ENDPOINT_PUBLIC,
+    });
+  }
+
+  private async getOwnedEndpoint(workspaceId: string, id: string) {
+    const ep = await this.prisma.webhookEndpoint.findFirst({ where: { id, workspaceId } });
+    if (!ep) throw new NotFoundException('Webhook endpoint not found');
+    return ep;
+  }
+
+  async updateEndpoint(
+    workspaceId: string,
+    id: string,
+    input: { url?: string; events?: string[]; description?: string; status?: string },
+  ) {
+    await this.getOwnedEndpoint(workspaceId, id);
+    if (input.events) this.validateEvents(input.events);
+    return this.prisma.webhookEndpoint.update({
+      where: { id },
+      data: {
+        ...(input.url !== undefined && { url: input.url }),
+        ...(input.events !== undefined && { events: input.events }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.status !== undefined && { status: input.status, ...(input.status === 'ACTIVE' && { failureCount: 0 }) }),
+      },
+      select: this.ENDPOINT_PUBLIC,
+    });
+  }
+
+  async removeEndpoint(workspaceId: string, id: string) {
+    await this.getOwnedEndpoint(workspaceId, id);
+    await this.prisma.webhookEndpoint.delete({ where: { id } });
+    return { id };
+  }
+
+  async listDeliveries(workspaceId: string, endpointId: string) {
+    await this.getOwnedEndpoint(workspaceId, endpointId);
+    return this.prisma.webhookDelivery.findMany({
+      where: { workspaceId, endpointId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  async sendTest(workspaceId: string, id: string) {
+    const ep = await this.getOwnedEndpoint(workspaceId, id);
+    const eventId = `test_${randomBytes(8).toString('hex')}`;
+    const delivery = await this.prisma.webhookDelivery.create({
+      data: { workspaceId, endpointId: ep.id, eventId, eventType: 'marketing.webhook.test.v1' },
+      select: { id: true },
+    });
+    await this.scheduledJob.schedule({
+      workspaceId,
+      kind: 'webhook.deliver',
+      runAt: new Date(),
+      payload: {
+        deliveryId: delivery.id,
+        event: { id: eventId, type: 'marketing.webhook.test.v1', payload: { workspaceId, message: 'test event' } },
+      },
+      maxAttempts: WEBHOOK_MAX_ATTEMPTS,
+    });
+    return { deliveryId: delivery.id, status: 'QUEUED' };
   }
 
   async deliverOne(payload: DeliverPayload, attempts: number): Promise<void> {
