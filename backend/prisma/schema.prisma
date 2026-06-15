@@ -306,6 +306,48 @@ model Segment {
   @@map("segments")
 }
 
+/// Epic A5 — a CSV lead import. Rows are parsed + stored on upload (status
+/// MAPPING); on commit the mapping + dedupe policy are set and processing runs
+/// in batches via the ScheduledJob queue (kind 'import.batch').
+model ImportJob {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  filename     String
+  status       String   @default("MAPPING") // MAPPING|RUNNING|DONE|FAILED|CANCELLED
+  mapping      Json? // { csvHeader -> field } incl. cf:<key>, tags, __skip
+  dedupePolicy String   @default("SKIP") // SKIP|UPDATE|CREATE
+  total        Int      @default(0)
+  processed    Int      @default(0)
+  created      Int      @default(0)
+  updated      Int      @default(0)
+  skipped      Int      @default(0)
+  failed       Int      @default(0)
+  errors       Json? // capped sample [{ row, message }]
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  rows ImportJobRow[]
+
+  @@index([workspaceId, status])
+  @@map("import_jobs")
+}
+
+model ImportJobRow {
+  id          String  @id @default(uuid())
+  importJobId String
+  rowIndex    Int
+  raw         Json
+  status      String  @default("PENDING") // PENDING|DONE|SKIPPED|FAILED
+  leadId      String?
+  error       String?
+
+  job ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId, status])
+  @@map("import_job_rows")
+}
+
 model LeadActivity {
   id          String  @id @default(uuid())
   type        String // CALL, VISIT, NOTE, EMAIL, WHATSAPP, STATUS_CHANGE, DEMO, MEETING
