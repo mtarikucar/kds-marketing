@@ -1,0 +1,104 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../../../prisma/prisma.service';
+
+const OPT_OUT_FIELD: Record<string, 'emailOptOut' | 'smsOptOut' | 'waOptOut'> = {
+  MARKETING_EMAIL: 'emailOptOut',
+  MARKETING_SMS: 'smsOptOut',
+  MARKETING_WHATSAPP: 'waOptOut',
+};
+
+interface ConsentMeta {
+  source?: string;
+  ipAddress?: string;
+}
+
+/**
+ * Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
+ * Recording a marketing consent also syncs the Lead's per-channel opt-out flag
+ * (so the campaign engine honours it). EXPORT returns the data; ERASURE is
+ * recorded PENDING for reviewed execution (never auto-deletes).
+ */
+@Injectable()
+export class ComplianceService {
+  constructor(private prisma: PrismaService) {}
+
+  private async assertLead(workspaceId: string, leadId: string) {
+    const l = await this.prisma.lead.findFirst({
+      where: { id: leadId, workspaceId },
+      select: { id: true },
+    });
+    if (!l) throw new NotFoundException('Lead not found');
+  }
+
+  async recordConsent(
+    workspaceId: string,
+    leadId: string,
+    type: string,
+    granted: boolean,
+    meta: ConsentMeta = {},
+  ) {
+    await this.assertLead(workspaceId, leadId);
+    const record = await this.prisma.consentRecord.create({
+      data: { workspaceId, leadId, type, granted, source: meta.source, ipAddress: meta.ipAddress },
+    });
+    const field = OPT_OUT_FIELD[type];
+    if (field) {
+      // granted=false → opted OUT (true); granted=true → opted IN (false).
+      await this.prisma.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
+    }
+    return record;
+  }
+
+  async getConsents(workspaceId: string, leadId: string) {
+    await this.assertLead(workspaceId, leadId);
+    const all = await this.prisma.consentRecord.findMany({
+      where: { workspaceId, leadId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const latest: Record<string, { type: string; granted: boolean; at: Date }> = {};
+    for (const r of all) {
+      if (!(r.type in latest)) latest[r.type] = { type: r.type, granted: r.granted, at: r.createdAt };
+    }
+    return Object.values(latest);
+  }
+
+  async requestExport(workspaceId: string, leadId: string, requestedById?: string) {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: leadId, workspaceId },
+      include: { activities: true, offers: true, tasks: true },
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+    const consents = await this.prisma.consentRecord.findMany({
+      where: { workspaceId, leadId },
+    });
+    const payload = { lead, consents };
+    await this.prisma.dataRequest.create({
+      data: {
+        workspaceId,
+        leadId,
+        kind: 'EXPORT',
+        status: 'COMPLETED',
+        payload: payload as unknown as Prisma.InputJsonValue,
+        requestedById: requestedById ?? null,
+        completedAt: new Date(),
+      },
+    });
+    return payload;
+  }
+
+  async requestErasure(workspaceId: string, leadId: string, requestedById?: string) {
+    await this.assertLead(workspaceId, leadId);
+    return this.prisma.dataRequest.create({
+      data: { workspaceId, leadId, kind: 'ERASURE', status: 'PENDING', requestedById: requestedById ?? null },
+    });
+  }
+
+  listRequests(workspaceId: string) {
+    return this.prisma.dataRequest.findMany({
+      where: { workspaceId },
+      orderBy: { requestedAt: 'desc' },
+      take: 100,
+    });
+  }
+}
