@@ -146,9 +146,11 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
-// Epic C — memberships: courses/modules/lessons.
+// Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
 import { CoursesService } from './memberships/courses.service';
+import { EnrollmentController } from './memberships/enrollment.controller';
+import { EnrollmentService } from './memberships/enrollment.service';
 
 @Module({
   imports: [
@@ -232,6 +234,7 @@ import { CoursesService } from './memberships/courses.service';
     MarketingBrandingController,
     PublicBrandingController,
     CoursesController,
+    EnrollmentController,
   ],
   providers: [
     // Services
@@ -335,6 +338,7 @@ import { CoursesService } from './memberships/courses.service';
     BrandingService,
     // Epic C — memberships.
     CoursesService,
+    EnrollmentService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

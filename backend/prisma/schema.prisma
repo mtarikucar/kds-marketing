@@ -1427,11 +1427,48 @@ model Course {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  modules CourseModule[]
+  modules     CourseModule[]
+  enrollments Enrollment[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status])
   @@map("courses")
+}
+
+/// Epic C2 — a Lead's enrollment in a Course. `leadId` is a soft ref to the
+/// contact (the member). progressPct is recomputed from LessonProgress on each
+/// completion; status flips COMPLETED at 100%.
+model Enrollment {
+  id          String    @id @default(uuid())
+  workspaceId String
+  courseId    String
+  leadId      String
+  status      String    @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  progressPct Int       @default(0)
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+
+  course   Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  progress LessonProgress[]
+
+  @@unique([courseId, leadId])
+  @@index([workspaceId, courseId])
+  @@index([workspaceId, leadId])
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  id           String    @id @default(uuid())
+  enrollmentId String
+  lessonId     String
+  completed    Boolean   @default(false)
+  completedAt  DateTime?
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, lessonId])
+  @@index([enrollmentId, completed])
+  @@map("lesson_progress")
 }
 
 model CourseModule {
