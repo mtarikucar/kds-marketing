@@ -214,6 +214,10 @@ export class MarketingLeadsService {
       orderBy.createdAt = 'desc';
     }
 
+    // Epic A4 — merged duplicates are tombstoned, not deleted; hide them from
+    // the pipeline list/count (a direct GET /:id still resolves a tombstone).
+    where.mergedIntoId = null;
+
     // workspaceId is spread LAST so no filter combination can ever
     // widen the query beyond the caller's workspace.
     const [leads, total] = await Promise.all([

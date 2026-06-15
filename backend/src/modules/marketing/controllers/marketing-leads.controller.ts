@@ -16,7 +16,9 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingLeadsService } from '../services/marketing-leads.service';
 import { TagsService } from '../services/tags.service';
+import { LeadDedupeService } from '../services/lead-dedupe.service';
 import { AssignTagsDto } from '../dto/tag.dto';
+import { MergeLeadsDto } from '../dto/merge-leads.dto';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -34,7 +36,24 @@ export class MarketingLeadsController {
   constructor(
     private readonly leadsService: MarketingLeadsService,
     private readonly tagsService: TagsService,
+    private readonly dedupeService: LeadDedupeService,
   ) {}
+
+  // Declared before the `:id` routes so "duplicates"/"merge" are not captured
+  // as a lead id.
+  @Get('duplicates')
+  duplicates(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.dedupeService.findDuplicates(actor.workspaceId);
+  }
+
+  @Post('merge')
+  @Audit({ action: 'lead.merge', resourceType: 'lead', captureBody: ['canonicalId'] })
+  merge(
+    @Body() dto: MergeLeadsDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.dedupeService.merge(actor.workspaceId, dto.canonicalId, dto.duplicateIds);
+  }
 
   @Get(':id/tags')
   listTags(

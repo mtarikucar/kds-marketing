@@ -6,6 +6,7 @@ export * from './custom-fields.service';
 export * from './tags.service';
 export * from './segment-compiler.service';
 export * from './segments.service';
+export * from './lead-dedupe.service';
 export * from './marketing-offers.service';
 export * from './marketing-dashboard.service';
 export * from './marketing-reports.service';

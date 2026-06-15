@@ -47,7 +47,7 @@ const FILLABLE_FIELDS = [
   'notes',
 ] as const;
 
-interface Cluster {
+export interface Cluster {
   suggestedCanonicalId: string;
   leads: { id: string; [k: string]: unknown }[];
 }

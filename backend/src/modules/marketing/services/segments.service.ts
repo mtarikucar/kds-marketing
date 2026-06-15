@@ -89,9 +89,9 @@ export class SegmentsService {
     await this.compiler.validate(workspaceId, definition as SegmentNode);
     const filter = this.compiler.compile(workspaceId, definition as SegmentNode);
     const [count, sample] = await Promise.all([
-      this.prisma.lead.count({ where: { workspaceId, AND: [filter] } }),
+      this.prisma.lead.count({ where: { workspaceId, mergedIntoId: null, AND: [filter] } }),
       this.prisma.lead.findMany({
-        where: { workspaceId, AND: [filter] },
+        where: { workspaceId, mergedIntoId: null, AND: [filter] },
         take: 10,
         select: SAMPLE_SELECT,
       }),
@@ -106,7 +106,7 @@ export class SegmentsService {
       seg.definition as unknown as SegmentNode,
     );
     const count = await this.prisma.lead.count({
-      where: { workspaceId, AND: [filter] },
+      where: { workspaceId, mergedIntoId: null, AND: [filter] },
     });
     await this.prisma.segment.update({
       where: { id },
@@ -124,12 +124,12 @@ export class SegmentsService {
     const skip = (Math.max(1, page) - 1) * pageSize;
     const [items, total] = await Promise.all([
       this.prisma.lead.findMany({
-        where: { workspaceId, AND: [filter] },
+        where: { workspaceId, mergedIntoId: null, AND: [filter] },
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.lead.count({ where: { workspaceId, AND: [filter] } }),
+      this.prisma.lead.count({ where: { workspaceId, mergedIntoId: null, AND: [filter] } }),
     ]);
     return { items, total, page, pageSize };
   }
