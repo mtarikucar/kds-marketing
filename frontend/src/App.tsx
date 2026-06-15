@@ -17,7 +17,7 @@ import OffersPage from './pages/marketing/offers/OffersPage';
 import ReportsPage from './pages/marketing/ReportsPage';
 import CommissionsPage from './pages/marketing/CommissionsPage';
 import MarketingUsersPage from './pages/marketing/users';
-import InstallationsPage from './pages/marketing/InstallationsPage';
+import InstallationsPage from './pages/marketing/installations/InstallationsPage';
 import CallsPage from './pages/marketing/CallsPage';
 import PerformancePage from './pages/marketing/PerformancePage';
 import TargetsPage from './pages/marketing/targets';
