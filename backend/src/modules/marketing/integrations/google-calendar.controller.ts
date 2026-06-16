@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Logger,
   Param,
   Post,
   Query,
@@ -26,7 +27,7 @@ import {
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
-import { GoogleCalendarService } from './google-calendar.service';
+import { GoogleCalendarService, GCAL_ERR } from './google-calendar.service';
 import { GoogleCalendarSyncService } from './google-calendar-sync.service';
 
 class ConnectQueryDto {
@@ -120,11 +121,20 @@ const WEBHOOK_THROTTLE = {
 @Controller('marketing/integrations/google-calendar')
 @UseGuards(MarketingGuard)
 export class GoogleCalendarPublicController {
+  private readonly logger = new Logger(GoogleCalendarPublicController.name);
+
   constructor(
     private readonly svc: GoogleCalendarService,
     private readonly sync: GoogleCalendarSyncService,
   ) {}
 
+  /**
+   * Google redirects the BROWSER here after consent. We finish the exchange and
+   * 302 back into the SPA connections page with a result flag — never raw JSON
+   * in the user's face. On failure we log the exact step server-side (no tokens
+   * in those messages) and pass only a coarse `reason` code to the SPA, so the
+   * user gets an actionable toast and the operator can diagnose from logs.
+   */
   @Get('callback')
   @MarketingPublic()
   @Throttle(CALLBACK_THROTTLE)
@@ -135,13 +145,18 @@ export class GoogleCalendarPublicController {
   ): Promise<void> {
     try {
       await this.svc.handleCallback(state, code);
-      // The SPA reads this; in production you may 302 to a settings page.
-      res.status(200).json({ connected: true });
-    } catch {
-      // Never leak which step failed; a clean error is enough for the callback.
-      res
-        .status(400)
-        .json({ statusCode: 400, message: 'Google Calendar connect failed' });
+      res.redirect(
+        302,
+        this.svc.panelUrl('/settings/connections?gcal=connected'),
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'unknown';
+      const reason = gcalCallbackReason(message);
+      this.logger.warn(`Google Calendar callback failed (${reason}): ${message}`);
+      res.redirect(
+        302,
+        this.svc.panelUrl(`/settings/connections?gcal=error&reason=${reason}`),
+      );
     }
   }
 
@@ -160,5 +175,27 @@ export class GoogleCalendarPublicController {
       .pullByChannel(channelId, resourceId)
       .catch(() => undefined);
     return { ok: true };
+  }
+}
+
+/**
+ * Map an OAuth-flow failure message to a coarse, non-sensitive `reason` code the
+ * SPA can turn into an actionable toast. Driven off the shared GCAL_ERR strings
+ * (single source of truth) so the thrower and this mapper can't drift.
+ */
+function gcalCallbackReason(message: string): string {
+  switch (message) {
+    case GCAL_ERR.notConfigured:
+      return 'not_configured';
+    case GCAL_ERR.invalidState:
+      return 'state_invalid';
+    case GCAL_ERR.missingCode:
+      return 'missing_code';
+    case GCAL_ERR.noRefreshToken:
+      return 'no_refresh_token';
+    case GCAL_ERR.exchangeFailed:
+      return 'exchange_failed';
+    default:
+      return 'unknown';
   }
 }
