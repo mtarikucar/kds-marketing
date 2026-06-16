@@ -1,0 +1,31 @@
+import { Facebook, Instagram, Linkedin, type LucideIcon } from 'lucide-react';
+import type { SocialNetwork } from './socialSchemas';
+
+type BadgeTone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger' | 'info';
+
+export interface NetworkMeta {
+  label: string;
+  icon: LucideIcon;
+  tone: BadgeTone;
+}
+
+/** Presentation metadata for each supported social network. */
+export const NETWORK_META: Record<SocialNetwork, NetworkMeta> = {
+  FACEBOOK: { label: 'Facebook', icon: Facebook, tone: 'info' },
+  INSTAGRAM: { label: 'Instagram', icon: Instagram, tone: 'danger' },
+  LINKEDIN: { label: 'LinkedIn', icon: Linkedin, tone: 'primary' },
+};
+
+export const POST_STATUS_TONE: Record<string, BadgeTone> = {
+  DRAFT: 'neutral',
+  SCHEDULED: 'info',
+  PUBLISHING: 'warning',
+  PUBLISHED: 'success',
+  FAILED: 'danger',
+};
+
+export const TARGET_STATUS_TONE: Record<string, BadgeTone> = {
+  PENDING: 'neutral',
+  PUBLISHED: 'success',
+  FAILED: 'danger',
+};

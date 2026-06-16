@@ -14,6 +14,7 @@ import { MarketingPublic, MarketingRoute } from '../decorators/marketing-public.
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingAuthService } from '../services/marketing-auth.service';
 import { MarketingLoginDto } from '../dto/login.dto';
+import { Verify2faDto } from '../dto/two-factor.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { RefreshTokenDto } from '../dto/refresh-token.dto';
@@ -43,6 +44,14 @@ export class MarketingAuthController {
   login(@Body() dto: MarketingLoginDto, @Req() req: Request) {
     const ip = getClientIp(req);
     return this.authService.login(dto, ip);
+  }
+
+  // Epic F — complete a 2FA login (public: the password step already passed).
+  @Post('2fa/verify')
+  @MarketingPublic()
+  @Throttle(LOGIN_THROTTLE)
+  verify2fa(@Body() dto: Verify2faDto) {
+    return this.authService.verify2fa(dto.challengeToken, dto.code);
   }
 
   @Post('register-workspace')

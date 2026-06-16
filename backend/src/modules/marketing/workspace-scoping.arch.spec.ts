@@ -66,12 +66,84 @@ const OWNED_DELEGATES = [
   // P8 (GoHighLevel parity): Voice AI (Twilio).
   'voiceCall',
   'voiceTranscript',
+  // P8 (GoHighLevel parity): configurable IVR / phone-tree menus (over Voice).
+  'ivrMenu',
+  'ivrOption',
   // P9 (GoHighLevel parity): end-customer invoicing.
   'invoice',
   'workspacePspConfig',
   // P10 (GoHighLevel parity): white-label-lite branding.
   'workspaceBranding',
+  // Epic A (CRM data model): custom fields, tags, segments, imports.
+  'customFieldDef',
+  'tag',
+  'leadTag',
+  'segment',
+  'importJob',
+  'importJobRow',
+  // Epic B (public API + outbound webhooks).
+  'apiKey',
+  'webhookEndpoint',
+  'webhookDelivery',
+  // Epic F (compliance): GDPR/KVKK consent + data subject requests.
+  'consentRecord',
+  'dataRequest',
+  // Epic E (funnel A/B experiments + surveys).
+  'experiment',
+  'experimentEvent',
+  'survey',
+  'surveyResponse',
+  // Epic B4 (Slack incoming-webhook notifications).
+  'slackIntegration',
+  // Epic F (custom roles + granular permissions).
+  'customRole',
+  // Epic C (memberships: courses/lessons + enrollment/progress).
+  'course',
+  'courseModule',
+  'lesson',
+  'enrollment',
+  'lessonProgress',
+  // Epic C (memberships: communities).
+  'community',
+  'communityMember',
+  'communityPost',
+  'communityComment',
+  // Epic G (env-gated enterprise SSO via OIDC).
+  'ssoConnection',
+  // Integrations (env-gated Google Calendar 2-way sync).
+  'googleCalendarConnection',
+  // Affiliate manager (GHL parity).
+  'affiliate',
+  'affiliateReferral',
+  'affiliateCommission',
+  // P11 (GoHighLevel parity): env-gated social media planner.
+  'socialAccount',
+  'socialPost',
+  'socialPostTarget',
+  // Epic D1 (GHL parity): agency config snapshots (owned by the capturing agency).
+  'snapshot',
+  // Epic D1 (GHL parity): agency rebilling / SaaS-mode — per-location SaaS plans +
+  // monthly settlement charges, both OWNED by the agency (workspaceId = agency id).
+  'rebillingPlan',
+  'rebillCharge',
 ] as const;
+
+/**
+ * Epic D1 (agency / sub-account hierarchy) note — the `workspace` delegate is
+ * DELIBERATELY NOT in OWNED_DELEGATES above (a Workspace is the tenant root, not
+ * a workspace-owned row), so this check does not — and should not — scan the
+ * agency.service.ts cross-into-child reads (`workspace.findFirst` /
+ * `.findMany` keyed on `parentWorkspaceId`, and the LOCATION child-create).
+ * Those are the ONE sanctioned cross-workspace path; they are legitimate
+ * because every one of them is guarded by `assertAgencyOwns(agencyWorkspaceId,
+ * locationId)` — the parent-ownership invariant — NOT by a workspaceId column.
+ * The owned-delegate writes that agency.service.ts DOES make (marketingUser /
+ * marketingDistributionConfig creates for the new location, and lead /
+ * marketingUser counts in the dashboard) all carry an explicit `workspaceId`
+ * for the child, so they pass the check below unchanged. Leaving `workspace`
+ * out of the delegate list is the honest, documented exemption — not a
+ * loosened check.
+ */
 
 /** Methods that can address many rows or create rows. */
 const SCOPED_METHODS = [
@@ -134,6 +206,68 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'meta webhook resolves the channel by its provider page/phone id before any workspace context exists',
   'channels/public-channel-resolver.service.ts:message.updateMany':
     'netgsm DLR flips an outbound message status by its globally-unique provider job id',
+  // Google Calendar push-webhook has NO workspace context — Google only sends
+  // the watch channel id. channelId is UNIQUE (one connection per channel), so
+  // this resolver (the ONLY unscoped connection read) keys on a globally-unique
+  // handle the workspace itself registered; it can't leak across tenants.
+  'integrations/google-calendar-sync.service.ts:googleCalendarConnection.findFirst':
+    'google push-webhook resolves the connection by its unique watch channelId before any workspace context exists',
+
+  // ---- Epic A imports — ImportJobRow has NO workspaceId column; it is owned by
+  // its parent ImportJob (which carries workspaceId). Every row op keys on
+  // importJobId, and the job is created/loaded in the same workspace-scoped
+  // flow (createCsv carries workspaceId; processBatch runs off a workspace-owned
+  // ScheduledJob payload). Scope is inherited from the parent, not the column.
+  'parent-scoped:importJobRow.createMany':
+    'rows are created under a job just created with workspaceId (createCsv)',
+  'parent-scoped:importJobRow.findMany':
+    'batch read keyed by importJobId; the job is the workspace-owned scope anchor',
+  'parent-scoped:importJobRow.count':
+    'remaining-row count keyed by importJobId; scoped via the parent ImportJob',
+
+  // ---- Epic A tags — LeadTag is a join table with NO workspaceId column
+  // (composite PK [leadId, tagId]). Every op resolves the Lead via a scoped
+  // assertLead/findMany and the tags via resolveOrCreate(workspaceId, …) first,
+  // so leadId/tagId are already workspace-bound. lead-dedupe re-parents under a
+  // scoped lead.findMany (the same parent-scoped pattern as leadActivity).
+  'parent-scoped:leadTag.findMany':
+    'keyed by a leadId resolved through a workspace-scoped read',
+  'parent-scoped:leadTag.createMany':
+    'links a scoped lead to tags from resolveOrCreate(workspaceId, …)',
+  'parent-scoped:leadTag.deleteMany':
+    'keyed by a leadId/tagIds resolved through workspace-scoped reads',
+  'parent-scoped:leadTag.updateMany':
+    'dedupe re-parents tags under leads resolved via a scoped lead.findMany',
+
+  // ---- Epic C memberships — CourseModule/Lesson/LessonProgress/CommunityMember
+  // have NO workspaceId column; they hang off Course/Module/Enrollment/Community
+  // which DO. Every op below is preceded by an assert* that resolves the parent
+  // via a workspace-scoped read, so the child key (courseId/moduleId/
+  // enrollmentId/communityId) is already workspace-bound.
+  'parent-scoped:courseModule.count':
+    'module count keyed by a courseId resolved via assertCourse(workspaceId, …)',
+  'parent-scoped:courseModule.create':
+    'module created under a course resolved via assertCourse(workspaceId, …)',
+  'parent-scoped:courseModule.updateMany':
+    'reorder keyed by (id, courseId) with the course resolved via a scoped read',
+  'parent-scoped:lesson.count':
+    'lesson count keyed by a courseId/module resolved via a scoped read',
+  'parent-scoped:lesson.create':
+    'lesson created under a module resolved via assertModule(workspaceId, …)',
+  'parent-scoped:lesson.findFirst':
+    'lesson resolved through its module/course after a scoped enrollment read',
+  'parent-scoped:lessonProgress.findMany':
+    'progress keyed by an enrollmentId resolved via assertEnrollment(workspaceId, …)',
+  'parent-scoped:lessonProgress.upsert':
+    'progress keyed by (enrollmentId, lessonId) under a scoped enrollment',
+  'parent-scoped:lessonProgress.count':
+    'completed count keyed by an enrollmentId resolved via a scoped read',
+  'parent-scoped:communityMember.upsert':
+    'membership keyed by (communityId, leadId) under assertCommunity(workspaceId, …)',
+  'parent-scoped:communityMember.deleteMany':
+    'leave keyed by (communityId, leadId) under a scoped community read',
+  'parent-scoped:communityMember.findMany':
+    'roster keyed by a communityId resolved via assertCommunity(workspaceId, …)',
 };
 
 function walkTs(dir: string): string[] {

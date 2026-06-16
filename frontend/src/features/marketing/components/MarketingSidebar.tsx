@@ -6,6 +6,7 @@ import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { APP_VERSION } from '../../../lib/env';
 import { NAV_GROUPS, visibleNav, type NavItem } from '../navigation';
 import { useEntitlements } from '../hooks/useEntitlements';
+import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   [
@@ -19,13 +20,14 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
   const { t } = useTranslation('marketing');
   const { user, logout } = useMarketingAuthStore();
   const { has } = useEntitlements();
+  const { isAgency } = useWorkspaceProfile();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   // Collapsible groups (only Growth, today) remember their open state per group id.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  // Role + entitlement gated, with emptied groups already dropped.
-  const groups = visibleNav(NAV_GROUPS, { isManager, has });
+  // Role + entitlement + agency-kind gated, with emptied groups already dropped.
+  const groups = visibleNav(NAV_GROUPS, { isManager, has, isAgency });
 
   const renderItem = (item: NavItem) => (
     <NavLink key={item.path} to={item.path} onClick={onNavigate} className={linkClass}>

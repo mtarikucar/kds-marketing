@@ -10,6 +10,7 @@ import {
   Wrench,
   Phone,
   LineChart,
+  PieChart,
   Flag,
   FlaskConical,
   CreditCard,
@@ -25,6 +26,23 @@ import {
   Mic,
   Banknote,
   Palette,
+  SlidersHorizontal,
+  Tag,
+  Filter,
+  FileUp,
+  GraduationCap,
+  Building2,
+  Camera,
+  Receipt,
+  KeyRound,
+  Webhook,
+  Plug,
+  Share2,
+  ListTree,
+  ShieldCheck,
+  Lock,
+  Scale,
+  BadgeDollarSign,
 } from 'lucide-react';
 
 /**
@@ -80,6 +98,8 @@ export interface NavGroup {
   items: NavItem[];
   /** Collapsible groups remember their open/closed state (Growth, which can be long). */
   collapsible?: boolean;
+  /** When true, the whole group only renders for an AGENCY workspace (Epic D). */
+  agencyOnly?: boolean;
 }
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -105,6 +125,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
       { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
       { path: '/performance', labelKey: 'nav.performance', label: 'Performance', icon: LineChart },
+      { path: '/analytics', labelKey: 'nav.analytics', label: 'Analytics', icon: PieChart, managerOnly: true },
     ],
   },
   {
@@ -123,7 +144,37 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
       { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
+      { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
       { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
+      { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
+      { path: '/experiments', labelKey: 'nav.experiments', label: 'Experiments', icon: FlaskConical, managerOnly: true },
+      { path: '/surveys', labelKey: 'nav.surveys', label: 'Surveys', icon: ClipboardList, managerOnly: true },
+      { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, feature: 'commissions', managerOnly: true },
+    ],
+  },
+  {
+    id: 'memberships',
+    labelKey: 'nav.group.memberships',
+    label: 'Memberships',
+    items: [
+      // Epic C — courses + communities. No backend `memberships` entitlement
+      // exists, so these are core (always-entitled) but manager-gated, mirroring
+      // the CRM-config precedent (settings group). Authoring is a manager task.
+      { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, managerOnly: true },
+      { path: '/memberships/communities', labelKey: 'nav.communities', label: 'Communities', icon: MessagesSquare, managerOnly: true },
+    ],
+  },
+  {
+    id: 'agency',
+    labelKey: 'nav.group.agency',
+    label: 'Agency',
+    // Epic D — sub-accounts / snapshots / rebilling. The whole group is hidden
+    // unless the workspace is an AGENCY; each route's page also self-guards.
+    agencyOnly: true,
+    items: [
+      { path: '/agency/locations', labelKey: 'nav.agencyLocations', label: 'Sub-accounts', icon: Building2, managerOnly: true },
+      { path: '/agency/snapshots', labelKey: 'nav.agencySnapshots', label: 'Snapshots', icon: Camera, managerOnly: true },
+      { path: '/agency/rebilling', labelKey: 'nav.agencyRebilling', label: 'Rebilling', icon: Receipt, managerOnly: true },
     ],
   },
   {
@@ -133,7 +184,18 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
+      // CRM config (Epic A) — core CRM, no entitlement, manager-only.
+      { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
+      { path: '/settings/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
+      { path: '/settings/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
+      { path: '/settings/import', labelKey: 'nav.import', label: 'Import leads', icon: FileUp, managerOnly: true },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
+      { path: '/settings/connections', labelKey: 'nav.connections', label: 'Connections', icon: Plug, managerOnly: true },
+      { path: '/settings/api-keys', labelKey: 'nav.apiKeys', label: 'API Keys', icon: KeyRound, managerOnly: true },
+      { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook, managerOnly: true },
+      { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: Lock, managerOnly: true },
+      { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
+      { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
       { path: '/branding', labelKey: 'nav.branding', label: 'Branding', icon: Palette, managerOnly: true },
       { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
     ],
@@ -144,16 +206,19 @@ export interface NavVisibilityOpts {
   isManager: boolean;
   /** Entitlement check; `has(undefined)` is true (core item). */
   has: (feature?: FeatureKey) => boolean;
+  /** True only for an AGENCY workspace — gates the `agencyOnly` group (Epic D). */
+  isAgency?: boolean;
 }
 
 /**
  * Pure nav gating used by the sidebar (extracted so it's unit-testable without
- * rendering): drop items the user's role/entitlement can't see, then drop any
- * group left empty. This is the function that turns the flat 26-link menu into
- * a focused, package-appropriate one.
+ * rendering): drop `agencyOnly` groups for non-agency workspaces, drop items the
+ * user's role/entitlement can't see, then drop any group left empty. This is the
+ * function that turns the flat 26-link menu into a focused, package-appropriate one.
  */
 export function visibleNav(groups: NavGroup[], opts: NavVisibilityOpts): NavGroup[] {
   return groups
+    .filter((g) => (g.agencyOnly ? !!opts.isAgency : true))
     .map((g) => ({
       ...g,
       items: g.items.filter(

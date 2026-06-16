@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -30,7 +32,7 @@ import { MarketingUserPayload } from '../types';
  */
 @MarketingRoute()
 @Controller('marketing/research')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class MarketingResearchController {
   constructor(
@@ -44,6 +46,7 @@ export class MarketingResearchController {
   }
 
   @Post('profiles')
+  @RequirePermission('settings.manage')
   createProfile(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateResearchProfileDto,
@@ -52,6 +55,7 @@ export class MarketingResearchController {
   }
 
   @Patch('profiles/:id')
+  @RequirePermission('settings.manage')
   updateProfile(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -61,6 +65,7 @@ export class MarketingResearchController {
   }
 
   @Delete('profiles/:id')
+  @RequirePermission('settings.manage')
   removeProfile(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -81,6 +86,7 @@ export class MarketingResearchController {
 
   @Post('tokens')
   @RequiresFeature('apiAccess')
+  @RequirePermission('settings.manage')
   mintToken(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: MintIngestTokenDto,
@@ -90,6 +96,7 @@ export class MarketingResearchController {
 
   @Delete('tokens/:id')
   @RequiresFeature('apiAccess')
+  @RequirePermission('settings.manage')
   revokeToken(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,

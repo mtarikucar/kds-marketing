@@ -11,10 +11,16 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingLeadsService } from '../services/marketing-leads.service';
+import { TagsService } from '../services/tags.service';
+import { LeadDedupeService } from '../services/lead-dedupe.service';
+import { AssignTagsDto } from '../dto/tag.dto';
+import { MergeLeadsDto } from '../dto/merge-leads.dto';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -26,12 +32,64 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 
 @Controller('marketing/leads')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class MarketingLeadsController {
-  constructor(private readonly leadsService: MarketingLeadsService) {}
+  constructor(
+    private readonly leadsService: MarketingLeadsService,
+    private readonly tagsService: TagsService,
+    private readonly dedupeService: LeadDedupeService,
+  ) {}
+
+  // Declared before the `:id` routes so "duplicates"/"merge" are not captured
+  // as a lead id.
+  @Get('duplicates')
+  duplicates(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.dedupeService.findDuplicates(actor.workspaceId);
+  }
+
+  @Post('merge')
+  @RequirePermission('leads.write')
+  @Audit({ action: 'lead.merge', resourceType: 'lead', captureBody: ['canonicalId'] })
+  merge(
+    @Body() dto: MergeLeadsDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.dedupeService.merge(actor.workspaceId, dto.canonicalId, dto.duplicateIds);
+  }
+
+  @Get(':id/tags')
+  listTags(
+    @Param('id') id: string,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.tagsService.getLeadTags(actor.workspaceId, id);
+  }
+
+  @Post(':id/tags')
+  @RequirePermission('leads.write')
+  @Audit({ action: 'lead.tag.assign', resourceType: 'lead', resourceIdParam: 'id' })
+  assignTags(
+    @Param('id') id: string,
+    @Body() dto: AssignTagsDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.tagsService.assignToLead(actor.workspaceId, id, dto.tags, actor.id);
+  }
+
+  @Delete(':id/tags/:tagId')
+  @RequirePermission('leads.write')
+  @Audit({ action: 'lead.tag.unassign', resourceType: 'lead', resourceIdParam: 'id' })
+  unassignTag(
+    @Param('id') id: string,
+    @Param('tagId') tagId: string,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.tagsService.unassignFromLead(actor.workspaceId, id, [tagId]);
+  }
 
   @Post()
+  @RequirePermission('leads.write')
   create(@Body() dto: CreateLeadDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.leadsService.create(actor.workspaceId, dto, actor.id, actor.role);
   }
@@ -47,6 +105,7 @@ export class MarketingLeadsController {
   }
 
   @Patch(':id')
+  @RequirePermission('leads.write')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateLeadDto,
@@ -62,6 +121,7 @@ export class MarketingLeadsController {
     resourceIdParam: 'id',
     captureBody: ['status', 'lostReason'],
   })
+  @RequirePermission('leads.write')
   updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateLeadStatusDto,
@@ -79,6 +139,7 @@ export class MarketingLeadsController {
 
   @Patch(':id/assign')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   assign(
     @Param('id') id: string,
     @Body() dto: AssignLeadDto,
@@ -92,6 +153,7 @@ export class MarketingLeadsController {
   // POST so there's no ambiguity. Manager-only at the decorator layer.
   @Post('bulk-assign')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   bulkAssign(
     @Body() dto: BulkAssignLeadDto,
     @CurrentMarketingUser() actor: MarketingUserPayload,
@@ -106,6 +168,7 @@ export class MarketingLeadsController {
 
   @Post(':id/convert')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   convert(
     @Param('id') id: string,
     @Body() dto: ConvertLeadDto,
@@ -116,6 +179,7 @@ export class MarketingLeadsController {
 
   @Delete(':id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   delete(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.leadsService.delete(actor.workspaceId, id);
   }

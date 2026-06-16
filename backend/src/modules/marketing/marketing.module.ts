@@ -9,6 +9,13 @@ import {
   MarketingLeadsController,
   MarketingActivitiesController,
   MarketingTasksController,
+  MarketingCustomFieldsController,
+  MarketingTagsController,
+  MarketingSegmentsController,
+  MarketingImportsController,
+  MarketingApiKeysController,
+  MarketingWebhooksController,
+  PublicApiV1Controller,
   MarketingOffersController,
   MarketingDashboardController,
   MarketingReportsController,
@@ -25,6 +32,14 @@ import {
   MarketingLeadsService,
   MarketingActivitiesService,
   MarketingTasksService,
+  CustomFieldsService,
+  TagsService,
+  SegmentCompilerService,
+  SegmentsService,
+  LeadDedupeService,
+  ImportService,
+  ApiKeysService,
+  WebhookOutboundService,
   MarketingOffersService,
   MarketingDashboardService,
   MarketingReportsService,
@@ -88,6 +103,7 @@ import { WebchatPublicController } from './controllers/webchat-public.controller
 import { MetaWebhookController } from './controllers/meta-webhook.controller';
 import { NetgsmPublicController } from './controllers/netgsm-public.controller';
 import { SseTokenGuard } from './guards/sse-token.guard';
+import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
 import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
@@ -135,6 +151,9 @@ import { MarketingVoiceController } from './controllers/marketing-voice.controll
 import { TwilioVoiceController } from './controllers/twilio-voice.controller';
 import { VoiceAdapter } from './channels/adapters/voice.adapter';
 import { VoiceAiService } from './channels/voice-ai.service';
+// Phase F P8 — configurable IVR / phone-tree menus over the Voice flow.
+import { IvrController } from './ivr/ivr.controller';
+import { IvrService } from './ivr/ivr.service';
 
 // Phase F P9 — end-customer invoicing.
 import { MarketingInvoicesController } from './controllers/marketing-invoices.controller';
@@ -145,6 +164,71 @@ import { InvoicesService } from './invoicing/invoices.service';
 import { MarketingBrandingController } from './controllers/marketing-branding.controller';
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
+
+// GHL parity — affiliate manager (affiliates, referrals, commissions, payouts).
+import { AffiliateController } from './controllers/affiliate.controller';
+import { AffiliateService } from './services/affiliate.service';
+
+// Epic D1 (GHL parity) — agency / sub-account hierarchy (agency owns location
+// workspaces; scoped cross-into-child management behind assertAgencyOwns).
+import { AgencyController } from './controllers/agency.controller';
+import { AgencyService } from './services/agency.service';
+// Epic D1 (GHL parity) — agency config snapshots (capture workspace config,
+// clone into child locations behind assertAgencyOwns).
+import { SnapshotController } from './controllers/snapshot.controller';
+import { SnapshotService } from './services/snapshot.service';
+// Epic D1 (GHL parity) — agency rebilling / SaaS-mode (per-location SaaS plans,
+// REAL usage metering, env-gated Stripe-Connect settlement behind assertAgencyOwns).
+import { RebillingController } from './controllers/rebilling.controller';
+import { RebillingService } from './services/rebilling.service';
+
+// P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
+import { SocialPlannerController } from './social-planner/social-planner.controller';
+import { SocialPlannerService } from './social-planner/social-planner.service';
+
+// Epic C — memberships: courses/modules/lessons + enrollment/progress.
+import { CoursesController } from './memberships/courses.controller';
+import { CoursesService } from './memberships/courses.service';
+import { EnrollmentController } from './memberships/enrollment.controller';
+import { EnrollmentService } from './memberships/enrollment.service';
+import { CommunitiesController } from './memberships/communities.controller';
+import { CommunitiesService } from './memberships/communities.service';
+// Epic G — analytics (read-only lead aggregations).
+import { AnalyticsController } from './analytics/analytics.controller';
+import { AnalyticsService } from './analytics/analytics.service';
+import { AttributionService } from './analytics/attribution.service';
+// Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
+import { ComplianceController } from './compliance/compliance.controller';
+import { ComplianceService } from './compliance/compliance.service';
+// Epic E — funnel A/B experiments + surveys.
+import { ExperimentsController } from './funnels/experiments.controller';
+import { ExperimentsService } from './funnels/experiments.service';
+import { SurveysController } from './funnels/surveys.controller';
+import { SurveysService } from './funnels/surveys.service';
+import { PublicFunnelsController } from './funnels/public-funnels.controller';
+// Epic F — 2FA/MFA (TOTP).
+import { TwoFactorController } from './controllers/two-factor.controller';
+import { TwoFactorService } from './services/two-factor.service';
+// Epic B4 — Slack incoming-webhook notifications.
+import { SlackController } from './integrations/slack.controller';
+import { SlackService } from './integrations/slack.service';
+// Epic G — env-gated enterprise SSO (OIDC, authorization-code + PKCE).
+import {
+  SsoAdminController,
+  SsoPublicController,
+} from './integrations/sso.controller';
+import { SsoService } from './services/sso.service';
+// Integrations — env-gated Google Calendar 2-way sync (OAuth, push + pull).
+import {
+  GoogleCalendarController,
+  GoogleCalendarPublicController,
+} from './integrations/google-calendar.controller';
+import { GoogleCalendarService } from './integrations/google-calendar.service';
+import { GoogleCalendarSyncService } from './integrations/google-calendar-sync.service';
+// Epic F — custom roles + granular permissions.
+import { RolesController } from './roles/roles.controller';
+import { RolesService } from './roles/roles.service';
+import { PermissionsGuard } from './roles/permissions.guard';
 
 @Module({
   imports: [
@@ -194,6 +278,13 @@ import { BrandingService } from './branding/branding.service';
     MarketingLeadsController,
     MarketingActivitiesController,
     MarketingTasksController,
+    MarketingCustomFieldsController,
+    MarketingTagsController,
+    MarketingSegmentsController,
+    MarketingImportsController,
+    MarketingApiKeysController,
+    MarketingWebhooksController,
+    PublicApiV1Controller,
     MarketingOffersController,
     MarketingDashboardController,
     MarketingReportsController,
@@ -223,10 +314,31 @@ import { BrandingService } from './branding/branding.service';
     ReviewGateController,
     MarketingVoiceController,
     TwilioVoiceController,
+    IvrController,
     MarketingInvoicesController,
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    CoursesController,
+    EnrollmentController,
+    CommunitiesController,
+    AnalyticsController,
+    ComplianceController,
+    ExperimentsController,
+    SurveysController,
+    PublicFunnelsController,
+    TwoFactorController,
+    SlackController,
+    RolesController,
+    SsoAdminController,
+    SsoPublicController,
+    GoogleCalendarController,
+    GoogleCalendarPublicController,
+    AffiliateController,
+    AgencyController,
+    SnapshotController,
+    RebillingController,
+    SocialPlannerController,
   ],
   providers: [
     // Services
@@ -234,6 +346,14 @@ import { BrandingService } from './branding/branding.service';
     MarketingLeadsService,
     MarketingActivitiesService,
     MarketingTasksService,
+    CustomFieldsService,
+    TagsService,
+    SegmentCompilerService,
+    SegmentsService,
+    LeadDedupeService,
+    ImportService,
+    ApiKeysService,
+    WebhookOutboundService,
     MarketingOffersService,
     MarketingDashboardService,
     MarketingReportsService,
@@ -324,15 +444,51 @@ import { BrandingService } from './branding/branding.service';
     // Twilio TwiML turn engine.
     VoiceAdapter,
     VoiceAiService,
+    // Phase F P8 — configurable IVR / phone-tree menus over the Voice flow.
+    IvrService,
     // Phase F P9 — end-customer invoicing (per-workspace PSP, public pay page).
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic C — memberships.
+    CoursesService,
+    EnrollmentService,
+    CommunitiesService,
+    // Epic G — analytics.
+    AnalyticsService,
+    AttributionService,
+    // Epic F (compliance).
+    ComplianceService,
+    // Epic E — funnel A/B + surveys.
+    ExperimentsService,
+    SurveysService,
+    // Epic F — 2FA.
+    TwoFactorService,
+    // Epic B4 — Slack notify.
+    SlackService,
+    // Epic G — env-gated enterprise SSO (OIDC).
+    SsoService,
+    // Integrations — env-gated Google Calendar 2-way sync.
+    GoogleCalendarService,
+    GoogleCalendarSyncService,
+    // Epic F — custom roles + permissions.
+    RolesService,
+    PermissionsGuard,
+    // GHL parity — affiliate manager.
+    AffiliateService,
+    // Epic D1 (GHL parity) — agency / sub-account hierarchy.
+    AgencyService,
+    RebillingService,
+    // Epic D1 (GHL parity) — agency config snapshots.
+    SnapshotService,
+    // P11 (GoHighLevel parity): env-gated social media planner.
+    SocialPlannerService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
     IngestTokenGuard,
     FeatureGuard,
+    ApiKeyGuard,
   ],
   exports: [
     MarketingAuthService,

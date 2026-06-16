@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -36,7 +38,7 @@ import { MarketingUserPayload } from '../types';
 @MarketingRoute()
 @RequiresFeature('installations')
 @Controller('marketing/installations')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 export class InstallationController {
   constructor(
     private readonly jobs: InstallationJobService,
@@ -55,6 +57,7 @@ export class InstallationController {
 
   @Post('crews')
   @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
   createCrew(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateCrewDto,
@@ -64,6 +67,7 @@ export class InstallationController {
 
   @Patch('crews/:id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
   updateCrew(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -100,6 +104,7 @@ export class InstallationController {
 
   @Post('jobs')
   @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
   createJob(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateJobDto,
@@ -116,6 +121,7 @@ export class InstallationController {
   }
 
   @Post('jobs/:id/schedule')
+  @RequirePermission('leads.write')
   schedule(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -125,6 +131,7 @@ export class InstallationController {
   }
 
   @Patch('jobs/:id/status')
+  @RequirePermission('leads.write')
   setStatus(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -136,6 +143,7 @@ export class InstallationController {
   // --- tasks ---
 
   @Post('jobs/:id/tasks')
+  @RequirePermission('leads.write')
   addTask(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -145,6 +153,7 @@ export class InstallationController {
   }
 
   @Patch('jobs/:id/tasks/:taskId/toggle')
+  @RequirePermission('leads.write')
   toggleTask(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -154,6 +163,7 @@ export class InstallationController {
   }
 
   @Delete('jobs/:id/tasks/:taskId')
+  @RequirePermission('leads.write')
   removeTask(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,

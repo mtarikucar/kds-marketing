@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -26,7 +28,7 @@ import { CreateChannelDto, UpdateChannelDto } from '../dto/channel.dto';
  */
 @MarketingRoute()
 @Controller('marketing/channels')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 @RequiresFeature('conversationAi')
 export class MarketingChannelsController {
@@ -43,11 +45,13 @@ export class MarketingChannelsController {
   }
 
   @Post()
+  @RequirePermission('settings.manage')
   create(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: CreateChannelDto) {
     return this.channels.create(actor.workspaceId, dto);
   }
 
   @Patch(':id')
+  @RequirePermission('settings.manage')
   update(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -57,11 +61,13 @@ export class MarketingChannelsController {
   }
 
   @Delete(':id')
+  @RequirePermission('settings.manage')
   remove(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.channels.remove(actor.workspaceId, id);
   }
 
   @Post(':id/verify')
+  @RequirePermission('settings.manage')
   verify(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.channels.verify(actor.workspaceId, id);
   }

@@ -49,10 +49,28 @@ model Workspace {
   /// generic workspaces close WON leads without provisioning.
   coreIntegration Json?
 
+  /// Epic D1 — agency / sub-account hierarchy (GoHighLevel parity).
+  /// `kind` classifies the workspace in the hierarchy:
+  ///   STANDALONE — a plain tenant with no parent and no children (default;
+  ///                every pre-Epic-D workspace is one);
+  ///   AGENCY     — owns child LOCATION workspaces it can manage;
+  ///   LOCATION   — a sub-account; `parentWorkspaceId` points at its AGENCY.
+  /// Modelled as a String (not a native PG enum) to match this schema's
+  /// status-string convention and keep the migration a plain ADD COLUMN.
+  /// Allowed values are the WorkspaceKind union in types.ts.
+  kind String @default("STANDALONE")
+
+  /// The owning AGENCY for a LOCATION sub-account; null for STANDALONE/AGENCY.
+  /// Self-reference (no FK cascade, matching the soft-reference style) — the
+  /// agency.service.ts cross-into-child path is the ONLY sanctioned reader and
+  /// it guards every access with assertAgencyOwns (parent-ownership check).
+  parentWorkspaceId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])
+  @@index([parentWorkspaceId])
   @@map("workspaces")
 }
 
@@ -106,6 +124,17 @@ model MarketingUser {
   // Session revocation token: carried in access/refresh JWTs; bumped on
   // logout and on password change so outstanding tokens are invalidated.
   tokenVersion Int @default(0)
+
+  // Epic F — 2FA/MFA (TOTP). Secret stored once enrollment begins; enabled only
+  // after a code is verified. Backup codes are SHA-256 hashes (single-use).
+  twoFactorEnabled     Boolean @default(false)
+  twoFactorSecret      String?
+  twoFactorBackupCodes Json?
+
+  // Epic F — optional custom role (granular permissions). When set, its
+  // permission set overrides the legacy `role` string; otherwise the legacy
+  // OWNER/MANAGER/REP → permission mapping applies. Additive, non-breaking.
+  customRoleId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -175,6 +204,7 @@ model Lead {
   tasks       MarketingTask[]
   offers      LeadOffer[]
   commissions Commission[]    @relation("CommissionLead")
+  tags        LeadTag[]
 
   // v3.0.1 round-4 — hardware "Teklif Al" leads (source=HARDWARE_QUOTE)
   // capture (a) the requesting tenant via soft-FK string and (b) a
@@ -191,6 +221,19 @@ model Lead {
   emailOptOut Boolean @default(false)
   smsOptOut   Boolean @default(false)
   waOptOut    Boolean @default(false)
+
+  // Epic A1 — workspace-defined custom fields. Shape is { "<defKey>": value };
+  // values are validated/coerced against CustomFieldDef by CustomFieldsService
+  // before write. GIN-indexed (jsonb_path_ops) for segment/audience filtering.
+  customFields Json @default("{}")
+
+  // Epic A4 — duplicate detection + merge. Normalized match keys are maintained
+  // on every write; `mergedIntoId` tombstones a lead folded into a canonical one
+  // (kept, not deleted, so old links still resolve).
+  phoneNormalized String?
+  emailNormalized String?
+  mergedIntoId    String?
+  mergedAt        DateTime?
 
   @@unique([workspaceId, externalRef])
   @@index([workspaceId])
@@ -209,7 +252,189 @@ model Lead {
   @@index([status, createdAt])
   @@index([originTenantId])
   @@index([workspaceId, scoredAt])
+  @@index([customFields], type: Gin, map: "leads_customFields_gin")
+  @@index([workspaceId, phoneNormalized])
+  @@index([workspaceId, emailNormalized])
+  @@index([mergedIntoId])
   @@map("leads")
+}
+
+/// Epic A1 — workspace-scoped typed custom-field definitions. Values live in
+/// Lead.customFields (JSONB). `key` + `type` are immutable after creation (values
+/// are keyed by `key`); deleting = archive (values retained). `entity` is
+/// enum-ready (LEAD today; CONTACT|OPPORTUNITY later) but only LEAD is wired.
+model CustomFieldDef {
+  id          String   @id @default(uuid())
+  workspaceId String
+  entity      String   @default("LEAD") // LEAD (enum-ready: CONTACT | OPPORTUNITY)
+  key         String // slug, immutable, unique per (workspace, entity)
+  label       String
+  type        String // TEXT|TEXTAREA|NUMBER|DATE|DATETIME|BOOL|SELECT|MULTISELECT|URL|PHONE|EMAIL
+  options     Json? // [{ value, label }] for SELECT/MULTISELECT
+  required    Boolean  @default(false)
+  position    Int      @default(0)
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, entity, key])
+  @@index([workspaceId, entity, archived])
+  @@map("custom_field_defs")
+}
+
+/// Epic A2 — workspace-scoped lead tag taxonomy. `nameLower` is the
+/// service-maintained case-insensitive uniqueness key (assign-by-name is
+/// idempotent regardless of casing). Tag↔Lead is the LeadTag join table.
+model Tag {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  nameLower   String
+  color       String? // hex, optional
+  createdAt   DateTime @default(now())
+
+  leadTags LeadTag[]
+
+  @@unique([workspaceId, nameLower])
+  @@index([workspaceId])
+  @@map("tags")
+}
+
+/// Epic A2 — Tag↔Lead membership. Composite PK makes assignment idempotent.
+model LeadTag {
+  leadId       String
+  tagId        String
+  assignedAt   DateTime @default(now())
+  assignedById String?
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([leadId, tagId])
+  @@index([tagId])
+  @@map("lead_tags")
+}
+
+/// Epic A3 — a saved, reusable lead audience. `definition` is a typed predicate
+/// tree (group: {op, children[]}; leaf: {field, cmp, value}) over native Lead
+/// columns, `cf:<key>` custom fields, and `tag` membership. DYNAMIC = evaluated
+/// live by SegmentCompilerService; the same compiler resolves campaign audiences.
+model Segment {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  name            String
+  description     String?
+  kind            String    @default("DYNAMIC") // DYNAMIC (v1)
+  definition      Json
+  lastCount       Int?
+  lastEvaluatedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@map("segments")
+}
+
+/// Epic A5 — a CSV lead import. Rows are parsed + stored on upload (status
+/// MAPPING); on commit the mapping + dedupe policy are set and processing runs
+/// in batches via the ScheduledJob queue (kind 'import.batch').
+model ImportJob {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  filename     String
+  status       String   @default("MAPPING") // MAPPING|RUNNING|DONE|FAILED|CANCELLED
+  mapping      Json? // { csvHeader -> field } incl. cf:<key>, tags, __skip
+  dedupePolicy String   @default("SKIP") // SKIP|UPDATE|CREATE
+  total        Int      @default(0)
+  processed    Int      @default(0)
+  created      Int      @default(0)
+  updated      Int      @default(0)
+  skipped      Int      @default(0)
+  failed       Int      @default(0)
+  errors       Json? // capped sample [{ row, message }]
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  rows ImportJobRow[]
+
+  @@index([workspaceId, status])
+  @@map("import_jobs")
+}
+
+model ImportJobRow {
+  id          String  @id @default(uuid())
+  importJobId String
+  rowIndex    Int
+  raw         Json
+  status      String  @default("PENDING") // PENDING|DONE|SKIPPED|FAILED
+  leadId      String?
+  error       String?
+
+  job ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId, status])
+  @@map("import_job_rows")
+}
+
+/// Epic B1 — workspace-scoped programmatic API key. The raw key (mk_live_…) is
+/// shown once on create; only the SHA-256 `keyHash` is stored and the `prefix`
+/// is shown thereafter. `scopes` gates read/write on the public REST API.
+model ApiKey {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  keyHash     String    @unique
+  prefix      String
+  scopes      Json      @default("[\"read\", \"write\"]")
+  status      String    @default("ACTIVE") // ACTIVE | REVOKED
+  lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@index([workspaceId, status])
+  @@map("api_keys")
+}
+
+/// Epic B2 — an outbound webhook subscription. `events` is the JSON array of
+/// domain event types this endpoint wants. `secret` is the HMAC signing key
+/// (returned once on create); deliveries carry `X-Webhook-Signature`.
+model WebhookEndpoint {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  url            String
+  events         Json      @default("[]")
+  secret         String
+  description    String?
+  status         String    @default("ACTIVE") // ACTIVE | DISABLED
+  failureCount   Int       @default(0)
+  lastDeliveryAt DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("webhook_endpoints")
+}
+
+/// Epic B2 — one attempt-tracked delivery of a domain event to an endpoint.
+model WebhookDelivery {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  endpointId   String
+  eventId      String
+  eventType    String
+  status       String    @default("PENDING") // PENDING | SUCCESS | FAILED
+  responseCode Int?
+  attempts     Int       @default(0)
+  error        String?
+  createdAt    DateTime  @default(now())
+  deliveredAt  DateTime?
+
+  @@index([endpointId, status])
+  @@index([workspaceId, createdAt])
+  @@map("webhook_deliveries")
 }
 
 model LeadActivity {
@@ -1160,13 +1385,19 @@ model Booking {
   email       String?
   phone       String?
   notes       String?
-  status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED
+  status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED | EXTERNAL_BUSY (pulled from Google)
   token       String   @unique
+
+  // Google Calendar 2-way sync: the mirrored Google event id (nullable). For
+  // our bookings pushed to Google it is the created event's id; for "busy"
+  // blocks pulled FROM Google (status EXTERNAL_BUSY) it is the source event id.
+  googleEventId String?
 
   createdAt DateTime @default(now())
 
   @@index([calendarId, startAt])
   @@index([workspaceId])
+  @@index([workspaceId, googleEventId])
   @@map("bookings")
 }
 
@@ -1241,6 +1472,55 @@ model VoiceTranscript {
 
   @@index([callId])
   @@map("voice_transcripts")
+}
+
+/// A configurable IVR / phone-tree menu (GoHighLevel parity). Sits IN FRONT OF
+/// the existing Voice-AI flow: when a workspace has an enabled `isRoot` menu,
+/// inbound calls are answered with this menu's <Gather numDigits=1> instead of
+/// going straight to the AI receptionist. Workspace-owned. `greeting` is either
+/// plain text (spoken via <Say>) or an absolute audio URL (played via <Play>).
+model IvrMenu {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  greeting    String  @db.Text
+  enabled     Boolean @default(true)
+  isRoot      Boolean @default(false) // the entry menu for inbound calls
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  options IvrOption[]
+
+  @@index([workspaceId])
+  // At most ONE enabled root menu per workspace is enforced in the service
+  // layer (a partial unique index can't express "enabled AND isRoot" portably
+  // here); this index makes the root lookup on the inbound webhook cheap.
+  @@index([workspaceId, isRoot, enabled])
+  @@map("ivr_menus")
+}
+
+/// One keypad option on an IvrMenu. `digit` is unique within a menu. `action`
+/// decides what the digit does: SUBMENU (nested <Gather> via targetMenuId),
+/// DIAL (<Dial> the E.164 dialNumber), VOICEMAIL (<Record>), HANGUP (<Hangup>),
+/// or AI_RECEPTIONIST (hand off to the existing Voice-AI flow).
+model IvrOption {
+  id           String  @id @default(uuid())
+  workspaceId  String
+  menuId       String
+  digit        String // '0'-'9' | '*' | '#'
+  label        String
+  action       String // SUBMENU | DIAL | VOICEMAIL | HANGUP | AI_RECEPTIONIST
+  targetMenuId String? // for SUBMENU
+  dialNumber   String? // for DIAL, E.164
+
+  createdAt DateTime @default(now())
+
+  menu IvrMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([menuId, digit])
+  @@index([workspaceId])
+  @@map("ivr_options")
 }
 
 /// An invoice the workspace sends to its OWN end customer. `items` is an array
@@ -1408,4 +1688,535 @@ model RoutineConfig {
   updatedAt          DateTime  @updatedAt
 
   @@map("routine_configs")
+}
+
+/// Epic C1 — a workspace-authored course. Content lives in CourseModule →
+/// Lesson. Members are Leads (soft ref via Enrollment). Publishing requires
+/// at least one lesson (enforced in the service).
+model Course {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  title         String
+  slug          String
+  description   String?  @db.Text
+  status        String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  priceCents    Int? // null = free
+  currency      String?
+  coverImageUrl String?
+  position      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  modules     CourseModule[]
+  enrollments Enrollment[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("courses")
+}
+
+/// Epic C2 — a Lead's enrollment in a Course. `leadId` is a soft ref to the
+/// contact (the member). progressPct is recomputed from LessonProgress on each
+/// completion; status flips COMPLETED at 100%.
+model Enrollment {
+  id          String    @id @default(uuid())
+  workspaceId String
+  courseId    String
+  leadId      String
+  status      String    @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  progressPct Int       @default(0)
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+
+  course   Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  progress LessonProgress[]
+
+  @@unique([courseId, leadId])
+  @@index([workspaceId, courseId])
+  @@index([workspaceId, leadId])
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  id           String    @id @default(uuid())
+  enrollmentId String
+  lessonId     String
+  completed    Boolean   @default(false)
+  completedAt  DateTime?
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, lessonId])
+  @@index([enrollmentId, completed])
+  @@map("lesson_progress")
+}
+
+/// Epic C3 — a community space. Members are Leads; posts/comments may be
+/// authored by a staff MarketingUser (authorUserId) or a member Lead
+/// (authorLeadId), both soft refs.
+model Community {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String?  @db.Text
+  status      String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members CommunityMember[]
+  posts   CommunityPost[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("communities")
+}
+
+model CommunityMember {
+  id          String   @id @default(uuid())
+  communityId String
+  leadId      String
+  role        String   @default("MEMBER") // MEMBER | MODERATOR
+  joinedAt    DateTime @default(now())
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, leadId])
+  @@index([communityId])
+  @@map("community_members")
+}
+
+model CommunityPost {
+  id           String   @id @default(uuid())
+  communityId  String
+  workspaceId  String
+  authorUserId String?
+  authorLeadId String?
+  title        String?
+  body         String   @db.Text
+  pinned       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  community Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  comments  CommunityComment[]
+
+  @@index([communityId, pinned, createdAt])
+  @@map("community_posts")
+}
+
+model CommunityComment {
+  id           String   @id @default(uuid())
+  postId       String
+  workspaceId  String
+  authorUserId String?
+  authorLeadId String?
+  body         String   @db.Text
+  createdAt    DateTime @default(now())
+
+  post CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, createdAt])
+  @@map("community_comments")
+}
+
+model CourseModule {
+  id       String @id @default(uuid())
+  courseId String
+  title    String
+  position Int    @default(0)
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId, position])
+  @@map("course_modules")
+}
+
+model Lesson {
+  id          String  @id @default(uuid())
+  moduleId    String
+  title       String
+  type        String  @default("VIDEO") // VIDEO | TEXT | PDF | QUIZ
+  content     String? @db.Text
+  videoUrl    String?
+  durationSec Int?
+  position    Int     @default(0)
+  isPreview   Boolean @default(false)
+
+  module CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([moduleId, position])
+  @@map("lessons")
+}
+
+/// Epic F (compliance) — append-only consent log for GDPR/KVKK. Each row is one
+/// consent change for a Lead; the latest row per type is current. Recording a
+/// consent also syncs the Lead's per-channel opt-out flag.
+model ConsentRecord {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  type        String // MARKETING_EMAIL | MARKETING_SMS | MARKETING_WHATSAPP | DATA_PROCESSING
+  granted     Boolean
+  source      String?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, leadId, type])
+  @@map("consent_records")
+}
+
+/// Epic F (compliance) — a GDPR data subject request. EXPORT aggregates and
+/// returns a Lead's data immediately; ERASURE is recorded PENDING for reviewed
+/// execution (deletion is intentionally not automatic).
+model DataRequest {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  leadId        String
+  kind          String // EXPORT | ERASURE
+  status        String    @default("PENDING") // PENDING | COMPLETED
+  payload       Json?
+  requestedById String?
+  requestedAt   DateTime  @default(now())
+  completedAt   DateTime?
+
+  @@index([workspaceId, status])
+  @@map("data_requests")
+}
+
+/// Epic E — an A/B (split) experiment over a funnel/site page. `variants` is a
+/// JSON array of { key, label, weight, blocks? }; selection is weighted-random
+/// and each impression/conversion is an ExperimentEvent for results aggregation.
+model Experiment {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  pageId      String?
+  variants    Json     @default("[]")
+  status      String   @default("DRAFT") // DRAFT | RUNNING | STOPPED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  events ExperimentEvent[]
+
+  @@index([workspaceId, status])
+  @@map("experiments")
+}
+
+model ExperimentEvent {
+  id           String   @id @default(uuid())
+  experimentId String
+  workspaceId  String
+  variantKey   String
+  kind         String // IMPRESSION | CONVERSION
+  createdAt    DateTime @default(now())
+
+  experiment Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+
+  @@index([experimentId, variantKey, kind])
+  @@map("experiment_events")
+}
+
+/// Epic E — a workspace-authored survey (richer than a lead-capture FormDef).
+/// `questions` is a JSON array of { key, label, type, required?, options? }.
+model Survey {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  questions   Json     @default("[]")
+  status      String   @default("DRAFT") // DRAFT | PUBLISHED | CLOSED
+  redirectUrl String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  responses SurveyResponse[]
+
+  @@index([workspaceId, status])
+  @@map("surveys")
+}
+
+model SurveyResponse {
+  id          String   @id @default(uuid())
+  surveyId    String
+  workspaceId String
+  leadId      String?
+  answers     Json
+  createdAt   DateTime @default(now())
+
+  survey Survey @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  @@index([surveyId, createdAt])
+  @@map("survey_responses")
+}
+
+/// Epic B4 — Slack incoming-webhook notifications. On a subscribed domain event
+/// the workspace's ACTIVE integrations POST a formatted message to `webhookUrl`
+/// (a Slack-issued URL; no OAuth). `events` empty = all supported events.
+model SlackIntegration {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  webhookUrl     String
+  channel        String?
+  events         Json      @default("[]")
+  status         String    @default("ACTIVE") // ACTIVE | DISABLED
+  lastNotifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("slack_integrations")
+}
+
+/// Epic G — env-gated enterprise SSO via OIDC (authorization-code + PKCE).
+/// One row per workspace IdP. `clientSecret` is stored SEALED with the
+/// AES-256-GCM secret-box (env MARKETING_SECRET_KEY) and is NEVER returned by
+/// the API. `allowedDomains` (when non-empty) restricts which verified email
+/// domains may JIT-provision/match a user. Inert when no enabled row exists or
+/// the secret-box is unconfigured — the feature is simply unavailable.
+model SsoConnection {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  provider       String   @default("OIDC") // OIDC (only mode today)
+  issuer         String // OIDC issuer base URL; token/JWKS discovered from it
+  clientId       String
+  clientSecret   String // SEALED (secret-box v1:...); masked out of API responses
+  enabled        Boolean  @default(false)
+  allowedDomains String[] @default([]) // empty = any verified email domain
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, enabled])
+  @@map("sso_connections")
+}
+
+/// Env-gated Google Calendar 2-way sync. One row per (workspace, connecting
+/// MarketingUser, googleCalendar). OAuth tokens are stored SEALED (secret-box
+/// v1:...) and NEVER returned by the API. `syncToken` drives incremental pulls;
+/// `channelId`/`resourceId` back the optional Google "watch" push-webhook.
+model GoogleCalendarConnection {
+  id               String   @id @default(uuid())
+  workspaceId      String
+  marketingUserId  String
+  googleCalendarId String   @default("primary")
+  accessToken      String // SEALED (secret-box v1:...) — masked out of API responses
+  refreshToken     String // SEALED (secret-box v1:...) — masked out of API responses
+  tokenExpiresAt   DateTime
+  syncToken        String? // Google incremental events.list sync token (nullable until first pull)
+  channelId        String? // Google watch channel id (push webhook); unique when set
+  resourceId       String? // Google watch resource id (push webhook)
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, marketingUserId])
+  @@unique([channelId])
+  @@map("google_calendar_connections")
+}
+
+/// Epic F — a workspace-defined custom role with a granular permission set
+/// (array of permission keys from the catalog). Assigned to MarketingUsers via
+/// `customRoleId`; overrides the legacy OWNER/MANAGER/REP mapping.
+model CustomRole {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  permissions Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("custom_roles")
+}
+
+/// Affiliate manager — workspace-scoped affiliate (partner/referrer).
+/// `code` is unique per workspace (not globally unique, unlike MarketingUser.referralCode) — use @@unique([workspaceId, code]).
+model Affiliate {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  name            String
+  email           String
+  code            String
+  commissionType  String   // PERCENT | FLAT
+  commissionValue Decimal  @db.Decimal(10, 2)
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  referrals   AffiliateReferral[]
+  commissions AffiliateCommission[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId, status])
+  @@map("affiliates")
+}
+
+/// A referral tracked to an affiliate. referredLeadId is a soft ref to Lead.id.
+model AffiliateReferral {
+  id                  String    @id @default(uuid())
+  workspaceId         String
+  affiliateId         String
+  affiliate           Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  referredLeadId      String?
+  status              String    @default("PENDING") // PENDING | CONVERTED | REJECTED
+  convertedAt         DateTime?
+  createdAt           DateTime  @default(now())
+
+  commissions AffiliateCommission[]
+
+  @@index([workspaceId, affiliateId])
+  @@index([workspaceId, status])
+  @@map("affiliate_referrals")
+}
+
+/// A commission owed to an affiliate for a converted referral.
+/// amount = PERCENT → commissionValue% × conversionValue, or FLAT → commissionValue.
+model AffiliateCommission {
+  id          String            @id @default(uuid())
+  workspaceId String
+  affiliateId String
+  affiliate   Affiliate         @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  referralId  String
+  referral    AffiliateReferral @relation(fields: [referralId], references: [id], onDelete: Restrict)
+  amount      Decimal           @db.Decimal(10, 2)
+  status      String            @default("OWED") // OWED | APPROVED | PAID
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([workspaceId, affiliateId])
+  @@index([workspaceId, status])
+  @@map("affiliate_commissions")
+}
+
+/// Social account connected to a workspace (env-gated per-network publish).
+/// accessToken is SEALED (secret-box v1:...) — never returned raw in API responses.
+model SocialAccount {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  network        String   // FACEBOOK | INSTAGRAM | LINKEDIN
+  externalId     String   // provider page/profile id
+  displayName    String
+  accessToken    String   @db.Text // SEALED — never returned raw
+  tokenExpiresAt DateTime?
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  targets SocialPostTarget[]
+
+  @@unique([workspaceId, network, externalId])
+  @@index([workspaceId, network])
+  @@map("social_accounts")
+}
+
+/// A social post authored in the planner (may fan out to multiple networks).
+model SocialPost {
+  id          String    @id @default(uuid())
+  workspaceId String
+  content     String    @db.Text
+  mediaUrls   String[]
+  status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  targets SocialPostTarget[]
+
+  @@index([workspaceId, status])
+  @@map("social_posts")
+}
+
+/// A single per-network publish target for a SocialPost.
+model SocialPostTarget {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  postId          String
+  post            SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  account         SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Restrict)
+  network         String   // FACEBOOK | INSTAGRAM | LINKEDIN
+  status          String   @default("PENDING") // PENDING|PUBLISHED|FAILED
+  externalPostId  String?
+  error           String?
+
+  @@index([workspaceId, postId])
+  @@index([workspaceId, status])
+  @@map("social_post_targets")
+}
+
+/// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).
+///
+/// A reusable capture of one workspace's CONFIG (custom-field defs, tags,
+/// segments, workflows, agent profiles, funnels/pages, forms, booking calendars,
+/// knowledge docs, review sources) — NEVER customer data (leads, conversations,
+/// offers, invoices, users). `workspaceId` is the AGENCY that captured it, so a
+/// snapshot is a normal workspace-OWNED row (same scoping invariant as every
+/// other owned delegate). `payload` stores each captured record in its PORTABLE
+/// shape (stripped of id / workspaceId / timestamps), keyed by config type, so
+/// `apply` can stamp the target workspaceId and idempotently re-create the config
+/// in a child LOCATION (authorized via assertAgencyOwns).
+model Snapshot {
+  id          String   @id @default(uuid())
+  workspaceId String // the AGENCY that owns this snapshot
+  name        String
+  description String?
+  payload     Json // captured config, keyed by type (portable shape)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("snapshots")
+}
+
+/// Epic D1 — agency REBILLING / SaaS-mode (GoHighLevel "agency charges sub-account"
+/// parity). One plan per child LOCATION: the flat monthly SaaS fee the agency charges
+/// it, plus a markup applied to that location's REAL metered usage (read from
+/// UsageCounter — the same `ai.credits` / `messages.sent` meters the product already
+/// writes). `workspaceId` is the AGENCY that owns the plan (normal owned-delegate
+/// scoping); `locationWorkspaceId` is its child LOCATION, authorized via
+/// assertAgencyOwns at the service layer (no DB FK, matching the soft-reference style).
+/// Money is Decimal(10,2) TRY — identical semantics to packages/invoices; this module
+/// is additive and never touches the existing customer billing tables.
+model RebillingPlan {
+  id                  String   @id @default(uuid())
+  workspaceId         String // the AGENCY that owns this plan
+  locationWorkspaceId String // the child LOCATION it bills
+  basePrice           Decimal  @default(0) @db.Decimal(10, 2) // flat monthly SaaS fee (TRY)
+  usageUnitPrice      Decimal  @default(0) @db.Decimal(10, 2) // agency cost basis per metered usage unit (TRY)
+  markupPercent       Decimal  @default(0) @db.Decimal(10, 2) // % markup the agency adds on metered usage
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([workspaceId, locationWorkspaceId])
+  @@index([workspaceId])
+  @@map("rebilling_plans")
+}
+
+/// Epic D1 — a monthly REBILL settlement line per location. computeCharge meters the
+/// location's REAL usage over [periodStart, periodEnd) and records a DRAFT charge:
+/// baseAmount = plan.basePrice, usageAmount = meteredUnits × usageUnitPrice ×
+/// (1 + markupPercent/100), totalAmount = baseAmount + usageAmount. The actual
+/// outbound charge (chargeViaStripeConnect) is ENV-GATED: when Stripe Connect is not
+/// configured the charge stays DRAFT (internal settlement only, no live charge);
+/// when configured it flips to INVOICED/PAID and stores `stripeChargeId`. Idempotent.
+model RebillCharge {
+  id                  String   @id @default(uuid())
+  workspaceId         String // the AGENCY that owns this charge
+  locationWorkspaceId String // the child LOCATION being settled
+  periodStart         DateTime
+  periodEnd           DateTime
+  baseAmount          Decimal  @default(0) @db.Decimal(10, 2)
+  usageAmount         Decimal  @default(0) @db.Decimal(10, 2)
+  totalAmount         Decimal  @default(0) @db.Decimal(10, 2)
+  usageUnits          Int      @default(0) // raw metered units the usage line settled (audit trail)
+  status              String   @default("DRAFT") // DRAFT | INVOICED | PAID | FAILED
+  stripeChargeId      String?
+  createdAt           DateTime @default(now())
+
+  @@index([workspaceId])
+  @@index([workspaceId, locationWorkspaceId])
+  @@map("rebill_charges")
 }

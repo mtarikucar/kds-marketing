@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -26,11 +28,12 @@ import { MarketingUserPayload } from '../types';
 @MarketingRoute()
 @RequiresFeature('telephony')
 @Controller('marketing/calls')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 export class SalesCallController {
   constructor(private readonly calls: SalesCallService) {}
 
   @Post('start')
+  @RequirePermission('leads.write')
   start(
     @Body() dto: StartCallDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -39,6 +42,7 @@ export class SalesCallController {
   }
 
   @Post(':id/log')
+  @RequirePermission('leads.write')
   log(
     @Param('id') id: string,
     @Body() dto: LogCallDto,

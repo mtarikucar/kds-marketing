@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -30,7 +32,7 @@ import {
  */
 @MarketingRoute()
 @Controller('marketing/workflows')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 @RequiresFeature('workflows')
 export class MarketingWorkflowsController {
@@ -42,11 +44,13 @@ export class MarketingWorkflowsController {
   }
 
   @Post('draft')
+  @RequirePermission('automations.manage')
   draft(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: DraftWorkflowDto) {
     return this.workflows.draft(actor.workspaceId, dto.prompt);
   }
 
   @Post()
+  @RequirePermission('automations.manage')
   create(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: CreateWorkflowDto) {
     return this.workflows.create(actor.workspaceId, dto);
   }
@@ -62,6 +66,7 @@ export class MarketingWorkflowsController {
   }
 
   @Patch(':id')
+  @RequirePermission('automations.manage')
   update(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -71,6 +76,7 @@ export class MarketingWorkflowsController {
   }
 
   @Post(':id/status')
+  @RequirePermission('automations.manage')
   setStatus(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -80,6 +86,7 @@ export class MarketingWorkflowsController {
   }
 
   @Delete(':id')
+  @RequirePermission('automations.manage')
   remove(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.workflows.remove(actor.workspaceId, id);
   }

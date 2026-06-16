@@ -1,0 +1,61 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
+import SurveysPage from './SurveysPage';
+
+vi.mock('../../../../features/marketing/api/marketingApi', () => ({
+  default: {
+    get: vi.fn().mockResolvedValue({ data: [] }),
+    post: vi.fn().mockResolvedValue({ data: { id: '1' } }),
+    patch: vi.fn().mockResolvedValue({ data: {} }),
+    delete: vi.fn().mockResolvedValue({ data: {} }),
+  },
+}));
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string | string[], opts?: { defaultValue?: string } | string) =>
+      (typeof opts === 'string' ? opts : opts?.defaultValue) ??
+      (Array.isArray(key) ? key[key.length - 1] : key),
+    i18n: { language: 'en' },
+  }),
+}));
+
+function wrapper({ children }: { children: React.ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+describe('SurveysPage', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('mounts and renders the page heading', () => {
+    render(<SurveysPage />, { wrapper });
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('opens the create dialog', async () => {
+    render(<SurveysPage />, { wrapper });
+    const btns = screen.getAllByRole('button', { name: /new survey/i });
+    await userEvent.click(btns[0]);
+    expect(await screen.findByRole('heading', { level: 2 })).toBeInTheDocument();
+  });
+
+  it('shows a validation error on empty submit', async () => {
+    render(<SurveysPage />, { wrapper });
+    const btns = screen.getAllByRole('button', { name: /new survey/i });
+    await userEvent.click(btns[0]);
+    // Submit without a name or a question label -> required errors surface.
+    const saveBtns = await screen.findAllByRole('button', { name: /new survey/i });
+    // The dialog's submit button is the last "New survey" button rendered.
+    await userEvent.click(saveBtns[saveBtns.length - 1]);
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts.length).toBeGreaterThan(0);
+  });
+});

@@ -196,6 +196,11 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         '1.2.3.4',
       );
       expect(jwt.sign.mock.calls[0][0]).toMatchObject({ wsp: 'ws-1' });
+      // login() now returns a union: the success branch (with `user`) or a
+      // 2FA-challenge branch. baseUser has 2FA off, so this is the success
+      // path — narrow to it before asserting workspace isolation.
+      expect('user' in res).toBe(true);
+      if (!('user' in res)) throw new Error('expected a non-2FA login result');
       expect(res.user.workspaceId).toBe('ws-1');
     });
   });

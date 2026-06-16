@@ -31,6 +31,16 @@ const BillingPage              = lazy(() => import('./pages/marketing/billing'))
 // Manager-only pages
 const MarketingUsersPage       = lazy(() => import('./pages/marketing/users'));
 const TargetsPage              = lazy(() => import('./pages/marketing/targets'));
+const CustomFieldsPage         = lazy(() => import('./pages/marketing/crm/customFields'));
+const TagsPage                 = lazy(() => import('./pages/marketing/crm/tags'));
+const SegmentsPage             = lazy(() => import('./pages/marketing/crm/segments'));
+const CoursesPage              = lazy(() => import('./pages/marketing/memberships/courses'));
+const CourseEditorPage         = lazy(() => import('./pages/marketing/memberships/courses/CourseEditorPage'));
+const CommunitiesPage          = lazy(() => import('./pages/marketing/memberships/communities'));
+const CommunityDetailPage      = lazy(() => import('./pages/marketing/memberships/communities/CommunityDetailPage'));
+const AgencyLocationsPage      = lazy(() => import('./pages/marketing/agency/LocationsPage'));
+const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/SnapshotsPage'));
+const AgencyRebillingPage      = lazy(() => import('./pages/marketing/agency/RebillingPage'));
 const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
 const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
@@ -43,6 +53,20 @@ const ReviewsPage              = lazy(() => import('./pages/marketing/ReviewsPag
 const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'));
 const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
+const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
+const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/AnalyticsPage'));
+// GHL-parity settings/tools UIs
+const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/apiKeys'));
+const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
+const ConnectionsPage          = lazy(() => import('./pages/marketing/settings/connections'));
+const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
+const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
+const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
+const SocialPlannerPage        = lazy(() => import('./pages/marketing/social'));
+const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
+const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
+const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
+const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -108,11 +132,26 @@ export default function App() {
           <Route path="/calls"          element={<S><CallsPage /></S>} />
           <Route path="/performance"    element={<S><PerformancePage /></S>} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
+          {/* Self-service 2FA — available to every authenticated marketing user. */}
+          <Route path="/settings/two-factor" element={<S><TwoFactorPage /></S>} />
         </Route>
         <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.MANAGER} />}>
           <Route element={<MarketingLayout />}>
             <Route path="/users"       element={<S><MarketingUsersPage /></S>} />
             <Route path="/targets"     element={<S><TargetsPage /></S>} />
+            <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
+            <Route path="/settings/tags"          element={<S><TagsPage /></S>} />
+            <Route path="/settings/segments"      element={<S><SegmentsPage /></S>} />
+            <Route path="/settings/import"        element={<S><ImportWizardPage /></S>} />
+            <Route path="/memberships/courses"            element={<S><CoursesPage /></S>} />
+            <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
+            <Route path="/memberships/communities"        element={<S><CommunitiesPage /></S>} />
+            <Route path="/memberships/communities/:id"    element={<S><CommunityDetailPage /></S>} />
+            {/* Agency console (Epic D) — each page self-guards on workspace.kind === AGENCY
+                (AgencyGuard); backend additionally 403s every /agency route for non-agencies. */}
+            <Route path="/agency/locations"  element={<S><AgencyLocationsPage /></S>} />
+            <Route path="/agency/snapshots"  element={<S><AgencySnapshotsPage /></S>} />
+            <Route path="/agency/rebilling"  element={<S><AgencyRebillingPage /></S>} />
             <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
@@ -125,6 +164,19 @@ export default function App() {
             <Route path="/voice"       element={<S><VoicePage /></S>} />
             <Route path="/invoices"    element={<S><InvoicesPage /></S>} />
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
+            {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
+            <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
+            {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
+            <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
+            <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
+            <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />
+            <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
+            <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
+            <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />
+            <Route path="/experiments" element={<S><ExperimentsPage /></S>} />
+            <Route path="/surveys"     element={<S><SurveysPage /></S>} />
+            <Route path="/affiliates"  element={<S><AffiliatesPage /></S>} />
           </Route>
         </Route>
       </Route>

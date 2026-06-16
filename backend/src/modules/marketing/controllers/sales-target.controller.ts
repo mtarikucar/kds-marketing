@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -24,12 +26,13 @@ import { MarketingUserPayload } from '../types';
  */
 @MarketingRoute()
 @Controller('marketing')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class SalesTargetController {
   constructor(private readonly targets: SalesTargetService) {}
 
   @Post('targets')
   @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
   set(@Body() dto: SetTargetDto, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.targets.setTarget(user.workspaceId, dto, user.id);
   }
@@ -41,6 +44,7 @@ export class SalesTargetController {
 
   @Delete('targets/:id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
   remove(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.targets.remove(user.workspaceId, id);
   }
