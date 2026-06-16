@@ -175,6 +175,7 @@ model Lead {
   tasks       MarketingTask[]
   offers      LeadOffer[]
   commissions Commission[]    @relation("CommissionLead")
+  tags        LeadTag[]
 
   // v3.0.1 round-4 — hardware "Teklif Al" leads (source=HARDWARE_QUOTE)
   // capture (a) the requesting tenant via soft-FK string and (b) a
@@ -191,6 +192,19 @@ model Lead {
   emailOptOut Boolean @default(false)
   smsOptOut   Boolean @default(false)
   waOptOut    Boolean @default(false)
+
+  // Epic A1 — workspace-defined custom fields. Shape is { "<defKey>": value };
+  // values are validated/coerced against CustomFieldDef by CustomFieldsService
+  // before write. GIN-indexed (jsonb_path_ops) for segment/audience filtering.
+  customFields Json @default("{}")
+
+  // Epic A4 — duplicate detection + merge. Normalized match keys are maintained
+  // on every write; `mergedIntoId` tombstones a lead folded into a canonical one
+  // (kept, not deleted, so old links still resolve).
+  phoneNormalized String?
+  emailNormalized String?
+  mergedIntoId    String?
+  mergedAt        DateTime?
 
   @@unique([workspaceId, externalRef])
   @@index([workspaceId])
@@ -209,7 +223,129 @@ model Lead {
   @@index([status, createdAt])
   @@index([originTenantId])
   @@index([workspaceId, scoredAt])
+  @@index([customFields], type: Gin)
+  @@index([workspaceId, phoneNormalized])
+  @@index([workspaceId, emailNormalized])
+  @@index([mergedIntoId])
   @@map("leads")
+}
+
+/// Epic A1 — workspace-scoped typed custom-field definitions. Values live in
+/// Lead.customFields (JSONB). `key` + `type` are immutable after creation (values
+/// are keyed by `key`); deleting = archive (values retained). `entity` is
+/// enum-ready (LEAD today; CONTACT|OPPORTUNITY later) but only LEAD is wired.
+model CustomFieldDef {
+  id          String   @id @default(uuid())
+  workspaceId String
+  entity      String   @default("LEAD") // LEAD (enum-ready: CONTACT | OPPORTUNITY)
+  key         String // slug, immutable, unique per (workspace, entity)
+  label       String
+  type        String // TEXT|TEXTAREA|NUMBER|DATE|DATETIME|BOOL|SELECT|MULTISELECT|URL|PHONE|EMAIL
+  options     Json? // [{ value, label }] for SELECT/MULTISELECT
+  required    Boolean  @default(false)
+  position    Int      @default(0)
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, entity, key])
+  @@index([workspaceId, entity, archived])
+  @@map("custom_field_defs")
+}
+
+/// Epic A2 — workspace-scoped lead tag taxonomy. `nameLower` is the
+/// service-maintained case-insensitive uniqueness key (assign-by-name is
+/// idempotent regardless of casing). Tag↔Lead is the LeadTag join table.
+model Tag {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  nameLower   String
+  color       String? // hex, optional
+  createdAt   DateTime @default(now())
+
+  leadTags LeadTag[]
+
+  @@unique([workspaceId, nameLower])
+  @@index([workspaceId])
+  @@map("tags")
+}
+
+/// Epic A2 — Tag↔Lead membership. Composite PK makes assignment idempotent.
+model LeadTag {
+  leadId       String
+  tagId        String
+  assignedAt   DateTime @default(now())
+  assignedById String?
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([leadId, tagId])
+  @@index([tagId])
+  @@map("lead_tags")
+}
+
+/// Epic A3 — a saved, reusable lead audience. `definition` is a typed predicate
+/// tree (group: {op, children[]}; leaf: {field, cmp, value}) over native Lead
+/// columns, `cf:<key>` custom fields, and `tag` membership. DYNAMIC = evaluated
+/// live by SegmentCompilerService; the same compiler resolves campaign audiences.
+model Segment {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  name            String
+  description     String?
+  kind            String    @default("DYNAMIC") // DYNAMIC (v1)
+  definition      Json
+  lastCount       Int?
+  lastEvaluatedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@map("segments")
+}
+
+/// Epic A5 — a CSV lead import. Rows are parsed + stored on upload (status
+/// MAPPING); on commit the mapping + dedupe policy are set and processing runs
+/// in batches via the ScheduledJob queue (kind 'import.batch').
+model ImportJob {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  filename     String
+  status       String   @default("MAPPING") // MAPPING|RUNNING|DONE|FAILED|CANCELLED
+  mapping      Json? // { csvHeader -> field } incl. cf:<key>, tags, __skip
+  dedupePolicy String   @default("SKIP") // SKIP|UPDATE|CREATE
+  total        Int      @default(0)
+  processed    Int      @default(0)
+  created      Int      @default(0)
+  updated      Int      @default(0)
+  skipped      Int      @default(0)
+  failed       Int      @default(0)
+  errors       Json? // capped sample [{ row, message }]
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  rows ImportJobRow[]
+
+  @@index([workspaceId, status])
+  @@map("import_jobs")
+}
+
+model ImportJobRow {
+  id          String  @id @default(uuid())
+  importJobId String
+  rowIndex    Int
+  raw         Json
+  status      String  @default("PENDING") // PENDING|DONE|SKIPPED|FAILED
+  leadId      String?
+  error       String?
+
+  job ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId, status])
+  @@map("import_job_rows")
 }
 
 model LeadActivity {

@@ -15,6 +15,10 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingLeadsService } from '../services/marketing-leads.service';
+import { TagsService } from '../services/tags.service';
+import { LeadDedupeService } from '../services/lead-dedupe.service';
+import { AssignTagsDto } from '../dto/tag.dto';
+import { MergeLeadsDto } from '../dto/merge-leads.dto';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -29,7 +33,55 @@ import { Audit } from '../../audit/audit.decorator';
 @UseGuards(MarketingGuard, MarketingRolesGuard)
 @MarketingRoute()
 export class MarketingLeadsController {
-  constructor(private readonly leadsService: MarketingLeadsService) {}
+  constructor(
+    private readonly leadsService: MarketingLeadsService,
+    private readonly tagsService: TagsService,
+    private readonly dedupeService: LeadDedupeService,
+  ) {}
+
+  // Declared before the `:id` routes so "duplicates"/"merge" are not captured
+  // as a lead id.
+  @Get('duplicates')
+  duplicates(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.dedupeService.findDuplicates(actor.workspaceId);
+  }
+
+  @Post('merge')
+  @Audit({ action: 'lead.merge', resourceType: 'lead', captureBody: ['canonicalId'] })
+  merge(
+    @Body() dto: MergeLeadsDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.dedupeService.merge(actor.workspaceId, dto.canonicalId, dto.duplicateIds);
+  }
+
+  @Get(':id/tags')
+  listTags(
+    @Param('id') id: string,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.tagsService.getLeadTags(actor.workspaceId, id);
+  }
+
+  @Post(':id/tags')
+  @Audit({ action: 'lead.tag.assign', resourceType: 'lead', resourceIdParam: 'id' })
+  assignTags(
+    @Param('id') id: string,
+    @Body() dto: AssignTagsDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.tagsService.assignToLead(actor.workspaceId, id, dto.tags, actor.id);
+  }
+
+  @Delete(':id/tags/:tagId')
+  @Audit({ action: 'lead.tag.unassign', resourceType: 'lead', resourceIdParam: 'id' })
+  unassignTag(
+    @Param('id') id: string,
+    @Param('tagId') tagId: string,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.tagsService.unassignFromLead(actor.workspaceId, id, [tagId]);
+  }
 
   @Post()
   create(@Body() dto: CreateLeadDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
