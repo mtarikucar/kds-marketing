@@ -1,18 +1,36 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
-import { NAV_GROUPS } from '../navigation';
+import { NAV_HUBS } from '../navigation';
 
 /**
- * Route-derived breadcrumb trail (wayfinding). Reuses the navigation config as
- * the label source, so "where am I" reads consistently with the sidebar:
- * `Group › Page` (and `Group › Page › New/Edit/Detail` on nested routes). The
- * match is the longest nav path that prefixes the current location, so detail
- * routes like `/leads/:id` resolve to their parent ("Leads") plus a leaf.
+ * Route-derived breadcrumb trail (wayfinding). Reuses the navigation hub config
+ * as the label source, so "where am I" reads consistently with the sidebar:
+ * `Hub › Page` (and `Hub › Page › New/Edit/Detail` on nested routes). The match
+ * is the longest nav path that prefixes the current location, so detail routes
+ * like `/leads/:id` resolve to their parent ("Leads") plus a leaf. Single-page
+ * hubs (Dashboard/Tasks) render just their own label.
  */
-const ITEMS = NAV_GROUPS.flatMap((g) =>
-  g.items.map((i) => ({ ...i, groupLabel: g.label, groupLabelKey: g.labelKey })),
-);
+const ITEMS = NAV_HUBS.flatMap((h) => {
+  const items = (h.children ?? []).map((c) => ({
+    path: c.path,
+    label: c.label,
+    labelKey: c.labelKey,
+    groupLabel: h.label,
+    groupLabelKey: h.labelKey,
+  }));
+  if (h.path) {
+    // single-page hub — the hub itself is the leaf (no distinct group)
+    items.push({
+      path: h.path,
+      label: h.label,
+      labelKey: h.labelKey,
+      groupLabel: h.label,
+      groupLabelKey: h.labelKey,
+    });
+  }
+  return items;
+});
 
 export default function Breadcrumbs() {
   const { t } = useTranslation('marketing');
@@ -35,16 +53,22 @@ export default function Breadcrumbs() {
         ? t('breadcrumb.edit', 'Edit')
         : t('breadcrumb.detail', 'Detail');
 
+  // Suppress a redundant "Dashboard › Dashboard" for single-page hubs.
+  const showGroup = match.groupLabelKey !== match.labelKey;
   const Chevron = () => <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />;
 
   return (
     <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-      <span className="hidden truncate text-muted-foreground sm:inline">
-        {t(match.groupLabelKey, match.groupLabel)}
-      </span>
-      <span className="hidden sm:inline">
-        <Chevron />
-      </span>
+      {showGroup && (
+        <>
+          <span className="hidden truncate text-muted-foreground sm:inline">
+            {t(match.groupLabelKey, match.groupLabel)}
+          </span>
+          <span className="hidden sm:inline">
+            <Chevron />
+          </span>
+        </>
+      )}
       {subLabel ? (
         <>
           <Link
