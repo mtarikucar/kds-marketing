@@ -69,7 +69,7 @@ export class SurveysService {
   async listResponses(workspaceId: string, surveyId: string) {
     await this.owned(workspaceId, surveyId);
     return this.prisma.surveyResponse.findMany({
-      where: { surveyId },
+      where: { surveyId, workspaceId },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });

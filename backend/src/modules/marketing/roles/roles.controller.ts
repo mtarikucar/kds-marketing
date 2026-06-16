@@ -23,6 +23,8 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { RolesService } from './roles.service';
+import { PermissionsGuard } from './permissions.guard';
+import { RequirePermission } from './require-permission.decorator';
 
 class RoleDto {
   @IsString() @IsNotEmpty() @MaxLength(80)
@@ -50,7 +52,11 @@ class AssignRoleDto {
 
 @MarketingRoute()
 @Controller('marketing/roles')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+// PermissionsGuard runs after MarketingGuard populates request.marketingUser
+// (incl. customRoleId). It is a no-op on handlers without @RequirePermission,
+// so reads stay open to OWNER/MANAGER via the legacy MarketingRolesGuard while
+// the mutating handlers below additionally require the `users.manage` grant.
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('OWNER', 'MANAGER')
 export class RolesController {
   constructor(private readonly svc: RolesService) {}
@@ -66,24 +72,28 @@ export class RolesController {
   }
 
   @Post()
+  @RequirePermission('settings.manage')
   @Audit({ action: 'role.create', resourceType: 'role' })
   create(@Body() dto: RoleDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.create(u.workspaceId, dto);
   }
 
   @Post('assign')
+  @RequirePermission('settings.manage')
   @Audit({ action: 'role.assign', resourceType: 'user', captureBody: ['userId', 'roleId'] })
   assign(@Body() dto: AssignRoleDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.assignToUser(u.workspaceId, dto.userId, dto.roleId ?? null);
   }
 
   @Patch(':id')
+  @RequirePermission('settings.manage')
   @Audit({ action: 'role.update', resourceType: 'role', resourceIdParam: 'id' })
   update(@Param('id') id: string, @Body() dto: UpdateRoleDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.update(u.workspaceId, id, dto);
   }
 
   @Delete(':id')
+  @RequirePermission('settings.manage')
   @Audit({ action: 'role.delete', resourceType: 'role', resourceIdParam: 'id' })
   remove(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.remove(u.workspaceId, id);

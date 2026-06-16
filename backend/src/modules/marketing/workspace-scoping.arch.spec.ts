@@ -71,6 +71,40 @@ const OWNED_DELEGATES = [
   'workspacePspConfig',
   // P10 (GoHighLevel parity): white-label-lite branding.
   'workspaceBranding',
+  // Epic A (CRM data model): custom fields, tags, segments, imports.
+  'customFieldDef',
+  'tag',
+  'leadTag',
+  'segment',
+  'importJob',
+  'importJobRow',
+  // Epic B (public API + outbound webhooks).
+  'apiKey',
+  'webhookEndpoint',
+  'webhookDelivery',
+  // Epic F (compliance): GDPR/KVKK consent + data subject requests.
+  'consentRecord',
+  'dataRequest',
+  // Epic E (funnel A/B experiments + surveys).
+  'experiment',
+  'experimentEvent',
+  'survey',
+  'surveyResponse',
+  // Epic B4 (Slack incoming-webhook notifications).
+  'slackIntegration',
+  // Epic F (custom roles + granular permissions).
+  'customRole',
+  // Epic C (memberships: courses/lessons + enrollment/progress).
+  'course',
+  'courseModule',
+  'lesson',
+  'enrollment',
+  'lessonProgress',
+  // Epic C (memberships: communities).
+  'community',
+  'communityMember',
+  'communityPost',
+  'communityComment',
 ] as const;
 
 /** Methods that can address many rows or create rows. */
@@ -134,6 +168,62 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'meta webhook resolves the channel by its provider page/phone id before any workspace context exists',
   'channels/public-channel-resolver.service.ts:message.updateMany':
     'netgsm DLR flips an outbound message status by its globally-unique provider job id',
+
+  // ---- Epic A imports — ImportJobRow has NO workspaceId column; it is owned by
+  // its parent ImportJob (which carries workspaceId). Every row op keys on
+  // importJobId, and the job is created/loaded in the same workspace-scoped
+  // flow (createCsv carries workspaceId; processBatch runs off a workspace-owned
+  // ScheduledJob payload). Scope is inherited from the parent, not the column.
+  'parent-scoped:importJobRow.createMany':
+    'rows are created under a job just created with workspaceId (createCsv)',
+  'parent-scoped:importJobRow.findMany':
+    'batch read keyed by importJobId; the job is the workspace-owned scope anchor',
+  'parent-scoped:importJobRow.count':
+    'remaining-row count keyed by importJobId; scoped via the parent ImportJob',
+
+  // ---- Epic A tags — LeadTag is a join table with NO workspaceId column
+  // (composite PK [leadId, tagId]). Every op resolves the Lead via a scoped
+  // assertLead/findMany and the tags via resolveOrCreate(workspaceId, …) first,
+  // so leadId/tagId are already workspace-bound. lead-dedupe re-parents under a
+  // scoped lead.findMany (the same parent-scoped pattern as leadActivity).
+  'parent-scoped:leadTag.findMany':
+    'keyed by a leadId resolved through a workspace-scoped read',
+  'parent-scoped:leadTag.createMany':
+    'links a scoped lead to tags from resolveOrCreate(workspaceId, …)',
+  'parent-scoped:leadTag.deleteMany':
+    'keyed by a leadId/tagIds resolved through workspace-scoped reads',
+  'parent-scoped:leadTag.updateMany':
+    'dedupe re-parents tags under leads resolved via a scoped lead.findMany',
+
+  // ---- Epic C memberships — CourseModule/Lesson/LessonProgress/CommunityMember
+  // have NO workspaceId column; they hang off Course/Module/Enrollment/Community
+  // which DO. Every op below is preceded by an assert* that resolves the parent
+  // via a workspace-scoped read, so the child key (courseId/moduleId/
+  // enrollmentId/communityId) is already workspace-bound.
+  'parent-scoped:courseModule.count':
+    'module count keyed by a courseId resolved via assertCourse(workspaceId, …)',
+  'parent-scoped:courseModule.create':
+    'module created under a course resolved via assertCourse(workspaceId, …)',
+  'parent-scoped:courseModule.updateMany':
+    'reorder keyed by (id, courseId) with the course resolved via a scoped read',
+  'parent-scoped:lesson.count':
+    'lesson count keyed by a courseId/module resolved via a scoped read',
+  'parent-scoped:lesson.create':
+    'lesson created under a module resolved via assertModule(workspaceId, …)',
+  'parent-scoped:lesson.findFirst':
+    'lesson resolved through its module/course after a scoped enrollment read',
+  'parent-scoped:lessonProgress.findMany':
+    'progress keyed by an enrollmentId resolved via assertEnrollment(workspaceId, …)',
+  'parent-scoped:lessonProgress.upsert':
+    'progress keyed by (enrollmentId, lessonId) under a scoped enrollment',
+  'parent-scoped:lessonProgress.count':
+    'completed count keyed by an enrollmentId resolved via a scoped read',
+  'parent-scoped:communityMember.upsert':
+    'membership keyed by (communityId, leadId) under assertCommunity(workspaceId, …)',
+  'parent-scoped:communityMember.deleteMany':
+    'leave keyed by (communityId, leadId) under a scoped community read',
+  'parent-scoped:communityMember.findMany':
+    'roster keyed by a communityId resolved via assertCommunity(workspaceId, …)',
 };
 
 function walkTs(dir: string): string[] {

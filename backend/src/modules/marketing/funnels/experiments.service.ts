@@ -120,7 +120,7 @@ export class ExperimentsService {
     await this.owned(workspaceId, id);
     const grouped = await this.prisma.experimentEvent.groupBy({
       by: ['variantKey', 'kind'],
-      where: { experimentId: id },
+      where: { experimentId: id, workspaceId },
       _count: true,
     });
     const byVariant: Record<string, { impressions: number; conversions: number }> = {};

@@ -160,7 +160,7 @@ export class CommunitiesService {
   async listComments(workspaceId: string, postId: string) {
     await this.assertPost(workspaceId, postId);
     return this.prisma.communityComment.findMany({
-      where: { postId },
+      where: { postId, workspaceId },
       orderBy: { createdAt: 'asc' },
     });
   }
