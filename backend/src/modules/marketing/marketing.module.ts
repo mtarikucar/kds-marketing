@@ -172,6 +172,9 @@ import { CommunitiesService } from './memberships/communities.service';
 // Epic G — analytics (read-only lead aggregations).
 import { AnalyticsController } from './analytics/analytics.controller';
 import { AnalyticsService } from './analytics/analytics.service';
+// Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
+import { ComplianceController } from './compliance/compliance.controller';
+import { ComplianceService } from './compliance/compliance.service';
 
 @Module({
   imports: [
@@ -265,6 +268,7 @@ import { AnalyticsService } from './analytics/analytics.service';
     EnrollmentController,
     CommunitiesController,
     AnalyticsController,
+    ComplianceController,
   ],
   providers: [
     // Services
@@ -380,6 +384,8 @@ import { AnalyticsService } from './analytics/analytics.service';
     CommunitiesService,
     // Epic G — analytics.
     AnalyticsService,
+    // Epic F (compliance).
+    ComplianceService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

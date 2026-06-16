@@ -1765,3 +1765,38 @@ model Lesson {
   @@index([moduleId, position])
   @@map("lessons")
 }
+
+/// Epic F (compliance) — append-only consent log for GDPR/KVKK. Each row is one
+/// consent change for a Lead; the latest row per type is current. Recording a
+/// consent also syncs the Lead's per-channel opt-out flag.
+model ConsentRecord {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  type        String // MARKETING_EMAIL | MARKETING_SMS | MARKETING_WHATSAPP | DATA_PROCESSING
+  granted     Boolean
+  source      String?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, leadId, type])
+  @@map("consent_records")
+}
+
+/// Epic F (compliance) — a GDPR data subject request. EXPORT aggregates and
+/// returns a Lead's data immediately; ERASURE is recorded PENDING for reviewed
+/// execution (deletion is intentionally not automatic).
+model DataRequest {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  leadId        String
+  kind          String // EXPORT | ERASURE
+  status        String    @default("PENDING") // PENDING | COMPLETED
+  payload       Json?
+  requestedById String?
+  requestedAt   DateTime  @default(now())
+  completedAt   DateTime?
+
+  @@index([workspaceId, status])
+  @@map("data_requests")
+}
