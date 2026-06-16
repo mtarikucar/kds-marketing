@@ -117,6 +117,8 @@ const OWNED_DELEGATES = [
   'socialAccount',
   'socialPost',
   'socialPostTarget',
+  // Epic D1 (GHL parity): agency config snapshots (owned by the capturing agency).
+  'snapshot',
 ] as const;
 
 /**

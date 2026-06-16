@@ -170,6 +170,10 @@ import { AffiliateService } from './services/affiliate.service';
 // workspaces; scoped cross-into-child management behind assertAgencyOwns).
 import { AgencyController } from './controllers/agency.controller';
 import { AgencyService } from './services/agency.service';
+// Epic D1 (GHL parity) — agency config snapshots (capture workspace config,
+// clone into child locations behind assertAgencyOwns).
+import { SnapshotController } from './controllers/snapshot.controller';
+import { SnapshotService } from './services/snapshot.service';
 
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
@@ -324,6 +328,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     GoogleCalendarPublicController,
     AffiliateController,
     AgencyController,
+    SnapshotController,
     SocialPlannerController,
   ],
   providers: [
@@ -462,6 +467,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     AffiliateService,
     // Epic D1 (GHL parity) — agency / sub-account hierarchy.
     AgencyService,
+    // Epic D1 (GHL parity) — agency config snapshots.
+    SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
     // Guards

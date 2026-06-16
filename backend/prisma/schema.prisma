@@ -2097,3 +2097,26 @@ model SocialPostTarget {
   @@index([workspaceId, status])
   @@map("social_post_targets")
 }
+
+/// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).
+///
+/// A reusable capture of one workspace's CONFIG (custom-field defs, tags,
+/// segments, workflows, agent profiles, funnels/pages, forms, booking calendars,
+/// knowledge docs, review sources) — NEVER customer data (leads, conversations,
+/// offers, invoices, users). `workspaceId` is the AGENCY that captured it, so a
+/// snapshot is a normal workspace-OWNED row (same scoping invariant as every
+/// other owned delegate). `payload` stores each captured record in its PORTABLE
+/// shape (stripped of id / workspaceId / timestamps), keyed by config type, so
+/// `apply` can stamp the target workspaceId and idempotently re-create the config
+/// in a child LOCATION (authorized via assertAgencyOwns).
+model Snapshot {
+  id          String   @id @default(uuid())
+  workspaceId String // the AGENCY that owns this snapshot
+  name        String
+  description String?
+  payload     Json // captured config, keyed by type (portable shape)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("snapshots")
+}
