@@ -174,6 +174,10 @@ import { AgencyService } from './services/agency.service';
 // clone into child locations behind assertAgencyOwns).
 import { SnapshotController } from './controllers/snapshot.controller';
 import { SnapshotService } from './services/snapshot.service';
+// Epic D1 (GHL parity) — agency rebilling / SaaS-mode (per-location SaaS plans,
+// REAL usage metering, env-gated Stripe-Connect settlement behind assertAgencyOwns).
+import { RebillingController } from './controllers/rebilling.controller';
+import { RebillingService } from './services/rebilling.service';
 
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
@@ -329,6 +333,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     AffiliateController,
     AgencyController,
     SnapshotController,
+    RebillingController,
     SocialPlannerController,
   ],
   providers: [
@@ -467,6 +472,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     AffiliateService,
     // Epic D1 (GHL parity) — agency / sub-account hierarchy.
     AgencyService,
+    RebillingService,
     // Epic D1 (GHL parity) — agency config snapshots.
     SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.

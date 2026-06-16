@@ -119,6 +119,10 @@ const OWNED_DELEGATES = [
   'socialPostTarget',
   // Epic D1 (GHL parity): agency config snapshots (owned by the capturing agency).
   'snapshot',
+  // Epic D1 (GHL parity): agency rebilling / SaaS-mode — per-location SaaS plans +
+  // monthly settlement charges, both OWNED by the agency (workspaceId = agency id).
+  'rebillingPlan',
+  'rebillCharge',
 ] as const;
 
 /**
