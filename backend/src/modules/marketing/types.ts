@@ -22,3 +22,15 @@ export interface MarketingUserPayload {
   role: string;
   status: string;
 }
+
+/** Epic D1 — position of a workspace in the agency / sub-account hierarchy.
+ *  STANDALONE: plain single tenant (default). AGENCY: owns LOCATION children.
+ *  LOCATION: a sub-account whose `parentWorkspaceId` points at its AGENCY.
+ *  Stored as a String column on Workspace (status-string convention). */
+export type WorkspaceKind = 'STANDALONE' | 'AGENCY' | 'LOCATION';
+
+export const WORKSPACE_KINDS: readonly WorkspaceKind[] = [
+  'STANDALONE',
+  'AGENCY',
+  'LOCATION',
+] as const;

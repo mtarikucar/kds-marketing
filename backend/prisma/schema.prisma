@@ -49,10 +49,28 @@ model Workspace {
   /// generic workspaces close WON leads without provisioning.
   coreIntegration Json?
 
+  /// Epic D1 — agency / sub-account hierarchy (GoHighLevel parity).
+  /// `kind` classifies the workspace in the hierarchy:
+  ///   STANDALONE — a plain tenant with no parent and no children (default;
+  ///                every pre-Epic-D workspace is one);
+  ///   AGENCY     — owns child LOCATION workspaces it can manage;
+  ///   LOCATION   — a sub-account; `parentWorkspaceId` points at its AGENCY.
+  /// Modelled as a String (not a native PG enum) to match this schema's
+  /// status-string convention and keep the migration a plain ADD COLUMN.
+  /// Allowed values are the WorkspaceKind union in types.ts.
+  kind String @default("STANDALONE")
+
+  /// The owning AGENCY for a LOCATION sub-account; null for STANDALONE/AGENCY.
+  /// Self-reference (no FK cascade, matching the soft-reference style) — the
+  /// agency.service.ts cross-into-child path is the ONLY sanctioned reader and
+  /// it guards every access with assertAgencyOwns (parent-ownership check).
+  parentWorkspaceId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])
+  @@index([parentWorkspaceId])
   @@map("workspaces")
 }
 

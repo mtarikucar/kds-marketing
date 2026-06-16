@@ -119,6 +119,23 @@ const OWNED_DELEGATES = [
   'socialPostTarget',
 ] as const;
 
+/**
+ * Epic D1 (agency / sub-account hierarchy) note — the `workspace` delegate is
+ * DELIBERATELY NOT in OWNED_DELEGATES above (a Workspace is the tenant root, not
+ * a workspace-owned row), so this check does not — and should not — scan the
+ * agency.service.ts cross-into-child reads (`workspace.findFirst` /
+ * `.findMany` keyed on `parentWorkspaceId`, and the LOCATION child-create).
+ * Those are the ONE sanctioned cross-workspace path; they are legitimate
+ * because every one of them is guarded by `assertAgencyOwns(agencyWorkspaceId,
+ * locationId)` — the parent-ownership invariant — NOT by a workspaceId column.
+ * The owned-delegate writes that agency.service.ts DOES make (marketingUser /
+ * marketingDistributionConfig creates for the new location, and lead /
+ * marketingUser counts in the dashboard) all carry an explicit `workspaceId`
+ * for the child, so they pass the check below unchanged. Leaving `workspace`
+ * out of the delegate list is the honest, documented exemption — not a
+ * loosened check.
+ */
+
 /** Methods that can address many rows or create rows. */
 const SCOPED_METHODS = [
   'findMany',
