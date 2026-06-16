@@ -1605,3 +1605,163 @@ model RoutineConfig {
 
   @@map("routine_configs")
 }
+
+/// Epic C1 — a workspace-authored course. Content lives in CourseModule →
+/// Lesson. Members are Leads (soft ref via Enrollment). Publishing requires
+/// at least one lesson (enforced in the service).
+model Course {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  title         String
+  slug          String
+  description   String?  @db.Text
+  status        String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  priceCents    Int? // null = free
+  currency      String?
+  coverImageUrl String?
+  position      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  modules     CourseModule[]
+  enrollments Enrollment[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("courses")
+}
+
+/// Epic C2 — a Lead's enrollment in a Course. `leadId` is a soft ref to the
+/// contact (the member). progressPct is recomputed from LessonProgress on each
+/// completion; status flips COMPLETED at 100%.
+model Enrollment {
+  id          String    @id @default(uuid())
+  workspaceId String
+  courseId    String
+  leadId      String
+  status      String    @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  progressPct Int       @default(0)
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+
+  course   Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  progress LessonProgress[]
+
+  @@unique([courseId, leadId])
+  @@index([workspaceId, courseId])
+  @@index([workspaceId, leadId])
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  id           String    @id @default(uuid())
+  enrollmentId String
+  lessonId     String
+  completed    Boolean   @default(false)
+  completedAt  DateTime?
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, lessonId])
+  @@index([enrollmentId, completed])
+  @@map("lesson_progress")
+}
+
+/// Epic C3 — a community space. Members are Leads; posts/comments may be
+/// authored by a staff MarketingUser (authorUserId) or a member Lead
+/// (authorLeadId), both soft refs.
+model Community {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String?  @db.Text
+  status      String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members CommunityMember[]
+  posts   CommunityPost[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("communities")
+}
+
+model CommunityMember {
+  id          String   @id @default(uuid())
+  communityId String
+  leadId      String
+  role        String   @default("MEMBER") // MEMBER | MODERATOR
+  joinedAt    DateTime @default(now())
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, leadId])
+  @@index([communityId])
+  @@map("community_members")
+}
+
+model CommunityPost {
+  id           String   @id @default(uuid())
+  communityId  String
+  workspaceId  String
+  authorUserId String?
+  authorLeadId String?
+  title        String?
+  body         String   @db.Text
+  pinned       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  community Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  comments  CommunityComment[]
+
+  @@index([communityId, pinned, createdAt])
+  @@map("community_posts")
+}
+
+model CommunityComment {
+  id           String   @id @default(uuid())
+  postId       String
+  workspaceId  String
+  authorUserId String?
+  authorLeadId String?
+  body         String   @db.Text
+  createdAt    DateTime @default(now())
+
+  post CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, createdAt])
+  @@map("community_comments")
+}
+
+model CourseModule {
+  id       String @id @default(uuid())
+  courseId String
+  title    String
+  position Int    @default(0)
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId, position])
+  @@map("course_modules")
+}
+
+model Lesson {
+  id          String  @id @default(uuid())
+  moduleId    String
+  title       String
+  type        String  @default("VIDEO") // VIDEO | TEXT | PDF | QUIZ
+  content     String? @db.Text
+  videoUrl    String?
+  durationSec Int?
+  position    Int     @default(0)
+  isPreview   Boolean @default(false)
+
+  module CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([moduleId, position])
+  @@map("lessons")
+}

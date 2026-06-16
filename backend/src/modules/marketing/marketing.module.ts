@@ -162,6 +162,14 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// Epic C — memberships: courses/modules/lessons + enrollment/progress.
+import { CoursesController } from './memberships/courses.controller';
+import { CoursesService } from './memberships/courses.service';
+import { EnrollmentController } from './memberships/enrollment.controller';
+import { EnrollmentService } from './memberships/enrollment.service';
+import { CommunitiesController } from './memberships/communities.controller';
+import { CommunitiesService } from './memberships/communities.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -250,6 +258,9 @@ import { BrandingService } from './branding/branding.service';
     PublicInvoiceController,
     MarketingBrandingController,
     PublicBrandingController,
+    CoursesController,
+    EnrollmentController,
+    CommunitiesController,
   ],
   providers: [
     // Services
@@ -359,6 +370,10 @@ import { BrandingService } from './branding/branding.service';
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
+    // Epic C — memberships.
+    CoursesService,
+    EnrollmentService,
+    CommunitiesService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
