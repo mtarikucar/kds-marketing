@@ -29,6 +29,7 @@ import {
   Tag,
   Filter,
   FileUp,
+  GraduationCap,
 } from 'lucide-react';
 
 /**
@@ -128,6 +129,18 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
+    ],
+  },
+  {
+    id: 'memberships',
+    labelKey: 'nav.group.memberships',
+    label: 'Memberships',
+    items: [
+      // Epic C — courses + communities. No backend `memberships` entitlement
+      // exists, so these are core (always-entitled) but manager-gated, mirroring
+      // the CRM-config precedent (settings group). Authoring is a manager task.
+      { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, managerOnly: true },
+      { path: '/memberships/communities', labelKey: 'nav.communities', label: 'Communities', icon: MessagesSquare, managerOnly: true },
     ],
   },
   {

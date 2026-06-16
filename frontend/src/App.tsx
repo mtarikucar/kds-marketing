@@ -34,6 +34,10 @@ const TargetsPage              = lazy(() => import('./pages/marketing/targets'))
 const CustomFieldsPage         = lazy(() => import('./pages/marketing/crm/customFields'));
 const TagsPage                 = lazy(() => import('./pages/marketing/crm/tags'));
 const SegmentsPage             = lazy(() => import('./pages/marketing/crm/segments'));
+const CoursesPage              = lazy(() => import('./pages/marketing/memberships/courses'));
+const CourseEditorPage         = lazy(() => import('./pages/marketing/memberships/courses/CourseEditorPage'));
+const CommunitiesPage          = lazy(() => import('./pages/marketing/memberships/communities'));
+const CommunityDetailPage      = lazy(() => import('./pages/marketing/memberships/communities/CommunityDetailPage'));
 const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
 const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
@@ -121,6 +125,10 @@ export default function App() {
             <Route path="/settings/tags"          element={<S><TagsPage /></S>} />
             <Route path="/settings/segments"      element={<S><SegmentsPage /></S>} />
             <Route path="/settings/import"        element={<S><ImportWizardPage /></S>} />
+            <Route path="/memberships/courses"            element={<S><CoursesPage /></S>} />
+            <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
+            <Route path="/memberships/communities"        element={<S><CommunitiesPage /></S>} />
+            <Route path="/memberships/communities/:id"    element={<S><CommunityDetailPage /></S>} />
             <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
