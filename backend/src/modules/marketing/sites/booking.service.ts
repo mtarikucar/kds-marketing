@@ -13,6 +13,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
+import { GoogleCalendarSyncService } from '../integrations/google-calendar-sync.service';
 
 const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
@@ -35,6 +36,7 @@ export class BookingService implements OnModuleInit {
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
+    private readonly googleSync: GoogleCalendarSyncService,
   ) {}
 
   onModuleInit(): void {
@@ -97,8 +99,16 @@ export class BookingService implements OnModuleInit {
     if (to > cap) to = cap;
     const now = Date.now();
 
+    // Slots are blocked by our CONFIRMED bookings AND by EXTERNAL_BUSY blocks
+    // pulled from a connected Google Calendar (which are not tied to a specific
+    // calendarId — they busy the whole workspace's availability).
     const bookings = await this.prisma.booking.findMany({
-      where: { workspaceId, calendarId: calId, status: 'CONFIRMED', startAt: { gte: from, lte: to } },
+      where: {
+        workspaceId,
+        status: { in: ['CONFIRMED', 'EXTERNAL_BUSY'] },
+        startAt: { gte: from, lte: to },
+        OR: [{ calendarId: calId }, { status: 'EXTERNAL_BUSY' }],
+      },
       select: { startAt: true, endAt: true },
     });
     const busy = bookings.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
@@ -197,7 +207,38 @@ export class BookingService implements OnModuleInit {
         payload: { workspaceId, bookingId: booking.id },
       });
     }
+    // Push the new booking to a connected Google Calendar (best-effort, inert
+    // when the integration is unconfigured); the BookingCreated domain event
+    // also drives this, so a missed direct call self-heals on the next pull.
+    this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
+  }
+
+  /**
+   * Cancel a workspace booking: mark it CANCELLED and delete the mirrored
+   * Google event (best-effort, inert when the integration is unconfigured).
+   * Workspace-scoped; 404s a cross-workspace or unknown id.
+   */
+  async cancel(workspaceId: string, id: string) {
+    const existing = await this.prisma.booking.findFirst({
+      where: { id, workspaceId },
+      select: { id: true, status: true },
+    });
+    if (!existing) throw new NotFoundException('Booking not found');
+    if (existing.status === 'EXTERNAL_BUSY') {
+      // External Google blocks are owned by Google; cancel them THERE.
+      throw new BadRequestException('Cannot cancel an external calendar block');
+    }
+    if (existing.status !== 'CANCELLED') {
+      await this.prisma.booking.updateMany({
+        where: { id: existing.id, workspaceId },
+        data: { status: 'CANCELLED' },
+      });
+      // Remove the Google mirror so the slot frees up on both sides.
+      this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
+    }
+    return { id: existing.id, status: 'CANCELLED' };
   }
 
   private async remind(job: ClaimedJob): Promise<void> {

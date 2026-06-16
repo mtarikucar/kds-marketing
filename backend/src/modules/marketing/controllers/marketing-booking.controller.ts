@@ -32,4 +32,17 @@ export class MarketingBookingController {
 
   @Delete(':id')
   remove(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.booking.remove(a.workspaceId, id); }
+
+  /**
+   * Cancel a single BOOKING (not a calendar) — marks it CANCELLED and deletes
+   * its mirrored Google Calendar event. Distinct path so it never collides with
+   * the calendar `:id` routes above.
+   */
+  @Post('bookings/:bookingId/cancel')
+  cancelBooking(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.booking.cancel(a.workspaceId, bookingId);
+  }
 }

@@ -1,0 +1,160 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { MarketingGuard } from '../guards/marketing.guard';
+import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
+import {
+  MarketingPublic,
+  MarketingRoute,
+} from '../decorators/marketing-public.decorator';
+import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
+import { MarketingUserPayload } from '../types';
+import { Audit } from '../../audit/audit.decorator';
+import { GoogleCalendarService } from './google-calendar.service';
+import { GoogleCalendarSyncService } from './google-calendar-sync.service';
+
+class ConnectQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  calendarId?: string;
+}
+
+/**
+ * Env-gated Google Calendar admin surface — OWNER/MANAGER only; mutations are
+ * audited; OAuth tokens are sealed at rest and NEVER echoed (responses carry
+ * only `tokenSet`/`syncEnabled` flags). When the feature is inert (env OAuth
+ * client or secret-box missing) `connect` returns a clean 400 ("Google Calendar
+ * not configured"); `status` still answers with `configured:false`.
+ */
+@MarketingRoute()
+@Controller('marketing/integrations/google-calendar')
+@UseGuards(MarketingGuard, MarketingRolesGuard)
+// 'MANAGER' is the floor — the hierarchical guard admits MANAGER and OWNER and
+// rejects REP (co-listing OWNER would raise the bar to OWNER-only).
+@MarketingRoles('MANAGER')
+export class GoogleCalendarController {
+  constructor(
+    private readonly svc: GoogleCalendarService,
+    private readonly sync: GoogleCalendarSyncService,
+  ) {}
+
+  /** Feature + connection status for the admin UI. */
+  @Get('status')
+  status(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.status(u.workspaceId);
+  }
+
+  @Get()
+  list(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.list(u.workspaceId);
+  }
+
+  /**
+   * Begin the OAuth round-trip: returns the Google consent URL (JSON) for the
+   * SPA to open. The grant is attributed to THIS user + workspace via state.
+   */
+  @Get('connect')
+  @Audit({ action: 'google-calendar.connect', resourceType: 'google-calendar-connection' })
+  connect(
+    @Query() q: ConnectQueryDto,
+    @CurrentMarketingUser() u: MarketingUserPayload,
+  ) {
+    const { url } = this.svc.getAuthUrl(u.workspaceId, u.id, q.calendarId);
+    return { url };
+  }
+
+  /** Manually trigger an incremental pull for the workspace (admin button). */
+  @Post('sync')
+  @Audit({ action: 'google-calendar.sync', resourceType: 'google-calendar-connection' })
+  syncNow(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.sync.pullWorkspace(u.workspaceId);
+  }
+
+  @Delete(':id')
+  @Audit({ action: 'google-calendar.disconnect', resourceType: 'google-calendar-connection', resourceIdParam: 'id' })
+  disconnect(
+    @Param('id') id: string,
+    @CurrentMarketingUser() u: MarketingUserPayload,
+  ) {
+    return this.svc.disconnect(u.workspaceId, id);
+  }
+}
+
+const CALLBACK_THROTTLE = {
+  default: { limit: 30, ttl: 60_000, blockDuration: 60_000 },
+};
+const WEBHOOK_THROTTLE = {
+  default: { limit: 120, ttl: 60_000, blockDuration: 60_000 },
+};
+
+/**
+ * PUBLIC Google endpoints (no marketing token):
+ *  - the OAuth callback (Google redirects the browser here with code+state),
+ *  - the push-webhook receiver (Google POSTs change notifications here with
+ *    X-Goog-Channel-Id / X-Goog-Resource-Id headers).
+ *
+ * The webhook validates the channel/resource against the stored connection and
+ * answers 200 regardless (Google retries on non-2xx) — an unknown channel is
+ * simply ignored, never surfaced.
+ */
+@MarketingRoute()
+@Controller('marketing/integrations/google-calendar')
+@UseGuards(MarketingGuard)
+export class GoogleCalendarPublicController {
+  constructor(
+    private readonly svc: GoogleCalendarService,
+    private readonly sync: GoogleCalendarSyncService,
+  ) {}
+
+  @Get('callback')
+  @MarketingPublic()
+  @Throttle(CALLBACK_THROTTLE)
+  async callback(
+    @Query('state') state: string,
+    @Query('code') code: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    try {
+      await this.svc.handleCallback(state, code);
+      // The SPA reads this; in production you may 302 to a settings page.
+      res.status(200).json({ connected: true });
+    } catch {
+      // Never leak which step failed; a clean error is enough for the callback.
+      res
+        .status(400)
+        .json({ statusCode: 400, message: 'Google Calendar connect failed' });
+    }
+  }
+
+  @Post('notifications')
+  @MarketingPublic()
+  @HttpCode(200)
+  @Throttle(WEBHOOK_THROTTLE)
+  async notifications(
+    @Headers('x-goog-channel-id') channelId: string,
+    @Headers('x-goog-resource-id') resourceId: string,
+    @Headers('x-goog-resource-state') resourceState: string,
+  ): Promise<{ ok: boolean }> {
+    // Google's initial "sync" ping after watch creation carries no changes.
+    if (resourceState === 'sync') return { ok: true };
+    await this.sync
+      .pullByChannel(channelId, resourceId)
+      .catch(() => undefined);
+    return { ok: true };
+  }
+}

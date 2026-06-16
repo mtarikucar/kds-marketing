@@ -1367,13 +1367,19 @@ model Booking {
   email       String?
   phone       String?
   notes       String?
-  status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED
+  status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED | EXTERNAL_BUSY (pulled from Google)
   token       String   @unique
+
+  // Google Calendar 2-way sync: the mirrored Google event id (nullable). For
+  // our bookings pushed to Google it is the created event's id; for "busy"
+  // blocks pulled FROM Google (status EXTERNAL_BUSY) it is the source event id.
+  googleEventId String?
 
   createdAt DateTime @default(now())
 
   @@index([calendarId, startAt])
   @@index([workspaceId])
+  @@index([workspaceId, googleEventId])
   @@map("bookings")
 }
 
@@ -1916,6 +1922,31 @@ model SsoConnection {
   @@index([workspaceId])
   @@index([workspaceId, enabled])
   @@map("sso_connections")
+}
+
+/// Env-gated Google Calendar 2-way sync. One row per (workspace, connecting
+/// MarketingUser, googleCalendar). OAuth tokens are stored SEALED (secret-box
+/// v1:...) and NEVER returned by the API. `syncToken` drives incremental pulls;
+/// `channelId`/`resourceId` back the optional Google "watch" push-webhook.
+model GoogleCalendarConnection {
+  id               String   @id @default(uuid())
+  workspaceId      String
+  marketingUserId  String
+  googleCalendarId String   @default("primary")
+  accessToken      String // SEALED (secret-box v1:...) — masked out of API responses
+  refreshToken     String // SEALED (secret-box v1:...) — masked out of API responses
+  tokenExpiresAt   DateTime
+  syncToken        String? // Google incremental events.list sync token (nullable until first pull)
+  channelId        String? // Google watch channel id (push webhook); unique when set
+  resourceId       String? // Google watch resource id (push webhook)
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, marketingUserId])
+  @@unique([channelId])
+  @@map("google_calendar_connections")
 }
 
 /// Epic F — a workspace-defined custom role with a granular permission set

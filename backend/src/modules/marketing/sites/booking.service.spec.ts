@@ -30,7 +30,13 @@ describe('BookingService', () => {
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };
-    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any);
+    // Google Calendar sync is inert in this suite (push/cancel are best-effort
+    // no-ops here); the dedicated google-calendar specs exercise it for real.
+    const googleSync = {
+      pushBooking: jest.fn().mockResolvedValue(null),
+      cancelBooking: jest.fn().mockResolvedValue(false),
+    };
+    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any);
   });
 
   it('slices the availability window into slots', async () => {

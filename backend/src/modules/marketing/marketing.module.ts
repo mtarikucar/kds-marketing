@@ -194,6 +194,13 @@ import {
   SsoPublicController,
 } from './integrations/sso.controller';
 import { SsoService } from './services/sso.service';
+// Integrations — env-gated Google Calendar 2-way sync (OAuth, push + pull).
+import {
+  GoogleCalendarController,
+  GoogleCalendarPublicController,
+} from './integrations/google-calendar.controller';
+import { GoogleCalendarService } from './integrations/google-calendar.service';
+import { GoogleCalendarSyncService } from './integrations/google-calendar-sync.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -300,6 +307,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     RolesController,
     SsoAdminController,
     SsoPublicController,
+    GoogleCalendarController,
+    GoogleCalendarPublicController,
   ],
   providers: [
     // Services
@@ -427,6 +436,9 @@ import { PermissionsGuard } from './roles/permissions.guard';
     SlackService,
     // Epic G — env-gated enterprise SSO (OIDC).
     SsoService,
+    // Integrations — env-gated Google Calendar 2-way sync.
+    GoogleCalendarService,
+    GoogleCalendarSyncService,
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,

@@ -107,6 +107,8 @@ const OWNED_DELEGATES = [
   'communityComment',
   // Epic G (env-gated enterprise SSO via OIDC).
   'ssoConnection',
+  // Integrations (env-gated Google Calendar 2-way sync).
+  'googleCalendarConnection',
 ] as const;
 
 /** Methods that can address many rows or create rows. */
@@ -170,6 +172,12 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'meta webhook resolves the channel by its provider page/phone id before any workspace context exists',
   'channels/public-channel-resolver.service.ts:message.updateMany':
     'netgsm DLR flips an outbound message status by its globally-unique provider job id',
+  // Google Calendar push-webhook has NO workspace context — Google only sends
+  // the watch channel id. channelId is UNIQUE (one connection per channel), so
+  // this resolver (the ONLY unscoped connection read) keys on a globally-unique
+  // handle the workspace itself registered; it can't leak across tenants.
+  'integrations/google-calendar-sync.service.ts:googleCalendarConnection.findFirst':
+    'google push-webhook resolves the connection by its unique watch channelId before any workspace context exists',
 
   // ---- Epic A imports — ImportJobRow has NO workspaceId column; it is owned by
   // its parent ImportJob (which carries workspaceId). Every row op keys on
