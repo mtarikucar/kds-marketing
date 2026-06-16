@@ -175,6 +175,12 @@ import { AnalyticsService } from './analytics/analytics.service';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
+// Epic E — funnel A/B experiments + surveys.
+import { ExperimentsController } from './funnels/experiments.controller';
+import { ExperimentsService } from './funnels/experiments.service';
+import { SurveysController } from './funnels/surveys.controller';
+import { SurveysService } from './funnels/surveys.service';
+import { PublicFunnelsController } from './funnels/public-funnels.controller';
 
 @Module({
   imports: [
@@ -269,6 +275,9 @@ import { ComplianceService } from './compliance/compliance.service';
     CommunitiesController,
     AnalyticsController,
     ComplianceController,
+    ExperimentsController,
+    SurveysController,
+    PublicFunnelsController,
   ],
   providers: [
     // Services
@@ -386,6 +395,9 @@ import { ComplianceService } from './compliance/compliance.service';
     AnalyticsService,
     // Epic F (compliance).
     ComplianceService,
+    // Epic E — funnel A/B + surveys.
+    ExperimentsService,
+    SurveysService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
