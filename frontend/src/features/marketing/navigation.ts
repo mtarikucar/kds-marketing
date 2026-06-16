@@ -30,6 +30,9 @@ import {
   Filter,
   FileUp,
   GraduationCap,
+  Building2,
+  Camera,
+  Receipt,
 } from 'lucide-react';
 
 /**
@@ -85,6 +88,8 @@ export interface NavGroup {
   items: NavItem[];
   /** Collapsible groups remember their open/closed state (Growth, which can be long). */
   collapsible?: boolean;
+  /** When true, the whole group only renders for an AGENCY workspace (Epic D). */
+  agencyOnly?: boolean;
 }
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -144,6 +149,19 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: 'agency',
+    labelKey: 'nav.group.agency',
+    label: 'Agency',
+    // Epic D — sub-accounts / snapshots / rebilling. The whole group is hidden
+    // unless the workspace is an AGENCY; each route's page also self-guards.
+    agencyOnly: true,
+    items: [
+      { path: '/agency/locations', labelKey: 'nav.agencyLocations', label: 'Sub-accounts', icon: Building2, managerOnly: true },
+      { path: '/agency/snapshots', labelKey: 'nav.agencySnapshots', label: 'Snapshots', icon: Camera, managerOnly: true },
+      { path: '/agency/rebilling', labelKey: 'nav.agencyRebilling', label: 'Rebilling', icon: Receipt, managerOnly: true },
+    ],
+  },
+  {
     id: 'settings',
     labelKey: 'nav.group.settings',
     label: 'Settings',
@@ -166,16 +184,19 @@ export interface NavVisibilityOpts {
   isManager: boolean;
   /** Entitlement check; `has(undefined)` is true (core item). */
   has: (feature?: FeatureKey) => boolean;
+  /** True only for an AGENCY workspace — gates the `agencyOnly` group (Epic D). */
+  isAgency?: boolean;
 }
 
 /**
  * Pure nav gating used by the sidebar (extracted so it's unit-testable without
- * rendering): drop items the user's role/entitlement can't see, then drop any
- * group left empty. This is the function that turns the flat 26-link menu into
- * a focused, package-appropriate one.
+ * rendering): drop `agencyOnly` groups for non-agency workspaces, drop items the
+ * user's role/entitlement can't see, then drop any group left empty. This is the
+ * function that turns the flat 26-link menu into a focused, package-appropriate one.
  */
 export function visibleNav(groups: NavGroup[], opts: NavVisibilityOpts): NavGroup[] {
   return groups
+    .filter((g) => (g.agencyOnly ? !!opts.isAgency : true))
     .map((g) => ({
       ...g,
       items: g.items.filter(

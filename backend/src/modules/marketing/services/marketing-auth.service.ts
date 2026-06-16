@@ -451,6 +451,10 @@ export class MarketingAuthService {
         id: true,
         slug: true,
         name: true,
+        // `kind` distinguishes AGENCY / LOCATION / STANDALONE workspaces; the
+        // frontend gates the agency console (sub-accounts, snapshots, rebilling)
+        // on `workspace.kind === 'AGENCY'`. Additive, non-secret, read-only.
+        kind: true,
         productName: true,
         productUrl: true,
         defaultLanguage: true,

@@ -54,4 +54,24 @@ describe('visibleNav — role + entitlement gating', () => {
       '/offers',
     ]);
   });
+
+  it('hides the Agency group for a non-agency workspace (Epic D)', () => {
+    const groups = visibleNav(NAV_GROUPS, { isManager: true, has: entitle() });
+    expect(groups.find((g) => g.id === 'agency')).toBeUndefined();
+  });
+
+  it('shows the Agency group only for an AGENCY workspace manager', () => {
+    const groups = visibleNav(NAV_GROUPS, {
+      isManager: true,
+      has: entitle(),
+      isAgency: true,
+    });
+    const agency = groups.find((g) => g.id === 'agency');
+    expect(agency).toBeDefined();
+    expect(agency!.items.map((i) => i.path).sort()).toEqual([
+      '/agency/locations',
+      '/agency/rebilling',
+      '/agency/snapshots',
+    ]);
+  });
 });

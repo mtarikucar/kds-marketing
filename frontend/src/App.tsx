@@ -38,6 +38,9 @@ const CoursesPage              = lazy(() => import('./pages/marketing/membership
 const CourseEditorPage         = lazy(() => import('./pages/marketing/memberships/courses/CourseEditorPage'));
 const CommunitiesPage          = lazy(() => import('./pages/marketing/memberships/communities'));
 const CommunityDetailPage      = lazy(() => import('./pages/marketing/memberships/communities/CommunityDetailPage'));
+const AgencyLocationsPage      = lazy(() => import('./pages/marketing/agency/LocationsPage'));
+const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/SnapshotsPage'));
+const AgencyRebillingPage      = lazy(() => import('./pages/marketing/agency/RebillingPage'));
 const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
 const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
@@ -129,6 +132,11 @@ export default function App() {
             <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
             <Route path="/memberships/communities"        element={<S><CommunitiesPage /></S>} />
             <Route path="/memberships/communities/:id"    element={<S><CommunityDetailPage /></S>} />
+            {/* Agency console (Epic D) — each page self-guards on workspace.kind === AGENCY
+                (AgencyGuard); backend additionally 403s every /agency route for non-agencies. */}
+            <Route path="/agency/locations"  element={<S><AgencyLocationsPage /></S>} />
+            <Route path="/agency/snapshots"  element={<S><AgencySnapshotsPage /></S>} />
+            <Route path="/agency/rebilling"  element={<S><AgencyRebillingPage /></S>} />
             <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
