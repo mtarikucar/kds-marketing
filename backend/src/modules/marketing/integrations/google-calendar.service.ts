@@ -5,7 +5,6 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { randomBytes } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
   sealSecret,
@@ -25,9 +24,11 @@ import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
  * When either is missing, admin mutations and the auth-url return a clean 400
  * ("Google Calendar not configured"); nothing crashes and no token is echoed.
  *
- * State storage for the OAuth round-trip is an in-memory Map (state → {ws,user,
- * expiresAt}). SINGLE-REPLICA only — the connect-start and the callback must
- * land on the same instance (mirrors SsoService; same scaling caveat).
+ * The OAuth round-trip is STATELESS: the `state` param is a self-contained,
+ * AES-GCM-sealed token carrying {workspace,user,calendar,expiresAt}. The
+ * callback opens+verifies it — no server-side store, so it survives container
+ * restarts, redeploys and horizontal scaling (the old in-memory Map lost state
+ * on every restart, which silently broke the connect→callback hop).
  *
  * The Google APIs are reached via the SSRF-safe fetch with a timeout. Tokens
  * are sealed with the secret-box and masked out of every response.
@@ -40,7 +41,24 @@ const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes to complete the round-trip
 // Refresh a little before the real expiry so a request mid-flight never 401s.
 const REFRESH_SKEW_MS = 60 * 1000;
 
-interface PendingConnect {
+/**
+ * Stable failure messages thrown by the OAuth flow. Exported so the public
+ * callback controller can map each to a coarse, non-sensitive `reason` code for
+ * the SPA redirect (and so this list is the single source of truth — no
+ * stringly-typed drift between thrower and mapper). None of these carry tokens
+ * or secrets.
+ */
+export const GCAL_ERR = {
+  notConfigured: 'Google Calendar not configured',
+  invalidState: 'Invalid or expired OAuth state',
+  missingCode: 'Missing authorization code',
+  noRefreshToken:
+    'Google did not return a refresh token (re-consent with offline access)',
+  exchangeFailed: 'Google code exchange failed',
+} as const;
+
+/** Claims carried inside the sealed, self-contained OAuth `state` token. */
+interface StateClaims {
   workspaceId: string;
   marketingUserId: string;
   googleCalendarId: string;
@@ -74,8 +92,6 @@ export interface GoogleCalendarConnectionRow {
 @Injectable()
 export class GoogleCalendarService {
   private readonly logger = new Logger(GoogleCalendarService.name);
-  /** Single-replica in-memory OAuth state store (see class doc). */
-  private readonly pending = new Map<string, PendingConnect>();
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -104,8 +120,22 @@ export class GoogleCalendarService {
 
   private assertConfigured(): void {
     if (!this.isConfigured()) {
-      throw new BadRequestException('Google Calendar not configured');
+      throw new BadRequestException(GCAL_ERR.notConfigured);
     }
+  }
+
+  /**
+   * Absolute URL into the SPA panel for the browser OAuth redirect. Uses
+   * MARKETING_PUBLIC_URL when set; otherwise returns the path as-is (same
+   * origin) so local dev / tests still resolve. `pathAndQuery` is a fixed,
+   * caller-controlled string (never user input), so no open-redirect surface.
+   */
+  panelUrl(pathAndQuery: string): string {
+    const base = process.env.MARKETING_PUBLIC_URL?.trim();
+    if (base && base.startsWith('http')) {
+      return new URL(pathAndQuery, base).toString();
+    }
+    return pathAndQuery;
   }
 
   private redirectUri(): string {
@@ -129,8 +159,9 @@ export class GoogleCalendarService {
 
   /**
    * Build the Google consent URL (offline access ⇒ a refresh_token; prompt
-   * consent so the refresh_token is re-issued). Persists state→{ws,user} so the
-   * callback can attribute the grant. Throws 400 when the feature is inert.
+   * consent so the refresh_token is re-issued). The `state` is a sealed,
+   * self-contained token attributing the grant to {ws,user,calendar} — the
+   * callback opens it, so no server-side state is kept. Throws 400 when inert.
    */
   getAuthUrl(
     workspaceId: string,
@@ -138,9 +169,7 @@ export class GoogleCalendarService {
     googleCalendarId = 'primary',
   ): { url: string; state: string } {
     this.assertConfigured();
-    const state = b64url(randomBytes(32));
-    this.sweepExpired();
-    this.pending.set(state, {
+    const state = this.encodeState({
       workspaceId,
       marketingUserId,
       googleCalendarId: googleCalendarId || 'primary',
@@ -166,20 +195,18 @@ export class GoogleCalendarService {
    */
   async handleCallback(state: string, code: string) {
     this.assertConfigured();
-    const ctx = this.consumeState(state);
+    const ctx = this.decodeState(state);
     if (!ctx) {
-      throw new UnauthorizedException('Invalid or expired OAuth state');
+      throw new UnauthorizedException(GCAL_ERR.invalidState);
     }
     if (!code) {
-      throw new BadRequestException('Missing authorization code');
+      throw new BadRequestException(GCAL_ERR.missingCode);
     }
 
     const tokens = await this.exchangeCode(code);
     if (!tokens.access_token || !tokens.refresh_token) {
       // No refresh_token ⇒ we can't keep the connection alive; force re-consent.
-      throw new UnauthorizedException(
-        'Google did not return a refresh token (re-consent with offline access)',
-      );
+      throw new UnauthorizedException(GCAL_ERR.noRefreshToken);
     }
     const expiresAt = new Date(
       Date.now() + (tokens.expires_in ?? 3600) * 1000,
@@ -333,18 +360,34 @@ export class GoogleCalendarService {
     }
   }
 
-  private consumeState(state: string): PendingConnect | null {
-    const ctx = this.pending.get(state);
-    if (!ctx) return null;
-    this.pending.delete(state); // single-use
-    if (ctx.expiresAt < Date.now()) return null;
-    return ctx;
+  /** Seal the claims into a URL-safe, self-contained `state` token. */
+  private encodeState(claims: StateClaims): string {
+    return b64url(Buffer.from(sealSecret(JSON.stringify(claims)), 'utf8'));
   }
 
-  private sweepExpired(): void {
-    const now = Date.now();
-    for (const [k, v] of this.pending) {
-      if (v.expiresAt < now) this.pending.delete(k);
+  /**
+   * Open + validate a `state` token. Returns null for anything forged, tampered
+   * (GCM auth fails), malformed, or past its TTL — the caller maps null to a
+   * clean 401. The auth `code` is single-use at Google, so a replayed state
+   * grants nothing new; no server-side single-use bookkeeping is needed.
+   */
+  private decodeState(state: string): StateClaims | null {
+    if (!state) return null;
+    try {
+      const json = openSecret(b64urlDecode(state).toString('utf8'));
+      const claims = JSON.parse(json) as StateClaims;
+      if (
+        !claims ||
+        typeof claims.workspaceId !== 'string' ||
+        typeof claims.marketingUserId !== 'string' ||
+        typeof claims.expiresAt !== 'number'
+      ) {
+        return null;
+      }
+      if (claims.expiresAt < Date.now()) return null;
+      return claims;
+    } catch {
+      return null;
     }
   }
 
@@ -408,4 +451,9 @@ function b64url(input: Buffer): string {
     .replace(/=/g, '')
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
+}
+
+function b64urlDecode(input: string): Buffer {
+  // Buffer tolerates missing '=' padding; just restore the standard alphabet.
+  return Buffer.from(input.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 }

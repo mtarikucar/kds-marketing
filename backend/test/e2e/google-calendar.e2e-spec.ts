@@ -192,12 +192,28 @@ describe('Google Calendar sync (e2e)', () => {
       expect(res.body.message).toBe('Google Calendar not configured');
     });
 
-    it('the public callback fails cleanly (400) without leaking the step', async () => {
+    it('the public callback 302s back to the SPA with a coarse reason (no leak)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/marketing/integrations/google-calendar/callback')
         .query({ state: 'forged', code: 'whatever' });
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('Google Calendar connect failed');
+      // Inert ⇒ the flow throws "not configured"; the browser is redirected to
+      // the connections page with a coarse reason, never raw JSON / step detail.
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(
+        '/settings/connections?gcal=error&reason=not_configured',
+      );
     });
+  });
+
+  it('the public callback 302s with reason=state_invalid for a forged state (configured)', async () => {
+    // Configured path (env client present): a forged/expired state is rejected
+    // and surfaced as a coarse, actionable reason — not an opaque 400.
+    const res = await request(app.getHttpServer())
+      .get('/api/marketing/integrations/google-calendar/callback')
+      .query({ state: 'forged-token', code: 'whatever' });
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(
+      '/settings/connections?gcal=error&reason=state_invalid',
+    );
   });
 });

@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { toast } from 'sonner';
 import ConnectionsPage from './ConnectionsPage';
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock('../../../../features/marketing/api/marketingApi', () => ({
   default: {
@@ -38,6 +43,18 @@ function wrapper({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Wrapper that seeds the URL with the Google OAuth callback result params. */
+function routerWith(initialEntry: string) {
+  return function Wrapped({ children }: { children: React.ReactNode }) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[initialEntry]}>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
+  };
+}
+
 describe('ConnectionsPage', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -58,5 +75,25 @@ describe('ConnectionsPage', () => {
     await userEvent.click(saveBtn);
     const alerts = await screen.findAllByRole('alert');
     expect(alerts.length).toBeGreaterThan(0);
+  });
+
+  it('shows a success toast when the Google callback returns ?gcal=connected', async () => {
+    render(<ConnectionsPage />, { wrapper: routerWith('/settings/connections?gcal=connected') });
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Google Calendar connected'),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('shows an actionable error toast when the callback returns ?gcal=error&reason=...', async () => {
+    render(<ConnectionsPage />, {
+      wrapper: routerWith('/settings/connections?gcal=error&reason=exchange_failed'),
+    });
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'Could not finish Google sign-in — the server OAuth credentials may be wrong.',
+      ),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

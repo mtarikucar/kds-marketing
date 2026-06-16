@@ -176,6 +176,49 @@ describe('Google Calendar integration (mocked Google)', () => {
     );
   });
 
+  it('state survives a process restart (stateless, sealed — not in-memory)', async () => {
+    // Mint the state on one instance, then complete the callback on a BRAND NEW
+    // instance with EMPTY in-memory state — this is exactly the connect→callback
+    // hop across a container restart/redeploy that the old in-memory Map broke.
+    const { state } = svc.getAuthUrl(WS_A, USER);
+    const restarted = new GoogleCalendarService(prisma as never);
+
+    safeFetchSpy.mockResolvedValue(
+      jsonResponse({ access_token: 'a', refresh_token: 'r', expires_in: 3600 }),
+    );
+    prisma.googleCalendarConnection.findFirst.mockResolvedValue(null as never);
+    (prisma.googleCalendarConnection.create as jest.Mock).mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          id: 'conn-1',
+          syncToken: null,
+          channelId: null,
+          resourceId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+        }),
+    );
+
+    // Resolving (not throwing "Invalid or expired OAuth state") is the proof:
+    // the fresh instance accepted state it never stored in memory.
+    await expect(restarted.handleCallback(state, 'auth-code')).resolves.toEqual(
+      expect.objectContaining({ tokenSet: true }),
+    );
+  });
+
+  it('callback rejects a tampered state token (GCM auth fails → 401)', async () => {
+    const { state } = svc.getAuthUrl(WS_A, USER);
+    // Flip a char in the middle of the sealed token (guaranteed real iv/tag/ct
+    // bytes, not ignored trailing padding bits); AES-GCM auth must reject it.
+    const mid = Math.floor(state.length / 2);
+    const swap = state[mid] === 'A' ? 'B' : 'A';
+    const tampered = state.slice(0, mid) + swap + state.slice(mid + 1);
+    await expect(svc.handleCallback(tampered, 'code')).rejects.toThrow(
+      'Invalid or expired OAuth state',
+    );
+  });
+
   it('callback rejects when Google returns no refresh token', async () => {
     const { state } = svc.getAuthUrl(WS_A, USER);
     safeFetchSpy.mockResolvedValue(
