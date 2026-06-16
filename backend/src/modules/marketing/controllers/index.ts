@@ -39,3 +39,4 @@ export * from './marketing-invoices.controller';
 export * from './public-invoice.controller';
 export * from './marketing-branding.controller';
 export * from './public-branding.controller';
+export * from './affiliate.controller';

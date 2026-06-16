@@ -162,6 +162,10 @@ import { MarketingBrandingController } from './controllers/marketing-branding.co
 import { PublicBrandingController } from './controllers/public-branding.controller';
 import { BrandingService } from './branding/branding.service';
 
+// GHL parity — affiliate manager (affiliates, referrals, commissions, payouts).
+import { AffiliateController } from './controllers/affiliate.controller';
+import { AffiliateService } from './services/affiliate.service';
+
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
 import { CoursesService } from './memberships/courses.service';
@@ -309,6 +313,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     SsoPublicController,
     GoogleCalendarController,
     GoogleCalendarPublicController,
+    AffiliateController,
   ],
   providers: [
     // Services
@@ -442,6 +447,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,
+    // GHL parity — affiliate manager.
+    AffiliateService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

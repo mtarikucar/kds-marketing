@@ -109,6 +109,10 @@ const OWNED_DELEGATES = [
   'ssoConnection',
   // Integrations (env-gated Google Calendar 2-way sync).
   'googleCalendarConnection',
+  // Affiliate manager (GHL parity).
+  'affiliate',
+  'affiliateReferral',
+  'affiliateCommission',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

@@ -22,3 +22,4 @@ export * from './lead-auto-assigner.service';
 export * from './marketing-distribution.service';
 export * from './sales-call.service';
 export * from './sales-target.service';
+export * from './affiliate.service';

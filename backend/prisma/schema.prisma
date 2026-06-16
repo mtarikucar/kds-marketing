@@ -1964,3 +1964,62 @@ model CustomRole {
   @@index([workspaceId])
   @@map("custom_roles")
 }
+
+/// Affiliate manager — workspace-scoped affiliate (partner/referrer).
+/// `code` is unique per workspace (not globally unique, unlike MarketingUser.referralCode) — use @@unique([workspaceId, code]).
+model Affiliate {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  name            String
+  email           String
+  code            String
+  commissionType  String   // PERCENT | FLAT
+  commissionValue Decimal  @db.Decimal(10, 2)
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  referrals   AffiliateReferral[]
+  commissions AffiliateCommission[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId, status])
+  @@map("affiliates")
+}
+
+/// A referral tracked to an affiliate. referredLeadId is a soft ref to Lead.id.
+model AffiliateReferral {
+  id                  String    @id @default(uuid())
+  workspaceId         String
+  affiliateId         String
+  affiliate           Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  referredLeadId      String?
+  status              String    @default("PENDING") // PENDING | CONVERTED | REJECTED
+  convertedAt         DateTime?
+  createdAt           DateTime  @default(now())
+
+  commissions AffiliateCommission[]
+
+  @@index([workspaceId, affiliateId])
+  @@index([workspaceId, status])
+  @@map("affiliate_referrals")
+}
+
+/// A commission owed to an affiliate for a converted referral.
+/// amount = PERCENT → commissionValue% × conversionValue, or FLAT → commissionValue.
+model AffiliateCommission {
+  id          String            @id @default(uuid())
+  workspaceId String
+  affiliateId String
+  affiliate   Affiliate         @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  referralId  String
+  referral    AffiliateReferral @relation(fields: [referralId], references: [id], onDelete: Restrict)
+  amount      Decimal           @db.Decimal(10, 2)
+  status      String            @default("OWED") // OWED | APPROVED | PAID
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([workspaceId, affiliateId])
+  @@index([workspaceId, status])
+  @@map("affiliate_commissions")
+}
