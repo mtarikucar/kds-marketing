@@ -181,6 +181,9 @@ import { ExperimentsService } from './funnels/experiments.service';
 import { SurveysController } from './funnels/surveys.controller';
 import { SurveysService } from './funnels/surveys.service';
 import { PublicFunnelsController } from './funnels/public-funnels.controller';
+// Epic F — 2FA/MFA (TOTP).
+import { TwoFactorController } from './controllers/two-factor.controller';
+import { TwoFactorService } from './services/two-factor.service';
 
 @Module({
   imports: [
@@ -278,6 +281,7 @@ import { PublicFunnelsController } from './funnels/public-funnels.controller';
     ExperimentsController,
     SurveysController,
     PublicFunnelsController,
+    TwoFactorController,
   ],
   providers: [
     // Services
@@ -398,6 +402,8 @@ import { PublicFunnelsController } from './funnels/public-funnels.controller';
     // Epic E — funnel A/B + surveys.
     ExperimentsService,
     SurveysService,
+    // Epic F — 2FA.
+    TwoFactorService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

@@ -107,6 +107,12 @@ model MarketingUser {
   // logout and on password change so outstanding tokens are invalidated.
   tokenVersion Int @default(0)
 
+  // Epic F — 2FA/MFA (TOTP). Secret stored once enrollment begins; enabled only
+  // after a code is verified. Backup codes are SHA-256 hashes (single-use).
+  twoFactorEnabled     Boolean @default(false)
+  twoFactorSecret      String?
+  twoFactorBackupCodes Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
