@@ -223,7 +223,7 @@ model Lead {
   @@index([status, createdAt])
   @@index([originTenantId])
   @@index([workspaceId, scoredAt])
-  @@index([customFields], type: Gin)
+  @@index([customFields], type: Gin, map: "leads_customFields_gin")
   @@index([workspaceId, phoneNormalized])
   @@index([workspaceId, emailNormalized])
   @@index([mergedIntoId])

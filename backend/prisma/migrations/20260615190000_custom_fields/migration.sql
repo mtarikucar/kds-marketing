@@ -22,7 +22,10 @@ CREATE UNIQUE INDEX "custom_field_defs_workspaceId_entity_key_key"
 CREATE INDEX "custom_field_defs_workspaceId_entity_archived_idx"
   ON "custom_field_defs" ("workspaceId", "entity", "archived");
 
--- Lead custom-field values (JSONB). GIN (jsonb_path_ops) accelerates
--- containment/equality predicates used by segment/audience filtering.
+-- Lead custom-field values (JSONB). Default GIN (jsonb_ops) accelerates the
+-- containment/key-existence predicates used by segment/audience filtering.
+-- (jsonb_ops, not jsonb_path_ops: the latter isn't round-tripped by Prisma's
+-- introspection so it permanently fails the migrations↔schema parity gate, and
+-- jsonb_ops also supports the ?/?&/?| operators the segment compiler may use.)
 ALTER TABLE "leads" ADD COLUMN "customFields" JSONB NOT NULL DEFAULT '{}';
-CREATE INDEX "leads_customFields_gin" ON "leads" USING GIN ("customFields" jsonb_path_ops);
+CREATE INDEX "leads_customFields_gin" ON "leads" USING GIN ("customFields");
