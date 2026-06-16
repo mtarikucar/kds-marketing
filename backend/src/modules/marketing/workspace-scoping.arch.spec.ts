@@ -113,6 +113,10 @@ const OWNED_DELEGATES = [
   'affiliate',
   'affiliateReferral',
   'affiliateCommission',
+  // P11 (GoHighLevel parity): env-gated social media planner.
+  'socialAccount',
+  'socialPost',
+  'socialPostTarget',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

@@ -2023,3 +2023,59 @@ model AffiliateCommission {
   @@index([workspaceId, status])
   @@map("affiliate_commissions")
 }
+
+/// Social account connected to a workspace (env-gated per-network publish).
+/// accessToken is SEALED (secret-box v1:...) — never returned raw in API responses.
+model SocialAccount {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  network        String   // FACEBOOK | INSTAGRAM | LINKEDIN
+  externalId     String   // provider page/profile id
+  displayName    String
+  accessToken    String   @db.Text // SEALED — never returned raw
+  tokenExpiresAt DateTime?
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  targets SocialPostTarget[]
+
+  @@unique([workspaceId, network, externalId])
+  @@index([workspaceId, network])
+  @@map("social_accounts")
+}
+
+/// A social post authored in the planner (may fan out to multiple networks).
+model SocialPost {
+  id          String    @id @default(uuid())
+  workspaceId String
+  content     String    @db.Text
+  mediaUrls   String[]
+  status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  targets SocialPostTarget[]
+
+  @@index([workspaceId, status])
+  @@map("social_posts")
+}
+
+/// A single per-network publish target for a SocialPost.
+model SocialPostTarget {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  postId          String
+  post            SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  account         SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Restrict)
+  network         String   // FACEBOOK | INSTAGRAM | LINKEDIN
+  status          String   @default("PENDING") // PENDING|PUBLISHED|FAILED
+  externalPostId  String?
+  error           String?
+
+  @@index([workspaceId, postId])
+  @@index([workspaceId, status])
+  @@map("social_post_targets")
+}

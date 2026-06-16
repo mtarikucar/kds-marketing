@@ -166,6 +166,10 @@ import { BrandingService } from './branding/branding.service';
 import { AffiliateController } from './controllers/affiliate.controller';
 import { AffiliateService } from './services/affiliate.service';
 
+// P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
+import { SocialPlannerController } from './social-planner/social-planner.controller';
+import { SocialPlannerService } from './social-planner/social-planner.service';
+
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
 import { CoursesService } from './memberships/courses.service';
@@ -314,6 +318,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     GoogleCalendarController,
     GoogleCalendarPublicController,
     AffiliateController,
+    SocialPlannerController,
   ],
   providers: [
     // Services
@@ -449,6 +454,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     PermissionsGuard,
     // GHL parity — affiliate manager.
     AffiliateService,
+    // P11 (GoHighLevel parity): env-gated social media planner.
+    SocialPlannerService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
