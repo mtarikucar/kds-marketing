@@ -55,6 +55,18 @@ const InvoicesPage             = lazy(() => import('./pages/marketing/invoices')
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
 const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
 const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/AnalyticsPage'));
+// GHL-parity settings/tools UIs
+const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/apiKeys'));
+const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
+const ConnectionsPage          = lazy(() => import('./pages/marketing/settings/connections'));
+const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
+const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
+const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
+const SocialPlannerPage        = lazy(() => import('./pages/marketing/social'));
+const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
+const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
+const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
+const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -120,6 +132,8 @@ export default function App() {
           <Route path="/calls"          element={<S><CallsPage /></S>} />
           <Route path="/performance"    element={<S><PerformancePage /></S>} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
+          {/* Self-service 2FA — available to every authenticated marketing user. */}
+          <Route path="/settings/two-factor" element={<S><TwoFactorPage /></S>} />
         </Route>
         <Route element={<MarketingProtectedRoute requiredRole={MarketingRole.MANAGER} />}>
           <Route element={<MarketingLayout />}>
@@ -152,6 +166,17 @@ export default function App() {
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
             {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
             <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
+            {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
+            <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
+            <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
+            <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />
+            <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
+            <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
+            <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />
+            <Route path="/experiments" element={<S><ExperimentsPage /></S>} />
+            <Route path="/surveys"     element={<S><SurveysPage /></S>} />
+            <Route path="/affiliates"  element={<S><AffiliatesPage /></S>} />
           </Route>
         </Route>
       </Route>
