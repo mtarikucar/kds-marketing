@@ -54,6 +54,7 @@ const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'
 const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
 const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
+const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/AnalyticsPage'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -149,6 +150,8 @@ export default function App() {
             <Route path="/voice"       element={<S><VoicePage /></S>} />
             <Route path="/invoices"    element={<S><InvoicesPage /></S>} />
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
+            {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
+            <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
           </Route>
         </Route>
       </Route>

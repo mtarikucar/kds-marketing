@@ -10,6 +10,7 @@ import {
   Wrench,
   Phone,
   LineChart,
+  PieChart,
   Flag,
   FlaskConical,
   CreditCard,
@@ -115,6 +116,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
       { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
       { path: '/performance', labelKey: 'nav.performance', label: 'Performance', icon: LineChart },
+      { path: '/analytics', labelKey: 'nav.analytics', label: 'Analytics', icon: PieChart, managerOnly: true },
     ],
   },
   {
