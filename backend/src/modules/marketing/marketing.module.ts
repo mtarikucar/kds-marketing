@@ -187,6 +187,10 @@ import { TwoFactorService } from './services/two-factor.service';
 // Epic B4 — Slack incoming-webhook notifications.
 import { SlackController } from './integrations/slack.controller';
 import { SlackService } from './integrations/slack.service';
+// Epic F — custom roles + granular permissions.
+import { RolesController } from './roles/roles.controller';
+import { RolesService } from './roles/roles.service';
+import { PermissionsGuard } from './roles/permissions.guard';
 
 @Module({
   imports: [
@@ -286,6 +290,7 @@ import { SlackService } from './integrations/slack.service';
     PublicFunnelsController,
     TwoFactorController,
     SlackController,
+    RolesController,
   ],
   providers: [
     // Services
@@ -410,6 +415,9 @@ import { SlackService } from './integrations/slack.service';
     TwoFactorService,
     // Epic B4 — Slack notify.
     SlackService,
+    // Epic F — custom roles + permissions.
+    RolesService,
+    PermissionsGuard,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
