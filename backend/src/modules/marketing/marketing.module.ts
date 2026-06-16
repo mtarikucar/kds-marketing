@@ -172,6 +172,7 @@ import { CommunitiesService } from './memberships/communities.service';
 // Epic G — analytics (read-only lead aggregations).
 import { AnalyticsController } from './analytics/analytics.controller';
 import { AnalyticsService } from './analytics/analytics.service';
+import { AttributionService } from './analytics/attribution.service';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
@@ -406,6 +407,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     CommunitiesService,
     // Epic G — analytics.
     AnalyticsService,
+    AttributionService,
     // Epic F (compliance).
     ComplianceService,
     // Epic E — funnel A/B + surveys.

@@ -5,12 +5,18 @@ import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { AnalyticsService } from './analytics.service';
+import { AttributionModel, AttributionService } from './attribution.service';
+
+const ATTRIBUTION_MODELS: AttributionModel[] = ['first', 'last', 'linear'];
 
 @MarketingRoute()
 @Controller('marketing/analytics')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
 export class AnalyticsController {
-  constructor(private readonly svc: AnalyticsService) {}
+  constructor(
+    private readonly svc: AnalyticsService,
+    private readonly attributionSvc: AttributionService,
+  ) {}
 
   @Get('funnel')
   funnel(
@@ -46,5 +52,23 @@ export class AnalyticsController {
     @CurrentMarketingUser() u: MarketingUserPayload,
   ) {
     return this.svc.repPerformance(u.workspaceId, { from, to });
+  }
+
+  /**
+   * Multi-touch attribution + conversion value. `model` selects how a converted
+   * lead's accepted-offer value is split across its channel touch path:
+   * first-touch | last-touch | linear. Defaults to last-touch (GHL default).
+   */
+  @Get('attribution')
+  attribution(
+    @Query('model') model: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @CurrentMarketingUser() u: MarketingUserPayload,
+  ) {
+    const selected = ATTRIBUTION_MODELS.includes(model as AttributionModel)
+      ? (model as AttributionModel)
+      : 'last';
+    return this.attributionSvc.attribution(u.workspaceId, { model: selected, from, to });
   }
 }
