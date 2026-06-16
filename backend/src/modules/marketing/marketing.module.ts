@@ -169,6 +169,9 @@ import { EnrollmentController } from './memberships/enrollment.controller';
 import { EnrollmentService } from './memberships/enrollment.service';
 import { CommunitiesController } from './memberships/communities.controller';
 import { CommunitiesService } from './memberships/communities.service';
+// Epic G — analytics (read-only lead aggregations).
+import { AnalyticsController } from './analytics/analytics.controller';
+import { AnalyticsService } from './analytics/analytics.service';
 
 @Module({
   imports: [
@@ -261,6 +264,7 @@ import { CommunitiesService } from './memberships/communities.service';
     CoursesController,
     EnrollmentController,
     CommunitiesController,
+    AnalyticsController,
   ],
   providers: [
     // Services
@@ -374,6 +378,8 @@ import { CommunitiesService } from './memberships/communities.service';
     CoursesService,
     EnrollmentService,
     CommunitiesService,
+    // Epic G — analytics.
+    AnalyticsService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
