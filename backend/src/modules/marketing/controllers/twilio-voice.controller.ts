@@ -1,10 +1,11 @@
-import { Controller, Post, Req, Res, Headers, Logger } from '@nestjs/common';
+import { Controller, Post, Param, Req, Res, Headers, Logger } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { PublicChannelResolverService } from '../channels/public-channel-resolver.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { VoiceAiService } from '../channels/voice-ai.service';
+import { IvrService } from '../ivr/ivr.service';
 
 /** Twilio's request-signature algorithm: base64(HMAC-SHA1(authToken, url + sorted k+v)). */
 export function validTwilioSignature(authToken: string, url: string, params: Record<string, any>, signature: string): boolean {
@@ -34,6 +35,7 @@ export class TwilioVoiceController {
     private readonly resolver: PublicChannelResolverService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly voice: VoiceAiService,
+    private readonly ivr: IvrService,
     private readonly config: ConfigService,
   ) {}
 
@@ -63,8 +65,41 @@ export class TwilioVoiceController {
     if (!channel) { res.type('text/xml').send(TWIML_HANGUP); return; }
     const cfg = this.registry.resolveConfig(channel);
     if (!this.verify(req, cfg.secrets.authToken ?? '')) { res.status(403).send('bad signature'); return; }
+    // IVR phone-tree sits IN FRONT OF the AI flow: if this workspace has an
+    // ENABLED root menu, answer with its keypad <Gather>. Otherwise fall through
+    // to the existing AI receptionist UNCHANGED (non-IVR workspaces unaffected).
+    const root = await this.ivr.getEnabledRootMenu(channel.workspaceId);
+    if (root) {
+      const twiml = await this.ivr.renderMenuTwiml(channel.workspaceId, root.id);
+      res.type('text/xml').send(twiml);
+      return;
+    }
     const twiml = await this.voice.startCall(channel as any, String(b.From ?? ''), String(b.To ?? ''), String(b.CallSid ?? ''));
     res.type('text/xml').send(twiml);
+  }
+
+  /**
+   * IVR keypad callback: Twilio posts the pressed digit (`Digits`) here from a
+   * menu's <Gather action>. We resolve the VOICE channel by the called number
+   * (`To`, present on every in-call request) — the IVR runs BEFORE any VoiceCall
+   * row exists, so we can't key on CallSid yet — verify the signature, then map
+   * the digit to the next TwiML. AI_RECEPTIONIST hands off to the EXISTING flow
+   * via voice.startCall (we never duplicate it).
+   */
+  @Post('ivr/:menuId')
+  async ivrDigit(@Param('menuId') menuId: string, @Req() req: Request, @Res() res: Response): Promise<void> {
+    const b = req.body ?? {};
+    const channel = b.To ? await this.resolver.byExternalId('VOICE', String(b.To)) : null;
+    if (!channel) { res.type('text/xml').send(TWIML_HANGUP); return; }
+    const cfg = this.registry.resolveConfig(channel);
+    if (!this.verify(req, cfg.secrets.authToken ?? '')) { res.status(403).send('bad signature'); return; }
+    const outcome = await this.ivr.handleDigit(channel.workspaceId, menuId, String(b.Digits ?? ''));
+    if (outcome.aiHandoff) {
+      const twiml = await this.voice.startCall(channel as any, String(b.From ?? ''), String(b.To ?? ''), String(b.CallSid ?? ''));
+      res.type('text/xml').send(twiml);
+      return;
+    }
+    res.type('text/xml').send(outcome.twiml ?? TWIML_HANGUP);
   }
 
   @Post('gather')

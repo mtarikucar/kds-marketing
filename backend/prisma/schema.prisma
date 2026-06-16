@@ -1474,6 +1474,55 @@ model VoiceTranscript {
   @@map("voice_transcripts")
 }
 
+/// A configurable IVR / phone-tree menu (GoHighLevel parity). Sits IN FRONT OF
+/// the existing Voice-AI flow: when a workspace has an enabled `isRoot` menu,
+/// inbound calls are answered with this menu's <Gather numDigits=1> instead of
+/// going straight to the AI receptionist. Workspace-owned. `greeting` is either
+/// plain text (spoken via <Say>) or an absolute audio URL (played via <Play>).
+model IvrMenu {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  greeting    String  @db.Text
+  enabled     Boolean @default(true)
+  isRoot      Boolean @default(false) // the entry menu for inbound calls
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  options IvrOption[]
+
+  @@index([workspaceId])
+  // At most ONE enabled root menu per workspace is enforced in the service
+  // layer (a partial unique index can't express "enabled AND isRoot" portably
+  // here); this index makes the root lookup on the inbound webhook cheap.
+  @@index([workspaceId, isRoot, enabled])
+  @@map("ivr_menus")
+}
+
+/// One keypad option on an IvrMenu. `digit` is unique within a menu. `action`
+/// decides what the digit does: SUBMENU (nested <Gather> via targetMenuId),
+/// DIAL (<Dial> the E.164 dialNumber), VOICEMAIL (<Record>), HANGUP (<Hangup>),
+/// or AI_RECEPTIONIST (hand off to the existing Voice-AI flow).
+model IvrOption {
+  id           String  @id @default(uuid())
+  workspaceId  String
+  menuId       String
+  digit        String // '0'-'9' | '*' | '#'
+  label        String
+  action       String // SUBMENU | DIAL | VOICEMAIL | HANGUP | AI_RECEPTIONIST
+  targetMenuId String? // for SUBMENU
+  dialNumber   String? // for DIAL, E.164
+
+  createdAt DateTime @default(now())
+
+  menu IvrMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([menuId, digit])
+  @@index([workspaceId])
+  @@map("ivr_options")
+}
+
 /// An invoice the workspace sends to its OWN end customer. `items` is an array
 /// of { description, qty, unitPrice }; `total` is denormalized. Paid via the
 /// workspace's own PSP (WorkspacePspConfig) on the public /i/:token page.

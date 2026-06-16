@@ -151,6 +151,9 @@ import { MarketingVoiceController } from './controllers/marketing-voice.controll
 import { TwilioVoiceController } from './controllers/twilio-voice.controller';
 import { VoiceAdapter } from './channels/adapters/voice.adapter';
 import { VoiceAiService } from './channels/voice-ai.service';
+// Phase F P8 — configurable IVR / phone-tree menus over the Voice flow.
+import { IvrController } from './ivr/ivr.controller';
+import { IvrService } from './ivr/ivr.service';
 
 // Phase F P9 — end-customer invoicing.
 import { MarketingInvoicesController } from './controllers/marketing-invoices.controller';
@@ -311,6 +314,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     ReviewGateController,
     MarketingVoiceController,
     TwilioVoiceController,
+    IvrController,
     MarketingInvoicesController,
     PublicInvoiceController,
     MarketingBrandingController,
@@ -440,6 +444,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     // Twilio TwiML turn engine.
     VoiceAdapter,
     VoiceAiService,
+    // Phase F P8 — configurable IVR / phone-tree menus over the Voice flow.
+    IvrService,
     // Phase F P9 — end-customer invoicing (per-workspace PSP, public pay page).
     InvoicesService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).

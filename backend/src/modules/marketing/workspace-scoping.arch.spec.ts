@@ -66,6 +66,9 @@ const OWNED_DELEGATES = [
   // P8 (GoHighLevel parity): Voice AI (Twilio).
   'voiceCall',
   'voiceTranscript',
+  // P8 (GoHighLevel parity): configurable IVR / phone-tree menus (over Voice).
+  'ivrMenu',
+  'ivrOption',
   // P9 (GoHighLevel parity): end-customer invoicing.
   'invoice',
   'workspacePspConfig',
