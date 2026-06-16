@@ -46,6 +46,7 @@ const ReviewsPage              = lazy(() => import('./pages/marketing/ReviewsPag
 const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'));
 const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
+const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -119,6 +120,7 @@ export default function App() {
             <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
             <Route path="/settings/tags"          element={<S><TagsPage /></S>} />
             <Route path="/settings/segments"      element={<S><SegmentsPage /></S>} />
+            <Route path="/settings/import"        element={<S><ImportWizardPage /></S>} />
             <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
