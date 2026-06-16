@@ -236,6 +236,27 @@ export class MarketingAuthService {
     return { message: 'Logged out' };
   }
 
+  /**
+   * Public token-issue seam for federated logins (SSO/OIDC). The IdP-side
+   * identity check happens in {@link SsoService}; once a MarketingUser is
+   * matched/provisioned, this mints the SAME marketing session pair the
+   * password path does — there is exactly one place that knows how to sign a
+   * marketing JWT, and SSO reuses it rather than re-deriving the payload.
+   */
+  issueSession(user: {
+    id: string;
+    workspaceId: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone: string | null;
+    avatar: string | null;
+    role: string;
+    tokenVersion: number;
+  }) {
+    return this.generateTokens(user);
+  }
+
   private generateTokens(user: {
     id: string;
     workspaceId: string;

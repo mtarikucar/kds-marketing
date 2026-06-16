@@ -105,6 +105,8 @@ const OWNED_DELEGATES = [
   'communityMember',
   'communityPost',
   'communityComment',
+  // Epic G (env-gated enterprise SSO via OIDC).
+  'ssoConnection',
 ] as const;
 
 /** Methods that can address many rows or create rows. */

@@ -1895,6 +1895,29 @@ model SlackIntegration {
   @@map("slack_integrations")
 }
 
+/// Epic G — env-gated enterprise SSO via OIDC (authorization-code + PKCE).
+/// One row per workspace IdP. `clientSecret` is stored SEALED with the
+/// AES-256-GCM secret-box (env MARKETING_SECRET_KEY) and is NEVER returned by
+/// the API. `allowedDomains` (when non-empty) restricts which verified email
+/// domains may JIT-provision/match a user. Inert when no enabled row exists or
+/// the secret-box is unconfigured — the feature is simply unavailable.
+model SsoConnection {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  provider       String   @default("OIDC") // OIDC (only mode today)
+  issuer         String // OIDC issuer base URL; token/JWKS discovered from it
+  clientId       String
+  clientSecret   String // SEALED (secret-box v1:...); masked out of API responses
+  enabled        Boolean  @default(false)
+  allowedDomains String[] @default([]) // empty = any verified email domain
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, enabled])
+  @@map("sso_connections")
+}
+
 /// Epic F — a workspace-defined custom role with a granular permission set
 /// (array of permission keys from the catalog). Assigned to MarketingUsers via
 /// `customRoleId`; overrides the legacy OWNER/MANAGER/REP mapping.

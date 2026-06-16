@@ -188,6 +188,12 @@ import { TwoFactorService } from './services/two-factor.service';
 // Epic B4 — Slack incoming-webhook notifications.
 import { SlackController } from './integrations/slack.controller';
 import { SlackService } from './integrations/slack.service';
+// Epic G — env-gated enterprise SSO (OIDC, authorization-code + PKCE).
+import {
+  SsoAdminController,
+  SsoPublicController,
+} from './integrations/sso.controller';
+import { SsoService } from './services/sso.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -292,6 +298,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     TwoFactorController,
     SlackController,
     RolesController,
+    SsoAdminController,
+    SsoPublicController,
   ],
   providers: [
     // Services
@@ -417,6 +425,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     TwoFactorService,
     // Epic B4 — Slack notify.
     SlackService,
+    // Epic G — env-gated enterprise SSO (OIDC).
+    SsoService,
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,
