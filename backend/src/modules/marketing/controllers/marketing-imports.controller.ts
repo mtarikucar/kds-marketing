@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
@@ -17,7 +19,7 @@ import { CommitImportDto, UploadImportDto } from '../dto/import.dto';
 
 @MarketingRoute()
 @Controller('marketing/imports')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingImportsController {
   constructor(private readonly svc: ImportService) {}
 
@@ -28,6 +30,7 @@ export class MarketingImportsController {
 
   @Post()
   @Audit({ action: 'import.upload', resourceType: 'import' })
+  @RequirePermission('contacts.write')
   upload(
     @Body() dto: UploadImportDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -45,6 +48,7 @@ export class MarketingImportsController {
 
   @Post(':id/commit')
   @Audit({ action: 'import.commit', resourceType: 'import', resourceIdParam: 'id' })
+  @RequirePermission('contacts.write')
   commit(
     @Param('id') id: string,
     @Body() dto: CommitImportDto,

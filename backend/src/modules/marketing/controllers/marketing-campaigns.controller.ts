@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -25,7 +27,7 @@ import { CreateCampaignDto, UpdateCampaignDto } from '../dto/campaign.dto';
  */
 @MarketingRoute()
 @Controller('marketing/campaigns')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 @RequiresFeature('campaigns')
 export class MarketingCampaignsController {
@@ -37,6 +39,7 @@ export class MarketingCampaignsController {
   }
 
   @Post()
+  @RequirePermission('campaigns.send')
   create(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: CreateCampaignDto) {
     return this.campaigns.create(a.workspaceId, dto);
   }
@@ -52,31 +55,37 @@ export class MarketingCampaignsController {
   }
 
   @Patch(':id')
+  @RequirePermission('campaigns.send')
   update(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: UpdateCampaignDto) {
     return this.campaigns.update(a.workspaceId, id, dto);
   }
 
   @Post(':id/launch')
+  @RequirePermission('campaigns.send')
   launch(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.campaigns.launch(a.workspaceId, id);
   }
 
   @Post(':id/pause')
+  @RequirePermission('campaigns.send')
   pause(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.campaigns.pause(a.workspaceId, id);
   }
 
   @Post(':id/resume')
+  @RequirePermission('campaigns.send')
   resume(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.campaigns.resume(a.workspaceId, id);
   }
 
   @Post(':id/cancel')
+  @RequirePermission('campaigns.send')
   cancel(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.campaigns.cancel(a.workspaceId, id);
   }
 
   @Delete(':id')
+  @RequirePermission('campaigns.send')
   remove(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.campaigns.remove(a.workspaceId, id);
   }

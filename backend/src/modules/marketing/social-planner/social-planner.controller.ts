@@ -20,6 +20,8 @@ import {
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -75,7 +77,7 @@ class SchedulePostDto {
 
 @MarketingRoute()
 @Controller('marketing/social-planner')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('OWNER', 'MANAGER')
 export class SocialPlannerController {
   constructor(private readonly svc: SocialPlannerService) {}
@@ -96,6 +98,7 @@ export class SocialPlannerController {
 
   @Post('accounts')
   @Audit({ action: 'social.account.connect', resourceType: 'social-account', captureBody: ['network', 'displayName', 'externalId'] })
+  @RequirePermission('campaigns.send')
   connectAccount(@Body() dto: ConnectAccountDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.connectAccount(u.workspaceId, {
       ...dto,
@@ -105,6 +108,7 @@ export class SocialPlannerController {
 
   @Delete('accounts/:accountId')
   @Audit({ action: 'social.account.disconnect', resourceType: 'social-account', resourceIdParam: 'accountId' })
+  @RequirePermission('campaigns.send')
   disconnectAccount(@Param('accountId') accountId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.disconnectAccount(u.workspaceId, accountId);
   }
@@ -118,6 +122,7 @@ export class SocialPlannerController {
 
   @Post('posts')
   @Audit({ action: 'social.post.create', resourceType: 'social-post', captureBody: ['mediaUrls'] })
+  @RequirePermission('campaigns.send')
   createPost(@Body() dto: CreatePostDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.createPost(u.workspaceId, dto);
   }
@@ -129,6 +134,7 @@ export class SocialPlannerController {
 
   @Patch('posts/:postId')
   @Audit({ action: 'social.post.update', resourceType: 'social-post', resourceIdParam: 'postId' })
+  @RequirePermission('campaigns.send')
   updatePost(
     @Param('postId') postId: string,
     @Body() dto: UpdatePostDto,
@@ -139,6 +145,7 @@ export class SocialPlannerController {
 
   @Delete('posts/:postId')
   @Audit({ action: 'social.post.delete', resourceType: 'social-post', resourceIdParam: 'postId' })
+  @RequirePermission('campaigns.send')
   deletePost(@Param('postId') postId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.deletePost(u.workspaceId, postId);
   }
@@ -147,6 +154,7 @@ export class SocialPlannerController {
 
   @Post('posts/:postId/schedule')
   @Audit({ action: 'social.post.schedule', resourceType: 'social-post', resourceIdParam: 'postId', captureBody: ['scheduledAt'] })
+  @RequirePermission('campaigns.send')
   schedulePost(
     @Param('postId') postId: string,
     @Body() dto: SchedulePostDto,
@@ -162,6 +170,7 @@ export class SocialPlannerController {
 
   @Post('posts/:postId/publish-now')
   @Audit({ action: 'social.post.publish-now', resourceType: 'social-post', resourceIdParam: 'postId' })
+  @RequirePermission('campaigns.send')
   publishNow(@Param('postId') postId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.publishNow(u.workspaceId, postId);
   }

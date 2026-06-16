@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
@@ -24,7 +26,7 @@ import {
 
 @MarketingRoute()
 @Controller('marketing/custom-fields')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingCustomFieldsController {
   constructor(private readonly svc: CustomFieldsService) {}
 
@@ -38,6 +40,7 @@ export class MarketingCustomFieldsController {
 
   @Post()
   @Audit({ action: 'custom-field.create', resourceType: 'custom-field' })
+  @RequirePermission('contacts.write')
   create(
     @Body() dto: CreateCustomFieldDefDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -47,6 +50,7 @@ export class MarketingCustomFieldsController {
 
   @Post('reorder')
   @Audit({ action: 'custom-field.reorder', resourceType: 'custom-field' })
+  @RequirePermission('contacts.write')
   reorder(
     @Body() dto: ReorderCustomFieldsDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -60,6 +64,7 @@ export class MarketingCustomFieldsController {
     resourceType: 'custom-field',
     resourceIdParam: 'id',
   })
+  @RequirePermission('contacts.write')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateCustomFieldDefDto,
@@ -74,6 +79,7 @@ export class MarketingCustomFieldsController {
     resourceType: 'custom-field',
     resourceIdParam: 'id',
   })
+  @RequirePermission('contacts.write')
   archive(
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -87,6 +93,7 @@ export class MarketingCustomFieldsController {
     resourceType: 'custom-field',
     resourceIdParam: 'id',
   })
+  @RequirePermission('contacts.write')
   restore(
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,

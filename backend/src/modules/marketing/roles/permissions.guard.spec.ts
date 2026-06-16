@@ -87,4 +87,32 @@ describe('PermissionsGuard — live granular permission enforcement', () => {
       ForbiddenException,
     );
   });
+
+  // Epic F — `leads.manage` is the manager-tier lead-admin permission added to
+  // back the @MarketingRoles('MANAGER') gate on lead assign/convert/delete (and
+  // the parallel task/offer/activity deletes). Its legacy mapping MUST grant it
+  // to OWNER & MANAGER but withhold it from REP, so those endpoints keep
+  // admitting exactly who they did before this rollout.
+  describe('leads.manage legacy mapping (manager-tier lead admin)', () => {
+    it('admits a legacy OWNER', async () => {
+      const { guard } = guardWith('leads.manage');
+      await expect(
+        guard.canActivate(ctxFor({ role: 'OWNER', customRoleId: null })),
+      ).resolves.toBe(true);
+    });
+
+    it('admits a legacy MANAGER', async () => {
+      const { guard } = guardWith('leads.manage');
+      await expect(
+        guard.canActivate(ctxFor({ role: 'MANAGER', customRoleId: null })),
+      ).resolves.toBe(true);
+    });
+
+    it('rejects a legacy REP (REP could never delete/convert leads)', async () => {
+      const { guard } = guardWith('leads.manage');
+      await expect(
+        guard.canActivate(ctxFor({ role: 'REP', customRoleId: null })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
 });

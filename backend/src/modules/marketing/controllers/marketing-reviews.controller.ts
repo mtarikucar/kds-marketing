@@ -2,6 +2,8 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@n
 import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -21,7 +23,7 @@ class ReviewReplyDto {
 /** Reviews / reputation. MANAGER+ behind the `reviews` feature. */
 @MarketingRoute()
 @Controller('marketing/reviews')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 @RequiresFeature('reviews')
 export class MarketingReviewsController {
@@ -30,16 +32,21 @@ export class MarketingReviewsController {
   @Get('sources')
   listSources(@CurrentMarketingUser() a: MarketingUserPayload) { return this.reviews.listSources(a.workspaceId); }
   @Post('sources')
+  @RequirePermission('settings.manage')
   createSource(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: ReviewSourceDto) { return this.reviews.createSource(a.workspaceId, dto); }
   @Patch('sources/:id')
+  @RequirePermission('settings.manage')
   updateSource(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: ReviewSourceDto) { return this.reviews.updateSource(a.workspaceId, id, dto); }
   @Delete('sources/:id')
+  @RequirePermission('settings.manage')
   removeSource(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.reviews.removeSource(a.workspaceId, id); }
 
   @Get()
   list(@CurrentMarketingUser() a: MarketingUserPayload) { return this.reviews.list(a.workspaceId); }
   @Post(':id/draft')
+  @RequirePermission('settings.manage')
   draft(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.reviews.draftReply(a.workspaceId, id); }
   @Post(':id/reply')
+  @RequirePermission('settings.manage')
   reply(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: ReviewReplyDto) { return this.reviews.saveReply(a.workspaceId, id, dto.text); }
 }

@@ -59,6 +59,9 @@ export class MarketingGuard implements CanActivate {
           lastName: true,
           role: true,
           status: true,
+          // Epic F — needed by PermissionsGuard so a user's custom role (when
+          // assigned) overrides the legacy OWNER/MANAGER/REP permission mapping.
+          customRoleId: true,
           tokenVersion: true,
         },
       });

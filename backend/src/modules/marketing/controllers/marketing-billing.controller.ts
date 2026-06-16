@@ -10,6 +10,8 @@ import { Request } from 'express';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute, MarketingPublic } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -37,7 +39,7 @@ export class CheckoutDto {
  */
 @MarketingRoute()
 @Controller('marketing/billing')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingBillingController {
   constructor(private readonly billing: BillingService) {}
 
@@ -61,6 +63,7 @@ export class MarketingBillingController {
 
   @Post('checkout')
   @MarketingRoles('OWNER')
+  @RequirePermission('billing.manage')
   checkout(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CheckoutDto,

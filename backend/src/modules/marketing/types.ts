@@ -21,6 +21,9 @@ export interface MarketingUserPayload {
   lastName: string;
   role: string;
   status: string;
+  /** Epic F — when set, the custom role's granular permission set overrides the
+   * legacy OWNER/MANAGER/REP mapping (resolved by PermissionsGuard). */
+  customRoleId?: string | null;
 }
 
 /** Epic D1 — position of a workspace in the agency / sub-account hierarchy.

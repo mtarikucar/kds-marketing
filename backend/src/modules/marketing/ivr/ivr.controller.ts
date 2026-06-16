@@ -19,6 +19,8 @@ import {
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -65,7 +67,7 @@ class CreateOptionDto {
  */
 @MarketingRoute()
 @Controller('marketing/ivr')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoles('OWNER', 'MANAGER')
 @RequiresFeature('voiceAi')
 export class IvrController {
@@ -83,12 +85,14 @@ export class IvrController {
 
   @Post('menus')
   @Audit({ action: 'ivr.menu.create', resourceType: 'ivr-menu', captureBody: ['name', 'isRoot', 'enabled'] })
+  @RequirePermission('settings.manage')
   createMenu(@CurrentMarketingUser() u: MarketingUserPayload, @Body() dto: CreateMenuDto) {
     return this.ivr.createMenu(u.workspaceId, dto);
   }
 
   @Patch('menus/:id')
   @Audit({ action: 'ivr.menu.update', resourceType: 'ivr-menu', resourceIdParam: 'id', captureBody: ['name', 'isRoot', 'enabled'] })
+  @RequirePermission('settings.manage')
   updateMenu(
     @CurrentMarketingUser() u: MarketingUserPayload,
     @Param('id') id: string,
@@ -99,12 +103,14 @@ export class IvrController {
 
   @Delete('menus/:id')
   @Audit({ action: 'ivr.menu.delete', resourceType: 'ivr-menu', resourceIdParam: 'id' })
+  @RequirePermission('settings.manage')
   deleteMenu(@CurrentMarketingUser() u: MarketingUserPayload, @Param('id') id: string) {
     return this.ivr.deleteMenu(u.workspaceId, id);
   }
 
   @Post('menus/:id/options')
   @Audit({ action: 'ivr.option.create', resourceType: 'ivr-option', resourceIdParam: 'id', captureBody: ['digit', 'action'] })
+  @RequirePermission('settings.manage')
   addOption(
     @CurrentMarketingUser() u: MarketingUserPayload,
     @Param('id') menuId: string,
@@ -115,6 +121,7 @@ export class IvrController {
 
   @Delete('menus/:id/options/:optionId')
   @Audit({ action: 'ivr.option.delete', resourceType: 'ivr-option', resourceIdParam: 'optionId' })
+  @RequirePermission('settings.manage')
   deleteOption(
     @CurrentMarketingUser() u: MarketingUserPayload,
     @Param('id') menuId: string,

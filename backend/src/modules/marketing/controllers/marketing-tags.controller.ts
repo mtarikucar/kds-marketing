@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
@@ -24,7 +26,7 @@ import {
 
 @MarketingRoute()
 @Controller('marketing/tags')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingTagsController {
   constructor(private readonly svc: TagsService) {}
 
@@ -35,6 +37,7 @@ export class MarketingTagsController {
 
   @Post()
   @Audit({ action: 'tag.create', resourceType: 'tag' })
+  @RequirePermission('contacts.write')
   create(
     @Body() dto: CreateTagDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -44,6 +47,7 @@ export class MarketingTagsController {
 
   @Post('bulk-assign')
   @Audit({ action: 'tag.bulk-assign', resourceType: 'tag' })
+  @RequirePermission('contacts.write')
   bulkAssign(
     @Body() dto: BulkAssignTagsDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -53,6 +57,7 @@ export class MarketingTagsController {
 
   @Post('bulk-unassign')
   @Audit({ action: 'tag.bulk-unassign', resourceType: 'tag' })
+  @RequirePermission('contacts.write')
   bulkUnassign(
     @Body() dto: BulkUnassignTagsDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -62,6 +67,7 @@ export class MarketingTagsController {
 
   @Patch(':id')
   @Audit({ action: 'tag.update', resourceType: 'tag', resourceIdParam: 'id' })
+  @RequirePermission('contacts.write')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateTagDto,
@@ -72,6 +78,7 @@ export class MarketingTagsController {
 
   @Delete(':id')
   @Audit({ action: 'tag.delete', resourceType: 'tag', resourceIdParam: 'id' })
+  @RequirePermission('contacts.write')
   remove(
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,

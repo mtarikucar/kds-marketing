@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -20,12 +22,13 @@ import { UpdateOfferDto } from '../dto/update-offer.dto';
 import { MarketingUserPayload } from '../types';
 
 @Controller('marketing/offers')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class MarketingOffersController {
   constructor(private readonly offersService: MarketingOffersService) {}
 
   @Post()
+  @RequirePermission('leads.write')
   create(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateOfferDto,
@@ -51,6 +54,7 @@ export class MarketingOffersController {
   }
 
   @Patch(':id')
+  @RequirePermission('leads.write')
   update(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -60,6 +64,7 @@ export class MarketingOffersController {
   }
 
   @Post(':id/send')
+  @RequirePermission('leads.write')
   markSent(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -69,6 +74,7 @@ export class MarketingOffersController {
 
   @Delete(':id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   delete(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,

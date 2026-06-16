@@ -197,6 +197,9 @@ export function mockMarketingUser(over: Partial<Record<string, unknown>> = {}) {
     lastName: 'Owner',
     role: 'OWNER',
     status: 'ACTIVE',
+    // Epic F — null means "fall back to the legacy role→permission mapping".
+    // Specs that exercise custom-role enforcement set this + customRole.findUnique.
+    customRoleId: null,
     tokenVersion: 0,
     ...over,
   };

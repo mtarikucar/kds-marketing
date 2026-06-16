@@ -3,6 +3,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -17,7 +19,7 @@ class BrandingDto {
 /** White-label branding for the workspace's public surfaces. MANAGER+. */
 @MarketingRoute()
 @Controller('marketing/branding')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class MarketingBrandingController {
   constructor(private readonly branding: BrandingService) {}
@@ -28,6 +30,7 @@ export class MarketingBrandingController {
   }
 
   @Put()
+  @RequirePermission('settings.manage')
   set(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: BrandingDto) {
     return this.branding.set(a.workspaceId, dto);
   }
@@ -43,6 +46,7 @@ export class MarketingBrandingController {
       },
     }),
   )
+  @RequirePermission('settings.manage')
   uploadLogo(@CurrentMarketingUser() a: MarketingUserPayload, @UploadedFile() file: any) {
     return this.branding.saveLogo(a.workspaceId, file);
   }

@@ -12,6 +12,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -23,11 +25,12 @@ import { MarketingUserPayload } from '../types';
 
 @MarketingRoute()
 @Controller('marketing/tasks')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingTasksController {
   constructor(private readonly tasksService: MarketingTasksService) {}
 
   @Post()
+  @RequirePermission('tasks.write')
   create(@Body() dto: CreateTaskDto, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.tasksService.create(user.workspaceId, dto, user.id);
   }
@@ -65,6 +68,7 @@ export class MarketingTasksController {
   }
 
   @Patch(':id')
+  @RequirePermission('tasks.write')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateTaskDto,
@@ -74,12 +78,14 @@ export class MarketingTasksController {
   }
 
   @Patch(':id/complete')
+  @RequirePermission('tasks.write')
   complete(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.tasksService.complete(user.workspaceId, id, user.id, user.role);
   }
 
   @Delete(':id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   delete(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.tasksService.delete(user.workspaceId, id, user.id, user.role);
   }

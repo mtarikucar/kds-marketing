@@ -10,6 +10,8 @@ import {
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -58,7 +60,7 @@ class CreateSnapshotDto {
  * audited resourceId, so each cross-into-child clone records BOTH ids.
  */
 @Controller('marketing/agency/snapshots')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class SnapshotController {
   constructor(
@@ -91,6 +93,7 @@ export class SnapshotController {
     resourceType: 'snapshot',
     captureBody: ['name', 'sourceWorkspaceId'],
   })
+  @RequirePermission('users.manage')
   async capture(
     @Body() dto: CreateSnapshotDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -117,6 +120,7 @@ export class SnapshotController {
     resourceIdParam: 'locationId',
     captureBody: [],
   })
+  @RequirePermission('users.manage')
   async apply(
     @Param('snapshotId') snapshotId: string,
     @Param('locationId') locationId: string,

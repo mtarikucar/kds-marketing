@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -30,7 +32,7 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 
 @Controller('marketing/leads')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class MarketingLeadsController {
   constructor(
@@ -47,6 +49,7 @@ export class MarketingLeadsController {
   }
 
   @Post('merge')
+  @RequirePermission('leads.write')
   @Audit({ action: 'lead.merge', resourceType: 'lead', captureBody: ['canonicalId'] })
   merge(
     @Body() dto: MergeLeadsDto,
@@ -64,6 +67,7 @@ export class MarketingLeadsController {
   }
 
   @Post(':id/tags')
+  @RequirePermission('leads.write')
   @Audit({ action: 'lead.tag.assign', resourceType: 'lead', resourceIdParam: 'id' })
   assignTags(
     @Param('id') id: string,
@@ -74,6 +78,7 @@ export class MarketingLeadsController {
   }
 
   @Delete(':id/tags/:tagId')
+  @RequirePermission('leads.write')
   @Audit({ action: 'lead.tag.unassign', resourceType: 'lead', resourceIdParam: 'id' })
   unassignTag(
     @Param('id') id: string,
@@ -84,6 +89,7 @@ export class MarketingLeadsController {
   }
 
   @Post()
+  @RequirePermission('leads.write')
   create(@Body() dto: CreateLeadDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.leadsService.create(actor.workspaceId, dto, actor.id, actor.role);
   }
@@ -99,6 +105,7 @@ export class MarketingLeadsController {
   }
 
   @Patch(':id')
+  @RequirePermission('leads.write')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateLeadDto,
@@ -114,6 +121,7 @@ export class MarketingLeadsController {
     resourceIdParam: 'id',
     captureBody: ['status', 'lostReason'],
   })
+  @RequirePermission('leads.write')
   updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateLeadStatusDto,
@@ -131,6 +139,7 @@ export class MarketingLeadsController {
 
   @Patch(':id/assign')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   assign(
     @Param('id') id: string,
     @Body() dto: AssignLeadDto,
@@ -144,6 +153,7 @@ export class MarketingLeadsController {
   // POST so there's no ambiguity. Manager-only at the decorator layer.
   @Post('bulk-assign')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   bulkAssign(
     @Body() dto: BulkAssignLeadDto,
     @CurrentMarketingUser() actor: MarketingUserPayload,
@@ -158,6 +168,7 @@ export class MarketingLeadsController {
 
   @Post(':id/convert')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   convert(
     @Param('id') id: string,
     @Body() dto: ConvertLeadDto,
@@ -168,6 +179,7 @@ export class MarketingLeadsController {
 
   @Delete(':id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
   delete(@Param('id') id: string, @CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.leadsService.delete(actor.workspaceId, id);
   }

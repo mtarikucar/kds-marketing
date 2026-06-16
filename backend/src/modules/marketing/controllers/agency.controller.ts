@@ -18,6 +18,8 @@ import {
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -101,7 +103,7 @@ class SuspendLocationDto {
  * cross-into-child write records BOTH workspace ids.
  */
 @Controller('marketing/agency')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class AgencyController {
   constructor(
@@ -138,6 +140,7 @@ export class AgencyController {
     resourceType: 'workspace',
     captureBody: ['name', 'ownerEmail'],
   })
+  @RequirePermission('users.manage')
   async createLocation(
     @Body() dto: CreateLocationDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -171,6 +174,7 @@ export class AgencyController {
     resourceIdParam: 'locationId',
     captureBody: ['status'],
   })
+  @RequirePermission('users.manage')
   async suspendLocation(
     @Param('locationId') locationId: string,
     @Body() dto: SuspendLocationDto,

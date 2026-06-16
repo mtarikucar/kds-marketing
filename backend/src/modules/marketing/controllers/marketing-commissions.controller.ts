@@ -16,6 +16,8 @@ class UpdateCommissionAmountDto {
 }
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -27,7 +29,7 @@ import { Audit } from '../../audit/audit.decorator';
 
 @RequiresFeature('commissions')
 @Controller('marketing/commissions')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoute()
 export class MarketingCommissionsController {
   constructor(
@@ -52,6 +54,7 @@ export class MarketingCommissionsController {
 
   @Patch(':id')
   @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
   updateAmount(
     @Param('id') id: string,
     @Body() dto: UpdateCommissionAmountDto,
@@ -67,6 +70,7 @@ export class MarketingCommissionsController {
     resourceType: 'commission',
     resourceIdParam: 'id',
   })
+  @RequirePermission('settings.manage')
   approve(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.commissionsService.approve(user.workspaceId, id, user.id);
   }
@@ -78,6 +82,7 @@ export class MarketingCommissionsController {
     resourceType: 'commission',
     resourceIdParam: 'id',
   })
+  @RequirePermission('settings.manage')
   markPaid(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
     return this.commissionsService.markPaid(user.workspaceId, id, user.id);
   }

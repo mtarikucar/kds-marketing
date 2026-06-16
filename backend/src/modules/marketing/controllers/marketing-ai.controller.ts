@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -38,7 +40,7 @@ import {
  */
 @MarketingRoute()
 @Controller('marketing/ai')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 export class MarketingAiController {
   constructor(
     private readonly knowledge: KnowledgeService,
@@ -70,6 +72,7 @@ export class MarketingAiController {
   @Post('knowledge')
   @MarketingRoles('MANAGER')
   @RequiresFeature('agentStudio')
+  @RequirePermission('settings.manage')
   createKnowledge(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateKnowledgeDto,
@@ -80,6 +83,7 @@ export class MarketingAiController {
   @Patch('knowledge/:id')
   @MarketingRoles('MANAGER')
   @RequiresFeature('agentStudio')
+  @RequirePermission('settings.manage')
   updateKnowledge(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -91,6 +95,7 @@ export class MarketingAiController {
   @Delete('knowledge/:id')
   @MarketingRoles('MANAGER')
   @RequiresFeature('agentStudio')
+  @RequirePermission('settings.manage')
   removeKnowledge(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -120,6 +125,7 @@ export class MarketingAiController {
   @Post('agents')
   @MarketingRoles('MANAGER')
   @RequiresFeature('agentStudio')
+  @RequirePermission('settings.manage')
   createAgent(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateAgentDto,
@@ -130,6 +136,7 @@ export class MarketingAiController {
   @Patch('agents/:id')
   @MarketingRoles('MANAGER')
   @RequiresFeature('agentStudio')
+  @RequirePermission('settings.manage')
   updateAgent(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -141,6 +148,7 @@ export class MarketingAiController {
   @Delete('agents/:id')
   @MarketingRoles('MANAGER')
   @RequiresFeature('agentStudio')
+  @RequirePermission('settings.manage')
   removeAgent(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -152,6 +160,7 @@ export class MarketingAiController {
 
   @Post('compose')
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   compose(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: ComposeContentDto,
@@ -163,6 +172,7 @@ export class MarketingAiController {
 
   @Post('ask')
   @RequiresFeature('askAi')
+  @RequirePermission('leads.write')
   ask(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: AskAiDto) {
     return this.askAi.ask(actor.workspaceId, dto.question);
   }

@@ -2,6 +2,10 @@
 export const PERMISSIONS = [
   'leads.read',
   'leads.write',
+  // Manager-tier lead administration (assign/reassign, convert, delete) — held
+  // by OWNER/MANAGER but NOT REP, mirroring the legacy @MarketingRoles('MANAGER')
+  // gate on those lead/task/offer/activity admin actions.
+  'leads.manage',
   'tasks.read',
   'tasks.write',
   'contacts.read',

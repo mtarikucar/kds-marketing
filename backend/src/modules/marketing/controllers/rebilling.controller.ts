@@ -19,6 +19,8 @@ import {
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -82,7 +84,7 @@ class ListChargesQueryDto {
  * unconditionally and lets the service decide.
  */
 @Controller('marketing/agency/rebilling')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoute()
 export class RebillingController {
   constructor(
@@ -128,6 +130,7 @@ export class RebillingController {
     resourceIdParam: 'locationId',
     captureBody: ['basePrice', 'usageUnitPrice', 'markupPercent', 'enabled'],
   })
+  @RequirePermission('billing.manage')
   async upsertPlan(
     @Param('locationId') locationId: string,
     @Body() dto: UpsertPlanDto,
@@ -157,6 +160,7 @@ export class RebillingController {
     resourceIdParam: 'locationId',
     captureBody: ['periodStart', 'periodEnd'],
   })
+  @RequirePermission('billing.manage')
   async computeCharge(
     @Param('locationId') locationId: string,
     @Body() dto: ComputeChargeDto,
@@ -184,6 +188,7 @@ export class RebillingController {
     resourceIdParam: 'chargeId',
     captureBody: [],
   })
+  @RequirePermission('billing.manage')
   async charge(
     @Param('chargeId') chargeId: string,
     @CurrentMarketingUser() user: MarketingUserPayload,

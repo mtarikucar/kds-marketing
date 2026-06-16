@@ -15,6 +15,8 @@ import { Observable, interval, merge } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { SseTokenGuard } from '../guards/sse-token.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
@@ -24,7 +26,7 @@ import { ConversationsService } from '../channels/conversations.service';
 import { ConversationStreamService } from '../channels/conversation-stream.service';
 import { ReplyDto, AssignConversationDto, SetAiPausedDto } from '../dto/conversation.dto';
 
-const REST_GUARDS = [MarketingGuard, MarketingRolesGuard, FeatureGuard];
+const REST_GUARDS = [MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard];
 
 /**
  * The agent Inbox. REST endpoints sit behind the usual marketing guards +
@@ -74,6 +76,7 @@ export class MarketingConversationsController {
   @Post(':id/reply')
   @UseGuards(...REST_GUARDS)
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   reply(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -85,6 +88,7 @@ export class MarketingConversationsController {
   @Post(':id/assign')
   @UseGuards(...REST_GUARDS)
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   assign(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -96,6 +100,7 @@ export class MarketingConversationsController {
   @Post(':id/ai-pause')
   @UseGuards(...REST_GUARDS)
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   setAiPaused(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -107,6 +112,7 @@ export class MarketingConversationsController {
   @Post(':id/close')
   @UseGuards(...REST_GUARDS)
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   close(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.conversations.close(actor.workspaceId, id);
   }
@@ -114,6 +120,7 @@ export class MarketingConversationsController {
   @Post(':id/reopen')
   @UseGuards(...REST_GUARDS)
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   reopen(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.conversations.reopen(actor.workspaceId, id);
   }
@@ -121,6 +128,7 @@ export class MarketingConversationsController {
   @Post(':id/read')
   @UseGuards(...REST_GUARDS)
   @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
   markRead(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.conversations.markRead(actor.workspaceId, id);
   }

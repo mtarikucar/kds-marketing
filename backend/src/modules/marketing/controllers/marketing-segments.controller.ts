@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
@@ -24,7 +26,7 @@ import {
 
 @MarketingRoute()
 @Controller('marketing/segments')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingSegmentsController {
   constructor(private readonly svc: SegmentsService) {}
 
@@ -35,6 +37,7 @@ export class MarketingSegmentsController {
 
   @Post()
   @Audit({ action: 'segment.create', resourceType: 'segment' })
+  @RequirePermission('contacts.write')
   create(
     @Body() dto: CreateSegmentDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -43,6 +46,7 @@ export class MarketingSegmentsController {
   }
 
   @Post('preview')
+  @RequirePermission('contacts.write')
   preview(
     @Body() dto: PreviewSegmentDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -66,6 +70,7 @@ export class MarketingSegmentsController {
   }
 
   @Post(':id/count')
+  @RequirePermission('contacts.write')
   count(
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -75,6 +80,7 @@ export class MarketingSegmentsController {
 
   @Patch(':id')
   @Audit({ action: 'segment.update', resourceType: 'segment', resourceIdParam: 'id' })
+  @RequirePermission('contacts.write')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateSegmentDto,
@@ -85,6 +91,7 @@ export class MarketingSegmentsController {
 
   @Delete(':id')
   @Audit({ action: 'segment.delete', resourceType: 'segment', resourceIdParam: 'id' })
+  @RequirePermission('contacts.write')
   remove(
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,

@@ -23,6 +23,8 @@ import {
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import {
   MarketingPublic,
@@ -96,7 +98,7 @@ class UpdateSsoDto {
  */
 @MarketingRoute()
 @Controller('marketing/integrations/sso')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 // 'MANAGER' is the floor: the hierarchical guard admits MANAGER and OWNER,
 // and rejects REP (co-listing OWNER would raise the bar to OWNER-only).
 @MarketingRoles('MANAGER')
@@ -115,6 +117,7 @@ export class SsoAdminController {
 
   @Post()
   @Audit({ action: 'sso.create', resourceType: 'sso-connection' })
+  @RequirePermission('settings.manage')
   create(
     @Body() dto: CreateSsoDto,
     @CurrentMarketingUser() u: MarketingUserPayload,
@@ -124,6 +127,7 @@ export class SsoAdminController {
 
   @Patch(':id')
   @Audit({ action: 'sso.update', resourceType: 'sso-connection', resourceIdParam: 'id' })
+  @RequirePermission('settings.manage')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateSsoDto,
@@ -134,6 +138,7 @@ export class SsoAdminController {
 
   @Delete(':id')
   @Audit({ action: 'sso.delete', resourceType: 'sso-connection', resourceIdParam: 'id' })
+  @RequirePermission('settings.manage')
   remove(
     @Param('id') id: string,
     @CurrentMarketingUser() u: MarketingUserPayload,

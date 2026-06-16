@@ -16,6 +16,8 @@ import { Throttle } from '@nestjs/throttler';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import {
   MarketingPublic,
@@ -43,7 +45,7 @@ class ConnectQueryDto {
  */
 @MarketingRoute()
 @Controller('marketing/integrations/google-calendar')
-@UseGuards(MarketingGuard, MarketingRolesGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 // 'MANAGER' is the floor — the hierarchical guard admits MANAGER and OWNER and
 // rejects REP (co-listing OWNER would raise the bar to OWNER-only).
 @MarketingRoles('MANAGER')
@@ -81,12 +83,14 @@ export class GoogleCalendarController {
   /** Manually trigger an incremental pull for the workspace (admin button). */
   @Post('sync')
   @Audit({ action: 'google-calendar.sync', resourceType: 'google-calendar-connection' })
+  @RequirePermission('settings.manage')
   syncNow(@CurrentMarketingUser() u: MarketingUserPayload) {
     return this.sync.pullWorkspace(u.workspaceId);
   }
 
   @Delete(':id')
   @Audit({ action: 'google-calendar.disconnect', resourceType: 'google-calendar-connection', resourceIdParam: 'id' })
+  @RequirePermission('settings.manage')
   disconnect(
     @Param('id') id: string,
     @CurrentMarketingUser() u: MarketingUserPayload,

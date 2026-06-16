@@ -20,6 +20,8 @@ import {
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
+import { PermissionsGuard } from '../roles/permissions.guard';
+import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
@@ -93,7 +95,7 @@ class ConvertReferralDto {
 
 @RequiresFeature('commissions')
 @Controller('marketing/affiliates')
-@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard)
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoute()
 export class AffiliateController {
   constructor(private readonly affiliateService: AffiliateService) {}
@@ -103,6 +105,7 @@ export class AffiliateController {
   @Post()
   @MarketingRoles('MANAGER')
   @Audit({ action: 'affiliate.create', resourceType: 'affiliate' })
+  @RequirePermission('settings.manage')
   create(
     @Body() dto: CreateAffiliateDto,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -142,6 +145,7 @@ export class AffiliateController {
     resourceType: 'affiliateCommission',
     resourceIdParam: 'commissionId',
   })
+  @RequirePermission('settings.manage')
   approveCommission(
     @Param('commissionId') commissionId: string,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -156,6 +160,7 @@ export class AffiliateController {
     resourceType: 'affiliateCommission',
     resourceIdParam: 'commissionId',
   })
+  @RequirePermission('settings.manage')
   payCommission(
     @Param('commissionId') commissionId: string,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -172,6 +177,7 @@ export class AffiliateController {
     resourceType: 'affiliateReferral',
     resourceIdParam: 'referralId',
   })
+  @RequirePermission('settings.manage')
   convertReferral(
     @Param('referralId') referralId: string,
     @Body() dto: ConvertReferralDto,
@@ -201,6 +207,7 @@ export class AffiliateController {
     resourceType: 'affiliate',
     resourceIdParam: 'id',
   })
+  @RequirePermission('settings.manage')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateAffiliateDto,
@@ -216,6 +223,7 @@ export class AffiliateController {
     resourceType: 'affiliate',
     resourceIdParam: 'id',
   })
+  @RequirePermission('settings.manage')
   remove(
     @Param('id') id: string,
     @CurrentMarketingUser() user: MarketingUserPayload,
@@ -232,6 +240,7 @@ export class AffiliateController {
     resourceType: 'affiliate',
     resourceIdParam: 'id',
   })
+  @RequirePermission('settings.manage')
   async recordReferral(
     @Param('id') id: string,
     @Body() dto: RecordReferralDto,
