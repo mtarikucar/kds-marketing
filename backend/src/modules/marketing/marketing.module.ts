@@ -13,6 +13,9 @@ import {
   MarketingTagsController,
   MarketingSegmentsController,
   MarketingImportsController,
+  MarketingApiKeysController,
+  MarketingWebhooksController,
+  PublicApiV1Controller,
   MarketingOffersController,
   MarketingDashboardController,
   MarketingReportsController,
@@ -35,6 +38,8 @@ import {
   SegmentsService,
   LeadDedupeService,
   ImportService,
+  ApiKeysService,
+  WebhookOutboundService,
   MarketingOffersService,
   MarketingDashboardService,
   MarketingReportsService,
@@ -98,6 +103,7 @@ import { WebchatPublicController } from './controllers/webchat-public.controller
 import { MetaWebhookController } from './controllers/meta-webhook.controller';
 import { NetgsmPublicController } from './controllers/netgsm-public.controller';
 import { SseTokenGuard } from './guards/sse-token.guard';
+import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
 import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
@@ -208,6 +214,9 @@ import { BrandingService } from './branding/branding.service';
     MarketingTagsController,
     MarketingSegmentsController,
     MarketingImportsController,
+    MarketingApiKeysController,
+    MarketingWebhooksController,
+    PublicApiV1Controller,
     MarketingOffersController,
     MarketingDashboardController,
     MarketingReportsController,
@@ -254,6 +263,8 @@ import { BrandingService } from './branding/branding.service';
     SegmentsService,
     LeadDedupeService,
     ImportService,
+    ApiKeysService,
+    WebhookOutboundService,
     MarketingOffersService,
     MarketingDashboardService,
     MarketingReportsService,
@@ -353,6 +364,7 @@ import { BrandingService } from './branding/branding.service';
     MarketingRolesGuard,
     IngestTokenGuard,
     FeatureGuard,
+    ApiKeyGuard,
   ],
   exports: [
     MarketingAuthService,
