@@ -184,6 +184,9 @@ import { PublicFunnelsController } from './funnels/public-funnels.controller';
 // Epic F — 2FA/MFA (TOTP).
 import { TwoFactorController } from './controllers/two-factor.controller';
 import { TwoFactorService } from './services/two-factor.service';
+// Epic B4 — Slack incoming-webhook notifications.
+import { SlackController } from './integrations/slack.controller';
+import { SlackService } from './integrations/slack.service';
 
 @Module({
   imports: [
@@ -282,6 +285,7 @@ import { TwoFactorService } from './services/two-factor.service';
     SurveysController,
     PublicFunnelsController,
     TwoFactorController,
+    SlackController,
   ],
   providers: [
     // Services
@@ -404,6 +408,8 @@ import { TwoFactorService } from './services/two-factor.service';
     SurveysService,
     // Epic F — 2FA.
     TwoFactorService,
+    // Epic B4 — Slack notify.
+    SlackService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
