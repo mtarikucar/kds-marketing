@@ -130,6 +130,16 @@ jobs:
           # Anthropic billing key. OPTIONAL: if unset, all AI features stay
           # dormant (graceful no-op) — never fails the deploy.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # GHL-parity env-gated integrations. ALL OPTIONAL — unset = that
+          # integration stays inert (never fails the deploy). Set the GitHub
+          # secret to activate. See docs/ops/ghl-parity-setup.md.
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
+          LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
+          STRIPE_CONNECT_CLIENT_ID: ${{ secrets.STRIPE_CONNECT_CLIENT_ID }}
           BANK_IBAN: ${{ secrets.BANK_IBAN }}
           BANK_ACCOUNT_NAME: ${{ secrets.BANK_ACCOUNT_NAME }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
@@ -169,6 +179,15 @@ jobs:
           ROUTINE_TOKEN=${ROUTINE_TOKEN}
           MARKETING_SECRET_KEY=${MARKETING_SECRET_KEY}
           ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+          # GHL-parity integrations (optional; empty = inert).
+          GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
+          GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
+          META_APP_ID=${META_APP_ID}
+          META_APP_SECRET=${META_APP_SECRET}
+          LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
+          LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
+          STRIPE_CONNECT_CLIENT_ID=${STRIPE_CONNECT_CLIENT_ID}
+          MARKETING_PUBLIC_URL=https://marketing.hummytummy.com
           CORE_SERVICE_URL=http://host.docker.internal:3000
           CORS_ORIGIN=https://marketing.hummytummy.com
           FRONTEND_URL=https://marketing.hummytummy.com
