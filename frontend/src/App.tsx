@@ -31,6 +31,9 @@ const BillingPage              = lazy(() => import('./pages/marketing/billing'))
 // Manager-only pages
 const MarketingUsersPage       = lazy(() => import('./pages/marketing/users'));
 const TargetsPage              = lazy(() => import('./pages/marketing/targets'));
+const CustomFieldsPage         = lazy(() => import('./pages/marketing/crm/customFields'));
+const TagsPage                 = lazy(() => import('./pages/marketing/crm/tags'));
+const SegmentsPage             = lazy(() => import('./pages/marketing/crm/segments'));
 const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
 const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
@@ -113,6 +116,9 @@ export default function App() {
           <Route element={<MarketingLayout />}>
             <Route path="/users"       element={<S><MarketingUsersPage /></S>} />
             <Route path="/targets"     element={<S><TargetsPage /></S>} />
+            <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
+            <Route path="/settings/tags"          element={<S><TagsPage /></S>} />
+            <Route path="/settings/segments"      element={<S><SegmentsPage /></S>} />
             <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />

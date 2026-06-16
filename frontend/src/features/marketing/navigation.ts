@@ -25,6 +25,9 @@ import {
   Mic,
   Banknote,
   Palette,
+  SlidersHorizontal,
+  Tag,
+  Filter,
 } from 'lucide-react';
 
 /**
@@ -133,6 +136,10 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
+      // CRM config (Epic A) — core CRM, no entitlement, manager-only.
+      { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
+      { path: '/settings/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
+      { path: '/settings/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
       { path: '/branding', labelKey: 'nav.branding', label: 'Branding', icon: Palette, managerOnly: true },
       { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
