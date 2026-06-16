@@ -3,14 +3,20 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import MarketingSidebar from './MarketingSidebar';
 import MarketingHeader from './MarketingHeader';
+import HubSubNav from './HubSubNav';
+import SettingsLayout from './SettingsLayout';
 import AskAiPanel from './AskAiPanel';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { IconButton } from '@/components/ui/IconButton';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
+import { NAV_HUBS, findActiveHub } from '../navigation';
 
 export default function MarketingLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+
+  // Area detection is structural (no gating needed) — the active hub's `area`.
+  const isSettings = findActiveHub(NAV_HUBS, location.pathname)?.area === 'settings';
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -23,7 +29,6 @@ export default function MarketingLayout() {
       <div className="lg:hidden">
         <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
           <SheetContent side="left" hideClose className="w-64 max-w-[85vw] p-0">
-            {/* Accessible name + description for the dialog (sidebar brand is decorative). */}
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <SheetDescription className="sr-only">Main navigation menu</SheetDescription>
             <MarketingSidebar onNavigate={() => setSidebarOpen(false)} />
@@ -32,20 +37,29 @@ export default function MarketingLayout() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+      <div className="flex min-w-0 min-h-0 flex-1 flex-col">
         {/* Mobile top bar */}
-        <div className="flex items-center lg:hidden px-4 py-3 bg-surface border-b border-border">
-          <IconButton
-            aria-label="Open menu"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Menu className="w-5 h-5" />
+        <div className="flex items-center border-b border-border bg-surface px-4 py-3 lg:hidden">
+          <IconButton aria-label="Open menu" onClick={() => setSidebarOpen(true)}>
+            <Menu className="h-5 w-5" />
           </IconButton>
         </div>
         <MarketingHeader />
-        <main className="flex-1 min-h-0 p-4 lg:p-6 overflow-y-auto bg-background">
+        {/* Hub sub-nav (sibling pages of the active hub) — not in the Settings area. */}
+        {!isSettings && <HubSubNav />}
+        <main className="min-h-0 flex-1 overflow-hidden bg-background">
           <ErrorBoundary key={location.pathname}>
-            <Outlet />
+            {isSettings ? (
+              <SettingsLayout>
+                <div className="p-4 lg:p-6">
+                  <Outlet />
+                </div>
+              </SettingsLayout>
+            ) : (
+              <div className="h-full overflow-y-auto p-4 lg:p-6">
+                <Outlet />
+              </div>
+            )}
           </ErrorBoundary>
         </main>
       </div>
