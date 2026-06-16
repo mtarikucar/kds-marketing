@@ -16,8 +16,8 @@ export default function PageHeader({ title, subtitle, action }: PageHeaderProps)
   return (
     <div className="flex items-start justify-between gap-3 flex-wrap">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
-        {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
+        <h1 className="text-2xl font-bold text-foreground">{title}</h1>
+        {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
       </div>
       {action}
     </div>

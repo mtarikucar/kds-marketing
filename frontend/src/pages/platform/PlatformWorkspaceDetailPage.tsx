@@ -1,7 +1,39 @@
 import { useQuery } from '@tanstack/react-query';
-import { useParams, Navigate, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { usePlatformAuthStore } from '../../store/platformAuthStore';
 import platformApi from '../../features/platform/api/platformApi';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { StatCard } from '@/components/ui/StatCard';
+import { Badge, type BadgeProps } from '@/components/ui/Badge';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import type { BreadcrumbItem } from '@/components/ui/Breadcrumbs';
+
+/** SPA-nav render helper for breadcrumbs — avoids full page reload. */
+function renderBreadcrumbLink(item: BreadcrumbItem, _children: React.ReactNode) {
+  return (
+    <Link to={item.href!} className="text-muted-foreground hover:text-foreground transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded">
+      {item.label}
+    </Link>
+  );
+}
+
+const STATUS_TONE: Record<string, NonNullable<BadgeProps['tone']>> = {
+  ACTIVE: 'success',
+  SUSPENDED: 'warning',
+  CLOSED: 'neutral',
+};
+
+function DefRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex justify-between gap-4 py-1">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="text-end text-foreground">{value}</dd>
+    </div>
+  );
+}
 
 export default function PlatformWorkspaceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -10,81 +42,121 @@ export default function PlatformWorkspaceDetailPage() {
   const { data: ws, isLoading } = useQuery({
     queryKey: ['platform', 'workspace', id],
     queryFn: () => platformApi.get(`/workspaces/${id}`).then((r) => r.data),
-    // Gate on auth too (guard now sits below) so no fetch fires pre-redirect.
+    // Gate on auth too (guard sits in the layout) so no fetch fires pre-redirect.
     enabled: isAuthenticated && !!id,
   });
 
-  // Guard AFTER all hooks (Rules of Hooks).
-  if (!isAuthenticated) {
-    return <Navigate to="/platform/login" replace />;
-  }
+  const breadcrumbs = [
+    { label: 'Workspaces', href: '/platform/workspaces' },
+    { label: ws?.name ?? 'Workspace' },
+  ];
 
   if (isLoading) {
-    return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-400">Loading…</div>;
-  }
-  if (!ws) {
-    return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-400">Not found</div>;
+    return (
+      <div className="space-y-5">
+        <Skeleton className="h-8 w-64" />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 w-full rounded-xl" />
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full rounded-xl" />
+      </div>
+    );
   }
 
-  const stat = (label: string, value: React.ReactNode) => (
-    <div className="bg-white border border-slate-200 rounded-xl p-4">
-      <div className="text-xs text-slate-400 uppercase tracking-wide">{label}</div>
-      <div className="text-xl font-bold text-slate-900 mt-1">{value}</div>
-    </div>
-  );
+  if (!ws) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Workspace" breadcrumbs={breadcrumbs} renderBreadcrumbLink={renderBreadcrumbLink} />
+        <EmptyState title="Not found" description="This workspace does not exist or is no longer available." />
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-slate-900 text-white">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
-          <Link to="/platform/workspaces" className="text-slate-300 hover:text-white text-sm">← Workspaces</Link>
-          <h1 className="font-semibold">{ws.name}</h1>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-white/10">{ws.status}</span>
-        </div>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        title={ws.name}
+        breadcrumbs={breadcrumbs}
+        renderBreadcrumbLink={renderBreadcrumbLink}
+        actions={
+          <Badge tone={STATUS_TONE[ws.status] ?? 'neutral'}>{ws.status}</Badge>
+        }
+      />
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {stat('Users', ws.counts.users)}
-          {stat('Leads', ws.counts.leads)}
-          {stat('Open leads', ws.counts.openLeads)}
-          {stat('Won leads', ws.counts.wonLeads)}
-        </div>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard label="Users" value={String(ws.counts.users)} />
+        <StatCard label="Leads" value={String(ws.counts.leads)} />
+        <StatCard label="Open leads" value={String(ws.counts.openLeads)} />
+        <StatCard label="Won leads" value={String(ws.counts.wonLeads)} tone="success" />
+      </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-            <h2 className="font-semibold text-slate-900">Workspace</h2>
-            <dl className="text-sm space-y-2">
-              <div className="flex justify-between"><dt className="text-slate-500">Slug</dt><dd className="text-slate-900 font-mono">{ws.slug}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">Product</dt><dd className="text-slate-900">{ws.productName}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">URL</dt><dd className="text-slate-900">{ws.productUrl ?? '—'}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">Language / Currency</dt><dd className="text-slate-900">{ws.defaultLanguage} / {ws.defaultCurrency}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">Core integration</dt><dd className="text-slate-900">{ws.coreIntegration ? 'Yes' : 'No'}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">Created</dt><dd className="text-slate-900">{new Date(ws.createdAt).toLocaleDateString()}</dd></div>
-            </dl>
-          </div>
+      <Tabs defaultValue="workspace">
+        <TabsList>
+          <TabsTrigger value="workspace">Workspace</TabsTrigger>
+          <TabsTrigger value="owner">Owner</TabsTrigger>
+          {ws.productDescription && <TabsTrigger value="product">Product</TabsTrigger>}
+        </TabsList>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-            <h2 className="font-semibold text-slate-900">Owner</h2>
-            {ws.owner ? (
-              <dl className="text-sm space-y-2">
-                <div className="flex justify-between"><dt className="text-slate-500">Name</dt><dd className="text-slate-900">{ws.owner.firstName} {ws.owner.lastName}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-500">Email</dt><dd className="text-slate-900">{ws.owner.email}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-500">Last login</dt><dd className="text-slate-900">{ws.owner.lastLogin ? new Date(ws.owner.lastLogin).toLocaleString() : '—'}</dd></div>
+        <TabsContent value="workspace">
+          <Card>
+            <CardHeader>
+              <CardTitle>Workspace details</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="text-sm">
+                <DefRow label="Slug" value={<span className="font-mono">{ws.slug}</span>} />
+                <DefRow label="Product" value={ws.productName} />
+                <DefRow label="URL" value={ws.productUrl ?? '—'} />
+                <DefRow
+                  label="Language / Currency"
+                  value={`${ws.defaultLanguage} / ${ws.defaultCurrency}`}
+                />
+                <DefRow label="Core integration" value={ws.coreIntegration ? 'Yes' : 'No'} />
+                <DefRow label="Created" value={new Date(ws.createdAt).toLocaleDateString()} />
               </dl>
-            ) : (
-              <p className="text-sm text-slate-400">No owner account</p>
-            )}
-          </div>
-        </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="owner">
+          <Card>
+            <CardHeader>
+              <CardTitle>Owner</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {ws.owner ? (
+                <dl className="text-sm">
+                  <DefRow label="Name" value={`${ws.owner.firstName} ${ws.owner.lastName}`} />
+                  <DefRow label="Email" value={ws.owner.email} />
+                  <DefRow
+                    label="Last login"
+                    value={ws.owner.lastLogin ? new Date(ws.owner.lastLogin).toLocaleString() : '—'}
+                  />
+                </dl>
+              ) : (
+                <p className="text-sm text-muted-foreground">No owner account</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {ws.productDescription && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
-            <h2 className="font-semibold text-slate-900 mb-2">Product description</h2>
-            <p className="text-sm text-slate-600 whitespace-pre-wrap">{ws.productDescription}</p>
-          </div>
+          <TabsContent value="product">
+            <Card>
+              <CardHeader>
+                <CardTitle>Product description</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+                  {ws.productDescription}
+                </p>
+              </CardContent>
+            </Card>
+          </TabsContent>
         )}
-      </main>
+      </Tabs>
     </div>
   );
 }

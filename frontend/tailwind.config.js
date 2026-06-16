@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -13,38 +14,60 @@ export default {
       },
     },
     extend: {
+      // Console type scale (additive — Tailwind's default text-* sizes remain).
+      // Without this block these utilities emit NO CSS; the headings/labels
+      // across the ui library depend on them.
+      fontSize: {
+        micro: ['0.75rem', { lineHeight: '1rem', letterSpacing: '0.04em' }],
+        caption: ['0.8125rem', { lineHeight: '1.125rem' }],
+        'body-lg': ['1.0625rem', { lineHeight: '1.6rem' }],
+        h3: ['1.125rem', { lineHeight: '1.5rem', fontWeight: '600' }],
+        h2: ['1.375rem', { lineHeight: '1.75rem', fontWeight: '650' }],
+        h1: ['1.75rem', { lineHeight: '2.1rem', fontWeight: '700' }],
+        display: ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.02em', fontWeight: '700' }],
+      },
       colors: {
-        // Semantic colors using CSS variables
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
+        // Semantic colors using CSS variables (now hex, no hsl() wrapper).
+        border: {
+          DEFAULT: "var(--border)",
+          strong: "var(--border-strong)",
+        },
+        input: "var(--input)",
+        ring: "var(--ring)",
+        background: "var(--background)",
+        foreground: "var(--foreground)",
 
-        // Primary — corporate deep blue (was the legacy orange). The ramp is
-        // anchored so 500 = main brand (#1d4ed8) and 600 = hover (#1e40af);
-        // the DEFAULT/hover CSS vars in index.css carry the same two values.
+        // Surfaces (Console layering)
+        surface: {
+          DEFAULT: "var(--surface)",
+          muted: "var(--surface-muted)",
+          raised: "var(--surface-raised)",
+        },
+
+        // Primary — Console iris. DEFAULT/hover CSS vars carry the active brand
+        // values; the numeric ramp is the iris scale used by existing pages
+        // (from-primary-*, ring-primary-*, border-primary-*).
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-          hover: "hsl(var(--primary-hover))",
-          50: '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#3b82f6',
-          500: '#1d4ed8',  // Main brand color
-          600: '#1e40af',  // Hover state
-          700: '#1e3a8a',
-          800: '#172554',
-          900: '#101c40',
-          950: '#0a1228',
+          DEFAULT: "var(--primary)",
+          foreground: "var(--primary-foreground)",
+          hover: "var(--primary-hover)",
+          50: '#eef2ff',
+          100: '#e0e7ff',
+          200: '#c7d2fe',
+          300: '#a5b4fc',
+          400: '#818cf8',
+          500: '#6366f1',
+          600: '#4f46e5',
+          700: '#4338ca',
+          800: '#3730a3',
+          900: '#312e81',
+          950: '#1e1b4b',
         },
 
         // Secondary
         secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: "var(--secondary)",
+          foreground: "var(--secondary-foreground)",
         },
 
         // Slate - Neutral palette (Modern SaaS style)
@@ -64,14 +87,29 @@ export default {
 
         // Destructive
         destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
+          DEFAULT: "var(--destructive)",
+          foreground: "var(--destructive-foreground)",
+        },
+
+        // Danger (Console alias for destructive, with subtle surface)
+        danger: {
+          DEFAULT: "var(--danger)",
+          subtle: "var(--danger-subtle)",
+          foreground: "var(--danger-foreground)",
+        },
+
+        // Info
+        info: {
+          DEFAULT: "var(--info)",
+          subtle: "var(--info-subtle)",
+          foreground: "var(--info-foreground)",
         },
 
         // Success
         success: {
-          DEFAULT: "hsl(var(--success))",
-          foreground: "hsl(var(--success-foreground))",
+          DEFAULT: "var(--success)",
+          subtle: "var(--success-subtle)",
+          foreground: "var(--success-foreground)",
           50: '#f0fdf4',
           100: '#dcfce7',
           200: '#bbf7d0',
@@ -86,8 +124,9 @@ export default {
 
         // Warning
         warning: {
-          DEFAULT: "hsl(var(--warning))",
-          foreground: "hsl(var(--warning-foreground))",
+          DEFAULT: "var(--warning)",
+          subtle: "var(--warning-subtle)",
+          foreground: "var(--warning-foreground)",
           50: '#fefce8',
           100: '#fef9c3',
           200: '#fef08a',
@@ -102,26 +141,38 @@ export default {
 
         // Muted
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: "var(--muted)",
+          foreground: "var(--muted-foreground)",
         },
 
         // Accent
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: "var(--accent)",
+          foreground: "var(--accent-foreground)",
         },
 
         // Popover
         popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
+          DEFAULT: "var(--popover)",
+          foreground: "var(--popover-foreground)",
         },
 
         // Card
         card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
+          DEFAULT: "var(--card)",
+          foreground: "var(--card-foreground)",
+        },
+
+        // Chart palette
+        chart: {
+          1: 'var(--chart-1)',
+          2: 'var(--chart-2)',
+          3: 'var(--chart-3)',
+          4: 'var(--chart-4)',
+          5: 'var(--chart-5)',
+          6: 'var(--chart-6)',
+          7: 'var(--chart-7)',
+          8: 'var(--chart-8)',
         },
       },
 
@@ -149,6 +200,7 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         heading: ['Outfit', 'system-ui', 'sans-serif'],
+        display: ['Outfit', 'Inter', 'system-ui', 'sans-serif'],
       },
 
       // Spacing scale for consistent whitespace
@@ -221,8 +273,16 @@ export default {
 
       // Transition timing
       transitionDuration: {
+        fast: '120ms',
+        base: '180ms',
+        slow: '240ms',
         '250': '250ms',
         '350': '350ms',
+      },
+
+      // Motion easing token (Console standard curve)
+      transitionTimingFunction: {
+        standard: 'cubic-bezier(.2,.8,.2,1)',
       },
 
       // Z-index scale

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { PhoneIcon } from '@heroicons/react/24/outline';
+import { Phone } from 'lucide-react';
 import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import type { SalesCall, StartCallResult } from '../types';
@@ -66,7 +66,7 @@ export default function ClickToDialButton({
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           placeholder="+90 5xx xxx xx xx"
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm flex-1 min-w-0 sm:flex-none sm:w-44"
+          className="px-3 py-2 border border-input rounded-lg text-sm flex-1 min-w-0 sm:flex-none sm:w-44 bg-background text-foreground"
         />
         <button
           onClick={() => {
@@ -74,22 +74,22 @@ export default function ClickToDialButton({
             start.mutate();
           }}
           disabled={start.isPending}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
         >
-          <PhoneIcon className="w-4 h-4" />
+          <Phone className="w-4 h-4" />
           {start.isPending ? 'Starting…' : 'Call'}
         </button>
       </div>
 
       {activeCall && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setActiveCall(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold text-gray-900">Log call outcome</h2>
-            <p className="text-sm text-gray-500">Dialing {activeCall.toPhone}</p>
+          <div className="bg-background rounded-xl shadow-xl w-full max-w-sm p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-foreground">Log call outcome</h2>
+            <p className="text-sm text-muted-foreground">Dialing {activeCall.toPhone}</p>
             <select
               value={logForm.status}
               onChange={(e) => setLogForm({ ...logForm, status: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+              className="w-full px-3 py-2 border border-input rounded-lg text-sm bg-background text-foreground"
             >
               {CALL_OUTCOMES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -100,21 +100,21 @@ export default function ClickToDialButton({
                 placeholder="Duration (seconds)"
                 value={logForm.durationSec}
                 onChange={(e) => setLogForm({ ...logForm, durationSec: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                className="w-full px-3 py-2 border border-input rounded-lg text-sm bg-background text-foreground"
               />
             )}
             <textarea
               placeholder="Notes"
               value={logForm.notes}
               onChange={(e) => setLogForm({ ...logForm, notes: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none"
+              className="w-full px-3 py-2 border border-input rounded-lg text-sm resize-none bg-background text-foreground"
               rows={3}
             />
             <div className="flex gap-2">
-              <button onClick={() => log.mutate()} disabled={log.isPending} className="flex-1 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">
+              <button onClick={() => log.mutate()} disabled={log.isPending} className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50">
                 {log.isPending ? 'Saving…' : 'Save outcome'}
               </button>
-              <button onClick={() => setActiveCall(null)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-600">Close</button>
+              <button onClick={() => setActiveCall(null)} className="px-4 py-2 border border-input rounded-lg text-sm text-muted-foreground hover:text-foreground">Close</button>
             </div>
           </div>
         </div>

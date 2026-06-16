@@ -1,0 +1,350 @@
+/**
+ * InvoicesPage — Console migration (Phase 4, Task 4).
+ * Requires `invoicing` entitlement (gating enforced by the route layer).
+ *
+ * Preserved verbatim:
+ *   - useQuery(['marketing','invoices'], { refetchInterval: 20_000 })
+ *   - useQuery(['marketing','invoices','psp'])
+ *   - create mutation  → POST /invoices  { currency, notes?, items[{description,qty,unitPrice}] }
+ *   - send mutation    → POST /invoices/:id/send  (copies payUrl to clipboard)
+ *   - markPaid mut.    → POST /invoices/:id/mark-paid
+ *   - voidInv mut.     → POST /invoices/:id/void
+ *   - savePsp mut.     → PUT  /invoices/psp  { provider, secrets?, configPublic? }
+ *   - invalidate pattern: ['marketing','invoices']
+ *   - financial item total display: inv.total / 100  (stored in cents, display in major unit)
+ *   - unitPrice conversion: Math.round((Number(price) || 0) * 100) — in InvoiceForm
+ *
+ * Presentation upgrade:
+ *   - PageHeader + "New invoice" action button
+ *   - Card for PSP settings (provider Select + key/instructions Input)
+ *   - InvoiceForm (extracted sub-component) for create flow
+ *   - Table + status Badge for invoice list
+ *   - ConfirmDialog for void (destructive)
+ *   - EmptyState when no invoices
+ *   - Tokens everywhere; dark-mode-safe; lucide icons
+ */
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
+import { FileText, Clipboard, CheckCircle, Trash2, Plus } from 'lucide-react';
+import marketingApi from '@/features/marketing/api/marketingApi';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
+import { Input } from '@/components/ui/Input';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/Select';
+import { InvoiceForm } from './InvoiceForm';
+
+interface InvoiceRow {
+  id: string;
+  number: string;
+  total: number;
+  currency: string;
+  status: string;
+  createdAt: string;
+}
+
+function invoiceStatusTone(
+  status: string,
+): 'success' | 'info' | 'neutral' | 'warning' {
+  if (status === 'PAID') return 'success';
+  if (status === 'SENT') return 'info';
+  if (status === 'VOID') return 'neutral';
+  return 'warning';
+}
+
+export default function InvoicesPage() {
+  const { t } = useTranslation('marketing');
+  const queryClient = useQueryClient();
+
+  const [showForm, setShowForm] = useState(false);
+  const [psp, setPsp] = useState({ provider: 'MANUAL', secretKey: '', instructions: '' });
+  const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
+
+  // ── Queries ────────────────────────────────────────────────────────────────
+  const { data: invoices } = useQuery<InvoiceRow[]>({
+    queryKey: ['marketing', 'invoices'],
+    queryFn: () => marketingApi.get('/invoices').then((r) => r.data),
+    refetchInterval: 20_000,
+  });
+  const { data: pspCfg } = useQuery({
+    queryKey: ['marketing', 'invoices', 'psp'],
+    queryFn: () => marketingApi.get('/invoices/psp').then((r) => r.data),
+  });
+
+  // ── Invalidation ──────────────────────────────────────────────────────────
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'invoices'] });
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+  const create = useMutation({
+    mutationFn: (payload: {
+      currency: string;
+      notes?: string;
+      items: { description: string; qty: number; unitPrice: number }[];
+    }) => marketingApi.post('/invoices', payload),
+    onSuccess: () => {
+      invalidate();
+      setShowForm(false);
+      toast.success(t('invoices.created', 'Invoice created'));
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('invoices.saveFailed', 'Save failed')),
+  });
+
+  const send = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/send`),
+    onSuccess: ({ data }) => {
+      invalidate();
+      navigator.clipboard.writeText(data.payUrl);
+      toast.success(t('invoices.sent', 'Sent — pay link copied'));
+    },
+  });
+
+  const markPaid = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/mark-paid`),
+    onSuccess: invalidate,
+  });
+
+  const voidInv = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/void`),
+    onSuccess: () => {
+      invalidate();
+      setVoidTarget(null);
+    },
+  });
+
+  const savePsp = useMutation({
+    mutationFn: () =>
+      marketingApi.put('/invoices/psp', {
+        provider: psp.provider,
+        secrets:
+          psp.provider === 'STRIPE' && psp.secretKey ? { secretKey: psp.secretKey } : undefined,
+        configPublic:
+          psp.provider === 'MANUAL' && psp.instructions
+            ? { instructions: psp.instructions }
+            : undefined,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'invoices', 'psp'] });
+      setPsp((p) => ({ ...p, secretKey: '' }));
+      toast.success(t('invoices.pspSaved', 'Payment settings saved'));
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title={t('invoices.title', 'Invoices')}
+        description={t(
+          'invoices.subtitle',
+          'Bill your customers and collect via your own Stripe or bank transfer.',
+        )}
+        actions={
+          !showForm && (
+            <Button onClick={() => setShowForm(true)}>
+              <Plus className="h-4 w-4" aria-hidden />
+              {t('invoices.new', 'New invoice')}
+            </Button>
+          )
+        }
+      />
+
+      {/* PSP settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('invoices.payments', 'How you get paid')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-end gap-3">
+            {/* Provider */}
+            <div className="w-52">
+              <p className="mb-1 text-xs font-medium text-muted-foreground">
+                {t('invoices.provider', 'Provider')}
+              </p>
+              <Select
+                value={psp.provider}
+                onValueChange={(v) => setPsp((p) => ({ ...p, provider: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MANUAL">
+                    {t('invoices.manual', 'Bank transfer (manual)')}
+                  </SelectItem>
+                  <SelectItem value="STRIPE">Stripe</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Stripe secret key / manual instructions */}
+            {psp.provider === 'STRIPE' ? (
+              <div className="flex-1 min-w-48">
+                <p className="mb-1 text-xs font-medium text-muted-foreground">
+                  {t('invoices.stripeKey', 'Your Stripe secret key')}{' '}
+                  {pspCfg?.configuredSecrets?.includes('secretKey') && (
+                    <span className="text-success">✓ set</span>
+                  )}
+                </p>
+                <Input
+                  type="password"
+                  value={psp.secretKey}
+                  onChange={(e) => setPsp((p) => ({ ...p, secretKey: e.target.value }))}
+                  placeholder="sk_live_…"
+                  autoComplete="off"
+                />
+              </div>
+            ) : (
+              <div className="flex-1 min-w-48">
+                <p className="mb-1 text-xs font-medium text-muted-foreground">
+                  {t('invoices.instructions', 'Payment instructions (shown to payer)')}
+                </p>
+                <Input
+                  value={psp.instructions}
+                  onChange={(e) => setPsp((p) => ({ ...p, instructions: e.target.value }))}
+                  placeholder="IBAN TR.. — Acme Ltd"
+                />
+              </div>
+            )}
+
+            <Button
+              variant="secondary"
+              loading={savePsp.isPending}
+              onClick={() => savePsp.mutate()}
+            >
+              {t('common.save', 'Save')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* New invoice form */}
+      {showForm && (
+        <InvoiceForm
+          isPending={create.isPending}
+          onSubmit={(payload) => create.mutate(payload)}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {/* Invoice list */}
+      {(invoices?.length ?? 0) === 0 && !showForm ? (
+        <EmptyState
+          icon={<FileText className="h-8 w-8" />}
+          title={t('invoices.empty', 'No invoices yet.')}
+          description={t(
+            'invoices.emptyHint',
+            'Create your first invoice to start billing customers.',
+          )}
+          action={
+            <Button onClick={() => setShowForm(true)}>
+              <Plus className="h-4 w-4" aria-hidden />
+              {t('invoices.new', 'New invoice')}
+            </Button>
+          }
+        />
+      ) : (invoices?.length ?? 0) > 0 ? (
+        <Card>
+          <div className="overflow-x-auto">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>{t('invoices.number', 'Invoice #')}</TH>
+                  <TH>{t('invoices.status', 'Status')}</TH>
+                  <TH numeric>{t('invoices.total', 'Total')}</TH>
+                  <TH className="hidden sm:table-cell">
+                    {t('invoices.date', 'Date')}
+                  </TH>
+                  <TH className="w-28 text-end">{t('invoices.actions', 'Actions')}</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {(invoices ?? []).map((inv) => (
+                  <TR key={inv.id}>
+                    <TD className="font-medium text-foreground">
+                      <span className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-primary shrink-0" aria-hidden />
+                        {inv.number}
+                      </span>
+                    </TD>
+                    <TD>
+                      <Badge tone={invoiceStatusTone(inv.status)} size="sm">
+                        {inv.status}
+                      </Badge>
+                    </TD>
+                    <TD numeric className="text-foreground">
+                      {/* inv.total is stored in cents — display in major unit */}
+                      {(inv.total / 100).toLocaleString()} {inv.currency}
+                    </TD>
+                    <TD className="hidden sm:table-cell text-xs text-muted-foreground">
+                      {new Date(inv.createdAt).toLocaleDateString()}
+                    </TD>
+                    <TD>
+                      {inv.status !== 'PAID' && inv.status !== 'VOID' && (
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => send.mutate(inv.id)}
+                            title={t('invoices.send', 'Send / copy pay link')}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <Clipboard className="h-4 w-4" aria-hidden />
+                          </button>
+                          <button
+                            onClick={() => markPaid.mutate(inv.id)}
+                            title={t('invoices.markPaid', 'Mark paid')}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-success hover:bg-success-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <CheckCircle className="h-4 w-4" aria-hidden />
+                          </button>
+                          <button
+                            onClick={() => setVoidTarget(inv)}
+                            title={t('invoices.void', 'Void invoice')}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-danger-subtle hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                          </button>
+                        </div>
+                      )}
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </div>
+        </Card>
+      ) : null}
+
+      {/* Confirm void */}
+      <ConfirmDialog
+        open={!!voidTarget}
+        onOpenChange={(open) => { if (!open) setVoidTarget(null); }}
+        title={t('invoices.voidTitle', 'Void invoice?')}
+        description={
+          voidTarget
+            ? t(
+                'invoices.voidDesc',
+                'Void invoice {{number}}? This cannot be undone.',
+                { number: voidTarget.number },
+              )
+            : undefined
+        }
+        confirmLabel={t('invoices.void', 'Void')}
+        tone="danger"
+        onConfirm={() => voidTarget && voidInv.mutate(voidTarget.id)}
+        loading={voidInv.isPending}
+      />
+    </div>
+  );
+}

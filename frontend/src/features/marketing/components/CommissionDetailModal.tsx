@@ -1,11 +1,25 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { X, CheckCircle2, DollarSign, Pencil } from 'lucide-react';
+import { CheckCircle2, DollarSign, Pencil } from 'lucide-react';
 import { useState } from 'react';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDate, fmtDateTime } from '../utils/format';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  Badge,
+  Button,
+  Skeleton,
+  Input,
+} from '../../../components/ui';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CommissionDetail {
   id: string;
@@ -57,17 +71,27 @@ interface CommissionDetail {
   }>;
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  PENDING: 'bg-amber-100 text-amber-800',
-  APPROVED: 'bg-blue-100 text-blue-800',
-  PAID: 'bg-emerald-100 text-emerald-800',
-};
+// ─── Badge tone helpers ──────────────────────────────────────────────────────
 
-const TYPE_BADGE: Record<string, string> = {
-  SIGNUP: 'bg-primary-100 text-primary-800',
-  RENEWAL: 'bg-teal-100 text-teal-800',
-  UPSELL: 'bg-fuchsia-100 text-fuchsia-800',
-};
+function statusTone(s: string): 'warning' | 'info' | 'success' | 'neutral' {
+  switch (s) {
+    case 'PENDING':  return 'warning';
+    case 'APPROVED': return 'info';
+    case 'PAID':     return 'success';
+    default:         return 'neutral';
+  }
+}
+
+function typeTone(t: string): 'primary' | 'success' | 'info' | 'neutral' {
+  switch (t) {
+    case 'SIGNUP':  return 'primary';
+    case 'RENEWAL': return 'success';
+    case 'UPSELL':  return 'info';
+    default:        return 'neutral';
+  }
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
   commissionId: string | null;
@@ -140,55 +164,49 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
     },
   });
 
-  if (!commissionId) return null;
-
   const amount = data ? Number(data.amount) : 0;
   const commissionRate = data?.plan ? Number(data.plan.commissionRate) : null;
   // paidAmount = amount / rate (reverses the SIGNUP/RENEWAL/UPSELL math)
   const paidAmount =
     commissionRate && commissionRate > 0 ? amount / commissionRate : null;
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/40"
-      onClick={onClose}
-    >
-      <div
-        className="relative w-full max-w-2xl rounded-t-2xl sm:rounded-2xl bg-white shadow-2xl max-h-[92vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <h2 className="text-lg font-semibold text-slate-900">
-            {t('commission.detailTitle', 'Komisyon detayı')}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </header>
+  const open = !!commissionId;
 
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0">
+        {/* Header */}
+        <DialogHeader className="px-6 py-4 border-b border-border">
+          <DialogTitle>
+            {t('commission.detailTitle', 'Komisyon detayı')}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            {t('commission.detailDescription', 'Commission details and payment information')}
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {isLoading || !data ? (
-            <div className="h-40 animate-pulse rounded-lg bg-slate-100" />
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-48" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-32 w-full mt-4" />
+            </div>
           ) : (
             <>
+              {/* Amount + type + status headline */}
               <div className="flex flex-wrap items-baseline gap-3">
-                <span className="text-4xl font-bold text-slate-900">
+                <span className="font-display text-h1 text-foreground tabular-nums">
                   ₺{amount.toFixed(2)}
                 </span>
-                <span
-                  className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${TYPE_BADGE[data.type] ?? 'bg-slate-100 text-slate-700'}`}
-                >
+                <Badge tone={typeTone(data.type)}>
                   {t(`commissionType.${data.type}`, data.type)}
-                </span>
-                <span
-                  className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${STATUS_BADGE[data.status] ?? 'bg-slate-100 text-slate-700'}`}
-                >
+                </Badge>
+                <Badge tone={statusTone(data.status)}>
                   {t(`commissionStatus.${data.status}`, data.status)}
-                </span>
+                </Badge>
                 {isManager && data.status === 'PENDING' && !editingAmount && (
                   <button
                     type="button"
@@ -196,7 +214,7 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
                       setDraftAmount(amount.toString());
                       setEditingAmount(true);
                     }}
-                    className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800"
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <Pencil className="w-3.5 h-3.5" />
                     {t('commission.editAmount', 'Tutarı düzelt')}
@@ -204,18 +222,19 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
                 )}
               </div>
 
+              {/* Inline amount editor */}
               {editingAmount && (
                 <div className="mt-3 flex items-center gap-2">
-                  <input
+                  <Input
                     type="number"
                     step="0.01"
                     min="0"
                     value={draftAmount}
                     onChange={(e) => setDraftAmount(e.target.value)}
-                    className="w-32 rounded-md border-slate-300 text-sm focus:border-primary-500 focus:ring-primary-500"
+                    className="w-36"
                   />
-                  <button
-                    type="button"
+                  <Button
+                    size="sm"
                     onClick={() => {
                       const n = Number(draftAmount);
                       if (!Number.isFinite(n) || n < 0) {
@@ -224,92 +243,92 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
                       }
                       updateAmount.mutate(n);
                     }}
-                    disabled={updateAmount.isPending}
-                    className="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700 disabled:opacity-50"
+                    loading={updateAmount.isPending}
                   >
                     {t('common.save', 'Kaydet')}
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => setEditingAmount(false)}
-                    className="text-xs text-slate-500 hover:text-slate-700"
                   >
                     {t('common.cancel', 'Vazgeç')}
-                  </button>
+                  </Button>
                 </div>
               )}
 
+              {/* Details grid */}
               <dl className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 text-sm">
                 <div>
-                  <dt className="text-slate-500">
+                  <dt className="text-muted-foreground">
                     {t('commission.fields.customer', 'Müşteri')}
                   </dt>
-                  <dd className="mt-0.5 font-medium text-slate-900">
+                  <dd className="mt-0.5 font-medium text-foreground">
                     {data.tenant?.name ?? '—'}
                     {data.tenant?.subdomain && (
-                      <span className="ml-2 text-xs text-slate-400">
+                      <span className="ml-2 text-xs text-muted-foreground">
                         {data.tenant.subdomain}
                       </span>
                     )}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-slate-500">
+                  <dt className="text-muted-foreground">
                     {t('commission.fields.plan', 'Plan')}
                   </dt>
-                  <dd className="mt-0.5 font-medium text-slate-900">
+                  <dd className="mt-0.5 font-medium text-foreground">
                     {data.plan?.displayName ?? '—'}
                     {commissionRate != null && (
-                      <span className="ml-2 text-xs text-slate-500">
+                      <span className="ml-2 text-xs text-muted-foreground">
                         ({(commissionRate * 100).toFixed(1)}%)
                       </span>
                     )}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-slate-500">
+                  <dt className="text-muted-foreground">
                     {t('commission.fields.period', 'Periyot')}
                   </dt>
-                  <dd className="mt-0.5 font-medium text-slate-900">{data.period}</dd>
+                  <dd className="mt-0.5 font-medium text-foreground">{data.period}</dd>
                 </div>
                 <div>
-                  <dt className="text-slate-500">
+                  <dt className="text-muted-foreground">
                     {t('commission.fields.calculation', 'Hesaplama')}
                   </dt>
-                  <dd className="mt-0.5 font-mono text-xs text-slate-800">
+                  <dd className="mt-0.5 font-mono text-xs text-foreground">
                     {paidAmount != null && commissionRate != null ? (
                       <>
                         ₺{paidAmount.toFixed(2)} × {(commissionRate * 100).toFixed(1)}% = ₺
                         {amount.toFixed(2)}
                       </>
                     ) : (
-                      <span className="text-slate-400">
+                      <span className="text-muted-foreground">
                         {t('commission.fields.calcUnavailable', 'Plan ilişkilendirilemedi')}
                       </span>
                     )}
                   </dd>
                 </div>
                 <div className="sm:col-span-2">
-                  <dt className="text-slate-500">
+                  <dt className="text-muted-foreground">
                     {t('commission.fields.lead', 'Bağlı Lead')}
                   </dt>
-                  <dd className="mt-0.5 text-sm text-slate-900">
+                  <dd className="mt-0.5 text-sm text-foreground">
                     {data.lead ? (
                       <span>
                         <span className="font-medium">{data.lead.businessName}</span>
                         {data.lead.source && (
-                          <span className="ml-2 text-xs text-slate-500">
+                          <span className="ml-2 text-xs text-muted-foreground">
                             {t(`source.${data.lead.source}`, data.lead.source)}
                           </span>
                         )}
                         {data.lead.convertedAt && (
-                          <span className="ml-2 text-xs text-slate-400">
+                          <span className="ml-2 text-xs text-muted-foreground">
                             {fmtDate(data.lead.convertedAt)}
                           </span>
                         )}
                       </span>
                     ) : (
-                      <span className="text-slate-400">
+                      <span className="text-muted-foreground">
                         {t('commission.fields.noLead', 'Lead bağlantısı yok')}
                       </span>
                     )}
@@ -317,19 +336,20 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
                 </div>
                 {data.notes && (
                   <div className="sm:col-span-2">
-                    <dt className="text-slate-500">
+                    <dt className="text-muted-foreground">
                       {t('commission.fields.notes', 'Notlar')}
                     </dt>
-                    <dd className="mt-0.5 text-sm text-slate-700">{data.notes}</dd>
+                    <dd className="mt-0.5 text-sm text-foreground">{data.notes}</dd>
                   </div>
                 )}
               </dl>
 
+              {/* Audit timeline */}
               <section className="mt-6">
-                <h3 className="text-sm font-semibold text-slate-900 mb-3">
+                <h3 className="text-sm font-semibold text-foreground mb-3">
                   {t('commission.auditLog', 'Geçmiş')}
                 </h3>
-                <ol className="relative border-l border-slate-200 pl-5 space-y-3">
+                <ol className="relative border-s border-border ps-5 space-y-3">
                   <AuditEntry
                     label={t('commission.history.created', 'Komisyon oluşturuldu')}
                     at={data.createdAt}
@@ -356,36 +376,35 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
           )}
         </div>
 
+        {/* Footer actions — manager only, not shown when PAID */}
         {isManager && data && data.status !== 'PAID' && (
-          <footer className="border-t border-slate-200 px-6 py-3 flex gap-2 justify-end bg-slate-50">
+          <DialogFooter className="px-6 py-3 border-t border-border bg-surface-muted">
             {data.status === 'PENDING' && (
-              <button
-                type="button"
+              <Button
                 onClick={() => approve.mutate()}
-                disabled={approve.isPending}
-                className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                loading={approve.isPending}
               >
-                <CheckCircle2 className="w-4 h-4" />
+                <CheckCircle2 className="h-4 w-4" />
                 {t('commission.approve', 'Onayla')}
-              </button>
+              </Button>
             )}
             {data.status === 'APPROVED' && (
-              <button
-                type="button"
+              <Button
                 onClick={() => markPaid.mutate()}
-                disabled={markPaid.isPending}
-                className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                loading={markPaid.isPending}
               >
-                <DollarSign className="w-4 h-4" />
+                <DollarSign className="h-4 w-4" />
                 {t('commission.markPaid', 'Ödendi işaretle')}
-              </button>
+              </Button>
             )}
-          </footer>
+          </DialogFooter>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
+
+// ─── Audit entry ──────────────────────────────────────────────────────────────
 
 function AuditEntry({
   label,
@@ -398,12 +417,12 @@ function AuditEntry({
 }) {
   return (
     <li>
-      <div className="absolute -left-[5px] mt-1.5 h-2.5 w-2.5 rounded-full bg-slate-300" />
-      <p className="text-sm text-slate-900">{label}</p>
-      <p className="text-xs text-slate-500">
+      <div className="absolute -start-[5px] mt-1.5 h-2.5 w-2.5 rounded-full bg-border" />
+      <p className="text-sm text-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground">
         {fmtDateTime(at)}
         {actorName && (
-          <span className="ml-2 text-slate-400">— {actorName}</span>
+          <span className="ml-2 text-muted-foreground">— {actorName}</span>
         )}
       </p>
     </li>
@@ -411,7 +430,13 @@ function AuditEntry({
 }
 
 function describeAuditEntry(
-  entry: { action: string; prevStatus?: string; nextStatus?: string; prevAmount?: string; nextAmount?: string },
+  entry: {
+    action: string;
+    prevStatus?: string;
+    nextStatus?: string;
+    prevAmount?: string;
+    nextAmount?: string;
+  },
   t: any,
 ): string {
   if (entry.action === 'approve') {

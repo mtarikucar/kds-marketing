@@ -1,0 +1,263 @@
+import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
+import { PageHeader } from '@/components/ui';
+import marketingApi from '../../../features/marketing/api/marketingApi';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { API_URL } from '../../../lib/env';
+import { ConversationList } from './ConversationList';
+import { ThreadPane } from './ThreadPane';
+import { LeadContextPane } from './LeadContextPane';
+
+interface ConversationRow {
+  id: string;
+  status: string;
+  aiPaused: boolean;
+  unreadCount: number;
+  lastMessageAt?: string | null;
+  lead?: { businessName?: string; contactPerson?: string } | null;
+  channel?: { type?: string; name?: string } | null;
+  lastMessage?: { body?: string; direction?: string } | null;
+}
+
+/**
+ * Omnichannel Inbox — 3 panes: conversation list, the live thread + composer,
+ * and the lead context card. A single authenticated SSE stream (fetch + Bearer
+ * header) to the workspace keeps everything live (any event re-fetches the
+ * affected queries). An agent reply pauses the AI (human takeover); the AI can
+ * be resumed per thread.
+ *
+ * We deliberately do NOT use EventSource: the native EventSource API cannot
+ * set request headers, so the only way to authenticate it is to put the access
+ * token in the query string — leaking the bearer token into logs and history.
+ * Instead we open the stream with fetch() + an Authorization header and parse
+ * the text/event-stream frames by hand. An AbortController tears the connection
+ * down on unmount / token change, and a 3 s timer reconnects if the stream
+ * drops (matching EventSource's auto-reconnect).
+ */
+export default function InboxPage() {
+  const { t } = useTranslation('marketing');
+  const queryClient = useQueryClient();
+  const { accessToken, user } = useMarketingAuthStore();
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [statusFilter, setStatusFilter] = useState('OPEN');
+  const [showContext, setShowContext] = useState(false);
+
+  // ── Queries ────────────────────────────────────────────────────────────────
+
+  const {
+    data: conversations,
+    isLoading: conversationsLoading,
+    isError: conversationsError,
+    refetch: refetchConversations,
+  } = useQuery<ConversationRow[]>({
+    queryKey: ['marketing', 'conversations', statusFilter],
+    queryFn: () =>
+      marketingApi
+        .get('/conversations', { params: { status: statusFilter } })
+        .then((r) => r.data),
+    refetchInterval: 30_000,
+  });
+
+  const { data: thread } = useQuery({
+    queryKey: ['marketing', 'conversation', selectedId],
+    queryFn: () =>
+      marketingApi.get(`/conversations/${selectedId}`).then((r) => r.data),
+    enabled: !!selectedId,
+  });
+
+  // ── Live SSE stream ────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const controller = new AbortController();
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+
+    const handleFrame = (frame: string) => {
+      const dataLines = frame
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart());
+      if (dataLines.length === 0) return;
+      const payload = dataLines.join('\n');
+      try {
+        const data = JSON.parse(payload);
+        if (data?.kind === 'heartbeat') return;
+        queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
+        if (data?.conversationId) {
+          queryClient.invalidateQueries({
+            queryKey: ['marketing', 'conversation', data.conversationId],
+          });
+        }
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+
+    const connect = async () => {
+      try {
+        const res = await fetch(`${API_URL}/marketing/conversations/stream`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'text/event-stream',
+          },
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          // Normalize CRLF → LF so the `\n\n` frame split works regardless of
+          // whether the server emits `\n\n` or `\r\n\r\n` boundaries.
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            if (frame.trim()) handleFrame(frame);
+          }
+        }
+        if (!closed) scheduleReconnect();
+      } catch {
+        if (!closed) scheduleReconnect();
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (closed) return;
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      controller.abort();
+    };
+  }, [accessToken, queryClient]);
+
+  // ── Side-effects ───────────────────────────────────────────────────────────
+
+  // Mark read on open.
+  useEffect(() => {
+    if (selectedId)
+      marketingApi.post(`/conversations/${selectedId}/read`).catch(() => undefined);
+  }, [selectedId]);
+
+  // ── Mutations ──────────────────────────────────────────────────────────────
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] });
+    if (selectedId)
+      queryClient.invalidateQueries({
+        queryKey: ['marketing', 'conversation', selectedId],
+      });
+  };
+
+  const reply = useMutation({
+    mutationFn: (text: string) =>
+      marketingApi.post(`/conversations/${selectedId}/reply`, { text }),
+    onSuccess: () => {
+      setDraft('');
+      invalidate();
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.sendFailed', 'Send failed')),
+  });
+
+  const toggleAi = useMutation({
+    mutationFn: (paused: boolean) =>
+      marketingApi.post(`/conversations/${selectedId}/ai-pause`, { paused }),
+    onSuccess: invalidate,
+  });
+
+  const closeConvo = useMutation({
+    mutationFn: () =>
+      marketingApi.post(`/conversations/${selectedId}/close`),
+    onSuccess: invalidate,
+  });
+
+  // ── Derived ────────────────────────────────────────────────────────────────
+
+  const convo = thread?.conversation;
+  const lead = thread?.lead;
+  const messages = thread?.messages ?? [];
+
+  const handleBack = () => {
+    setSelectedId(null);
+    setShowContext(false);
+  };
+
+  return (
+    <div className="flex flex-col h-full gap-4">
+      <PageHeader
+        title={t('inbox.title')}
+        description={t('inbox.subtitle')}
+      />
+
+      <div className="flex-1 min-h-0 flex gap-0 sm:gap-4">
+        {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
+        <div className={selectedId ? 'hidden sm:flex' : 'flex'}>
+          <ConversationList
+            conversations={conversations}
+            isLoading={conversationsLoading}
+            isError={conversationsError}
+            selectedId={selectedId}
+            statusFilter={statusFilter}
+            isManager={isManager}
+            onSelect={(id) => setSelectedId(id)}
+            onStatusFilter={setStatusFilter}
+            onRetry={() => refetchConversations()}
+          />
+        </div>
+
+        {/* Pane 2 — thread + composer (full-width on phone when a conversation is open) */}
+        <div
+          className={`${
+            selectedId ? 'flex' : 'hidden sm:flex'
+          } w-full sm:w-auto sm:flex-1 min-w-0`}
+        >
+          <ThreadPane
+            convo={convo}
+            lead={lead}
+            channel={thread?.channel}
+            messages={messages}
+            draft={draft}
+            isSending={reply.isPending}
+            isTogglingAi={toggleAi.isPending}
+            isClosing={closeConvo.isPending}
+            onDraftChange={setDraft}
+            onSend={() => draft.trim() && reply.mutate(draft.trim())}
+            onToggleAi={() => convo && toggleAi.mutate(!convo.aiPaused)}
+            onClose={() => closeConvo.mutate()}
+            onBack={handleBack}
+            onShowContext={() => setShowContext(true)}
+          />
+        </div>
+
+        {/* Pane 3 — lead context: inline at lg+, sheet below lg */}
+        <LeadContextPane lead={lead} />
+        {showContext && (
+          <LeadContextPane
+            lead={lead}
+            asSheet
+            onClose={() => setShowContext(false)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}

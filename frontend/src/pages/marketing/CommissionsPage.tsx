@@ -1,17 +1,73 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { CheckCircle2, DollarSign } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import type { Commission } from '../../features/marketing/types';
 import { fmtDate } from '../../features/marketing/utils/format';
 import { formatMoney, asWorkspaceCurrency } from '../../lib/money';
+import CommissionDetailModal from '../../features/marketing/components/CommissionDetailModal';
+import {
+  PageHeader,
+  Card,
+  CardContent,
+  StatCard,
+  Badge,
+  Table,
+  THead,
+  TBody,
+  TR,
+  TH,
+  TD,
+  FilterBar,
+  EmptyState,
+  Skeleton,
+  Button,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  Input,
+} from '../../components/ui';
 
-const statusColors: Record<string, string> = {
-  PENDING: 'bg-yellow-100 text-yellow-800',
-  APPROVED: 'bg-blue-100 text-blue-800',
-  PAID: 'bg-green-100 text-green-800',
-};
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function commissionStatusTone(
+  status: string,
+): 'warning' | 'info' | 'success' | 'neutral' {
+  switch (status) {
+    case 'PENDING':
+      return 'warning';
+    case 'APPROVED':
+      return 'info';
+    case 'PAID':
+      return 'success';
+    default:
+      return 'neutral';
+  }
+}
+
+// ─── Skeleton rows ─────────────────────────────────────────────────────────
+
+function TableSkeleton({ cols }: { cols: number }) {
+  return (
+    <TBody>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <TR key={i}>
+          {Array.from({ length: cols }).map((__, j) => (
+            <TD key={j}>
+              <Skeleton className="h-4 w-full" />
+            </TD>
+          ))}
+        </TR>
+      ))}
+    </TBody>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CommissionsPage() {
   const { user } = useMarketingAuthStore();
@@ -20,6 +76,9 @@ export default function CommissionsPage() {
 
   const [period, setPeriod] = useState('');
   const [status, setStatus] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // ── Queries ──────────────────────────────────────────────────────────────
 
   const {
     data: commissions,
@@ -52,6 +111,8 @@ export default function CommissionsPage() {
         .then((r) => r.data),
   });
 
+  // ── Mutations ─────────────────────────────────────────────────────────────
+
   const approveMutation = useMutation({
     mutationFn: (id: string) => marketingApi.patch(`/commissions/${id}/approve`),
     onSuccess: () => {
@@ -74,154 +135,187 @@ export default function CommissionsPage() {
     },
   });
 
+  // ── Derived ───────────────────────────────────────────────────────────────
+
   const items: Commission[] = commissions?.data || [];
-  // Workspace currency drives the money formatting; defaults to TRY when the
-  // summary hasn't loaded or returns an unexpected value.
   const currency = asWorkspaceCurrency(summary?.currency);
+  const colCount = isManager ? 7 : 6;
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-gray-900">Commissions</h1>
+    <div className="space-y-6">
+      <PageHeader
+        title="Commissions"
+        description="Track and manage sales commissions across periods."
+      />
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Period</label>
-            <input
-              type="month"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none"
-            >
-              <option value="">All</option>
-              <option value="PENDING">PENDING</option>
-              <option value="APPROVED">APPROVED</option>
-              <option value="PAID">PAID</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Summary Cards */}
+      {/* Summary stat cards */}
       {summary && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <p className="text-sm text-gray-500">Pending</p>
-            <p className="text-2xl font-bold text-yellow-600 mt-1">
-              {formatMoney(summary.pending.total, currency)}
-            </p>
-            <p className="text-xs text-gray-400 mt-1">{summary.pending.count} entries</p>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <p className="text-sm text-gray-500">Approved</p>
-            <p className="text-2xl font-bold text-blue-600 mt-1">
-              {formatMoney(summary.approved.total, currency)}
-            </p>
-            <p className="text-xs text-gray-400 mt-1">{summary.approved.count} entries</p>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <p className="text-sm text-gray-500">Paid</p>
-            <p className="text-2xl font-bold text-green-600 mt-1">
-              {formatMoney(summary.paid.total, currency)}
-            </p>
-            <p className="text-xs text-gray-400 mt-1">{summary.paid.count} entries</p>
-          </div>
+          <StatCard
+            label="Pending"
+            value={formatMoney(summary.pending.total, currency)}
+            tone="warning"
+            delta={{ value: `${summary.pending.count} entries`, direction: 'flat' }}
+          />
+          <StatCard
+            label="Approved"
+            value={formatMoney(summary.approved.total, currency)}
+            tone="info"
+            delta={{ value: `${summary.approved.count} entries`, direction: 'flat' }}
+          />
+          <StatCard
+            label="Paid"
+            value={formatMoney(summary.paid.total, currency)}
+            tone="success"
+            delta={{ value: `${summary.paid.count} entries`, direction: 'flat' }}
+          />
         </div>
       )}
 
+      {/* Filters */}
+      <FilterBar>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+            Period
+          </label>
+          <Input
+            type="month"
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="h-9 w-40"
+          />
+        </div>
+        <Select value={status || '__all'} onValueChange={(v) => setStatus(v === '__all' ? '' : v)}>
+          <SelectTrigger className="w-36">
+            <SelectValue placeholder="All statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all">All statuses</SelectItem>
+            <SelectItem value="PENDING">Pending</SelectItem>
+            <SelectItem value="APPROVED">Approved</SelectItem>
+            <SelectItem value="PAID">Paid</SelectItem>
+          </SelectContent>
+        </Select>
+        {(period || status) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setPeriod('');
+              setStatus('');
+            }}
+          >
+            Clear
+          </Button>
+        )}
+      </FilterBar>
+
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-gray-500">
-                <th className="px-4 py-3 font-medium">Period</th>
-                <th className="px-4 py-3 font-medium">Type</th>
-                <th className="px-4 py-3 font-medium">Amount</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium hidden md:table-cell">Rep</th>
-                <th className="px-4 py-3 font-medium hidden md:table-cell">Date</th>
-                {isManager && <th className="px-4 py-3 font-medium">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={isManager ? 7 : 6} className="px-4 py-8 text-center text-gray-500">Loading...</td>
-                </tr>
-              ) : isError ? (
-                <tr>
-                  <td colSpan={isManager ? 7 : 6} className="px-4 py-8 text-center">
-                    <p className="text-sm text-red-600">Could not load commissions.</p>
-                    <button
-                      onClick={() => refetch()}
-                      className="mt-2 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
-                    >
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Period</TH>
+                <TH>Type</TH>
+                <TH numeric>Amount</TH>
+                <TH>Status</TH>
+                <TH className="hidden md:table-cell">Rep</TH>
+                <TH className="hidden md:table-cell">Date</TH>
+                {isManager && <TH>Actions</TH>}
+              </TR>
+            </THead>
+
+            {isLoading ? (
+              <TableSkeleton cols={colCount} />
+            ) : isError ? (
+              <TBody>
+                <TR>
+                  <TD colSpan={colCount} className="py-12 text-center">
+                    <p className="text-sm text-danger mb-2">Could not load commissions.</p>
+                    <Button variant="outline" size="sm" onClick={() => refetch()}>
                       Retry
-                    </button>
-                  </td>
-                </tr>
-              ) : items.length === 0 ? (
-                <tr>
-                  <td colSpan={isManager ? 7 : 6} className="px-4 py-8 text-center text-gray-500">No commissions found</td>
-                </tr>
-              ) : (
-                items.map((c) => (
-                  <tr key={c.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{c.period}</td>
-                    <td className="px-4 py-3 text-gray-600">{c.type}</td>
-                    <td className="px-4 py-3 font-medium">{formatMoney(c.amount, currency)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[c.status] || 'bg-gray-100'}`}>
-                        {c.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 hidden md:table-cell text-gray-600">
-                      {c.marketingUser ? `${c.marketingUser.firstName} ${c.marketingUser.lastName}` : '-'}
-                    </td>
-                    <td className="px-4 py-3 hidden md:table-cell text-gray-400 text-xs">
+                    </Button>
+                  </TD>
+                </TR>
+              </TBody>
+            ) : items.length === 0 ? (
+              <TBody>
+                <TR>
+                  <TD colSpan={colCount} className="py-0">
+                    <EmptyState
+                      title="No commissions found"
+                      description="Adjust your filters or check back later."
+                      className="rounded-none border-0"
+                    />
+                  </TD>
+                </TR>
+              </TBody>
+            ) : (
+              <TBody>
+                {items.map((c) => (
+                  <TR
+                    key={c.id}
+                    className="cursor-pointer"
+                    onClick={() => setSelectedId(c.id)}
+                  >
+                    <TD className="font-medium text-foreground">{c.period}</TD>
+                    <TD className="text-muted-foreground">{c.type}</TD>
+                    <TD numeric className="font-medium">
+                      {formatMoney(c.amount, currency)}
+                    </TD>
+                    <TD>
+                      <Badge tone={commissionStatusTone(c.status)}>{c.status}</Badge>
+                    </TD>
+                    <TD className="hidden md:table-cell text-muted-foreground">
+                      {c.marketingUser
+                        ? `${c.marketingUser.firstName} ${c.marketingUser.lastName}`
+                        : '—'}
+                    </TD>
+                    <TD className="hidden md:table-cell text-muted-foreground text-xs">
                       {fmtDate(c.createdAt)}
-                    </td>
+                    </TD>
                     {isManager && (
-                      <td className="px-4 py-3">
+                      <TD onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-1">
                           {c.status === 'PENDING' && (
-                            <button
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => approveMutation.mutate(c.id)}
-                              disabled={approveMutation.isPending}
-                              className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-xs hover:bg-blue-100"
+                              loading={approveMutation.isPending}
                             >
+                              <CheckCircle2 className="h-3.5 w-3.5" />
                               Approve
-                            </button>
+                            </Button>
                           )}
                           {c.status === 'APPROVED' && (
-                            <button
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => payMutation.mutate(c.id)}
-                              disabled={payMutation.isPending}
-                              className="px-2 py-1 bg-green-50 text-green-600 rounded text-xs hover:bg-green-100"
+                              loading={payMutation.isPending}
                             >
+                              <DollarSign className="h-3.5 w-3.5" />
                               Mark Paid
-                            </button>
+                            </Button>
                           )}
                         </div>
-                      </td>
+                      </TD>
                     )}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                  </TR>
+                ))}
+              </TBody>
+            )}
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Detail modal */}
+      <CommissionDetailModal
+        commissionId={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   );
 }

@@ -1,73 +1,177 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { PhoneIcon, SparklesIcon, UserIcon, ChevronLeftIcon } from '@heroicons/react/24/outline';
+import { Phone, Sparkles, User, ChevronLeft } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Badge } from '@/components/ui/Badge';
+import { Card } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Button } from '@/components/ui/Button';
+import { ScrollArea } from '@/components/ui/ScrollArea';
 
-interface VoiceCall { id: string; fromNumber: string; toNumber: string; status: string; turns: number; createdAt: string }
-interface Turn { role: string; text: string; createdAt: string }
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface VoiceCall {
+  id: string;
+  fromNumber: string;
+  toNumber: string;
+  status: string;
+  turns: number;
+  createdAt: string;
+}
+interface Turn {
+  role: string;
+  text: string;
+  createdAt: string;
+}
+
+// ── Badge helper ──────────────────────────────────────────────────────────────
+
+function callStatusTone(status: string) {
+  if (status === 'COMPLETED') return 'success' as const;
+  if (status === 'IN_PROGRESS') return 'info' as const;
+  return 'neutral' as const;
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function VoicePage() {
   const { t } = useTranslation('marketing');
   const [selected, setSelected] = useState<string | null>(null);
+
+  // ── Queries ──────────────────────────────────────────────────────────────────
 
   const { data: calls } = useQuery<VoiceCall[]>({
     queryKey: ['marketing', 'voice', 'calls'],
     queryFn: () => marketingApi.get('/voice/calls').then((r) => r.data),
     refetchInterval: 20_000,
   });
+
   const { data: transcript } = useQuery<Turn[]>({
     queryKey: ['marketing', 'voice', 'transcript', selected],
     queryFn: () => marketingApi.get(`/voice/calls/${selected}/transcript`).then((r) => r.data),
     enabled: !!selected,
   });
 
+  // ── Render ────────────────────────────────────────────────────────────────────
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">{t('voice.title', 'Voice AI')}</h1>
-        <p className="text-sm text-slate-500">{t('voice.subtitle', 'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).')}</p>
-      </div>
+      <PageHeader
+        title={t('voice.title', 'Voice AI')}
+        description={t(
+          'voice.subtitle',
+          'AI answers your phone (Twilio), grounded on an agent + your knowledge base. Configure the number under Channels (type VOICE).',
+        )}
+      />
 
-      <div className="flex gap-0 sm:gap-4 h-[calc(100vh-12rem)]">
-        <div className={`${selected ? 'hidden sm:block' : 'block'} w-full sm:w-80 sm:shrink-0 bg-white rounded-xl border border-slate-200 overflow-y-auto divide-y divide-slate-50`}>
-          {(calls ?? []).map((c) => (
-            <button key={c.id} onClick={() => setSelected(c.id)} className={`w-full text-left p-3 hover:bg-slate-50 ${selected === c.id ? 'bg-primary/5' : ''}`}>
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-sm text-slate-900 flex items-center gap-1.5"><PhoneIcon className="w-4 h-4 text-primary" />{c.fromNumber || t('voice.unknown', 'Unknown')}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${c.status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700' : c.status === 'IN_PROGRESS' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>{c.status}</span>
+      <div className="flex gap-4 h-[calc(100vh-12rem)]">
+        {/* Call list panel */}
+        <Card
+          className={`${selected ? 'hidden sm:flex' : 'flex'} flex-col w-full sm:w-80 sm:shrink-0 overflow-hidden`}
+        >
+          <ScrollArea className="flex-1">
+            {(calls ?? []).length === 0 ? (
+              <div className="p-6">
+                <EmptyState
+                  icon={<Phone className="h-8 w-8" />}
+                  title={t('voice.empty', 'No AI calls yet')}
+                />
               </div>
-              <div className="text-xs text-slate-400 mt-0.5">{c.turns} {t('voice.turns', 'turns')} · {new Date(c.createdAt).toLocaleString()}</div>
-            </button>
-          ))}
-          {(calls ?? []).length === 0 && <div className="p-6 text-center text-xs text-slate-400">{t('voice.empty', 'No AI calls yet.')}</div>}
-        </div>
-
-        <div className={`${selected ? 'block' : 'hidden sm:block'} w-full sm:w-auto sm:flex-1 bg-white rounded-xl border border-slate-200 overflow-y-auto p-4`}>
-          {!selected ? (
-            <div className="h-full flex items-center justify-center text-sm text-slate-400">{t('voice.selectPrompt', 'Select a call to see the transcript.')}</div>
-          ) : (
-            <div className="space-y-3">
-              <button
-                onClick={() => setSelected(null)}
-                className="sm:hidden flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
-              >
-                <ChevronLeftIcon className="w-4 h-4" /> {t('voice.back', 'Calls')}
-              </button>
-              {(transcript ?? []).map((tt, i) => (
-                <div key={i} className={`flex ${tt.role === 'AI' ? 'justify-start' : tt.role === 'CUSTOMER' ? 'justify-end' : 'justify-center'}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${tt.role === 'AI' ? 'bg-slate-100 text-slate-800' : tt.role === 'CUSTOMER' ? 'bg-primary text-primary-foreground' : 'bg-amber-50 text-amber-700 text-xs'}`}>
-                    <div className="flex items-center gap-1 opacity-70 text-[10px] mb-0.5">
-                      {tt.role === 'AI' ? <SparklesIcon className="w-3 h-3" /> : tt.role === 'CUSTOMER' ? <UserIcon className="w-3 h-3" /> : null}{tt.role}
+            ) : (
+              <div className="divide-y divide-border">
+                {(calls ?? []).map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelected(c.id)}
+                    className={`w-full text-left p-3 transition-colors hover:bg-surface-muted ${
+                      selected === c.id ? 'bg-primary/5' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-foreground truncate">
+                        <Phone className="h-4 w-4 text-primary shrink-0" />
+                        {c.fromNumber || t('voice.unknown', 'Unknown')}
+                      </span>
+                      <Badge tone={callStatusTone(c.status)} size="sm">
+                        {c.status}
+                      </Badge>
                     </div>
-                    {tt.text}
-                  </div>
-                </div>
-              ))}
-              {(transcript ?? []).length === 0 && <div className="text-sm text-slate-400">{t('voice.noTranscript', 'No transcript for this call.')}</div>}
-            </div>
-          )}
-        </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      {c.turns} {t('voice.turns', 'turns')} · {new Date(c.createdAt).toLocaleString()}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </Card>
+
+        {/* Transcript panel */}
+        <Card
+          className={`${selected ? 'flex' : 'hidden sm:flex'} flex-col flex-1 overflow-hidden`}
+        >
+          <ScrollArea className="flex-1 p-4">
+            {!selected ? (
+              <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                {t('voice.selectPrompt', 'Select a call to see the transcript.')}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* Mobile back button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="sm:hidden mb-2"
+                  onClick={() => setSelected(null)}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  {t('voice.back', 'Calls')}
+                </Button>
+
+                {(transcript ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    {t('voice.noTranscript', 'No transcript for this call.')}
+                  </p>
+                ) : (
+                  (transcript ?? []).map((tt, i) => (
+                    <div
+                      key={i}
+                      className={`flex ${
+                        tt.role === 'AI'
+                          ? 'justify-start'
+                          : tt.role === 'CUSTOMER'
+                          ? 'justify-end'
+                          : 'justify-center'
+                      }`}
+                    >
+                      <div
+                        className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
+                          tt.role === 'AI'
+                            ? 'bg-surface-muted text-foreground'
+                            : tt.role === 'CUSTOMER'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-warning-subtle text-warning text-xs'
+                        }`}
+                      >
+                        <div className="mb-0.5 flex items-center gap-1 text-[10px] opacity-70">
+                          {tt.role === 'AI' ? (
+                            <Sparkles className="h-3 w-3" />
+                          ) : tt.role === 'CUSTOMER' ? (
+                            <User className="h-3 w-3" />
+                          ) : null}
+                          {tt.role}
+                        </div>
+                        {tt.text}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </ScrollArea>
+        </Card>
       </div>
     </div>
   );

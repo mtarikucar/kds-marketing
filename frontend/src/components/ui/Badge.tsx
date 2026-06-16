@@ -1,30 +1,25 @@
-import type { HTMLAttributes } from 'react';
+import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from './cn';
 
-type Tone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger';
+const badge = cva('inline-flex items-center gap-1 rounded-full font-medium', {
+  variants: {
+    tone: {
+      neutral: 'bg-surface-muted text-muted-foreground',
+      primary: 'bg-primary/10 text-primary',
+      success: 'bg-success-subtle text-success',
+      warning: 'bg-warning-subtle text-warning',
+      danger: 'bg-danger-subtle text-danger',
+      info: 'bg-info-subtle text-info',
+    },
+    size: { sm: 'px-2 py-0.5 text-micro', md: 'px-2.5 py-0.5 text-caption' },
+  },
+  defaultVariants: { tone: 'neutral', size: 'md' },
+});
 
-const TONES: Record<Tone, string> = {
-  neutral: 'bg-slate-100 text-slate-700',
-  primary: 'bg-primary/10 text-primary',
-  success: 'bg-emerald-50 text-emerald-700',
-  warning: 'bg-amber-50 text-amber-700',
-  danger: 'bg-red-50 text-red-700',
-};
+export interface BadgeProps
+  extends React.HTMLAttributes<HTMLSpanElement>,
+    VariantProps<typeof badge> {}
 
-/** Status pill. Centralizes the per-page `statusColors` maps the audit flagged. */
-export function Badge({
-  tone = 'neutral',
-  className,
-  ...props
-}: HTMLAttributes<HTMLSpanElement> & { tone?: Tone }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
-        TONES[tone],
-        className,
-      )}
-      {...props}
-    />
-  );
+export function Badge({ className, tone, size, ...props }: BadgeProps) {
+  return <span className={cn(badge({ tone, size }), className)} {...props} />;
 }

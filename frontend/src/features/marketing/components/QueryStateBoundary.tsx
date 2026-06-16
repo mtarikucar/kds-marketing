@@ -25,7 +25,7 @@ export default function QueryStateBoundary({
   children,
 }: QueryStateBoundaryProps) {
   if (isLoading) {
-    return <p className="py-8 text-center text-sm text-slate-500">{loadingText}</p>;
+    return <p className="py-8 text-center text-sm text-muted-foreground">{loadingText}</p>;
   }
 
   if (isError) {
@@ -35,7 +35,7 @@ export default function QueryStateBoundary({
         {onRetry && (
           <button
             onClick={onRetry}
-            className="mt-3 px-3 py-1.5 text-sm font-medium text-red-700 bg-white border border-red-300 rounded-lg hover:bg-red-100"
+            className="mt-3 px-3 py-1.5 text-sm font-medium text-red-700 bg-surface border border-red-300 rounded-lg hover:bg-red-100"
           >
             Retry
           </button>

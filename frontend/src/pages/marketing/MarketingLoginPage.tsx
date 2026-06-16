@@ -1,17 +1,36 @@
-import { useState } from 'react';
 import { useNavigate, Navigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { LogIn } from 'lucide-react';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { Card, CardContent, CardHeader } from '../../components/ui/Card';
+import { Field } from '../../components/ui/Field';
+import { Input } from '../../components/ui/Input';
+import { Button } from '../../components/ui/Button';
+import { Callout } from '../../components/ui/Callout';
+
+const loginSchema = z.object({
+  email: z.string().trim().min(1, 'required').email('emailInvalid'),
+  password: z.string().min(1, 'required'),
+});
+type LoginValues = z.infer<typeof loginSchema>;
 
 export default function MarketingLoginPage() {
   const navigate = useNavigate();
   const { t } = useTranslation('marketing');
   const { login, isAuthenticated } = useMarketingAuthStore();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    setError,
+  } = useForm<LoginValues>({
+    resolver: zodResolver(loginSchema),
+  });
 
   // Guard AFTER all hooks (Rules of Hooks): every render calls the same hooks in
   // the same order; an already-authenticated visitor is then redirected before
@@ -20,88 +39,96 @@ export default function MarketingLoginPage() {
     return <Navigate to="/dashboard" replace />;
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-
+  const onSubmit = async (values: LoginValues) => {
     try {
-      const { data } = await marketingApi.post('/auth/login', { email, password });
+      const { data } = await marketingApi.post('/auth/login', values);
       login(data.user, data.accessToken, data.refreshToken);
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.response?.data?.message || err.message || t('login.wrongCreds'));
-    } finally {
-      setLoading(false);
+      setError('root', {
+        message: err.response?.data?.message || err.message || t('login.wrongCreds'),
+      });
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-background flex items-center justify-center px-4">
       <div className="w-full max-w-md">
-        <div className="bg-white rounded-2xl shadow-xl p-8">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <div className="w-14 h-14 bg-primary rounded-xl flex items-center justify-center mx-auto mb-4">
-              <span className="text-primary-foreground font-bold text-xl">M</span>
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col items-center gap-3 pb-2">
+              <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
+                <LogIn className="h-6 w-6 text-primary-foreground" aria-hidden="true" />
+              </div>
+              <div className="text-center">
+                <h1 className="font-display text-h2 text-foreground">{t('login.title')}</h1>
+                <p className="text-sm text-muted-foreground mt-1">{t('login.subtitle')}</p>
+              </div>
             </div>
-            <h1 className="text-2xl font-bold text-slate-900">{t('login.title')}</h1>
-            <p className="text-sm text-slate-500 mt-1">{t('login.subtitle')}</p>
-          </div>
+          </CardHeader>
 
-          {/* Error */}
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-              {error}
-            </div>
-          )}
+          <CardContent>
+            {errors.root && (
+              <Callout tone="danger" className="mb-4">
+                {errors.root.message}
+              </Callout>
+            )}
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                {t('login.emailLabel')}
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
+              <Field
+                label={t('login.emailLabel')}
                 required
-                className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none"
-                placeholder="you@company.com"
-              />
-            </div>
+                error={errors.email?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@company.com"
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    {...register('email')}
+                  />
+                )}
+              </Field>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                {t('login.passwordLabel')}
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+              <Field
+                label={t('login.passwordLabel')}
                 required
-                className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none"
-                placeholder="••••••••"
-              />
-            </div>
+                error={errors.password?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="••••••••"
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    {...register('password')}
+                  />
+                )}
+              </Field>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading ? t('login.loading') : t('login.submit')}
-            </button>
-          </form>
+              <Button
+                type="submit"
+                size="lg"
+                loading={isSubmitting}
+                className="w-full"
+              >
+                {t('login.submit')}
+              </Button>
+            </form>
 
-          <p className="text-center text-sm text-slate-500 mt-6">
-            {t('register.noAccount', "Don't have a workspace yet?")}{' '}
-            <Link to="/register" className="text-primary font-medium hover:underline">
-              {t('register.cta', 'Create one')}
-            </Link>
-          </p>
-        </div>
+            <p className="text-center text-sm text-muted-foreground mt-6">
+              {t('register.noAccount', "Don't have a workspace yet?")}{' '}
+              <Link to="/register" className="text-primary font-medium hover:underline">
+                {t('register.cta', 'Create one')}
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

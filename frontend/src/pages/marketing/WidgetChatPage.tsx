@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { Send } from 'lucide-react';
 import { API_URL } from '../../lib/env';
+import { Button } from '@/components/ui/Button';
+import { Spinner } from '@/components/ui/Spinner';
+import { Avatar } from '@/components/ui/Avatar';
 
 interface WidgetMessage {
   id: string;
@@ -32,6 +36,7 @@ export default function WidgetChatPage() {
   const [draft, setDraft] = useState('');
   const [ready, setReady] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Session bootstrap.
   useEffect(() => {
@@ -105,57 +110,101 @@ export default function WidgetChatPage() {
       const saved = JSON.parse(localStorage.getItem(lsKey) || '{}');
       localStorage.setItem(lsKey, JSON.stringify({ ...saved, conversationId: res.conversationId }));
     }
+    inputRef.current?.focus();
   }, [draft, visitorId, conversationId, base, lsKey]);
 
   if (!widgetKey) {
-    return <div className="p-4 text-sm text-slate-500">Missing widget key.</div>;
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <p className="text-sm text-muted-foreground">Missing widget key.</p>
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col h-screen bg-white">
-      <div className="px-4 py-3 text-white font-medium flex items-center gap-2" style={{ background: accent }}>
-        {logo && <img src={logo} alt="" className="h-6" />}
-        {channelName}
-      </div>
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50">
+    <div className="flex flex-col h-screen bg-background">
+      {/* Header — accent colour from branding, falls back to indigo */}
+      <header
+        className="shrink-0 flex items-center gap-2.5 px-4 py-3 text-white font-medium shadow-sm"
+        style={{ background: accent }}
+      >
+        {logo ? (
+          <img src={logo} alt="" className="h-6 w-auto object-contain" />
+        ) : (
+          <Avatar
+            initials={channelName.slice(0, 2).toUpperCase()}
+            size="sm"
+            className="bg-white/20 text-white text-xs"
+          />
+        )}
+        <span className="truncate text-sm font-semibold">{channelName}</span>
+
+        {!ready && (
+          <span className="ms-auto flex items-center gap-1.5 text-xs font-normal opacity-80">
+            <Spinner className="h-3.5 w-3.5" />
+            Connecting…
+          </span>
+        )}
+      </header>
+
+      {/* Message list */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-surface-muted">
         {greeting && messages.length === 0 && (
           <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-white border border-slate-200 text-slate-800">
+            <div className="max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-surface border border-border text-foreground shadow-xs">
               {greeting}
             </div>
           </div>
         )}
+
         {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.direction === 'INBOUND' ? 'justify-end' : 'justify-start'}`}>
+          <div
+            key={m.id}
+            className={`flex ${m.direction === 'INBOUND' ? 'justify-end' : 'justify-start'}`}
+          >
             <div
-              className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
+              className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words shadow-xs ${
                 m.direction === 'INBOUND'
                   ? 'bg-primary text-primary-foreground'
-                  : 'bg-white border border-slate-200 text-slate-800'
+                  : 'bg-surface border border-border text-foreground'
               }`}
             >
               {m.body}
             </div>
           </div>
         ))}
+
         <div ref={endRef} />
       </div>
-      <div className="p-3 border-t border-slate-200 flex gap-2">
+
+      {/* Composer */}
+      <div className="shrink-0 p-3 border-t border-border bg-surface flex items-center gap-2">
         <input
+          ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && send()}
+          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && send()}
           disabled={!ready}
           placeholder={ready ? 'Type a message…' : 'Connecting…'}
-          className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+          aria-label="Message"
+          className="flex-1 h-9 px-3 py-2 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 focus:ring-offset-background disabled:opacity-50 transition-shadow"
         />
-        <button
+        <Button
+          variant="primary"
+          size="md"
           onClick={send}
           disabled={!ready || !draft.trim()}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          aria-label="Send message"
+          className="shrink-0"
+          style={
+            /* override primary colour with the widget accent so the Send button
+               matches the header — only if the accent differs from the default primary */
+            accent !== '#1e40af' ? { background: accent, borderColor: accent } : undefined
+          }
         >
-          Send
-        </button>
+          <Send className="h-4 w-4" aria-hidden="true" />
+          <span className="sr-only">Send</span>
+        </Button>
       </div>
     </div>
   );

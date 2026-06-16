@@ -1,0 +1,8 @@
+# Build output
+dist/
+
+# Playwright artifacts — generated at runtime, never committed
+playwright-report/
+test-results/
+# Playwright browser binaries (installed via `npx playwright install`)
+/node_modules/.cache/ms-playwright/

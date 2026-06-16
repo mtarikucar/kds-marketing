@@ -1,14 +1,29 @@
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useForm, type SubmitHandler } from 'react-hook-form';
+import { useForm, type SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { BusinessType, LeadSource } from '../../features/marketing/types';
 import { leadSchema, type LeadFormValues } from '../../features/marketing/schemas';
+import {
+  PageHeader,
+  Card,
+  CardContent,
+  Field,
+  Input,
+  Textarea,
+  Button,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  IconButton,
+} from '@/components/ui';
 
 /**
  * Lead create/edit form. Route param `id` switches into edit mode
@@ -121,206 +136,317 @@ export default function CreateLeadPage() {
     mutation.mutate(payload);
   };
 
-  const inputCls =
-    'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-900 focus:ring-2 focus:ring-primary focus:border-primary outline-none disabled:bg-slate-50';
-  const errCls = 'mt-1 text-xs text-red-600';
-  const labelCls = 'block text-sm text-slate-600 mb-1';
-  const sectionTitleCls = 'text-sm font-semibold text-slate-900 mb-3';
-
   const fieldErr = (msg?: string) =>
     msg
       ? // Translation lookup; falls back to the raw message for any
         // backend-supplied string (e.g. duplicate-email error).
         t([`validation.${msg}`, msg], { defaultValue: msg })
-      : null;
+      : undefined;
+
+  const errors = form.formState.errors;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 sm:px-0 pb-12">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">
-          {isEdit ? t('createLead.titleEdit') : t('createLead.titleNew')}
-        </h1>
-        <p className="text-sm text-slate-500 mt-1">{t('createLead.subtitle')}</p>
-      </div>
-
-      <form
-        onSubmit={form.handleSubmit(onSubmit)}
-        noValidate
-        className="bg-white rounded-xl border border-slate-200 p-6 space-y-6"
-      >
-        {/* Business */}
-        <section>
-          <h3 className={sectionTitleCls}>{t('createLead.sections.business')}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>{t('createLead.fields.businessName')} *</label>
-              <input type="text" {...form.register('businessName')} className={inputCls} />
-              {form.formState.errors.businessName && (
-                <p className={errCls}>{fieldErr(form.formState.errors.businessName.message)}</p>
-              )}
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.businessType')} *</label>
-              <select {...form.register('businessType')} className={inputCls}>
-                {Object.values(BusinessType).map((b) => (
-                  <option key={b} value={b}>
-                    {t(`businessType.${b}`)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.tableCount')}</label>
-              <input
-                type="number"
-                min={0}
-                {...form.register('tableCount')}
-                className={inputCls}
-              />
-              {form.formState.errors.tableCount && (
-                <p className={errCls}>{fieldErr(form.formState.errors.tableCount.message)}</p>
-              )}
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.branchCount')}</label>
-              <input
-                type="number"
-                min={0}
-                {...form.register('branchCount')}
-                className={inputCls}
-              />
-              {form.formState.errors.branchCount && (
-                <p className={errCls}>{fieldErr(form.formState.errors.branchCount.message)}</p>
-              )}
-            </div>
-            <div className="sm:col-span-2">
-              <label className={labelCls}>{t('createLead.fields.currentSystem')}</label>
-              <input type="text" {...form.register('currentSystem')} className={inputCls} />
-            </div>
-          </div>
-        </section>
-
-        {/* Contact */}
-        <section>
-          <h3 className={sectionTitleCls}>{t('createLead.sections.contact')}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>{t('createLead.fields.contactPerson')} *</label>
-              <input type="text" {...form.register('contactPerson')} className={inputCls} />
-              {form.formState.errors.contactPerson && (
-                <p className={errCls}>{fieldErr(form.formState.errors.contactPerson.message)}</p>
-              )}
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.phone')}</label>
-              <input
-                type="tel"
-                {...form.register('phone')}
-                placeholder="+90555..."
-                className={inputCls}
-              />
-              {form.formState.errors.phone && (
-                <p className={errCls}>{fieldErr(form.formState.errors.phone.message)}</p>
-              )}
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.whatsapp')}</label>
-              <input
-                type="tel"
-                {...form.register('whatsapp')}
-                placeholder="+90555..."
-                className={inputCls}
-              />
-              {form.formState.errors.whatsapp && (
-                <p className={errCls}>{fieldErr(form.formState.errors.whatsapp.message)}</p>
-              )}
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.email')}</label>
-              <input type="email" {...form.register('email')} className={inputCls} />
-              {form.formState.errors.email && (
-                <p className={errCls}>{fieldErr(form.formState.errors.email.message)}</p>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* Location */}
-        <section>
-          <h3 className={sectionTitleCls}>{t('createLead.sections.location')}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className={labelCls}>{t('createLead.fields.city')}</label>
-              <input type="text" {...form.register('city')} className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.region')}</label>
-              <input type="text" {...form.register('region')} className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.address')}</label>
-              <input type="text" {...form.register('address')} className={inputCls} />
-            </div>
-          </div>
-        </section>
-
-        {/* Lead info */}
-        <section>
-          <h3 className={sectionTitleCls}>{t('createLead.sections.lead')}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className={labelCls}>{t('createLead.fields.source')} *</label>
-              <select {...form.register('source')} className={inputCls}>
-                {Object.values(LeadSource).map((s) => (
-                  <option key={s} value={s}>
-                    {t(`source.${s}`)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.priority')}</label>
-              <select {...form.register('priority')} className={inputCls}>
-                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
-                  <option key={p} value={p}>
-                    {t(`priority.${p}`)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>{t('createLead.fields.nextFollowUp')}</label>
-              <input type="date" {...form.register('nextFollowUp')} className={inputCls} />
-            </div>
-          </div>
-          <div className="mt-4">
-            <label className={labelCls}>{t('createLead.fields.notes')}</label>
-            <textarea
-              rows={3}
-              {...form.register('notes')}
-              className={`${inputCls} resize-none`}
-            />
-          </div>
-        </section>
-
-        {/* Actions */}
-        <div className="flex gap-3 pt-4 border-t border-slate-200">
-          <button
-            type="submit"
-            disabled={mutation.isPending}
-            className="inline-flex items-center gap-2 px-6 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 disabled:opacity-60 transition"
-          >
-            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isEdit ? t('createLead.submitUpdate') : t('createLead.submitCreate')}
-          </button>
-          <button
-            type="button"
+    <div className="max-w-3xl mx-auto px-4 sm:px-0 pb-12 space-y-6">
+      <PageHeader
+        title={isEdit ? t('createLead.titleEdit') : t('createLead.titleNew')}
+        description={t('createLead.subtitle')}
+        actions={
+          <IconButton
+            aria-label={t('common.back')}
             onClick={() => navigate(-1)}
-            className="px-6 py-2.5 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 transition"
+            variant="ghost"
+            size="sm"
           >
-            {t('common.cancel')}
-          </button>
-        </div>
+            <ArrowLeft className="h-4 w-4" />
+          </IconButton>
+        }
+      />
+
+      <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
+        <Card>
+          <CardContent className="pt-5 space-y-8">
+            {/* Business */}
+            <section>
+              <h3 className="text-sm font-semibold text-foreground mb-4">
+                {t('createLead.sections.business')}
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field
+                  label={t('createLead.fields.businessName')}
+                  required
+                  error={fieldErr(errors.businessName?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('businessName')}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.businessType')}
+                  required
+                  error={fieldErr(errors.businessType?.message)}
+                >
+                  {({ id, invalid }) => (
+                    <Controller
+                      control={form.control}
+                      name="businessType"
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={id}
+                            aria-invalid={invalid || undefined}
+                            ref={field.ref}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.values(BusinessType).map((b) => (
+                              <SelectItem key={b} value={b}>
+                                {t(`businessType.${b}`)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.tableCount')}
+                  error={fieldErr(errors.tableCount?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      type="number"
+                      min={0}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('tableCount')}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.branchCount')}
+                  error={fieldErr(errors.branchCount?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      type="number"
+                      min={0}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('branchCount')}
+                    />
+                  )}
+                </Field>
+
+                <div className="sm:col-span-2">
+                  <Field label={t('createLead.fields.currentSystem')}>
+                    {({ id }) => (
+                      <Input id={id} {...form.register('currentSystem')} />
+                    )}
+                  </Field>
+                </div>
+              </div>
+            </section>
+
+            {/* Contact */}
+            <section>
+              <h3 className="text-sm font-semibold text-foreground mb-4">
+                {t('createLead.sections.contact')}
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field
+                  label={t('createLead.fields.contactPerson')}
+                  required
+                  error={fieldErr(errors.contactPerson?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('contactPerson')}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.phone')}
+                  error={fieldErr(errors.phone?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      type="tel"
+                      placeholder="+90555..."
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('phone')}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.whatsapp')}
+                  error={fieldErr(errors.whatsapp?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      type="tel"
+                      placeholder="+90555..."
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('whatsapp')}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.email')}
+                  error={fieldErr(errors.email?.message)}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input
+                      id={id}
+                      type="email"
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid || undefined}
+                      {...form.register('email')}
+                    />
+                  )}
+                </Field>
+              </div>
+            </section>
+
+            {/* Location */}
+            <section>
+              <h3 className="text-sm font-semibold text-foreground mb-4">
+                {t('createLead.sections.location')}
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <Field label={t('createLead.fields.city')}>
+                  {({ id }) => <Input id={id} {...form.register('city')} />}
+                </Field>
+
+                <Field label={t('createLead.fields.region')}>
+                  {({ id }) => <Input id={id} {...form.register('region')} />}
+                </Field>
+
+                <Field label={t('createLead.fields.address')}>
+                  {({ id }) => <Input id={id} {...form.register('address')} />}
+                </Field>
+              </div>
+            </section>
+
+            {/* Lead info */}
+            <section>
+              <h3 className="text-sm font-semibold text-foreground mb-4">
+                {t('createLead.sections.lead')}
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <Field
+                  label={t('createLead.fields.source')}
+                  required
+                  error={fieldErr(errors.source?.message)}
+                >
+                  {({ id, invalid }) => (
+                    <Controller
+                      control={form.control}
+                      name="source"
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={id}
+                            aria-invalid={invalid || undefined}
+                            ref={field.ref}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.values(LeadSource).map((s) => (
+                              <SelectItem key={s} value={s}>
+                                {t(`source.${s}`)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label={t('createLead.fields.priority')}
+                  error={fieldErr(errors.priority?.message)}
+                >
+                  {({ id, invalid }) => (
+                    <Controller
+                      control={form.control}
+                      name="priority"
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={id}
+                            aria-invalid={invalid || undefined}
+                            ref={field.ref}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
+                              <SelectItem key={p} value={p}>
+                                {t(`priority.${p}`)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  )}
+                </Field>
+
+                <Field label={t('createLead.fields.nextFollowUp')}>
+                  {({ id }) => (
+                    <Input id={id} type="date" {...form.register('nextFollowUp')} />
+                  )}
+                </Field>
+              </div>
+
+              <div className="mt-4">
+                <Field label={t('createLead.fields.notes')}>
+                  {({ id }) => (
+                    <Textarea id={id} rows={3} {...form.register('notes')} />
+                  )}
+                </Field>
+              </div>
+            </section>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-2 border-t border-border">
+              <Button type="submit" loading={mutation.isPending}>
+                {isEdit ? t('createLead.submitUpdate') : t('createLead.submitCreate')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate(-1)}
+              >
+                {t('common.cancel')}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </form>
     </div>
   );
