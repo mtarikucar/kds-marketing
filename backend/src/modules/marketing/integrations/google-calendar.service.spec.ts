@@ -229,6 +229,18 @@ describe('Google Calendar integration (mocked Google)', () => {
     );
   });
 
+  it('surfaces Google\'s precise OAuth error on a failed code exchange', async () => {
+    const { state } = svc.getAuthUrl(WS_A, USER);
+    // Google answers 401 with {error:"invalid_client"} when the client_id/secret
+    // pair is wrong — the message must carry that code (it's not a secret).
+    safeFetchSpy.mockResolvedValue(
+      jsonResponse({ error: 'invalid_client' }, 401),
+    );
+    await expect(svc.handleCallback(state, 'code')).rejects.toThrow(
+      'Google code exchange failed: invalid_client',
+    );
+  });
+
   // ------------------------------------------------------------------- //
   //  Token refresh on expiry                                            //
   // ------------------------------------------------------------------- //
