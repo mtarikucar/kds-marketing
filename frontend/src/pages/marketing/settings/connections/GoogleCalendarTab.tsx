@@ -37,9 +37,13 @@ export function GoogleCalendarTab() {
   const handleConnect = () => {
     connect.mutate(undefined, {
       onSuccess: ({ url }) => {
-        // Open Google's consent screen. The callback re-enables the connection
-        // server-side; the user returns and the status query re-fetches.
-        window.open(url, '_blank', 'noopener,noreferrer');
+        // Full-page, SAME-TAB redirect to Google's consent screen. The marketing
+        // auth token lives in sessionStorage (per-tab isolation), so opening a
+        // NEW tab would land the OAuth callback unauthenticated and bounce it to
+        // the login page (losing the ?gcal= result). Staying in this tab keeps
+        // the session; Google returns us to /settings/connections?gcal=...
+        // authenticated, where the result toast fires and status re-fetches.
+        window.location.assign(url);
       },
       onError: (e) =>
         toast.error(apiError(e, t('connections.gcal.connectError', { defaultValue: 'Could not start Google connect' }))),
