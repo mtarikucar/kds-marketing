@@ -61,6 +61,8 @@ function freshConn(over: Record<string, unknown> = {}) {
     syncToken: null as string | null,
     channelId: null as string | null,
     resourceId: null as string | null,
+    channelToken: null as string | null,
+    channelExpiration: null as Date | null,
     enabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -349,6 +351,7 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
     jest.restoreAllMocks();
     delete process.env.GOOGLE_OAUTH_CLIENT_ID;
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    delete process.env.MARKETING_PUBLIC_URL;
   });
 
   it('subscribes to BookingCreated on init and unsubscribes on destroy', () => {
@@ -392,6 +395,35 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
         where: { id: 'bk-1', workspaceId: WS_A },
         data: { googleEventId: 'gevt-123' },
       }),
+    );
+  });
+
+  it('push is idempotent — a duplicate create (409) adopts the deterministic id, no second event', async () => {
+    prisma.googleCalendarConnection.findFirst.mockResolvedValue(freshConn() as never);
+    prisma.booking.findFirst.mockResolvedValue({
+      id: 'bk-1',
+      workspaceId: WS_A,
+      name: 'Demo',
+      notes: null,
+      email: null,
+      startAt: new Date('2027-06-14T09:00:00.000Z'),
+      endAt: new Date('2027-06-14T09:30:00.000Z'),
+      status: 'CONFIRMED',
+      googleEventId: null,
+    } as never);
+    (prisma.booking.updateMany as jest.Mock).mockResolvedValue({ count: 1 } as never);
+    // The sibling push path already created this event ⇒ Google answers 409.
+    safeFetchSpy.mockResolvedValue(jsonResponse({ error: 'duplicate' }, 409));
+
+    const eventId = await sync.pushBooking(WS_A, 'bk-1');
+    // The create carried our deterministic id (bk + booking id sans hyphens)…
+    const body = JSON.parse(safeFetchSpy.mock.calls[0][1].body as string);
+    expect(body.id).toBe('bkbk1');
+    // …and the 409 was adopted (no throw), the id persisted so pull won't see a
+    // phantom external block.
+    expect(eventId).toBe('bkbk1');
+    expect(prisma.booking.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { googleEventId: 'bkbk1' } }),
     );
   });
 
@@ -573,6 +605,140 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
     const bad = await sync.pullByChannel('chan-1', 'WRONG-RES');
     expect(bad).toBeNull();
   });
+
+  // --------------------------- WATCH --------------------------------- //
+
+  it('startWatch registers a push channel and stores id/resource/token/expiration', async () => {
+    process.env.MARKETING_PUBLIC_URL = 'https://app.example.com';
+    const conn = freshConn();
+    const exp = Date.now() + 7 * 24 * 3600 * 1000;
+    safeFetchSpy.mockResolvedValue(
+      jsonResponse({ id: 'chan-x', resourceId: 'res-x', expiration: String(exp) }),
+    );
+    (prisma.googleCalendarConnection.updateMany as jest.Mock).mockResolvedValue({ count: 1 } as never);
+
+    const ok = await sync.startWatch(conn as never);
+    expect(ok).toBe(true);
+
+    // POSTed to events.watch with our webhook address, a token, web_hook type.
+    const call = safeFetchSpy.mock.calls[0];
+    expect(call[0]).toContain('/calendars/primary/events/watch');
+    expect(call[1].method).toBe('POST');
+    const body = JSON.parse(call[1].body as string);
+    expect(body.type).toBe('web_hook');
+    expect(body.address).toBe(
+      'https://app.example.com/api/marketing/integrations/google-calendar/notifications',
+    );
+    expect(typeof body.token).toBe('string');
+
+    // Persisted the channel resource (workspace-scoped), token matches the body.
+    const data = (prisma.googleCalendarConnection.updateMany as jest.Mock).mock.calls[0][0]
+      .data as Record<string, unknown>;
+    expect(data.channelId).toBe(body.id);
+    expect(data.resourceId).toBe('res-x');
+    expect(data.channelToken).toBe(body.token);
+    expect(data.channelExpiration instanceof Date).toBe(true);
+  });
+
+  it('startWatch degrades to manual mode (returns false) on a Google error', async () => {
+    process.env.MARKETING_PUBLIC_URL = 'https://app.example.com';
+    safeFetchSpy.mockResolvedValue(
+      jsonResponse({ error: 'push.webhookUrlUnauthorized' }, 401),
+    );
+    const ok = await sync.startWatch(freshConn() as never);
+    expect(ok).toBe(false);
+  });
+
+  it('startWatch is a no-op (false) without an https MARKETING_PUBLIC_URL', async () => {
+    delete process.env.MARKETING_PUBLIC_URL;
+    const ok = await sync.startWatch(freshConn() as never);
+    expect(ok).toBe(false);
+    expect(safeFetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('startWatch registers the new channel BEFORE retiring the old (no orphan window)', async () => {
+    process.env.MARKETING_PUBLIC_URL = 'https://app.example.com';
+    const conn = freshConn({ channelId: 'old-chan', resourceId: 'old-res' });
+    safeFetchSpy
+      .mockResolvedValueOnce(
+        jsonResponse({ id: 'new', resourceId: 'r', expiration: String(Date.now() + 1e6) }),
+      ) // events.watch (new) — FIRST
+      .mockResolvedValueOnce(emptyResponse(204)); // channels.stop (old) — AFTER persist
+    (prisma.googleCalendarConnection.updateMany as jest.Mock).mockResolvedValue({ count: 1 } as never);
+
+    const ok = await sync.startWatch(conn as never);
+    expect(ok).toBe(true);
+    expect(safeFetchSpy.mock.calls[0][0]).toContain('/events/watch');
+    expect(safeFetchSpy.mock.calls[1][0]).toContain('/channels/stop');
+    // The channel we retire is the OLD one.
+    expect(JSON.parse(safeFetchSpy.mock.calls[1][1].body as string).id).toBe('old-chan');
+  });
+
+  it('stopWatch stops the channel and clears every channel field', async () => {
+    const conn = freshConn({ channelId: 'chan-1', resourceId: 'res-1', channelToken: 'tok' });
+    safeFetchSpy.mockResolvedValue(emptyResponse(204));
+    (prisma.googleCalendarConnection.updateMany as jest.Mock).mockResolvedValue({ count: 1 } as never);
+
+    await sync.stopWatch(conn as never);
+    expect(safeFetchSpy.mock.calls[0][0]).toContain('/channels/stop');
+    const data = (prisma.googleCalendarConnection.updateMany as jest.Mock).mock.calls[0][0]
+      .data as Record<string, unknown>;
+    expect(data).toEqual({
+      channelId: null,
+      resourceId: null,
+      channelToken: null,
+      channelExpiration: null,
+    });
+  });
+
+  it('pullByChannel rejects a forged channel token, accepts the right one', async () => {
+    const conn = freshConn({
+      channelId: 'chan-1',
+      resourceId: 'res-1',
+      channelToken: 'secret-tok',
+      syncToken: 'tk',
+    });
+    prisma.googleCalendarConnection.findFirst.mockResolvedValue(conn as never);
+    const bad = await sync.pullByChannel('chan-1', 'res-1', 'WRONG-TOKEN');
+    expect(bad).toBeNull();
+
+    safeFetchSpy.mockResolvedValue(jsonResponse({ items: [], nextSyncToken: 'tk2' }));
+    (prisma.googleCalendarConnection.updateMany as jest.Mock).mockResolvedValue({ count: 1 } as never);
+    prisma.googleCalendarConnection.findFirst.mockResolvedValue(conn as never);
+    const ok = await sync.pullByChannel('chan-1', 'res-1', 'secret-tok');
+    expect(ok?.ok).toBe(true);
+  });
+
+  it('renewWatches re-registers channels within the renewal window', async () => {
+    process.env.MARKETING_PUBLIC_URL = 'https://app.example.com';
+    const near = freshConn({
+      id: 'c1',
+      channelId: 'old-chan',
+      resourceId: 'old-res',
+      channelExpiration: new Date(Date.now() + 3600_000), // ~1h out ⇒ due
+    });
+    prisma.googleCalendarConnection.findMany.mockResolvedValue([near] as never);
+    safeFetchSpy
+      .mockResolvedValueOnce(
+        jsonResponse({ id: 'new', resourceId: 'r', expiration: String(Date.now() + 7 * 24 * 3600 * 1000) }),
+      ) // events.watch (new)
+      .mockResolvedValueOnce(emptyResponse(204)); // channels.stop (old)
+    (prisma.googleCalendarConnection.updateMany as jest.Mock).mockResolvedValue({ count: 1 } as never);
+
+    const res = await sync.renewWatches();
+    expect(res.renewed).toBe(1);
+  });
+
+  it('ensureWatch skips re-registration when a healthy channel exists', async () => {
+    const healthy = freshConn({
+      channelId: 'chan-1',
+      channelExpiration: new Date(Date.now() + 5 * 24 * 3600_000), // far from expiry
+    });
+    prisma.googleCalendarConnection.findFirst.mockResolvedValue(healthy as never);
+    const ok = await sync.ensureWatch(WS_A);
+    expect(ok).toBe(true);
+    expect(safeFetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -607,6 +773,8 @@ async function sealViaCallback(
     syncToken: null as string | null,
     channelId: null as string | null,
     resourceId: null as string | null,
+    channelToken: null as string | null,
+    channelExpiration: null as Date | null,
     enabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),

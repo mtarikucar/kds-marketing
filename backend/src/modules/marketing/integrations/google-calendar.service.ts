@@ -84,6 +84,8 @@ export interface GoogleCalendarConnectionRow {
   syncToken: string | null;
   channelId: string | null;
   resourceId: string | null;
+  channelToken: string | null;
+  channelExpiration: Date | null;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -345,6 +347,7 @@ export class GoogleCalendarService {
       tokenExpiresAt: row.tokenExpiresAt,
       syncEnabled: row.enabled,
       pushChannelActive: !!row.channelId,
+      pushExpiresAt: row.channelExpiration,
       lastSyncToken: row.syncToken ? true : false,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

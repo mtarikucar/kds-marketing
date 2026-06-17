@@ -92,10 +92,14 @@ export class GoogleCalendarController {
   @Delete(':id')
   @Audit({ action: 'google-calendar.disconnect', resourceType: 'google-calendar-connection', resourceIdParam: 'id' })
   @RequirePermission('settings.manage')
-  disconnect(
+  async disconnect(
     @Param('id') id: string,
     @CurrentMarketingUser() u: MarketingUserPayload,
   ) {
+    // Stop the Google push channel first (best-effort) so we don't leave an
+    // orphaned watch pointing at our webhook after the row is gone.
+    const row = await this.svc.owned(u.workspaceId, id);
+    await this.sync.stopWatch(row).catch(() => undefined);
     return this.svc.disconnect(u.workspaceId, id);
   }
 }
@@ -144,7 +148,11 @@ export class GoogleCalendarPublicController {
     @Res() res: Response,
   ): Promise<void> {
     try {
-      await this.svc.handleCallback(state, code);
+      const conn = await this.svc.handleCallback(state, code);
+      // Activate the real-time push channel on the just-connected calendar
+      // (best-effort; manual sync still works if the webhook domain isn't
+      // verified). Never block the redirect.
+      await this.sync.ensureWatch(conn.workspaceId, conn.id).catch(() => undefined);
       res.redirect(
         302,
         this.svc.panelUrl('/settings/connections?gcal=connected'),
@@ -168,11 +176,14 @@ export class GoogleCalendarPublicController {
     @Headers('x-goog-channel-id') channelId: string,
     @Headers('x-goog-resource-id') resourceId: string,
     @Headers('x-goog-resource-state') resourceState: string,
+    @Headers('x-goog-channel-token') channelToken: string,
   ): Promise<{ ok: boolean }> {
     // Google's initial "sync" ping after watch creation carries no changes.
     if (resourceState === 'sync') return { ok: true };
+    // The token is validated against the stored per-channel nonce inside
+    // pullByChannel — a forged notification simply no-ops.
     await this.sync
-      .pullByChannel(channelId, resourceId)
+      .pullByChannel(channelId, resourceId, channelToken)
       .catch(() => undefined);
     return { ok: true };
   }

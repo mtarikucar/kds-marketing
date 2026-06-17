@@ -2003,12 +2003,14 @@ model GoogleCalendarConnection {
   accessToken      String // SEALED (secret-box v1:...) — masked out of API responses
   refreshToken     String // SEALED (secret-box v1:...) — masked out of API responses
   tokenExpiresAt   DateTime
-  syncToken        String? // Google incremental events.list sync token (nullable until first pull)
-  channelId        String? // Google watch channel id (push webhook); unique when set
-  resourceId       String? // Google watch resource id (push webhook)
-  enabled          Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  syncToken         String? // Google incremental events.list sync token (nullable until first pull)
+  channelId         String? // Google watch channel id (push webhook); unique when set
+  resourceId        String? // Google watch resource id (push webhook)
+  channelToken      String? // per-channel verification nonce (validated on the incoming webhook)
+  channelExpiration DateTime? // when the Google watch channel expires (drives the renewal cron)
+  enabled           Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([workspaceId])
   @@index([workspaceId, marketingUserId])
