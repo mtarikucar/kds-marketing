@@ -28,6 +28,10 @@ describe('MessageQuotaService', () => {
           else if (args.create?.value !== undefined && counterValue === 0) counterValue = args.create.value;
           return { value: counterValue };
         }),
+        update: jest.fn().mockImplementation(async (args: any) => {
+          if (args.data?.value !== undefined) counterValue = args.data.value;
+          return { value: counterValue };
+        }),
       },
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
@@ -67,6 +71,14 @@ describe('MessageQuotaService', () => {
     withLimit(100);
     await svc.reserve(WS, 'INSTAGRAM');
     await svc.refund(WS, 'INSTAGRAM');
+    expect(counterValue).toBe(0);
+  });
+
+  it('never drives the counter negative — an over-refund floors at 0', async () => {
+    withLimit(100);
+    await svc.reserve(WS, 'SMS'); // 1
+    await svc.refund(WS, 'SMS'); // 0
+    await svc.refund(WS, 'SMS'); // still 0, not -1
     expect(counterValue).toBe(0);
   });
 

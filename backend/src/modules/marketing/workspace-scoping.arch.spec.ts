@@ -197,15 +197,14 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   'scheduling/scheduled-job-runner.service.ts:scheduledJob.updateMany':
     'stuck-reaper resets RUNNING rows across all workspaces (crash recovery sweeper)',
   // Inbound public webhooks have NO workspace context — the provider only
-  // gives a widget key or a page/phone id. These two lookups (the ONLY
-  // cross-workspace channel/message access) live in one resolver so the
-  // exemption surface is a single auditable file; both key on globally-unique
-  // handles ((type, externalId) the workspace registered; externalMessageId
-  // the provider minted) so they can't leak across tenants.
+  // gives a widget key or a page/phone id. This lookup (the ONLY cross-workspace
+  // channel access) lives in one resolver so the exemption surface is a single
+  // auditable file; it keys on the globally-unique (type, externalId) handle the
+  // workspace registered, so it can't leak across tenants. (NetGSM delivery
+  // status is no longer flipped by an unauthenticated push — it's polled per
+  // message by id in NetgsmDlrPollService — so that exemption is gone.)
   'channels/public-channel-resolver.service.ts:channel.findFirst':
     'meta webhook resolves the channel by its provider page/phone id before any workspace context exists',
-  'channels/public-channel-resolver.service.ts:message.updateMany':
-    'netgsm DLR flips an outbound message status by its globally-unique provider job id',
   // Google Calendar push-webhook has NO workspace context — Google only sends
   // the watch channel id. channelId is UNIQUE (one connection per channel), so
   // this resolver (the ONLY unscoped connection read) keys on a globally-unique

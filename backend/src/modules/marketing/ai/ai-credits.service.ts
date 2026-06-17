@@ -85,9 +85,29 @@ export class AiCreditsService {
   /** Return reserved credits to the pool when the AI call itself failed. */
   async refund(workspaceId: string, cost: number): Promise<void> {
     if (cost <= 0) return;
-    await this.bump(workspaceId, monthKey(), -cost).catch((e) =>
-      this.logger.error(`credit refund failed for ${workspaceId}: ${e?.message ?? e}`),
-    );
+    const period = monthKey();
+    // Floored read-modify-write under the SAME per-workspace lock as reserve, so
+    // a refund can never drive the meter below 0 (a negative `used` would make
+    // `remaining` overstate the cap and let a workspace exceed its plan).
+    await this.prisma
+      .$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('ai-credits:' + workspaceId)}))::text AS locked`,
+        );
+        const row = await tx.usageCounter.findUnique({
+          where: { workspaceId_metric_periodKey: { workspaceId, metric: AI_CREDITS_METRIC, periodKey: period } },
+          select: { value: true },
+        });
+        if (!row) return; // nothing reserved this period → nothing to refund
+        const next = Math.max(0, (row.value ?? 0) - cost);
+        await tx.usageCounter.update({
+          where: { workspaceId_metric_periodKey: { workspaceId, metric: AI_CREDITS_METRIC, periodKey: period } },
+          data: { value: next },
+        });
+      })
+      .catch((e: any) =>
+        this.logger.error(`credit refund failed for ${workspaceId}: ${e?.message ?? e}`),
+      );
   }
 
   /** Read-only meter for the billing summary / UI gauges. */

@@ -24,7 +24,9 @@ describe('CampaignSenderService.batch', () => {
           { id: 'r2', leadId: 'l2', token: 't2' },
         ]),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         count: jest.fn().mockResolvedValue(0),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
       lead: {
         findFirst: jest.fn().mockImplementation(async ({ where }: any) =>
@@ -65,5 +67,40 @@ describe('CampaignSenderService.batch', () => {
     prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'PAUSED' });
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
     expect(prisma.campaignRecipient.findMany).not.toHaveBeenCalled();
+  });
+
+  it('atomically claims each recipient (PENDING→SENDING) before processing it', async () => {
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+    expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith({
+      where: { id: 'r1', workspaceId: WS, status: 'PENDING' },
+      data: { status: 'SENDING' },
+    });
+  });
+
+  it('does NOT send a recipient already claimed by a concurrent (reaped) batch', async () => {
+    // Both leads opted-in, but our claim loses the race for the second recipient.
+    prisma.lead.findFirst.mockResolvedValue({ id: 'x', email: 'a@b.com', emailOptOut: false });
+    prisma.campaignRecipient.updateMany
+      .mockResolvedValueOnce({ count: 1 }) // r1 — we claimed it
+      .mockResolvedValueOnce({ count: 0 }); // r2 — a concurrent run already took it
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(email.sendPlainEmail).toHaveBeenCalledTimes(1); // only the one we claimed
+  });
+
+  it('recomputes campaign stats from recipient counts (no lost update under concurrency)', async () => {
+    prisma.campaignRecipient.groupBy.mockResolvedValue([
+      { status: 'SENT', _count: { _all: 3 } },
+      { status: 'FAILED', _count: { _all: 1 } },
+      { status: 'SKIPPED', _count: { _all: 2 } },
+    ]);
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats);
+    expect(statsUpdate[0].data.stats).toEqual(
+      expect.objectContaining({ sent: 3, failed: 1, skipped: 2 }),
+    );
   });
 });
