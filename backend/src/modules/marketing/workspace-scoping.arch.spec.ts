@@ -212,6 +212,13 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // handle the workspace itself registered; it can't leak across tenants.
   'integrations/google-calendar-sync.service.ts:googleCalendarConnection.findFirst':
     'google push-webhook resolves the connection by its unique watch channelId before any workspace context exists',
+  // The watch-renewal @Cron is a global control-plane sweep (like the
+  // scheduled-job runner): it re-registers push channels nearing expiry across
+  // ALL workspaces. The other findMany in this file (pullWorkspace) IS
+  // workspace-scoped; the create/update paths (startWatch/stopWatch) all key on
+  // (id, workspaceId), so only this renewal sweep is legitimately unscoped.
+  'integrations/google-calendar-sync.service.ts:googleCalendarConnection.findMany':
+    'watch-renewal cron re-registers expiring push channels across all workspaces (control-plane sweep)',
 
   // ---- Epic A imports — ImportJobRow has NO workspaceId column; it is owned by
   // its parent ImportJob (which carries workspaceId). Every row op keys on

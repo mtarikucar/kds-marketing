@@ -4,7 +4,8 @@ import {
   OnModuleInit,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { randomBytes } from 'crypto';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
@@ -37,9 +38,18 @@ import {
  */
 
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
+const CHANNELS_STOP_ENDPOINT = `${CALENDAR_API_BASE}/channels/stop`;
 const EXTERNAL_BUSY = 'EXTERNAL_BUSY';
 // Page cap so one webhook/scheduler tick can't spin forever on a huge backlog.
 const MAX_PULL_PAGES = 10;
+// We REQUEST a 7-day watch TTL (Google's calendar maximum); Google may return a
+// shorter expiration, which we honour. The renewal cron re-registers before it
+// lapses so the real-time push never silently stops.
+const WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
+// Renew when a channel is within this window of expiring (cron runs every 6h).
+const WATCH_RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
+// The path Google POSTs change notifications to (built onto MARKETING_PUBLIC_URL).
+const WEBHOOK_PATH = '/api/marketing/integrations/google-calendar/notifications';
 
 interface GoogleEvent {
   id?: string;
@@ -53,6 +63,13 @@ interface EventsListResponse {
   items?: GoogleEvent[];
   nextPageToken?: string;
   nextSyncToken?: string;
+}
+
+/** Google events.watch response (the push-channel resource). */
+interface WatchResponse {
+  id?: string; // echoes our channel id
+  resourceId?: string; // opaque Google resource id (sent back on every webhook)
+  expiration?: string; // ms-epoch as a string
 }
 
 export interface PullResult {
@@ -148,11 +165,28 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
           { method: 'PATCH', body: JSON.stringify(body) },
         );
       } else {
-        event = await this.apiJson(
-          `${CALENDAR_API_BASE}/calendars/${cal}/events`,
-          accessToken,
-          { method: 'POST', body: JSON.stringify(body) },
-        );
+        // Deterministic event id ⇒ the create is IDEMPOTENT. A booking's push
+        // can fire twice (BookingService calls pushBooking directly AND the
+        // BookingCreated domain event drives it); with a client-supplied id the
+        // second create returns 409 instead of minting a DUPLICATE Google event
+        // (which pull would otherwise re-import as a phantom EXTERNAL_BUSY block).
+        // Booking ids are UUIDs (hex), so stripping hyphens yields a valid
+        // base32hex id ([a-v0-9], 5–1024 chars).
+        const eventId = `bk${booking.id.replace(/-/g, '')}`;
+        try {
+          event = await this.apiJson(
+            `${CALENDAR_API_BASE}/calendars/${cal}/events`,
+            accessToken,
+            { method: 'POST', body: JSON.stringify({ ...body, id: eventId }) },
+          );
+        } catch (e) {
+          if (e instanceof GoogleHttpError && e.status === 409) {
+            // The sibling push path already created it — adopt the known id.
+            event = { id: eventId };
+          } else {
+            throw e;
+          }
+        }
         if (event.id) {
           await this.prisma.booking.updateMany({
             where: { id: booking.id, workspaceId },
@@ -204,6 +238,213 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       );
       return false;
     }
+  }
+
+  // ===================================================================== //
+  //  WATCH (real-time push channel lifecycle)                             //
+  // ===================================================================== //
+
+  /**
+   * Ensure the workspace's active connection has a LIVE Google push channel:
+   * (re)register one when there's none, or when the current one is within the
+   * renewal window. Called after a successful connect and by the renewal cron.
+   * Best-effort — returns false (never throws) so connecting/sync is unaffected
+   * when push can't be established (e.g. the webhook domain isn't verified).
+   */
+  async ensureWatch(
+    workspaceId: string,
+    connectionId?: string,
+  ): Promise<boolean> {
+    if (!this.google.isConfigured()) return false;
+    // Target the specific connection when given (so a freshly-connected SECOND
+    // calendar gets its own watch), else the workspace's active connection.
+    const conn = connectionId
+      ? ((await this.prisma.googleCalendarConnection.findFirst({
+          where: { id: connectionId, workspaceId, enabled: true },
+        })) as GoogleCalendarConnectionRow | null)
+      : await this.activeConnection(workspaceId);
+    if (!conn) return false;
+    if (!this.watchNeedsRenewal(conn)) return true;
+    return this.startWatch(conn);
+  }
+
+  /** True when the connection has no channel, or its channel is near expiry. */
+  private watchNeedsRenewal(conn: GoogleCalendarConnectionRow): boolean {
+    if (!conn.channelId || !conn.channelExpiration) return true;
+    return (
+      conn.channelExpiration.getTime() - WATCH_RENEW_BEFORE_MS <= Date.now()
+    );
+  }
+
+  /**
+   * Register a fresh events.watch push channel for the connection (stopping any
+   * prior one first so channels don't pile up), and persist its id/resource/
+   * token/expiration. Returns true on success; on a Google error (commonly a
+   * 401 when the webhook domain isn't verified for the project) it logs a clear
+   * message and returns false, leaving the connection in manual-sync mode.
+   */
+  async startWatch(conn: GoogleCalendarConnectionRow): Promise<boolean> {
+    if (!this.google.isConfigured()) return false;
+    const address = this.webhookAddress();
+    if (!address) {
+      this.logger.warn(
+        'Google Calendar watch skipped: MARKETING_PUBLIC_URL is not an https URL',
+      );
+      return false;
+    }
+
+    // Capture any prior channel so we can retire it AFTER the replacement is
+    // live and persisted. Stopping the old channel first (the naive order) would
+    // orphan the connection if the new watch POST or its persist then failed —
+    // Google would keep firing at a channelId no row matches, and push would be
+    // lost until the next connect.
+    const prevChannelId = conn.channelId;
+    const prevResourceId = conn.resourceId;
+
+    const channelId = randomUUID();
+    const channelToken = randomBytes(24).toString('hex');
+    const body = {
+      id: channelId,
+      type: 'web_hook',
+      address,
+      token: channelToken,
+      params: { ttl: String(WATCH_TTL_SECONDS) },
+    };
+
+    try {
+      const accessToken = await this.google.getFreshAccessToken(conn);
+      const cal = encodeURIComponent(conn.googleCalendarId);
+      const res = await this.apiJson<WatchResponse>(
+        `${CALENDAR_API_BASE}/calendars/${cal}/events/watch`,
+        accessToken,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
+      const expMs = Number(res.expiration);
+      const expiration = Number.isFinite(expMs)
+        ? new Date(expMs)
+        : new Date(Date.now() + WATCH_TTL_SECONDS * 1000);
+      await this.prisma.googleCalendarConnection.updateMany({
+        where: { id: conn.id, workspaceId: conn.workspaceId },
+        data: {
+          channelId,
+          resourceId: res.resourceId ?? null,
+          channelToken,
+          channelExpiration: expiration,
+        },
+      });
+      // Keep the in-memory row coherent for any follow-on use this request.
+      conn.channelId = channelId;
+      conn.resourceId = res.resourceId ?? null;
+      conn.channelToken = channelToken;
+      conn.channelExpiration = expiration;
+
+      // New channel is live AND persisted — now best-effort retire the old one.
+      if (prevChannelId) {
+        await this.postChannelStop(prevChannelId, prevResourceId, accessToken).catch(
+          (e) =>
+            this.logger.warn(
+              `Google Calendar: failed to stop superseded channel ${prevChannelId}: ${(e as Error).message}`,
+            ),
+        );
+      }
+      this.logger.log(
+        `Google Calendar watch active for connection ${conn.id} until ${expiration.toISOString()}`,
+      );
+      return true;
+    } catch (e) {
+      const status = e instanceof GoogleHttpError ? e.status : 0;
+      this.logger.warn(
+        `Google Calendar watch failed for connection ${conn.id} (HTTP ${status}) — ` +
+          `staying in manual-sync mode. If this is 401, verify the webhook domain ` +
+          `for the Google Cloud project. ${(e as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Stop the connection's Google push channel (best-effort) and clear the
+   * channel fields. Called on disconnect and before re-registering.
+   */
+  async stopWatch(conn: GoogleCalendarConnectionRow): Promise<void> {
+    if (!conn.channelId) return;
+    if (this.google.isConfigured()) {
+      try {
+        const accessToken = await this.google.getFreshAccessToken(conn);
+        await this.postChannelStop(conn.channelId, conn.resourceId, accessToken);
+      } catch (e) {
+        // A channel that's already gone/expired is fine — just clear our copy.
+        this.logger.warn(
+          `Google Calendar channels.stop failed for ${conn.id}: ${(e as Error).message}`,
+        );
+      }
+    }
+    await this.prisma.googleCalendarConnection.updateMany({
+      where: { id: conn.id, workspaceId: conn.workspaceId },
+      data: {
+        channelId: null,
+        resourceId: null,
+        channelToken: null,
+        channelExpiration: null,
+      },
+    });
+    conn.channelId = null;
+    conn.resourceId = null;
+    conn.channelToken = null;
+    conn.channelExpiration = null;
+  }
+
+  /** Low-level Google channels.stop for an arbitrary channel (no DB write). */
+  private async postChannelStop(
+    channelId: string,
+    resourceId: string | null,
+    accessToken: string,
+  ): Promise<void> {
+    await this.apiVoid(CHANNELS_STOP_ENDPOINT, accessToken, {
+      method: 'POST',
+      body: JSON.stringify({ id: channelId, resourceId }),
+    });
+  }
+
+  /**
+   * Renew push channels that are within the renewal window so the real-time
+   * feed never lapses. Runs every 6h. Only touches connections that ALREADY
+   * have a channel (a connection whose initial watch failed — e.g. unverified
+   * domain — is re-attempted on the next connect, not spammed here).
+   *
+   * Single-replica assumption (mirrors the other marketing @Cron jobs); a
+   * multi-replica deploy would fire this on each instance.
+   */
+  @Cron(CronExpression.EVERY_6_HOURS, { name: 'gcal-watch-renew' })
+  async renewWatches(): Promise<{ renewed: number }> {
+    if (!this.google.isConfigured()) return { renewed: 0 };
+    const cutoff = new Date(Date.now() + WATCH_RENEW_BEFORE_MS);
+    const due = (await this.prisma.googleCalendarConnection.findMany({
+      where: {
+        enabled: true,
+        channelId: { not: null },
+        OR: [
+          { channelExpiration: null },
+          { channelExpiration: { lte: cutoff } },
+        ],
+      },
+    })) as GoogleCalendarConnectionRow[];
+
+    let renewed = 0;
+    for (const conn of due) {
+      if (await this.startWatch(conn)) renewed++;
+    }
+    if (renewed) {
+      this.logger.log(`Google Calendar: renewed ${renewed} push channel(s)`);
+    }
+    return { renewed };
+  }
+
+  /** Build the public https webhook address, or null when not deployable. */
+  private webhookAddress(): string | null {
+    const base = process.env.MARKETING_PUBLIC_URL?.trim();
+    if (!base || !base.startsWith('http')) return null;
+    return new URL(WEBHOOK_PATH, base).toString();
   }
 
   // ===================================================================== //
@@ -336,15 +577,17 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
   async pullByChannel(
     channelId: string,
     resourceId: string,
+    channelToken?: string,
   ): Promise<PullResult | null> {
     if (!channelId) return null;
     const conn = (await this.prisma.googleCalendarConnection.findFirst({
       where: { channelId },
     })) as GoogleCalendarConnectionRow | null;
-    // Validate the resource id matches what we stored for this channel.
-    if (!conn || (conn.resourceId && conn.resourceId !== resourceId)) {
-      return null;
-    }
+    if (!conn) return null;
+    // Validate the resource id AND the per-channel token we set at watch time —
+    // both must match what we stored, else this is a stale/forged notification.
+    if (conn.resourceId && conn.resourceId !== resourceId) return null;
+    if (conn.channelToken && conn.channelToken !== channelToken) return null;
     return this.pullEvents(conn);
   }
 
@@ -435,11 +678,11 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     return (await res.json()) as T;
   }
 
-  /** Authenticated Google API call where the body is ignored (DELETE). */
+  /** Authenticated Google API call whose response body is ignored (DELETE / stop). */
   private async apiVoid(
     url: string,
     accessToken: string,
-    init: { method: string },
+    init: { method: string; body?: string },
   ): Promise<void> {
     await this.apiCall(url, accessToken, init);
   }
