@@ -69,11 +69,20 @@ function validateEnv(): void {
   }
 
   // MARKETING_SECRET_KEY is the AES-256-GCM master key that seals channel/PSP
-  // secrets (consumed from Phase F P2 on). It's optional in P1, but if it's
-  // present it MUST decode to exactly 32 bytes or the box throws at first
-  // use — validate the format now rather than discover it mid-request.
+  // secrets AND mints the NetGSM MO callback tokens. It is now load-bearing for
+  // live omnichannel, so it is REQUIRED in production (fail fast rather than
+  // 503 on the first channel save / forge-open the unsigned MO webhook). When
+  // present it MUST decode to exactly 32 bytes or the box throws at first use.
   const secretKey = process.env.MARKETING_SECRET_KEY;
-  if (secretKey) {
+  if (!secretKey) {
+    if (isProd) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '[env] MARKETING_SECRET_KEY is required in production — channel/PSP secrets and NetGSM callback tokens cannot be sealed/minted without it. Generate with: openssl rand -base64 32',
+      );
+      process.exit(1);
+    }
+  } else {
     let bytes = 0;
     try {
       bytes = Buffer.from(secretKey, 'base64').length;

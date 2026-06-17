@@ -38,6 +38,10 @@ describe('AiCreditsService — monthly credit metering', () => {
           }
           return { value: counterValue };
         }),
+        update: jest.fn().mockImplementation(async (args: any) => {
+          if (args.data?.value !== undefined) counterValue = args.data.value;
+          return { value: counterValue };
+        }),
       },
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
@@ -95,6 +99,13 @@ describe('AiCreditsService — monthly credit metering', () => {
     await svc.reserve(WS, 5);
     await svc.refund(WS, 2);
     expect(counterValue).toBe(3);
+  });
+
+  it('never drives the meter negative — an over-refund floors at 0', async () => {
+    withLimit(100);
+    await svc.reserve(WS, 2); // 2
+    await svc.refund(WS, 5); // floors to 0, not -3
+    expect(counterValue).toBe(0);
   });
 
   it('usage reports limit/used/remaining off the current period meter', async () => {

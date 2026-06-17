@@ -54,28 +54,34 @@ export class CampaignSenderService implements OnModuleInit {
     }
 
     const links = (Array.isArray(campaign.links) ? campaign.links : []) as string[];
-    const delta = { sent: 0, failed: 0, skipped: 0 };
 
     for (const r of recipients) {
+      // Atomic claim: a concurrent batch — e.g. a slow run reaped after 15 min and
+      // re-dispatched while still in flight — that re-read the same PENDING rows
+      // cannot also process this recipient. Only one updateMany flips PENDING→
+      // SENDING; the loser sees count 0 and skips, so no double-send / double-meter.
+      const claim = await this.prisma.campaignRecipient.updateMany({
+        where: { id: r.id, workspaceId, status: 'PENDING' },
+        data: { status: 'SENDING' },
+      });
+      if (claim.count === 0) continue;
+
       const lead = await this.prisma.lead.findFirst({ where: { id: r.leadId, workspaceId } });
       const to = this.recipientAddress(campaign.channel, lead);
       if (!lead || this.isOptedOut(campaign.channel, lead) || !to) {
         await this.mark(r.id, 'SKIPPED');
-        delta.skipped++;
         continue;
       }
       const body = this.render(campaign.channel, campaign.body, r.token, links);
       const result = await this.send(workspaceId, campaign.channel, to, campaign.subject, body);
       if (result.ok) {
         await this.mark(r.id, 'SENT', { messageId: result.messageId, sentAt: new Date() });
-        delta.sent++;
       } else {
         await this.mark(r.id, 'FAILED', { error: result.error?.slice(0, 300) });
-        delta.failed++;
       }
     }
 
-    await this.bumpStats(campaignId, delta);
+    await this.recomputeStats(workspaceId, campaignId);
 
     const remaining = await this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, status: 'PENDING' } });
     if (remaining > 0) {
@@ -155,7 +161,20 @@ export class CampaignSenderService implements OnModuleInit {
     await this.prisma.campaignRecipient.update({ where: { id }, data: { status, ...extra } });
   }
 
-  private async bumpStats(campaignId: string, delta: { sent: number; failed: number; skipped: number }): Promise<void> {
+  /**
+   * Recompute send stats from the recipient rows (the source of truth) rather
+   * than accumulating per-batch deltas. This is idempotent (a reaped/re-run batch
+   * can't double-count) and immune to the lost-update race of a read-modify-write
+   * on the JSON `stats` blob: even interleaved writers converge on the true count.
+   */
+  private async recomputeStats(workspaceId: string, campaignId: string): Promise<void> {
+    const groups = await this.prisma.campaignRecipient.groupBy({
+      by: ['status'],
+      where: { workspaceId, campaignId },
+      _count: { _all: true },
+    });
+    const countOf = (status: string) =>
+      groups.find((g) => g.status === status)?._count._all ?? 0;
     const c = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { stats: true } });
     const s = (c?.stats ?? {}) as Record<string, number>;
     await this.prisma.campaign.update({
@@ -163,9 +182,9 @@ export class CampaignSenderService implements OnModuleInit {
       data: {
         stats: {
           ...s,
-          sent: (s.sent ?? 0) + delta.sent,
-          failed: (s.failed ?? 0) + delta.failed,
-          skipped: (s.skipped ?? 0) + delta.skipped,
+          sent: countOf('SENT'),
+          failed: countOf('FAILED'),
+          skipped: countOf('SKIPPED'),
         } as Prisma.InputJsonValue,
       },
     });

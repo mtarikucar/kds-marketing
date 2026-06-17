@@ -113,6 +113,8 @@ import { ConversationStreamService } from './channels/conversation-stream.servic
 import { MessageSenderService } from './channels/message-sender.service';
 import { ConversationAiEngineService } from './channels/conversation-ai-engine.service';
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
+import { NetgsmReportClient } from './channels/netgsm-report.client';
+import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
 import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
@@ -419,6 +421,10 @@ import { PermissionsGuard } from './roles/permissions.guard';
     ConversationsService,
     ConversationAiEngineService,
     PublicChannelResolverService,
+    // NetGSM delivery reports are POLLED (not pushed): a per-minute, advisory-
+    // locked sweeper that resolves still-pending outbound SMS via the report API.
+    NetgsmReportClient,
+    NetgsmDlrPollService,
     SseTokenGuard,
     // Phase F P3 — workflow automation: the trigger listener + executor (each
     // registers its bus/ScheduledJob hooks on init) + action handler + CRUD.

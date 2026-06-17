@@ -11,6 +11,8 @@ import {
   isSecretBoxConfigured,
 } from '../../../common/crypto/secret-box.helper';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
+import { assertNetgsmSmsSecrets } from './netgsm-config.util';
+import { netgsmMoCallbackUrl } from './netgsm-callback.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -73,6 +75,7 @@ export class ChannelsService {
       data.widgetKey = `wc_${randomBytes(16).toString('hex')}`;
     }
     if (dto.secrets && Object.keys(dto.secrets).length) {
+      if (dto.type === 'SMS') assertNetgsmSmsSecrets(dto.secrets);
       data.configSealed = this.seal(dto.secrets);
     }
     const c = await this.prisma.channel.create({ data: { ...data, workspaceId } });
@@ -99,7 +102,9 @@ export class ChannelsService {
           /* unreadable box — replace wholesale */
         }
       }
-      data.configSealed = this.seal({ ...current, ...dto.secrets });
+      const merged = { ...current, ...dto.secrets };
+      if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
+      data.configSealed = this.seal(merged);
     }
     const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
     return this.mask(c);
@@ -154,6 +159,12 @@ export class ChannelsService {
       externalId: c.externalId,
       configPublic: c.configPublic ?? null,
       configuredSecrets,
+      // SMS (NetGSM) inbound is unsigned, so we hand the operator a tokenized MO
+      // callback URL to paste into the NetGSM panel ("İnteraktif SMS → URL'ye
+      // yönlendir"). Null until PUBLIC_BASE_URL + MARKETING_SECRET_KEY are set.
+      ...(c.type === 'SMS'
+        ? { callbackUrl: netgsmMoCallbackUrl(process.env.PUBLIC_BASE_URL, c.id) }
+        : {}),
       lastVerifiedAt: c.lastVerifiedAt,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,

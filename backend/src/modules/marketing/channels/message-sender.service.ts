@@ -68,44 +68,64 @@ export class MessageSenderService {
       result = { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };
     }
 
+    let refunded = false;
     if (result.status === 'FAILED') {
       await this.quota.refund(workspaceId, channel.type);
+      refunded = true;
       const scrubbed = String(result.error ?? '').replace(/password=[^&\s]+/gi, 'password=***');
       this.logger.warn(`send failed convo=${conversationId} ch=${channel.type}: ${scrubbed}`);
     }
 
-    const message = await this.prisma.message.create({
-      data: {
-        workspaceId,
-        conversationId,
-        direction: 'OUTBOUND',
-        authorType,
-        authorId: input.authorId ?? null,
-        body: text,
-        externalMessageId: result.externalMessageId,
-        status: result.status,
-        error: result.error ?? null,
-      },
-    });
+    // Persist the message, bump the conversation, and enqueue the domain event
+    // in ONE transaction: the outbox is durable only when appended in the same
+    // tx as the state change, and a crash mid-way must not leave a sent message
+    // unrecorded with its event lost.
+    let message;
+    try {
+      message = await this.prisma.$transaction(async (tx) => {
+        const m = await tx.message.create({
+          data: {
+            workspaceId,
+            conversationId,
+            direction: 'OUTBOUND',
+            authorType,
+            authorId: input.authorId ?? null,
+            body: text,
+            externalMessageId: result.externalMessageId,
+            status: result.status,
+            error: result.error ?? null,
+          },
+        });
+        await tx.conversation.update({
+          where: { id: conversationId },
+          data: { lastMessageAt: new Date() },
+        });
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.ConversationMessageSent,
+            idempotencyKey: `conv-msg-sent:${m.id}`,
+            payload: {
+              workspaceId,
+              conversationId,
+              channelId: channel.id,
+              messageId: m.id,
+              authorType,
+              occurredAt: new Date().toISOString(),
+            },
+          },
+          tx as any,
+        );
+        return m;
+      });
+    } catch (e) {
+      // A successful provider send whose bookkeeping failed must NOT permanently
+      // consume the customer's monthly message quota — refund what we reserved
+      // (unless the send already FAILED and was refunded above), then surface it.
+      if (!refunded) await this.quota.refund(workspaceId, channel.type);
+      throw e;
+    }
 
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: { lastMessageAt: new Date() },
-    });
-
-    await this.outbox.append({
-      type: MarketingEventTypes.ConversationMessageSent,
-      idempotencyKey: `conv-msg-sent:${message.id}`,
-      payload: {
-        workspaceId,
-        conversationId,
-        channelId: channel.id,
-        messageId: message.id,
-        authorType,
-        occurredAt: new Date().toISOString(),
-      },
-    });
-
+    // Best-effort live fan-out, only after the tx has committed.
     this.stream.push(workspaceId, { kind: 'message', conversationId, payload: message });
     return message;
   }

@@ -85,9 +85,29 @@ export class MessageQuotaService {
 
   async refund(workspaceId: string, channelType: string, count = 1): Promise<void> {
     if (!this.isMetered(channelType) || count <= 0) return;
-    await this.bump(workspaceId, monthKey(), -count).catch((e) =>
-      this.logger.error(`message refund failed for ${workspaceId}: ${e?.message ?? e}`),
-    );
+    const period = monthKey();
+    // Floored read-modify-write under the SAME per-workspace lock as reserve, so
+    // a refund can never drive the counter below 0 (a negative `used` would make
+    // `remaining` overstate the cap and let a workspace exceed its plan).
+    await this.prisma
+      .$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('messages:' + workspaceId)}))::text AS locked`,
+        );
+        const row = await tx.usageCounter.findUnique({
+          where: { workspaceId_metric_periodKey: { workspaceId, metric: MESSAGES_METRIC, periodKey: period } },
+          select: { value: true },
+        });
+        if (!row) return; // nothing reserved this period → nothing to refund
+        const next = Math.max(0, (row.value ?? 0) - count);
+        await tx.usageCounter.update({
+          where: { workspaceId_metric_periodKey: { workspaceId, metric: MESSAGES_METRIC, periodKey: period } },
+          data: { value: next },
+        });
+      })
+      .catch((e: any) =>
+        this.logger.error(`message refund failed for ${workspaceId}: ${e?.message ?? e}`),
+      );
   }
 
   async usage(workspaceId: string): Promise<{ limit: number; used: number; remaining: number }> {

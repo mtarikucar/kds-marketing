@@ -25,21 +25,18 @@ export class PublicChannelResolverService {
     });
   }
 
+  /** NetGSM MO webhook → the channel by its id (carried, token-signed, in the
+   *  callback URL). Cross-workspace by id here; the caller authenticates via the
+   *  per-channel token and scopes all downstream work to the row's workspaceId. */
+  async channelForInbound(channelId: string) {
+    return this.prisma.channel.findUnique({ where: { id: channelId } });
+  }
+
   /** Twilio gather/status → the VOICE channel a call belongs to (CallSid is
    *  globally unique; the channel read is then workspace-scoped via the call). */
   async channelForVoiceCall(callSid: string) {
     const call = await this.prisma.voiceCall.findUnique({ where: { externalCallId: callSid } });
     if (!call) return null;
     return this.prisma.channel.findFirst({ where: { id: call.channelId, workspaceId: call.workspaceId } });
-  }
-
-  /** NetGSM DLR → update an outbound message's delivery status by its provider
-   *  job id (externalMessageId is globally unique). Returns rows touched. */
-  async markDeliveryStatus(externalMessageId: string, status: string): Promise<number> {
-    const res = await this.prisma.message.updateMany({
-      where: { externalMessageId },
-      data: { status },
-    });
-    return res.count;
   }
 }

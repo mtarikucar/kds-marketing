@@ -11,13 +11,37 @@ required for them to function.**
 | Web-chat (public page) | `/widget?key=…` (SPA route) | same |
 | Web-chat API | `POST/GET /api/public/webchat/:widgetKey/*` | — |
 | Meta webhook (WA/IG/Messenger) | `GET/POST /api/public/channels/meta/webhook` | — |
-| NetGSM DLR | `POST /api/public/channels/netgsm/dlr` | — |
+| NetGSM inbound SMS (MO reply) | `POST /api/public/channels/netgsm/:channelId/:token/mo` | — |
+| NetGSM DLR push (deprecated no-op) | `POST /api/public/channels/netgsm/dlr` | — |
 | Campaign open pixel | `GET /api/public/t/o/:token` | `/t/o/:token` |
 | Campaign click | `GET /api/public/t/c/:token?i=N` | `/t/c/:token` |
 | Campaign unsubscribe | `GET /api/public/u/:token` | `/u/:token` |
 | Funnel page render | `GET /api/public/p/:ws/:slug` | `/p/:ws/:slug` |
 | Form submit | `POST /api/public/f/:formId` | `/f/:formId` |
 | Booking page / slots / reserve | `GET/POST /api/public/book/:ws/:cal[...]` | `/book/:ws/:cal` |
+
+## NetGSM SMS (two-way) — delivery is polled, inbound is pushed
+
+NetGSM's API is asymmetric, so the two directions are handled differently:
+
+- **Delivery reports (DLR): POLLED, not pushed.** `NetgsmDlrPollService` queries
+  `GET https://api.netgsm.com.tr/sms/report` once a minute (advisory-locked,
+  single-replica, ≤10 reports/tick per NetGSM's rate limit) for recently-sent
+  SMS still in `SENT` and applies the mapped status. The legacy
+  `POST …/netgsm/dlr` push route is a **logged no-op** that performs no writes —
+  it is retained only so a stray/misconfigured POST neither errors nor
+  retry-storms. (It previously updated message status by a guessable job id with
+  no auth or workspace scope; that cross-tenant vector is removed.)
+- **Inbound MO replies: PUSHED to a tokenized URL.** NetGSM does not sign
+  callbacks, so the MO URL embeds the `channelId` plus an HMAC `token`
+  (`HMAC-SHA256(MARKETING_SECRET_KEY, "netgsm-mo:<channelId>")`) — only someone
+  holding the master key can mint a valid URL, so it is unforgeable.
+
+**Onboarding the operator:** the exact URL to paste into the NetGSM panel
+(**İnteraktif SMS → "URL Adresine Yönlendir"**) is returned as the `callbackUrl`
+field on the SMS channel's API view (`GET /marketing/channels/:id`). It is null
+until both `MARKETING_SECRET_KEY` and `PUBLIC_BASE_URL` are set. Inbound MO
+replies do **not** consume the monthly outbound message quota.
 
 ## Optional: prettier customer-facing URLs
 
