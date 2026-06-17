@@ -16,13 +16,26 @@ import { googleCalendarKey } from './hooks';
  * these are the English defaults and the actionable hint for the user.
  */
 function gcalErrorFallback(reason: string): string {
+  // Token-exchange failures arrive as `exchange_<googleCode>` (e.g.
+  // exchange_invalid_client) — give the operator the specific, actionable cause.
+  if (reason.startsWith('exchange_')) {
+    const code = reason.slice('exchange_'.length);
+    switch (code) {
+      case 'invalid_client':
+        return 'Google rejected the OAuth credentials (invalid_client). The client ID and secret must be from the SAME OAuth client — re-set both and redeploy.';
+      case 'redirect_uri_mismatch':
+        return 'Google rejected the redirect URI (redirect_uri_mismatch). Register https://marketing.hummytummy.com/api/marketing/integrations/google-calendar/callback exactly in the OAuth client.';
+      case 'invalid_grant':
+        return 'The authorization code was invalid or expired (invalid_grant). Click Connect and finish the consent promptly.';
+      default:
+        return `Could not finish Google sign-in at the token-exchange step (${code || 'failed'}). Check the OAuth client_id/secret and redirect URI.`;
+    }
+  }
   switch (reason) {
     case 'state_invalid':
       return 'The Google connection link expired. Please click Connect again.';
     case 'no_refresh_token':
       return 'Google did not grant offline access. Reconnect and approve every prompt.';
-    case 'exchange_failed':
-      return 'Could not finish Google sign-in — the server OAuth credentials may be wrong.';
     case 'not_configured':
       return 'Google Calendar is not configured on this server.';
     case 'missing_code':

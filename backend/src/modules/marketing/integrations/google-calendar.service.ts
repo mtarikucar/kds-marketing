@@ -436,10 +436,30 @@ export class GoogleCalendarService {
       throw new UnauthorizedException(`Google ${label} failed`);
     }
     if (!res.ok) {
-      this.logger.warn(`Google ${label} failed: HTTP ${res.status}`);
-      throw new UnauthorizedException(`Google ${label} failed`);
+      // Google returns a precise OAuth error in the body (invalid_client |
+      // redirect_uri_mismatch | invalid_grant | ...). Surface the CODE — it's
+      // not a secret — so the operator can act without prod log access.
+      const code = await readGoogleError(res);
+      this.logger.warn(
+        `Google ${label} failed: HTTP ${res.status}${code ? ` ${code}` : ''}`,
+      );
+      throw new UnauthorizedException(
+        code ? `Google ${label} failed: ${code}` : `Google ${label} failed`,
+      );
     }
     return (await res.json()) as GoogleTokenResponse;
+  }
+}
+
+/** Best-effort extraction of Google's OAuth `error` code from a failed token
+ * response. Returns null unless it's a clean `[a-z_]` token (URL/log-safe). */
+async function readGoogleError(res: Response): Promise<string | null> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    const code = body?.error?.trim();
+    return code && /^[a-z_]+$/i.test(code) ? code : null;
+  } catch {
+    return null;
   }
 }
 

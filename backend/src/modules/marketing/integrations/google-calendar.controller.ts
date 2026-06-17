@@ -184,6 +184,14 @@ export class GoogleCalendarPublicController {
  * (single source of truth) so the thrower and this mapper can't drift.
  */
 function gcalCallbackReason(message: string): string {
+  // Token-exchange failures may carry Google's precise OAuth error code
+  // ("Google code exchange failed: invalid_client") — forward it as
+  // `exchange_<code>` so the SPA can show an actionable hint. The code is a
+  // clean [a-z_] token (sanitised at the source), never a secret.
+  if (message.startsWith(GCAL_ERR.exchangeFailed)) {
+    const detail = message.slice(GCAL_ERR.exchangeFailed.length).replace(/^:\s*/, '');
+    return detail ? `exchange_${detail}` : 'exchange_failed';
+  }
   switch (message) {
     case GCAL_ERR.notConfigured:
       return 'not_configured';
@@ -193,8 +201,6 @@ function gcalCallbackReason(message: string): string {
       return 'missing_code';
     case GCAL_ERR.noRefreshToken:
       return 'no_refresh_token';
-    case GCAL_ERR.exchangeFailed:
-      return 'exchange_failed';
     default:
       return 'unknown';
   }

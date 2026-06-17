@@ -85,13 +85,13 @@ describe('ConnectionsPage', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it('shows an actionable error toast when the callback returns ?gcal=error&reason=...', async () => {
+  it('shows the precise cause when the callback returns ?gcal=error&reason=exchange_invalid_client', async () => {
     render(<ConnectionsPage />, {
-      wrapper: routerWith('/settings/connections?gcal=error&reason=exchange_failed'),
+      wrapper: routerWith('/settings/connections?gcal=error&reason=exchange_invalid_client'),
     });
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        'Could not finish Google sign-in — the server OAuth credentials may be wrong.',
+        expect.stringContaining('invalid_client'),
       ),
     );
     expect(toast.success).not.toHaveBeenCalled();
