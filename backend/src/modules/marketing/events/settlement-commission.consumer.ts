@@ -104,11 +104,15 @@ export class SettlementCommissionConsumer
       });
       if (existing) return; // this payment already credited
 
-      const lead = await this.prisma.lead.findFirst({
-        where: { workspaceId, convertedTenantId: p.tenantId },
-        select: { id: true, assignedToId: true },
+      // Credit the rep who ORIGINALLY converted this tenant — taken from the
+      // SIGNUP commission, NOT the lead's current assignedToId (which may have
+      // been reassigned after the deal closed; the renewal/upsell still belongs
+      // to the closer). No SIGNUP row ⇒ no converter to credit ⇒ skip.
+      const signup = await this.prisma.commission.findFirst({
+        where: { workspaceId, tenantId: p.tenantId, type: "SIGNUP" },
+        select: { marketingUserId: true, leadId: true },
       });
-      if (!lead?.assignedToId) return;
+      if (!signup?.marketingUserId) return;
 
       const amount = new Prisma.Decimal(p.amount)
         .mul(p.commissionRate)
@@ -123,13 +127,13 @@ export class SettlementCommissionConsumer
           status: "PENDING",
           period: this.periodOf(p.occurredAt),
           tenantId: p.tenantId,
-          leadId: lead.id,
-          marketingUserId: lead.assignedToId,
+          leadId: signup.leadId,
+          marketingUserId: signup.marketingUserId,
           sourcePaymentId: p.paymentId,
         },
       });
       this.logger.log(
-        `${type} commission created for tenant=${p.tenantId} rep=${lead.assignedToId} amount=${amount}`,
+        `${type} commission created for tenant=${p.tenantId} rep=${signup.marketingUserId} amount=${amount}`,
       );
     } catch (err: any) {
       // The partial-unique on (sourcePaymentId, type) is the race backstop —

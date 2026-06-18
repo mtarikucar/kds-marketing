@@ -29,7 +29,14 @@ export class MarketingTasksService {
   ) {}
 
   private assertDueDateNotInPast(dueDate: Date | string): Date {
-    const d = new Date(dueDate);
+    // A date-only value (YYYY-MM-DD) is interpreted as the END of that day, not
+    // UTC midnight — otherwise a task due "today", created in the afternoon by a
+    // UTC+ user (e.g. UTC+3 / Turkey), parses as hours in the past and is wrongly
+    // rejected. Full datetimes are used as-is.
+    const d =
+      typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate.trim())
+        ? new Date(`${dueDate.trim()}T23:59:59.999Z`)
+        : new Date(dueDate);
     if (Number.isNaN(d.getTime())) {
       throw new BadRequestException('Invalid dueDate');
     }
