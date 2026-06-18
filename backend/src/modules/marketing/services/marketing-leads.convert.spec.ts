@@ -298,4 +298,37 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       expect(prisma.lead.update).not.toHaveBeenCalled();
     });
   });
+
+  describe('workflow-trigger events', () => {
+    it('updateStatus emits the lead.status_changed trigger on a real transition', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        status: 'CONTACTED',
+        assignedToId: 'rep-1',
+        convertedTenantId: null,
+      } as any);
+      prisma.lead.updateMany.mockResolvedValue({ count: 1 } as any);
+      prisma.lead.findUniqueOrThrow.mockResolvedValue({
+        id: 'lead-1',
+        status: 'WAITING',
+        businessName: 'X',
+        assignedToId: 'rep-1',
+      } as any);
+      outbox.append.mockClear();
+
+      await svc.updateStatus(WS, 'lead-1', 'WAITING', undefined, 'user-1', 'MANAGER');
+
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'marketing.lead.status_changed.v1',
+          payload: expect.objectContaining({
+            workspaceId: WS,
+            leadId: 'lead-1',
+            fromStatus: 'CONTACTED',
+            toStatus: 'WAITING',
+          }),
+        }),
+      );
+    });
+  });
 });

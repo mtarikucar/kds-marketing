@@ -135,7 +135,7 @@ export class MarketingLeadsService {
     );
 
     const { customFields: _ignoredCustomFields, ...leadData } = dto;
-    return this.prisma.lead.create({
+    const lead = await this.prisma.lead.create({
       data: {
         ...leadData,
         workspaceId,
@@ -151,6 +151,31 @@ export class MarketingLeadsService {
         },
       },
     });
+
+    // Fire the `lead.created` workflow trigger (it was only emitted by the
+    // form/channel paths, so manually-created leads never ran automations,
+    // Slack alerts, outbound webhooks or AI routines). Best-effort.
+    await this.emitLeadCreated(workspaceId, lead.id, lead.source);
+    return lead;
+  }
+
+  /** Emit the lead.created domain event (workflow trigger). Best-effort. */
+  private async emitLeadCreated(
+    workspaceId: string,
+    leadId: string,
+    source: string,
+  ): Promise<void> {
+    await this.outbox
+      .append({
+        type: MarketingEventTypes.LeadCreated,
+        idempotencyKey: `lead-created:${leadId}`,
+        payload: { workspaceId, leadId, source, occurredAt: new Date().toISOString() },
+      })
+      .catch((e) =>
+        this.logger.warn(
+          `lead.created outbox append failed for ${leadId}: ${(e as Error).message}`,
+        ),
+      );
   }
 
   async findAll(workspaceId: string, filter: LeadFilterDto, userId: string, userRole: string) {
@@ -490,6 +515,29 @@ export class MarketingLeadsService {
           metadata: { leadId: id, from: lead.status, to: status },
         },
       });
+    }
+
+    // Fire the `lead.status_changed` workflow trigger (the event the trigger
+    // service subscribes to was never emitted, so those automations were dead).
+    // Best-effort — never fail the status update on an outbox hiccup.
+    if (status !== lead.status) {
+      await this.outbox
+        .append({
+          type: MarketingEventTypes.LeadStatusChanged,
+          idempotencyKey: `lead-status:${id}:${lead.status}->${status}:${Date.now()}`,
+          payload: {
+            workspaceId,
+            leadId: id,
+            fromStatus: lead.status,
+            toStatus: status,
+            occurredAt: new Date().toISOString(),
+          },
+        })
+        .catch((e) =>
+          this.logger.warn(
+            `lead.status_changed outbox append failed for ${id}: ${(e as Error).message}`,
+          ),
+        );
     }
 
     return updatedLead;

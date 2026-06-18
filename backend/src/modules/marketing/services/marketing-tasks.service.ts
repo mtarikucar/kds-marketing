@@ -4,11 +4,14 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateTaskDto } from '../dto/create-task.dto';
 import { UpdateTaskDto } from '../dto/update-task.dto';
 import { TaskFilterDto } from '../dto/task-filter.dto';
 import { MarketingNotificationsService } from './marketing-notifications.service';
+import { OutboxService } from '../../outbox/outbox.service';
+import { MarketingEventTypes } from '../events/marketing-event-types';
 
 // Allow a small grace for clock skew before rejecting a dueDate as
 // "in the past". 5 minutes is enough for any sane client drift.
@@ -17,9 +20,12 @@ const MAX_CALENDAR_RANGE_DAYS = 62;
 
 @Injectable()
 export class MarketingTasksService {
+  private readonly logger = new Logger(MarketingTasksService.name);
+
   constructor(
     private prisma: PrismaService,
     private notificationsService: MarketingNotificationsService,
+    private outbox: OutboxService,
   ) {}
 
   private assertDueDateNotInPast(dueDate: Date | string): Date {
@@ -277,10 +283,33 @@ export class MarketingTasksService {
       throw new ForbiddenException('You can only complete your own tasks');
     }
 
-    return this.prisma.marketingTask.update({
+    const updated = await this.prisma.marketingTask.update({
       where: { id: task.id },
       data: { status: 'COMPLETED', completedAt: new Date() },
     });
+
+    // Fire the `task.completed` workflow trigger (the event was never emitted,
+    // so task-completion automations were dead). Only on a real transition into
+    // COMPLETED; best-effort — never fail the completion on an outbox hiccup.
+    if (task.status !== 'COMPLETED') {
+      await this.outbox
+        .append({
+          type: MarketingEventTypes.TaskCompleted,
+          idempotencyKey: `task-completed:${task.id}`,
+          payload: {
+            workspaceId,
+            taskId: task.id,
+            leadId: task.leadId ?? null,
+            occurredAt: new Date().toISOString(),
+          },
+        })
+        .catch((e) =>
+          this.logger.warn(
+            `task.completed outbox append failed for ${task.id}: ${(e as Error).message}`,
+          ),
+        );
+    }
+    return updated;
   }
 
   async delete(workspaceId: string, id: string, userId: string, userRole: string) {
