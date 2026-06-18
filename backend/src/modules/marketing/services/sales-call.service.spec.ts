@@ -105,7 +105,10 @@ describe('SalesCallService', () => {
         status: 'INITIATED',
         leadId: 'lead-1',
       } as any);
-      prisma.salesCall.update.mockResolvedValue({ id: 'call-1', status: 'CONNECTED' } as any);
+      // logCall now claims the row atomically (updateMany WHERE status=INITIATED)
+      // then re-reads it, so a concurrent duplicate can't double-mirror.
+      prisma.salesCall.updateMany.mockResolvedValue({ count: 1 } as any);
+      prisma.salesCall.findUniqueOrThrow.mockResolvedValue({ id: 'call-1', status: 'CONNECTED' } as any);
 
       await svc.logCall(WS, 'call-1', REP, {
         status: 'CONNECTED',
@@ -117,9 +120,9 @@ describe('SalesCallService', () => {
       expect(prisma.salesCall.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'call-1', workspaceId: WS } }),
       );
-      expect(prisma.salesCall.update).toHaveBeenCalledWith(
+      expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'call-1' },
+          where: { id: 'call-1', workspaceId: WS, status: 'INITIATED' },
           data: expect.objectContaining({ status: 'CONNECTED', durationSec: 120, endedAt: expect.any(Date) }),
         }),
       );
