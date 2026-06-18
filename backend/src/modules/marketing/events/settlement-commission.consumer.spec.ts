@@ -68,23 +68,21 @@ describe('SettlementCommissionConsumer', () => {
 
   describe('RENEWAL / UPSELL', () => {
     it('creates a RENEWAL commission with sourcePaymentId for the converting rep', async () => {
-      prisma.commission.findFirst.mockResolvedValue(null); // not yet credited
-      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', assignedToId: 'rep-1' } as any);
+      prisma.commission.findFirst
+        .mockResolvedValueOnce(null) // sourcePaymentId dedup probe → not yet credited
+        .mockResolvedValueOnce({ marketingUserId: 'rep-1', leadId: 'lead-1' } as any); // SIGNUP → original converter
       prisma.commission.create.mockResolvedValue({} as any);
 
       await handle(makeEvent({ kind: 'renewal' }));
 
-      // Dedup probe + lead resolution are workspace-scoped.
+      // Credit is taken from the original SIGNUP commission (the converting rep),
+      // resolved by tenantId — NOT the lead's current assignee.
       expect(prisma.commission.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ workspaceId: 'ws-core' }),
-        }),
-      );
-      expect(prisma.lead.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             workspaceId: 'ws-core',
-            convertedTenantId: 'tenant-1',
+            tenantId: 'tenant-1',
+            type: 'SIGNUP',
           }),
         }),
       );
@@ -108,8 +106,9 @@ describe('SettlementCommissionConsumer', () => {
     });
 
     it('creates an UPSELL commission for kind=upsell', async () => {
-      prisma.commission.findFirst.mockResolvedValue(null);
-      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', assignedToId: 'rep-1' } as any);
+      prisma.commission.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ marketingUserId: 'rep-1', leadId: 'lead-1' } as any);
       prisma.commission.create.mockResolvedValue({} as any);
 
       await handle(makeEvent({ kind: 'upsell' }));
