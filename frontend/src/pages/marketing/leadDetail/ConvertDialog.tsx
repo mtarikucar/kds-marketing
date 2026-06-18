@@ -13,18 +13,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/Dialog';
-import { passwordSchema } from '../../../features/marketing/schemas';
 import { formatMoney } from '../../../lib/money';
+import type { ConvertLeadPayload } from '../../../features/marketing/api/leads.service';
 import type { ConvertDialogState } from './useConvertDialog';
 
 // RFC 5321 / 5322 lite — mirrors the lead-detail email check; full
 // validation happens server-side on /convert.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Mirrors the backend admin-password rule for the /convert endpoint
-// (8+ chars with upper/lower/digit, via the shared passwordSchema).
-const PASSWORD_HINT = 'Min 8 chars, with upper, lower case & a number';
-
+// NOTE: the convert endpoint (ConvertLeadDto) accepts ONLY these fields and the
+// global ValidationPipe runs with forbidNonWhitelisted:true — sending anything
+// else (e.g. adminPassword, commissionAmount) makes the request fail with 400.
+// By design the admin's temporary password is generated + emailed server-side
+// (sales staff never hold plaintext creds), and the commission is computed from
+// the plan — so neither is collected here.
 const convertSchema = z.object({
   tenantName: z.string().trim().min(1, 'required'),
   adminEmail: z
@@ -34,12 +36,7 @@ const convertSchema = z.object({
     .refine((v) => EMAIL_RE.test(v), { message: 'Invalid email format.' }),
   adminFirstName: z.string().trim().min(1, 'required'),
   adminLastName: z.string().trim().min(1, 'required'),
-  adminPassword: passwordSchema,
   offerId: z.string().optional(),
-  commissionAmount: z
-    .union([z.string(), z.number()])
-    .optional()
-    .transform((v) => (v === '' || v == null ? undefined : v)),
 });
 
 type ConvertFormValues = z.input<typeof convertSchema>;
@@ -47,7 +44,7 @@ type ConvertFormValues = z.input<typeof convertSchema>;
 interface ConvertDialogProps {
   state: ConvertDialogState;
   fmtDate: (d: string | Date | null | undefined) => string;
-  onSubmit: (data: Record<string, unknown>) => void;
+  onSubmit: (data: ConvertLeadPayload) => void;
   isPending: boolean;
 }
 
@@ -62,9 +59,7 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
       adminEmail: '',
       adminFirstName: '',
       adminLastName: '',
-      adminPassword: '',
       offerId: '',
-      commissionAmount: '',
     },
   });
 
@@ -78,9 +73,7 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
         adminEmail: lead.email || '',
         adminFirstName: parts[0] || '',
         adminLastName: parts.slice(1).join(' ') || '',
-        adminPassword: '',
         offerId: sentOffers[0]?.id || '',
-        commissionAmount: '',
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,16 +81,13 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
 
   const submit: SubmitHandler<ConvertFormValues> = (raw) => {
     const values = convertSchema.parse(raw);
+    // Send ONLY the fields ConvertLeadDto whitelists — anything extra 400s.
     onSubmit({
       tenantName: values.tenantName,
       adminEmail: values.adminEmail,
       adminFirstName: values.adminFirstName,
       adminLastName: values.adminLastName,
-      adminPassword: values.adminPassword,
       ...(values.offerId ? { offerId: values.offerId } : {}),
-      ...(values.commissionAmount != null && values.commissionAmount !== ''
-        ? { commissionAmount: Number(values.commissionAmount) }
-        : {}),
     });
   };
 
@@ -107,7 +97,8 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
         <DialogHeader>
           <DialogTitle>Convert Lead to Customer</DialogTitle>
           <DialogDescription>
-            Provision a tenant and admin account from this lead.
+            Provision a tenant and admin account from this lead. A temporary
+            password is generated and emailed to the admin.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={form.handleSubmit(submit)} noValidate className="space-y-4">
@@ -158,23 +149,6 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
               )}
             </Field>
           </div>
-          <Field
-            label="Admin Password"
-            required
-            hint={PASSWORD_HINT}
-            error={form.formState.errors.adminPassword?.message}
-          >
-            {({ id, describedBy, invalid }) => (
-              <Input
-                id={id}
-                type="password"
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                placeholder={PASSWORD_HINT}
-                {...form.register('adminPassword')}
-              />
-            )}
-          </Field>
           {sentOffers.length > 0 && (
             <Field label="Link Offer (optional)">
               {({ id, describedBy }) => (
@@ -195,17 +169,6 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
               )}
             </Field>
           )}
-          <Field label="Commission Amount" error={form.formState.errors.commissionAmount?.message}>
-            {({ id, describedBy }) => (
-              <Input
-                id={id}
-                type="number"
-                aria-describedby={describedBy}
-                placeholder="0"
-                {...form.register('commissionAmount')}
-              />
-            )}
-          </Field>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={close}>
               Cancel

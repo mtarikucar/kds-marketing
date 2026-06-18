@@ -48,8 +48,18 @@ export type CreateTaskPayload = Record<string, unknown>;
 // CreateLeadPage.onSubmit before calling mutate().
 export type UpsertLeadPayload = Record<string, unknown>;
 
-// Convert payload — passed from ConvertDialog.
-export type ConvertLeadPayload = Record<string, unknown>;
+// Convert payload — MUST mirror the backend ConvertLeadDto EXACTLY. The global
+// ValidationPipe runs with forbidNonWhitelisted, so any extra property (e.g. a
+// stray adminPassword/commissionAmount) makes /convert 400. A concrete type —
+// not Record<string, unknown> — makes that contract a compile-time error.
+export interface ConvertLeadPayload {
+  tenantName: string;
+  adminEmail: string;
+  adminFirstName: string;
+  adminLastName: string;
+  planId?: string;
+  offerId?: string;
+}
 
 // ── Service functions ────────────────────────────────────────────────────────
 
