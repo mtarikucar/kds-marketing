@@ -147,6 +147,11 @@ export class BookingService implements OnModuleInit {
     if (!cal) throw new NotFoundException('Calendar not found');
     const start = new Date(dto.start);
     if (isNaN(start.getTime()) || start.getTime() < Date.now()) throw new BadRequestException('Invalid or past slot');
+    // Reject an off-grid / out-of-hours timestamp: a direct API call must not be
+    // able to book a slot the public picker (availability()) would never offer.
+    if (!this.isAlignedSlot(cal, start)) {
+      throw new BadRequestException('Slot is outside the calendar availability or not aligned to the grid');
+    }
     const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
 
     const booking = await this.prisma.$transaction(async (tx) => {
@@ -285,6 +290,38 @@ export class BookingService implements OnModuleInit {
       booking.email, 'Reminder: your booking is soon',
       `This is a reminder for your booking at ${booking.startAt.toUTCString()}.`,
     ).catch(() => undefined);
+  }
+
+  /**
+   * True when `start` is a real bookable slot for this calendar: inside a
+   * weekday availability window AND aligned to the slot+buffer grid — the same
+   * enumeration availability() uses to offer slots. Closes the gap where a
+   * direct reserve call could pass an arbitrary off-grid / out-of-hours time.
+   */
+  private isAlignedSlot(
+    cal: { availability: unknown; slotMinutes: number; bufferMinutes: number },
+    start: Date,
+  ): boolean {
+    const avail = (cal.availability ?? {}) as Record<
+      string,
+      Array<{ start: string; end: string }>
+    >;
+    const day = new Date(
+      Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()),
+    );
+    const windows = avail[String(start.getUTCDay())] ?? [];
+    const slotMs = cal.slotMinutes * 60_000;
+    const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
+    const target = start.getTime();
+    for (const w of windows) {
+      const ws = this.atUtc(day, w.start);
+      const we = this.atUtc(day, w.end);
+      if (ws == null || we == null) continue;
+      for (let s = ws; s + slotMs <= we; s += stepMs) {
+        if (s === target) return true;
+      }
+    }
+    return false;
   }
 
   private atUtc(day: Date, hhmm: string): number | null {

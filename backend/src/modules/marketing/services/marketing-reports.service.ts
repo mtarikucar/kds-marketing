@@ -28,7 +28,7 @@ export class MarketingReportsService {
       }),
       this.prisma.lead.groupBy({
         by: ['assignedToId', 'status'],
-        where: { assignedTo: { is: repWhere }, ...dateWhere, workspaceId },
+        where: { assignedTo: { is: repWhere }, ...dateWhere, workspaceId, mergedIntoId: null },
         _count: { id: true },
       }),
       this.prisma.leadActivity.groupBy({
@@ -80,7 +80,7 @@ export class MarketingReportsService {
   }
 
   async getLeadSourceReport(workspaceId: string, filter: ReportFilterDto) {
-    const where: any = {};
+    const where: any = { mergedIntoId: null }; // exclude tombstoned (merged) leads
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
     if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
 
@@ -123,7 +123,7 @@ export class MarketingReportsService {
   }
 
   async getRegionalReport(workspaceId: string, filter: ReportFilterDto) {
-    const where: any = {};
+    const where: any = { mergedIntoId: null }; // exclude tombstoned (merged) leads
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
     if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
 
@@ -153,7 +153,7 @@ export class MarketingReportsService {
   }
 
   async getConversionFunnel(workspaceId: string, filter: ReportFilterDto) {
-    const where: any = {};
+    const where: any = { mergedIntoId: null }; // exclude tombstoned (merged) leads
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
     if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
 

@@ -55,6 +55,15 @@ describe('BookingService', () => {
     expect(slots).toEqual(['2027-06-14T09:30:00.000Z']);
   });
 
+  it('refuses a slot outside the availability window (off-grid / out-of-hours)', async () => {
+    // The calendar offers 09:00–10:00; a direct API call for 11:00 is not a real
+    // slot and must be rejected before any booking is created.
+    await expect(
+      svc.book(WS, 'c1', { start: '2027-06-14T11:00:00.000Z', name: 'Ada' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a slot that overlaps a confirmed booking', async () => {
     prisma.booking.findFirst.mockResolvedValue({ id: 'taken' });
     await expect(
