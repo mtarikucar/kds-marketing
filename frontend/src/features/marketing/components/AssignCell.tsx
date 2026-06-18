@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { UserPlus, PencilLine, X, Search } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
 import type { MarketingUserInfo } from '../types';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 interface RepRow extends MarketingUserInfo {
   status?: string;
@@ -36,6 +37,15 @@ export default function AssignCell({
   onAssigned,
 }: AssignCellProps) {
   const { t } = useTranslation('marketing');
+  // Defense-in-depth: the rep list + inline (re)assignment is a manager-only
+  // capability. Rather than trust every caller to pass `readOnly` for a REP,
+  // also derive it from the authenticated role here. A non-manager can then
+  // never fire the manager-only GET /users (which 403s) nor render the editor,
+  // even if a future caller forgets `readOnly`. Mirrors the role check the
+  // leads list/detail pages already do before mounting this cell.
+  const user = useMarketingAuthStore((s) => s.user);
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  const effectiveReadOnly = readOnly || !isManager;
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -49,8 +59,9 @@ export default function AssignCell({
     queryFn: () => marketingApi.get('/users').then((r) => r.data),
     // Don't load until the popover is at least opened once on the page;
     // the lead detail page already prefetches with the same key, so
-    // hitting it again here is free.
-    enabled: !readOnly,
+    // hitting it again here is free. Gated on manager role too (see above)
+    // so a REP-rendered cell never fires this manager-only request.
+    enabled: !effectiveReadOnly,
     staleTime: 60_000,
   });
 
@@ -120,7 +131,7 @@ export default function AssignCell({
     };
   }, [open]);
 
-  if (readOnly) {
+  if (effectiveReadOnly) {
     return (
       <span className="text-muted-foreground text-sm">
         {currentAssignee
