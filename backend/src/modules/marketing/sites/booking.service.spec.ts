@@ -23,6 +23,8 @@ describe('BookingService', () => {
       bookingCalendar: { findFirst: jest.fn().mockResolvedValue(calendar()) },
       booking: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn(), create: jest.fn() },
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
+      // The per-slot advisory lock acquired at the top of the booking tx.
+      $executeRaw: jest.fn().mockResolvedValue(1),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const outbox = { append: jest.fn().mockResolvedValue('e') };
@@ -66,6 +68,17 @@ describe('BookingService', () => {
     const res = await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
     expect(res.id).toBe('b1');
     expect(prisma.booking.create).toHaveBeenCalled();
+  });
+
+  it('takes a per-calendar advisory lock inside the tx (serializes concurrent reserves)', async () => {
+    prisma.booking.findFirst.mockResolvedValue(null);
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk_x', email: null });
+    await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
+    // The lock is acquired (pg_advisory_xact_lock) before the conflict check so
+    // two concurrent reserves for the same slot can't both pass it (double-book).
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+    const sqlParts = (prisma.$executeRaw as jest.Mock).mock.calls[0][0];
+    expect(String(sqlParts.join?.('') ?? sqlParts)).toContain('pg_advisory_xact_lock');
   });
 
   it('refuses a past slot', async () => {

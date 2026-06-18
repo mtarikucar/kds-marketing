@@ -81,12 +81,23 @@ describe('CampaignSenderService.batch', () => {
     // Both leads opted-in, but our claim loses the race for the second recipient.
     prisma.lead.findFirst.mockResolvedValue({ id: 'x', email: 'a@b.com', emailOptOut: false });
     prisma.campaignRecipient.updateMany
+      .mockResolvedValueOnce({ count: 0 }) // reclaim pass (no stranded SENDING rows)
       .mockResolvedValueOnce({ count: 1 }) // r1 — we claimed it
       .mockResolvedValueOnce({ count: 0 }); // r2 — a concurrent run already took it
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
 
     expect(email.sendPlainEmail).toHaveBeenCalledTimes(1); // only the one we claimed
+  });
+
+  it('reclaims recipients stranded in SENDING by a crashed prior batch before sending', async () => {
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+    // A SENDING→PENDING sweep runs first so a crash between claim and mark
+    // doesn't silently drop the recipient (the batch only selects PENDING).
+    expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith({
+      where: { workspaceId: WS, campaignId: 'c1', status: 'SENDING' },
+      data: { status: 'PENDING' },
+    });
   });
 
   it('recomputes campaign stats from recipient counts (no lost update under concurrency)', async () => {

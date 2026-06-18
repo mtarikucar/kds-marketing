@@ -201,6 +201,31 @@ describe('RebillingService — computeCharge (REAL usage metering + math)', () =
     expect(charge.locationWorkspaceId).toBe(LOCATION_A1);
   });
 
+  it('is idempotent per period — returns the existing charge, never mints a 2nd (no double Stripe charge)', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.rebillingPlan.findUnique as jest.Mock).mockResolvedValue(plan as never);
+    (prisma.usageCounter.aggregate as jest.Mock).mockResolvedValue({ _sum: { value: 40 } } as never);
+    // A DRAFT charge already exists for this (location, period).
+    const existing = { id: 'charge-existing', status: 'DRAFT', workspaceId: AGENCY_A, locationWorkspaceId: LOCATION_A1 };
+    (prisma.rebillCharge.findFirst as jest.Mock).mockResolvedValue(existing as never);
+
+    const charge = await svc.computeCharge(
+      AGENCY_A,
+      LOCATION_A1,
+      new Date('2026-05-01T00:00:00Z'),
+      new Date('2026-06-01T00:00:00Z'),
+    );
+
+    // Returned the existing row and did NOT create a duplicate.
+    expect(charge.id).toBe('charge-existing');
+    expect(prisma.rebillCharge.create).not.toHaveBeenCalled();
+    // The dedupe lookup is scoped to (agency, location, period) and excludes FAILED.
+    const where = (prisma.rebillCharge.findFirst as jest.Mock).mock.calls[0][0].where;
+    expect(where.workspaceId).toBe(AGENCY_A);
+    expect(where.locationWorkspaceId).toBe(LOCATION_A1);
+    expect(where.status).toEqual({ not: 'FAILED' });
+  });
+
   it('zero usage → usageAmount 0, total = basePrice', async () => {
     const { prisma, svc } = makeSvc();
     (prisma.rebillingPlan.findUnique as jest.Mock).mockResolvedValue(plan as never);

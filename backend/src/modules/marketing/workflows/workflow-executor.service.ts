@@ -157,6 +157,13 @@ export class WorkflowExecutorService implements OnModuleInit {
         return;
       }
       stepIndex = outcome.goto != null ? outcome.goto : stepIndex + 1;
+      // Persist the cursor after EVERY completed step (not just at wait/stop/
+      // end). Otherwise a hard crash mid-advance leaves the run RUNNING with a
+      // stale cursor; the reaper re-runs advance() and REPLAYS every step since
+      // the last persist — re-sending SMS/email, re-creating tasks, re-POSTing
+      // webhooks. With this, a replay re-fires at most the single step that was
+      // in-flight at crash time (inherent at-least-once for external effects).
+      await this.persistContext(runId, ctx, stepIndex);
     }
     // Hit the per-advance step ceiling — yield as FAILED to avoid a hot loop.
     await this.finish(runId, 'FAILED', `exceeded ${MAX_STEPS_PER_ADVANCE} steps in one advance (goto cycle?)`);

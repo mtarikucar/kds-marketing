@@ -11,10 +11,12 @@ import {
   BadRequestException,
   MessageEvent,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { randomUUID } from 'crypto';
 import { Observable, from, interval, merge } from 'rxjs';
 import { switchMap, map } from 'rxjs/operators';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { PublicChannelResolverService } from '../channels/public-channel-resolver.service';
 import { ConversationIngressService } from '../channels/conversation-ingress.service';
 import { ConversationStreamService } from '../channels/conversation-stream.service';
@@ -40,6 +42,7 @@ export class WebchatPublicController {
   ) {}
 
   @Post(':widgetKey/session')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async session(@Param('widgetKey') widgetKey: string, @Body() dto: WebchatSessionDto) {
     const channel = await this.activeWebchat(widgetKey);
     const pub = (channel.configPublic ?? {}) as Record<string, unknown>;
@@ -52,6 +55,7 @@ export class WebchatPublicController {
   }
 
   @Post(':widgetKey/messages')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async postMessage(@Param('widgetKey') widgetKey: string, @Body() dto: WebchatMessageDto) {
     const channel = await this.activeWebchat(widgetKey);
     const res = await this.ingress.ingest(

@@ -22,6 +22,8 @@ describe('CampaignTrackingService', () => {
         update: jest.fn().mockResolvedValue({}),
       },
       lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      // bump() now increments the counter via an atomic jsonb_set UPDATE.
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
     };
     svc = new CampaignTrackingService(prisma as any);
   });
@@ -30,6 +32,17 @@ describe('CampaignTrackingService', () => {
     prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, clickedAt: null });
     prisma.campaign.findFirst.mockResolvedValue({ links: ['https://shop.example/spring'] });
     await expect(svc.click('tok', 0)).resolves.toBe('https://shop.example/spring');
+  });
+
+  it('open bumps the counter ATOMICALLY (single jsonb_set UPDATE, no read-modify-write race)', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, openedAt: null });
+    await svc.open('tok');
+    // No findUnique→update read-modify-write on stats; a single atomic UPDATE.
+    expect(prisma.campaign.findUnique).not.toHaveBeenCalled();
+    const [sql, key, id] = (prisma.$executeRawUnsafe as jest.Mock).mock.calls[0];
+    expect(sql).toContain('jsonb_set');
+    expect(key).toBe('opened');
+    expect(id).toBe('c1');
   });
 
   it('click refuses an out-of-range index (no redirect target)', async () => {

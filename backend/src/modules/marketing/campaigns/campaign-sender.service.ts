@@ -44,6 +44,16 @@ export class CampaignSenderService implements OnModuleInit {
     const campaign = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
     if (!campaign || campaign.status !== 'SENDING') return;
 
+    // Reclaim recipients stranded in SENDING by a prior batch that crashed
+    // between the PENDING→SENDING claim and the SENT/FAILED mark. The batch
+    // below selects only PENDING, so without this they'd be silently dropped
+    // (and the campaign reported SENT). Safe: the job dedups on campaignId, so
+    // only one batch per campaign runs at a time — any SENDING here is stale.
+    await this.prisma.campaignRecipient.updateMany({
+      where: { workspaceId, campaignId, status: 'SENDING' },
+      data: { status: 'PENDING' },
+    });
+
     const recipients = await this.prisma.campaignRecipient.findMany({
       where: { workspaceId, campaignId, status: 'PENDING' },
       take: BATCH_SIZE,

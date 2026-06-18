@@ -38,6 +38,11 @@ async function metaSend(
         messaging_type: 'RESPONSE',
         message: { text },
       }),
+      // Bound the call: undici's fetch has no default total timeout, so a
+      // black-holed Graph endpoint would hang forever, wedging the sequential
+      // scheduled-job batch (AI auto-replies run inside it) and holding a
+      // reserved quota slot until the process is killed.
+      signal: AbortSignal.timeout(10_000),
     });
     const data: any = await res.json().catch(() => ({}));
     if (!res.ok) {

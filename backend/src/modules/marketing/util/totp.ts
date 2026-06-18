@@ -1,4 +1,9 @@
 import { createHmac, createHash, randomBytes } from 'crypto';
+import {
+  sealSecret,
+  openSecret,
+  isSecretBoxConfigured,
+} from '../../../common/crypto/secret-box.helper';
 
 /**
  * Epic F — dependency-free TOTP (RFC 6238) for 2FA. SHA-1, 6 digits, 30s period
@@ -43,6 +48,32 @@ export function base32Decode(s: string): Buffer {
 
 export function generateTotpSecret(): string {
   return base32Encode(randomBytes(20));
+}
+
+/**
+ * Seal a TOTP shared secret for at-rest storage with the AES-256-GCM secret-box
+ * (the seed mints valid OTPs, so it must not sit in plaintext — every peer
+ * credential is sealed). Falls back to plaintext only when the secret-box is
+ * unconfigured (dev); MARKETING_SECRET_KEY is required in production.
+ */
+export function sealTotpSecret(secret: string): string {
+  return isSecretBoxConfigured() ? sealSecret(secret) : secret;
+}
+
+/**
+ * Open a stored TOTP secret. New rows are sealed (`v1:...`); rows enrolled
+ * before this hardening are plaintext base32 — read both so existing 2FA users
+ * keep working (and re-seal opportunistically on the next write).
+ */
+export function openTotpSecret(stored: string): string {
+  if (stored.startsWith('v1:')) {
+    try {
+      return openSecret(stored);
+    } catch {
+      return stored;
+    }
+  }
+  return stored;
 }
 
 export function totpUri(secret: string, label: string, issuer = 'kds-marketing'): string {

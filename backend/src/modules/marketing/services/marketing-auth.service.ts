@@ -11,7 +11,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
-import { hashBackupCode, verifyTotp } from '../util/totp';
+import { hashBackupCode, openTotpSecret, verifyTotp } from '../util/totp';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -158,7 +158,7 @@ export class MarketingAuthService {
       throw new UnauthorizedException('Invalid 2FA challenge');
     }
 
-    let ok = !!user.twoFactorSecret && verifyTotp(user.twoFactorSecret, code);
+    let ok = !!user.twoFactorSecret && verifyTotp(openTotpSecret(user.twoFactorSecret), code);
     if (!ok) {
       const hashes = (user.twoFactorBackupCodes as string[]) ?? [];
       const h = hashBackupCode(code);

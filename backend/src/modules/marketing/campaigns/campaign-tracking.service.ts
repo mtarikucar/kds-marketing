@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 
 /**
@@ -54,12 +53,26 @@ export class CampaignTrackingService {
     return true;
   }
 
-  private async bump(campaignId: string, key: string): Promise<void> {
-    const c = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { stats: true } });
-    const s = (c?.stats ?? {}) as Record<string, number>;
-    await this.prisma.campaign.update({
-      where: { id: campaignId },
-      data: { stats: { ...s, [key]: (s[key] ?? 0) + 1 } as Prisma.InputJsonValue },
-    });
+  /**
+   * Atomically increment one analytics counter in the campaign's JSON stats.
+   * A single jsonb_set UPDATE (no read-modify-write), so concurrent open/click
+   * pixels across different recipients of the same campaign can't lose
+   * increments. `key` is a fixed internal literal (never user input).
+   */
+  private async bump(
+    campaignId: string,
+    key: 'opened' | 'clicked' | 'unsubscribed',
+  ): Promise<void> {
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE "campaigns"
+         SET "stats" = jsonb_set(
+           COALESCE("stats", '{}'::jsonb),
+           ARRAY[$1],
+           to_jsonb(COALESCE(("stats"->>$1)::int, 0) + 1),
+           true)
+       WHERE "id" = $2`,
+      key,
+      campaignId,
+    );
   }
 }

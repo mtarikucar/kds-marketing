@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Param, Body, Res, NotFoundException } from '@nestjs/common';
 import { Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { ReviewsService } from '../reviews/reviews.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
@@ -38,6 +40,7 @@ export class ReviewGateController {
   }
 
   @Post('r/:token')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async submit(@Param('token') token: string, @Body() body: { rating: number; text?: string; authorName?: string }) {
     if (!body || typeof body.rating !== 'number') throw new NotFoundException('Invalid rating');
     return this.reviews.submitRating(token, body.rating, body.text, body.authorName);

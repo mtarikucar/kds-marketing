@@ -1,10 +1,12 @@
 import { Controller, Get, Post, Param, Query, Body, Req, Res, NotFoundException } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { Throttle } from '@nestjs/throttler';
 import { SitesService } from '../sites/sites.service';
 import { FormsService } from '../sites/forms.service';
 import { BookingService } from '../sites/booking.service';
 import { BookSlotDto, SlotsQueryDto } from '../dto/public-site.dto';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
@@ -39,6 +41,7 @@ export class PublicSiteController {
   }
 
   @Post('f/:formId')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async submit(@Param('formId') formId: string, @Body() body: Record<string, unknown>, @Res() res: Response): Promise<void> {
     // Dynamic-field form (schema is workspace-authored) — can't use a DTO, so
     // hard-cap the untrusted shape: ≤50 keys, key ≤100 chars, value ≤2000 chars.
@@ -77,6 +80,7 @@ export class PublicSiteController {
   }
 
   @Post('book/:ws/:cal/reserve')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async reserve(
     @Param('ws') ws: string, @Param('cal') cal: string,
     @Body() body: BookSlotDto,

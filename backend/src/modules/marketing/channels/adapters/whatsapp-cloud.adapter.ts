@@ -59,6 +59,9 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
           type: 'text',
           text: { body: text },
         }),
+        // undici fetch has no default total timeout — bound it so a black-holed
+        // Graph endpoint can't hang the sequential job batch / pin a quota slot.
+        signal: AbortSignal.timeout(10_000),
       });
       const data: any = await res.json().catch(() => ({}));
       if (!res.ok) {

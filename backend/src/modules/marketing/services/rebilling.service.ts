@@ -240,6 +240,22 @@ export class RebillingService {
     const usageAmount = money(meteredCost.mul(markupFactor));
     const totalAmount = money(baseAmount.plus(usageAmount));
 
+    // Idempotent per (location, period): re-computing the same month (OWNER
+    // double-click / retry / monthly re-run) must NOT mint a second charge row,
+    // or settling both would bill the location's connected Stripe account twice
+    // for one period. Return any existing non-FAILED charge for the period
+    // instead of inserting a duplicate.
+    const existing = await this.prisma.rebillCharge.findFirst({
+      where: {
+        workspaceId: agencyWorkspaceId,
+        locationWorkspaceId,
+        periodStart,
+        periodEnd,
+        status: { not: 'FAILED' },
+      },
+    });
+    if (existing) return existing;
+
     return this.prisma.rebillCharge.create({
       data: {
         workspaceId: agencyWorkspaceId,
