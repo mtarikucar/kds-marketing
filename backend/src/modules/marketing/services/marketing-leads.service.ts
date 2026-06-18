@@ -76,7 +76,10 @@ export class MarketingLeadsService {
       const existing = await this.prisma.lead.findFirst({
         where: {
           workspaceId,
-          email: dto.email,
+          // Dedup on the NORMALIZED key so "John@X.com" matches "john@x.com"
+          // (raw email was case/format-sensitive); skip tombstoned leads.
+          emailNormalized: normalizeEmail(dto.email),
+          mergedIntoId: null,
           status: { notIn: ['WON', 'LOST'] },
         },
         select: { id: true, businessName: true, assignedTo: { select: { firstName: true, lastName: true } } },

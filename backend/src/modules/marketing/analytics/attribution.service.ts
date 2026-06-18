@@ -113,11 +113,13 @@ export class AttributionService {
 
   async attribution(workspaceId: string, q: AttributionQuery): Promise<AttributionResult> {
     const leads = await this.prisma.lead.findMany({
-      where: { workspaceId, ...this.range(q.from, q.to) },
+      // Exclude tombstoned (merged-away) leads from analytics.
+      where: { workspaceId, mergedIntoId: null, ...this.range(q.from, q.to) },
       select: {
         id: true,
         source: true,
         status: true,
+        convertedTenantId: true,
         createdAt: true,
         convertedAt: true,
         offers: { select: { status: true, customPrice: true, planMonthlyPrice: true } },
@@ -146,7 +148,11 @@ export class AttributionService {
       // Track touch reach (for conversionRate) regardless of conversion.
       const distinct = new Set(path);
       const value = this.leadValue(lead.offers);
-      const isConverted = value.greaterThan(0);
+      // Conversion is driven by the REAL signal (status WON / a provisioned
+      // tenant — convert() sets both), not by whether the lead happened to have
+      // a priced ACCEPTED offer. An offer-less or FREE-plan conversion is still
+      // a conversion (its revenue may legitimately be 0).
+      const isConverted = lead.status === 'WON' || lead.convertedTenantId != null;
 
       for (const ch of distinct) {
         if (!touchedLeads.has(ch)) touchedLeads.set(ch, new Set());

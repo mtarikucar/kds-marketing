@@ -202,15 +202,19 @@ export class MarketingOffersService {
         where: { id },
         data: { status: 'SENT', sentAt: new Date() },
       }),
-      // Only advance the lead forward; don't clobber a later status.
-      ...(['OFFER_SENT', 'WAITING', 'WON', 'LOST'].includes(offer.lead.status)
-        ? []
-        : [
-            this.prisma.lead.update({
-              where: { id: offer.leadId },
-              data: { status: 'OFFER_SENT' },
-            }),
-          ]),
+      // Advance the lead to OFFER_SENT atomically: a compound WHERE re-asserts
+      // (inside the tx) that the lead is still open + unconverted, so a convert()
+      // racing between the read above and this write can't be reverted WON→
+      // OFFER_SENT. updateMany matches 0 rows (no-op) when the lead already moved.
+      this.prisma.lead.updateMany({
+        where: {
+          id: offer.leadId,
+          workspaceId,
+          convertedTenantId: null,
+          status: { notIn: ['OFFER_SENT', 'WAITING', 'WON', 'LOST'] },
+        },
+        data: { status: 'OFFER_SENT' },
+      }),
     ]);
 
     return updatedOffer;
@@ -219,8 +223,17 @@ export class MarketingOffersService {
   async delete(workspaceId: string, id: string) {
     const offer = await this.prisma.leadOffer.findFirst({
       where: { id, workspaceId },
+      include: { lead: { select: { convertedTenantId: true } } },
     });
     if (!offer) throw new NotFoundException('Offer not found');
+    // An ACCEPTED offer is the attribution + plan basis of a converted deal —
+    // deleting it would zero the conversion's revenue/attribution. Never delete
+    // an accepted offer or any offer on a converted lead.
+    if (offer.status === 'ACCEPTED' || offer.lead?.convertedTenantId) {
+      throw new BadRequestException(
+        'An accepted offer on a converted lead cannot be deleted',
+      );
+    }
 
     await this.prisma.leadOffer.delete({ where: { id } });
     return { message: 'Offer deleted successfully' };
