@@ -83,6 +83,9 @@ describe('LeadDedupeService.merge', () => {
     prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
     prisma.leadTag.findMany.mockResolvedValue([] as any);
     prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    // The tombstone updateMany now claims convertedTenantId:null and asserts the
+    // count matches the dup count (TOCTOU guard) — return the 1 dup it touched.
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
 
     const res = await svc.merge(WS, 'a', ['b']);
 
@@ -99,7 +102,7 @@ describe('LeadDedupeService.merge', () => {
     // dup tombstoned, scoped by workspace
     expect(prisma.lead.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: { in: ['b'] }, workspaceId: WS },
+        where: { id: { in: ['b'] }, workspaceId: WS, convertedTenantId: null },
         data: expect.objectContaining({ mergedIntoId: 'a' }),
       }),
     );

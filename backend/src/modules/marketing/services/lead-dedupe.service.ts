@@ -207,11 +207,20 @@ export class LeadDedupeService {
         data: { customFields: customFields as Prisma.InputJsonValue, ...filled },
       });
 
-      // Tombstone the duplicates (explicitly workspace-scoped).
-      await tx.lead.updateMany({
-        where: { id: { in: dupIds }, workspaceId },
+      // Tombstone the duplicates (explicitly workspace-scoped). The
+      // `convertedTenantId: null` claim closes the TOCTOU against a convert()
+      // racing between the pre-check above and here: a dup converted in the
+      // meantime is NOT tombstoned, and the count mismatch aborts the whole
+      // merge (the tx rolls back the child re-parenting too).
+      const tombstone = await tx.lead.updateMany({
+        where: { id: { in: dupIds }, workspaceId, convertedTenantId: null },
         data: { mergedIntoId: canonicalId, mergedAt: new Date() },
       });
+      if (tombstone.count !== dupIds.length) {
+        throw new ConflictException(
+          'A duplicate was converted during the merge — refresh and retry',
+        );
+      }
 
       await this.outbox.append(
         {

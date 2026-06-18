@@ -168,6 +168,7 @@ export class MarketingLeadsController {
 
   @Post(':id/convert')
   @MarketingRoles('MANAGER')
+  @Audit({ action: 'lead.convert', resourceType: 'lead', resourceIdParam: 'id' })
   @RequirePermission('leads.manage')
   convert(
     @Param('id') id: string,
