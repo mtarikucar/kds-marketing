@@ -220,7 +220,7 @@ export class ImportService implements OnModuleInit {
     if (!or.length) return Promise.resolve(null);
     return this.prisma.lead.findFirst({
       where: { workspaceId, mergedIntoId: null, OR: or },
-      select: { id: true, customFields: true },
+      select: { id: true, customFields: true, status: true, convertedTenantId: true },
     });
   }
 
@@ -261,49 +261,70 @@ export class ImportService implements OnModuleInit {
 
         let leadId: string | null = null;
         let rowStatus = 'DONE';
-        if (existing && policy === 'SKIP') {
-          rowStatus = 'SKIPPED';
-          skipped++;
-        } else if (existing && policy === 'UPDATE') {
-          await this.prisma.lead.update({
-            where: { id: existing.id },
-            data: {
-              ...this.nativeScalars(native),
-              customFields: {
-                ...((existing.customFields as Record<string, unknown>) ?? {}),
-                ...customFields,
-              } as Prisma.InputJsonValue,
-              phoneNormalized,
-              emailNormalized,
-            },
-          });
-          leadId = existing.id;
-          updated++;
-        } else {
-          const lead = await this.prisma.lead.create({
-            data: {
-              workspaceId: job.workspaceId,
-              businessName: native.businessName,
-              contactPerson: native.contactPerson ?? '',
-              businessType: native.businessType ?? 'OTHER',
-              source: native.source ?? 'IMPORT',
-              ...this.nativeScalars(native),
-              customFields: customFields as Prisma.InputJsonValue,
-              phoneNormalized,
-              emailNormalized,
-            },
-          });
-          leadId = lead.id;
-          created++;
-        }
+        // Decide the action up-front (no writes yet). A converted/WON customer
+        // is never overwritten from a CSV row.
+        const action: 'created' | 'updated' | 'skipped' =
+          (existing && policy === 'SKIP') ||
+          (existing && (existing.convertedTenantId || existing.status === 'WON'))
+            ? 'skipped'
+            : existing && policy === 'UPDATE'
+              ? 'updated'
+              : 'created';
+        if (action === 'skipped') rowStatus = 'SKIPPED';
 
-        if (tags.length && leadId) {
-          await this.tags.assignToLead(job.workspaceId, leadId, tags);
-        }
-        await this.prisma.importJobRow.update({
-          where: { id: row.id },
-          data: { status: rowStatus, leadId },
+        // The lead write AND the row outcome commit together, so a crash can
+        // never leave an imported lead with a PENDING/FAILED row (or vice-versa).
+        await this.prisma.$transaction(async (tx) => {
+          if (action === 'updated' && existing) {
+            await tx.lead.update({
+              where: { id: existing.id },
+              data: {
+                ...this.nativeScalars(native),
+                customFields: {
+                  ...((existing.customFields as Record<string, unknown>) ?? {}),
+                  ...customFields,
+                } as Prisma.InputJsonValue,
+                phoneNormalized,
+                emailNormalized,
+              },
+            });
+            leadId = existing.id;
+          } else if (action === 'created') {
+            const lead = await tx.lead.create({
+              data: {
+                workspaceId: job.workspaceId,
+                businessName: native.businessName,
+                contactPerson: native.contactPerson ?? '',
+                businessType: native.businessType ?? 'OTHER',
+                source: native.source ?? 'IMPORT',
+                ...this.nativeScalars(native),
+                customFields: customFields as Prisma.InputJsonValue,
+                phoneNormalized,
+                emailNormalized,
+              },
+            });
+            leadId = lead.id;
+          }
+          await tx.importJobRow.update({
+            where: { id: row.id },
+            data: { status: rowStatus, leadId },
+          });
         });
+
+        // Only count AFTER the tx commits, so a rolled-back row isn't counted.
+        if (action === 'created') created++;
+        else if (action === 'updated') updated++;
+        else skipped++;
+
+        // Tags are best-effort AFTER the row committed — a tag failure must not
+        // un-import the lead or flip the row to FAILED (the lead is in).
+        if (tags.length && leadId) {
+          await this.tags
+            .assignToLead(job.workspaceId, leadId, tags)
+            .catch((e) =>
+              this.logger.warn(`import: tag assign failed for lead ${leadId}: ${(e as Error).message}`),
+            );
+        }
       } catch (e) {
         failed++;
         const message = (e as Error).message;

@@ -6,6 +6,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ConversationStreamService } from './conversation-stream.service';
 import { ChannelType, InboundMessage } from './channel-adapter.interface';
+import { normalizePhone } from '../utils/lead-normalize';
 
 export interface IngressChannel {
   id: string;
@@ -158,7 +159,11 @@ export class ConversationIngressService {
           businessType: 'OTHER',
           source: SOURCE_BY_CHANNEL[channel.type] ?? 'OTHER',
           status: 'NEW',
-          ...(isPhone ? { phone: inbound.externalUserId } : {}),
+          // Write the normalized phone too so a later form/manual lead with the
+          // same number dedup-matches this channel-created lead (cross-path).
+          ...(isPhone
+            ? { phone: inbound.externalUserId, phoneNormalized: normalizePhone(inbound.externalUserId) }
+            : {}),
           ...(inbound.kind === 'WA' ? { whatsapp: inbound.externalUserId } : {}),
           ...(autoOwner ? { assignedToId: autoOwner } : {}),
         },

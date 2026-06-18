@@ -12,6 +12,7 @@ import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { GoogleCalendarSyncService } from '../integrations/google-calendar-sync.service';
 
@@ -177,10 +178,21 @@ export class BookingService implements OnModuleInit {
       // Link or create a lead.
       const email = dto.email?.trim() || null;
       const phone = dto.phone?.trim() || null;
+      const emailNormalized = normalizeEmail(email);
+      const phoneNormalized = normalizePhone(phone);
       let leadId: string | null = null;
-      if (email || phone) {
+      if (emailNormalized || phoneNormalized) {
+        // Dedup on the NORMALIZED keys (cross-path with manual/form leads) and
+        // skip tombstoned (merged-away) leads.
         const existing = await tx.lead.findFirst({
-          where: { workspaceId, OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] },
+          where: {
+            workspaceId,
+            mergedIntoId: null,
+            OR: [
+              ...(emailNormalized ? [{ emailNormalized }] : []),
+              ...(phoneNormalized ? [{ phoneNormalized }] : []),
+            ],
+          },
           select: { id: true },
         });
         leadId = existing?.id ?? null;
@@ -192,6 +204,8 @@ export class BookingService implements OnModuleInit {
             workspaceId, businessName: dto.name || 'Booking', contactPerson: dto.name || 'Booking',
             businessType: 'OTHER', source: 'WEBSITE', status: 'NEW',
             ...(email ? { email } : {}), ...(phone ? { phone } : {}),
+            ...(emailNormalized ? { emailNormalized } : {}),
+            ...(phoneNormalized ? { phoneNormalized } : {}),
             ...(autoOwner ? { assignedToId: autoOwner } : {}),
           },
         });
