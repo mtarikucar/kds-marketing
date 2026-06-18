@@ -52,6 +52,40 @@ export class MarketingCommissionsService {
     };
   }
 
+  /**
+   * One commission with its rep + originating lead + append-only audit log, for
+   * the detail modal. Workspace-scoped; a REP may only read its OWN rows (same
+   * rule as findAll/getSummary). 404 when absent or out of scope.
+   */
+  async get(workspaceId: string, id: string, userId: string, userRole: string) {
+    const commission = await this.prisma.commission.findFirst({
+      // workspaceId inline (not via a variable) so the multi-tenant fitness scan
+      // sees it; REP may read only its own rows.
+      where: {
+        id,
+        workspaceId,
+        ...(userRole === 'REP' ? { marketingUserId: userId } : {}),
+      },
+      include: {
+        marketingUser: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        lead: {
+          select: {
+            id: true,
+            businessName: true,
+            contactPerson: true,
+            source: true,
+            status: true,
+            convertedAt: true,
+          },
+        },
+      },
+    });
+    if (!commission) throw new NotFoundException('Commission not found');
+    return commission;
+  }
+
   async getSummary(workspaceId: string, userId: string, userRole: string, period?: string) {
     const where: any = {};
 

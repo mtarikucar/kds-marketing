@@ -52,8 +52,19 @@ export class MarketingCommissionsController {
     return this.commissionsService.getSummary(user.workspaceId, user.id, user.role, period);
   }
 
+  // NOTE: keep AFTER the literal 'summary' route so it isn't shadowed by :id.
+  @Get(':id')
+  get(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.commissionsService.get(user.workspaceId, id, user.id, user.role);
+  }
+
   @Patch(':id')
   @MarketingRoles('MANAGER')
+  @Audit({
+    action: 'commission.amount',
+    resourceType: 'commission',
+    resourceIdParam: 'id',
+  })
   @RequirePermission('settings.manage')
   updateAmount(
     @Param('id') id: string,
