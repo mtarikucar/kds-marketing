@@ -731,6 +731,13 @@ export class MarketingLeadsService {
     if (lead.convertedTenantId) {
       throw new ConflictException('Lead already converted');
     }
+    // Terminal states must not be re-opened to WON via the API. WON is reachable
+    // only from OFFER_SENT/WAITING in the state machine; the Convert button is
+    // hidden elsewhere in the UI, but the endpoint is directly reachable — so a
+    // LOST (or stray WON-without-tenant) lead could otherwise be converted.
+    if (lead.status === 'LOST' || lead.status === 'WON') {
+      throw new BadRequestException(`A ${lead.status.toLowerCase()} lead cannot be converted`);
+    }
 
     // Resolve the offer (marketing-owned) to derive the plan + offer overrides.
     // Scoped: an offer id from another workspace must not feed this convert.
