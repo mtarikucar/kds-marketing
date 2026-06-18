@@ -1,7 +1,9 @@
 import { Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ExperimentsService } from './experiments.service';
 import { SurveysService } from './surveys.service';
 import { ConvertDto, SurveySubmitDto } from './funnels.dto';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 
 /**
  * Epic E — public (unauthenticated) endpoints a funnel page calls: pick an A/B
@@ -23,11 +25,13 @@ export class PublicFunnelsController {
   }
 
   @Post('exp/:id/convert')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   convert(@Param('id') id: string, @Body() dto: ConvertDto) {
     return this.experiments.trackConversion(id, dto.variantKey);
   }
 
   @Post('survey/:id/submit')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   submitSurvey(@Param('id') id: string, @Body() dto: SurveySubmitDto) {
     return this.surveys.submit(id, dto.answers, dto.leadId);
   }

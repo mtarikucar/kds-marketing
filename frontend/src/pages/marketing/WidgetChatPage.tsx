@@ -98,14 +98,30 @@ export default function WidgetChatPage() {
     const text = draft.trim();
     if (!text || !visitorId) return;
     setDraft('');
-    // Optimistic echo.
-    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, direction: 'INBOUND', body: text }]);
-    const res = await fetch(`${base}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ visitorId, text }),
-    }).then((r) => (r.ok ? r.json() : null));
-    if (res?.conversationId && res.conversationId !== conversationId) {
+    // Optimistic echo (tracked by a stable local id so we can roll it back).
+    const localId = `local-${Date.now()}`;
+    setMessages((prev) => [...prev, { id: localId, direction: 'INBOUND', body: text }]);
+    let res: { conversationId?: string } | null = null;
+    try {
+      res = await fetch(`${base}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitorId, text }),
+      }).then((r) => (r.ok ? r.json() : null));
+    } catch {
+      res = null; // network drop
+    }
+    if (!res) {
+      // Send failed (rate-limited / 4xx-5xx / network). Roll back the optimistic
+      // echo and hand the text back to the input, so the visitor sees their
+      // message was NOT delivered and can retry — instead of believing a
+      // never-sent (often first-contact) message reached the inbox.
+      setMessages((prev) => prev.filter((m) => m.id !== localId));
+      setDraft(text);
+      inputRef.current?.focus();
+      return;
+    }
+    if (res.conversationId && res.conversationId !== conversationId) {
       setConversationId(res.conversationId);
       const saved = JSON.parse(localStorage.getItem(lsKey) || '{}');
       localStorage.setItem(lsKey, JSON.stringify({ ...saved, conversationId: res.conversationId }));

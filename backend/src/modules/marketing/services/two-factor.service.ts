@@ -9,6 +9,8 @@ import {
   generateBackupCodes,
   generateTotpSecret,
   hashBackupCode,
+  openTotpSecret,
+  sealTotpSecret,
   totpUri,
   verifyTotp,
 } from '../util/totp';
@@ -34,7 +36,9 @@ export class TwoFactorService {
     const secret = generateTotpSecret();
     await this.prisma.marketingUser.update({
       where: { id: userId },
-      data: { twoFactorSecret: secret, twoFactorEnabled: false },
+      // Store SEALED at rest (the seed mints valid OTPs). The otpauthUri the
+      // user scans still carries the plaintext secret — that's by design.
+      data: { twoFactorSecret: sealTotpSecret(secret), twoFactorEnabled: false },
     });
     return { secret, otpauthUri: totpUri(secret, u.email) };
   }
@@ -42,7 +46,7 @@ export class TwoFactorService {
   async enable(userId: string, code: string) {
     const u = await this.getUser(userId);
     if (!u.twoFactorSecret) throw new BadRequestException('Start enrollment first');
-    if (!verifyTotp(u.twoFactorSecret, code)) {
+    if (!verifyTotp(openTotpSecret(u.twoFactorSecret), code)) {
       throw new BadRequestException('Invalid verification code');
     }
     const backupCodes = generateBackupCodes();
@@ -59,7 +63,7 @@ export class TwoFactorService {
   async disable(userId: string, code: string) {
     const u = await this.getUser(userId);
     if (!u.twoFactorEnabled) return { enabled: false };
-    const okTotp = !!u.twoFactorSecret && verifyTotp(u.twoFactorSecret, code);
+    const okTotp = !!u.twoFactorSecret && verifyTotp(openTotpSecret(u.twoFactorSecret), code);
     const hashes = (u.twoFactorBackupCodes as string[]) ?? [];
     const okBackup = hashes.includes(hashBackupCode(code));
     if (!okTotp && !okBackup) throw new BadRequestException('Invalid verification code');

@@ -146,6 +146,14 @@ export class BookingService implements OnModuleInit {
     const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
 
     const booking = await this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent reservations for THIS calendar so the overlap
+      // check below is race-free. Without it, two simultaneous public reserve
+      // calls for the same slot both pass the (non-locking) conflict SELECT and
+      // both insert — double-booking one slot. There is no DB-level
+      // unique/exclusion constraint to catch it (Prisma can't model a partial/
+      // range-exclude index without breaking migrate-parity), so a transaction-
+      // scoped advisory lock is the clean fix; it auto-releases at commit.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${calId}`}))`;
       const conflict = await tx.booking.findFirst({
         where: { workspaceId, calendarId: calId, status: 'CONFIRMED', startAt: { lt: end }, endAt: { gt: start } },
         select: { id: true },
