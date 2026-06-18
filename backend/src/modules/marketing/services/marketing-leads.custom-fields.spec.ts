@@ -13,16 +13,18 @@ describe('MarketingLeadsService — customFields validation', () => {
   let prisma: MockPrismaClient;
   let svc: MarketingLeadsService;
   let cf: { validateAndNormalize: jest.Mock };
+  let outbox: { append: jest.Mock };
 
   beforeEach(() => {
     prisma = mockPrismaClient();
     cf = { validateAndNormalize: jest.fn().mockResolvedValue({ budget: 1500 }) };
+    outbox = { append: jest.fn().mockResolvedValue('outbox-id') };
     svc = new MarketingLeadsService(
       prisma as any,
       {} as any, // emailService
       { pickAssignee: jest.fn().mockResolvedValue(null) } as any, // autoAssigner
       {} as any, // provisioning
-      { append: jest.fn() } as any, // outbox
+      outbox as any, // outbox
       cf as any, // customFields
     );
     prisma.lead.findFirst.mockResolvedValue(null);
@@ -46,6 +48,13 @@ describe('MarketingLeadsService — customFields validation', () => {
     expect(prisma.lead.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ customFields: { budget: 1500 } }),
+      }),
+    );
+    // A manually-created lead now fires the lead.created workflow trigger.
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'marketing.lead.created.v1',
+        payload: expect.objectContaining({ workspaceId: 'ws-1', leadId: 'lead-1' }),
       }),
     );
   });
