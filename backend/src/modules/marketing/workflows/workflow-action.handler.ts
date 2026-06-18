@@ -10,6 +10,7 @@ import { MessageSenderService } from '../channels/message-sender.service';
 import { ReviewsService } from '../reviews/reviews.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 import { WorkflowFilter, WorkflowStep, FILTER_OPS } from './workflow-dsl.schema';
+import { ALLOWED_TRANSITIONS } from '../services/marketing-leads.service';
 
 export interface WorkflowContext {
   workspaceId: string;
@@ -226,6 +227,23 @@ export class WorkflowActionHandler {
     const data: Record<string, any> = {};
     for (const [k, v] of Object.entries(step.set ?? {})) {
       if (LEAD_WRITABLE.has(k)) data[k] = typeof v === 'string' ? this.interpolate(v, ctx) : v;
+    }
+    // A workflow must NEVER drive a lead into WON (that path is owned by
+    // convert(), which provisions a tenant + mints a commission) or make an
+    // illegal status jump that bypasses the state machine. Drop an unsafe
+    // status write but keep the rest of the fields. Fails safe: if the current
+    // status is unknown, the transition isn't in the map and status is dropped.
+    if (data.status !== undefined) {
+      const current = (ctx.lead as { status?: string }).status ?? '';
+      const legal =
+        data.status !== 'WON' &&
+        (ALLOWED_TRANSITIONS[current] ?? []).includes(data.status as string);
+      if (!legal) {
+        this.logger.warn(
+          `workflow update_lead: dropped illegal status ${current}→${data.status} for lead ${ctx.lead.id}`,
+        );
+        delete data.status;
+      }
     }
     if (Object.keys(data).length === 0) return 'skipped (no writable fields)';
     await this.prisma.lead.updateMany({ where: { id: ctx.lead.id, workspaceId: ctx.workspaceId }, data });

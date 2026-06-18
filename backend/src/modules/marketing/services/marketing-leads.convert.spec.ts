@@ -272,4 +272,30 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       expect(prisma.lead.updateMany).not.toHaveBeenCalled();
     });
   });
+
+  describe('terminal-state guards', () => {
+    it('convert() refuses a LOST lead (no re-opening a terminal lead to WON)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        convertedTenantId: null,
+        status: 'LOST',
+        assignedToId: 'rep-1',
+      } as any);
+      await expect(svc.convert(WS, 'lead-1', DTO, 'user-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      // Never provisioned a tenant for a lost lead.
+      expect(provisioning.provisionTenantForLead).not.toHaveBeenCalled();
+    });
+
+    it('delete()/archive refuses a converted lead (would dangle its tenant + commission)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        status: 'WON',
+        convertedTenantId: 'tenant-1',
+      } as any);
+      await expect(svc.delete(WS, 'lead-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -106,7 +106,10 @@ export class BookingService implements OnModuleInit {
       where: {
         workspaceId,
         status: { in: ['CONFIRMED', 'EXTERNAL_BUSY'] },
-        startAt: { gte: from, lte: to },
+        // OVERLAP the window, not just start-within it: a block that started
+        // before `from` but runs into the window still busies these slots.
+        startAt: { lt: to },
+        endAt: { gt: from },
         OR: [{ calendarId: calId }, { status: 'EXTERNAL_BUSY' }],
       },
       select: { startAt: true, endAt: true },
@@ -154,8 +157,19 @@ export class BookingService implements OnModuleInit {
       // range-exclude index without breaking migrate-parity), so a transaction-
       // scoped advisory lock is the clean fix; it auto-releases at commit.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${calId}`}))`;
+      // Mirror availability() exactly: a slot is taken by a CONFIRMED booking on
+      // THIS calendar OR by any EXTERNAL_BUSY block (Google-pulled, workspace-
+      // wide, not tied to a calendarId). The old check ignored EXTERNAL_BUSY, so
+      // a visitor could book straight over a Google-busy time the slot picker
+      // had already hidden.
       const conflict = await tx.booking.findFirst({
-        where: { workspaceId, calendarId: calId, status: 'CONFIRMED', startAt: { lt: end }, endAt: { gt: start } },
+        where: {
+          workspaceId,
+          status: { in: ['CONFIRMED', 'EXTERNAL_BUSY'] },
+          startAt: { lt: end },
+          endAt: { gt: start },
+          OR: [{ calendarId: calId }, { status: 'EXTERNAL_BUSY' }],
+        },
         select: { id: true },
       });
       if (conflict) throw new BadRequestException('That slot was just taken');

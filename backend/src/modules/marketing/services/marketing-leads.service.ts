@@ -36,7 +36,7 @@ import {
  * once the lead is closed, otherwise a rep could flip a converted WON
  * lead back to NEW and leave the tenant/commission dangling.
  */
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   NEW: ['CONTACTED', 'NOT_REACHABLE', 'LOST'],
   CONTACTED: ['MEETING_DONE', 'DEMO_SCHEDULED', 'NOT_REACHABLE', 'WAITING', 'LOST'],
   NOT_REACHABLE: ['CONTACTED', 'LOST'],
@@ -1094,6 +1094,13 @@ export class MarketingLeadsService {
     // Workspace-safe id mutation: scoped pre-check, then update by id.
     const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) throw new NotFoundException('Lead not found');
+
+    // A converted (WON) lead must NOT be archived: flipping it to LOST would
+    // leave its provisioned tenant + earned commission dangling against a now-
+    // "lost" record (and corrupt won/lost reporting). Closed deals are final.
+    if (lead.convertedTenantId || lead.status === 'WON') {
+      throw new BadRequestException('A converted lead cannot be archived');
+    }
 
     await this.prisma.lead.update({
       where: { id: lead.id },
