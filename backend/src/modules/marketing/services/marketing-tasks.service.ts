@@ -268,7 +268,12 @@ export class MarketingTasksService {
       await this.assertLeadInWorkspace(workspaceId, dto.leadId);
     }
 
-    const data: any = { ...dto };
+    const { status, ...rest } = dto;
+    const data: any = { ...rest };
+    // COMPLETED is owned by complete() — the atomic claim + the task.completed
+    // workflow trigger. The generic editor must NOT silently complete a task and
+    // skip that side effect; other status moves (IN_PROGRESS/CANCELLED) are fine.
+    if (status && status !== 'COMPLETED') data.status = status;
     if (dto.dueDate) data.dueDate = new Date(dto.dueDate);
 
     return this.prisma.marketingTask.update({

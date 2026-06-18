@@ -124,8 +124,12 @@ export class SalesCallService {
 
     const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.salesCall.update({
-        where: { id },
+      // Atomic claim INSIDE the tx: only the first logger flips INITIATED→<status>.
+      // The pre-check above is racy on its own, so two concurrent logCall calls
+      // could both reach here and BOTH mirror a CALL activity. The compound WHERE
+      // lets exactly one win; the loser sees count 0 and aborts (no double row).
+      const claim = await tx.salesCall.updateMany({
+        where: { id, workspaceId, status: 'INITIATED' },
         data: {
           status: dto.status,
           durationSec: dto.durationSec ?? null,
@@ -133,6 +137,10 @@ export class SalesCallService {
           endedAt: now,
         },
       });
+      if (claim.count === 0) {
+        throw new ConflictException('Call already logged');
+      }
+      const row = await tx.salesCall.findUniqueOrThrow({ where: { id } });
 
       // Mirror onto the lead timeline so the rep's call history lives with the
       // lead (duration in minutes, per LeadActivity's convention).
