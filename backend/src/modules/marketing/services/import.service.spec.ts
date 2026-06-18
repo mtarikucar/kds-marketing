@@ -8,6 +8,9 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
+  // processBatch now writes the lead + the row outcome in one $transaction;
+  // run the callback against the same mock client.
+  (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
   const customFields = { validateAndNormalize: jest.fn().mockResolvedValue({}) };
   const tags = { assignToLead: jest.fn().mockResolvedValue([]) };
   const scheduledJob = { schedule: jest.fn().mockResolvedValue('job-1') };
@@ -115,6 +118,33 @@ describe('ImportService.processBatch', () => {
 
     await svc.processBatch('imp-1', 0);
 
+    expect(prisma.lead.create).not.toHaveBeenCalled();
+    expect(prisma.importJobRow.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'r1' }, data: expect.objectContaining({ status: 'SKIPPED' }) }),
+    );
+  });
+
+  it('NEVER overwrites a converted (WON) customer under the UPDATE policy', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, dedupePolicy: 'UPDATE' } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', email: 'a@x.com' } },
+    ] as any);
+    // The matched lead is a converted customer.
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1',
+      customFields: {},
+      status: 'WON',
+      convertedTenantId: 'tenant-1',
+    } as any);
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    // The converted customer's record is left untouched; the row is skipped.
+    expect(prisma.lead.update).not.toHaveBeenCalled();
     expect(prisma.lead.create).not.toHaveBeenCalled();
     expect(prisma.importJobRow.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'r1' }, data: expect.objectContaining({ status: 'SKIPPED' }) }),

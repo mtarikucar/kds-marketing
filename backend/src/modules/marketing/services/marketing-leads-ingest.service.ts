@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import {
   IngestLeadCandidateDto,
   IngestLeadsDto,
@@ -320,6 +321,10 @@ export class MarketingLeadsIngestService {
       contactPerson: c.businessName,
       phone: c.phone,
       email: c.email,
+      // Canonical dedup keys so an AI-ingested lead collides with a later
+      // form/manual/booking lead that has the same email/phone (cross-path).
+      phoneNormalized: normalizePhone(c.phone),
+      emailNormalized: normalizeEmail(c.email),
       city: c.city,
       region: c.region,
       businessType: c.businessType,

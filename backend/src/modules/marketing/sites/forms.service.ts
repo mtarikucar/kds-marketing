@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 
 /**
  * Public form submission → lead. Resolves the workspace from the FormDef,
@@ -38,19 +39,35 @@ export class FormsService {
     const name = (data.name || data.fullName || data.contactPerson || '').trim();
     const email = (data.email || '').trim() || null;
     const phone = (data.phone || data.tel || '').trim() || null;
+    // Canonical dedup keys — match the manual-create path so a form submit and a
+    // hand-entered lead with the same (case/format-varying) email/phone collide.
+    const emailNormalized = normalizeEmail(email);
+    const phoneNormalized = normalizePhone(phone);
     const businessName = (data.businessName || data.company || name || 'Form lead').trim();
 
     const leadId = await this.prisma.$transaction(async (tx) => {
-      // De-dupe by email or phone within the workspace.
-      let existing = null as { id: string } | null;
-      if (email || phone) {
+      // De-dupe on the NORMALIZED keys, skipping tombstoned (merged-away) leads
+      // so a merge can't be resurrected by a later submission.
+      let existing = null as { id: string; status: string } | null;
+      if (emailNormalized || phoneNormalized) {
         existing = await tx.lead.findFirst({
-          where: { workspaceId, OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] },
-          select: { id: true },
+          where: {
+            workspaceId,
+            mergedIntoId: null,
+            OR: [
+              ...(emailNormalized ? [{ emailNormalized }] : []),
+              ...(phoneNormalized ? [{ phoneNormalized }] : []),
+            ],
+          },
+          select: { id: true, status: true },
         });
       }
       if (existing) {
-        await tx.lead.updateMany({ where: { id: existing.id, workspaceId }, data: { source: 'WEBSITE' } });
+        // A re-engagement signal for an OPEN lead — but never overwrite a closed
+        // (WON/LOST) lead's original source.
+        if (existing.status !== 'WON' && existing.status !== 'LOST') {
+          await tx.lead.updateMany({ where: { id: existing.id, workspaceId }, data: { source: 'WEBSITE' } });
+        }
         return existing.id;
       }
       const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
@@ -64,6 +81,8 @@ export class FormsService {
           status: 'NEW',
           ...(email ? { email } : {}),
           ...(phone ? { phone } : {}),
+          ...(emailNormalized ? { emailNormalized } : {}),
+          ...(phoneNormalized ? { phoneNormalized } : {}),
           ...(autoOwner ? { assignedToId: autoOwner } : {}),
         },
       });
