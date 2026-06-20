@@ -39,6 +39,15 @@ export const MarketingEventTypes = {
   TaskCompleted: "marketing.task.completed.v1",
   // Phase F P9 — end-customer invoicing.
   InvoicePaid: "marketing.invoice.paid.v1",
+
+  // Opportunities / pipelines (GoHighLevel parity). Emitted by the
+  // OpportunitiesService when a deal is created or moves stage / resolves.
+  // Forward-compatible trigger sources for workflow automation (wired in a
+  // later epic) and pipeline reporting.
+  OpportunityCreated: "marketing.opportunity.created.v1",
+  OpportunityStageChanged: "marketing.opportunity.stage_changed.v1",
+  OpportunityWon: "marketing.opportunity.won.v1",
+  OpportunityLost: "marketing.opportunity.lost.v1",
 } as const;
 
 export type MarketingEventType =

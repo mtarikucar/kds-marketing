@@ -40,3 +40,4 @@ export * from './public-invoice.controller';
 export * from './marketing-branding.controller';
 export * from './public-branding.controller';
 export * from './affiliate.controller';
+export * from './marketing-opportunities.controller';
