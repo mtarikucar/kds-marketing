@@ -31,7 +31,13 @@ import {
   DialogFooter,
   Input,
   Textarea,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
 } from '@/components/ui';
+import { listProducts } from '../../../features/marketing/api/products.service';
 
 const STATUS_TONE: Record<EstimateStatus, 'neutral' | 'info' | 'success' | 'danger' | 'warning'> = {
   DRAFT: 'neutral',
@@ -106,6 +112,27 @@ export default function EstimatesPage() {
     queryKey: ['marketing', 'estimates'],
     queryFn: listEstimates,
   });
+
+  // Catalog for the "add from product" picker in the line-item editor.
+  const { data: productPage } = useQuery({
+    queryKey: ['marketing', 'products', 'active'],
+    queryFn: () => listProducts({ active: true, limit: 100 }),
+    staleTime: 60_000,
+  });
+  const products = productPage?.data ?? [];
+
+  const addProductLine = (productId: string) => {
+    const p = products.find((x) => x.id === productId);
+    if (!p) return;
+    setForm((f) => ({
+      ...f,
+      currency: f.items.some((it) => it.description.trim()) ? f.currency : p.currency,
+      items: [
+        ...f.items.filter((it) => it.description.trim() || it.price),
+        { description: p.name, qty: '1', price: String(Number(p.price) || 0) },
+      ],
+    }));
+  };
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'estimates'] });
   const onError = (e: unknown) =>
@@ -314,6 +341,22 @@ export default function EstimatesPage() {
           )}
 
           <div className="space-y-3">
+            {/* Quick-add from the products catalog */}
+            {isDraft && products.length > 0 && (
+              <Select value="" onValueChange={addProductLine}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t('estimates.addFromProduct', 'Add from product…')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {products.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name} · {Number(p.price)} {p.currency}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+
             {/* Line items */}
             <div className="space-y-2">
               {form.items.map((it, i) => (

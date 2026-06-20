@@ -436,6 +436,7 @@
     "qty": "Qty",
     "unitPrice": "Price",
     "addItem": "Add item",
+    "addFromProduct": "Add from product…",
     "total": "Total",
     "validUntil": "Valid until",
     "notes": "Notes",
