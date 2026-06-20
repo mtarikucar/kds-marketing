@@ -98,6 +98,32 @@ describe('EstimatesService', () => {
     });
   });
 
+  describe('public accept / decline (token-gated)', () => {
+    it('accepts via the public token and stamps acceptedAt', async () => {
+      prisma.estimate.findUnique.mockResolvedValue({ id: 'e1', status: 'SENT' } as any);
+      prisma.estimate.update.mockResolvedValue({ id: 'e1' } as any);
+      const res = await svc.publicAccept('es_tok');
+      expect(prisma.estimate.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { publicToken: 'es_tok' } }),
+      );
+      expect(prisma.estimate.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'ACCEPTED' }) }),
+      );
+      expect(res).toEqual({ status: 'ACCEPTED' });
+    });
+
+    it('refuses to accept an already-declined estimate via token', async () => {
+      prisma.estimate.findUnique.mockResolvedValue({ id: 'e1', status: 'DECLINED' } as any);
+      await expect(svc.publicAccept('es_tok')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.estimate.update).not.toHaveBeenCalled();
+    });
+
+    it('404s an unknown public token', async () => {
+      prisma.estimate.findUnique.mockResolvedValue(null);
+      await expect(svc.publicView('nope')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('accept / decline', () => {
     it('declining an accepted estimate is rejected', async () => {
       prisma.estimate.findFirst.mockResolvedValue({ id: 'e1', status: 'ACCEPTED' } as any);
