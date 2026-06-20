@@ -97,6 +97,7 @@
     "dashboard": "Gösterge Paneli",
     "leads": "Lead'ler",
     "opportunities": "Fırsatlar",
+    "estimates": "Teklif Belgeleri",
     "offers": "Teklifler",
     "tasks": "Görevler",
     "calendar": "Takvim",
@@ -409,6 +410,42 @@
     "interval": {
       "MONTH": "Aylık",
       "YEAR": "Yıllık"
+    }
+  },
+  "estimates": {
+    "title": "Teklif Belgeleri",
+    "subtitle": "Müşterilere gönderdiğiniz teklifler.",
+    "newEstimate": "Yeni teklif",
+    "editEstimate": "Teklifi düzenle",
+    "emptyTitle": "Henüz teklif yok",
+    "empty": "Bir teklif oluşturup müşteriye gönderin.",
+    "saved": "Kaydedildi",
+    "saveError": "Teklif kaydedilemedi",
+    "sent": "Teklif gönderildi",
+    "accepted": "Kabul edildi olarak işaretlendi",
+    "declined": "Reddedildi olarak işaretlendi",
+    "deleted": "Teklif silindi",
+    "converted": "{{n}} numaralı faturaya dönüştürüldü",
+    "invoiced": "Faturalandı",
+    "readonlyNote": "Gönderilmiş teklif salt-okunurdur. Listedeki işlemleri kullanın.",
+    "item": "Kalem",
+    "itemPlaceholder": "Açıklama",
+    "qty": "Adet",
+    "unitPrice": "Fiyat",
+    "addItem": "Kalem ekle",
+    "total": "Toplam",
+    "validUntil": "Geçerlilik",
+    "notes": "Notlar",
+    "send": "Gönder",
+    "accept": "Kabul et",
+    "decline": "Reddet",
+    "convert": "Faturaya dönüştür",
+    "status": {
+      "DRAFT": "Taslak",
+      "SENT": "Gönderildi",
+      "ACCEPTED": "Kabul edildi",
+      "DECLINED": "Reddedildi",
+      "EXPIRED": "Süresi doldu"
     }
   },
   "opportunities": {

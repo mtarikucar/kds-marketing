@@ -97,6 +97,7 @@
     "dashboard": "Dashboard",
     "leads": "Leads",
     "opportunities": "Opportunities",
+    "estimates": "Estimates",
     "offers": "Offers",
     "tasks": "Tasks",
     "calendar": "Calendar",
@@ -412,6 +413,42 @@
     "interval": {
       "MONTH": "Monthly",
       "YEAR": "Yearly"
+    }
+  },
+  "estimates": {
+    "title": "Estimates",
+    "subtitle": "Quotes you send to customers.",
+    "newEstimate": "New estimate",
+    "editEstimate": "Edit estimate",
+    "emptyTitle": "No estimates yet",
+    "empty": "Create a quote and send it to a customer.",
+    "saved": "Saved",
+    "saveError": "Could not save the estimate",
+    "sent": "Estimate sent",
+    "accepted": "Marked accepted",
+    "declined": "Marked declined",
+    "deleted": "Estimate deleted",
+    "converted": "Converted to invoice {{n}}",
+    "invoiced": "Invoiced",
+    "readonlyNote": "A sent estimate is read-only. Use the actions on the list.",
+    "item": "Item",
+    "itemPlaceholder": "Description",
+    "qty": "Qty",
+    "unitPrice": "Price",
+    "addItem": "Add item",
+    "total": "Total",
+    "validUntil": "Valid until",
+    "notes": "Notes",
+    "send": "Send",
+    "accept": "Accept",
+    "decline": "Decline",
+    "convert": "Convert to invoice",
+    "status": {
+      "DRAFT": "Draft",
+      "SENT": "Sent",
+      "ACCEPTED": "Accepted",
+      "DECLINED": "Declined",
+      "EXPIRED": "Expired"
     }
   },
   "opportunities": {
