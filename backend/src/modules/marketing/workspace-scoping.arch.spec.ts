@@ -126,6 +126,12 @@ const OWNED_DELEGATES = [
   // monthly settlement charges, both OWNED by the agency (workspaceId = agency id).
   'rebillingPlan',
   'rebillCharge',
+  // Sales Opportunities + Pipelines (GHL parity): kanban sales spine. Stages
+  // and opportunities carry workspaceId on every multi-row/create call; the
+  // Pipeline→Stage→Opportunity FKs keep intra-feature integrity.
+  'pipeline',
+  'pipelineStage',
+  'opportunity',
 ] as const;
 
 /**

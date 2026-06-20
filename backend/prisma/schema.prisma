@@ -2222,3 +2222,89 @@ model RebillCharge {
   @@index([workspaceId, locationWorkspaceId])
   @@map("rebill_charges")
 }
+
+/// Epic — Sales Opportunities (GoHighLevel parity). A workspace defines one or
+/// more named Pipelines; each Pipeline is an ordered list of Stages, and
+/// Opportunities (deals) move across those stages on a kanban board. Soft
+/// references (plain String, no cross-model FK) to the workspace, the owning rep
+/// (MarketingUser) and the originating Lead match this schema's no-cross-FK
+/// convention; the Pipeline→Stage→Opportunity links ARE real relations (intra
+/// feature) so deleting a pipeline cascades its stages and a stage in use can't
+/// be dropped out from under live deals.
+model Pipeline {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  position    Int      @default(0) // order among the workspace's pipelines
+  isDefault   Boolean  @default(false) // the pipeline new opportunities land in by default
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stages        PipelineStage[]
+  opportunities Opportunity[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, archived])
+  @@map("pipelines")
+}
+
+/// A single column on a pipeline's kanban board. `probability` is an advisory
+/// 0-100 forecast weight; `isWon`/`isLost` mark terminal stages so moving a deal
+/// into one resolves it (sets Opportunity.status + wonAt/lostAt).
+model PipelineStage {
+  id          String   @id @default(uuid())
+  workspaceId String
+  pipelineId  String
+  pipeline    Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name        String
+  position    Int      @default(0) // order within the pipeline (left→right)
+  probability Int      @default(0) // 0-100 advisory win likelihood for forecasting
+  isWon       Boolean  @default(false)
+  isLost      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  opportunities Opportunity[]
+
+  @@index([workspaceId])
+  @@index([pipelineId, position])
+  @@map("pipeline_stages")
+}
+
+/// A deal moving through a pipeline. `value`/`currency` drive forecasting;
+/// `position` orders the card within its stage column (kanban). `leadId` and
+/// `assignedToId` are soft references (no FK) like the rest of the schema.
+/// `status`: OPEN | WON | LOST | ABANDONED — kept in sync with the stage's
+/// isWon/isLost flags by the service.
+model Opportunity {
+  id          String        @id @default(uuid())
+  workspaceId String
+  pipelineId  String
+  pipeline    Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stageId     String
+  stage       PipelineStage @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  leadId       String? // soft ref to leads.id (the originating contact), nullable
+  assignedToId String? // soft ref to marketing_users.id (owning rep), nullable
+
+  name       String
+  value      Decimal   @default(0) @db.Decimal(12, 2) // monetary value for forecasting
+  currency   String    @default("TRY") // TRY | USD | EUR
+  status     String    @default("OPEN") // OPEN | WON | LOST | ABANDONED
+  source     String?
+  notes      String?   @db.Text
+  position   Int       @default(0) // order within the stage column (lower = top)
+  lostReason String?
+  wonAt      DateTime?
+  lostAt     DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, pipelineId, stageId, position])
+  @@index([workspaceId, status])
+  @@index([assignedToId])
+  @@index([leadId])
+  @@map("opportunities")
+}

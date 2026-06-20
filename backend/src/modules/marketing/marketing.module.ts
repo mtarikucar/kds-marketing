@@ -232,6 +232,11 @@ import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
 import { PermissionsGuard } from './roles/permissions.guard';
 
+// Sales Opportunities + Pipelines (GoHighLevel parity).
+import { MarketingOpportunitiesController } from './controllers/marketing-opportunities.controller';
+import { PipelinesService } from './opportunities/pipelines.service';
+import { OpportunitiesService } from './opportunities/opportunities.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -312,6 +317,7 @@ import { PermissionsGuard } from './roles/permissions.guard';
     MarketingSitesController,
     MarketingBookingController,
     PublicSiteController,
+    MarketingOpportunitiesController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -445,6 +451,8 @@ import { PermissionsGuard } from './roles/permissions.guard';
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
+    PipelinesService,
+    OpportunitiesService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
