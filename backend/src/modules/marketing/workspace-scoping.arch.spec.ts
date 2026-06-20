@@ -132,6 +132,8 @@ const OWNED_DELEGATES = [
   'pipeline',
   'pipelineStage',
   'opportunity',
+  // Products catalog (GHL parity): workspace-owned priced items.
+  'product',
 ] as const;
 
 /**
