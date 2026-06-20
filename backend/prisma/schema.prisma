@@ -2308,3 +2308,29 @@ model Opportunity {
   @@index([leadId])
   @@map("opportunities")
 }
+
+/// Epic — Products catalog (GoHighLevel parity). Reusable priced items a
+/// workspace sells: attached to invoices/estimates/order-forms (later epics)
+/// and opportunities. `billingType` ONE_TIME | RECURRING (interval MONTH|YEAR);
+/// `price` is in the currency's major unit (e.g. 99.90 TRY). Soft workspace
+/// scoping (no cross-FK), matching the rest of the schema. Archive (active=false)
+/// instead of delete so historical line items keep resolving.
+model Product {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?  @db.Text
+  sku         String?
+  price       Decimal  @default(0) @db.Decimal(12, 2)
+  currency    String   @default("TRY") // TRY | USD | EUR
+  billingType String   @default("ONE_TIME") // ONE_TIME | RECURRING
+  interval    String? // MONTH | YEAR (set when billingType=RECURRING)
+  taxRate     Decimal? @db.Decimal(5, 2) // optional VAT/tax percent
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, active])
+  @@map("products")
+}

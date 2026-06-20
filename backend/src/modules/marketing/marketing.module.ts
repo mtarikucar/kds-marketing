@@ -237,6 +237,10 @@ import { MarketingOpportunitiesController } from './controllers/marketing-opport
 import { PipelinesService } from './opportunities/pipelines.service';
 import { OpportunitiesService } from './opportunities/opportunities.service';
 
+// Products catalog (GoHighLevel parity).
+import { MarketingProductsController } from './controllers/marketing-products.controller';
+import { ProductsService } from './products/products.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -318,6 +322,7 @@ import { OpportunitiesService } from './opportunities/opportunities.service';
     MarketingBookingController,
     PublicSiteController,
     MarketingOpportunitiesController,
+    MarketingProductsController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -453,6 +458,7 @@ import { OpportunitiesService } from './opportunities/opportunities.service';
     // AI reply drafts (wired into the send_review_request workflow action).
     PipelinesService,
     OpportunitiesService,
+    ProductsService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
