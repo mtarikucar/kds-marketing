@@ -1,0 +1,439 @@
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
+import { Plus, Trash2, Send, Check, X, FileOutput, Pencil } from 'lucide-react';
+
+import {
+  listEstimates,
+  createEstimate,
+  updateEstimate,
+  sendEstimate,
+  acceptEstimate,
+  declineEstimate,
+  convertEstimate,
+  deleteEstimate,
+  type Estimate,
+  type EstimateStatus,
+} from '../../../features/marketing/api/estimates.service';
+import {
+  PageHeader,
+  Button,
+  Card,
+  CardContent,
+  Badge,
+  Spinner,
+  EmptyState,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  Input,
+  Textarea,
+} from '@/components/ui';
+
+const STATUS_TONE: Record<EstimateStatus, 'neutral' | 'info' | 'success' | 'danger' | 'warning'> = {
+  DRAFT: 'neutral',
+  SENT: 'info',
+  ACCEPTED: 'success',
+  DECLINED: 'danger',
+  EXPIRED: 'warning',
+};
+
+interface ItemRow {
+  description: string;
+  qty: string;
+  price: string; // major units in the form; converted to minor on save
+}
+
+interface FormState {
+  id?: string;
+  status?: EstimateStatus;
+  currency: string;
+  notes: string;
+  validUntil: string;
+  items: ItemRow[];
+}
+
+const EMPTY_ITEM: ItemRow = { description: '', qty: '1', price: '' };
+const EMPTY_FORM: FormState = {
+  currency: 'TRY',
+  notes: '',
+  validUntil: '',
+  items: [{ ...EMPTY_ITEM }],
+};
+
+function money(minor: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(
+      (minor || 0) / 100,
+    );
+  } catch {
+    return `${(minor || 0) / 100} ${currency}`;
+  }
+}
+
+function Labeled({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={['space-y-1.5', className].filter(Boolean).join(' ')}>
+      <label className="text-sm font-medium text-foreground">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Estimates / quotes (GoHighLevel parity). List + a line-item editor; send to
+ * the customer, mark accepted/declined, and convert an accepted estimate into an
+ * invoice. Reps manage their own quotes (leads.write); the backend scopes data.
+ */
+export default function EstimatesPage() {
+  const { t } = useTranslation('marketing');
+  const queryClient = useQueryClient();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+
+  const { data: estimates, isLoading } = useQuery({
+    queryKey: ['marketing', 'estimates'],
+    queryFn: listEstimates,
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'estimates'] });
+  const onError = (e: unknown) =>
+    toast.error(
+      (e as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        t('estimates.saveError', 'Could not save the estimate'),
+    );
+
+  const buildPayload = (f: FormState) => ({
+    currency: f.currency,
+    notes: f.notes || undefined,
+    validUntil: f.validUntil || undefined,
+    items: f.items
+      .filter((it) => it.description.trim())
+      .map((it) => ({
+        description: it.description.trim(),
+        qty: Math.max(0, Math.round(Number(it.qty) || 0)),
+        unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
+      })),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (f: FormState) =>
+      f.id ? updateEstimate(f.id, buildPayload(f)) : createEstimate(buildPayload(f)),
+    onSuccess: () => {
+      invalidate();
+      setDialogOpen(false);
+      setForm(EMPTY_FORM);
+      toast.success(t('estimates.saved', 'Saved'));
+    },
+    onError,
+  });
+
+  const sendMut = useMutation({
+    mutationFn: sendEstimate,
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('estimates.sent', 'Estimate sent'));
+    },
+    onError,
+  });
+  const acceptMut = useMutation({
+    mutationFn: acceptEstimate,
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('estimates.accepted', 'Marked accepted'));
+    },
+    onError,
+  });
+  const declineMut = useMutation({
+    mutationFn: declineEstimate,
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('estimates.declined', 'Marked declined'));
+    },
+    onError,
+  });
+  const deleteMut = useMutation({
+    mutationFn: deleteEstimate,
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('estimates.deleted', 'Estimate deleted'));
+    },
+    onError,
+  });
+  const convertMut = useMutation({
+    mutationFn: convertEstimate,
+    onSuccess: (inv) => {
+      invalidate();
+      toast.success(t('estimates.converted', 'Converted to invoice {{n}}', { n: inv.number }));
+    },
+    onError,
+  });
+
+  const openNew = () => {
+    setForm({ ...EMPTY_FORM, items: [{ ...EMPTY_ITEM }] });
+    setDialogOpen(true);
+  };
+  const openEdit = (e: Estimate) => {
+    setForm({
+      id: e.id,
+      status: e.status,
+      currency: e.currency,
+      notes: e.notes ?? '',
+      validUntil: e.validUntil ? e.validUntil.slice(0, 10) : '',
+      items: (e.items ?? []).map((it) => ({
+        description: it.description,
+        qty: String(it.qty),
+        price: String((it.unitPrice || 0) / 100),
+      })),
+    });
+    setDialogOpen(true);
+  };
+
+  const formTotal = useMemo(
+    () =>
+      form.items.reduce(
+        (s, it) => s + Math.round(Number(it.qty) || 0) * Math.round(Number(it.price) * 100 || 0),
+        0,
+      ),
+    [form.items],
+  );
+
+  const isDraft = !form.id || form.status === 'DRAFT';
+  const rows = estimates ?? [];
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title={t('estimates.title', 'Estimates')}
+        description={t('estimates.subtitle', 'Quotes you send to customers.')}
+        actions={
+          <Button size="md" onClick={openNew}>
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            {t('estimates.newEstimate', 'New estimate')}
+          </Button>
+        }
+      />
+
+      {isLoading && (
+        <div className="flex justify-center py-16">
+          <Spinner />
+        </div>
+      )}
+
+      {!isLoading && rows.length === 0 && (
+        <EmptyState
+          title={t('estimates.emptyTitle', 'No estimates yet')}
+          description={t('estimates.empty', 'Create a quote and send it to a customer.')}
+          action={
+            <Button size="sm" onClick={openNew}>
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              {t('estimates.newEstimate', 'New estimate')}
+            </Button>
+          }
+        />
+      )}
+
+      {rows.length > 0 && (
+        <div className="space-y-2">
+          {rows.map((e) => (
+            <Card key={e.id}>
+              <CardContent className="p-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-foreground">{e.number}</p>
+                    <Badge tone={STATUS_TONE[e.status]} size="sm">
+                      {t(`estimates.status.${e.status}`, e.status)}
+                    </Badge>
+                    {e.convertedInvoiceId && (
+                      <Badge tone="success" size="sm">
+                        {t('estimates.invoiced', 'Invoiced')}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-lg font-semibold text-foreground mt-0.5">
+                    {money(e.total, e.currency)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(e)} title={t('common.edit', 'Edit')}>
+                    <Pencil className="w-4 h-4" aria-hidden="true" />
+                  </Button>
+                  {(e.status === 'DRAFT' || e.status === 'SENT') && (
+                    <Button variant="ghost" size="sm" onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
+                      <Send className="w-4 h-4" aria-hidden="true" />
+                    </Button>
+                  )}
+                  {e.status !== 'ACCEPTED' && e.status !== 'DECLINED' && (
+                    <>
+                      <Button variant="ghost" size="sm" onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
+                        <Check className="w-4 h-4 text-success" aria-hidden="true" />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
+                        <X className="w-4 h-4 text-danger" aria-hidden="true" />
+                      </Button>
+                    </>
+                  )}
+                  {!e.convertedInvoiceId && (e.status === 'ACCEPTED' || e.status === 'SENT') && (
+                    <Button variant="ghost" size="sm" onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
+                      <FileOutput className="w-4 h-4 text-primary" aria-hidden="true" />
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => deleteMut.mutate(e.id)}>
+                    <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {form.id ? t('estimates.editEstimate', 'Edit estimate') : t('estimates.newEstimate', 'New estimate')}
+            </DialogTitle>
+          </DialogHeader>
+
+          {!isDraft && (
+            <p className="text-caption text-muted-foreground">
+              {t('estimates.readonlyNote', 'A sent estimate is read-only. Use the actions on the list.')}
+            </p>
+          )}
+
+          <div className="space-y-3">
+            {/* Line items */}
+            <div className="space-y-2">
+              {form.items.map((it, i) => (
+                <div key={i} className="flex items-end gap-2">
+                  <Labeled label={i === 0 ? t('estimates.item', 'Item') : ''} className="flex-1">
+                    <Input
+                      disabled={!isDraft}
+                      value={it.description}
+                      onChange={(e) =>
+                        setForm((f) => {
+                          const items = [...f.items];
+                          items[i] = { ...items[i], description: e.target.value };
+                          return { ...f, items };
+                        })
+                      }
+                      placeholder={t('estimates.itemPlaceholder', 'Description')}
+                    />
+                  </Labeled>
+                  <Labeled label={i === 0 ? t('estimates.qty', 'Qty') : ''} className="w-16">
+                    <Input
+                      type="number"
+                      min={0}
+                      disabled={!isDraft}
+                      value={it.qty}
+                      onChange={(e) =>
+                        setForm((f) => {
+                          const items = [...f.items];
+                          items[i] = { ...items[i], qty: e.target.value };
+                          return { ...f, items };
+                        })
+                      }
+                    />
+                  </Labeled>
+                  <Labeled label={i === 0 ? t('estimates.unitPrice', 'Price') : ''} className="w-24">
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      disabled={!isDraft}
+                      value={it.price}
+                      onChange={(e) =>
+                        setForm((f) => {
+                          const items = [...f.items];
+                          items[i] = { ...items[i], price: e.target.value };
+                          return { ...f, items };
+                        })
+                      }
+                    />
+                  </Labeled>
+                  {isDraft && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setForm((f) => ({
+                          ...f,
+                          items: f.items.length > 1 ? f.items.filter((_, j) => j !== i) : f.items,
+                        }))
+                      }
+                    >
+                      <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {isDraft && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setForm((f) => ({ ...f, items: [...f.items, { ...EMPTY_ITEM }] }))}
+                >
+                  <Plus className="w-4 h-4" aria-hidden="true" />
+                  {t('estimates.addItem', 'Add item')}
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-border pt-2">
+              <span className="text-sm text-muted-foreground">{t('estimates.total', 'Total')}</span>
+              <span className="text-lg font-semibold text-foreground">
+                {money(formTotal, form.currency)}
+              </span>
+            </div>
+
+            <div className="flex gap-2">
+              <Labeled label={t('estimates.validUntil', 'Valid until')} className="flex-1">
+                <Input
+                  type="date"
+                  disabled={!isDraft}
+                  value={form.validUntil}
+                  onChange={(e) => setForm((f) => ({ ...f, validUntil: e.target.value }))}
+                />
+              </Labeled>
+            </div>
+            <Labeled label={t('estimates.notes', 'Notes')}>
+              <Textarea
+                rows={2}
+                disabled={!isDraft}
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              />
+            </Labeled>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)}>
+              {t('common.close', 'Close')}
+            </Button>
+            {isDraft && (
+              <Button
+                size="sm"
+                disabled={saveMutation.isPending || !form.items.some((it) => it.description.trim())}
+                onClick={() => saveMutation.mutate(form)}
+              >
+                {t('common.save', 'Save')}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

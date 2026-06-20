@@ -24,6 +24,7 @@ const CalendarPage             = lazy(() => import('./pages/marketing/calendar/C
 const OffersPage               = lazy(() => import('./pages/marketing/offers/OffersPage'));
 const OpportunitiesPage        = lazy(() => import('./pages/marketing/opportunities/OpportunitiesPage'));
 const PipelineSettingsPage     = lazy(() => import('./pages/marketing/opportunities/PipelineSettingsPage'));
+const EstimatesPage            = lazy(() => import('./pages/marketing/estimates/EstimatesPage'));
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
@@ -130,6 +131,7 @@ export default function App() {
           <Route path="/calendar"       element={<S><CalendarPage /></S>} />
           <Route path="/offers"         element={<S><OffersPage /></S>} />
           <Route path="/opportunities"  element={<S><OpportunitiesPage /></S>} />
+          <Route path="/estimates"      element={<S><EstimatesPage /></S>} />
           <Route path="/reports"        element={<S><ReportsPage /></S>} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
