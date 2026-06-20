@@ -22,6 +22,8 @@ const LeadDetailPage           = lazy(() => import('./pages/marketing/leadDetail
 const TasksPage                = lazy(() => import('./pages/marketing/tasks/TasksPage'));
 const CalendarPage             = lazy(() => import('./pages/marketing/calendar/CalendarPage'));
 const OffersPage               = lazy(() => import('./pages/marketing/offers/OffersPage'));
+const OpportunitiesPage        = lazy(() => import('./pages/marketing/opportunities/OpportunitiesPage'));
+const PipelineSettingsPage     = lazy(() => import('./pages/marketing/opportunities/PipelineSettingsPage'));
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
@@ -126,6 +128,7 @@ export default function App() {
           <Route path="/tasks"          element={<S><TasksPage /></S>} />
           <Route path="/calendar"       element={<S><CalendarPage /></S>} />
           <Route path="/offers"         element={<S><OffersPage /></S>} />
+          <Route path="/opportunities"  element={<S><OpportunitiesPage /></S>} />
           <Route path="/reports"        element={<S><ReportsPage /></S>} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
@@ -140,6 +143,7 @@ export default function App() {
             <Route path="/users"       element={<S><MarketingUsersPage /></S>} />
             <Route path="/targets"     element={<S><TargetsPage /></S>} />
             <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
+            <Route path="/settings/pipelines" element={<S><PipelineSettingsPage /></S>} />
             <Route path="/settings/tags"          element={<S><TagsPage /></S>} />
             <Route path="/settings/segments"      element={<S><SegmentsPage /></S>} />
             <Route path="/settings/import"        element={<S><ImportWizardPage /></S>} />

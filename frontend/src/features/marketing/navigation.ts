@@ -12,6 +12,7 @@ import {
   LineChart,
   PieChart,
   Flag,
+  Target,
   FlaskConical,
   CreditCard,
   Sparkles,
@@ -137,6 +138,7 @@ export const NAV_HUBS: NavHub[] = [
   {
     id: 'sales', labelKey: 'nav.group.sales', label: 'Sales', icon: DollarSign,
     children: [
+      { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Opportunities', icon: Target },
       { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: FileText },
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
       { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
