@@ -43,3 +43,4 @@ export * from './affiliate.controller';
 export * from './marketing-opportunities.controller';
 export * from './marketing-products.controller';
 export * from './marketing-estimates.controller';
+export * from './public-estimate.controller';

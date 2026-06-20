@@ -243,6 +243,7 @@ import { ProductsService } from './products/products.service';
 
 // Estimates / quotes (GoHighLevel parity).
 import { MarketingEstimatesController } from './controllers/marketing-estimates.controller';
+import { PublicEstimateController } from './controllers/public-estimate.controller';
 import { EstimatesService } from './estimates/estimates.service';
 
 @Module({
@@ -328,6 +329,7 @@ import { EstimatesService } from './estimates/estimates.service';
     MarketingOpportunitiesController,
     MarketingProductsController,
     MarketingEstimatesController,
+    PublicEstimateController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,

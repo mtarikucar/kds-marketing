@@ -172,4 +172,56 @@ export class EstimatesService {
     await this.prisma.estimate.delete({ where: { id } });
     return { message: 'Estimate deleted' };
   }
+
+  // ─── Public (customer) flow — gated by the unguessable publicToken ──────────
+  // No workspace context: the token IS the capability. findUnique on the @unique
+  // publicToken (and the id-keyed update) are the sanctioned token-scoped reads,
+  // mirroring the public invoice pay page.
+
+  async publicView(token: string) {
+    const estimate = await this.prisma.estimate.findUnique({
+      where: { publicToken: token },
+      select: {
+        number: true,
+        items: true,
+        currency: true,
+        total: true,
+        notes: true,
+        status: true,
+        validUntil: true,
+      },
+    });
+    if (!estimate) throw new NotFoundException('Estimate not found');
+    return estimate;
+  }
+
+  async publicAccept(token: string) {
+    const estimate = await this.prisma.estimate.findUnique({ where: { publicToken: token } });
+    if (!estimate) throw new NotFoundException('Estimate not found');
+    if (estimate.status === 'DECLINED') {
+      throw new ConflictException('This estimate was already declined');
+    }
+    if (estimate.status !== 'ACCEPTED') {
+      await this.prisma.estimate.update({
+        where: { id: estimate.id },
+        data: { status: 'ACCEPTED', acceptedAt: new Date(), declinedAt: null },
+      });
+    }
+    return { status: 'ACCEPTED' };
+  }
+
+  async publicDecline(token: string) {
+    const estimate = await this.prisma.estimate.findUnique({ where: { publicToken: token } });
+    if (!estimate) throw new NotFoundException('Estimate not found');
+    if (estimate.status === 'ACCEPTED') {
+      throw new ConflictException('This estimate was already accepted');
+    }
+    if (estimate.status !== 'DECLINED') {
+      await this.prisma.estimate.update({
+        where: { id: estimate.id },
+        data: { status: 'DECLINED', declinedAt: new Date() },
+      });
+    }
+    return { status: 'DECLINED' };
+  }
 }
