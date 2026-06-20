@@ -127,6 +127,7 @@
     "reviews": "Reviews",
     "voice": "Voice AI",
     "invoices": "Invoices",
+    "products": "Products",
     "branding": "Branding"
   },
   "common": {
@@ -385,6 +386,33 @@
     "createSuccess": "Lead created",
     "updateSuccess": "Lead updated",
     "duplicateEmailError": "A lead with this email already exists"
+  },
+  "products": {
+    "title": "Products",
+    "subtitle": "Reusable priced items you sell.",
+    "newProduct": "New product",
+    "editProduct": "Edit product",
+    "emptyTitle": "No products yet",
+    "empty": "Create products to reuse on invoices and deals.",
+    "saved": "Saved",
+    "saveError": "Could not save the product",
+    "archived": "Product archived",
+    "deleted": "Product deleted",
+    "name": "Name",
+    "namePlaceholder": "Pro plan",
+    "price": "Price",
+    "currency": "Currency",
+    "billingType": "Billing",
+    "oneTime": "One-time",
+    "recurring": "Recurring",
+    "intervalLabel": "Interval",
+    "tax": "Tax %",
+    "sku": "SKU",
+    "description": "Description",
+    "interval": {
+      "MONTH": "Monthly",
+      "YEAR": "Yearly"
+    }
   },
   "opportunities": {
     "title": "Opportunities",
