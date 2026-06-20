@@ -23,6 +23,24 @@ describe('workflow DSL', () => {
     expect(() => parseWorkflowParts({ type: 'lead.exploded', filters: [] }, okSteps)).toThrow();
   });
 
+  it('accepts the opportunity + tag triggers and tag actions (GHL parity)', () => {
+    const dsl = parseWorkflowParts(
+      { type: 'opportunity.stage_changed', filters: [{ field: 'trigger.status', op: 'eq', value: 'WON' }] },
+      [
+        { type: 'add_tag', tag: 'customer' },
+        { type: 'remove_tag', tag: 'prospect' },
+        { type: 'stop_workflow' },
+      ],
+    );
+    expect(dsl.trigger.type).toBe('opportunity.stage_changed');
+    expect(dsl.steps[0]).toMatchObject({ type: 'add_tag', tag: 'customer' });
+    expect(parseWorkflowParts({ type: 'tag.added', filters: [] }, okSteps).trigger.type).toBe('tag.added');
+  });
+
+  it('rejects an empty tag on add_tag', () => {
+    expect(() => parseWorkflowParts(okTrigger, [{ type: 'add_tag', tag: '' }])).toThrow();
+  });
+
   it('rejects an unknown step type', () => {
     expect(() => parseWorkflowParts(okTrigger, [{ type: 'launch_missiles' }])).toThrow();
   });

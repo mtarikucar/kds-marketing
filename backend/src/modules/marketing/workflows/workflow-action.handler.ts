@@ -8,6 +8,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { MarketingNotificationsService } from '../services/marketing-notifications.service';
 import { MessageSenderService } from '../channels/message-sender.service';
 import { ReviewsService } from '../reviews/reviews.service';
+import { TagsService } from '../services/tags.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 import { WorkflowFilter, WorkflowStep, FILTER_OPS } from './workflow-dsl.schema';
 import { ALLOWED_TRANSITIONS } from '../services/marketing-leads.service';
@@ -52,6 +53,7 @@ export class WorkflowActionHandler {
     private readonly notifications: MarketingNotificationsService,
     private readonly sender: MessageSenderService,
     private readonly reviews: ReviewsService,
+    private readonly tags: TagsService,
   ) {}
 
   async execute(step: WorkflowStep, ctx: WorkflowContext): Promise<StepOutcome> {
@@ -85,6 +87,10 @@ export class WorkflowActionHandler {
         return { startWorkflowId: step.workflowId };
       case 'send_review_request':
         return { output: { result: await this.reviewRequest(ctx) } };
+      case 'add_tag':
+        return { output: { result: await this.addTag(step, ctx) } };
+      case 'remove_tag':
+        return { output: { result: await this.removeTag(step, ctx) } };
       default:
         return { output: { result: 'unknown step' } };
     }
@@ -249,6 +255,29 @@ export class WorkflowActionHandler {
     await this.prisma.lead.updateMany({ where: { id: ctx.lead.id, workspaceId: ctx.workspaceId }, data });
     Object.assign(ctx.lead, data);
     return 'lead updated';
+  }
+
+  private async addTag(step: any, ctx: WorkflowContext): Promise<string> {
+    if (!ctx.lead?.id) return 'skipped (no lead)';
+    const name = this.interpolate(step.tag, ctx).trim().slice(0, 60);
+    if (!name) return 'skipped (empty tag)';
+    // assignToLead resolves-or-creates the tag, links it idempotently, and emits
+    // marketing.lead.tag.added.v1 (which can itself drive a tag.added workflow).
+    await this.tags.assignToLead(ctx.workspaceId, ctx.lead.id, [name]);
+    return `tag added: ${name}`;
+  }
+
+  private async removeTag(step: any, ctx: WorkflowContext): Promise<string> {
+    if (!ctx.lead?.id) return 'skipped (no lead)';
+    const name = this.interpolate(step.tag, ctx).trim().toLowerCase();
+    if (!name) return 'skipped (empty tag)';
+    // Resolve to the tag actually on the lead (case-insensitive) so we never
+    // create a tag just to remove it; no-op if the lead doesn't carry it.
+    const current = await this.tags.getLeadTags(ctx.workspaceId, ctx.lead.id);
+    const match = current.find((t) => t.name.trim().toLowerCase() === name);
+    if (!match) return 'skipped (tag not on lead)';
+    await this.tags.unassignFromLead(ctx.workspaceId, ctx.lead.id, [match.id]);
+    return `tag removed: ${match.name}`;
   }
 
   private async notify(step: any, ctx: WorkflowContext): Promise<string> {

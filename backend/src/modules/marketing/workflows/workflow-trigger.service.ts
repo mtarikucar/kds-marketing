@@ -15,6 +15,11 @@ const EVENT_FOR_TRIGGER: Record<WorkflowTriggerType, string> = {
   'booking.created': MarketingEventTypes.BookingCreated,
   'review.received': MarketingEventTypes.ReviewReceived,
   'task.completed': MarketingEventTypes.TaskCompleted,
+  'tag.added': MarketingEventTypes.LeadTagAdded,
+  'opportunity.created': MarketingEventTypes.OpportunityCreated,
+  'opportunity.stage_changed': MarketingEventTypes.OpportunityStageChanged,
+  'opportunity.won': MarketingEventTypes.OpportunityWon,
+  'opportunity.lost': MarketingEventTypes.OpportunityLost,
 };
 
 /**

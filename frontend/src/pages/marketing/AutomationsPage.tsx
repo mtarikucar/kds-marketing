@@ -63,6 +63,11 @@ const TRIGGER_TYPES = [
   'booking.created',
   'review.received',
   'task.completed',
+  'tag.added',
+  'opportunity.created',
+  'opportunity.stage_changed',
+  'opportunity.won',
+  'opportunity.lost',
 ] as const;
 
 const STEP_TEMPLATES: Record<string, unknown> = {
@@ -75,6 +80,8 @@ const STEP_TEMPLATES: Record<string, unknown> = {
   create_task: { type: 'create_task', title: 'Follow up with {{lead.contactPerson}}', dueInHours: 24 },
   assign_lead: { type: 'assign_lead', strategy: 'auto' },
   update_lead: { type: 'update_lead', set: { status: 'CONTACTED' } },
+  add_tag: { type: 'add_tag', tag: 'customer' },
+  remove_tag: { type: 'remove_tag', tag: 'prospect' },
   notify_user: { type: 'notify_user', message: 'New lead {{lead.businessName}} entered the workflow' },
   stop_workflow: { type: 'stop_workflow' },
 };

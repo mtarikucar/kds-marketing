@@ -263,6 +263,7 @@ export class OpportunitiesService {
         {
           workspaceId,
           opportunityId: id,
+          leadId: opp.leadId,
           pipelineId: opp.pipelineId,
           fromStageId: opp.stageId,
           toStageId: stage.id,
@@ -274,6 +275,7 @@ export class OpportunitiesService {
         void this.emit(MarketingEventTypes.OpportunityWon, `opp-won:${id}`, {
           workspaceId,
           opportunityId: id,
+          leadId: opp.leadId,
           value: Number(updated.value),
           occurredAt: now.toISOString(),
         });
@@ -281,6 +283,7 @@ export class OpportunitiesService {
         void this.emit(MarketingEventTypes.OpportunityLost, `opp-lost:${id}`, {
           workspaceId,
           opportunityId: id,
+          leadId: opp.leadId,
           occurredAt: now.toISOString(),
         });
       }
@@ -308,6 +311,7 @@ export class OpportunitiesService {
     void this.emit(MarketingEventTypes.OpportunityWon, `opp-won:${id}`, {
       workspaceId,
       opportunityId: id,
+      leadId: opp.leadId,
       value: Number(updated.value),
       occurredAt: now.toISOString(),
     });
@@ -340,6 +344,7 @@ export class OpportunitiesService {
     void this.emit(MarketingEventTypes.OpportunityLost, `opp-lost:${id}`, {
       workspaceId,
       opportunityId: id,
+      leadId: opp.leadId,
       reason: dto.reason ?? null,
       occurredAt: now.toISOString(),
     });

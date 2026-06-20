@@ -48,6 +48,10 @@ export const MarketingEventTypes = {
   OpportunityStageChanged: "marketing.opportunity.stage_changed.v1",
   OpportunityWon: "marketing.opportunity.won.v1",
   OpportunityLost: "marketing.opportunity.lost.v1",
+
+  // Tag assignment (emitted by TagsService). Backs the `tag.added` workflow
+  // trigger; the matching removed event exists for outbound webhooks.
+  LeadTagAdded: "marketing.lead.tag.added.v1",
 } as const;
 
 export type MarketingEventType =

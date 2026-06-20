@@ -16,6 +16,15 @@ export const TRIGGER_TYPES = [
   'booking.created',
   'review.received',
   'task.completed',
+  // Tag automation: fires when a tag is added to a lead.
+  'tag.added',
+  // Opportunity / pipeline automation (GHL parity) — backed by the
+  // OpportunitiesService outbox events. stage_changed is the workhorse
+  // (filter on trigger.toStageId / trigger.status).
+  'opportunity.created',
+  'opportunity.stage_changed',
+  'opportunity.won',
+  'opportunity.lost',
 ] as const;
 export type WorkflowTriggerType = (typeof TRIGGER_TYPES)[number];
 
@@ -110,6 +119,10 @@ const StepSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('start_workflow'), workflowId: z.string().max(64) }),
   z.object({ type: z.literal('stop_workflow') }),
   z.object({ type: z.literal('send_review_request') }), // wired in P6
+  // Tag automation (GHL parity): add/remove a tag on the lead by name. add_tag
+  // resolves-or-creates the tag (idempotent); remove_tag is a no-op if absent.
+  z.object({ type: z.literal('add_tag'), tag: z.string().min(1).max(60) }),
+  z.object({ type: z.literal('remove_tag'), tag: z.string().min(1).max(60) }),
 ]);
 export type WorkflowStep = z.infer<typeof StepSchema>;
 
