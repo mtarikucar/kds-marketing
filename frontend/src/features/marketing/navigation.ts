@@ -35,6 +35,7 @@ import {
   Building2,
   Camera,
   Receipt,
+  Package,
   KeyRound,
   Webhook,
   Plug,
@@ -196,6 +197,7 @@ export const NAV_HUBS: NavHub[] = [
   {
     id: 'payments', labelKey: 'nav.group.payments', label: 'Payments', icon: Banknote,
     children: [
+      { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
       { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
       { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
     ],

@@ -124,6 +124,7 @@
     "reviews": "Yorumlar",
     "voice": "Sesli AI",
     "invoices": "Faturalar",
+    "products": "Ürünler",
     "branding": "Marka"
   },
   "common": {
@@ -382,6 +383,33 @@
     "createSuccess": "Lead oluşturuldu",
     "updateSuccess": "Lead güncellendi",
     "duplicateEmailError": "Bu e-postaya sahip bir lead zaten var"
+  },
+  "products": {
+    "title": "Ürünler",
+    "subtitle": "Sattığınız tekrar kullanılabilir fiyatlı kalemler.",
+    "newProduct": "Yeni ürün",
+    "editProduct": "Ürünü düzenle",
+    "emptyTitle": "Henüz ürün yok",
+    "empty": "Faturalarda ve fırsatlarda kullanmak için ürün oluşturun.",
+    "saved": "Kaydedildi",
+    "saveError": "Ürün kaydedilemedi",
+    "archived": "Ürün arşivlendi",
+    "deleted": "Ürün silindi",
+    "name": "Ad",
+    "namePlaceholder": "Pro plan",
+    "price": "Fiyat",
+    "currency": "Para birimi",
+    "billingType": "Faturalama",
+    "oneTime": "Tek seferlik",
+    "recurring": "Tekrarlayan",
+    "intervalLabel": "Aralık",
+    "tax": "Vergi %",
+    "sku": "SKU",
+    "description": "Açıklama",
+    "interval": {
+      "MONTH": "Aylık",
+      "YEAR": "Yıllık"
+    }
   },
   "opportunities": {
     "title": "Fırsatlar",
