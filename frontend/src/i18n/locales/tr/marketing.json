@@ -433,6 +433,7 @@
     "qty": "Adet",
     "unitPrice": "Fiyat",
     "addItem": "Kalem ekle",
+    "addFromProduct": "Üründen ekle…",
     "total": "Toplam",
     "validUntil": "Geçerlilik",
     "notes": "Notlar",
