@@ -134,6 +134,8 @@ const OWNED_DELEGATES = [
   'opportunity',
   // Products catalog (GHL parity): workspace-owned priced items.
   'product',
+  // Estimates / quotes (GHL parity): priced documents owned by the workspace.
+  'estimate',
 ] as const;
 
 /**

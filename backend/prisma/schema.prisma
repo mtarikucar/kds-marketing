@@ -2334,3 +2334,32 @@ model Product {
   @@index([workspaceId, active])
   @@map("products")
 }
+
+/// Epic — Estimates / quotes (GoHighLevel parity). A priced document of line
+/// items sent to a lead/customer who can accept or decline; an accepted estimate
+/// converts to an Invoice (convertedInvoiceId, a soft no-FK link). Mirrors the
+/// Invoice shape: `items` is a JSON array of { description, qty, unitPrice }
+/// (minor units), `total` is the computed minor-unit sum, `publicToken` backs the
+/// customer accept/decline page. Soft workspace scoping.
+model Estimate {
+  id                 String    @id @default(uuid())
+  workspaceId        String
+  leadId             String?
+  number             String
+  items              Json
+  currency           String    @default("TRY")
+  total              Int       @default(0) // minor units (kuruş/cents)
+  notes              String?
+  validUntil         DateTime?
+  status             String    @default("DRAFT") // DRAFT | SENT | ACCEPTED | DECLINED | EXPIRED
+  publicToken        String    @unique
+  acceptedAt         DateTime?
+  declinedAt         DateTime?
+  convertedInvoiceId String? // set once converted to an invoice (soft ref)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("estimates")
+}
