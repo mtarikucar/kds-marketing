@@ -28,7 +28,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(ids).not.toContain('payments');
     expect(ids).not.toContain('agency');
     expect(childPaths(hubs, 'contacts')).toEqual(['/leads']);
-    expect(childPaths(hubs, 'sales')).toEqual(['/offers']);
+    expect(childPaths(hubs, 'sales')).toEqual(['/opportunities', '/offers']);
     expect(childPaths(hubs, 'reporting')).toEqual(['/reports', '/performance']);
     expect(childPaths(hubs, 'settings')).toEqual(['/settings/two-factor']);
   });
