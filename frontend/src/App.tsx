@@ -74,6 +74,7 @@ const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'
 const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
+const TelephonySettingsPage    = lazy(() => import('./pages/marketing/TelephonySettingsPage'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -186,6 +187,7 @@ export default function App() {
             <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />
             <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
+            <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
             <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />
             <Route path="/experiments" element={<S><ExperimentsPage /></S>} />
