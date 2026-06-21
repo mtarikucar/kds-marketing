@@ -36,9 +36,12 @@ export default function ClickToDialButton({
     onSuccess: (data) => {
       setActiveCall(data.call);
       setLogForm({ status: 'CONNECTED', durationSec: '', notes: '' });
-      // Hand off to the softphone. tel: links are a no-op on desktops without a
-      // dialer, which is fine — the rep can still log the manual outcome.
-      window.location.href = data.dialUri;
+      if (data.mode === 'api') {
+        // api-dial: NetGSM rings the rep's extension then the customer — no tel:.
+        toast.success('Calling… your extension is ringing');
+      } else if (data.dialUri) {
+        window.location.href = data.dialUri; // click-to-dial hands off to the device
+      }
       queryClient.invalidateQueries({ queryKey: ['marketing', 'calls'] });
     },
     onError: (e: any) => toast.error(errMsg(e, 'Failed to start call')),

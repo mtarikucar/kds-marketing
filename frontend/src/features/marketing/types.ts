@@ -383,7 +383,7 @@ export interface SalesCall {
 export interface StartCallResult {
   call: SalesCall;
   dialUri: string;
-  mode: string;
+  mode?: 'click-to-dial' | 'api';
 }
 
 export const CALL_STATUS_LABELS: Record<CallStatus, string> = {
