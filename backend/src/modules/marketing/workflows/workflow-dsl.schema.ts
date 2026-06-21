@@ -25,6 +25,8 @@ export const TRIGGER_TYPES = [
   'opportunity.stage_changed',
   'opportunity.won',
   'opportunity.lost',
+  // Standalone trigger link clicked (GHL parity). Filter on trigger.triggerLinkId.
+  'link.clicked',
 ] as const;
 export type WorkflowTriggerType = (typeof TRIGGER_TYPES)[number];
 

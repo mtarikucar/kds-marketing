@@ -53,6 +53,7 @@ const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudi
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
 const ChannelsSettingsPage     = lazy(() => import('./pages/marketing/ChannelsSettingsPage'));
 const SnippetsPage             = lazy(() => import('./pages/marketing/settings/snippets'));
+const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLinks'));
 const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
 const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
@@ -195,6 +196,7 @@ export default function App() {
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />
             <Route path="/custom-objects/:key" element={<S><CustomObjectDetailPage /></S>} />
             <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />

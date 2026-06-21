@@ -156,6 +156,9 @@ const OWNED_DELEGATES = [
   // Inbox productivity (GHL parity): canned-response snippets + internal notes.
   'messageSnippet',
   'conversationNote',
+  // Trigger links (GHL parity): trackable short links + their click rows.
+  'triggerLink',
+  'triggerLinkClick',
 ] as const;
 
 /**

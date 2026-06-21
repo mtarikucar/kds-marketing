@@ -1321,6 +1321,43 @@ model ConversationNote {
   @@map("conversation_notes")
 }
 
+/// Standalone trigger link (GHL parity) — a trackable short link that 302s to
+/// `targetUrl` and, on each click, records a TriggerLinkClick + emits the
+/// `link.clicked` workflow trigger. `slug` is GLOBALLY unique (the public route
+/// /l/:slug carries no workspace context — same pattern as a webchat widgetKey).
+model TriggerLink {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String   @unique // public id, globally unique
+  targetUrl   String   @db.Text
+  clickCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  clicks TriggerLinkClick[]
+
+  @@index([workspaceId])
+  @@map("trigger_links")
+}
+
+/// One click on a TriggerLink. `leadId` is set when the link carried a `?c=`
+/// contact id that resolved to a workspace lead (attribution). Cascade-deleted.
+model TriggerLinkClick {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  triggerLinkId String
+  triggerLink   TriggerLink @relation(fields: [triggerLinkId], references: [id], onDelete: Cascade)
+  leadId        String?
+  ip            String?
+  userAgent     String?
+  clickedAt     DateTime    @default(now())
+
+  @@index([triggerLinkId, clickedAt])
+  @@index([workspaceId, clickedAt])
+  @@map("trigger_link_clicks")
+}
+
 /// An automation: a trigger (event + filters) and an ordered step list, both
 /// stored as the executable-simple DSL JSON (validated by workflow-dsl.schema
 /// at the API boundary). `version` bumps on every save so an in-flight run can

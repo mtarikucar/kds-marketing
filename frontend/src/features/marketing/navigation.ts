@@ -52,6 +52,7 @@ import {
   MousePointerClick,
   Database,
   MessageSquareText,
+  Link2,
 } from 'lucide-react';
 
 /**
@@ -162,6 +163,7 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
       { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
+      { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
       { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
       { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, feature: 'commissions', managerOnly: true },
     ],

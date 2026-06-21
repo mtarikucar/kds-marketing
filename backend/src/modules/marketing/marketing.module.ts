@@ -283,6 +283,11 @@ import { MarketingSnippetsController } from './controllers/marketing-snippets.co
 import { SnippetsService } from './inbox/snippets.service';
 import { LeadBulkService } from './inbox/lead-bulk.service';
 
+// Trigger links + QR codes (GoHighLevel parity).
+import { MarketingTriggerLinksController } from './controllers/marketing-trigger-links.controller';
+import { PublicTriggerLinkController } from './controllers/public-trigger-link.controller';
+import { TriggerLinksService } from './trigger-links/trigger-links.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -379,6 +384,8 @@ import { LeadBulkService } from './inbox/lead-bulk.service';
     MarketingAdsController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
+    MarketingTriggerLinksController,
+    PublicTriggerLinkController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -530,6 +537,7 @@ import { LeadBulkService } from './inbox/lead-bulk.service';
     CustomObjectsService,
     SnippetsService,
     LeadBulkService,
+    TriggerLinksService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

@@ -52,6 +52,10 @@ export const MarketingEventTypes = {
   // Tag assignment (emitted by TagsService). Backs the `tag.added` workflow
   // trigger; the matching removed event exists for outbound webhooks.
   LeadTagAdded: "marketing.lead.tag.added.v1",
+
+  // Standalone trigger link clicked (emitted by TriggerLinksService). Backs the
+  // `link.clicked` workflow trigger; filter on trigger.triggerLinkId.
+  LinkClicked: "marketing.link.clicked.v1",
 } as const;
 
 export type MarketingEventType =

@@ -20,6 +20,7 @@ const EVENT_FOR_TRIGGER: Record<WorkflowTriggerType, string> = {
   'opportunity.stage_changed': MarketingEventTypes.OpportunityStageChanged,
   'opportunity.won': MarketingEventTypes.OpportunityWon,
   'opportunity.lost': MarketingEventTypes.OpportunityLost,
+  'link.clicked': MarketingEventTypes.LinkClicked,
 };
 
 /**
