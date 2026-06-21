@@ -28,6 +28,8 @@ const EstimatesPage            = lazy(() => import('./pages/marketing/estimates/
 const DocumentsPage            = lazy(() => import('./pages/marketing/documents/DocumentsPage'));
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
+const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
+const CustomObjectDetailPage   = lazy(() => import('./pages/marketing/customObjects/CustomObjectDetailPage'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
 const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
@@ -191,6 +193,8 @@ export default function App() {
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />
+            <Route path="/custom-objects/:key" element={<S><CustomObjectDetailPage /></S>} />
             <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />
             <Route path="/experiments" element={<S><ExperimentsPage /></S>} />
             <Route path="/surveys"     element={<S><SurveysPage /></S>} />

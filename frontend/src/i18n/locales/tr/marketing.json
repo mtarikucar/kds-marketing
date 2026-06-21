@@ -105,6 +105,7 @@
     "commissions": "Komisyonlar",
     "reports": "Raporlar",
     "adReporting": "Reklam Raporları",
+    "customObjects": "Özel Nesneler",
     "installations": "Kurulumlar",
     "calls": "Aramalar",
     "performance": "Performans",
@@ -709,6 +710,73 @@
     "passwordResetSuccess": "Parola sıfırlandı",
     "deactivateSuccess": "Kullanıcı pasifleştirildi",
     "reactivateSuccess": "Kullanıcı aktifleştirildi"
+  },
+  "customObjects": {
+    "title": "Özel Nesneler",
+    "subtitle": "Kişilerin ötesinde kendi kayıt türlerinizi tanımlayın — mülk, araç, poliçe, her şey.",
+    "new": "Yeni nesne",
+    "searchPlaceholder": "Kayıtlarda ara…",
+    "empty": {
+      "title": "Henüz özel nesne yok",
+      "description": "İşletmenize özel kayıtları modellemek için ilk özel nesnenizi oluşturun."
+    },
+    "detail": { "subtitle": "Kayıtlara göz atın ve alanları yönetin.", "back": "Tüm nesneler" },
+    "tabs": { "records": "Kayıtlar", "fields": "Alanlar" },
+    "col": { "name": "Ad" },
+    "action": { "archive": "Arşivle" },
+    "form": {
+      "newTitle": "Yeni özel nesne",
+      "editTitle": "Nesneyi düzenle",
+      "subtitle": "Çalışma alanınız için bir kayıt türü tanımlayın (örn. Mülk, Araç, Poliçe).",
+      "key": "Anahtar",
+      "keyHint": "Değiştirilemez lower_snake_case tanımlayıcı.",
+      "labelSingular": "Ad (tekil)",
+      "labelPlural": "Ad (çoğul)",
+      "primaryField": "Birincil alan anahtarı",
+      "primaryFieldHint": "Hangi alan anahtarının kaydın görünen adı olduğu (varsayılan \"name\").",
+      "description": "Açıklama"
+    },
+    "record": {
+      "new": "Yeni kayıt",
+      "newTitle": "Yeni {{label}}",
+      "editTitle": "{{label}} düzenle",
+      "subtitle": "Bu kaydın alanlarını doldurun.",
+      "empty": "Henüz kayıt yok",
+      "emptyHint": "İlk kaydınızı oluşturun.",
+      "emptyNoFields": "Önce bu nesneye alan ekleyin, ardından kayıt oluşturun.",
+      "noFields": "Tanımlı alan yok",
+      "noFieldsHint": "Kayıt oluşturmadan önce bu nesneye alan ekleyin."
+    },
+    "field": {
+      "new": "Yeni alan",
+      "label": "Etiket",
+      "key": "Anahtar",
+      "type": "Tür",
+      "required": "Zorunlu",
+      "empty": "Henüz alan yok",
+      "emptyHint": "Bu nesnenin kayıtlarını tanımlamak için alan ekleyin."
+    },
+    "confirm": {
+      "archiveTitle": "Özel nesneyi arşivle",
+      "archiveBody": "Nesne listeden gizlenir. Kayıtları korunur ve daha sonra geri yüklenebilir.",
+      "deleteRecordTitle": "Kaydı sil",
+      "deleteRecordBody": "Bu, kaydı ve kişi bağlantılarını kalıcı olarak siler.",
+      "archiveFieldTitle": "Alanı arşivle",
+      "archiveFieldBody": "Alan yeni kayıtlardan gizlenir. Mevcut değerler korunur."
+    },
+    "toast": {
+      "created": "Özel nesne oluşturuldu",
+      "createFailed": "Nesne oluşturulamadı",
+      "archived": "Nesne arşivlendi",
+      "archiveFailed": "Arşivlenemedi",
+      "recordSaved": "Kayıt kaydedildi",
+      "recordFailed": "Kayıt kaydedilemedi",
+      "recordDeleted": "Kayıt silindi",
+      "deleteFailed": "Silinemedi",
+      "fieldSaved": "Alan kaydedildi",
+      "fieldFailed": "Alan kaydedilemedi",
+      "fieldArchived": "Alan arşivlendi"
+    }
   },
   "ads": {
     "title": "Reklam Raporları",

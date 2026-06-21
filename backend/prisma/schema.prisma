@@ -285,6 +285,69 @@ model CustomFieldDef {
   @@map("custom_field_defs")
 }
 
+/// Custom Objects (GoHighLevel parity) — a workspace-defined record type beyond
+/// the built-in Contact (e.g. Property, Vehicle, Policy). Its fields reuse
+/// CustomFieldDef rows namespaced by `entity = "OBJ:<key>"`, so the whole
+/// custom-field type/validation machinery is shared. `primaryField` names the
+/// field whose value is denormalized into CustomObjectRecord.displayName.
+model CustomObjectDef {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  key           String // slug, immutable, unique per workspace
+  labelSingular String
+  labelPlural   String
+  primaryField  String   @default("name") // field key used as the record's display name
+  description   String?
+  icon          String?
+  archived      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  records CustomObjectRecord[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, archived])
+  @@map("custom_object_defs")
+}
+
+/// One instance of a custom object. Field values live in `values` (JSONB,
+/// validated against the object's CustomFieldDefs); `displayName` is denormalized
+/// from the primary field for cheap list/search. Cascade-deleted with its def.
+model CustomObjectRecord {
+  id          String   @id @default(uuid())
+  workspaceId String
+  objectDefId String
+  objectDef   CustomObjectDef @relation(fields: [objectDefId], references: [id], onDelete: Cascade)
+  values      Json     @default("{}")
+  displayName String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  links CustomObjectLink[]
+
+  @@index([workspaceId, objectDefId])
+  @@index([workspaceId, objectDefId, displayName])
+  @@map("custom_object_records")
+}
+
+/// Association between a custom-object record and a Contact (Lead, soft ref).
+/// The (record, lead) pair is unique so linking is idempotent. Cascade-deleted
+/// with its record; lead deletion is reconciled by the records service.
+model CustomObjectLink {
+  id          String   @id @default(uuid())
+  workspaceId String
+  recordId    String
+  record      CustomObjectRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  leadId      String // associated Contact (soft ref to Lead — no FK, multi-tenant pattern)
+  label       String? // e.g. "owner", "primary contact"
+  createdAt   DateTime @default(now())
+
+  @@unique([recordId, leadId])
+  @@index([workspaceId, leadId])
+  @@index([workspaceId, recordId])
+  @@map("custom_object_links")
+}
+
 /// Epic A2 — workspace-scoped lead tag taxonomy. `nameLower` is the
 /// service-maintained case-insensitive uniqueness key (assign-by-name is
 /// idempotent regardless of casing). Tag↔Lead is the LeadTag join table.

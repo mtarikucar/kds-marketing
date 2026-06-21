@@ -36,11 +36,11 @@ export class CustomFieldsService {
     private outbox: OutboxService,
   ) {}
 
-  list(workspaceId: string, includeArchived = false) {
+  list(workspaceId: string, includeArchived = false, entity = 'LEAD') {
     return this.prisma.customFieldDef.findMany({
       where: {
         workspaceId,
-        entity: 'LEAD',
+        entity,
         ...(includeArchived ? {} : { archived: false }),
       },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
@@ -58,10 +58,10 @@ export class CustomFieldsService {
     );
   }
 
-  async create(workspaceId: string, dto: CreateCustomFieldDefDto) {
+  async create(workspaceId: string, dto: CreateCustomFieldDefDto, entity = 'LEAD') {
     const key = dto.key ?? this.slugify(dto.label);
     const dupe = await this.prisma.customFieldDef.findUnique({
-      where: { workspaceId_entity_key: { workspaceId, entity: 'LEAD', key } },
+      where: { workspaceId_entity_key: { workspaceId, entity, key } },
     });
     if (dupe) {
       throw new ConflictException(`Custom field key "${key}" already exists`);
@@ -75,7 +75,7 @@ export class CustomFieldsService {
     return this.prisma.customFieldDef.create({
       data: {
         workspaceId,
-        entity: 'LEAD',
+        entity,
         key,
         label: dto.label,
         type: dto.type,
@@ -86,9 +86,14 @@ export class CustomFieldsService {
     });
   }
 
-  private async getOwned(workspaceId: string, id: string) {
+  // `entity`, when supplied, is enforced in the lookup so a field id from a
+  // DIFFERENT entity namespace (e.g. a LEAD field, or another custom object's
+  // field) cannot be mutated through this call — closes the cross-entity /
+  // privilege-boundary gap on the object-field routes. LEAD callers omit it
+  // (their ids are always LEAD fields), preserving existing behavior.
+  private async getOwned(workspaceId: string, id: string, entity?: string) {
     const def = await this.prisma.customFieldDef.findFirst({
-      where: { id, workspaceId },
+      where: { id, workspaceId, ...(entity ? { entity } : {}) },
     });
     if (!def) throw new NotFoundException('Custom field not found');
     return def;
@@ -98,8 +103,9 @@ export class CustomFieldsService {
     workspaceId: string,
     id: string,
     dto: UpdateCustomFieldDefDto,
+    entity?: string,
   ) {
-    await this.getOwned(workspaceId, id);
+    await this.getOwned(workspaceId, id, entity);
     return this.prisma.customFieldDef.update({
       where: { id },
       data: {
@@ -111,32 +117,34 @@ export class CustomFieldsService {
     });
   }
 
-  async archive(workspaceId: string, id: string) {
-    await this.getOwned(workspaceId, id);
+  async archive(workspaceId: string, id: string, entity?: string) {
+    await this.getOwned(workspaceId, id, entity);
     return this.prisma.customFieldDef.update({
       where: { id },
       data: { archived: true },
     });
   }
 
-  async restore(workspaceId: string, id: string) {
-    await this.getOwned(workspaceId, id);
+  async restore(workspaceId: string, id: string, entity?: string) {
+    await this.getOwned(workspaceId, id, entity);
     return this.prisma.customFieldDef.update({
       where: { id },
       data: { archived: false },
     });
   }
 
-  async reorder(workspaceId: string, ids: string[]) {
+  async reorder(workspaceId: string, ids: string[], entity = 'LEAD') {
+    // `entity` is part of the where so an id from another namespace is a no-op
+    // (can't reposition LEAD / other-object fields via an object's reorder).
     await this.prisma.$transaction(
       ids.map((id, i) =>
         this.prisma.customFieldDef.updateMany({
-          where: { id, workspaceId },
+          where: { id, workspaceId, entity },
           data: { position: i },
         }),
       ),
     );
-    return this.list(workspaceId, true);
+    return this.list(workspaceId, true, entity);
   }
 
   private coerce(def: DefRow, raw: unknown): unknown {

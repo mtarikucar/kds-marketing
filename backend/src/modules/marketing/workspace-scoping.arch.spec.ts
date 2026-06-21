@@ -146,6 +146,11 @@ const OWNED_DELEGATES = [
   // account (sealed token) and the pulled per-day metric rows are workspace-owned.
   'adAccount',
   'adMetric',
+  // Custom Objects (GHL parity): workspace-defined record types, their records,
+  // and record↔Contact links are all workspace-owned.
+  'customObjectDef',
+  'customObjectRecord',
+  'customObjectLink',
 ] as const;
 
 /**

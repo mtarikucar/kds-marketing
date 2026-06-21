@@ -105,6 +105,7 @@
     "commissions": "Commissions",
     "reports": "Reports",
     "adReporting": "Ad Reporting",
+    "customObjects": "Custom Objects",
     "installations": "Installations",
     "calls": "Calls",
     "performance": "Performance",
@@ -712,6 +713,73 @@
     "passwordResetSuccess": "Password reset",
     "deactivateSuccess": "User deactivated",
     "reactivateSuccess": "User reactivated"
+  },
+  "customObjects": {
+    "title": "Custom Objects",
+    "subtitle": "Define your own record types beyond Contacts — properties, vehicles, policies, anything.",
+    "new": "New object",
+    "searchPlaceholder": "Search records…",
+    "empty": {
+      "title": "No custom objects yet",
+      "description": "Create your first custom object to model records specific to your business."
+    },
+    "detail": { "subtitle": "Browse records and manage fields.", "back": "All objects" },
+    "tabs": { "records": "Records", "fields": "Fields" },
+    "col": { "name": "Name" },
+    "action": { "archive": "Archive" },
+    "form": {
+      "newTitle": "New custom object",
+      "editTitle": "Edit object",
+      "subtitle": "Define a record type for your workspace (e.g. Property, Vehicle, Policy).",
+      "key": "Key",
+      "keyHint": "Immutable lower_snake_case identifier.",
+      "labelSingular": "Name (singular)",
+      "labelPlural": "Name (plural)",
+      "primaryField": "Primary field key",
+      "primaryFieldHint": "Which field key is the record’s display name (default \"name\").",
+      "description": "Description"
+    },
+    "record": {
+      "new": "New record",
+      "newTitle": "New {{label}}",
+      "editTitle": "Edit {{label}}",
+      "subtitle": "Fill in the fields for this record.",
+      "empty": "No records yet",
+      "emptyHint": "Create your first record.",
+      "emptyNoFields": "Add fields to this object first, then create records.",
+      "noFields": "No fields defined",
+      "noFieldsHint": "Add fields to this object before creating records."
+    },
+    "field": {
+      "new": "New field",
+      "label": "Label",
+      "key": "Key",
+      "type": "Type",
+      "required": "Required",
+      "empty": "No fields yet",
+      "emptyHint": "Add fields to describe this object’s records."
+    },
+    "confirm": {
+      "archiveTitle": "Archive custom object",
+      "archiveBody": "The object is hidden from the list. Its records are kept and can be restored later.",
+      "deleteRecordTitle": "Delete record",
+      "deleteRecordBody": "This permanently deletes the record and its contact links.",
+      "archiveFieldTitle": "Archive field",
+      "archiveFieldBody": "The field is hidden from new records. Existing values are kept."
+    },
+    "toast": {
+      "created": "Custom object created",
+      "createFailed": "Failed to create object",
+      "archived": "Object archived",
+      "archiveFailed": "Failed to archive",
+      "recordSaved": "Record saved",
+      "recordFailed": "Failed to save record",
+      "recordDeleted": "Record deleted",
+      "deleteFailed": "Failed to delete",
+      "fieldSaved": "Field saved",
+      "fieldFailed": "Failed to save field",
+      "fieldArchived": "Field archived"
+    }
   },
   "ads": {
     "title": "Ad Reporting",

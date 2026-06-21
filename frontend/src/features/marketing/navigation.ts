@@ -50,6 +50,7 @@ import {
   Settings,
   PhoneCall,
   MousePointerClick,
+  Database,
 } from 'lucide-react';
 
 /**
@@ -128,6 +129,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'contacts', labelKey: 'nav.group.contacts', label: 'Contacts', icon: Users,
     children: [
       { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
+      { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database },
       { path: '/settings/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
       { path: '/settings/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
       { path: '/settings/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },

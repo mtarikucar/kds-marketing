@@ -272,6 +272,10 @@ import { MarketingAdsController } from './controllers/marketing-ads.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
 
+// Custom Objects (GoHighLevel parity) — workspace-defined record types.
+import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
+import { CustomObjectsService } from './custom-objects/custom-objects.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -364,6 +368,7 @@ import { AdsPullService } from './ads/ads-pull.service';
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
+    MarketingCustomObjectsController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -511,6 +516,7 @@ import { AdsPullService } from './ads/ads-pull.service';
     OrderFormsService,
     AdAccountService,
     AdsPullService,
+    CustomObjectsService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
