@@ -50,6 +50,9 @@ interface ChannelRow {
   externalId?: string | null;
   configuredSecrets: string[];
   lastVerifiedAt?: string | null;
+  // SMS (NetGSM) only: tokenized inbound-MO callback URL to paste into the NetGSM
+  // panel. Null until the server has PUBLIC_BASE_URL + MARKETING_SECRET_KEY set.
+  callbackUrl?: string | null;
 }
 interface AgentRow {
   id: string;
@@ -431,6 +434,45 @@ export default function ChannelsSettingsPage() {
                       <Clipboard className="h-4 w-4" />
                     </IconButton>
                   </div>
+                </div>
+              )}
+
+              {/* NetGSM inbound (MO) callback URL — paste into the panel so customer
+                  replies reach this channel. Surfaced like the web-chat snippet. */}
+              {c.type === 'SMS' && c.callbackUrl && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <p className="text-caption text-muted-foreground mb-1">
+                    {t(
+                      'channels.netgsmCallback',
+                      'NetGSM inbound (MO) URL — paste into İnteraktif SMS → “URL Adresine Yönlendir”',
+                    )}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
+                      {c.callbackUrl}
+                    </code>
+                    <IconButton
+                      variant="outline"
+                      size="sm"
+                      aria-label={t('common.copy', 'Copy')}
+                      onClick={() => {
+                        navigator.clipboard.writeText(c.callbackUrl!);
+                        toast.success(t('common.copied', 'Copied'));
+                      }}
+                    >
+                      <Clipboard className="h-4 w-4" />
+                    </IconButton>
+                  </div>
+                </div>
+              )}
+              {c.type === 'SMS' && !c.callbackUrl && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <p className="text-caption text-muted-foreground">
+                    {t(
+                      'channels.netgsmCallbackPending',
+                      'Inbound (MO) reply URL appears here once the server has PUBLIC_BASE_URL and MARKETING_SECRET_KEY set.',
+                    )}
+                  </p>
                 </div>
               )}
             </CardContent>
