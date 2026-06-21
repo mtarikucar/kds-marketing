@@ -128,6 +128,7 @@
     "invoices": "Faturalar",
     "products": "Ürünler",
     "subscriptions": "Abonelikler",
+    "orderForms": "Sipariş Formları",
     "branding": "Marka"
   },
   "common": {
@@ -386,6 +387,29 @@
     "createSuccess": "Lead oluşturuldu",
     "updateSuccess": "Lead güncellendi",
     "duplicateEmailError": "Bu e-postaya sahip bir lead zaten var"
+  },
+  "orderForms": {
+    "title": "Sipariş Formları",
+    "subtitle": "Bir ürünü satıp ödeme toplayan paylaşılabilir linkler.",
+    "newForm": "Yeni sipariş formu",
+    "editForm": "Sipariş formunu düzenle",
+    "emptyTitle": "Henüz sipariş formu yok",
+    "empty": "Bir ürünü online satmak için paylaşılabilir sipariş formu oluşturun.",
+    "needProduct": "Önce bir ürün oluşturun — sipariş formları bir ürün satar.",
+    "saved": "Kaydedildi",
+    "saveError": "Kaydedilemedi",
+    "deleted": "Sipariş formu silindi",
+    "linkCopied": "Genel link kopyalandı",
+    "copyLink": "Genel linki kopyala",
+    "active": "Aktif",
+    "inactive": "Pasif",
+    "name": "Ad",
+    "namePlaceholder": "Pro plan kaydı",
+    "product": "Ürün",
+    "selectProduct": "Bir ürün seçin",
+    "collectPhone": "Telefon topla",
+    "phoneRequired": "Telefon zorunlu",
+    "activeToggle": "Aktif"
   },
   "subscriptions": {
     "title": "Abonelikler",

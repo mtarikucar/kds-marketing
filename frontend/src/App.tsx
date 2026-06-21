@@ -58,6 +58,7 @@ const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'
 const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
 const ProductsPage             = lazy(() => import('./pages/marketing/products/ProductsPage'));
 const SubscriptionsPage        = lazy(() => import('./pages/marketing/subscriptions/SubscriptionsPage'));
+const OrderFormsPage           = lazy(() => import('./pages/marketing/orderForms/OrderFormsPage'));
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
 const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
 const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/AnalyticsPage'));
@@ -175,6 +176,7 @@ export default function App() {
             <Route path="/invoices"    element={<S><InvoicesPage /></S>} />
             <Route path="/products"    element={<S><ProductsPage /></S>} />
             <Route path="/subscriptions" element={<S><SubscriptionsPage /></S>} />
+            <Route path="/order-forms"   element={<S><OrderFormsPage /></S>} />
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
             {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
             <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
