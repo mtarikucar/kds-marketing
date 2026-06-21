@@ -5,7 +5,6 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
@@ -36,7 +35,6 @@ export class SalesCallService {
     private readonly prisma: PrismaService,
     private readonly registry: TelephonyProviderRegistry,
     private readonly outbox: OutboxService,
-    private readonly config: ConfigService,
     private readonly telephonyConfig: TelephonyConfigService,
   ) {}
 
@@ -50,17 +48,20 @@ export class SalesCallService {
    * or written here is scoped to the actor's workspace.
    */
   async startCall(workspaceId: string, marketingUserId: string, dto: StartCallDto) {
-    // Per-workspace provider selection: an ACTIVE Netsantral config → api-dial
-    // (call originates from the 0850 trunk); otherwise the click-to-dial fallback.
-    const netsantral = await this.telephonyConfig.resolveForWorkspace(workspaceId);
+    // FIX 8: Fetch rep's dahili FIRST — skip the expensive DB+AES resolve when
+    // the rep has no extension (api-dial is only possible with both).
+    const rep = await this.prisma.marketingUser.findFirst({
+      where: { id: marketingUserId, workspaceId },
+      select: { dahili: true },
+    });
+
+    // Per-workspace provider selection: an ACTIVE Netsantral config + rep dahili
+    // → api-dial (call originates from the 0850 trunk); otherwise click-to-dial.
     let providerId = 'netgsm-lite';
     let resolvedConfig: PrepareCallRequest['config'] | undefined;
-    if (netsantral) {
-      const rep = await this.prisma.marketingUser.findFirst({
-        where: { id: marketingUserId, workspaceId },
-        select: { dahili: true },
-      });
-      if (rep?.dahili) {
+    if (rep?.dahili) {
+      const netsantral = await this.telephonyConfig.resolveForWorkspace(workspaceId);
+      if (netsantral) {
         providerId = 'netgsm-netsantral';
         resolvedConfig = {
           username: netsantral.username, password: netsantral.password,
@@ -103,23 +104,48 @@ export class SalesCallService {
       if (!lead) throw new NotFoundException('Lead not found');
     }
 
-    const prepared = await provider.prepareOutboundCall({
-      toPhone: dto.toPhone,
-      marketingUserId,
-      config: resolvedConfig,
-    });
-    const call = await this.prisma.salesCall.create({
+    // FIX 1: Create the DB row BEFORE placing the live call so that if origination
+    // throws, the row exists and can be marked CANCELLED (no orphaned live calls).
+    const created = await this.prisma.salesCall.create({
       data: {
         workspaceId,
         marketingUserId,
         leadId: dto.leadId ?? null,
         direction: 'OUTBOUND',
         toPhone: dto.toPhone,
-        providerId: prepared.providerId,
+        providerId,
         status: 'INITIATED',
-        externalCallId: prepared.externalCallId,
+        externalCallId: null,
       },
     });
+
+    let prepared: Awaited<ReturnType<typeof provider.prepareOutboundCall>>;
+    try {
+      prepared = await provider.prepareOutboundCall({
+        toPhone: dto.toPhone,
+        marketingUserId,
+        config: resolvedConfig,
+      });
+    } catch (err: any) {
+      await this.prisma.salesCall.update({
+        where: { id: created.id },
+        data: {
+          status: 'CANCELLED',
+          endedAt: new Date(),
+          notes: 'Origination failed: ' + (err?.message ?? 'error'),
+        },
+      });
+      throw err;
+    }
+
+    if (prepared.externalCallId) {
+      await this.prisma.salesCall.update({
+        where: { id: created.id },
+        data: { externalCallId: prepared.externalCallId },
+      });
+    }
+
+    const call = { ...created, externalCallId: prepared.externalCallId ?? null };
     return { call, dialUri: prepared.dialUri, mode: prepared.mode };
   }
 

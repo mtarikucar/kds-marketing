@@ -31,4 +31,12 @@ describe('NetsantralClient', () => {
     expect(out.ok).toBe(false);
     expect(out.message).not.toContain('pw');
   });
+
+  it('scrubs all occurrences of the password when it appears multiple times in the error', async () => {
+    fetchMock = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('error: pw and again pw'));
+    const out = await new NetsantralClient().originate({ ...creds, customer_num: '5', internal_num: '104', trunk: '850' });
+    expect(out.ok).toBe(false);
+    expect(out.message).not.toContain('pw');
+    expect(out.message).toContain('***');
+  });
 });

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 import { assertNetsantralConfig } from './telephony-config.util';
@@ -18,6 +18,8 @@ export interface ResolvedNetsantral {
 
 @Injectable()
 export class TelephonyConfigService {
+  private readonly logger = new Logger(TelephonyConfigService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async get(workspaceId: string) {
@@ -57,7 +59,13 @@ export class TelephonyConfigService {
   /** Decrypted creds for an ACTIVE config, or null. Used by SalesCallService. */
   async resolveForWorkspace(workspaceId: string): Promise<ResolvedNetsantral | null> {
     const c = await this.prisma.telephonyConfig.findUnique({ where: { workspaceId } });
-    if (!c || c.status !== 'ACTIVE' || !c.configSealed || !c.trunk || !isSecretBoxConfigured()) return null;
+    if (!c || c.status !== 'ACTIVE' || !c.configSealed || !c.trunk) return null;
+    if (!isSecretBoxConfigured()) {
+      this.logger.warn(
+        'TelephonyConfig present but MARKETING_SECRET_KEY missing — api-dial disabled for workspace ' + workspaceId,
+      );
+      return null;
+    }
     let creds: Record<string, string>;
     try { creds = JSON.parse(openSecret(c.configSealed)); } catch { return null; }
     if (!creds.username || !creds.password) return null;

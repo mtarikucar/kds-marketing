@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -36,10 +37,14 @@ export default function TelephonySettingsPage() {
     defaultValues: {
       username: '',
       password: '',
-      trunk: cfg?.trunk ?? '',
-      pbxnum: cfg?.pbxnum ?? '',
+      trunk: '',
+      pbxnum: '',
     },
   });
+
+  useEffect(() => {
+    if (cfg) form.reset({ username: '', password: '', trunk: cfg.trunk ?? '', pbxnum: cfg.pbxnum ?? '' });
+  }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useMutation({
     mutationFn: (v: TelephonyFormValues) =>

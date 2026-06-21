@@ -53,7 +53,8 @@ export class NetsantralClient {
     } catch (e: any) {
       const timedOut = e?.name === 'AbortError' || e?.name === 'TimeoutError';
       const raw = timedOut ? 'Netsantral request timed out' : (e?.message ?? String(e));
-      const scrubbed = raw.replace(/password=[^&\s]+/gi, 'password=***').replace(p.password, '***');
+      const escaped = p.password.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const scrubbed = raw.replace(/password=[^&\s]+/gi, 'password=***').replace(new RegExp(escaped, 'g'), '***');
       return { ok: false, message: scrubbed };
     }
   }

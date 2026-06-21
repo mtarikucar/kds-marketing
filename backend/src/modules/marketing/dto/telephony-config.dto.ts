@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsObject, IsIn, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsObject, IsIn, MaxLength, ValidateIf } from 'class-validator';
 
 export class UpsertTelephonyConfigDto {
   @IsOptional() @IsObject() secrets?: Record<string, string>;
@@ -8,5 +8,5 @@ export class UpsertTelephonyConfigDto {
 }
 
 export class SetDahiliDto {
-  @IsOptional() @IsString() @MaxLength(10) dahili?: string;
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() @MaxLength(10) dahili?: string | null;
 }

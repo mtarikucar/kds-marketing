@@ -19,4 +19,8 @@ describe('interpretNetsantralOriginate', () => {
   it('handles empty body', () => {
     expect(interpretNetsantralOriginate('').ok).toBe(false);
   });
+  it('accepts JSON status "01" as success and returns the callId', () => {
+    const r = interpretNetsantralOriginate('{"status":"01","unique_id":"call-abc"}');
+    expect(r).toEqual({ ok: true, callId: 'call-abc' });
+  });
 });

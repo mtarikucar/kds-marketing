@@ -31,7 +31,7 @@ export function interpretNetsantralOriginate(rawBody: string): NetsantralOrigina
       const obj = Array.isArray(j) ? j[0] : j;
       const id = obj?.unique_id ?? obj?.uniqueid ?? obj?.callid ?? obj?.id;
       const status = String(obj?.status ?? '').toLowerCase();
-      if (id && (status === '' || status === 'success' || status === 'ok' || status === '00')) {
+      if (id && (status === '' || status === 'success' || status === 'ok' || ['00', '01', '02'].includes(status))) {
         return { ok: true, callId: String(id) };
       }
       const code = obj?.code != null ? String(obj.code) : undefined;
