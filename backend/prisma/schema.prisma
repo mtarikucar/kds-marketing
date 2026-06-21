@@ -2413,3 +2413,47 @@ model Estimate {
   @@index([workspaceId, status])
   @@map("estimates")
 }
+
+/// Epic — E-signature Documents / Contracts (GoHighLevel parity). A manager
+/// authors a document, SENDS it (freezes a body snapshot + consent statement and
+/// mints a public token), and a signer reviews the frozen body, types their full
+/// name, checks an explicit consent box and signs. Records a simple
+/// electronic-signature audit trail (name/email/ip/user-agent/timestamp +
+/// frozen consent + body snapshot — kept PLAINTEXT on purpose: it is legal
+/// evidence that must be inspectable, not a secret). `body` is plain text,
+/// rendered escaped (no HTML injection). `publicToken` is null until SENT.
+/// Soft workspace scoping (no FK).
+model Document {
+  id          String  @id @default(uuid())
+  workspaceId String
+  leadId      String? // soft ref (no FK), standalone allowed
+
+  type  String @default("AGREEMENT") // AGREEMENT | CONSENT | SERVICE_FORM
+  title String
+  body  String @db.Text // manager-authored plain text; rendered escaped + pre-wrap
+
+  status      String  @default("DRAFT") // DRAFT | SENT | SIGNED | DECLINED | VOIDED
+  publicToken String? @unique // null until SENT (Postgres allows many NULLs)
+
+  // Frozen-at-send evidence (immutable record of WHAT was presented):
+  bodySnapshot     String?   @db.Text
+  consentStatement String?   @db.Text
+  sentAt           DateTime?
+
+  // Legal audit trail — written once, at sign (plaintext on purpose):
+  signerName      String?
+  signerEmail     String?
+  signedAt        DateTime?
+  signerIp        String?
+  signerUserAgent String?   @db.Text
+
+  declinedAt DateTime?
+  voidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([leadId])
+  @@map("documents")
+}
