@@ -10,6 +10,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { TelephonyProviderRegistry } from '../telephony/telephony-provider.registry';
+import { TelephonyConfigService } from '../telephony/telephony-config.service';
+import { PrepareCallRequest } from '../telephony/telephony-provider.interface';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { StartCallDto } from '../dto/start-call.dto';
 import { LogCallDto, SalesCallOutcome } from '../dto/log-call.dto';
@@ -35,11 +37,8 @@ export class SalesCallService {
     private readonly registry: TelephonyProviderRegistry,
     private readonly outbox: OutboxService,
     private readonly config: ConfigService,
+    private readonly telephonyConfig: TelephonyConfigService,
   ) {}
-
-  private providerId(): string {
-    return this.config.get<string>('TELEPHONY_PROVIDER') ?? 'netgsm-lite';
-  }
 
   /**
    * Reserve the sales line and return a dial URI. Enforces the provider's
@@ -51,7 +50,25 @@ export class SalesCallService {
    * or written here is scoped to the actor's workspace.
    */
   async startCall(workspaceId: string, marketingUserId: string, dto: StartCallDto) {
-    const provider = this.registry.get(this.providerId());
+    // Per-workspace provider selection: an ACTIVE Netsantral config → api-dial
+    // (call originates from the 0850 trunk); otherwise the click-to-dial fallback.
+    const netsantral = await this.telephonyConfig.resolveForWorkspace(workspaceId);
+    let providerId = 'netgsm-lite';
+    let resolvedConfig: PrepareCallRequest['config'] | undefined;
+    if (netsantral) {
+      const rep = await this.prisma.marketingUser.findFirst({
+        where: { id: marketingUserId, workspaceId },
+        select: { dahili: true },
+      });
+      if (rep?.dahili) {
+        providerId = 'netgsm-netsantral';
+        resolvedConfig = {
+          username: netsantral.username, password: netsantral.password,
+          trunk: netsantral.trunk, pbxnum: netsantral.pbxnum, internalNum: rep.dahili,
+        };
+      }
+    }
+    const provider = this.registry.get(providerId);
 
     const active = await this.prisma.salesCall.findMany({
       where: { workspaceId, status: 'INITIATED' },
@@ -89,6 +106,7 @@ export class SalesCallService {
     const prepared = await provider.prepareOutboundCall({
       toPhone: dto.toPhone,
       marketingUserId,
+      config: resolvedConfig,
     });
     const call = await this.prisma.salesCall.create({
       data: {

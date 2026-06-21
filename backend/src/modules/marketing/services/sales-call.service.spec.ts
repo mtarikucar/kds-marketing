@@ -7,7 +7,9 @@ describe('SalesCallService', () => {
   let registry: { get: jest.Mock };
   let outbox: { append: jest.Mock };
   let config: { get: jest.Mock };
+  let telephonyConfig: { resolveForWorkspace: jest.Mock };
   let provider: any;
+  let liteProvider: any;
   let svc: SalesCallService;
 
   const WS = 'ws-1';
@@ -25,10 +27,12 @@ describe('SalesCallService', () => {
         externalCallId: null,
       }),
     };
+    liteProvider = provider;
     registry = { get: jest.fn().mockReturnValue(provider) };
     outbox = { append: jest.fn().mockResolvedValue('ob') };
     config = { get: jest.fn().mockReturnValue(undefined) };
-    svc = new SalesCallService(prisma as any, registry as any, outbox as any, config as any);
+    telephonyConfig = { resolveForWorkspace: jest.fn().mockResolvedValue(null) };
+    svc = new SalesCallService(prisma as any, registry as any, outbox as any, config as any, telephonyConfig as any);
 
     // Support both $transaction(callback) and $transaction([...]) forms.
     (prisma.$transaction as any).mockImplementation(async (arg: any) =>
@@ -93,6 +97,28 @@ describe('SalesCallService', () => {
       expect(prisma.lead.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'lead-x', workspaceId: WS } }),
       );
+    });
+
+    it('uses netgsm-netsantral with resolved config when the workspace has an ACTIVE config', async () => {
+      const apiProvider = { id: 'netgsm-netsantral', maxConcurrentCalls: 50, prepareOutboundCall: jest.fn().mockResolvedValue({ providerId: 'netgsm-netsantral', dialUri: '', mode: 'api', externalCallId: 'u-1' }) };
+      registry.get.mockImplementation((id: string) => (id === 'netgsm-netsantral' ? apiProvider : liteProvider));
+      telephonyConfig.resolveForWorkspace.mockResolvedValue({ username: '850', password: 'pw', trunk: '8508407303' });
+      prisma.marketingUser.findFirst.mockResolvedValue({ dahili: '104' } as any);
+      prisma.salesCall.findMany.mockResolvedValue([]);
+      prisma.salesCall.create.mockResolvedValue({ id: 'call-1' } as any);
+      await svc.startCall('ws', 'rep-1', { toPhone: '5551112233' } as any);
+      expect(apiProvider.prepareOutboundCall).toHaveBeenCalledWith(expect.objectContaining({
+        config: expect.objectContaining({ internalNum: '104', trunk: '8508407303' }),
+      }));
+    });
+
+    it('falls back to netgsm-lite click-to-dial when no telephony config', async () => {
+      registry.get.mockReturnValue(liteProvider);
+      telephonyConfig.resolveForWorkspace.mockResolvedValue(null);
+      prisma.salesCall.findMany.mockResolvedValue([]);
+      prisma.salesCall.create.mockResolvedValue({ id: 'call-2' } as any);
+      await svc.startCall('ws', 'rep-1', { toPhone: '5551112233' } as any);
+      expect(liteProvider.prepareOutboundCall).toHaveBeenCalled();
     });
   });
 
