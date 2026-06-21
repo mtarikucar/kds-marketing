@@ -72,6 +72,10 @@ import { SalesCallController } from './controllers/sales-call.controller';
 import { SalesCallService } from './services/sales-call.service';
 import { TelephonyProviderRegistry } from './telephony/telephony-provider.registry';
 import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
+import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
+import { NetsantralClient } from './telephony/netsantral.client';
+import { TelephonyConfigService } from './telephony/telephony-config.service';
+import { TelephonyConfigController } from './controllers/telephony-config.controller';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -324,6 +328,7 @@ import { OrderFormsService } from './order-forms/order-forms.service';
     MarketingNotificationsController,
     MarketingDistributionController,
     SalesCallController,
+    TelephonyConfigController,
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
@@ -421,6 +426,9 @@ import { OrderFormsService } from './order-forms/order-forms.service';
     SalesCallService,
     TelephonyProviderRegistry,
     NetgsmLiteAdapter,
+    NetgsmApiAdapter,
+    NetsantralClient,
+    TelephonyConfigService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,

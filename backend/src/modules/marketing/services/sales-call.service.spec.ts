@@ -6,8 +6,9 @@ describe('SalesCallService', () => {
   let prisma: MockPrismaClient;
   let registry: { get: jest.Mock };
   let outbox: { append: jest.Mock };
-  let config: { get: jest.Mock };
+  let telephonyConfig: { resolveForWorkspace: jest.Mock };
   let provider: any;
+  let liteProvider: any;
   let svc: SalesCallService;
 
   const WS = 'ws-1';
@@ -25,10 +26,11 @@ describe('SalesCallService', () => {
         externalCallId: null,
       }),
     };
+    liteProvider = provider;
     registry = { get: jest.fn().mockReturnValue(provider) };
     outbox = { append: jest.fn().mockResolvedValue('ob') };
-    config = { get: jest.fn().mockReturnValue(undefined) };
-    svc = new SalesCallService(prisma as any, registry as any, outbox as any, config as any);
+    telephonyConfig = { resolveForWorkspace: jest.fn().mockResolvedValue(null) };
+    svc = new SalesCallService(prisma as any, registry as any, outbox as any, telephonyConfig as any);
 
     // Support both $transaction(callback) and $transaction([...]) forms.
     (prisma.$transaction as any).mockImplementation(async (arg: any) =>
@@ -36,6 +38,8 @@ describe('SalesCallService', () => {
     );
     prisma.salesCall.findMany.mockResolvedValue([]); // no active calls by default
     prisma.salesCall.create.mockResolvedValue({ id: 'call-1', status: 'INITIATED' } as any);
+    prisma.salesCall.update = jest.fn().mockResolvedValue({}) as any;
+    prisma.marketingUser.findFirst.mockResolvedValue(null); // no dahili by default
   });
 
   describe('startCall', () => {
@@ -93,6 +97,50 @@ describe('SalesCallService', () => {
       expect(prisma.lead.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'lead-x', workspaceId: WS } }),
       );
+    });
+
+    it('uses netgsm-netsantral with resolved config when the workspace has an ACTIVE config', async () => {
+      const apiProvider = { id: 'netgsm-netsantral', maxConcurrentCalls: 50, prepareOutboundCall: jest.fn().mockResolvedValue({ providerId: 'netgsm-netsantral', dialUri: '', mode: 'api', externalCallId: 'u-1' }) };
+      registry.get.mockImplementation((id: string) => (id === 'netgsm-netsantral' ? apiProvider : liteProvider));
+      // FIX 8: dahili is fetched first, then resolveForWorkspace only when dahili is set
+      prisma.marketingUser.findFirst.mockResolvedValue({ dahili: '104' } as any);
+      telephonyConfig.resolveForWorkspace.mockResolvedValue({ username: '850', password: 'pw', trunk: '8508407303' });
+      prisma.salesCall.findMany.mockResolvedValue([]);
+      prisma.salesCall.create.mockResolvedValue({ id: 'call-1' } as any);
+      await svc.startCall('ws', 'rep-1', { toPhone: '5551112233' } as any);
+      expect(apiProvider.prepareOutboundCall).toHaveBeenCalledWith(expect.objectContaining({
+        config: expect.objectContaining({ internalNum: '104', trunk: '8508407303' }),
+      }));
+    });
+
+    it('falls back to netgsm-lite click-to-dial when no telephony config', async () => {
+      registry.get.mockReturnValue(liteProvider);
+      // rep has no dahili → resolveForWorkspace is never called
+      prisma.marketingUser.findFirst.mockResolvedValue({ dahili: null } as any);
+      telephonyConfig.resolveForWorkspace.mockResolvedValue(null);
+      prisma.salesCall.findMany.mockResolvedValue([]);
+      prisma.salesCall.create.mockResolvedValue({ id: 'call-2' } as any);
+      await svc.startCall('ws', 'rep-1', { toPhone: '5551112233' } as any);
+      expect(liteProvider.prepareOutboundCall).toHaveBeenCalled();
+    });
+
+    it('marks the SalesCall CANCELLED when origination throws', async () => {
+      const apiProvider = {
+        id: 'netgsm-netsantral',
+        maxConcurrentCalls: 50,
+        prepareOutboundCall: jest.fn().mockRejectedValue(new Error('network error')),
+      };
+      registry.get.mockImplementation((id: string) => (id === 'netgsm-netsantral' ? apiProvider : liteProvider));
+      prisma.marketingUser.findFirst.mockResolvedValue({ dahili: '104' } as any);
+      telephonyConfig.resolveForWorkspace.mockResolvedValue({ username: '850', password: 'pw', trunk: '8508407303' });
+      prisma.salesCall.findMany.mockResolvedValue([]);
+      prisma.salesCall.create.mockResolvedValue({ id: 'call-99' } as any);
+
+      await expect(svc.startCall('ws', 'rep-1', { toPhone: '5551112233' } as any)).rejects.toThrow('network error');
+      expect(prisma.salesCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'call-99' },
+        data: expect.objectContaining({ status: 'CANCELLED' }),
+      }));
     });
   });
 

@@ -104,6 +104,9 @@ model MarketingUser {
   firstName    String
   lastName     String
   phone        String?
+  /// Netsantral extension this rep's outbound calls ring (e.g. "104"). Null = no
+  /// api-dial; SalesCallService falls back to click-to-dial for this rep.
+  dahili       String?
   avatar       String?
   role         String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
   status       String    @default("ACTIVE") // ACTIVE, INACTIVE
@@ -1109,6 +1112,26 @@ model Channel {
   @@index([workspaceId, status])
   @@index([type, externalId])
   @@map("channels")
+}
+
+/// Per-workspace cloud-PBX (NetGSM Netsantral) config for api-dial outbound
+/// calls. One per workspace. Secrets sealed (AES-256-GCM); reads expose only
+/// which credential keys are set, never the sealed blob.
+model TelephonyConfig {
+  id           String   @id @default(uuid())
+  workspaceId  String   @unique
+  provider     String   @default("netgsm-netsantral")
+  status       String   @default("ACTIVE") // ACTIVE | DISABLED
+  /// Sealed JSON of { username, password } (the NetGSM API sub-user creds).
+  configSealed String?  @db.Text
+  /// Outbound trunk shown as the caller id (the 0850, digits only).
+  trunk        String?
+  /// PBX number when the account requires it (optional).
+  pbxnum       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("telephony_configs")
 }
 
 /// Maps a channel-specific contact identity (E.164 phone / WA id / FB PSID /
