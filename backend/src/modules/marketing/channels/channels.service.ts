@@ -1,6 +1,7 @@
 import {
   Injectable,
   NotFoundException,
+  ConflictException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
@@ -11,6 +12,7 @@ import {
   isSecretBoxConfigured,
 } from '../../../common/crypto/secret-box.helper';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
+import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
 
@@ -42,7 +44,31 @@ export class ChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: ChannelAdapterRegistry,
+    private readonly resolver: PublicChannelResolverService,
   ) {}
+
+  /** Canonical externalId for a type. EMAIL addresses are case-insensitive, so
+   *  store them lower-cased+trimmed — the inbound webhook lower-cases the To
+   *  address before resolving, so the two sides must agree. */
+  private normalizeExternalId(type: string, externalId: string | null | undefined): string | null {
+    if (externalId == null) return null;
+    const v = externalId.trim();
+    if (!v) return null;
+    return type === 'EMAIL' ? v.toLowerCase() : v;
+  }
+
+  /** Reject registering a provider identity (type, externalId) another ACTIVE
+   *  channel already owns — even in another workspace. byExternalId is the
+   *  single sanctioned cross-workspace read; without this two tenants could
+   *  claim the same inbound address and the webhook would deliver to whichever
+   *  findFirst returns (cross-tenant mail). */
+  private async assertExternalIdFree(type: string, externalId: string | null, excludeId?: string) {
+    if (!externalId) return;
+    const existing = await this.resolver.byExternalId(type, externalId);
+    if (existing && existing.id !== excludeId) {
+      throw new ConflictException('That provider identity is already connected to a channel');
+    }
+  }
 
   async list(workspaceId: string) {
     const rows = await this.prisma.channel.findMany({
@@ -62,13 +88,15 @@ export class ChannelsService {
     if (!this.registry.has(dto.type)) {
       throw new NotFoundException(`Unsupported channel type: ${dto.type}`);
     }
+    const externalId = this.normalizeExternalId(dto.type, dto.externalId);
+    await this.assertExternalIdFree(dto.type, externalId);
     const data: any = {
       workspaceId,
       type: dto.type,
       name: dto.name,
       status: 'ACTIVE',
       agentProfileId: dto.agentProfileId ?? null,
-      externalId: dto.externalId ?? null,
+      externalId,
       configPublic: dto.configPublic ?? undefined,
     };
     if (dto.type === 'WEBCHAT') {
@@ -89,7 +117,11 @@ export class ChannelsService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.agentProfileId !== undefined) data.agentProfileId = dto.agentProfileId;
-    if (dto.externalId !== undefined) data.externalId = dto.externalId;
+    if (dto.externalId !== undefined) {
+      const externalId = this.normalizeExternalId(existing.type, dto.externalId);
+      await this.assertExternalIdFree(existing.type, externalId, existing.id);
+      data.externalId = externalId;
+    }
     if (dto.configPublic !== undefined) data.configPublic = dto.configPublic;
     if (dto.secrets && Object.keys(dto.secrets).length) {
       // Merge onto existing secrets so a partial update (e.g. rotate one key)

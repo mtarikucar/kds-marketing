@@ -14,6 +14,7 @@ export type ChannelType =
   | 'INSTAGRAM'
   | 'MESSENGER'
   | 'TIKTOK' // TikTok DM (Business Messaging) — gated API; inert without creds
+  | 'EMAIL' // two-way email — per-workspace SMTP send + provider inbound webhook
   | 'VOICE'; // inbound AI phone (Twilio) — config-only, no text send
 
 export type ChannelCapability =
@@ -23,7 +24,7 @@ export type ChannelCapability =
   | 'session-window'; // provider enforces a reply window (e.g. WhatsApp 24h)
 
 /** How an external identity maps to a ContactIdentity.kind. */
-export type ContactKind = 'PHONE' | 'WA' | 'PSID' | 'IGSID' | 'WEBCHAT' | 'TIKTOKID';
+export type ContactKind = 'PHONE' | 'WA' | 'PSID' | 'IGSID' | 'WEBCHAT' | 'TIKTOKID' | 'EMAIL';
 
 /** A normalized inbound message, transport-agnostic. */
 export interface InboundMessage {

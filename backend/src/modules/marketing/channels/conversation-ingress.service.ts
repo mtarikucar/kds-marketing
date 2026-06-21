@@ -6,7 +6,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ConversationStreamService } from './conversation-stream.service';
 import { ChannelType, InboundMessage } from './channel-adapter.interface';
-import { normalizePhone } from '../utils/lead-normalize';
+import { normalizePhone, normalizeEmail } from '../utils/lead-normalize';
 
 export interface IngressChannel {
   id: string;
@@ -165,6 +165,11 @@ export class ConversationIngressService {
             ? { phone: inbound.externalUserId, phoneNormalized: normalizePhone(inbound.externalUserId) }
             : {}),
           ...(inbound.kind === 'WA' ? { whatsapp: inbound.externalUserId } : {}),
+          // Email leads get their address written (+ normalized) so a later
+          // form/manual lead with the same email dedup-matches this one.
+          ...(inbound.kind === 'EMAIL'
+            ? { email: inbound.externalUserId, emailNormalized: normalizeEmail(inbound.externalUserId) }
+            : {}),
           ...(autoOwner ? { assignedToId: autoOwner } : {}),
         },
       });

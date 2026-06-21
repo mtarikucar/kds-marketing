@@ -125,6 +125,8 @@ import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
 import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-messaging.adapter';
 import { TiktokDmAdapter } from './channels/adapters/tiktok-dm.adapter';
 import { TiktokWebhookController } from './controllers/tiktok-webhook.controller';
+import { EmailChannelAdapter } from './channels/adapters/email.adapter';
+import { EmailWebhookController } from './controllers/email-webhook.controller';
 
 // Phase F P3 — workflow automation (trigger → executor → action handlers).
 import { MarketingWorkflowsController } from './controllers/marketing-workflows.controller';
@@ -351,6 +353,7 @@ import { CustomObjectsService } from './custom-objects/custom-objects.service';
     WebchatPublicController,
     MetaWebhookController,
     TiktokWebhookController,
+    EmailWebhookController,
     NetgsmPublicController,
     MarketingWorkflowsController,
     MarketingCampaignsController,
@@ -474,6 +477,7 @@ import { CustomObjectsService } from './custom-objects/custom-objects.service';
     MessengerAdapter,
     InstagramAdapter,
     TiktokDmAdapter,
+    EmailChannelAdapter,
     MessageQuotaService,
     ChannelsService,
     ConversationStreamService,

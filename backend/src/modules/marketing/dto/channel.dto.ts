@@ -7,7 +7,7 @@ import {
   MaxLength,
 } from 'class-validator';
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER'];
+const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'EMAIL'];
 
 export class CreateChannelDto {
   @IsIn(CHANNEL_TYPES)
