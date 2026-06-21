@@ -153,6 +153,9 @@ const OWNED_DELEGATES = [
   'customObjectDef',
   'customObjectRecord',
   'customObjectLink',
+  // Inbox productivity (GHL parity): canned-response snippets + internal notes.
+  'messageSnippet',
+  'conversationNote',
 ] as const;
 
 /**

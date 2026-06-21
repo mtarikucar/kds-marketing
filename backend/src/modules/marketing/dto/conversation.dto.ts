@@ -1,8 +1,39 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, MaxLength } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsBoolean,
+  IsArray,
+  IsIn,
+  ArrayNotEmpty,
+  ArrayMaxSize,
+  MaxLength,
+} from 'class-validator';
 
 export class ReplyDto {
   @IsString() @IsNotEmpty() @MaxLength(4000)
   text: string;
+}
+
+/** An internal team-only note on a conversation. */
+export class ConversationNoteDto {
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  body: string;
+}
+
+/** Apply one action to many conversations at once. */
+export class BulkConversationDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(500)
+  @IsString({ each: true })
+  conversationIds: string[];
+
+  @IsIn(['close', 'reopen', 'assign', 'markRead'])
+  action: 'close' | 'reopen' | 'assign' | 'markRead';
+
+  @IsOptional() @IsString() @MaxLength(64)
+  assignedToId?: string | null;
 }
 
 export class AssignConversationDto {

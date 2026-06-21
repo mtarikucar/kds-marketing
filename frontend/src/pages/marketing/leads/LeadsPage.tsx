@@ -3,9 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus } from 'lucide-react';
+import { Plus, Download } from 'lucide-react';
 
-import { listLeads, bulkAssignLeads } from '../../../features/marketing/api/leads.service';
+import {
+  listLeads,
+  bulkAssignLeads,
+  bulkDeleteLeads,
+  bulkEnrollLeads,
+  exportLeadsCsv,
+} from '../../../features/marketing/api/leads.service';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { BulkActionToolbar } from '../../../features/marketing/components';
 import {
@@ -136,6 +142,43 @@ export default function LeadsPage() {
     onError: () => toast.error(t('leads.bulkAssign.error')),
   });
 
+  // Bulk soft-delete the selected leads.
+  const bulkDelete = useMutation({
+    mutationFn: () => bulkDeleteLeads(Array.from(selected)),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
+      toast.success(t('leads.bulkDelete.success', { defaultValue: '{{count}} lead(s) deleted', count: res?.deleted ?? 0 }));
+      setSelected(new Set());
+    },
+    onError: () => toast.error(t('leads.bulkDelete.error', { defaultValue: 'Failed to delete leads' })),
+  });
+
+  // Manually enroll the selected leads into a workflow.
+  const bulkEnroll = useMutation({
+    mutationFn: (workflowId: string) => bulkEnrollLeads(Array.from(selected), workflowId),
+    onSuccess: (res) => {
+      toast.success(t('leads.bulkEnroll.success', { defaultValue: '{{count}} lead(s) enrolled', count: res?.enrolled ?? 0 }));
+      setSelected(new Set());
+    },
+    onError: () => toast.error(t('leads.bulkEnroll.error', { defaultValue: 'Failed to enroll leads' })),
+  });
+
+  // Workflows for the bulk-enroll picker (manager only).
+  const { data: workflows = [] } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ['marketing', 'workflows', 'pick'],
+    queryFn: () => marketingApi.get('/workflows').then((r) => r.data),
+    enabled: isManager,
+    staleTime: 60_000,
+  });
+
+  // Export the current filtered list as CSV.
+  const exporting = useMutation({
+    mutationFn: () =>
+      exportLeadsCsv({ search, status, source, businessType, assignmentStatus }),
+    onError: () => toast.error(t('leads.export.error', { defaultValue: 'Export failed' })),
+  });
+
   const leads = data?.data ?? [];
   const visibleIds = useMemo(() => leads.map((l) => l.id), [leads]);
   const allChecked =
@@ -221,12 +264,18 @@ export default function LeadsPage() {
         title={t('leads.title')}
         description={t('leads.subtitle')}
         actions={
-          <Button asChild size="md">
-            <Link to="/leads/new">
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              {t('leads.createButton')}
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="md" onClick={() => exporting.mutate()} loading={exporting.isPending}>
+              <Download className="w-4 h-4" aria-hidden="true" />
+              {t('leads.export.button', { defaultValue: 'Export CSV' })}
+            </Button>
+            <Button asChild size="md">
+              <Link to="/leads/new">
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                {t('leads.createButton')}
+              </Link>
+            </Button>
+          </div>
         }
       />
 
@@ -319,7 +368,14 @@ export default function LeadsPage() {
           reps={reps}
           onBulkAssign={(repId) => bulkAssign.mutate(repId)}
           onClear={() => setSelected(new Set())}
-          pending={bulkAssign.isPending}
+          pending={bulkAssign.isPending || bulkDelete.isPending || bulkEnroll.isPending}
+          onBulkDelete={() => {
+            if (window.confirm(t('leads.bulkDelete.confirm', { defaultValue: 'Delete the selected leads?' }))) {
+              bulkDelete.mutate();
+            }
+          }}
+          workflows={workflows}
+          onEnroll={(workflowId) => bulkEnroll.mutate(workflowId)}
         />
       )}
 

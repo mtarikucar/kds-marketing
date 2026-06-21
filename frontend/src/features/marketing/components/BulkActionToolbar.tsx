@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Users, X, Search } from 'lucide-react';
+import { Users, X, Search, Trash2 } from 'lucide-react';
 import type { MarketingUserInfo } from '../types';
 
 interface RepRow extends MarketingUserInfo {
@@ -14,6 +14,11 @@ interface BulkActionToolbarProps {
   onBulkAssign: (repId: string | null) => void;
   onClear: () => void;
   pending?: boolean;
+  /** Optional — soft-delete the selected leads. */
+  onBulkDelete?: () => void;
+  /** Optional — enroll the selected leads into a workflow. */
+  workflows?: { id: string; name: string }[];
+  onEnroll?: (workflowId: string) => void;
 }
 
 /**
@@ -27,6 +32,9 @@ export default function BulkActionToolbar({
   onBulkAssign,
   onClear,
   pending,
+  onBulkDelete,
+  workflows,
+  onEnroll,
 }: BulkActionToolbarProps) {
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
@@ -148,6 +156,42 @@ export default function BulkActionToolbar({
             </div>
           )}
         </div>
+        {/* Enroll into a workflow */}
+        {onEnroll && workflows && workflows.length > 0 && (
+          <select
+            disabled={pending}
+            defaultValue=""
+            onChange={(e) => {
+              if (e.target.value) {
+                onEnroll(e.target.value);
+                e.target.value = '';
+              }
+            }}
+            className="px-2 py-1.5 border border-border-strong rounded-lg text-sm bg-surface text-foreground disabled:opacity-50"
+            aria-label={t('leads.bulkEnroll.label', 'Enroll in workflow')}
+          >
+            <option value="">{t('leads.bulkEnroll.label', 'Enroll in workflow…')}</option>
+            {workflows.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {/* Delete */}
+        {onBulkDelete && (
+          <button
+            type="button"
+            onClick={onBulkDelete}
+            disabled={pending}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-danger/40 text-danger rounded-lg text-sm hover:bg-danger-subtle disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+            {t('leads.bulkDelete.button', 'Delete')}
+          </button>
+        )}
+
         <button
           type="button"
           onClick={onClear}

@@ -80,6 +80,7 @@ export class MarketingLeadsService {
           // (raw email was case/format-sensitive); skip tombstoned leads.
           emailNormalized: normalizeEmail(dto.email),
           mergedIntoId: null,
+          deletedAt: null,
           status: { notIn: ['WON', 'LOST'] },
         },
         select: { id: true, businessName: true, assignedTo: { select: { firstName: true, lastName: true } } },
@@ -245,6 +246,8 @@ export class MarketingLeadsService {
     // Epic A4 — merged duplicates are tombstoned, not deleted; hide them from
     // the pipeline list/count (a direct GET /:id still resolves a tombstone).
     where.mergedIntoId = null;
+    // Inbox productivity — soft-deleted leads (bulk delete) are hidden too.
+    where.deletedAt = null;
 
     // workspaceId is spread LAST so no filter combination can ever
     // widen the query beyond the caller's workspace.
@@ -345,7 +348,14 @@ export class MarketingLeadsService {
     // this workspace, ignoring WON/LOST and this same row.
     if (dto.email !== undefined && dto.email && dto.email !== lead.email) {
       const clash = await this.prisma.lead.findFirst({
-        where: { workspaceId, email: dto.email, status: { notIn: ['WON', 'LOST'] }, id: { not: id } },
+        where: {
+          workspaceId,
+          email: dto.email,
+          status: { notIn: ['WON', 'LOST'] },
+          mergedIntoId: null,
+          deletedAt: null,
+          id: { not: id },
+        },
         select: { id: true, businessName: true, assignedTo: { select: { firstName: true, lastName: true } } },
       });
       if (clash) {

@@ -237,6 +237,10 @@ model Lead {
   emailNormalized String?
   mergedIntoId    String?
   mergedAt        DateTime?
+  // Inbox productivity (GHL parity): soft-delete via bulk actions. A deleted
+  // lead is hidden from the pipeline list/count (like a merge tombstone) but
+  // kept for audit; a direct GET /:id still resolves it.
+  deletedAt       DateTime?
 
   @@unique([workspaceId, externalRef])
   @@index([workspaceId])
@@ -1274,6 +1278,39 @@ model Message {
   @@index([conversationId, createdAt])
   @@index([workspaceId, createdAt])
   @@map("messages")
+}
+
+/// Inbox productivity (GHL parity) — a canned response. `shortcut` is the
+/// `/slug` an agent types to insert `body`. ownerId null = shared across the
+/// workspace; set = the author's private snippet. Workspace-owned.
+model MessageSnippet {
+  id          String   @id @default(uuid())
+  workspaceId String
+  ownerId     String? // null = shared; set = private to this MarketingUser
+  shortcut    String // typed as /<shortcut> in the composer
+  title       String
+  body        String   @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, shortcut])
+  @@index([workspaceId])
+  @@map("message_snippets")
+}
+
+/// Inbox productivity (GHL parity) — an INTERNAL note on a conversation. A
+/// SEPARATE model (not a Message) so it can NEVER reach a channel adapter's
+/// send egress — notes are team-only and never delivered to the contact.
+model ConversationNote {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  conversationId String
+  authorId       String
+  body           String   @db.Text
+  createdAt      DateTime @default(now())
+
+  @@index([workspaceId, conversationId, createdAt])
+  @@map("conversation_notes")
 }
 
 /// An automation: a trigger (event + filters) and an ordered step list, both

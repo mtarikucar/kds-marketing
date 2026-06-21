@@ -24,7 +24,13 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { ConversationsService } from '../channels/conversations.service';
 import { ConversationStreamService } from '../channels/conversation-stream.service';
-import { ReplyDto, AssignConversationDto, SetAiPausedDto } from '../dto/conversation.dto';
+import {
+  ReplyDto,
+  AssignConversationDto,
+  SetAiPausedDto,
+  ConversationNoteDto,
+  BulkConversationDto,
+} from '../dto/conversation.dto';
 
 const REST_GUARDS = [MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard];
 
@@ -131,5 +137,36 @@ export class MarketingConversationsController {
   @RequirePermission('leads.write')
   markRead(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.conversations.markRead(actor.workspaceId, id);
+  }
+
+  /** Bulk action over many conversations (close/reopen/assign/markRead). */
+  @Post('bulk')
+  @UseGuards(...REST_GUARDS)
+  @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
+  bulk(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: BulkConversationDto) {
+    return this.conversations.bulk(actor.workspaceId, dto.conversationIds, dto.action, {
+      assignedToId: dto.assignedToId,
+    });
+  }
+
+  @Get(':id/notes')
+  @UseGuards(...REST_GUARDS)
+  @RequiresFeature('conversationAi')
+  @RequirePermission('leads.read')
+  listNotes(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
+    return this.conversations.listNotes(actor.workspaceId, id);
+  }
+
+  @Post(':id/notes')
+  @UseGuards(...REST_GUARDS)
+  @RequiresFeature('conversationAi')
+  @RequirePermission('leads.write')
+  addNote(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: ConversationNoteDto,
+  ) {
+    return this.conversations.addNote(actor.workspaceId, id, actor.id, dto.body);
   }
 }

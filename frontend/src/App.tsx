@@ -52,6 +52,7 @@ const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/R
 const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
 const ChannelsSettingsPage     = lazy(() => import('./pages/marketing/ChannelsSettingsPage'));
+const SnippetsPage             = lazy(() => import('./pages/marketing/settings/snippets'));
 const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
 const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
@@ -172,6 +173,7 @@ export default function App() {
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
             <Route path="/channels"    element={<S><ChannelsSettingsPage /></S>} />
+            <Route path="/settings/snippets" element={<S><SnippetsPage /></S>} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
             <Route path="/campaigns"   element={<S><CampaignsPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />

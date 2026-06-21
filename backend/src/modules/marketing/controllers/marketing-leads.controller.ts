@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   Query,
+  Header,
   UseGuards,
 } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
@@ -28,6 +29,8 @@ import { ConvertLeadDto } from '../dto/convert-lead.dto';
 import { UpdateLeadStatusDto } from '../dto/update-lead-status.dto';
 import { AssignLeadDto } from '../dto/assign-lead.dto';
 import { BulkAssignLeadDto } from '../dto/bulk-assign-lead.dto';
+import { BulkLeadIdsDto, BulkEnrollLeadsDto } from '../dto/lead-bulk.dto';
+import { LeadBulkService } from '../inbox/lead-bulk.service';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 
@@ -39,13 +42,28 @@ export class MarketingLeadsController {
     private readonly leadsService: MarketingLeadsService,
     private readonly tagsService: TagsService,
     private readonly dedupeService: LeadDedupeService,
+    private readonly leadBulk: LeadBulkService,
   ) {}
 
-  // Declared before the `:id` routes so "duplicates"/"merge" are not captured
-  // as a lead id.
+  // Declared before the `:id` routes so "duplicates"/"merge"/"export.csv" are
+  // not captured as a lead id.
   @Get('duplicates')
   duplicates(@CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.dedupeService.findDuplicates(actor.workspaceId);
+  }
+
+  /** CSV export of the (filtered) lead list. REPs export only their own leads. */
+  @Get('export.csv')
+  @RequirePermission('leads.read')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="leads.csv"')
+  exportCsv(@CurrentMarketingUser() actor: MarketingUserPayload, @Query() q: LeadFilterDto) {
+    const assignedToId = actor.role === 'REP' ? actor.id : q.assignedToId;
+    return this.leadBulk.exportCsv(actor.workspaceId, {
+      status: q.status,
+      assignedToId,
+      search: q.search,
+    });
   }
 
   @Post('merge')
@@ -165,6 +183,25 @@ export class MarketingLeadsController {
       actor.id,
     );
   }
+
+  /** Soft-delete a set of leads (hidden from the pipeline; kept for audit). */
+  @Post('bulk-delete')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
+  @Audit({ action: 'lead.bulk_delete', resourceType: 'lead' })
+  bulkDelete(@Body() dto: BulkLeadIdsDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadBulk.bulkDelete(actor.workspaceId, dto.leadIds);
+  }
+
+  /** Manually enroll a set of leads into a workflow. */
+  @Post('bulk-enroll')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
+  @Audit({ action: 'lead.bulk_enroll', resourceType: 'lead' })
+  bulkEnroll(@Body() dto: BulkEnrollLeadsDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.leadBulk.bulkEnroll(actor.workspaceId, dto.leadIds, dto.workflowId, actor.id);
+  }
+
 
   @Post(':id/convert')
   @MarketingRoles('MANAGER')

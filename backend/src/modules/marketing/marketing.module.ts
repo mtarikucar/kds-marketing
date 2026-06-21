@@ -278,6 +278,11 @@ import { AdsPullService } from './ads/ads-pull.service';
 import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
 import { CustomObjectsService } from './custom-objects/custom-objects.service';
 
+// Inbox productivity (GoHighLevel parity) — snippets, notes, bulk, export.
+import { MarketingSnippetsController } from './controllers/marketing-snippets.controller';
+import { SnippetsService } from './inbox/snippets.service';
+import { LeadBulkService } from './inbox/lead-bulk.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -372,6 +377,7 @@ import { CustomObjectsService } from './custom-objects/custom-objects.service';
     PublicOrderFormController,
     MarketingAdsController,
     MarketingCustomObjectsController,
+    MarketingSnippetsController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -521,6 +527,8 @@ import { CustomObjectsService } from './custom-objects/custom-objects.service';
     AdAccountService,
     AdsPullService,
     CustomObjectsService,
+    SnippetsService,
+    LeadBulkService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

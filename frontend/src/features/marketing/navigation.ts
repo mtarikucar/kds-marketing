@@ -51,6 +51,7 @@ import {
   PhoneCall,
   MousePointerClick,
   Database,
+  MessageSquareText,
 } from 'lucide-react';
 
 /**
@@ -122,6 +123,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'conversations', labelKey: 'nav.group.conversations', label: 'Conversations', icon: MessagesSquare,
     children: [
       { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, feature: 'conversationAi' },
+      { path: '/settings/snippets', labelKey: 'nav.snippets', label: 'Canned Responses', icon: MessageSquareText },
       { path: '/channels', labelKey: 'nav.channels', label: 'Channels', icon: MessagesSquare, feature: 'conversationAi', managerOnly: true },
     ],
   },

@@ -149,3 +149,31 @@ export function bulkAssignLeads(
     .post<{ assigned: number }>('/leads/bulk-assign', { leadIds, assignedToId })
     .then((r) => r.data);
 }
+
+/** POST /leads/bulk-delete — soft-delete many leads at once. */
+export function bulkDeleteLeads(leadIds: string[]): Promise<{ deleted: number }> {
+  return marketingApi.post<{ deleted: number }>('/leads/bulk-delete', { leadIds }).then((r) => r.data);
+}
+
+/** POST /leads/bulk-enroll — manually enroll many leads into a workflow. */
+export function bulkEnrollLeads(
+  leadIds: string[],
+  workflowId: string,
+): Promise<{ enrolled: number; skipped: number }> {
+  return marketingApi
+    .post<{ enrolled: number; skipped: number }>('/leads/bulk-enroll', { leadIds, workflowId })
+    .then((r) => r.data);
+}
+
+/** GET /leads/export.csv — download the filtered lead list as a CSV file. */
+export async function exportLeadsCsv(params: LeadListParams): Promise<void> {
+  const res = await marketingApi.get('/leads/export.csv', { params, responseType: 'blob' });
+  const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

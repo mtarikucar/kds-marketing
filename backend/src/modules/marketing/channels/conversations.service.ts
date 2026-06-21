@@ -117,6 +117,83 @@ export class ConversationsService {
     return { ok: true };
   }
 
+  // ── Internal notes (team-only, never delivered to the contact) ──────────────
+
+  async listNotes(workspaceId: string, conversationId: string) {
+    await this.assertConvo(workspaceId, conversationId);
+    return this.prisma.conversationNote.findMany({
+      where: { workspaceId, conversationId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /** Add an INTERNAL note. Written to conversation_notes (NOT messages), so it
+   *  can never reach a channel adapter's send egress. Streamed for live inboxes. */
+  async addNote(workspaceId: string, conversationId: string, authorId: string, body: string) {
+    await this.assertConvo(workspaceId, conversationId);
+    const note = await this.prisma.conversationNote.create({
+      data: { workspaceId, conversationId, authorId, body },
+    });
+    // 'note' is hard-excluded from the public widget stream by the stream
+    // service's contact-safe allowlist — it reaches the agent Inbox only.
+    this.stream.push(workspaceId, { kind: 'note', conversationId, payload: note });
+    return note;
+  }
+
+  // ── Bulk actions over a set of conversations ────────────────────────────────
+
+  /** Apply one action to many conversations at once (workspace-scoped). */
+  async bulk(
+    workspaceId: string,
+    conversationIds: string[],
+    action: 'close' | 'reopen' | 'assign' | 'markRead',
+    payload: { assignedToId?: string | null } = {},
+  ) {
+    const ids = [...new Set(conversationIds)].filter((s) => typeof s === 'string' && s.length > 0);
+    if (ids.length === 0) return { updated: 0 };
+
+    let data: Record<string, unknown>;
+    switch (action) {
+      case 'close':
+        data = { status: 'CLOSED', closedAt: new Date() };
+        break;
+      case 'reopen':
+        data = { status: 'OPEN', closedAt: null };
+        break;
+      case 'markRead':
+        data = { unreadCount: 0 };
+        break;
+      case 'assign': {
+        const target = payload.assignedToId && payload.assignedToId.length > 0 ? payload.assignedToId : null;
+        if (target) {
+          // The assignee must belong to this workspace (no cross-tenant assign).
+          const user = await this.prisma.marketingUser.findFirst({
+            where: { id: target, workspaceId },
+            select: { id: true },
+          });
+          if (!user) throw new NotFoundException('Assignee not found');
+        }
+        data = { assignedToId: target };
+        break;
+      }
+    }
+    // updateMany is scoped by (id IN ids, workspaceId): ids from another
+    // workspace simply fall out of the match (count reflects only owned rows).
+    const res = await this.prisma.conversation.updateMany({
+      where: { id: { in: ids }, workspaceId },
+      data,
+    });
+    return { updated: res.count };
+  }
+
+  private async assertConvo(workspaceId: string, conversationId: string) {
+    const convo = await this.prisma.conversation.findFirst({
+      where: { id: conversationId, workspaceId },
+      select: { id: true },
+    });
+    if (!convo) throw new NotFoundException('Conversation not found');
+  }
+
   private async scopedUpdate(workspaceId: string, conversationId: string, data: any) {
     const convo = await this.prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId },

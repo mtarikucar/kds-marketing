@@ -168,7 +168,8 @@ export class CampaignsService {
 
   /** Build a tenant-scoped, opt-in, reachable Prisma where from the filter DSL. */
   buildAudienceWhere(workspaceId: string, channel: string, audienceFilter: unknown): Prisma.LeadWhereInput {
-    const where: any = { workspaceId };
+    // Tombstoned (merged) and soft-deleted leads must never become recipients.
+    const where: any = { workspaceId, mergedIntoId: null, deletedAt: null };
     if (channel === 'EMAIL') { where.emailOptOut = false; where.email = { not: null }; }
     else if (channel === 'SMS') { where.smsOptOut = false; where.phone = { not: null }; }
     else if (channel === 'WHATSAPP') { where.waOptOut = false; where.OR = [{ whatsapp: { not: null } }, { phone: { not: null } }]; }
