@@ -251,6 +251,11 @@ import { MarketingSubscriptionsController } from './controllers/marketing-subscr
 import { SubscriptionsService } from './subscriptions/subscriptions.service';
 import { SubscriptionsSchedulerService } from './subscriptions/subscriptions-scheduler.service';
 
+// E-signature documents / contracts (GoHighLevel parity).
+import { MarketingDocumentsController } from './controllers/marketing-documents.controller';
+import { PublicDocumentController } from './controllers/public-document.controller';
+import { DocumentsService } from './documents/documents.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -336,6 +341,8 @@ import { SubscriptionsSchedulerService } from './subscriptions/subscriptions-sch
     MarketingEstimatesController,
     PublicEstimateController,
     MarketingSubscriptionsController,
+    MarketingDocumentsController,
+    PublicDocumentController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -475,6 +482,7 @@ import { SubscriptionsSchedulerService } from './subscriptions/subscriptions-sch
     EstimatesService,
     SubscriptionsService,
     SubscriptionsSchedulerService,
+    DocumentsService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

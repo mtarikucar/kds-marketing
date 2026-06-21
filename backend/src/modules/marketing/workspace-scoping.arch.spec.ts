@@ -138,6 +138,8 @@ const OWNED_DELEGATES = [
   'estimate',
   // Recurring customer subscriptions (GHL parity): workspace-owned.
   'customerSubscription',
+  // E-signature documents / contracts (GHL parity): workspace-owned.
+  'document',
 ] as const;
 
 /**
@@ -215,6 +217,14 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // a duplicate invoice impossible. The lookup lives in this single scheduler file.
   'subscriptions/subscriptions-scheduler.service.ts:customerSubscription.findMany':
     'hourly recurring-invoice sweep reads due rows across all workspaces (system cron)',
+  // Public e-signature sign/decline: the document id is resolved from a
+  // token-scoped findUnique(publicToken) (the unguessable token IS the
+  // capability), then the status-conditional updateMany flips SENT→SIGNED/DECLINED
+  // by id. No workspace context exists on the public signer route — same
+  // sanctioned token-scoped pattern the public invoice/estimate flows use. (The
+  // manager send() updateMany DOES carry workspaceId.)
+  'documents/documents.service.ts:document.updateMany':
+    'public sign/decline keyed by id from a token-scoped findUnique(publicToken)',
   // Inbound public webhooks have NO workspace context — the provider only
   // gives a widget key or a page/phone id. This lookup (the ONLY cross-workspace
   // channel access) lives in one resolver so the exemption surface is a single
