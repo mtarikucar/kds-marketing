@@ -19,8 +19,21 @@ export type TelephonyCapability =
 export interface PrepareCallRequest {
   /** The number being called (customer/lead). */
   toPhone: string;
-  /** The rep initiating the call (their softphone is bound to the sales line). */
+  /** The rep initiating the call. */
   marketingUserId: string;
+  /**
+   * Resolved provider config for api-dial providers (Netsantral). The Lite
+   * (click-to-dial) provider ignores it. Supplied by SalesCallService after a
+   * per-workspace lookup so adapters stay stateless/multi-tenant.
+   */
+  config?: {
+    username: string;
+    password: string;
+    trunk: string;
+    pbxnum?: string;
+    /** The rep's extension; api-dial requires it. */
+    internalNum: string;
+  };
 }
 
 export interface PreparedCall {
