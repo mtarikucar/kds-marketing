@@ -44,6 +44,8 @@ export function configureApp(app: NestExpressApplication): void {
   // Meta (WhatsApp/Instagram/Messenger) webhook — X-Hub-Signature-256 is an
   // HMAC over the raw bytes, so the same raw-before-JSON treatment applies.
   app.use('/api/public/channels/meta/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
+  // TikTok DM webhook — HMAC-SHA256 over the raw body, same raw-before-JSON rule.
+  app.use('/api/public/channels/tiktok/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
 
   // Tight generic body limit (the marketing API has no file/webhook payloads;
   // the bulk lead-ingest endpoint caps its batch size in the DTO).
