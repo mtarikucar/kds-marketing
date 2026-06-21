@@ -41,7 +41,21 @@ export class InvoicesService {
     if (!inv) throw new NotFoundException('Invoice not found');
     return inv;
   }
-  async create(workspaceId: string, dto: { leadId?: string; items: InvoiceItem[]; currency?: string; notes?: string; dueDate?: string }) {
+  async create(
+    workspaceId: string,
+    dto: {
+      leadId?: string;
+      items: InvoiceItem[];
+      currency?: string;
+      notes?: string;
+      dueDate?: string;
+      // Set by the CustomerSubscription sweep so the invoice is born already
+      // stamped — the (subscriptionId, subscriptionPeriodKey) partial-unique
+      // index then enforces one-invoice-per-period AT INSERT (no orphan window).
+      subscriptionId?: string;
+      subscriptionPeriodKey?: string;
+    },
+  ) {
     const items = Array.isArray(dto.items) ? dto.items : [];
     return this.prisma.invoice.create({
       data: {
@@ -54,6 +68,8 @@ export class InvoicesService {
         notes: dto.notes ?? null,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
         publicToken: `in_${randomBytes(18).toString('hex')}`,
+        subscriptionId: dto.subscriptionId ?? null,
+        subscriptionPeriodKey: dto.subscriptionPeriodKey ?? null,
       },
     });
   }

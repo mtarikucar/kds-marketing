@@ -246,6 +246,11 @@ import { MarketingEstimatesController } from './controllers/marketing-estimates.
 import { PublicEstimateController } from './controllers/public-estimate.controller';
 import { EstimatesService } from './estimates/estimates.service';
 
+// Recurring customer subscriptions (GoHighLevel parity).
+import { MarketingSubscriptionsController } from './controllers/marketing-subscriptions.controller';
+import { SubscriptionsService } from './subscriptions/subscriptions.service';
+import { SubscriptionsSchedulerService } from './subscriptions/subscriptions-scheduler.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -330,6 +335,7 @@ import { EstimatesService } from './estimates/estimates.service';
     MarketingProductsController,
     MarketingEstimatesController,
     PublicEstimateController,
+    MarketingSubscriptionsController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -467,6 +473,8 @@ import { EstimatesService } from './estimates/estimates.service';
     OpportunitiesService,
     ProductsService,
     EstimatesService,
+    SubscriptionsService,
+    SubscriptionsSchedulerService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

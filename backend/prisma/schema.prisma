@@ -1541,11 +1541,61 @@ model Invoice {
   paidAt      DateTime?
   paidVia     String?
 
+  // Set when this invoice was minted by the CustomerSubscription sweep (null for
+  // hand-made invoices). The partial-unique index on (subscriptionId,
+  // subscriptionPeriodKey) — added in raw SQL, Prisma can't model partial-unique
+  // — makes "one invoice per (subscription, period)" a DB invariant, so a double
+  // sweep / retry can never double-bill.
+  subscriptionId        String?
+  subscriptionPeriodKey String? // e.g. "2026-06" — the period this invoice settles
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([workspaceId, status])
+  @@index([subscriptionId])
   @@map("invoices")
+}
+
+/// Epic — Recurring customer subscriptions (GoHighLevel parity). An hourly sweep
+/// mints a DRAFT Invoice each billing period from each due subscription; it does
+/// NOT auto-charge — the workspace collects via the existing invoice pay flow.
+/// DISTINCT from `WorkspaceSubscription` (the platform's SaaS billing of the
+/// workspace). `items` is the InvoiceItem[] snapshot ({description,qty,unitPrice}
+/// minor units); soft workspace scoping (no FK).
+model CustomerSubscription {
+  id          String  @id @default(uuid())
+  workspaceId String
+  leadId      String? // standalone allowed (nullable)
+
+  name     String // human label, e.g. "Gold membership"
+  items    Json // InvoiceItem[] snapshot
+  currency String  @default("TRY")
+  amount   Int     @default(0) // minor-unit sum of items (display/sanity; recomputed server-side)
+  notes    String?
+  dueDays  Int     @default(14) // generated invoice dueDate = issue date + dueDays
+
+  interval      String @default("MONTH") // MONTH | YEAR | WEEK
+  intervalCount Int    @default(1) // every N intervals
+
+  status              String    @default("ACTIVE") // ACTIVE | PAUSED | CANCELLED
+  anchorAt            DateTime  @default(now())
+  nextBillingAt       DateTime // the sweep mints when this is <= now
+  lastBilledAt        DateTime?
+  lastBilledPeriodKey String?
+  invoicesGenerated   Int       @default(0)
+  // Consecutive failed sweep attempts (transient errors). Reset to 0 on a
+  // successful/skipped bill. The sweep stops retrying a row once this hits the
+  // cap (poison-pill guard) so one bad subscription can't occupy a batch slot
+  // forever; the row is then surfaced for manual attention.
+  failedAttempts      Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextBillingAt])
+  @@index([workspaceId, status])
+  @@map("customer_subscriptions")
 }
 
 /// The workspace's OWN payment config for billing ITS customers (distinct from
