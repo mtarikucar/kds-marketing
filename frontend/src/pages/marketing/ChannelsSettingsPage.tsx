@@ -61,7 +61,7 @@ interface AgentRow {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'VOICE'] as const;
+const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'VOICE'] as const;
 type ChannelType = (typeof CHANNEL_TYPES)[number];
 
 const SECRET_FIELDS: Record<ChannelType, string[]> = {
@@ -70,12 +70,14 @@ const SECRET_FIELDS: Record<ChannelType, string[]> = {
   SMS: ['usercode', 'password', 'msgheader'],
   INSTAGRAM: ['pageAccessToken'],
   MESSENGER: ['pageAccessToken'],
+  TIKTOK: ['accessToken'],
   VOICE: ['accountSid', 'authToken'],
 };
 const NEEDS_EXTERNAL_ID: Record<string, string> = {
   WHATSAPP: 'Phone number ID',
   INSTAGRAM: 'Page ID',
   MESSENGER: 'Page ID',
+  TIKTOK: 'TikTok business/creator ID',
   VOICE: 'Twilio phone number (E.164)',
 };
 
