@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import TestWebphonePanel from '../../features/marketing/webphone/TestWebphonePanel';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -124,6 +125,7 @@ export default function TelephonySettingsPage() {
           </form>
         </CardContent>
       </Card>
+      <TestWebphonePanel />
     </div>
   );
 }

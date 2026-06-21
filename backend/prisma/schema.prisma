@@ -107,6 +107,9 @@ model MarketingUser {
   /// Netsantral extension this rep's outbound calls ring (e.g. "104"). Null = no
   /// api-dial; SalesCallService falls back to click-to-dial for this rep.
   dahili       String?
+  /// AES-256-GCM sealed SIP password for this rep's dahili (in-app webphone).
+  /// Served only to the owning rep over HTTPS; never returned raw.
+  dahiliSecret String?
   avatar       String?
   role         String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
   status       String    @default("ACTIVE") // ACTIVE, INACTIVE
@@ -1195,6 +1198,11 @@ model TelephonyConfig {
   trunk        String?
   /// PBX number when the account requires it (optional).
   pbxnum       String?
+  /// WebRTC websocket endpoint for the in-app webphone, e.g.
+  /// wss://sip5.netsantral.com:8089/ws (from the dahili edit screen).
+  wssUrl       String?
+  /// SIP domain/realm for AOR + targets, e.g. sip5.netsantral.com.
+  sipDomain    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

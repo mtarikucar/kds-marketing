@@ -9,7 +9,7 @@ jest.mock('../../../common/crypto/secret-box.helper', () => ({
 function prismaMock() {
   return {
     telephonyConfig: { findUnique: jest.fn().mockResolvedValue(undefined), upsert: jest.fn(), update: jest.fn() },
-    marketingUser: { updateMany: jest.fn() },
+    marketingUser: { findFirst: jest.fn(), updateMany: jest.fn() },
   } as any;
 }
 
@@ -48,5 +48,45 @@ describe('TelephonyConfigService', () => {
     const prisma = prismaMock();
     prisma.marketingUser.updateMany.mockResolvedValue({ count: 0 });
     await expect(new TelephonyConfigService(prisma).setDahili('ws', 'u', '104')).rejects.toThrow(/not found/i);
+  });
+
+  it('upsert stores wssUrl + sipDomain', async () => {
+    const prisma = prismaMock();
+    prisma.telephonyConfig.upsert.mockResolvedValue({ id: 'c1', workspaceId: 'ws', provider: 'netgsm-netsantral', status: 'ACTIVE', configSealed: 'sealed:{"username":"850","password":"pw"}', trunk: '8508407303', pbxnum: null, wssUrl: 'wss://sip5.netsantral.com:8089/ws', sipDomain: 'sip5.netsantral.com' });
+    const svc = new TelephonyConfigService(prisma);
+    const out = await svc.upsert('ws', { secrets: { username: '850', password: 'pw' }, trunk: '8508407303', wssUrl: 'wss://sip5.netsantral.com:8089/ws', sipDomain: 'sip5.netsantral.com' });
+    expect((out as any).wssUrl).toBe('wss://sip5.netsantral.com:8089/ws');
+    const data = prisma.telephonyConfig.upsert.mock.calls[0][0].update;
+    expect(data.wssUrl).toBe('wss://sip5.netsantral.com:8089/ws');
+    expect(data.sipDomain).toBe('sip5.netsantral.com');
+  });
+
+  it('setDahili seals the SIP password', async () => {
+    const prisma = prismaMock();
+    prisma.marketingUser.updateMany.mockResolvedValue({ count: 1 });
+    await new TelephonyConfigService(prisma).setDahili('ws', 'u', '101', 'sip-pw');
+    const data = prisma.marketingUser.updateMany.mock.calls[0][0].data;
+    expect(data.dahili).toBe('101');
+    expect(data.dahiliSecret).toBe('sealed:sip-pw');
+  });
+
+  it('webphoneConfigFor returns the rep webphone config when complete', async () => {
+    const prisma = prismaMock();
+    prisma.telephonyConfig.findUnique.mockResolvedValue({ workspaceId: 'ws', status: 'ACTIVE', wssUrl: 'wss://x/ws', sipDomain: 'sip5.netsantral.com', trunk: '850', configSealed: 'sealed:{"username":"850","password":"pw"}' });
+    prisma.marketingUser.findFirst.mockResolvedValue({ dahili: '101', dahiliSecret: 'sealed:sip-pw', firstName: 'A', lastName: 'B' });
+    const r = await new TelephonyConfigService(prisma).webphoneConfigFor('ws', 'u');
+    expect(r).toEqual({ wssUrl: 'wss://x/ws', sipDomain: 'sip5.netsantral.com', dahili: '101', sipPassword: 'sip-pw', displayName: 'A B' });
+    // the rep lookup MUST be scoped to {id, workspaceId} — no cross-tenant/user read
+    expect(prisma.marketingUser.findFirst).toHaveBeenCalledWith({
+      where: { id: 'u', workspaceId: 'ws' },
+      select: { dahili: true, dahiliSecret: true, firstName: true, lastName: true },
+    });
+  });
+
+  it('webphoneConfigFor returns null when the rep has no dahili/secret', async () => {
+    const prisma = prismaMock();
+    prisma.telephonyConfig.findUnique.mockResolvedValue({ workspaceId: 'ws', status: 'ACTIVE', wssUrl: 'wss://x/ws', sipDomain: 'd', trunk: '850', configSealed: 'sealed:{}' });
+    prisma.marketingUser.findFirst.mockResolvedValue({ dahili: null, dahiliSecret: null, firstName: 'A', lastName: 'B' });
+    expect(await new TelephonyConfigService(prisma).webphoneConfigFor('ws', 'u')).toBeNull();
   });
 });

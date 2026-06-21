@@ -8,6 +8,8 @@ export interface UpsertTelephonyInput {
   trunk?: string;
   pbxnum?: string;
   status?: string;
+  wssUrl?: string;
+  sipDomain?: string;
 }
 export interface ResolvedNetsantral {
   username: string;
@@ -47,6 +49,8 @@ export class TelephonyConfigService {
       configSealed: sealSecret(JSON.stringify(merged)),
       trunk: trunk ?? null,
       pbxnum: dto.pbxnum ?? existing?.pbxnum ?? null,
+      wssUrl: dto.wssUrl ?? existing?.wssUrl ?? null,
+      sipDomain: dto.sipDomain ?? existing?.sipDomain ?? null,
     };
     const c = await this.prisma.telephonyConfig.upsert({
       where: { workspaceId },
@@ -73,13 +77,31 @@ export class TelephonyConfigService {
   }
 
   /** Set a rep's Netsantral extension (workspace-scoped). */
-  async setDahili(workspaceId: string, marketingUserId: string, dahili: string | null) {
-    const res = await this.prisma.marketingUser.updateMany({
-      where: { id: marketingUserId, workspaceId },
-      data: { dahili: dahili?.trim() || null },
-    });
+  async setDahili(workspaceId: string, marketingUserId: string, dahili: string | null, sipPassword?: string) {
+    const data: { dahili: string | null; dahiliSecret?: string | null } = { dahili: dahili?.trim() || null };
+    if (sipPassword !== undefined) {
+      if (sipPassword && !isSecretBoxConfigured()) {
+        throw new ServiceUnavailableException('MARKETING_SECRET_KEY is not configured — cannot store the SIP password');
+      }
+      data.dahiliSecret = sipPassword ? sealSecret(sipPassword) : null;
+    }
+    const res = await this.prisma.marketingUser.updateMany({ where: { id: marketingUserId, workspaceId }, data });
     if (res.count === 0) throw new NotFoundException('User not found');
     return { ok: true };
+  }
+
+  /** Webphone config for the AUTHENTICATED rep's own dahili, or null. */
+  async webphoneConfigFor(workspaceId: string, marketingUserId: string) {
+    const c = await this.prisma.telephonyConfig.findUnique({ where: { workspaceId } });
+    if (!c || c.status !== 'ACTIVE' || !c.wssUrl || !c.sipDomain || !isSecretBoxConfigured()) return null;
+    const rep = await this.prisma.marketingUser.findFirst({
+      where: { id: marketingUserId, workspaceId },
+      select: { dahili: true, dahiliSecret: true, firstName: true, lastName: true },
+    });
+    if (!rep?.dahili || !rep?.dahiliSecret) return null;
+    let sipPassword: string;
+    try { sipPassword = openSecret(rep.dahiliSecret); } catch { return null; }
+    return { wssUrl: c.wssUrl, sipDomain: c.sipDomain, dahili: rep.dahili, sipPassword, displayName: `${rep.firstName} ${rep.lastName}`.trim() };
   }
 
   private mask(c: any) {
@@ -90,6 +112,7 @@ export class TelephonyConfigService {
     return {
       id: c.id, workspaceId: c.workspaceId, provider: c.provider, status: c.status,
       trunk: c.trunk, pbxnum: c.pbxnum, configuredSecrets,
+      wssUrl: c.wssUrl, sipDomain: c.sipDomain,
       createdAt: c.createdAt, updatedAt: c.updatedAt,
     };
   }
