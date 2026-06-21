@@ -33,6 +33,20 @@ export class TelephonyConfigController {
   @Patch('users/:id/dahili')
   @RequirePermission('settings.manage')
   setDahili(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: SetDahiliDto) {
-    return this.telephony.setDahili(a.workspaceId, id, dto.dahili ?? null);
+    return this.telephony.setDahili(a.workspaceId, id, dto.dahili ?? null, dto.sipPassword);
+  }
+}
+
+/** Rep-self webphone config: any authenticated telephony user reads their OWN dahili creds. */
+@MarketingRoute()
+@Controller('marketing/telephony')
+@UseGuards(MarketingGuard, FeatureGuard)
+@RequiresFeature('telephony')
+export class WebphoneConfigController {
+  constructor(private readonly telephony: TelephonyConfigService) {}
+
+  @Get('webphone-config')
+  webphone(@CurrentMarketingUser() a: MarketingUserPayload) {
+    return this.telephony.webphoneConfigFor(a.workspaceId, a.id);
   }
 }

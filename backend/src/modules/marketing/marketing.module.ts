@@ -75,7 +75,7 @@ import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { NetsantralClient } from './telephony/netsantral.client';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
-import { TelephonyConfigController } from './controllers/telephony-config.controller';
+import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -342,6 +342,7 @@ import { CustomObjectsService } from './custom-objects/custom-objects.service';
     MarketingDistributionController,
     SalesCallController,
     TelephonyConfigController,
+    WebphoneConfigController,
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
