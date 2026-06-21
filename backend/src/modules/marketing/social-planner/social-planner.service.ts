@@ -17,7 +17,7 @@ import { publishToNetwork, isNetworkConfigured } from './network-adapters';
 
 export const SOCIAL_PUBLISH_KIND = 'social.publish';
 
-const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN'] as const;
+const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK'] as const;
 type Network = (typeof NETWORKS)[number];
 
 function assertNetwork(network: string): asserts network is Network {
@@ -116,6 +116,7 @@ export class SocialPlannerService implements OnModuleInit {
       FACEBOOK: isNetworkConfigured('FACEBOOK'),
       INSTAGRAM: isNetworkConfigured('INSTAGRAM'),
       LINKEDIN: isNetworkConfigured('LINKEDIN'),
+      TIKTOK: isNetworkConfigured('TIKTOK'),
       secretBoxConfigured: isSecretBoxConfigured(),
     };
   }

@@ -16,7 +16,7 @@ const ACCOUNT = {
   createdAt: new Date().toISOString(),
 };
 
-const STATUS = { FACEBOOK: true, INSTAGRAM: true, LINKEDIN: true, secretBoxConfigured: true };
+const STATUS = { FACEBOOK: true, INSTAGRAM: true, LINKEDIN: true, TIKTOK: true, secretBoxConfigured: true };
 
 // Route GET responses by URL so accounts/status/posts each return the right shape.
 vi.mock('../../../features/marketing/api/marketingApi', () => ({

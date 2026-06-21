@@ -34,10 +34,14 @@ export function isNetworkConfigured(network: string): boolean {
       return !!(process.env.META_APP_ID && process.env.META_APP_SECRET);
     case 'LINKEDIN':
       return !!(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
+    case 'TIKTOK':
+      return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
     default:
       return false;
   }
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Publish to Facebook (Graph API /me/feed). */
 async function publishFacebook(
@@ -198,6 +202,84 @@ async function publishLinkedIn(
   }
 }
 
+/**
+ * Publish to TikTok (Content Posting API — Direct Post). TikTok is video-first:
+ * it pulls the video from the first media URL, then processes it asynchronously.
+ * We init the post and briefly poll the publish status to surface immediate
+ * failures; if it's still processing after the bounded wait we report success
+ * with the publish_id (TikTok finishes the encode on its side).
+ */
+async function publishTikTok(
+  account: AccountRow,
+  content: string,
+  mediaUrls: string[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('TIKTOK')) {
+    return { ok: false, error: 'TikTok not configured: set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  if (mediaUrls.length === 0) {
+    return { ok: false, error: 'TikTok requires a video media URL' };
+  }
+
+  try {
+    // Step 1 — init the post; TikTok pulls the video from the URL.
+    const initRes = await safeFetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json; charset=UTF-8',
+      },
+      body: JSON.stringify({
+        post_info: {
+          title: content.slice(0, 2200),
+          privacy_level: 'PUBLIC_TO_EVERYONE',
+          disable_comment: false,
+        },
+        source_info: { source: 'PULL_FROM_URL', video_url: mediaUrls[0] },
+      }),
+      timeoutMs: 15_000,
+    });
+    const initJson = (await initRes.json()) as Record<string, any>;
+    const publishId = initJson?.data?.publish_id;
+    if (!initRes.ok || !publishId) {
+      const err = String(initJson?.error?.message ?? initJson?.error?.code ?? initRes.status);
+      logger.warn(`TikTok publish init failed (${account.externalId}): ${err}`);
+      return { ok: false, error: err.slice(0, 500) };
+    }
+
+    // Step 2 — bounded status poll (≤10s) to catch immediate rejections.
+    for (let i = 0; i < 5; i++) {
+      await sleep(2_000);
+      const statusRes = await safeFetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json; charset=UTF-8',
+        },
+        body: JSON.stringify({ publish_id: publishId }),
+        timeoutMs: 10_000,
+      });
+      const statusJson = (await statusRes.json()) as Record<string, any>;
+      const status = statusJson?.data?.status;
+      if (status === 'PUBLISH_COMPLETE') {
+        return { ok: true, externalPostId: String(publishId) };
+      }
+      if (status === 'FAILED') {
+        const reason = String(statusJson?.data?.fail_reason ?? 'TikTok rejected the video');
+        return { ok: false, error: reason.slice(0, 500) };
+      }
+    }
+    // Still processing after the bounded wait — treat as accepted (queued).
+    return { ok: true, externalPostId: String(publishId) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`TikTok publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
 /** Dispatch to the correct per-network adapter. */
 export async function publishToNetwork(
   account: AccountRow,
@@ -211,6 +293,8 @@ export async function publishToNetwork(
       return publishInstagram(account, content, mediaUrls);
     case 'LINKEDIN':
       return publishLinkedIn(account, content, mediaUrls);
+    case 'TIKTOK':
+      return publishTikTok(account, content, mediaUrls);
     default:
       return { ok: false, error: `Unknown network: ${account.network}` };
   }

@@ -10,7 +10,7 @@ import { z } from 'zod';
  * own validation surface.
  */
 
-export const SOCIAL_NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN'] as const;
+export const SOCIAL_NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK'] as const;
 export type SocialNetwork = (typeof SOCIAL_NETWORKS)[number];
 
 // A single http(s) URL — matches the backend @IsUrl() per-item validation.
