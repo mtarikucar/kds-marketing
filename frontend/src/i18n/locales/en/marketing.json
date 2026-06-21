@@ -131,6 +131,7 @@
     "invoices": "Invoices",
     "products": "Products",
     "subscriptions": "Subscriptions",
+    "orderForms": "Order forms",
     "branding": "Branding"
   },
   "common": {
@@ -389,6 +390,29 @@
     "createSuccess": "Lead created",
     "updateSuccess": "Lead updated",
     "duplicateEmailError": "A lead with this email already exists"
+  },
+  "orderForms": {
+    "title": "Order forms",
+    "subtitle": "Shareable links that sell a product and collect payment.",
+    "newForm": "New order form",
+    "editForm": "Edit order form",
+    "emptyTitle": "No order forms yet",
+    "empty": "Create a shareable order form to sell a product online.",
+    "needProduct": "Create a product first — order forms sell a product.",
+    "saved": "Saved",
+    "saveError": "Could not save",
+    "deleted": "Order form deleted",
+    "linkCopied": "Public link copied",
+    "copyLink": "Copy public link",
+    "active": "Active",
+    "inactive": "Inactive",
+    "name": "Name",
+    "namePlaceholder": "Pro plan signup",
+    "product": "Product",
+    "selectProduct": "Select a product",
+    "collectPhone": "Collect phone",
+    "phoneRequired": "Phone required",
+    "activeToggle": "Active"
   },
   "subscriptions": {
     "title": "Subscriptions",
