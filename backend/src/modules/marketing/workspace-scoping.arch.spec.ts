@@ -136,6 +136,8 @@ const OWNED_DELEGATES = [
   'product',
   // Estimates / quotes (GHL parity): priced documents owned by the workspace.
   'estimate',
+  // Recurring customer subscriptions (GHL parity): workspace-owned.
+  'customerSubscription',
 ] as const;
 
 /**
@@ -206,6 +208,13 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'cancel by (kind, dedupKey) or by id — control-plane mutation; dedupKey embeds a row UUID',
   'scheduling/scheduled-job-runner.service.ts:scheduledJob.updateMany':
     'stuck-reaper resets RUNNING rows across all workspaces (crash recovery sweeper)',
+  // Recurring-subscription sweep: the hourly cron reads due ACTIVE subscriptions
+  // across ALL workspaces (status + nextBillingAt) — a system job, same shape as
+  // the scheduled-job runner. Every write it triggers (billOne) is workspace-
+  // scoped or id-keyed, and the (subscription, period) partial-unique index makes
+  // a duplicate invoice impossible. The lookup lives in this single scheduler file.
+  'subscriptions/subscriptions-scheduler.service.ts:customerSubscription.findMany':
+    'hourly recurring-invoice sweep reads due rows across all workspaces (system cron)',
   // Inbound public webhooks have NO workspace context — the provider only
   // gives a widget key or a page/phone id. This lookup (the ONLY cross-workspace
   // channel access) lives in one resolver so the exemption surface is a single
