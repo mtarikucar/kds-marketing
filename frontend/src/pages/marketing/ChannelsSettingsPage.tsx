@@ -263,14 +263,17 @@ export default function ChannelsSettingsPage() {
                     control={form.control}
                     name="agentProfileId"
                     render={({ field }) => (
-                      <Select value={field.value ?? ''} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value || '__none__'}
+                        onValueChange={(v) => field.onChange(v === '__none__' ? '' : v)}
+                      >
                         <SelectTrigger id={id}>
                           <SelectValue
                             placeholder={t('channels.noAgent', '— none (manual only) —')}
                           />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">
+                          <SelectItem value="__none__">
                             {t('channels.noAgent', '— none (manual only) —')}
                           </SelectItem>
                           {(agents ?? []).map((a) => (

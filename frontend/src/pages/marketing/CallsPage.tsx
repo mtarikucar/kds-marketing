@@ -129,9 +129,9 @@ export default function CallsPage() {
       {/* ── Filters ── */}
       <FilterBar>
         <Select
-          value={status}
+          value={status || '__all__'}
           onValueChange={(v) => {
-            setStatus(v);
+            setStatus(v === '__all__' ? '' : v);
             setPage(1);
           }}
         >
@@ -139,7 +139,7 @@ export default function CallsPage() {
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All statuses</SelectItem>
+            <SelectItem value="__all__">All statuses</SelectItem>
             {CALL_STATUSES.map((s) => (
               <SelectItem key={s} value={s}>
                 {CALL_STATUS_LABELS[s]}
@@ -150,9 +150,9 @@ export default function CallsPage() {
 
         {isManager && (
           <Select
-            value={repId}
+            value={repId || '__all__'}
             onValueChange={(v) => {
-              setRepId(v);
+              setRepId(v === '__all__' ? '' : v);
               setPage(1);
             }}
           >
@@ -160,7 +160,7 @@ export default function CallsPage() {
               <SelectValue placeholder="All reps" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All reps</SelectItem>
+              <SelectItem value="__all__">All reps</SelectItem>
               {repOptions.map((r) => (
                 <SelectItem key={r.id} value={r.id}>
                   {r.firstName} {r.lastName}
