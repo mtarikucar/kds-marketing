@@ -188,6 +188,10 @@ jobs:
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           STRIPE_CONNECT_CLIENT_ID=${STRIPE_CONNECT_CLIENT_ID}
           MARKETING_PUBLIC_URL=https://marketing.hummytummy.com
+          # Public origin for callback/tracking links the API emits (NetGSM MO
+          # callbackUrl, campaign tracking, Twilio voice signature). Without it the
+          # SMS channel's MO URL renders null and the operator can't wire NetGSM.
+          PUBLIC_BASE_URL=https://marketing.hummytummy.com
           CORE_SERVICE_URL=http://host.docker.internal:3000
           CORS_ORIGIN=https://marketing.hummytummy.com
           FRONTEND_URL=https://marketing.hummytummy.com
