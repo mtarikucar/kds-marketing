@@ -27,6 +27,7 @@ const PipelineSettingsPage     = lazy(() => import('./pages/marketing/opportunit
 const EstimatesPage            = lazy(() => import('./pages/marketing/estimates/EstimatesPage'));
 const DocumentsPage            = lazy(() => import('./pages/marketing/documents/DocumentsPage'));
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
+const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
 const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
@@ -138,6 +139,7 @@ export default function App() {
           <Route path="/estimates"      element={<S><EstimatesPage /></S>} />
           <Route path="/documents"      element={<S><DocumentsPage /></S>} />
           <Route path="/reports"        element={<S><ReportsPage /></S>} />
+          <Route path="/ads"            element={<S><AdReportingPage /></S>} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           <Route path="/calls"          element={<S><CallsPage /></S>} />

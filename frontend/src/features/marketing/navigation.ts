@@ -49,6 +49,7 @@ import {
   BadgeDollarSign,
   Settings,
   PhoneCall,
+  MousePointerClick,
 } from 'lucide-react';
 
 /**
@@ -195,6 +196,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'reporting', labelKey: 'nav.group.reporting', label: 'Reporting', icon: PieChart,
     children: [
       { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
+      { path: '/ads', labelKey: 'nav.adReporting', label: 'Ad Reporting', icon: MousePointerClick },
       { path: '/performance', labelKey: 'nav.performance', label: 'Performance', icon: LineChart },
       { path: '/analytics', labelKey: 'nav.analytics', label: 'Analytics', icon: PieChart, managerOnly: true },
     ],

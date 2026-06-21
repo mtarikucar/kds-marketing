@@ -142,6 +142,10 @@ const OWNED_DELEGATES = [
   'document',
   // Public payment-enabled order forms (GHL parity): workspace-owned config.
   'orderForm',
+  // Ad reporting (GHL parity): each workspace connects its OWN Meta/TikTok ad
+  // account (sealed token) and the pulled per-day metric rows are workspace-owned.
+  'adAccount',
+  'adMetric',
 ] as const;
 
 /**
@@ -219,6 +223,13 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // a duplicate invoice impossible. The lookup lives in this single scheduler file.
   'subscriptions/subscriptions-scheduler.service.ts:customerSubscription.findMany':
     'hourly recurring-invoice sweep reads due rows across all workspaces (system cron)',
+  // Ad-insights sweep: the hourly cron reads due ACTIVE ad accounts across ALL
+  // workspaces (status + lastPulledAt) — a system job, same shape as the
+  // subscription sweep. Every write it triggers (pullAccount: adMetric.upsert,
+  // adAccount.update) carries an explicit workspaceId or is id-keyed, and the
+  // (adAccountId, date, campaignId) unique index makes a re-pull idempotent.
+  'ads/ads-pull.service.ts:adAccount.findMany':
+    'hourly ad-insights sweep reads due ad accounts across all workspaces (system cron)',
   // Public e-signature sign/decline: the document id is resolved from a
   // token-scoped findUnique(publicToken) (the unguessable token IS the
   // capability), then the status-conditional updateMany flips SENT→SIGNED/DECLINED

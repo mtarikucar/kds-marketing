@@ -267,6 +267,11 @@ import { MarketingOrderFormsController } from './controllers/marketing-order-for
 import { PublicOrderFormController } from './controllers/public-order-form.controller';
 import { OrderFormsService } from './order-forms/order-forms.service';
 
+// Ad reporting — Meta Ads + TikTok Ads (GoHighLevel parity).
+import { MarketingAdsController } from './controllers/marketing-ads.controller';
+import { AdAccountService } from './ads/ad-account.service';
+import { AdsPullService } from './ads/ads-pull.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -358,6 +363,7 @@ import { OrderFormsService } from './order-forms/order-forms.service';
     PublicDocumentController,
     MarketingOrderFormsController,
     PublicOrderFormController,
+    MarketingAdsController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -503,6 +509,8 @@ import { OrderFormsService } from './order-forms/order-forms.service';
     SubscriptionsSchedulerService,
     DocumentsService,
     OrderFormsService,
+    AdAccountService,
+    AdsPullService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

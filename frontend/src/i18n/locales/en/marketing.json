@@ -104,6 +104,7 @@
     "calendar": "Calendar",
     "commissions": "Commissions",
     "reports": "Reports",
+    "adReporting": "Ad Reporting",
     "installations": "Installations",
     "calls": "Calls",
     "performance": "Performance",
@@ -711,6 +712,69 @@
     "passwordResetSuccess": "Password reset",
     "deactivateSuccess": "User deactivated",
     "reactivateSuccess": "User reactivated"
+  },
+  "ads": {
+    "title": "Ad Reporting",
+    "subtitle": "Track Meta and TikTok ad spend, clicks and conversions across your accounts.",
+    "connectAccount": "Connect account",
+    "viewToggle": "Ad reporting view",
+    "rangeToggle": "Date range",
+    "tabs": { "overview": "Overview", "accounts": "Accounts" },
+    "filter": { "allProviders": "All providers" },
+    "range": { "7": "7d", "30": "30d", "90": "90d" },
+    "stat": {
+      "spend": "Spend",
+      "impressions": "Impressions",
+      "clicks": "Clicks",
+      "leads": "Leads",
+      "ctr": "CTR",
+      "cpl": "Cost / lead"
+    },
+    "col": { "provider": "Provider", "date": "Date" },
+    "byProvider": { "title": "By provider" },
+    "byDay": { "title": "Daily breakdown", "empty": "No metrics in this range yet." },
+    "status": { "ACTIVE": "Active", "TOKEN_EXPIRED": "Token expired", "DISCONNECTED": "Disconnected" },
+    "empty": {
+      "title": "No ad accounts connected",
+      "description": "Connect a Meta or TikTok ad account to start seeing spend and conversion reporting."
+    },
+    "accounts": {
+      "empty": "No connected ad accounts",
+      "emptyHint": "Connect a Meta or TikTok ad account to pull spend and conversion metrics.",
+      "lastPulled": "Last refreshed {{when}}",
+      "neverPulled": "Not refreshed yet"
+    },
+    "action": { "refresh": "Refresh", "disconnect": "Disconnect" },
+    "confirm": {
+      "disconnectTitle": "Disconnect ad account",
+      "disconnectBody": "This removes the account and all of its pulled metrics. This cannot be undone."
+    },
+    "connect": {
+      "title": "Connect ad account",
+      "subtitle": "Link your Meta or TikTok ad account to pull spend and conversion metrics.",
+      "noSecretBox": "Token encryption is not configured on the server (MARKETING_SECRET_KEY). Accounts cannot be connected until an administrator enables it.",
+      "providerUnavailable": "This provider is not configured on the platform yet. Connecting it will not pull data until an administrator enables its app credentials.",
+      "provider": "Provider",
+      "externalAdId": "Ad account ID",
+      "metaIdHint": "Your Meta ad account id (act_… or the number).",
+      "tiktokIdHint": "Your TikTok advertiser_id.",
+      "displayName": "Display name",
+      "displayNameHint": "Optional — defaults to the account id.",
+      "displayNamePlaceholder": "e.g. Acme — Meta Ads",
+      "currency": "Currency",
+      "currencyHint": "Optional — the account currency (e.g. USD, TRY).",
+      "accessToken": "Access token",
+      "accessTokenHint": "Stored encrypted — it is never shown again after saving.",
+      "submit": "Connect"
+    },
+    "toast": {
+      "connected": "Ad account connected",
+      "connectFailed": "Failed to connect account",
+      "disconnected": "Ad account disconnected",
+      "disconnectFailed": "Failed to disconnect account",
+      "pulled": "Refreshed — {{count}} day(s) updated",
+      "pullFailed": "Failed to refresh metrics"
+    }
   },
   "reports": {
     "title": "Reports",

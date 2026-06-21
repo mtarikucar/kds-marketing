@@ -104,6 +104,7 @@
     "calendar": "Takvim",
     "commissions": "Komisyonlar",
     "reports": "Raporlar",
+    "adReporting": "Reklam Raporları",
     "installations": "Kurulumlar",
     "calls": "Aramalar",
     "performance": "Performans",
@@ -708,6 +709,69 @@
     "passwordResetSuccess": "Parola sıfırlandı",
     "deactivateSuccess": "Kullanıcı pasifleştirildi",
     "reactivateSuccess": "Kullanıcı aktifleştirildi"
+  },
+  "ads": {
+    "title": "Reklam Raporları",
+    "subtitle": "Hesaplarınızdaki Meta ve TikTok reklam harcaması, tıklama ve dönüşümlerini izleyin.",
+    "connectAccount": "Hesap bağla",
+    "viewToggle": "Reklam raporu görünümü",
+    "rangeToggle": "Tarih aralığı",
+    "tabs": { "overview": "Genel bakış", "accounts": "Hesaplar" },
+    "filter": { "allProviders": "Tüm sağlayıcılar" },
+    "range": { "7": "7g", "30": "30g", "90": "90g" },
+    "stat": {
+      "spend": "Harcama",
+      "impressions": "Gösterim",
+      "clicks": "Tıklama",
+      "leads": "Müşteri adayı",
+      "ctr": "TO",
+      "cpl": "Müşteri adayı maliyeti"
+    },
+    "col": { "provider": "Sağlayıcı", "date": "Tarih" },
+    "byProvider": { "title": "Sağlayıcıya göre" },
+    "byDay": { "title": "Günlük döküm", "empty": "Bu aralıkta henüz metrik yok." },
+    "status": { "ACTIVE": "Aktif", "TOKEN_EXPIRED": "Token süresi doldu", "DISCONNECTED": "Bağlantı kesildi" },
+    "empty": {
+      "title": "Bağlı reklam hesabı yok",
+      "description": "Harcama ve dönüşüm raporlarını görmek için bir Meta veya TikTok reklam hesabı bağlayın."
+    },
+    "accounts": {
+      "empty": "Bağlı reklam hesabı yok",
+      "emptyHint": "Harcama ve dönüşüm metriklerini çekmek için bir Meta veya TikTok reklam hesabı bağlayın.",
+      "lastPulled": "Son yenileme {{when}}",
+      "neverPulled": "Henüz yenilenmedi"
+    },
+    "action": { "refresh": "Yenile", "disconnect": "Bağlantıyı kes" },
+    "confirm": {
+      "disconnectTitle": "Reklam hesabının bağlantısını kes",
+      "disconnectBody": "Bu, hesabı ve çekilen tüm metriklerini kaldırır. Bu işlem geri alınamaz."
+    },
+    "connect": {
+      "title": "Reklam hesabı bağla",
+      "subtitle": "Harcama ve dönüşüm metriklerini çekmek için Meta veya TikTok reklam hesabınızı bağlayın.",
+      "noSecretBox": "Sunucuda token şifreleme yapılandırılmamış (MARKETING_SECRET_KEY). Bir yönetici etkinleştirene kadar hesaplar bağlanamaz.",
+      "providerUnavailable": "Bu sağlayıcı platformda henüz yapılandırılmadı. Bağlamak, bir yönetici uygulama kimlik bilgilerini etkinleştirene kadar veri çekmez.",
+      "provider": "Sağlayıcı",
+      "externalAdId": "Reklam hesabı kimliği",
+      "metaIdHint": "Meta reklam hesabı kimliğiniz (act_… veya numara).",
+      "tiktokIdHint": "TikTok advertiser_id değeriniz.",
+      "displayName": "Görünen ad",
+      "displayNameHint": "İsteğe bağlı — varsayılan olarak hesap kimliği.",
+      "displayNamePlaceholder": "örn. Acme — Meta Reklamları",
+      "currency": "Para birimi",
+      "currencyHint": "İsteğe bağlı — hesap para birimi (örn. USD, TRY).",
+      "accessToken": "Erişim tokenı",
+      "accessTokenHint": "Şifreli saklanır — kaydedildikten sonra bir daha gösterilmez.",
+      "submit": "Bağla"
+    },
+    "toast": {
+      "connected": "Reklam hesabı bağlandı",
+      "connectFailed": "Hesap bağlanamadı",
+      "disconnected": "Reklam hesabı bağlantısı kesildi",
+      "disconnectFailed": "Hesap bağlantısı kesilemedi",
+      "pulled": "Yenilendi — {{count}} gün güncellendi",
+      "pullFailed": "Metrikler yenilenemedi"
+    }
   },
   "reports": {
     "title": "Raporlar",

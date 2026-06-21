@@ -2511,3 +2511,54 @@ model OrderForm {
   @@index([workspaceId, createdAt])
   @@map("order_forms")
 }
+
+/// Epic — Ads reporting (GoHighLevel parity). A workspace connects its OWN Meta
+/// Ads / TikTok Ads account (per-tenant: the platform holds one app, each
+/// workspace pastes/grants its own ad-account access token, sealed). A periodic
+/// sweep pulls spend/impressions/clicks/leads into AdMetric for reporting. The
+/// token is SEALED (secret-box); never echoed. Env-gated / inert without creds.
+model AdAccount {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  provider       String // META | TIKTOK
+  externalAdId   String // act_<id> (Meta) / advertiser_id (TikTok)
+  displayName    String
+  accessToken    String    @db.Text // SEALED
+  refreshToken   String?   @db.Text // SEALED (OAuth auto-discovery — follow-up)
+  tokenExpiresAt DateTime?
+  status         String    @default("ACTIVE") // ACTIVE | TOKEN_EXPIRED | DISCONNECTED
+  currency       String?
+  lastPulledAt   DateTime?
+  lastError      String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  metrics AdMetric[]
+
+  @@unique([workspaceId, provider, externalAdId])
+  @@index([workspaceId, provider])
+  @@index([status, lastPulledAt])
+  @@map("ad_accounts")
+}
+
+/// A per-day (optionally per-campaign) rollup of ad metrics pulled from the
+/// provider. Idempotent upsert on (adAccountId, date, campaignId) so a re-pull
+/// never duplicates. `spend` is in the account currency's major unit.
+model AdMetric {
+  id          String    @id @default(uuid())
+  workspaceId String
+  adAccountId String
+  adAccount   AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  date        DateTime  @db.Date // UTC day
+  campaignId  String    @default("") // '' = account-level rollup
+  spend       Decimal   @default(0) @db.Decimal(14, 2)
+  impressions Int       @default(0)
+  clicks      Int       @default(0)
+  leads       Int       @default(0)
+  rawMetrics  Json?
+  pulledAt    DateTime  @default(now())
+
+  @@unique([adAccountId, date, campaignId])
+  @@index([workspaceId, date])
+  @@map("ad_metrics")
+}
