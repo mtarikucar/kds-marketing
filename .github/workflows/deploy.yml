@@ -147,6 +147,10 @@ jobs:
           # Optional: gates /api/metrics. If unset the endpoint relies on the
           # edge network restriction alone (host-nginx should not proxy it).
           METRICS_SCRAPE_TOKEN: ${{ secrets.METRICS_SCRAPE_TOKEN }}
+          # NetGSM click-to-dial sales line (telephony only, optional). NOTE: the
+          # NetGSM *SMS* credentials (usercode/password/msgheader) are NOT env vars —
+          # they live per-channel, sealed in the DB (set via Channels settings UI).
+          NETGSM_SALES_LINE: ${{ secrets.NETGSM_SALES_LINE }}
         run: |
           set -euo pipefail
           required=(MARKETING_POSTGRES_PASSWORD MARKETING_JWT_SECRET
@@ -203,6 +207,9 @@ jobs:
           STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
           STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
           METRICS_SCRAPE_TOKEN=${METRICS_SCRAPE_TOKEN}
+          # NetGSM click-to-dial sales line (telephony only; empty = inert). SMS
+          # creds are per-channel in the DB, not here.
+          NETGSM_SALES_LINE=${NETGSM_SALES_LINE}
           ENV
 
       - name: Ship env + compose (atomic)
