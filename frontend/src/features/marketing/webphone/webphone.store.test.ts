@@ -45,4 +45,11 @@ describe('webphone store', () => {
     await wp.start(cfg);
     expect(wp.getState().status).toBe('failed');
   });
+
+  it('reports failed status when register rejects (e.g. 401)', async () => {
+    register.mockRejectedValueOnce(new Error('401'));
+    const wp = createWebphone(document.createElement('audio'));
+    await wp.start(cfg);
+    expect(wp.getState().status).toBe('failed');
+  });
 });

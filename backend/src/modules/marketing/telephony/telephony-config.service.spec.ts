@@ -76,6 +76,11 @@ describe('TelephonyConfigService', () => {
     prisma.marketingUser.findFirst.mockResolvedValue({ dahili: '101', dahiliSecret: 'sealed:sip-pw', firstName: 'A', lastName: 'B' });
     const r = await new TelephonyConfigService(prisma).webphoneConfigFor('ws', 'u');
     expect(r).toEqual({ wssUrl: 'wss://x/ws', sipDomain: 'sip5.netsantral.com', dahili: '101', sipPassword: 'sip-pw', displayName: 'A B' });
+    // the rep lookup MUST be scoped to {id, workspaceId} — no cross-tenant/user read
+    expect(prisma.marketingUser.findFirst).toHaveBeenCalledWith({
+      where: { id: 'u', workspaceId: 'ws' },
+      select: { dahili: true, dahiliSecret: true, firstName: true, lastName: true },
+    });
   });
 
   it('webphoneConfigFor returns null when the rep has no dahili/secret', async () => {

@@ -55,7 +55,8 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
     },
 
     async hangup() {
-      if (user) await user.hangup();
+      if (!user || state.status !== 'incall') return;
+      try { await user.hangup(); } catch { /* already torn down */ }
       set({ status: 'registered' });
     },
 

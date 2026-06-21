@@ -23,7 +23,7 @@ A browser SIP client (**SIP.js**, its `SimpleUser`/`UserAgent` API) embedded app
 |---|---|---|
 | `TelephonyConfig` (+fields) | per-workspace `wssUrl` + `sipDomain` (already has sealed creds + trunk) | — |
 | per-rep dahili secret | each rep's dahili number (`MarketingUser.dahili` exists) + **sealed SIP password** | secret-box |
-| `GET /marketing/telephony/webphone-token` | returns the calling rep's webphone config `{wssUrl, sipDomain, dahili, sipPassword, displayName}` — auth'd, telephony-gated, **own rep only**, over HTTPS | config service |
+| `GET /marketing/telephony/webphone-config` | returns the calling rep's webphone config `{wssUrl, sipDomain, dahili, sipPassword, displayName}` — auth'd, telephony-gated, **own rep only**, over HTTPS | config service |
 | `webphone.store.ts` (FE) | SIP.js `UserAgent` lifecycle: fetch token → register on login → re-register/backoff → unregister on logout; exposes call state | SIP.js |
 | `WebphoneProvider` (FE, app-shell) | mounts the store app-wide so the phone is live on every page; renders the dock + incoming-call modal | webphone.store |
 | `WebphoneDock` (FE) | persistent mini-UI: status (registered/online), dialpad, active-call controls (answer/hangup/mute/hold), call timer | webphone.store |
@@ -39,13 +39,13 @@ SIP.js is the chosen lib (well-maintained, `SimpleUser` covers register/call/ans
 
 ## Security & multi-tenancy
 
-- Per-rep dahili **SIP password sealed** (AES-256-GCM, secret-box), served only to the authenticated owning rep over HTTPS via the webphone-token endpoint (never to others; never logged). Same sealing contract as channel/telephony creds.
+- Per-rep dahili **SIP password sealed** (AES-256-GCM, secret-box), served only to the authenticated owning rep over HTTPS via the webphone-config endpoint (never to others; never logged). Same sealing contract as channel/telephony creds.
 - `wssUrl`/`sipDomain` are per-workspace (`TelephonyConfig`). Everything workspace-scoped + `@RequiresFeature('telephony')`.
 - getUserMedia (mic) needs a **secure context** → only works over the prod **HTTPS** app (already the case) — not file://.
 
 ## Phasing (build order — de-risk first)
 
-**Phase A — foundation / de-risk (vertical slice, ships first):** `TelephonyConfig.wssUrl/sipDomain` + per-rep sealed dahili password + webphone-token endpoint + a minimal SIP.js register + a single outbound test call + a basic status indicator. **Goal: prove SIP.js registers to `wss://sip5.netsantral.com:8089/ws` and a call connects with audio over our HTTPS app.** This validates the entire foundation (WebRTC media, ICE, NetGSM compatibility) before investing in full UX. If ICE/media fails without TURN, that surfaces here (see risks).
+**Phase A — foundation / de-risk (vertical slice, ships first):** `TelephonyConfig.wssUrl/sipDomain` + per-rep sealed dahili password + webphone-config endpoint + a minimal SIP.js register + a single outbound test call + a basic status indicator. **Goal: prove SIP.js registers to `wss://sip5.netsantral.com:8089/ws` and a call connects with audio over our HTTPS app.** This validates the entire foundation (WebRTC media, ICE, NetGSM compatibility) before investing in full UX. If ICE/media fails without TURN, that surfaces here (see risks).
 
 **Phase B — full call UX:** persistent dock (dialpad + controls), inbound-call modal + answer, mute/hold/hangup, call timer, click-to-call from lead/contact, SalesCall logging (both directions).
 
@@ -64,7 +64,7 @@ Each phase = its own spec-confirm → plan → subagent-driven build. Phase A is
 
 ## Testing
 
-- BE unit: webphone-token endpoint (own-rep scoping, telephony gate, sealed-password round-trip), TelephonyConfig wssUrl/domain mask.
+- BE unit: webphone-config endpoint (own-rep scoping, telephony gate, sealed-password round-trip), TelephonyConfig wssUrl/domain mask.
 - FE unit: webphone store state machine (idle→registering→registered→incall) with a mocked SIP.js UserAgent; dock renders each state; click-to-call invokes `call()`.
 - Phase A live validation (over HTTPS prod): register shows "online"; an outbound test call connects with two-way audio + shows 0850 caller id.
 
