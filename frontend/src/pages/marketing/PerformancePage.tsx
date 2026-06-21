@@ -157,12 +157,15 @@ export default function PerformancePage() {
                 <Label htmlFor="perf-rep" className="text-xs text-muted-foreground">
                   Rep
                 </Label>
-                <Select value={repId} onValueChange={setRepId}>
+                <Select
+                  value={repId || '__all__'}
+                  onValueChange={(v) => setRepId(v === '__all__' ? '' : v)}
+                >
                   <SelectTrigger id="perf-rep" className="w-48">
                     <SelectValue placeholder="Whole team" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Whole team</SelectItem>
+                    <SelectItem value="__all__">Whole team</SelectItem>
                     {repOptions.map((r) => (
                       <SelectItem key={r.id} value={r.id}>
                         {r.firstName} {r.lastName}
