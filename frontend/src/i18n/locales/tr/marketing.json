@@ -98,6 +98,7 @@
     "leads": "Lead'ler",
     "opportunities": "Fırsatlar",
     "estimates": "Teklif Belgeleri",
+    "documents": "Belgeler",
     "offers": "Teklifler",
     "tasks": "Görevler",
     "calendar": "Takvim",
@@ -445,6 +446,34 @@
     "interval": {
       "MONTH": "Aylık",
       "YEAR": "Yıllık"
+    }
+  },
+  "documents": {
+    "title": "Belgeler",
+    "subtitle": "E-imza için gönderdiğiniz sözleşmeler.",
+    "newDocument": "Yeni belge",
+    "editDocument": "Belgeyi düzenle",
+    "emptyTitle": "Henüz belge yok",
+    "empty": "Bir sözleşme taslağı oluşturup e-imzaya gönderin.",
+    "saved": "Kaydedildi",
+    "saveError": "Kaydedilemedi",
+    "voided": "Geçersiz kılındı",
+    "deleted": "Belge silindi",
+    "linkCopied": "İmza linki kopyalandı",
+    "copyLink": "İmza linkini kopyala",
+    "void": "Geçersiz kıl",
+    "titleField": "Başlık",
+    "titlePlaceholder": "Hizmet sözleşmesi",
+    "body": "İçerik",
+    "bodyPlaceholder": "Sözleşmenin tam metni…",
+    "readonlyNote": "Gönderilmiş belge salt-okunurdur.",
+    "signedBy": "{{name}} tarafından {{date}} tarihinde imzalandı",
+    "status": {
+      "DRAFT": "Taslak",
+      "SENT": "Gönderildi",
+      "SIGNED": "İmzalandı",
+      "DECLINED": "Reddedildi",
+      "VOIDED": "Geçersiz"
     }
   },
   "estimates": {

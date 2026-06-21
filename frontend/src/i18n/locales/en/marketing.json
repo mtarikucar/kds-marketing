@@ -98,6 +98,7 @@
     "leads": "Leads",
     "opportunities": "Opportunities",
     "estimates": "Estimates",
+    "documents": "Documents",
     "offers": "Offers",
     "tasks": "Tasks",
     "calendar": "Calendar",
@@ -448,6 +449,34 @@
     "interval": {
       "MONTH": "Monthly",
       "YEAR": "Yearly"
+    }
+  },
+  "documents": {
+    "title": "Documents",
+    "subtitle": "Agreements you send for e-signature.",
+    "newDocument": "New document",
+    "editDocument": "Edit document",
+    "emptyTitle": "No documents yet",
+    "empty": "Draft an agreement and send it for e-signature.",
+    "saved": "Saved",
+    "saveError": "Could not save",
+    "voided": "Voided",
+    "deleted": "Document deleted",
+    "linkCopied": "Signing link copied",
+    "copyLink": "Copy signing link",
+    "void": "Void",
+    "titleField": "Title",
+    "titlePlaceholder": "Service agreement",
+    "body": "Body",
+    "bodyPlaceholder": "The full text of the agreement…",
+    "readonlyNote": "A sent document is read-only.",
+    "signedBy": "Signed by {{name}} on {{date}}",
+    "status": {
+      "DRAFT": "Draft",
+      "SENT": "Sent",
+      "SIGNED": "Signed",
+      "DECLINED": "Declined",
+      "VOIDED": "Voided"
     }
   },
   "estimates": {
