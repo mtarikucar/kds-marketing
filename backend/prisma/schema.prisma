@@ -1444,11 +1444,20 @@ model BookingCalendar {
   name          String
   slug          String
   ownerUserId   String?
+  // GHL calendar types. SINGLE = one owner (current behavior). ROUND_ROBIN =
+  // distribute each booking across `members` (one assignee per booking).
+  // COLLECTIVE = the whole team for one booking (capacity 1). CLASS = a group
+  // event with multiple attendees up to `capacity`. Effective per-slot capacity
+  // is derived: SINGLE/COLLECTIVE→1, CLASS→capacity, ROUND_ROBIN→member count.
+  type          String  @default("SINGLE") // SINGLE | ROUND_ROBIN | COLLECTIVE | CLASS
+  capacity      Int     @default(1) // attendees per slot for CLASS
   availability  Json
   slotMinutes   Int     @default(30)
   bufferMinutes Int     @default(0)
   timezone      String  @default("Europe/Istanbul")
   active        Boolean @default(true)
+
+  members BookingCalendarMember[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1456,6 +1465,23 @@ model BookingCalendar {
   @@unique([workspaceId, slug])
   @@index([workspaceId])
   @@map("booking_calendars")
+}
+
+/// A team member assigned to a ROUND_ROBIN / COLLECTIVE calendar. `priority`
+/// orders round-robin assignment (lower first as a tie-break). marketingUserId
+/// is a soft ref (no FK, multi-tenant pattern). Cascade-deleted with its calendar.
+model BookingCalendarMember {
+  id              String          @id @default(uuid())
+  workspaceId     String
+  calendarId      String
+  calendar        BookingCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  marketingUserId String
+  priority        Int             @default(0)
+  createdAt       DateTime        @default(now())
+
+  @@unique([calendarId, marketingUserId])
+  @@index([workspaceId, calendarId])
+  @@map("booking_calendar_members")
 }
 
 /// A booked slot. Creating one mints/links a Lead, emits booking.created (a
@@ -1472,6 +1498,9 @@ model Booking {
   phone       String?
   notes       String?
   status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED | EXTERNAL_BUSY (pulled from Google)
+  // The team member this booking is assigned to (round-robin pick; the owner
+  // for SINGLE/COLLECTIVE). Soft ref to a marketing user; null for class attendees.
+  assigneeUserId String?
   token       String   @unique
 
   // Google Calendar 2-way sync: the mirrored Google event id (nullable). For

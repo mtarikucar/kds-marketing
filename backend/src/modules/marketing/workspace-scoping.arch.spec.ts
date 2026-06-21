@@ -60,6 +60,8 @@ const OWNED_DELEGATES = [
   'formDef',
   'bookingCalendar',
   'booking',
+  // Calendar types (GHL parity): round-robin / collective team members.
+  'bookingCalendarMember',
   // P6 (GoHighLevel parity): reviews/reputation.
   'reviewSource',
   'review',

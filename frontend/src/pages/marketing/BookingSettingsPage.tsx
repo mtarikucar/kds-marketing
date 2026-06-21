@@ -19,6 +19,13 @@ import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
 import { Checkbox } from '@/components/ui/Checkbox';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/Select';
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -47,9 +54,17 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
+const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'] as const;
+type CalendarType = (typeof CALENDAR_TYPES)[number];
+const TEAM_TYPES: CalendarType[] = ['ROUND_ROBIN', 'COLLECTIVE'];
+
+interface WorkspaceUser { id: string; firstName?: string; lastName?: string; email: string }
+
 const calSchema = z.object({
   name: z.string().min(1, 'Required').max(120),
   slug: z.string().max(80).optional(),
+  type: z.enum(CALENDAR_TYPES),
+  capacity: z.coerce.number().int().min(1).max(1000),
   slotMinutes: z.coerce.number().int().min(5),
   bufferMinutes: z.coerce.number().int().min(0),
   availability: z.record(z.array(z.object({ start: z.string(), end: z.string() }))),
@@ -59,6 +74,8 @@ type CalFormValues = z.infer<typeof calSchema>;
 const DEFAULT_VALUES: CalFormValues = {
   name: '',
   slug: '',
+  type: 'SINGLE',
+  capacity: 1,
   slotMinutes: 30,
   bufferMinutes: 0,
   availability: {},
@@ -100,21 +117,43 @@ export default function BookingSettingsPage() {
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
+  const calType = watch('type');
+  const [members, setMembers] = useState<string[]>([]);
+
+  // Workspace users — only fetched when picking team members for a RR/collective.
+  const { data: users } = useQuery<WorkspaceUser[]>({
+    queryKey: ['marketing', 'users'],
+    queryFn: () => marketingApi.get('/users').then((r) => r.data),
+    enabled: dialogOpen && TEAM_TYPES.includes(calType),
+  });
+
   const save = useMutation({
-    mutationFn: (values: CalFormValues) => {
+    mutationFn: async (values: CalFormValues) => {
       const payload = {
         name: values.name,
         slug: values.slug || undefined,
+        type: values.type,
+        capacity: values.type === 'CLASS' ? Number(values.capacity) : 1,
         slotMinutes: Number(values.slotMinutes),
         bufferMinutes: Number(values.bufferMinutes),
         availability: values.availability,
       };
-      return editId ? marketingApi.patch(`/calendars/${editId}`, payload) : marketingApi.post('/calendars', payload);
+      const saved = editId
+        ? await marketingApi.patch(`/calendars/${editId}`, payload).then((r) => r.data)
+        : await marketingApi.post('/calendars', payload).then((r) => r.data);
+      // Persist the team-member set for round-robin / collective calendars.
+      if (TEAM_TYPES.includes(values.type) && saved?.id) {
+        await marketingApi.post(`/calendars/${saved.id}/members`, {
+          members: members.map((marketingUserId, i) => ({ marketingUserId, priority: i })),
+        });
+      }
+      return saved;
     },
     onSuccess: () => {
       invalidate();
       setDialogOpen(false);
       setEditId(null);
+      setMembers([]);
       reset(DEFAULT_VALUES);
       toast.success(t('booking.saved', 'Calendar saved'));
     },
@@ -130,6 +169,7 @@ export default function BookingSettingsPage() {
 
   const openCreate = () => {
     setEditId(null);
+    setMembers([]);
     reset(DEFAULT_VALUES);
     setDialogOpen(true);
   };
@@ -140,12 +180,27 @@ export default function BookingSettingsPage() {
     reset({
       name: full.name,
       slug: full.slug,
+      type: (full.type as CalendarType) ?? 'SINGLE',
+      capacity: full.capacity ?? 1,
       slotMinutes: full.slotMinutes,
       bufferMinutes: full.bufferMinutes,
       availability: full.availability ?? {},
     });
+    // Load existing members for team calendars.
+    if (TEAM_TYPES.includes((full.type as CalendarType) ?? 'SINGLE')) {
+      const ms = await marketingApi.get(`/calendars/${full.id}/members`).then((r) => r.data);
+      setMembers(Array.isArray(ms) ? ms.map((m: { marketingUserId: string }) => m.marketingUserId) : []);
+    } else {
+      setMembers([]);
+    }
     setDialogOpen(true);
   };
+
+  const toggleMember = (id: string, on: boolean) =>
+    setMembers((prev) => (on ? [...new Set([...prev, id])] : prev.filter((x) => x !== id)));
+
+  const userLabel = (u: WorkspaceUser) =>
+    [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email;
 
   const publicUrl = (slug: string) =>
     `${window.location.origin}/api/public/book/${wsId ?? ':workspace'}/${slug}`;
@@ -324,6 +379,73 @@ export default function BookingSettingsPage() {
                 )}
               </Field>
             </div>
+
+            {/* Calendar type + capacity */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field
+                label={t('booking.type', 'Calendar type')}
+                hint={t('booking.typeHint', 'How bookings are distributed across your team.')}
+              >
+                {({ id, describedBy }) => (
+                  <Select
+                    value={calType}
+                    onValueChange={(v) => setValue('type', v as CalendarType, { shouldValidate: true })}
+                  >
+                    <SelectTrigger id={id} aria-describedby={describedBy}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CALENDAR_TYPES.map((ty) => (
+                        <SelectItem key={ty} value={ty}>
+                          {t(`booking.calType.${ty}`, ty)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </Field>
+              {calType === 'CLASS' && (
+                <Field
+                  label={t('booking.capacity', 'Capacity per slot')}
+                  hint={t('booking.capacityHint', 'Max attendees for a group/class slot.')}
+                  error={errors.capacity?.message}
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} type="number" min={1} {...register('capacity')} />
+                  )}
+                </Field>
+              )}
+            </div>
+
+            {/* Team members (round-robin / collective) */}
+            {TEAM_TYPES.includes(calType) && (
+              <Card>
+                <CardContent className="pt-4 space-y-2">
+                  <Label>{t('booking.members', 'Team members')}</Label>
+                  <p className="text-micro text-muted-foreground">
+                    {calType === 'ROUND_ROBIN'
+                      ? t('booking.membersRoundRobin', 'Bookings are distributed one-by-one across these members.')
+                      : t('booking.membersCollective', 'All these members are booked together for each slot.')}
+                  </p>
+                  <div className="max-h-48 space-y-1.5 overflow-y-auto">
+                    {(users ?? []).map((u) => (
+                      <label key={u.id} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={members.includes(u.id)}
+                          onCheckedChange={(c) => toggleMember(u.id, !!c)}
+                        />
+                        {userLabel(u)}
+                      </label>
+                    ))}
+                    {(users ?? []).length === 0 && (
+                      <p className="text-micro text-muted-foreground">
+                        {t('booking.noUsers', 'No team members to assign.')}
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Availability */}
             <Card>

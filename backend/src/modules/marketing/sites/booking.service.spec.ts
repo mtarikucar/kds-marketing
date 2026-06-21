@@ -22,6 +22,11 @@ describe('BookingService', () => {
     prisma = {
       bookingCalendar: { findFirst: jest.fn().mockResolvedValue(calendar()) },
       booking: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn(), create: jest.fn() },
+      // Calendar-type members (ROUND_ROBIN / COLLECTIVE). Default: none.
+      bookingCalendarMember: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
       // The per-slot advisory lock acquired at the top of the booking tx.
       $executeRaw: jest.fn().mockResolvedValue(1),
@@ -92,5 +97,84 @@ describe('BookingService', () => {
 
   it('refuses a past slot', async () => {
     await expect(svc.book(WS, 'c1', { start: '2000-01-01T09:00:00.000Z', name: 'Ada' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // ── Calendar types (GHL parity) ──────────────────────────────────────────────
+  describe('calendar types', () => {
+    const RANGE_END = '2027-06-14T23:59:59.000Z';
+
+    it('CLASS still offers a slot below capacity', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'CLASS', capacity: 3 }));
+      prisma.booking.findMany
+        .mockResolvedValueOnce([
+          { startAt: new Date('2027-06-14T09:00:00.000Z'), endAt: new Date('2027-06-14T09:30:00.000Z') },
+          { startAt: new Date('2027-06-14T09:00:00.000Z'), endAt: new Date('2027-06-14T09:30:00.000Z') },
+        ]) // ours (2/3 at 09:00)
+        .mockResolvedValueOnce([]); // external
+      const slots = await svc.availability(WS, 'c1', dayISO, RANGE_END);
+      expect(slots).toEqual(['2027-06-14T09:00:00.000Z', '2027-06-14T09:30:00.000Z']);
+    });
+
+    it('CLASS hides a slot once capacity is reached', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'CLASS', capacity: 2 }));
+      prisma.booking.findMany
+        .mockResolvedValueOnce([
+          { startAt: new Date('2027-06-14T09:00:00.000Z'), endAt: new Date('2027-06-14T09:30:00.000Z') },
+          { startAt: new Date('2027-06-14T09:00:00.000Z'), endAt: new Date('2027-06-14T09:30:00.000Z') },
+        ]) // 2/2 at 09:00 → full
+        .mockResolvedValueOnce([]);
+      const slots = await svc.availability(WS, 'c1', dayISO, RANGE_END);
+      expect(slots).toEqual(['2027-06-14T09:30:00.000Z']);
+    });
+
+    it('ROUND_ROBIN capacity equals the member count', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'ROUND_ROBIN' }));
+      prisma.bookingCalendarMember.count.mockResolvedValue(2);
+      prisma.booking.findMany
+        .mockResolvedValueOnce([
+          { startAt: new Date('2027-06-14T09:00:00.000Z'), endAt: new Date('2027-06-14T09:30:00.000Z') },
+        ]) // 1 of 2 members busy at 09:00 → still open
+        .mockResolvedValueOnce([]);
+      const slots = await svc.availability(WS, 'c1', dayISO, RANGE_END);
+      expect(slots).toEqual(['2027-06-14T09:00:00.000Z', '2027-06-14T09:30:00.000Z']);
+    });
+
+    it('ROUND_ROBIN assigns a booking to a member who is free in that slot', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'ROUND_ROBIN', ownerUserId: null }));
+      prisma.booking.findFirst.mockResolvedValue(null); // no external block
+      prisma.booking.findMany.mockResolvedValue([{ assigneeUserId: 'u1' }]); // u1 already booked
+      prisma.bookingCalendarMember.findMany.mockResolvedValue([
+        { marketingUserId: 'u1' },
+        { marketingUserId: 'u2' },
+      ]);
+      prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
+      expect(prisma.booking.create.mock.calls[0][0].data.assigneeUserId).toBe('u2');
+    });
+
+    it('ROUND_ROBIN excludes a member already booked on ANOTHER calendar (no human double-book)', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'ROUND_ROBIN', ownerUserId: null }));
+      prisma.booking.findFirst.mockResolvedValue(null); // no external block
+      prisma.booking.findMany
+        .mockResolvedValueOnce([]) // overlapping on THIS calendar: none → under capacity
+        .mockResolvedValueOnce([{ assigneeUserId: 'u1' }]); // workspace-wide: u1 busy elsewhere
+      prisma.bookingCalendarMember.findMany.mockResolvedValue([
+        { marketingUserId: 'u1' },
+        { marketingUserId: 'u2' },
+      ]);
+      prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
+      expect(prisma.booking.create.mock.calls[0][0].data.assigneeUserId).toBe('u2');
+    });
+
+    it('CLASS rejects a reserve once the slot is at capacity', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'CLASS', capacity: 1 }));
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.findMany.mockResolvedValue([{ assigneeUserId: null }]); // 1/1
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
   });
 });

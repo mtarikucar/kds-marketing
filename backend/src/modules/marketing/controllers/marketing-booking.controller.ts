@@ -9,7 +9,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { BookingService } from '../sites/booking.service';
-import { CreateCalendarDto, UpdateCalendarDto } from '../dto/site.dto';
+import { CreateCalendarDto, UpdateCalendarDto, SetCalendarMembersDto } from '../dto/site.dto';
 
 /** Booking calendars (config). MANAGER+ behind `funnels`. Public booking is separate. */
 @MarketingRoute()
@@ -37,6 +37,22 @@ export class MarketingBookingController {
   @Delete(':id')
   @RequirePermission('settings.manage')
   remove(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.booking.remove(a.workspaceId, id); }
+
+  /** Team members for a ROUND_ROBIN / COLLECTIVE calendar. */
+  @Get(':id/members')
+  listMembers(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.booking.listMembers(a.workspaceId, id);
+  }
+
+  @Post(':id/members')
+  @RequirePermission('settings.manage')
+  setMembers(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: SetCalendarMembersDto,
+  ) {
+    return this.booking.setMembers(a.workspaceId, id, dto.members);
+  }
 
   /**
    * Cancel a single BOOKING (not a calendar) — marks it CANCELLED and deletes

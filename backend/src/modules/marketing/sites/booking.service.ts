@@ -18,6 +18,7 @@ import { GoogleCalendarSyncService } from '../integrations/google-calendar-sync.
 
 const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
+const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'];
 
 /**
  * Booking calendars + slot picking. Availability windows (per weekday, HH:mm)
@@ -60,6 +61,8 @@ export class BookingService implements OnModuleInit {
         name: dto.name,
         slug: this.slugify(dto.slug || dto.name),
         ownerUserId: dto.ownerUserId ?? null,
+        type: CALENDAR_TYPES.includes(dto.type) ? dto.type : 'SINGLE',
+        capacity: this.normCapacity(dto.capacity),
         availability: dto.availability ?? {},
         slotMinutes: dto.slotMinutes ?? 30,
         bufferMinutes: dto.bufferMinutes ?? 0,
@@ -74,8 +77,62 @@ export class BookingService implements OnModuleInit {
     for (const k of ['name', 'ownerUserId', 'availability', 'slotMinutes', 'bufferMinutes', 'timezone', 'active'] as const) {
       if (dto[k] !== undefined) data[k] = dto[k];
     }
+    if (dto.type !== undefined && CALENDAR_TYPES.includes(dto.type)) data.type = dto.type;
+    if (dto.capacity !== undefined) data.capacity = this.normCapacity(dto.capacity);
     if (dto.slug !== undefined) data.slug = this.slugify(dto.slug);
     return this.prisma.bookingCalendar.update({ where: { id: existing.id }, data });
+  }
+
+  private normCapacity(v: unknown): number {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(n, 1000); // sane upper bound for a class size
+  }
+
+  // ── Team members (ROUND_ROBIN / COLLECTIVE) ─────────────────────────────────
+
+  async listMembers(workspaceId: string, calId: string) {
+    await this.get(workspaceId, calId); // ownership 404
+    return this.prisma.bookingCalendarMember.findMany({
+      where: { workspaceId, calendarId: calId },
+      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  /** Replace the calendar's member set (validates each user is in the workspace). */
+  async setMembers(
+    workspaceId: string,
+    calId: string,
+    members: Array<{ marketingUserId: string; priority?: number }>,
+  ) {
+    await this.get(workspaceId, calId); // ownership 404
+    const ids = [...new Set(members.map((m) => m.marketingUserId))];
+    if (ids.length > 0) {
+      const found = await this.prisma.marketingUser.findMany({
+        where: { workspaceId, id: { in: ids } },
+        select: { id: true },
+      });
+      if (found.length !== ids.length) {
+        throw new BadRequestException('One or more members are not in this workspace');
+      }
+    }
+    await this.prisma.$transaction([
+      this.prisma.bookingCalendarMember.deleteMany({ where: { workspaceId, calendarId: calId } }),
+      ...(ids.length > 0
+        ? [
+            this.prisma.bookingCalendarMember.createMany({
+              data: members.map((m, i) => ({
+                workspaceId,
+                calendarId: calId,
+                marketingUserId: m.marketingUserId,
+                priority: m.priority ?? i,
+              })),
+              skipDuplicates: true,
+            }),
+          ]
+        : []),
+    ]);
+    return this.listMembers(workspaceId, calId);
   }
   async remove(workspaceId: string, id: string) {
     const res = await this.prisma.bookingCalendar.deleteMany({ where: { id, workspaceId } });
@@ -87,7 +144,23 @@ export class BookingService implements OnModuleInit {
   async publicCalendar(workspaceId: string, slug: string) {
     const c = await this.prisma.bookingCalendar.findFirst({ where: { workspaceId, slug, active: true } });
     if (!c) throw new NotFoundException('Calendar not found');
-    return { id: c.id, name: c.name, slotMinutes: c.slotMinutes, timezone: c.timezone };
+    return { id: c.id, name: c.name, slotMinutes: c.slotMinutes, timezone: c.timezone, type: c.type };
+  }
+
+  /**
+   * Per-slot capacity by calendar type. SINGLE/COLLECTIVE book one party per
+   * slot; CLASS holds `capacity` attendees; ROUND_ROBIN offers a slot while at
+   * least one of its members is free, so its capacity is the member count.
+   */
+  private effectiveCapacity(cal: { type: string; capacity: number }, memberCount: number): number {
+    switch (cal.type) {
+      case 'CLASS':
+        return Math.max(1, cal.capacity);
+      case 'ROUND_ROBIN':
+        return Math.max(1, memberCount);
+      default: // SINGLE | COLLECTIVE
+        return 1;
+    }
   }
 
   /** Available slot starts (ISO) in [from, to], capped to MAX_RANGE_DAYS. */
@@ -100,22 +173,35 @@ export class BookingService implements OnModuleInit {
     if (to > cap) to = cap;
     const now = Date.now();
 
-    // Slots are blocked by our CONFIRMED bookings AND by EXTERNAL_BUSY blocks
-    // pulled from a connected Google Calendar (which are not tied to a specific
-    // calendarId — they busy the whole workspace's availability).
-    const bookings = await this.prisma.booking.findMany({
+    const memberCount = await this.prisma.bookingCalendarMember.count({
+      where: { workspaceId, calendarId: calId },
+    });
+    const capacity = this.effectiveCapacity(cal, memberCount);
+
+    // CONFIRMED bookings on THIS calendar are COUNTED against the slot capacity;
+    // EXTERNAL_BUSY blocks (Google-pulled, workspace-wide) are a HARD block that
+    // ignores capacity. Fetch them separately so capacity only applies to ours.
+    const ours = await this.prisma.booking.findMany({
       where: {
         workspaceId,
-        status: { in: ['CONFIRMED', 'EXTERNAL_BUSY'] },
-        // OVERLAP the window, not just start-within it: a block that started
-        // before `from` but runs into the window still busies these slots.
+        calendarId: calId,
+        status: 'CONFIRMED',
         startAt: { lt: to },
         endAt: { gt: from },
-        OR: [{ calendarId: calId }, { status: 'EXTERNAL_BUSY' }],
       },
       select: { startAt: true, endAt: true },
     });
-    const busy = bookings.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
+    const external = await this.prisma.booking.findMany({
+      where: {
+        workspaceId,
+        status: 'EXTERNAL_BUSY',
+        startAt: { lt: to },
+        endAt: { gt: from },
+      },
+      select: { startAt: true, endAt: true },
+    });
+    const ourIv = ours.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
+    const extIv = external.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
     const avail = (cal.availability ?? {}) as Record<string, Array<{ start: string; end: string }>>;
     const slotMs = cal.slotMinutes * 60_000;
     const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
@@ -130,7 +216,9 @@ export class BookingService implements OnModuleInit {
         for (let s = ws; s + slotMs <= we; s += stepMs) {
           const e = s + slotMs;
           if (s < now) continue;
-          if (busy.some(([bs, be]) => s < be && e > bs)) continue;
+          if (extIv.some(([bs, be]) => s < be && e > bs)) continue; // hard block
+          const taken = ourIv.filter(([bs, be]) => s < be && e > bs).length;
+          if (taken >= capacity) continue; // at capacity
           out.push(new Date(s).toISOString());
         }
       }
@@ -163,22 +251,63 @@ export class BookingService implements OnModuleInit {
       // range-exclude index without breaking migrate-parity), so a transaction-
       // scoped advisory lock is the clean fix; it auto-releases at commit.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${calId}`}))`;
-      // Mirror availability() exactly: a slot is taken by a CONFIRMED booking on
-      // THIS calendar OR by any EXTERNAL_BUSY block (Google-pulled, workspace-
-      // wide, not tied to a calendarId). The old check ignored EXTERNAL_BUSY, so
-      // a visitor could book straight over a Google-busy time the slot picker
-      // had already hidden.
-      const conflict = await tx.booking.findFirst({
-        where: {
-          workspaceId,
-          status: { in: ['CONFIRMED', 'EXTERNAL_BUSY'] },
-          startAt: { lt: end },
-          endAt: { gt: start },
-          OR: [{ calendarId: calId }, { status: 'EXTERNAL_BUSY' }],
-        },
+      // Any EXTERNAL_BUSY (Google-pulled, workspace-wide) overlap is a HARD block
+      // regardless of capacity — a visitor must not book over a Google-busy time
+      // the slot picker had already hidden.
+      const external = await tx.booking.findFirst({
+        where: { workspaceId, status: 'EXTERNAL_BUSY', startAt: { lt: end }, endAt: { gt: start } },
         select: { id: true },
       });
-      if (conflict) throw new BadRequestException('That slot was just taken');
+      if (external) throw new BadRequestException('That slot was just taken');
+
+      // Capacity-aware check: count our CONFIRMED bookings overlapping the slot
+      // and reject once they reach the calendar's effective capacity (SINGLE/
+      // COLLECTIVE→1, CLASS→capacity, ROUND_ROBIN→member count). Mirrors
+      // availability() exactly so a direct reserve can't exceed what's offered.
+      const overlapping = await tx.booking.findMany({
+        where: { workspaceId, calendarId: calId, status: 'CONFIRMED', startAt: { lt: end }, endAt: { gt: start } },
+        select: { assigneeUserId: true },
+      });
+      // Members are only needed for ROUND_ROBIN (capacity = member count + per-
+      // member assignment). COLLECTIVE/SINGLE have capacity 1 and a static owner,
+      // CLASS has no assignee — so we don't fetch members for them.
+      const members =
+        cal.type === 'ROUND_ROBIN'
+          ? await tx.bookingCalendarMember.findMany({
+              where: { workspaceId, calendarId: calId },
+              orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+              select: { marketingUserId: true },
+            })
+          : [];
+      const capacity = this.effectiveCapacity(cal, members.length);
+      if (overlapping.length >= capacity) throw new BadRequestException('That slot was just taken');
+
+      // Assignee: ROUND_ROBIN → first member not already booked in this slot;
+      // SINGLE/COLLECTIVE → the calendar owner; CLASS → null (group attendee).
+      let assigneeUserId: string | null = cal.ownerUserId ?? null;
+      if (cal.type === 'ROUND_ROBIN') {
+        const memberIds = members.map((m) => m.marketingUserId);
+        // A member is busy if they have ANY overlapping CONFIRMED booking in the
+        // WORKSPACE (across calendars) — not just this calendar. A user can be a
+        // member of several calendars; counting only this one would re-assign a
+        // human already booked elsewhere in the same slot (double-booking).
+        const busyRows = memberIds.length
+          ? await tx.booking.findMany({
+              where: {
+                workspaceId,
+                status: 'CONFIRMED',
+                assigneeUserId: { in: memberIds },
+                startAt: { lt: end },
+                endAt: { gt: start },
+              },
+              select: { assigneeUserId: true },
+            })
+          : [];
+        const taken = new Set(busyRows.map((o) => o.assigneeUserId).filter(Boolean) as string[]);
+        assigneeUserId = members.find((m) => !taken.has(m.marketingUserId))?.marketingUserId ?? null;
+      } else if (cal.type === 'CLASS') {
+        assigneeUserId = null;
+      }
 
       // Link or create a lead.
       const email = dto.email?.trim() || null;
@@ -220,6 +349,7 @@ export class BookingService implements OnModuleInit {
         data: {
           workspaceId, calendarId: calId, leadId, startAt: start, endAt: end,
           name: dto.name, email, phone, notes: dto.notes ?? null,
+          assigneeUserId,
           token: `bk_${randomBytes(16).toString('hex')}`,
         },
       });
