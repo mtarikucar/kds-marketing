@@ -29,7 +29,7 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { SocialPlannerService } from './social-planner.service';
 
-const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN'] as const;
+const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK'] as const;
 
 class ConnectAccountDto {
   @IsIn(NETWORKS)

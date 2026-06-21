@@ -1,4 +1,4 @@
-import { Facebook, Instagram, Linkedin, type LucideIcon } from 'lucide-react';
+import { Facebook, Instagram, Linkedin, Music2, type LucideIcon } from 'lucide-react';
 import type { SocialNetwork } from './socialSchemas';
 
 type BadgeTone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger' | 'info';
@@ -14,6 +14,7 @@ export const NETWORK_META: Record<SocialNetwork, NetworkMeta> = {
   FACEBOOK: { label: 'Facebook', icon: Facebook, tone: 'info' },
   INSTAGRAM: { label: 'Instagram', icon: Instagram, tone: 'danger' },
   LINKEDIN: { label: 'LinkedIn', icon: Linkedin, tone: 'primary' },
+  TIKTOK: { label: 'TikTok', icon: Music2, tone: 'neutral' },
 };
 
 export const POST_STATUS_TONE: Record<string, BadgeTone> = {
