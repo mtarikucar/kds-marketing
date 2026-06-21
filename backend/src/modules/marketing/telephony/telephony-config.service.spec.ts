@@ -21,7 +21,7 @@ describe('TelephonyConfigService', () => {
       configSealed: 'sealed:{"username":"850","password":"pw"}', trunk: '850', pbxnum: null,
     });
     const svc = new TelephonyConfigService(prisma);
-    const out = await svc.upsert('ws', { secrets: { username: '850', password: 'pw' }, trunk: '850' });
+    const out = await svc.upsert('ws', { secrets: { username: '850', password: 'pw' }, trunk: '8508407303' });
     expect(prisma.telephonyConfig.upsert).toHaveBeenCalled();
     expect(out.configuredSecrets.sort()).toEqual(['password', 'username']);
     expect((out as any).configSealed).toBeUndefined();

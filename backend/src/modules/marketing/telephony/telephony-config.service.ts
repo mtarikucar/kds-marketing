@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
+import { assertNetsantralConfig } from './telephony-config.util';
 
 export interface UpsertTelephonyInput {
   secrets?: Record<string, string>;
@@ -32,6 +33,9 @@ export class TelephonyConfigService {
     }
     if (dto.secrets && Object.keys(dto.secrets).length) merged = { ...merged, ...dto.secrets };
     const trunk = dto.trunk ?? existing?.trunk ?? undefined;
+    // Validate the MERGED result (a partial update must still leave a complete,
+    // sealable config) — actionable save-time error beats a silent later failure.
+    assertNetsantralConfig(merged, { trunk });
     if (!isSecretBoxConfigured()) {
       throw new ServiceUnavailableException('MARKETING_SECRET_KEY is not configured — cannot store telephony credentials');
     }
