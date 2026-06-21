@@ -140,6 +140,8 @@ const OWNED_DELEGATES = [
   'customerSubscription',
   // E-signature documents / contracts (GHL parity): workspace-owned.
   'document',
+  // Public payment-enabled order forms (GHL parity): workspace-owned config.
+  'orderForm',
 ] as const;
 
 /**

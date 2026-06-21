@@ -2457,3 +2457,34 @@ model Document {
   @@index([leadId])
   @@map("documents")
 }
+
+/// Epic — Public payment-enabled Order Forms (GoHighLevel parity). A
+/// manager-authored config (template, NOT a per-buyer record): a public page
+/// where a buyer enters name/email/phone and submits → the server creates-or-
+/// dedupes a Lead (via the audited public lead-ingest pattern), creates an
+/// Invoice for the configured product/items, and redirects the buyer to the
+/// existing invoice pay page. Pricing is `productId` XOR `items` — the buyer can
+/// NEVER influence the amount (resolved server-side at submit). `publicToken` is
+/// minted at create (the form is meant to be shared). Soft workspace scoping.
+model OrderForm {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  productId   String? // soft ref to a Product; server resolves its live price at submit
+  items       Json? // fixed [{description,qty,unitPrice}] minor units; XOR productId
+  currency    String  @default("TRY") // TRY | USD | EUR
+
+  collectPhone  Boolean @default(true)
+  phoneRequired Boolean @default(false)
+  notes         String? @db.Text
+
+  publicToken String  @unique // always-on share token (the public-page capability)
+  active      Boolean @default(true) // inactive → public page 404s
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, active])
+  @@index([workspaceId, createdAt])
+  @@map("order_forms")
+}

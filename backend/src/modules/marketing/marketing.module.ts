@@ -256,6 +256,11 @@ import { MarketingDocumentsController } from './controllers/marketing-documents.
 import { PublicDocumentController } from './controllers/public-document.controller';
 import { DocumentsService } from './documents/documents.service';
 
+// Public payment-enabled order forms (GoHighLevel parity).
+import { MarketingOrderFormsController } from './controllers/marketing-order-forms.controller';
+import { PublicOrderFormController } from './controllers/public-order-form.controller';
+import { OrderFormsService } from './order-forms/order-forms.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -343,6 +348,8 @@ import { DocumentsService } from './documents/documents.service';
     MarketingSubscriptionsController,
     MarketingDocumentsController,
     PublicDocumentController,
+    MarketingOrderFormsController,
+    PublicOrderFormController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -483,6 +490,7 @@ import { DocumentsService } from './documents/documents.service';
     SubscriptionsService,
     SubscriptionsSchedulerService,
     DocumentsService,
+    OrderFormsService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
