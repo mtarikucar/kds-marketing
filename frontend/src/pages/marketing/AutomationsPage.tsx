@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -42,6 +42,8 @@ import {
   SelectValue,
 } from '@/components/ui/Select';
 import { Callout } from '@/components/ui/Callout';
+import { WorkflowCanvas } from './automations/WorkflowCanvas';
+import type { AnyStep } from './automations/workflowGraph';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -138,11 +140,15 @@ export default function AutomationsPage() {
   const [aiPrompt, setAiPrompt] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<WorkflowRow | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [builderView, setBuilderView] = useState<'canvas' | 'json'>('canvas');
   // The goal isn't an editable form field yet (full goal editing lands with the
   // visual canvas), so we thread it alongside the form: a template carries its
   // goal here so Save doesn't drop it. undefined = leave the goal untouched on a
   // PATCH (the API keeps the existing goal); null = no goal on a fresh create.
   const [pendingGoal, setPendingGoal] = useState<unknown>(undefined);
+  // The workflow's already-saved goal, kept only for read-only canvas display on
+  // edit (pendingGoal stays undefined so a steps/trigger edit doesn't clobber it).
+  const [existingGoal, setExistingGoal] = useState<unknown>(null);
 
   // ── Query ─────────────────────────────────────────────────────────────────
   const { data: workflows } = useQuery<WorkflowRow[]>({
@@ -172,6 +178,8 @@ export default function AutomationsPage() {
     form.reset(DEFAULT_VALUES);
     setAiPrompt('');
     setPendingGoal(null); // a fresh manual workflow has no goal
+    setExistingGoal(null);
+    setBuilderView('canvas');
     setFormOpen(true);
   };
 
@@ -187,6 +195,8 @@ export default function AutomationsPage() {
     });
     setAiPrompt('');
     setPendingGoal(tpl.goal ?? null); // carry the recipe's goal through to Save
+    setExistingGoal(null);
+    setBuilderView('canvas');
     setTemplatesOpen(false);
     setFormOpen(true);
   };
@@ -202,6 +212,8 @@ export default function AutomationsPage() {
     });
     setAiPrompt('');
     setPendingGoal(undefined); // editing the trigger/steps must not clobber the goal
+    setExistingGoal(full.goal ?? null); // but DO show it (read-only) on the canvas
+    setBuilderView('canvas');
     setFormOpen(true);
   };
 
@@ -264,6 +276,30 @@ export default function AutomationsPage() {
     form.setValue('steps', JSON.stringify(steps, null, 2), { shouldDirty: true });
   };
 
+  // ── Canvas ↔ JSON bridge ──────────────────────────────────────────────────
+  // The visual canvas and the JSON textarea edit the SAME steps[] — the form's
+  // `steps` string stays the single source of truth. parsedSteps is null when
+  // the string is not valid JSON (the canvas can't render it, so we fall back
+  // to the JSON view).
+  const stepsStr = form.watch('steps');
+  const triggerType = form.watch('triggerType');
+  const parsedSteps = useMemo<AnyStep[] | null>(() => {
+    try {
+      const v = JSON.parse(stepsStr || '[]');
+      // Every element must be a non-null object; a malformed array (e.g. [null])
+      // forces the JSON view rather than crashing the canvas.
+      return Array.isArray(v) && v.every((s) => s && typeof s === 'object') ? (v as AnyStep[]) : null;
+    } catch {
+      return null;
+    }
+  }, [stepsStr]);
+  const writeSteps = (next: AnyStep[]) =>
+    form.setValue('steps', JSON.stringify(next, null, 2), { shouldDirty: true, shouldValidate: true });
+  // What the canvas shows as the goal node: a pending goal (set/cleared this
+  // session) wins; otherwise the workflow's already-saved goal (edit mode).
+  const goalForDisplay = pendingGoal !== undefined ? pendingGoal : existingGoal;
+  const canvasGoal = goalForDisplay && typeof goalForDisplay === 'object' ? (goalForDisplay as any) : null;
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -324,7 +360,7 @@ export default function AutomationsPage() {
 
       {/* ── Create/Edit dialog ───────────────────────────────────────────── */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className={builderView === 'canvas' ? 'max-w-5xl' : 'max-w-2xl'}>
           <DialogHeader>
             <DialogTitle>
               {editId
@@ -426,14 +462,47 @@ export default function AutomationsPage() {
               )}
             </Field>
 
-            {/* Steps */}
-            <Field
-              label={t('automations.steps', 'Steps (JSON)')}
-              error={form.formState.errors.steps?.message}
-              required
-            >
-              {({ id, invalid }) => (
+            {/* Steps — visual canvas or raw JSON (both edit the same steps[]) */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-sm font-medium text-foreground">
+                  {t('automations.stepsLabel', 'Steps')}
+                  <span className="text-danger ml-0.5">*</span>
+                </label>
+                <div className="flex items-center rounded-md border border-border overflow-hidden text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBuilderView('canvas')}
+                    disabled={parsedSteps === null}
+                    className={`px-2.5 py-1 ${builderView === 'canvas' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-surface-muted'} disabled:opacity-40`}
+                  >
+                    {t('automations.canvas', 'Canvas')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBuilderView('json')}
+                    className={`px-2.5 py-1 ${builderView === 'json' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-surface-muted'}`}
+                  >
+                    {t('automations.json', 'JSON')}
+                  </button>
+                </div>
+              </div>
+
+              {builderView === 'canvas' && parsedSteps !== null ? (
+                <WorkflowCanvas
+                  triggerType={triggerType}
+                  steps={parsedSteps}
+                  goal={canvasGoal}
+                  onStepsChange={writeSteps}
+                  onGoalChange={(g) => setPendingGoal(g)}
+                />
+              ) : (
                 <div>
+                  {parsedSteps === null && (
+                    <p className="text-[11px] text-danger mb-1">
+                      {t('automations.invalidStepsJson', 'Steps JSON is invalid — fix it to use the visual canvas.')}
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-1 mb-1.5">
                     {Object.keys(STEP_TEMPLATES).map((k) => (
                       <button
@@ -449,14 +518,16 @@ export default function AutomationsPage() {
                     ))}
                   </div>
                   <Textarea
-                    id={id}
-                    aria-invalid={invalid}
+                    aria-invalid={!!form.formState.errors.steps}
                     className="font-mono min-h-48"
                     {...form.register('steps')}
                   />
                 </div>
               )}
-            </Field>
+              {form.formState.errors.steps?.message && (
+                <p className="text-[11px] text-danger mt-1">{form.formState.errors.steps.message}</p>
+              )}
+            </div>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
