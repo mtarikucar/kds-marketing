@@ -15,6 +15,8 @@ export interface AccountRow {
   network: string;
   externalId: string;
   accessToken: string; // SEALED
+  /** PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK — selects the LinkedIn author URN. */
+  accountType?: string | null;
 }
 
 /** Returns the access token or null if secret-box not configured / malformed. */
@@ -159,8 +161,12 @@ async function publishLinkedIn(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
 
+  const author =
+    account.accountType === 'LI_ORG'
+      ? `urn:li:organization:${account.externalId}`
+      : `urn:li:person:${account.externalId}`;
   const body: Record<string, unknown> = {
-    author: `urn:li:person:${account.externalId}`,
+    author,
     lifecycleState: 'PUBLISHED',
     specificContent: {
       'com.linkedin.ugc.ShareContent': {

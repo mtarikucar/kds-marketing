@@ -2597,6 +2597,10 @@ model SocialAccount {
   displayName    String
   accessToken    String   @db.Text // SEALED — never returned raw
   tokenExpiresAt DateTime?
+  refreshToken   String?  @db.Text // SEALED — provider refresh token (LinkedIn/TikTok)
+  accountType    String?  // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK
+  connectedVia   String   @default("MANUAL") // MANUAL | OAUTH
+  lastError      String?  // e.g. 'reauth_required' when token refresh fails
   enabled        Boolean  @default(true)
   createdAt      DateTime @default(now())
 
@@ -2605,6 +2609,21 @@ model SocialAccount {
   @@unique([workspaceId, network, externalId])
   @@index([workspaceId, network])
   @@map("social_accounts")
+}
+
+/// Short-lived handoff between the OAuth callback and the user's account-pick
+/// step. The callback stashes the provider token + the list of connectable
+/// assets here (sealed); the user then picks which to turn into SocialAccounts.
+model PendingSocialConnection {
+  id          String   @id @default(uuid())
+  workspaceId String
+  network     String
+  payload     String   @db.Text // SEALED JSON { token, refreshToken?, expiresAt?, assets:[...] }
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([workspaceId])
+  @@map("pending_social_connections")
 }
 
 /// A social post authored in the planner (may fan out to multiple networks).

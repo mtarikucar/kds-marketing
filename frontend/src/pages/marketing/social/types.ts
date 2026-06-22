@@ -19,6 +19,12 @@ export interface SocialAccount {
   tokenExpiresAt: string | null;
   enabled: boolean;
   createdAt: string;
+  /** PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK (OAUTH-connected accounts). */
+  accountType?: string | null;
+  /** MANUAL | OAUTH. */
+  connectedVia?: string | null;
+  /** Set to 'reauth_required' when a token refresh fails. */
+  lastError?: string | null;
 }
 
 export interface SocialPostTarget {
@@ -47,5 +53,6 @@ export interface NetworkStatus {
   FACEBOOK: boolean;
   INSTAGRAM: boolean;
   LINKEDIN: boolean;
+  TIKTOK: boolean;
   secretBoxConfigured: boolean;
 }
