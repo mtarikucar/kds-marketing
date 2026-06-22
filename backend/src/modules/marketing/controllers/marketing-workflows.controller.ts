@@ -43,6 +43,13 @@ export class MarketingWorkflowsController {
     return this.workflows.list(actor.workspaceId);
   }
 
+  /** Starter-template catalog for "Start from template". Read-only static
+   *  recipes — declared before the `:id` routes so the literal path wins. */
+  @Get('templates')
+  templates() {
+    return this.workflows.templates();
+  }
+
   @Post('draft')
   @RequirePermission('automations.manage')
   draft(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: DraftWorkflowDto) {

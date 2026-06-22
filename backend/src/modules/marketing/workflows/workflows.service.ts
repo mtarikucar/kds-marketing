@@ -16,6 +16,7 @@ import {
   FILTER_OPS,
   WorkflowDsl,
 } from './workflow-dsl.schema';
+import { listWorkflowTemplates } from './workflow-templates';
 
 const DSL_GUIDE = `You design marketing automations as STRICT JSON for this DSL. Output ONLY a JSON object, no prose, no markdown fences.
 Shape: { "trigger": { "type": <triggerType>, "filters": [Filter...] }, "steps": [Step...] }
@@ -49,6 +50,12 @@ export class WorkflowsService {
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
   ) {}
+
+  /** Static starter-automation catalog ("Start from template"). Not tenant
+   *  state — the same recipes for everyone; the picker pre-fills create(). */
+  templates() {
+    return listWorkflowTemplates();
+  }
 
   async list(workspaceId: string) {
     return this.prisma.workflow.findMany({

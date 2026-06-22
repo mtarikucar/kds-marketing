@@ -13,6 +13,7 @@ import {
   Sparkles,
   Plus,
   Pencil,
+  LayoutTemplate,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -51,6 +52,16 @@ interface WorkflowRow {
   trigger?: { type?: string };
   version: number;
   stats?: { started?: number; completed?: number } | null;
+}
+
+interface WorkflowTemplate {
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  trigger: { type: string; filters?: unknown[] };
+  steps: unknown[];
+  goal?: unknown;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -126,11 +137,26 @@ export default function AutomationsPage() {
   const [editId, setEditId] = useState<string>('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<WorkflowRow | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  // The goal isn't an editable form field yet (full goal editing lands with the
+  // visual canvas), so we thread it alongside the form: a template carries its
+  // goal here so Save doesn't drop it. undefined = leave the goal untouched on a
+  // PATCH (the API keeps the existing goal); null = no goal on a fresh create.
+  const [pendingGoal, setPendingGoal] = useState<unknown>(undefined);
 
   // ── Query ─────────────────────────────────────────────────────────────────
   const { data: workflows } = useQuery<WorkflowRow[]>({
     queryKey: ['marketing', 'workflows'],
     queryFn: () => marketingApi.get('/workflows').then((r) => r.data),
+  });
+
+  // Static starter-recipe catalog ("Start from template"). Loaded lazily when
+  // the picker opens so the page doesn't pay for it on every visit.
+  const { data: templates } = useQuery<WorkflowTemplate[]>({
+    queryKey: ['marketing', 'workflows', 'templates'],
+    queryFn: () => marketingApi.get('/workflows/templates').then((r) => r.data),
+    enabled: templatesOpen,
+    staleTime: 5 * 60 * 1000,
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'workflows'] });
@@ -145,6 +171,23 @@ export default function AutomationsPage() {
     setEditId('');
     form.reset(DEFAULT_VALUES);
     setAiPrompt('');
+    setPendingGoal(null); // a fresh manual workflow has no goal
+    setFormOpen(true);
+  };
+
+  // Pre-fill the create form from a starter template, then open it for editing.
+  // Nothing is persisted until the operator reviews and hits Save.
+  const applyTemplate = (tpl: WorkflowTemplate) => {
+    setEditId('');
+    form.reset({
+      name: tpl.name,
+      triggerType: tpl.trigger?.type ?? 'lead.created',
+      filters: JSON.stringify(tpl.trigger?.filters ?? [], null, 2),
+      steps: JSON.stringify(tpl.steps ?? [], null, 2),
+    });
+    setAiPrompt('');
+    setPendingGoal(tpl.goal ?? null); // carry the recipe's goal through to Save
+    setTemplatesOpen(false);
     setFormOpen(true);
   };
 
@@ -158,17 +201,21 @@ export default function AutomationsPage() {
       steps: JSON.stringify(full.steps ?? [], null, 2),
     });
     setAiPrompt('');
+    setPendingGoal(undefined); // editing the trigger/steps must not clobber the goal
     setFormOpen(true);
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const save = useMutation({
     mutationFn: (values: WorkflowFormValues) => {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: values.name,
         trigger: { type: values.triggerType, filters: JSON.parse(values.filters || '[]') },
         steps: JSON.parse(values.steps || '[]'),
       };
+      // Only send goal when we have an explicit value (null clears / object sets);
+      // undefined means "leave the stored goal as-is" on a PATCH.
+      if (pendingGoal !== undefined) payload.goal = pendingGoal;
       return editId
         ? marketingApi.patch(`/workflows/${editId}`, payload)
         : marketingApi.post('/workflows', payload);
@@ -226,12 +273,54 @@ export default function AutomationsPage() {
           'When something happens, do this. Triggers fire steps — send, wait, branch, create tasks, update leads.',
         )}
         actions={
-          <Button onClick={openCreate} size="md">
-            <Plus className="h-4 w-4" />
-            {t('automations.new', 'New automation')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="md" onClick={() => setTemplatesOpen(true)}>
+              <LayoutTemplate className="h-4 w-4" />
+              {t('automations.fromTemplate', 'Start from template')}
+            </Button>
+            <Button onClick={openCreate} size="md">
+              <Plus className="h-4 w-4" />
+              {t('automations.new', 'New automation')}
+            </Button>
+          </div>
         }
       />
+
+      {/* ── Template picker ───────────────────────────────────────────────── */}
+      <Dialog open={templatesOpen} onOpenChange={setTemplatesOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t('automations.templatesTitle', 'Start from a template')}</DialogTitle>
+            <DialogDescription>
+              {t('automations.templatesHint', 'Pick a recipe to pre-fill the builder — you can tweak everything before saving.')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto">
+            {(templates ?? []).map((tpl) => (
+              <button
+                key={tpl.key}
+                type="button"
+                onClick={() => applyTemplate(tpl)}
+                className="text-left rounded-lg border border-border p-3 hover:border-primary hover:bg-surface-muted transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="font-medium text-foreground">{tpl.name}</span>
+                  <Badge tone="neutral" size="sm">{tpl.category}</Badge>
+                </div>
+                <p className="text-caption text-muted-foreground">{tpl.description}</p>
+                <p className="text-[10px] text-muted-foreground mt-1.5 font-mono">
+                  {tpl.trigger?.type} · {(tpl.steps ?? []).length} {t('automations.steps', 'steps')}
+                </p>
+              </button>
+            ))}
+            {(templates ?? []).length === 0 && (
+              <p className="text-caption text-muted-foreground col-span-full text-center py-6">
+                {t('common.loading', 'Loading…')}
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Create/Edit dialog ───────────────────────────────────────────── */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
@@ -462,10 +551,16 @@ export default function AutomationsPage() {
               'No automations yet — describe one and let AI draft it.',
             )}
             action={
-              <Button onClick={openCreate}>
-                <Plus className="h-4 w-4" />
-                {t('automations.new', 'New automation')}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={() => setTemplatesOpen(true)}>
+                  <LayoutTemplate className="h-4 w-4" />
+                  {t('automations.fromTemplate', 'Start from template')}
+                </Button>
+                <Button onClick={openCreate}>
+                  <Plus className="h-4 w-4" />
+                  {t('automations.new', 'New automation')}
+                </Button>
+              </div>
             }
           />
         )}
