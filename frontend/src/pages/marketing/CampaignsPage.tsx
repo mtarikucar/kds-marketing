@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
+import { VariantsDialog } from './campaigns/VariantsDialog';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -125,6 +126,7 @@ export default function CampaignsPage() {
   });
   const selectedChannel = useWatch({ control: form.control, name: 'channel' });
   const selectedTemplateId = useWatch({ control: form.control, name: 'emailTemplateId' });
+  const [variantsOpen, setVariantsOpen] = useState(false);
 
   const { data: emailTemplates } = useQuery<EmailTemplateRow[]>({
     queryKey: ['marketing', 'email-templates'],
@@ -476,6 +478,16 @@ export default function CampaignsPage() {
                   </div>
                 )}
               </Field>
+            )}
+
+            {/* A/B test (EMAIL, existing draft only — variants are a sub-resource) */}
+            {selectedChannel === 'EMAIL' && editId && (
+              <div>
+                <Button type="button" variant="outline" size="sm" onClick={() => setVariantsOpen(true)}>
+                  {t('campaigns.abTest', 'A/B test…')}
+                </Button>
+                <VariantsDialog campaignId={editId} open={variantsOpen} onOpenChange={setVariantsOpen} />
+              </div>
             )}
 
             {/* Body */}

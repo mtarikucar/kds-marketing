@@ -28,6 +28,10 @@ describe('CampaignSenderService.batch', () => {
         count: jest.fn().mockResolvedValue(0),
         groupBy: jest.fn().mockResolvedValue([]),
       },
+      campaignVariant: {
+        findMany: jest.fn().mockResolvedValue([]), // no A/B variants by default
+        update: jest.fn().mockResolvedValue({}),
+      },
       lead: {
         findFirst: jest.fn().mockImplementation(async ({ where }: any) =>
           where.id === 'l1'

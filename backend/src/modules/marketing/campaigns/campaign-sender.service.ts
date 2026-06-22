@@ -79,6 +79,12 @@ export class CampaignSenderService implements OnModuleInit {
 
     const links = (Array.isArray(campaign.links) ? campaign.links : []) as string[];
 
+    // A/B: a recipient's variantKey selects that variant's subject/body/html.
+    const variants = (campaign as any).abEnabled
+      ? await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId } })
+      : [];
+    const variantByKey = new Map(variants.map((v: any) => [v.key, v]));
+
     for (const r of recipients) {
       // Atomic claim: a concurrent batch — e.g. a slow run reaped after 15 min and
       // re-dispatched while still in flight — that re-read the same PENDING rows
@@ -96,14 +102,24 @@ export class CampaignSenderService implements OnModuleInit {
         await this.mark(r.id, 'SKIPPED');
         continue;
       }
-      const body = this.render(campaign.channel, campaign.body, r.token, links);
+      // Resolve this recipient's content: their assigned A/B variant if any,
+      // else the campaign control.
+      const variant = (r as any).variantKey ? variantByKey.get((r as any).variantKey) : null;
+      const srcBody = variant ? (variant as any).body : campaign.body;
+      const srcSubject = variant ? ((variant as any).subject ?? campaign.subject) : campaign.subject;
+      // A variant without its own HTML inherits the campaign's — so an HTML
+      // campaign's A/B test varies the subject (+ plain-text part) rather than
+      // silently degrading variant recipients to plain text.
+      const srcHtml = variant ? ((variant as any).bodyHtml ?? (campaign as any).bodyHtml) : (campaign as any).bodyHtml;
+
+      const body = this.render(campaign.channel, srcBody, r.token, links);
       // EMAIL campaigns built with the block editor carry an HTML body; render it
       // (tracked links + HTML unsubscribe footer) and send it as the html part.
       const html =
-        campaign.channel === 'EMAIL' && (campaign as any).bodyHtml
-          ? this.renderHtml((campaign as any).bodyHtml as string, r.token, links)
+        campaign.channel === 'EMAIL' && srcHtml
+          ? this.renderHtml(srcHtml as string, r.token, links)
           : undefined;
-      const result = await this.send(workspaceId, campaign.channel, to, campaign.subject, body, html);
+      const result = await this.send(workspaceId, campaign.channel, to, srcSubject, body, html);
       if (result.ok) {
         await this.mark(r.id, 'SENT', { messageId: result.messageId, sentAt: new Date() });
       } else {
@@ -240,7 +256,7 @@ export class CampaignSenderService implements OnModuleInit {
     });
     const countOf = (status: string) =>
       groups.find((g) => g.status === status)?._count._all ?? 0;
-    const c = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { stats: true } });
+    const c = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { stats: true, abEnabled: true } });
     const s = (c?.stats ?? {}) as Record<string, number>;
     await this.prisma.campaign.update({
       where: { id: campaignId },
@@ -253,5 +269,28 @@ export class CampaignSenderService implements OnModuleInit {
         } as Prisma.InputJsonValue,
       },
     });
+
+    // Per-variant A/B stats — only for an A/B-enabled campaign, so a non-A/B
+    // campaign (which may still have a lone leftover variant row) never pays for
+    // the extra groupBys on the throttled batch path.
+    const variants = (c as any)?.abEnabled
+      ? await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId }, select: { id: true, key: true } })
+      : [];
+    if (variants.length) {
+      const [sentG, openG, clickG] = await Promise.all([
+        this.prisma.campaignRecipient.groupBy({ by: ['variantKey'], where: { workspaceId, campaignId, status: 'SENT' }, _count: { _all: true } }),
+        this.prisma.campaignRecipient.groupBy({ by: ['variantKey'], where: { workspaceId, campaignId, openedAt: { not: null } }, _count: { _all: true } }),
+        this.prisma.campaignRecipient.groupBy({ by: ['variantKey'], where: { workspaceId, campaignId, clickedAt: { not: null } }, _count: { _all: true } }),
+      ]);
+      const cnt = (g: any[], key: string) => g.find((x) => x.variantKey === key)?._count._all ?? 0;
+      await Promise.all(
+        variants.map((v) =>
+          this.prisma.campaignVariant.update({
+            where: { id: v.id },
+            data: { stats: { sent: cnt(sentG, v.key), opened: cnt(openG, v.key), clicked: cnt(clickG, v.key) } as Prisma.InputJsonValue },
+          }),
+        ),
+      );
+    }
   }
 }

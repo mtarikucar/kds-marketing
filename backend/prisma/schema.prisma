@@ -1502,6 +1502,10 @@ model Campaign {
   name           String
   channel        String // EMAIL | SMS | WHATSAPP
   status         String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | PAUSED | CANCELLED
+  /// A/B split test (GHL parity): when true + variants exist, each recipient is
+  /// assigned a weighted-random variantKey at launch and gets that variant's
+  /// subject/body. `subject`/`body` below remain the control/fallback.
+  abEnabled      Boolean   @default(false)
   subject        String?
   body           String    @db.Text
   /// Optional rendered HTML body (GHL email block builder). When set, EMAIL
@@ -1524,6 +1528,29 @@ model Campaign {
 
   @@index([workspaceId, status])
   @@map("campaigns")
+}
+
+/// An A/B test variant of a Campaign (GoHighLevel parity). Each carries its own
+/// subject + body (and optional HTML); recipients are split across variants by
+/// `weight` at launch. `stats` accumulates per-variant {sent, opened, clicked}.
+model CampaignVariant {
+  id              String  @id @default(uuid())
+  workspaceId     String
+  campaignId      String
+  key             String  // 'A' | 'B' | … (unique per campaign)
+  weight          Int     @default(1)
+  subject         String?
+  body            String  @db.Text
+  bodyHtml        String? @db.Text
+  emailTemplateId String?
+  stats           Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([campaignId, key])
+  @@index([workspaceId])
+  @@index([campaignId])
+  @@map("campaign_variants")
 }
 
 /// A reusable HTML email template built from a block list (GoHighLevel parity).
@@ -1554,6 +1581,8 @@ model CampaignRecipient {
   leadId      String
   token       String    @unique
   status      String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED | UNSUBSCRIBED
+  /// A/B variant assigned to this recipient at launch (null = control).
+  variantKey  String?
   messageId   String?
   error       String?
   sentAt      DateTime?

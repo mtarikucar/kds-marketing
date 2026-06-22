@@ -46,7 +46,56 @@ export class CampaignsService {
   async get(workspaceId: string, id: string) {
     const c = await this.prisma.campaign.findFirst({ where: { id, workspaceId } });
     if (!c) throw new NotFoundException('Campaign not found');
-    return c;
+    const variants = await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId: id }, orderBy: { key: 'asc' } });
+    return { ...c, variants };
+  }
+
+  async getVariants(workspaceId: string, campaignId: string) {
+    return this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId }, orderBy: { key: 'asc' } });
+  }
+
+  /** Replace a campaign's A/B variants (GHL parity). Only on a draft/scheduled
+   *  campaign — the recipient split is frozen at launch. abEnabled is forced off
+   *  unless there are at least two variants to split between. */
+  async setVariants(
+    workspaceId: string,
+    campaignId: string,
+    dto: { abEnabled?: boolean; variants: Array<{ key: string; weight?: number; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string }> },
+  ) {
+    const c = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId }, select: { id: true, status: true } });
+    if (!c) throw new NotFoundException('Campaign not found');
+    if (c.status !== 'DRAFT' && c.status !== 'SCHEDULED') {
+      throw new BadRequestException('Only a draft/scheduled campaign can be edited');
+    }
+    const keys = new Set<string>();
+    for (const v of dto.variants) {
+      const key = (v.key ?? '').trim();
+      if (!key || keys.has(key)) throw new BadRequestException('Variant keys must be unique and non-empty');
+      keys.add(key);
+      if ((v.weight ?? 1) < 1 || (v.weight ?? 1) > 1000) throw new BadRequestException('Variant weight must be 1–1000');
+    }
+    await this.prisma.$transaction([
+      this.prisma.campaignVariant.deleteMany({ where: { campaignId, workspaceId } }),
+      ...(dto.variants.length
+        ? [this.prisma.campaignVariant.createMany({
+            data: dto.variants.map((v) => ({
+              workspaceId,
+              campaignId,
+              key: v.key.trim(),
+              weight: v.weight ?? 1,
+              subject: v.subject ?? null,
+              body: v.body,
+              bodyHtml: v.bodyHtml || null,
+              emailTemplateId: v.emailTemplateId || null,
+            })),
+          })]
+        : []),
+      this.prisma.campaign.updateMany({
+        where: { id: campaignId, workspaceId },
+        data: { abEnabled: !!dto.abEnabled && dto.variants.length > 1 },
+      }),
+    ]);
+    return this.getVariants(workspaceId, campaignId);
   }
 
   async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string }) {
@@ -130,14 +179,18 @@ export class CampaignsService {
     const leads = await this.prisma.lead.findMany({ where: { ...where, workspaceId }, select: { id: true } });
     if (leads.length === 0) throw new BadRequestException('Audience is empty (no opted-in, reachable leads match)');
 
-    // Track links from the plain-text body AND the HTML body (decoded first, so a
-    // tracked link's redirect target is the real URL, not an HTML-escaped one).
-    const links = [
-      ...new Set([
-        ...this.extractLinks(campaign.body),
-        ...this.extractLinks(this.decodeHtml((campaign as any).bodyHtml ?? '')),
-      ]),
-    ];
+    // A/B: split recipients across variants by weight (frozen here at launch).
+    const variants = (campaign as any).abEnabled
+      ? await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId: campaign.id } })
+      : [];
+    const useAb = variants.length > 1;
+
+    // Track links from the control body+HTML AND every variant body+HTML (decoded
+    // first, so a tracked link's redirect target is the real URL, not escaped).
+    const srcs = [campaign.body, this.decodeHtml((campaign as any).bodyHtml ?? '')];
+    for (const v of variants) srcs.push(v.body, this.decodeHtml(v.bodyHtml ?? ''));
+    const links = [...new Set(srcs.flatMap((s) => this.extractLinks(s)))];
+
     // Materialize recipients (skip dupes if a previous partial launch raced).
     await this.prisma.campaignRecipient.createMany({
       data: leads.map((l) => ({
@@ -145,6 +198,7 @@ export class CampaignsService {
         campaignId: campaign.id,
         leadId: l.id,
         token: `cr_${randomBytes(18).toString('hex')}`,
+        variantKey: useAb ? this.pickVariant(variants) : null,
       })),
       skipDuplicates: true,
     });
@@ -208,6 +262,17 @@ export class CampaignsService {
       }
     }
     return where as Prisma.LeadWhereInput;
+  }
+
+  /** Weighted-random pick of a variant key (split frozen per recipient at launch). */
+  private pickVariant(variants: Array<{ key: string; weight: number }>): string {
+    const total = variants.reduce((s, v) => s + Math.max(1, v.weight), 0);
+    let r = Math.random() * total;
+    for (const v of variants) {
+      r -= Math.max(1, v.weight);
+      if (r < 0) return v.key;
+    }
+    return variants[variants.length - 1].key;
   }
 
   private extractLinks(body: string): string[] {

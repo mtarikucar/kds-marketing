@@ -4,9 +4,16 @@ import {
   IsOptional,
   IsIn,
   IsArray,
+  IsBoolean,
+  IsInt,
   IsDateString,
+  Min,
+  Max,
   MaxLength,
+  ValidateNested,
+  ArrayMaxSize,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateCampaignDto {
   @IsString() @IsNotEmpty() @MaxLength(120)
@@ -58,4 +65,19 @@ export class UpdateCampaignDto {
 
   @IsOptional() @IsDateString()
   scheduledAt?: string;
+}
+
+export class CampaignVariantDto {
+  @IsString() @IsNotEmpty() @MaxLength(8) key: string;
+  @IsOptional() @IsInt() @Min(1) @Max(1000) weight?: number;
+  @IsOptional() @IsString() @MaxLength(200) subject?: string;
+  @IsString() @IsNotEmpty() @MaxLength(20000) body: string;
+  @IsOptional() @IsString() @MaxLength(200000) bodyHtml?: string;
+  @IsOptional() @IsString() @MaxLength(64) emailTemplateId?: string;
+}
+
+export class SetVariantsDto {
+  @IsOptional() @IsBoolean() abEnabled?: boolean;
+  @IsArray() @ArrayMaxSize(6) @ValidateNested({ each: true }) @Type(() => CampaignVariantDto)
+  variants: CampaignVariantDto[];
 }

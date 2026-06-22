@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Patch,
   Delete,
   Body,
@@ -18,7 +19,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { CampaignsService } from '../campaigns/campaigns.service';
-import { CreateCampaignDto, UpdateCampaignDto } from '../dto/campaign.dto';
+import { CreateCampaignDto, UpdateCampaignDto, SetVariantsDto } from '../dto/campaign.dto';
 
 /**
  * Email/SMS/WhatsApp campaigns. MANAGER+ behind the `campaigns` feature.
@@ -58,6 +59,13 @@ export class MarketingCampaignsController {
   @RequirePermission('campaigns.send')
   update(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: UpdateCampaignDto) {
     return this.campaigns.update(a.workspaceId, id, dto);
+  }
+
+  /** Replace the campaign's A/B variants (draft/scheduled only). */
+  @Put(':id/variants')
+  @RequirePermission('campaigns.send')
+  setVariants(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: SetVariantsDto) {
+    return this.campaigns.setVariants(a.workspaceId, id, dto);
   }
 
   @Post(':id/launch')

@@ -74,5 +74,59 @@ describe('CampaignsService', () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'EMAIL', body: 'x', audienceFilter: [] });
       await expect(svc.launch(WS, 'c1')).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it('assigns every recipient a variant key when A/B is enabled', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null, abEnabled: true, audienceFilter: [] });
+      prisma.campaignVariant = {
+        findMany: jest.fn().mockResolvedValue([
+          { key: 'A', weight: 1, body: 'Hi A', bodyHtml: null },
+          { key: 'B', weight: 1, body: 'Hi B', bodyHtml: null },
+        ]),
+      };
+      await svc.launch(WS, 'c1');
+      const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
+      expect(rows).toHaveLength(2);
+      for (const row of rows) expect(['A', 'B']).toContain(row.variantKey);
+    });
+
+    it('leaves variantKey null when A/B is off', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', abEnabled: false, audienceFilter: [] });
+      await svc.launch(WS, 'c1');
+      const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
+      expect(rows.every((r: any) => r.variantKey === null)).toBe(true);
+    });
+  });
+
+  describe('setVariants', () => {
+    beforeEach(() => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', status: 'DRAFT' });
+      prisma.$transaction = jest.fn().mockResolvedValue([]);
+      prisma.campaignVariant = {
+        deleteMany: jest.fn(), createMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      };
+      prisma.campaign.updateMany = jest.fn();
+    });
+
+    it('rejects duplicate variant keys', async () => {
+      await expect(svc.setVariants(WS, 'c1', { variants: [{ key: 'A', body: 'x' }, { key: 'A', body: 'y' }] }))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects an out-of-range weight', async () => {
+      await expect(svc.setVariants(WS, 'c1', { variants: [{ key: 'A', weight: 0, body: 'x' }] }))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('replaces variants in one transaction (delete + create + campaign update)', async () => {
+      await svc.setVariants(WS, 'c1', { abEnabled: true, variants: [{ key: 'A', body: 'x' }] });
+      expect(prisma.$transaction.mock.calls[0][0]).toHaveLength(3);
+    });
+
+    it('refuses to edit variants on a launched campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', status: 'SENDING' });
+      await expect(svc.setVariants(WS, 'c1', { variants: [{ key: 'A', body: 'x' }] }))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });

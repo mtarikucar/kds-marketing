@@ -167,6 +167,8 @@ const OWNED_DELEGATES = [
   'funnel',
   // HTML email templates (GHL parity).
   'emailTemplate',
+  // Campaign A/B variants (GHL parity).
+  'campaignVariant',
   // Tax rates (GHL parity): reusable per-workspace KDV/VAT rates.
   'taxRate',
   // Coupons (GHL parity): discount codes + their redemption log.
