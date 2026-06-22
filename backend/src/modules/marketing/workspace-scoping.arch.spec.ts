@@ -31,6 +31,9 @@ const OWNED_DELEGATES = [
   'marketingNotification',
   'commission',
   'salesCall',
+  // Epic 11b (preview dialer: call-queue sessions).
+  'dialSession',
+  'dialSessionItem',
   'installationCrew',
   'installationJob',
   'installationTask',

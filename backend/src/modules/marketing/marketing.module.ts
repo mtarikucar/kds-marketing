@@ -70,6 +70,8 @@ import { HardwareQuoteConsumer } from './events/hardware-quote.consumer';
 // Phase 2 telephony — single-line Netgsm sales calls (click-to-dial + manual log).
 import { SalesCallController } from './controllers/sales-call.controller';
 import { SalesCallService } from './services/sales-call.service';
+import { DialerController } from './controllers/dialer.controller';
+import { DialerService } from './services/dialer.service';
 import { TelephonyProviderRegistry } from './telephony/telephony-provider.registry';
 import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
@@ -385,6 +387,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingNotificationsController,
     MarketingDistributionController,
     SalesCallController,
+    DialerController,
     TelephonyConfigController,
     WebphoneConfigController,
     InstallationController,
@@ -502,6 +505,7 @@ import { WalletService } from './wallet/wallet.service';
     HardwareQuoteConsumer,
     // Phase 2 telephony: sales-call log + single-line Netgsm provider.
     SalesCallService,
+    DialerService,
     TelephonyProviderRegistry,
     NetgsmLiteAdapter,
     NetgsmApiAdapter,

@@ -771,6 +771,44 @@ model SalesCall {
   @@map("sales_calls")
 }
 
+/// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
+/// one at a time (click-to-dial reusing SalesCallService, single-line). The rep
+/// previews each lead, dials, logs the outcome, and the queue auto-advances.
+model DialSession {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  marketingUserId String
+  status          String   @default("ACTIVE") // ACTIVE | DONE | CANCELLED
+  currentIndex    Int      @default(0)
+  total           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  items DialSessionItem[]
+
+  @@index([workspaceId, marketingUserId])
+  @@map("dial_sessions")
+}
+
+/// One lead in a dial session's queue. `outcome` is set when the rep logs or
+/// skips it; `callId` links to the SalesCall placed for it.
+model DialSessionItem {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  dialSessionId String
+  leadId        String
+  position      Int
+  outcome       String? // a SALES_CALL outcome, or SKIPPED
+  callId        String?
+  createdAt     DateTime @default(now())
+
+  session DialSession @relation(fields: [dialSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([dialSessionId, position])
+  @@index([workspaceId])
+  @@map("dial_session_items")
+}
+
 /// Phase-3 installation ops (inside the marketing context). A crew is an
 /// install team with a per-day job capacity used for availability checks.
 model InstallationCrew {
