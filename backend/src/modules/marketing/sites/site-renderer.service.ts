@@ -10,11 +10,17 @@ function safeUrl(v: unknown): string {
   const s = String(v ?? '');
   return /^https?:\/\//i.test(s) || s.startsWith('/') ? esc(s) : '#';
 }
+/** Coerce a customer-controlled value to an array — blocks/fields are unvalidated
+ *  JSON, so a non-array (e.g. items:"x") must NOT crash render() with `.map` of a
+ *  non-function; it degrades to empty (matching the Array.isArray guard on blocks). */
+function arr(v: unknown): any[] {
+  return Array.isArray(v) ? v : [];
+}
 
 interface FormDefLite {
   id: string;
   name: string;
-  fields: Array<{ name: string; label?: string; type?: string; required?: boolean }>;
+  fields: Array<{ name: string; label?: string; type?: string; required?: boolean; options?: string[] }>;
   redirectUrl?: string | null;
 }
 
@@ -71,18 +77,18 @@ export class SiteRendererService {
           (b.ctaText ? `<a class="btn" href="${safeUrl(b.ctaUrl)}">${esc(b.ctaText)}</a>` : '') + `</section>`;
       case 'features':
         return `<section class="s"><div class="grid">` +
-          (b.items ?? []).map((it: any) => `<div class="card"><h3>${esc(it.title)}</h3><p>${esc(it.text)}</p></div>`).join('') +
+          arr(b.items).map((it: any) => `<div class="card"><h3>${esc(it?.title)}</h3><p>${esc(it?.text)}</p></div>`).join('') +
           `</div></section>`;
       case 'pricing':
         return `<section class="s"><div class="grid">` +
-          (b.plans ?? []).map((p: any) =>
-            `<div class="card"><h3>${esc(p.name)}</h3><div class="price">${esc(p.price)}</div><ul>` +
-            (p.features ?? []).map((f: any) => `<li>${esc(f)}</li>`).join('') + `</ul>` +
-            (p.ctaUrl ? `<a class="btn" href="${safeUrl(p.ctaUrl)}">${esc(p.ctaText || 'Choose')}</a>` : '') + `</div>`,
+          arr(b.plans).map((p: any) =>
+            `<div class="card"><h3>${esc(p?.name)}</h3><div class="price">${esc(p?.price)}</div><ul>` +
+            arr(p?.features).map((f: any) => `<li>${esc(f)}</li>`).join('') + `</ul>` +
+            (p?.ctaUrl ? `<a class="btn" href="${safeUrl(p.ctaUrl)}">${esc(p.ctaText || 'Choose')}</a>` : '') + `</div>`,
           ).join('') + `</div></section>`;
       case 'faq':
         return `<section class="s"><h2>${esc(b.heading || 'FAQ')}</h2>` +
-          (b.items ?? []).map((it: any) => `<div class="card"><strong>${esc(it.q)}</strong><p>${esc(it.a)}</p></div>`).join('') + `</section>`;
+          arr(b.items).map((it: any) => `<div class="card"><strong>${esc(it?.q)}</strong><p>${esc(it?.a)}</p></div>`).join('') + `</section>`;
       case 'cta':
         return `<section class="s hero"><h2>${esc(b.heading)}</h2>` +
           (b.buttonText ? `<a class="btn" href="${safeUrl(b.buttonUrl)}">${esc(b.buttonText)}</a>` : '') + `</section>`;
@@ -97,20 +103,48 @@ export class SiteRendererService {
 
   private formBlock(b: any, form: FormDefLite | undefined, base: string): string {
     if (!form) return '';
-    const inputs = (form.fields ?? [])
-      .map((f) => {
-        const name = esc(f.name);
-        const label = esc(f.label || f.name);
-        const req = f.required ? 'required' : '';
-        if (f.type === 'textarea') return `<label>${label}</label><textarea name="${name}" ${req}></textarea>`;
-        const type = ['email', 'tel', 'number'].includes(f.type || '') ? f.type : 'text';
-        return `<label>${label}</label><input type="${esc(type)}" name="${name}" ${req}>`;
-      })
-      .join('');
+    const inputs = arr(form.fields).map((f) => this.formField(f)).join('');
     return (
       `<section class="s"><h2>${esc(b.heading || form.name)}</h2>` +
       `<form method="POST" action="${base}/api/public/f/${esc(form.id)}">${inputs}` +
       `<button class="btn" type="submit" style="margin-top:12px">${esc(b.submitText || 'Submit')}</button></form></section>`
     );
+  }
+
+  /** Render one form field as a plain (JS-free) input. select/radio/checkbox use
+   *  the field's `options` (escaped); checkbox with no options is a single
+   *  consent box. Everything stays HTML-escaped — no script, no template engine. */
+  private formField(f: { name: string; label?: string; type?: string; required?: boolean; options?: string[] }): string {
+    const name = esc(f.name);
+    const label = esc(f.label || f.name);
+    const req = f.required ? 'required' : '';
+    const opts = Array.isArray(f.options) ? f.options : [];
+    const inline = 'style="width:auto;margin-right:6px"';
+    switch (f.type) {
+      case 'textarea':
+        return `<label>${label}</label><textarea name="${name}" ${req}></textarea>`;
+      case 'select':
+        return `<label>${label}</label><select name="${name}" ${req}>` +
+          `<option value="">—</option>` +
+          opts.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('') +
+          `</select>`;
+      case 'radio':
+        return `<label>${label}</label><div>` +
+          opts.map((o) => `<label style="display:inline-flex;align-items:center;margin-right:14px"><input type="radio" name="${name}" value="${esc(o)}" ${req} ${inline}>${esc(o)}</label>`).join('') +
+          `</div>`;
+      case 'checkbox':
+        if (opts.length) {
+          return `<label>${label}</label><div>` +
+            opts.map((o) => `<label style="display:inline-flex;align-items:center;margin-right:14px"><input type="checkbox" name="${name}" value="${esc(o)}" ${inline}>${esc(o)}</label>`).join('') +
+            `</div>`;
+        }
+        return `<label style="display:inline-flex;align-items:center;margin-top:8px"><input type="checkbox" name="${name}" value="yes" ${req} ${inline}>${label}</label>`;
+      case 'date':
+        return `<label>${label}</label><input type="date" name="${name}" ${req}>`;
+      default: {
+        const type = ['email', 'tel', 'number'].includes(f.type || '') ? f.type : 'text';
+        return `<label>${label}</label><input type="${esc(type)}" name="${name}" ${req}>`;
+      }
+    }
   }
 }

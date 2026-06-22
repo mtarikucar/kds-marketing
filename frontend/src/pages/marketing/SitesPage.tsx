@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -34,6 +34,8 @@ import {
   TH,
   TD,
 } from '@/components/ui/Table';
+import { SiteBlockBuilder, type AnyBlock } from './sites/SiteBlockBuilder';
+import { FormFieldsEditor, type FormField } from './sites/FormFieldsEditor';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -75,6 +77,7 @@ export default function SitesPage() {
   const [aiPrompt, setAiPrompt] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteFormTarget, setDeleteFormTarget] = useState<string | null>(null);
+  const [formEdit, setFormEdit] = useState<{ id: string; name: string; fields: FormField[] } | null>(null);
 
   // Page form (RHF)
   const {
@@ -82,11 +85,13 @@ export default function SitesPage() {
     handleSubmit,
     reset: resetPage,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<PageFormValues>({
     resolver: zodResolver(pageSchema),
     defaultValues: { title: '', slug: '', blocks: '[]' },
   });
+  const [builderView, setBuilderView] = useState<'canvas' | 'json'>('canvas');
 
   // Form-creator form (RHF)
   const {
@@ -111,6 +116,21 @@ export default function SitesPage() {
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'sites'] });
+
+  // Canvas ↔ JSON bridge: the RHF `blocks` string stays the single source of
+  // truth. parsedBlocks is null when the string is invalid JSON (force JSON view).
+  const blocksStr = watch('blocks');
+  const parsedBlocks = useMemo<AnyBlock[] | null>(() => {
+    try {
+      const v = JSON.parse(blocksStr || '[]');
+      return Array.isArray(v) && v.every((b) => b && typeof b === 'object') ? (v as AnyBlock[]) : null;
+    } catch {
+      return null;
+    }
+  }, [blocksStr]);
+  const writeBlocks = (next: AnyBlock[]) =>
+    setValue('blocks', JSON.stringify(next, null, 2), { shouldDirty: true, shouldValidate: true });
+  const formOptions = (forms ?? []).map((f) => ({ id: f.id, name: f.name }));
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
@@ -176,12 +196,35 @@ export default function SitesPage() {
     },
   });
 
+  const saveFormFields = useMutation({
+    mutationFn: (f: { id: string; name: string; fields: FormField[] }) =>
+      marketingApi.patch(`/sites/forms/${f.id}`, {
+        name: f.name,
+        // Guarantee a non-empty POST key per field — an empty name renders
+        // <input name=""> which the browser never submits (silent data loss).
+        fields: f.fields.map((fld, i) => ({ ...fld, name: fld.name?.trim() || `field_${i + 1}` })),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'sites', 'forms'] });
+      setFormEdit(null);
+      toast.success(t('sites.formSaved', 'Form saved'));
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.formSaveFailed', 'Could not save form')),
+  });
+
+  const openFormEdit = async (id: string) => {
+    const full = await marketingApi.get('/sites/forms').then((r) => r.data as Array<{ id: string; name: string; fields?: FormField[] }>);
+    const f = full.find((x) => x.id === id);
+    if (f) setFormEdit({ id: f.id, name: f.name, fields: Array.isArray(f.fields) ? f.fields : [] });
+  };
+
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
   const openCreate = () => {
     setEditId(null);
     resetPage({ title: '', slug: '', blocks: '[]' });
     setAiPrompt('');
+    setBuilderView('canvas');
     setDialogOpen(true);
   };
 
@@ -194,6 +237,7 @@ export default function SitesPage() {
       blocks: JSON.stringify(full.blocks ?? [], null, 2),
     });
     setAiPrompt('');
+    setBuilderView('canvas');
     setDialogOpen(true);
   };
 
@@ -342,7 +386,10 @@ export default function SitesPage() {
                       {' '}{f.name}
                     </TD>
                     <TD>
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={() => openFormEdit(f.id)}>
+                          <Pencil className="h-3.5 w-3.5" />{t('sites.editFields', 'Fields')}
+                        </Button>
                         <IconButton
                           aria-label={t('common.delete', 'Delete')}
                           size="sm"
@@ -373,7 +420,7 @@ export default function SitesPage() {
           if (!open) { setDialogOpen(false); setEditId(null); resetPage(); setAiPrompt(''); }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className={builderView === 'canvas' ? 'max-w-3xl' : 'max-w-2xl'}>
           <DialogHeader>
             <DialogTitle>
               {editId ? t('sites.editPage', 'Edit page') : t('sites.new', 'New page')}
@@ -434,17 +481,32 @@ export default function SitesPage() {
                 )}
               </Field>
             </div>
-            <Field label={t('sites.blocks', 'Blocks (JSON)')} error={errors.blocks?.message}>
-              {({ id, describedBy, invalid }) => (
-                <Textarea
-                  id={id}
-                  aria-describedby={describedBy}
-                  aria-invalid={invalid}
-                  className="min-h-48 font-mono text-xs"
-                  {...register('blocks')}
-                />
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-sm font-medium text-foreground">{t('sites.sections', 'Sections')}</label>
+                <div className="flex items-center rounded-md border border-border overflow-hidden text-xs">
+                  <button type="button" onClick={() => setBuilderView('canvas')} disabled={parsedBlocks === null}
+                    className={`px-2.5 py-1 ${builderView === 'canvas' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-surface-muted'} disabled:opacity-40`}>
+                    {t('sites.visual', 'Visual')}
+                  </button>
+                  <button type="button" onClick={() => setBuilderView('json')}
+                    className={`px-2.5 py-1 ${builderView === 'json' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-surface-muted'}`}>
+                    {t('sites.json', 'JSON')}
+                  </button>
+                </div>
+              </div>
+              {builderView === 'canvas' && parsedBlocks !== null ? (
+                <SiteBlockBuilder blocks={parsedBlocks} forms={formOptions} onChange={writeBlocks} />
+              ) : (
+                <>
+                  {parsedBlocks === null && (
+                    <p className="text-[11px] text-danger mb-1">{t('sites.invalidBlocks', 'Blocks JSON is invalid — fix it to use the visual builder.')}</p>
+                  )}
+                  <Textarea aria-invalid={!!errors.blocks} className="min-h-48 font-mono text-xs" {...register('blocks')} />
+                </>
               )}
-            </Field>
+              {errors.blocks?.message && <p className="text-[11px] text-danger mt-1">{errors.blocks.message}</p>}
+            </div>
           </form>
 
           <DialogFooter>
@@ -463,6 +525,32 @@ export default function SitesPage() {
               {t('common.save', 'Save')}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Form fields editor */}
+      <Dialog open={!!formEdit} onOpenChange={(o) => { if (!o) setFormEdit(null); }}>
+        <DialogContent className="max-w-2xl">
+          {formEdit && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t('sites.editForm', 'Edit form')}</DialogTitle>
+                <DialogDescription>{t('sites.editFormDesc', 'Build the fields visitors fill in. Reorder, set types and required.')}</DialogDescription>
+              </DialogHeader>
+              <Field label={t('sites.formNameLabel', 'Form name')}>
+                {({ id }) => <Input id={id} value={formEdit.name} maxLength={120} onChange={(e) => setFormEdit({ ...formEdit, name: e.target.value })} />}
+              </Field>
+              <div className="max-h-[55vh] overflow-y-auto">
+                <FormFieldsEditor fields={formEdit.fields} onChange={(fields) => setFormEdit({ ...formEdit, fields })} />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setFormEdit(null)}>{t('common.cancel', 'Cancel')}</Button>
+                <Button onClick={() => saveFormFields.mutate(formEdit)} loading={saveFormFields.isPending} disabled={!formEdit.name.trim() || saveFormFields.isPending}>
+                  {t('common.save', 'Save')}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 

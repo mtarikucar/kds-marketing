@@ -40,6 +40,47 @@ describe('SiteRendererService', () => {
     expect(html).toContain('method="POST"');
   });
 
+  it('renders select / radio / checkbox / date fields with escaped options (no script)', () => {
+    const forms = new Map([['f1', {
+      id: 'f1', name: 'Survey', fields: [
+        { name: 'plan', label: 'Plan', type: 'select', options: ['Basic', 'Pro', '<x>'] },
+        { name: 'how', label: 'How?', type: 'radio', options: ['Ad', 'Friend'] },
+        { name: 'consent', label: 'I agree', type: 'checkbox', required: true },
+        { name: 'topics', label: 'Topics', type: 'checkbox', options: ['News', 'Tips'] },
+        { name: 'start', label: 'Start', type: 'date' },
+      ],
+    }]]);
+    const html = svc.render({ title: 'T', blocks: [{ type: 'form', formId: 'f1' }] }, forms as any, 'https://m.example');
+    expect(html).toContain('<select name="plan"');
+    expect(html).toContain('<option value="Pro">Pro</option>');
+    expect(html).toContain('&lt;x&gt;'); // option escaped
+    expect(html).toContain('type="radio" name="how" value="Ad"');
+    expect(html).toContain('type="checkbox" name="consent" value="yes" required');
+    expect(html).toContain('type="checkbox" name="topics" value="News"');
+    expect(html).toContain('type="date" name="start"');
+    expect(html).not.toContain('<x>');
+  });
+
+  it('does not crash the whole page when a block array field is a non-array (unvalidated JSON)', () => {
+    const forms = new Map([['f1', { id: 'f1', name: 'F', fields: 'nope' as any }]]);
+    expect(() =>
+      svc.render(
+        {
+          title: 'T',
+          blocks: [
+            { type: 'features', items: 'oops' },
+            { type: 'pricing', plans: 'x' },
+            { type: 'pricing', plans: [{ name: 'P', price: '$1', features: 'y' }] },
+            { type: 'faq', items: 7 },
+            { type: 'form', formId: 'f1' },
+          ],
+        },
+        forms as any,
+        'https://m.example',
+      ),
+    ).not.toThrow();
+  });
+
   it('honors a valid accent theme color but ignores a bogus one', () => {
     const ok = svc.render({ title: 'T', blocks: [], theme: { accent: '#ff0000' } }, new Map(), '');
     expect(ok).toContain('#ff0000');
