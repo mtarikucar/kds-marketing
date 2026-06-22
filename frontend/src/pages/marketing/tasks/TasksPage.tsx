@@ -6,9 +6,11 @@ import { useSearchParams, Link } from 'react-router-dom';
 import { Plus, AlertTriangle, CheckCircle2, Play, Pencil, Trash2, ClipboardList } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import marketingApi from '../../../features/marketing/api/marketingApi';
-import type { MarketingTask } from '../../../features/marketing/types';
+import type { MarketingTask, MarketingUserInfo } from '../../../features/marketing/types';
 import type { TaskFormValues } from '../../../features/marketing/schemas';
-import { fmtDate } from '../../../features/marketing/utils/format';
+import { fmtDateTime } from '../../../features/marketing/utils/format';
+import { localDateTimeToIso } from '../../../features/marketing/utils/datetime';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -60,11 +62,25 @@ const TYPE_TONE: Record<string, BadgeTone> = {
   OTHER: 'neutral',
 };
 
+interface RepRow extends MarketingUserInfo {
+  role: string;
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
+
+  const { user } = useMarketingAuthStore();
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+
+  const { data: reps = [] } = useQuery<RepRow[]>({
+    queryKey: ['marketing', 'users'],
+    queryFn: () => marketingApi.get('/users').then((r) => r.data),
+    enabled: isManager,
+    staleTime: 60_000,
+  });
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab');
 
@@ -161,7 +177,9 @@ export default function TasksPage() {
       title: values.title,
       type: values.type,
       priority: values.priority,
-      dueDate: values.dueDate,
+      // Combine the local date + time into a full ISO datetime so the hour the
+      // rep picked is exactly what gets stored (no off-by-one, no end-of-day).
+      dueDate: localDateTimeToIso(values.dueDate, values.dueTime),
       ...(values.description ? { description: values.description } : {}),
       ...(values.leadId ? { leadId: values.leadId } : {}),
       ...(values.assignedToId ? { assignedToId: values.assignedToId } : {}),
@@ -289,7 +307,7 @@ export default function TasksPage() {
           <span
             className={cn('text-sm', overdue ? 'text-danger font-medium' : 'text-muted-foreground')}
           >
-            {fmtDate(task.dueDate)}
+            {fmtDateTime(task.dueDate)}
           </span>
         );
       },
@@ -441,6 +459,7 @@ export default function TasksPage() {
         task={editingTask}
         onSubmit={handleFormSubmit}
         isPending={createMutation.isPending || updateMutation.isPending}
+        reps={reps}
       />
 
       {/* Delete confirm */}
