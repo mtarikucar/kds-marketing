@@ -54,5 +54,9 @@ export interface NetworkStatus {
   INSTAGRAM: boolean;
   LINKEDIN: boolean;
   TIKTOK: boolean;
+  // Epic 12 (needs-external, inert until creds).
+  TWITTER: boolean;
+  PINTEREST: boolean;
+  GMB: boolean;
   secretBoxConfigured: boolean;
 }

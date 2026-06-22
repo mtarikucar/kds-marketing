@@ -10,19 +10,27 @@ interface Props {
 }
 
 /**
- * One "Connect <Network>" button per network. A network whose platform app is
- * configured (env creds present, per the status endpoint) is clickable and
- * starts the OAuth redirect; an unconfigured network shows the button DISABLED
- * with a hint, so the one-click path is always discoverable and it's obvious
- * why it's not yet active (admin must add the app credentials). The manual
- * "Connect account" dialog remains as the fallback.
+ * Networks with a wired OAuth connect flow (mirrors the backend OAUTH_NETWORKS).
+ * The Epic-12 publish adapters (TWITTER/PINTEREST/GMB) are publish-configured via
+ * env but their per-network OAuth exchange classes are a deferred follow-up, so
+ * one-click connect stays disabled for them even when their publish env is set —
+ * otherwise the button would dead-end on an unsupported-network backend error.
+ */
+const OAUTH_CAPABLE = new Set<SocialNetwork>(['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK']);
+
+/**
+ * One "Connect <Network>" button per network. A network is clickable only when
+ * its platform app is configured (env creds present, per the status endpoint)
+ * AND its OAuth flow is wired; otherwise the button is DISABLED with a hint, so
+ * the one-click path is always discoverable and it's obvious why it's not yet
+ * active. The manual "Connect account" dialog remains as the fallback.
  */
 export function OAuthConnectButtons({ status }: Props) {
   const { t } = useTranslation('marketing');
   const { startConnect } = useSocialConnect();
 
   if (!status) return null;
-  const anyConfigured = SOCIAL_NETWORKS.some((n) => status[n]);
+  const anyConnectable = SOCIAL_NETWORKS.some((n) => status[n] && OAUTH_CAPABLE.has(n));
 
   return (
     <div className="space-y-2">
@@ -30,21 +38,26 @@ export function OAuthConnectButtons({ status }: Props) {
         {SOCIAL_NETWORKS.map((network: SocialNetwork) => {
           const meta = NETWORK_META[network];
           const Icon = meta.icon;
-          const configured = !!status[network];
+          const oauthWired = OAUTH_CAPABLE.has(network);
+          const connectable = !!status[network] && oauthWired;
           return (
             <Button
               key={network}
               variant="outline"
               size="sm"
-              disabled={!configured}
+              disabled={!connectable}
               title={
-                configured
+                connectable
                   ? undefined
-                  : t('social.oauth.notConfigured', {
-                      defaultValue: 'An admin must add this network’s app credentials first',
-                    })
+                  : oauthWired
+                    ? t('social.oauth.notConfigured', {
+                        defaultValue: 'An admin must add this network’s app credentials first',
+                      })
+                    : t('social.oauth.comingSoon', {
+                        defaultValue: 'One-click connect for this network is coming soon',
+                      })
               }
-              onClick={() => configured && startConnect(network)}
+              onClick={() => connectable && startConnect(network)}
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
               {t('social.oauth.connect', { defaultValue: 'Connect' })} {meta.label}
@@ -52,7 +65,7 @@ export function OAuthConnectButtons({ status }: Props) {
           );
         })}
       </div>
-      {!anyConfigured && (
+      {!anyConnectable && (
         <p className="text-micro text-muted-foreground">
           {t('social.oauth.setupHint', {
             defaultValue:

@@ -24,6 +24,9 @@ const status: NetworkStatus = {
   INSTAGRAM: true,
   LINKEDIN: false,
   TIKTOK: false,
+  TWITTER: false,
+  PINTEREST: false,
+  GMB: false,
   secretBoxConfigured: true,
 };
 
