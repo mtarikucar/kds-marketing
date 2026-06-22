@@ -15,13 +15,17 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { EnrollmentService } from './enrollment.service';
+import { CertificateService } from './certificate.service';
 import { CompleteLessonDto, EnrollDto } from './enrollment.dto';
 
 @MarketingRoute()
 @Controller('marketing/enrollments')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
 export class EnrollmentController {
-  constructor(private readonly svc: EnrollmentService) {}
+  constructor(
+    private readonly svc: EnrollmentService,
+    private readonly certificates: CertificateService,
+  ) {}
 
   @Get()
   list(
@@ -51,6 +55,12 @@ export class EnrollmentController {
     @CurrentMarketingUser() u: MarketingUserPayload,
   ) {
     return this.svc.markLessonComplete(u.workspaceId, id, dto.lessonId);
+  }
+
+  /** The completion certificate for this enrollment (null until it's earned). */
+  @Get(':id/certificate')
+  certificate(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.certificates.getForEnrollment(u.workspaceId, id);
   }
 
   @Delete(':id')

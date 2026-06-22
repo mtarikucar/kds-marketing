@@ -9,7 +9,8 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
-  return { prisma, svc: new EnrollmentService(prisma as any) };
+  const certificates = { issueForEnrollment: jest.fn().mockResolvedValue(null), getForEnrollment: jest.fn() };
+  return { prisma, certificates, svc: new EnrollmentService(prisma as any, certificates as any) };
 }
 
 /** A course shape for courseLessons() — modules→lessons in order. */
@@ -49,8 +50,8 @@ describe('EnrollmentService', () => {
     expect(out).toMatchObject({ progressPct: 50, status: 'ACTIVE', completedAt: null });
   });
 
-  it('flips to COMPLETED at 100%', async () => {
-    const { prisma, svc } = makeSvc();
+  it('flips to COMPLETED at 100% and issues a certificate', async () => {
+    const { prisma, certificates, svc } = makeSvc();
     prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
     prisma.lesson.findFirst.mockResolvedValue({ id: 'l2' } as any);
     prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l2', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
@@ -58,12 +59,27 @@ describe('EnrollmentService', () => {
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
     (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
     (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(2);
-    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }));
 
     const out: any = await svc.markLessonComplete(WS, 'e1', 'l2');
     expect(out.progressPct).toBe(100);
     expect(out.status).toBe('COMPLETED');
     expect(out.completedAt).toBeInstanceOf(Date);
+    expect(certificates.issueForEnrollment).toHaveBeenCalledWith(expect.objectContaining({ id: 'e1', courseId: 'c1' }));
+  });
+
+  it('does not issue a certificate below 100%', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1' } as any);
+    prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
+    await svc.markLessonComplete(WS, 'e1', 'l1');
+    expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
   });
 
   it('rejects completing a lesson that is not in the enrollment course', async () => {

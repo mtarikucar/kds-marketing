@@ -4,7 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { CertificateService } from './certificate.service';
 
 interface CreateCourseInput {
   title: string;
@@ -22,6 +24,8 @@ interface UpdateCourseInput {
   coverImageUrl?: string;
   status?: string;
   dripMode?: string | null;
+  certificateEnabled?: boolean;
+  certificateTemplate?: { title?: string; signature?: string; logoUrl?: string } | null;
 }
 interface LessonInput {
   title?: string;
@@ -41,7 +45,10 @@ interface LessonInput {
  */
 @Injectable()
 export class CoursesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly certificates: CertificateService,
+  ) {}
 
   private slugify(s: string): string {
     return (
@@ -100,8 +107,12 @@ export class CoursesService {
   }
 
   async update(workspaceId: string, id: string, dto: UpdateCourseInput) {
-    await this.assertCourse(workspaceId, id);
-    return this.prisma.course.update({
+    const prev = await this.prisma.course.findFirst({
+      where: { id, workspaceId },
+      select: { id: true, certificateEnabled: true },
+    });
+    if (!prev) throw new NotFoundException('Course not found');
+    const updated = await this.prisma.course.update({
       where: { id },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
@@ -111,8 +122,20 @@ export class CoursesService {
         ...(dto.coverImageUrl !== undefined && { coverImageUrl: dto.coverImageUrl }),
         ...(dto.status !== undefined && { status: dto.status }),
         ...(dto.dripMode !== undefined && { dripMode: dto.dripMode }),
+        ...(dto.certificateEnabled !== undefined && { certificateEnabled: dto.certificateEnabled }),
+        ...(dto.certificateTemplate !== undefined && {
+          certificateTemplate: dto.certificateTemplate ?? Prisma.JsonNull,
+        }),
       },
     });
+    // Turning certificates ON for a course that already has graduates is not
+    // retroactive by default — backfill so existing 100%-completers get one too.
+    // Fire-and-forget so a large cohort can't stall the PATCH; it's idempotent,
+    // and any miss self-heals when the certificate is next viewed (getForEnrollment).
+    if (dto.certificateEnabled === true && !prev.certificateEnabled) {
+      void this.certificates.backfillForCourse(workspaceId, id).catch(() => undefined);
+    }
+    return updated;
   }
 
   async remove(workspaceId: string, id: string) {

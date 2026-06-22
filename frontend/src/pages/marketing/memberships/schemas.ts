@@ -22,6 +22,11 @@ export const courseSchema = z.object({
   coverImageUrl: z.string().trim().max(2000).optional(),
   // Course-level default lesson gating (Epic 10a drip).
   dripMode: z.enum(['FREE', 'SEQUENTIAL', 'DRIP']).optional(),
+  // Completion certificates (Epic 10b).
+  certificateEnabled: z.boolean().optional(),
+  certTitle: z.string().trim().max(160).optional(),
+  certSignature: z.string().trim().max(120).optional(),
+  certLogoUrl: z.string().trim().max(2000).optional(),
 });
 
 export type CourseFormValues = z.input<typeof courseSchema>;

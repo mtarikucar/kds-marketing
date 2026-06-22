@@ -9,7 +9,8 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
-  return { prisma, svc: new CoursesService(prisma as any) };
+  const certificates = { backfillForCourse: jest.fn().mockResolvedValue(0) };
+  return { prisma, certificates, svc: new CoursesService(prisma as any, certificates as any) };
 }
 
 describe('CoursesService', () => {
@@ -38,6 +39,22 @@ describe('CoursesService', () => {
     (prisma.course.update as jest.Mock).mockResolvedValue({ id: 'c1', status: 'PUBLISHED' });
     const out: any = await svc.publish(WS, 'c1');
     expect(out.status).toBe('PUBLISHED');
+  });
+
+  it('backfills certificates when certificateEnabled flips on', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1', certificateEnabled: false } as any);
+    (prisma.course.update as jest.Mock).mockResolvedValue({ id: 'c1', certificateEnabled: true });
+    await svc.update(WS, 'c1', { certificateEnabled: true });
+    expect(certificates.backfillForCourse).toHaveBeenCalledWith(WS, 'c1');
+  });
+
+  it('does not backfill when certificates were already enabled', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1', certificateEnabled: true } as any);
+    (prisma.course.update as jest.Mock).mockResolvedValue({ id: 'c1', certificateEnabled: true });
+    await svc.update(WS, 'c1', { certificateEnabled: true, title: 'X' });
+    expect(certificates.backfillForCourse).not.toHaveBeenCalled();
   });
 
   it('appends a module at the next position', async () => {

@@ -69,9 +69,30 @@ export interface Course {
   coverImageUrl: string | null;
   /** Course-level default lesson gating (Epic 10a drip). */
   dripMode: Gating | null;
+  /** Completion certificates (Epic 10b). */
+  certificateEnabled: boolean;
+  certificateTemplate: CertificateTemplate | null;
   position: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CertificateTemplate {
+  title?: string;
+  signature?: string;
+  logoUrl?: string;
+}
+
+/** A course-completion certificate (Epic 10b). */
+export interface Certificate {
+  id: string;
+  workspaceId: string;
+  enrollmentId: string;
+  courseId: string;
+  leadId: string;
+  serial: string;
+  issuedAt: string;
+  pdfUrl: string | null;
 }
 
 /** GET /courses/:id eagerly includes ordered modules → lessons. */

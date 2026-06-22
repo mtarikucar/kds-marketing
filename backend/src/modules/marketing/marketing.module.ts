@@ -205,6 +205,8 @@ import { CoursesController } from './memberships/courses.controller';
 import { CoursesService } from './memberships/courses.service';
 import { EnrollmentController } from './memberships/enrollment.controller';
 import { EnrollmentService } from './memberships/enrollment.service';
+import { CertificateService } from './memberships/certificate.service';
+import { PublicCertificateController } from './controllers/public-certificate.controller';
 import { CommunitiesController } from './memberships/communities.controller';
 import { CommunitiesService } from './memberships/communities.service';
 // Epic G — analytics (read-only lead aggregations).
@@ -407,6 +409,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingSubscriptionsController,
     MarketingDocumentsController,
     PublicDocumentController,
+    PublicCertificateController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
@@ -600,6 +603,7 @@ import { WalletService } from './wallet/wallet.service';
     // Epic C — memberships.
     CoursesService,
     EnrollmentService,
+    CertificateService,
     CommunitiesService,
     // Epic G — analytics.
     AnalyticsService,

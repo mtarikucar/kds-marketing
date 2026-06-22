@@ -2202,11 +2202,17 @@ model Course {
   // gating unless that is FREE, in which case this course default applies — so an
   // operator can gate/drip a whole course without editing every lesson.
   dripMode      String?  // null/FREE | SEQUENTIAL | DRIP
+  // Completion certificates (Epic 10b). When enabled, a Certificate is issued
+  // the moment an enrollment reaches 100%. The template holds {title?, signature?,
+  // logoUrl?} for the rendered certificate.
+  certificateEnabled  Boolean @default(false)
+  certificateTemplate Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  modules     CourseModule[]
-  enrollments Enrollment[]
+  modules      CourseModule[]
+  enrollments  Enrollment[]
+  certificates Certificate[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status])
@@ -2247,6 +2253,28 @@ model LessonProgress {
   @@unique([enrollmentId, lessonId])
   @@index([enrollmentId, completed])
   @@map("lesson_progress")
+}
+
+/// Epic 10b — a completion certificate. Issued once per (course, lead)
+/// completion — keyed on the stable business identity, NOT the enrollment row,
+/// so an unenroll + re-enroll (which mints a new enrollment id) can't produce a
+/// duplicate credential. `enrollmentId` records the enrollment that triggered
+/// issuance (audit). `serial` is the unguessable public handle (verify page);
+/// `leadId` is a soft ref. Rendered to printable HTML on demand (no file storage).
+model Certificate {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  enrollmentId String
+  courseId     String
+  leadId       String
+  serial       String   @unique
+  issuedAt     DateTime @default(now())
+  pdfUrl       String? // reserved: a pre-rendered artifact URL if ever materialized
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, courseId, leadId])
+  @@map("certificates")
 }
 
 /// Epic C3 — a community space. Members are Leads; posts/comments may be

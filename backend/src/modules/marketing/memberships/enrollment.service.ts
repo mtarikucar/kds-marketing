@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { resolveLessonAccess, AccessLesson } from './lesson-access';
+import { CertificateService } from './certificate.service';
 
 /**
  * Epic C2 — enrolls Leads (contacts) into courses and tracks lesson progress.
@@ -14,7 +16,12 @@ import { resolveLessonAccess, AccessLesson } from './lesson-access';
  */
 @Injectable()
 export class EnrollmentService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(EnrollmentService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private readonly certificates: CertificateService,
+  ) {}
 
   private async assertCourse(workspaceId: string, courseId: string) {
     const c = await this.prisma.course.findFirst({
@@ -143,7 +150,7 @@ export class EnrollmentService {
     });
     const pct = total ? Math.round((done / total) * 100) : 0;
     const completed = pct >= 100;
-    return this.prisma.enrollment.update({
+    const updated = await this.prisma.enrollment.update({
       where: { id },
       data: {
         progressPct: pct,
@@ -151,5 +158,15 @@ export class EnrollmentService {
         completedAt: completed ? new Date() : null,
       },
     });
+    // Course completion → issue a certificate if the course has them enabled.
+    // Idempotent + best-effort: a failure here must not undo the lesson progress.
+    if (completed) {
+      try {
+        await this.certificates.issueForEnrollment(updated);
+      } catch (e: any) {
+        this.logger.warn(`certificate issuance failed for enrollment ${id}: ${e?.message ?? e}`);
+      }
+    }
+    return updated;
   }
 }

@@ -31,6 +31,9 @@ export const TRIGGER_TYPES = [
   // workspace's public hook URL; filter on trigger.body.<field> (the posted
   // JSON is carried under trigger.body) or trigger.webhookId.
   'webhook.received',
+  // Course-completion certificate issued (memberships, Epic 10b). Filter on
+  // trigger.courseId.
+  'certificate.issued',
 ] as const;
 export type WorkflowTriggerType = (typeof TRIGGER_TYPES)[number];
 

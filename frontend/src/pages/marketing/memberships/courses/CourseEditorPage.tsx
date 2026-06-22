@@ -94,6 +94,14 @@ export default function CourseEditorPage() {
           ...(values.currency ? { currency: values.currency } : {}),
           coverImageUrl: values.coverImageUrl ?? '',
           ...(values.dripMode ? { dripMode: values.dripMode } : {}),
+          certificateEnabled: values.certificateEnabled ?? false,
+          // Only meaningful when enabled; send the template either way so clearing
+          // a field persists.
+          certificateTemplate: {
+            title: values.certTitle || undefined,
+            signature: values.certSignature || undefined,
+            logoUrl: values.certLogoUrl || undefined,
+          },
         },
       },
       {
