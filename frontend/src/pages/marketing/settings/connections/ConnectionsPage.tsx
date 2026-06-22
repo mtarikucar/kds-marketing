@@ -3,12 +3,13 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { KeyRound, CalendarDays, Slack as SlackIcon } from 'lucide-react';
+import { KeyRound, CalendarDays, CalendarClock, Slack as SlackIcon } from 'lucide-react';
 import { PageHeader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui';
 import { SsoTab } from './SsoTab';
 import { GoogleCalendarTab } from './GoogleCalendarTab';
+import { OutlookCalendarTab } from './OutlookCalendarTab';
 import { SlackTab } from './SlackTab';
-import { googleCalendarKey } from './hooks';
+import { googleCalendarKey, outlookCalendarKey } from './hooks';
 
 /**
  * Human-readable fallback for each coarse Google-callback `reason` the backend
@@ -46,6 +47,40 @@ function gcalErrorFallback(reason: string): string {
 }
 
 /**
+ * Human-readable fallback for each coarse Outlook-callback `reason` the backend
+ * redirects back with (`?outlook=error&reason=...`) — mirrors gcalErrorFallback
+ * so the operator gets the same actionable diagnosis for a misconfigured Azure
+ * AD app (wrong secret / unregistered redirect URI / no offline consent).
+ */
+function outlookErrorFallback(reason: string): string {
+  if (reason.startsWith('exchange_')) {
+    const code = reason.slice('exchange_'.length);
+    switch (code) {
+      case 'invalid_client':
+        return 'Microsoft rejected the OAuth credentials (invalid_client). The client ID and secret must be from the SAME Azure AD app — re-set both and redeploy.';
+      case 'redirect_uri_mismatch':
+        return 'Microsoft rejected the redirect URI. Register https://marketing.hummytummy.com/api/marketing/integrations/outlook-calendar/callback exactly in the Azure AD app.';
+      case 'invalid_grant':
+        return 'The authorization code was invalid or expired (invalid_grant). Click Connect and finish the consent promptly.';
+      default:
+        return `Could not finish Microsoft sign-in at the token-exchange step (${code || 'failed'}). Check the Azure app client_id/secret and redirect URI.`;
+    }
+  }
+  switch (reason) {
+    case 'state_invalid':
+      return 'The Outlook connection link expired. Please click Connect again.';
+    case 'no_refresh_token':
+      return 'Microsoft did not grant offline access. Reconnect and approve every prompt.';
+    case 'not_configured':
+      return 'Outlook Calendar is not configured on this server.';
+    case 'missing_code':
+      return 'Microsoft did not return an authorization code. Please try again.';
+    default:
+      return 'Could not connect Outlook. Please try again.';
+  }
+}
+
+/**
  * Connections settings — the workspace's outbound integrations in one place:
  *  - Single sign-on (OIDC) via the per-workspace SSO controller,
  *  - Google Calendar two-way sync via the env-gated google-calendar controller,
@@ -64,30 +99,40 @@ export default function ConnectionsPage() {
   const qc = useQueryClient();
 
   const gcalResult = searchParams.get('gcal');
-  const [tab, setTab] = useState(gcalResult ? 'google-calendar' : 'sso');
+  const outlookResult = searchParams.get('outlook');
+  const [tab, setTab] = useState(
+    gcalResult ? 'google-calendar' : outlookResult ? 'outlook-calendar' : 'sso',
+  );
   const handled = useRef(false);
 
   useEffect(() => {
-    if (handled.current || !gcalResult) return;
+    if (handled.current || (!gcalResult && !outlookResult)) return;
     handled.current = true;
 
-    if (gcalResult === 'connected') {
-      toast.success(
-        t('connections.gcal.connectedToast', { defaultValue: 'Google Calendar connected' }),
-      );
-      qc.invalidateQueries({ queryKey: googleCalendarKey });
-    } else {
-      const reason = searchParams.get('reason') ?? 'unknown';
-      toast.error(
-        t(`connections.gcal.errorReason.${reason}`, { defaultValue: gcalErrorFallback(reason) }),
-      );
+    if (gcalResult) {
+      if (gcalResult === 'connected') {
+        toast.success(t('connections.gcal.connectedToast', { defaultValue: 'Google Calendar connected' }));
+        qc.invalidateQueries({ queryKey: googleCalendarKey });
+      } else {
+        const reason = searchParams.get('reason') ?? 'unknown';
+        toast.error(t(`connections.gcal.errorReason.${reason}`, { defaultValue: gcalErrorFallback(reason) }));
+      }
+    } else if (outlookResult) {
+      if (outlookResult === 'connected') {
+        toast.success(t('connections.outlook.connectedToast', { defaultValue: 'Outlook connected' }));
+        qc.invalidateQueries({ queryKey: outlookCalendarKey });
+      } else {
+        const reason = searchParams.get('reason') ?? 'unknown';
+        toast.error(t(`connections.outlook.errorReason.${reason}`, { defaultValue: outlookErrorFallback(reason) }));
+      }
     }
 
     const next = new URLSearchParams(searchParams);
     next.delete('gcal');
+    next.delete('outlook');
     next.delete('reason');
     setSearchParams(next, { replace: true });
-  }, [gcalResult, searchParams, setSearchParams, qc, t]);
+  }, [gcalResult, outlookResult, searchParams, setSearchParams, qc, t]);
 
   return (
     <div className="space-y-5">
@@ -108,6 +153,10 @@ export default function ConnectionsPage() {
             <CalendarDays className="me-2 h-4 w-4" aria-hidden="true" />
             {t('connections.tabs.googleCalendar', { defaultValue: 'Google Calendar' })}
           </TabsTrigger>
+          <TabsTrigger value="outlook-calendar">
+            <CalendarClock className="me-2 h-4 w-4" aria-hidden="true" />
+            {t('connections.tabs.outlookCalendar', { defaultValue: 'Outlook' })}
+          </TabsTrigger>
           <TabsTrigger value="slack">
             <SlackIcon className="me-2 h-4 w-4" aria-hidden="true" />
             {t('connections.tabs.slack', { defaultValue: 'Slack' })}
@@ -119,6 +168,9 @@ export default function ConnectionsPage() {
         </TabsContent>
         <TabsContent value="google-calendar">
           <GoogleCalendarTab />
+        </TabsContent>
+        <TabsContent value="outlook-calendar">
+          <OutlookCalendarTab />
         </TabsContent>
         <TabsContent value="slack">
           <SlackTab />

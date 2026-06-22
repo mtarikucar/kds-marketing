@@ -123,6 +123,8 @@ const OWNED_DELEGATES = [
   'ssoConnection',
   // Integrations (env-gated Google Calendar 2-way sync).
   'googleCalendarConnection',
+  // Integrations (env-gated Outlook/O365 calendar — Epic 12, inert).
+  'outlookCalendarConnection',
   // Affiliate manager (GHL parity).
   'affiliate',
   'affiliateReferral',

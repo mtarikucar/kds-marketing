@@ -2636,6 +2636,32 @@ model GoogleCalendarConnection {
   @@map("google_calendar_connections")
 }
 
+/// Epic 12 (needs-external, inert until an Azure AD app + MS_OAUTH creds) —
+/// Microsoft Outlook/O365 calendar connection. Mirrors GoogleCalendarConnection:
+/// sealed access/refresh tokens, a Graph delta cursor, and (for the deferred
+/// real-time sync) a change-notification subscription.
+model OutlookCalendarConnection {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  marketingUserId String
+  outlookCalendarId String @default("primary")
+  accessToken     String // SEALED — masked out of API responses
+  refreshToken    String // SEALED — masked out of API responses
+  tokenExpiresAt  DateTime
+  deltaToken             String? // Graph /me/events delta cursor (nullable until first pull)
+  subscriptionId         String? // Graph change-notification subscription id; unique when set
+  clientState            String? // per-subscription verification nonce
+  subscriptionExpiration DateTime? // when the Graph subscription expires (drives renewal)
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, marketingUserId])
+  @@unique([subscriptionId])
+  @@map("outlook_calendar_connections")
+}
+
 /// Epic F — a workspace-defined custom role with a granular permission set
 /// (array of permission keys from the catalog). Assigned to MarketingUsers via
 /// `customRoleId`; overrides the legacy OWNER/MANAGER/REP mapping.

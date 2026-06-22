@@ -247,6 +247,11 @@ import {
 } from './integrations/google-calendar.controller';
 import { GoogleCalendarService } from './integrations/google-calendar.service';
 import { GoogleCalendarSyncService } from './integrations/google-calendar-sync.service';
+import {
+  OutlookCalendarController,
+  OutlookCalendarPublicController,
+} from './integrations/outlook-calendar.controller';
+import { OutlookCalendarService } from './integrations/outlook-calendar.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -458,6 +463,8 @@ import { WalletService } from './wallet/wallet.service';
     SsoPublicController,
     GoogleCalendarController,
     GoogleCalendarPublicController,
+    OutlookCalendarController,
+    OutlookCalendarPublicController,
     AffiliateController,
     PublicAffiliatePortalController,
     AgencyController,
@@ -632,6 +639,7 @@ import { WalletService } from './wallet/wallet.service';
     SsoService,
     // Integrations — env-gated Google Calendar 2-way sync.
     GoogleCalendarService,
+    OutlookCalendarService,
     GoogleCalendarSyncService,
     // Epic F — custom roles + permissions.
     RolesService,

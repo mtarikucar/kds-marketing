@@ -46,6 +46,27 @@ export interface GoogleCalendarStatus {
   connections: GoogleCalendarConnection[];
 }
 
+/** Epic 12 (inert until MS_OAUTH creds) — Outlook/O365 calendar connection. */
+export interface OutlookCalendarConnection {
+  id: string;
+  workspaceId: string;
+  marketingUserId: string;
+  outlookCalendarId: string;
+  tokenSet: boolean;
+  tokenExpiresAt: string;
+  syncEnabled: boolean;
+  subscriptionActive: boolean;
+  hasDeltaCursor: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutlookCalendarStatus {
+  /** False ⇒ operator hasn't supplied MS_OAUTH_* / MARKETING_SECRET_KEY. */
+  configured: boolean;
+  connections: OutlookCalendarConnection[];
+}
+
 // ── Slack ─────────────────────────────────────────────────────────────────────
 
 export type SlackStatus = 'ACTIVE' | 'DISABLED';
