@@ -2104,7 +2104,7 @@ model CustomerSubscription {
 model WorkspacePspConfig {
   id           String  @id @default(uuid())
   workspaceId  String  @unique
-  provider     String  @default("MANUAL") // STRIPE | MANUAL
+  provider     String  @default("MANUAL") // STRIPE | PAYTR | MANUAL
   configSealed String? @db.Text
   configPublic Json?
 

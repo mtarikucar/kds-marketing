@@ -1,6 +1,8 @@
-import { Controller, Get, Post, Param, Query, Res } from '@nestjs/common';
-import { Response } from 'express';
+import { Body, Controller, Get, Post, Param, Query, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
@@ -43,9 +45,20 @@ export class PublicInvoiceController {
     );
   }
 
+  /** PayTR notification (Bildirim URL) — verify + settle; PayTR needs a literal "OK". */
+  @Post('i/paytr/callback')
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
+  async paytrCallback(@Body() body: Record<string, string>, @Res() res: Response): Promise<void> {
+    let ok = false;
+    try { ok = await this.invoices.paytrCallback(body); } catch { ok = false; }
+    // PayTR retries until it receives the literal "OK"; reply OK once verified
+    // (even on a non-success status, so it stops), FAIL only on an unmatched/forged hit.
+    res.status(200).type('text/plain').send(ok ? 'OK' : 'FAIL');
+  }
+
   @Post('i/:token/pay')
-  pay(@Param('token') token: string) {
-    return this.invoices.pay(token);
+  pay(@Param('token') token: string, @Req() req: Request) {
+    return this.invoices.pay(token, getClientIp(req));
   }
 
   @Get('i/:token/return')

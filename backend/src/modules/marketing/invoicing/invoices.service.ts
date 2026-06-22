@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   BadRequestException,
   NotFoundException,
   ServiceUnavailableException,
@@ -15,6 +16,12 @@ import { MarketingEventTypes } from '../events/marketing-event-types';
 import { TaxRatesService } from '../tax-rates/tax-rates.service';
 import { WalletService } from '../wallet/wallet.service';
 import { computeMoneyTotals, PricedItem, PG_INT_MAX } from './money.util';
+import {
+  PAYTR_DEFAULT_BASE_URL,
+  buildIframeTokenSignature,
+  encodeUserBasket,
+  verifyCallbackHash,
+} from '../../billing/payments/paytr.provider';
 
 /**
  * End-customer invoicing. The workspace bills ITS customers; payment runs
@@ -24,6 +31,7 @@ import { computeMoneyTotals, PricedItem, PG_INT_MAX } from './money.util';
  */
 @Injectable()
 export class InvoicesService {
+  private readonly logger = new Logger(InvoicesService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -229,11 +237,22 @@ export class InvoicesService {
     };
   }
 
-  async pay(token: string): Promise<{ redirectUrl?: string; manual?: unknown }> {
+  async pay(token: string, buyerIp = '0.0.0.0'): Promise<{ redirectUrl?: string; manual?: unknown }> {
     const inv = await this.prisma.invoice.findUnique({ where: { publicToken: token } });
     if (!inv) throw new NotFoundException('Invoice not found');
     if (inv.status === 'PAID') return { manual: { alreadyPaid: true } };
+    // A cancelled invoice is never payable through ANY provider — refuse before we
+    // ever mint a Stripe session / PayTR token for an order that can't settle.
+    if (inv.status === 'VOID') return { manual: { voided: true } };
     const psp = await this.prisma.workspacePspConfig.findUnique({ where: { workspaceId: inv.workspaceId } });
+    // PayTR (Epic 13, inert until a workspace stores PayTR merchant creds). TRY
+    // only — PayTR's "199$ collected as 199TL" footgun is avoided by refusing a
+    // non-TRY invoice. Reuses the battle-tested billing PayTR crypto helpers; the
+    // per-ws merchant creds come from the sealed PSP config (never the platform env).
+    if (psp?.provider === 'PAYTR') {
+      const redirectUrl = await this.payViaPaytr(inv, psp.configSealed, buyerIp);
+      return { redirectUrl };
+    }
     if (psp?.provider === 'STRIPE') {
       const secrets = this.openPsp(psp.configSealed);
       const key = secrets.secretKey;
@@ -266,16 +285,141 @@ export class InvoicesService {
     return { paid: false };
   }
 
+  // ---- PayTR (Epic 13, inert) ----
+
+  /** PayTR merchant_oid for an invoice — alphanumeric (PayTR rejects dashes). */
+  private static invoiceOid(invoiceId: string): string {
+    return `INV${invoiceId.replace(/-/g, '')}`;
+  }
+  /** Reverse the OID back to the invoice uuid (deterministic dash positions). */
+  private static oidToInvoiceId(oid: string): string | null {
+    if (!oid?.startsWith('INV')) return null;
+    const h = oid.slice(3);
+    if (!/^[0-9a-f]{32}$/i.test(h)) return null;
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+
+  /** Build a PayTR get-token request and return the hosted-iframe redirect URL. */
+  private async payViaPaytr(
+    inv: { id: string; workspaceId: string; leadId: string | null; total: number; currency: string; number: string; publicToken: string },
+    configSealed: string | null,
+    buyerIp: string,
+  ): Promise<string> {
+    if (inv.currency !== 'TRY') {
+      throw new BadRequestException('PayTR collects TRY only — this invoice is in ' + inv.currency);
+    }
+    const secrets = this.openPsp(configSealed);
+    const merchantId = secrets.merchantId;
+    const merchantKey = secrets.merchantKey;
+    const merchantSalt = secrets.merchantSalt;
+    if (!merchantId || !merchantKey || !merchantSalt) {
+      throw new ServiceUnavailableException('PayTR is not configured for this workspace');
+    }
+    const lead = inv.leadId
+      ? await this.prisma.lead.findFirst({ where: { id: inv.leadId, workspaceId: inv.workspaceId }, select: { email: true, contactPerson: true, phone: true } })
+      : null;
+    const email = lead?.email || 'noreply@example.com';
+    const testMode = (this.config.get<string>('PAYTR_TEST_MODE') === '0') ? '0' : '1';
+    const paymentAmount = String(inv.total); // already minor units (kuruş)
+    const userBasketBase64 = encodeUserBasket([[`Invoice ${inv.number}`, (inv.total / 100).toFixed(2), 1]]);
+    const merchantOid = InvoicesService.invoiceOid(inv.id);
+    const paytrToken = buildIframeTokenSignature(
+      { merchantId, userIp: buyerIp, merchantOid, email, paymentAmount, userBasketBase64, noInstallment: '0', maxInstallment: '0', currency: 'TL', testMode },
+      { merchantKey, merchantSalt },
+    );
+    const returnUrl = `${this.base()}/api/public/i/${inv.publicToken}`; // public pay page (renders "✓ Paid" once settled); inv.id would 404 (route looks up by token)
+    const form = new URLSearchParams({
+      merchant_id: merchantId, user_ip: buyerIp, merchant_oid: merchantOid, email,
+      payment_amount: paymentAmount, paytr_token: paytrToken, user_basket: userBasketBase64,
+      debug_on: testMode === '1' ? '1' : '0', no_installment: '0', max_installment: '0',
+      user_name: lead?.contactPerson || email, user_address: 'N/A', user_phone: lead?.phone || 'N/A',
+      merchant_ok_url: returnUrl, merchant_fail_url: returnUrl, timeout_limit: '30', currency: 'TL', test_mode: testMode,
+    });
+    const base = (this.config.get<string>('PAYTR_BASE_URL') ?? PAYTR_DEFAULT_BASE_URL).replace(/\/+$/, '');
+    let res: Response;
+    try {
+      res = await fetch(`${base}/odeme/api/get-token`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(), signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('PayTR is currently unreachable');
+    }
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!res.ok || body?.status !== 'success' || !body?.token) {
+      throw new ServiceUnavailableException(String(body?.reason ?? body?.err_msg ?? 'PayTR rejected the payment'));
+    }
+    return `${base}/odeme/guvenli/${body.token}`;
+  }
+
+  /**
+   * PayTR callback ("Bildirim URL"): verify the signed notification against the
+   * invoice's workspace PSP creds and settle on success. Returns whether to reply
+   * the literal "OK" PayTR expects (anything else makes PayTR retry).
+   */
+  async paytrCallback(body: { merchant_oid?: string; status?: string; total_amount?: string; hash?: string }): Promise<boolean> {
+    const oid = body?.merchant_oid ?? '';
+    const invoiceId = InvoicesService.oidToInvoiceId(oid);
+    if (!invoiceId || !body?.hash || !body?.status || body?.total_amount == null) return false;
+    const inv = await this.prisma.invoice.findUnique({ where: { id: invoiceId } });
+    if (!inv) return false;
+    const psp = await this.prisma.workspacePspConfig.findUnique({ where: { workspaceId: inv.workspaceId } });
+    if (psp?.provider !== 'PAYTR') return false;
+    const secrets = this.openPsp(psp.configSealed);
+    if (!secrets.merchantKey || !secrets.merchantSalt) return false;
+    const ok = verifyCallbackHash({
+      merchantOid: oid, merchantSalt: secrets.merchantSalt, status: body.status,
+      totalAmount: String(body.total_amount), merchantKey: secrets.merchantKey, providedHash: body.hash,
+    });
+    if (!ok) return false; // forged / wrong workspace — ignore (still ACK so PayTR stops)
+    if (body.status === 'success') {
+      // Amount-tamper guard: the signed hash covers the amount PayTR REPORTS, not
+      // that it equals what we billed (inv.total). A verified-but-mismatched amount
+      // — partial/installment capture, kuruş/currency drift, or a callback replayed
+      // from a smaller order under the same merchant salt — must NOT flip the invoice
+      // to fully PAID (the "199$ collected as 199 TL" footgun). Both are kuruş.
+      const paidKurus = Number.parseInt(String(body.total_amount), 10);
+      if (!Number.isFinite(paidKurus) || paidKurus !== inv.total) {
+        this.logger.warn(
+          `PayTR callback amount mismatch for invoice ${inv.id}: collected ${body.total_amount} vs billed ${inv.total} — verified hash but NOT settling`,
+        );
+        return true; // verified → ACK so PayTR stops retrying, but do NOT settle
+      }
+      await this.settle(inv, 'paytr');
+    }
+    return true; // verified → ACK with "OK"
+  }
+
   // ---- helpers ----
+  /**
+   * Settle an invoice to PAID and emit invoice.paid EXACTLY ONCE. The flip is a
+   * CONDITIONAL claim (status IN DRAFT/SENT) inside a tx, mirroring payWithWallet:
+   * a VOID or already-PAID invoice matches 0 rows (so a PSP callback can never
+   * settle a cancelled invoice — even if a token was minted just before the void),
+   * and concurrent PSP callback retries race on the row write-lock so only the
+   * winner appends the outbox event (no double invoice.paid).
+   */
   private async settle(inv: { id: string; workspaceId: string; leadId: string | null; status: string; total: number; currency: string }, via: string) {
     if (inv.status === 'PAID') return inv;
-    const updated = await this.prisma.invoice.update({ where: { id: inv.id }, data: { status: 'PAID', paidAt: new Date(), paidVia: via } });
-    await this.outbox.append({
-      type: MarketingEventTypes.InvoicePaid,
-      idempotencyKey: `invoice-paid:${inv.id}`,
-      payload: { workspaceId: inv.workspaceId, invoiceId: inv.id, leadId: inv.leadId, total: inv.total, currency: inv.currency, via, occurredAt: new Date().toISOString() },
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.invoice.updateMany({
+        where: { id: inv.id, workspaceId: inv.workspaceId, status: { in: ['DRAFT', 'SENT'] } },
+        data: { status: 'PAID', paidAt: new Date(), paidVia: via },
+      });
+      if (claimed.count === 0) {
+        // VOID / already-PAID / a concurrent retry won the claim — do NOT re-emit.
+        return tx.invoice.findFirst({ where: { id: inv.id, workspaceId: inv.workspaceId } });
+      }
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.InvoicePaid,
+          idempotencyKey: `invoice-paid:${inv.id}`,
+          payload: { workspaceId: inv.workspaceId, invoiceId: inv.id, leadId: inv.leadId, total: inv.total, currency: inv.currency, via, occurredAt: new Date().toISOString() },
+        },
+        tx as any,
+      );
+      return tx.invoice.findFirst({ where: { id: inv.id, workspaceId: inv.workspaceId } });
     });
-    return updated;
   }
   private openPsp(sealed: string | null): Record<string, string> {
     if (!sealed || !isSecretBoxConfigured()) return {};
