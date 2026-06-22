@@ -49,8 +49,25 @@ function refreshMarketingToken(): Promise<string> {
   return refreshInFlight;
 }
 
-marketingApi.interceptors.request.use((config) => {
-  const { accessToken } = useMarketingAuthStore.getState();
+marketingApi.interceptors.request.use(async (config) => {
+  let { accessToken } = useMarketingAuthStore.getState();
+  const { refreshToken } = useMarketingAuthStore.getState();
+  // The access token lives in memory only (never persisted), so every full
+  // page load / F5 / deep link starts with it null while the refresh token
+  // survives in sessionStorage. Without this, the first wave of queries fired
+  // on mount went out with no Authorization header → "No token provided" 401s
+  // (recovered by the response interceptor, but noisy + a wasted round-trip).
+  // Proactively run the single-flight refresh here so those first requests
+  // carry a fresh token. Single-flight means N parallel mount requests share
+  // ONE refresh.
+  if (!accessToken && refreshToken) {
+    try {
+      accessToken = await refreshMarketingToken();
+    } catch {
+      // Refresh failed (e.g. revoked/expired refresh token) — let the request
+      // proceed unauthenticated; the response interceptor handles the logout.
+    }
+  }
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;
   }
