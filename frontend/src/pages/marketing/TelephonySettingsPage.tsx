@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import TestWebphonePanel from '../../features/marketing/webphone/TestWebphonePanel';
+import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -15,6 +16,8 @@ interface TelephonyConfigView {
   status: string;
   trunk?: string | null;
   pbxnum?: string | null;
+  wssUrl?: string | null;
+  sipDomain?: string | null;
   configuredSecrets: string[];
 }
 
@@ -23,11 +26,19 @@ interface TelephonyFormValues {
   password: string;
   trunk: string;
   pbxnum: string;
+  wssUrl: string;
+  sipDomain: string;
+}
+
+interface DahiliFormValues {
+  dahili: string;
+  sipPassword: string;
 }
 
 export default function TelephonySettingsPage() {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
+  const userId = useMarketingAuthStore((s) => s.user?.id);
 
   const { data: cfg } = useQuery<TelephonyConfigView | null>({
     queryKey: ['marketing', 'telephony', 'config'],
@@ -40,11 +51,21 @@ export default function TelephonySettingsPage() {
       password: '',
       trunk: '',
       pbxnum: '',
+      wssUrl: '',
+      sipDomain: '',
     },
   });
 
   useEffect(() => {
-    if (cfg) form.reset({ username: '', password: '', trunk: cfg.trunk ?? '', pbxnum: cfg.pbxnum ?? '' });
+    if (cfg)
+      form.reset({
+        username: '',
+        password: '',
+        trunk: cfg.trunk ?? '',
+        pbxnum: cfg.pbxnum ?? '',
+        wssUrl: cfg.wssUrl ?? '',
+        sipDomain: cfg.sipDomain ?? '',
+      });
   }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useMutation({
@@ -56,10 +77,38 @@ export default function TelephonySettingsPage() {
         },
         trunk: v.trunk || undefined,
         pbxnum: v.pbxnum || undefined,
+        // Empty strings would fail the wss:// validator — send undefined to
+        // keep the stored value untouched on a partial save.
+        wssUrl: v.wssUrl || undefined,
+        sipDomain: v.sipDomain || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['marketing', 'telephony', 'config'] });
+      // The webphone registers only once config + wss/domain are present.
+      qc.invalidateQueries({ queryKey: ['marketing', 'telephony', 'webphone-config'] });
       toast.success(t('telephony.saved', 'Saved'));
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('telephony.saveFailed', 'Save failed')),
+  });
+
+  const dahiliForm = useForm<DahiliFormValues>({
+    defaultValues: { dahili: '', sipPassword: '' },
+  });
+
+  const saveDahili = useMutation({
+    mutationFn: (v: DahiliFormValues) => {
+      if (!userId) throw new Error('not authenticated');
+      return marketingApi.patch(`/telephony/users/${userId}/dahili`, {
+        dahili: v.dahili || null,
+        ...(v.sipPassword ? { sipPassword: v.sipPassword } : {}),
+      });
+    },
+    onSuccess: () => {
+      // Re-fetch so the Test Webphone panel picks up the new dahili and registers.
+      qc.invalidateQueries({ queryKey: ['marketing', 'telephony', 'webphone-config'] });
+      dahiliForm.reset({ dahili: dahiliForm.getValues('dahili'), sipPassword: '' });
+      toast.success(t('telephony.dahiliSaved', 'Extension saved'));
     },
     onError: (e: any) =>
       toast.error(e.response?.data?.message ?? t('telephony.saveFailed', 'Save failed')),
@@ -113,6 +162,24 @@ export default function TelephonySettingsPage() {
               <Field label="pbxnum (optional)">
                 {({ id }) => <Input id={id} {...form.register('pbxnum')} />}
               </Field>
+              <Field label="wssUrl (WebRTC)">
+                {({ id }) => (
+                  <Input
+                    id={id}
+                    placeholder="wss://sip5.netsantral.com:8089/ws"
+                    {...form.register('wssUrl')}
+                  />
+                )}
+              </Field>
+              <Field label="sipDomain">
+                {({ id }) => (
+                  <Input
+                    id={id}
+                    placeholder="sip5.netsantral.com"
+                    {...form.register('sipDomain')}
+                  />
+                )}
+              </Field>
             </div>
             <p className="text-caption text-muted-foreground">
               {cfg?.configuredSecrets?.length
@@ -125,6 +192,47 @@ export default function TelephonySettingsPage() {
           </form>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          <div>
+            <p className="font-medium">{t('telephony.myExtension', 'Webphone — my extension')}</p>
+            <p className="text-caption text-muted-foreground">
+              {t(
+                'telephony.myExtensionHint',
+                'Assign your own Netsantral extension + its SIP password to ring/answer calls in this browser.',
+              )}
+            </p>
+          </div>
+          <form
+            onSubmit={dahiliForm.handleSubmit((v) => saveDahili.mutate(v))}
+            className="space-y-4"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="dahili">
+                {({ id }) => (
+                  <Input id={id} placeholder="101" {...dahiliForm.register('dahili')} />
+                )}
+              </Field>
+              <Field label="SIP password">
+                {({ id }) => (
+                  <Input
+                    id={id}
+                    type="password"
+                    placeholder="••••••••"
+                    autoComplete="off"
+                    {...dahiliForm.register('sipPassword')}
+                  />
+                )}
+              </Field>
+            </div>
+            <Button type="submit" loading={saveDahili.isPending} disabled={!userId}>
+              {t('common.save', 'Save')}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
       <TestWebphonePanel />
     </div>
   );
