@@ -1,5 +1,5 @@
 import * as fetchMod from '../../../../common/util/safe-fetch';
-import { metaProvider, buildAuthorizeUrl } from './social-oauth.providers';
+import { metaProvider, linkedinProvider, buildAuthorizeUrl } from './social-oauth.providers';
 
 jest.mock('../../../../common/util/safe-fetch');
 const mockFetch = fetchMod.safeFetch as jest.Mock;
@@ -28,6 +28,52 @@ describe('buildAuthorizeUrl', () => {
     expect(url).toContain('client_key=TTKEY');
     expect(url).not.toContain('client_id=');
     expect(decodeURIComponent(url)).toContain('video.publish');
+  });
+
+  it('LinkedIn: space-delimited scopes incl. org share', () => {
+    process.env.LINKEDIN_CLIENT_ID = 'LIID';
+    process.env.API_URL = 'https://api.x/api';
+    const url = buildAuthorizeUrl('LINKEDIN', 'S');
+    expect(url).toContain('client_id=LIID');
+    const decoded = decodeURIComponent(url);
+    expect(decoded).toContain('w_organization_social');
+    expect(decoded).toContain('w_member_social');
+  });
+});
+
+describe('linkedinProvider.listAssets', () => {
+  beforeEach(() => {
+    process.env.LINKEDIN_CLIENT_ID = 'a';
+    process.env.LINKEDIN_CLIENT_SECRET = 'b';
+    mockFetch.mockReset();
+  });
+
+  it('returns the member profile and admined organizations', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ sub: 'urn-sub-1', name: 'Jane' })) // userinfo
+      .mockResolvedValueOnce(
+        res({
+          elements: [
+            { organization: 'urn:li:organization:999', 'organization~': { localizedName: 'Acme Inc' } },
+          ],
+        }),
+      ); // organizationAcls
+    const assets = await linkedinProvider.listAssets('TOKEN');
+    expect(assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ externalId: 'urn-sub-1', accountType: 'LI_PERSON' }),
+        expect.objectContaining({ externalId: '999', accountType: 'LI_ORG', displayName: 'Acme Inc' }),
+      ]),
+    );
+  });
+
+  it('still returns the profile when the org call fails', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ sub: 'urn-sub-1', name: 'Jane' }))
+      .mockRejectedValueOnce(new Error('403'));
+    const assets = await linkedinProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0].accountType).toBe('LI_PERSON');
   });
 });
 

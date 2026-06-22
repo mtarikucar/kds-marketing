@@ -124,12 +124,109 @@ export const metaProvider: SocialOAuthProvider = {
   },
 };
 
-/** Dispatch to the right provider. LinkedIn/TikTok added in later phases. */
+// ──────────────────────────────────────────────────────────────── LinkedIn
+
+const LI_TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
+
+async function linkedinTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  const res = await safeFetch(LI_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.error_description ?? json?.error ?? 'linkedin token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/** LinkedIn — connects the member's own profile and any organizations they admin. */
+export const linkedinProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    return linkedinTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('LINKEDIN'),
+      client_id: clientId('LINKEDIN') ?? '',
+      client_secret: clientSecret('LINKEDIN') ?? '',
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return linkedinTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId('LINKEDIN') ?? '',
+      client_secret: clientSecret('LINKEDIN') ?? '',
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const out: ConnectableAsset[] = [];
+    // The member's own profile (OpenID userinfo).
+    try {
+      const meRes = await safeFetch('https://api.linkedin.com/v2/userinfo', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        timeoutMs: 15000,
+      });
+      const me = (await meRes.json()) as any;
+      if (meRes.ok && me?.sub) {
+        out.push({
+          externalId: me.sub,
+          displayName: me.name ? `${me.name} (LinkedIn)` : 'My LinkedIn profile',
+          accountType: 'LI_PERSON',
+          token,
+        });
+      }
+    } catch {
+      /* userinfo unavailable — skip the person asset */
+    }
+    // Organizations the member administers.
+    try {
+      const orgRes = await safeFetch(
+        'https://api.linkedin.com/v2/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(organization~(localizedName)))',
+        {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'X-Restli-Protocol-Version': '2.0.0' },
+          timeoutMs: 15000,
+        },
+      );
+      const orgs = (await orgRes.json()) as any;
+      for (const el of orgs?.elements ?? []) {
+        const urn: string = el?.organization ?? '';
+        const id = urn.split(':').pop();
+        const name = el?.['organization~']?.localizedName;
+        if (id) {
+          out.push({
+            externalId: id,
+            displayName: name ?? `Organization ${id}`,
+            accountType: 'LI_ORG',
+            token,
+          });
+        }
+      }
+    } catch {
+      /* no admin orgs / insufficient scope — person-only is fine */
+    }
+    return out;
+  },
+};
+
+/** Dispatch to the right provider. TikTok added in a later phase. */
 export function providerFor(network: Network): SocialOAuthProvider {
   switch (network) {
     case 'FACEBOOK':
     case 'INSTAGRAM':
       return metaProvider;
+    case 'LINKEDIN':
+      return linkedinProvider;
     default:
       throw new Error(`OAuth provider not implemented for ${network}`);
   }
