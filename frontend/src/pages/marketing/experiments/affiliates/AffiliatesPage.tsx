@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Plus, Pencil, Trash2, BadgeDollarSign, CheckCircle2, Banknote, Users } from 'lucide-react';
+import { Plus, Pencil, Trash2, BadgeDollarSign, CheckCircle2, Banknote, Users, KeyRound, Copy } from 'lucide-react';
 import marketingApi from '../../../../features/marketing/api/marketingApi';
 import { fmtDate } from '../../../../features/marketing/utils/format';
 import { formatMoney, asWorkspaceCurrency } from '../../../../lib/money';
@@ -30,6 +30,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
 } from '@/components/ui';
 import { AffiliateFormDialog } from './AffiliateFormDialog';
 import type { AffiliateFormValues } from '../schemas';
@@ -199,6 +205,15 @@ export default function AffiliatesPage() {
     onError: () => toast.error(t('affiliates.payError', { defaultValue: 'Failed to mark commission paid' })),
   });
 
+  // Portal token — minted server-side, shown ONCE in a dialog.
+  const [portalToken, setPortalToken] = useState<string | null>(null);
+  const portalTokenMutation = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/affiliates/${id}/portal-token`).then((r) => r.data as { token: string }),
+    onSuccess: (res) => setPortalToken(res.token),
+    onError: () => toast.error(t('affiliates.portalTokenError', { defaultValue: 'Could not generate portal token' })),
+  });
+  const portalUrl = `${window.location.origin}/affiliate-portal`;
+
   const handleSubmit = (values: AffiliateFormValues) => {
     if (editing) updateMutation.mutate({ id: editing.id, data: toPayload(values, true) });
     else createMutation.mutate(toPayload(values, false));
@@ -291,6 +306,10 @@ export default function AffiliatesPage() {
               >
                 <BadgeDollarSign className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('affiliates.viewCommissions', { defaultValue: 'View commissions' })}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => portalTokenMutation.mutate(a.id)}>
+                <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+                {t('affiliates.generatePortalToken', { defaultValue: 'Generate portal token' })}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setDeleteTarget(a)}>
@@ -562,6 +581,41 @@ export default function AffiliatesPage() {
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         loading={deleteMutation.isPending}
       />
+
+      {/* Portal token — shown once; the affiliate signs into the portal with it. */}
+      <Dialog open={!!portalToken} onOpenChange={(o) => { if (!o) setPortalToken(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('affiliates.portalTokenTitle', { defaultValue: 'Affiliate portal access' })}</DialogTitle>
+            <DialogDescription>
+              {t('affiliates.portalTokenDesc', { defaultValue: 'Copy this token now — it is shown only once. Share it with the affiliate to sign into the portal.' })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">{t('affiliates.portalUrl', { defaultValue: 'Portal URL' })}</p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded border border-border bg-surface-muted px-2 py-1.5 text-xs">{portalUrl}</code>
+                <IconButton size="sm" variant="ghost" aria-label={t('common.copy', { defaultValue: 'Copy' })} onClick={() => navigator.clipboard.writeText(portalUrl)}>
+                  <Copy className="h-4 w-4" />
+                </IconButton>
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">{t('affiliates.portalToken', { defaultValue: 'Token' })}</p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded border border-border bg-surface-muted px-2 py-1.5 font-mono text-xs">{portalToken}</code>
+                <IconButton size="sm" variant="ghost" aria-label={t('common.copy', { defaultValue: 'Copy' })} onClick={() => portalToken && navigator.clipboard.writeText(portalToken)}>
+                  <Copy className="h-4 w-4" />
+                </IconButton>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setPortalToken(null)}>{t('common.done', { defaultValue: 'Done' })}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

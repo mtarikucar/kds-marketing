@@ -179,6 +179,8 @@ import { BrandingService } from './branding/branding.service';
 // GHL parity — affiliate manager (affiliates, referrals, commissions, payouts).
 import { AffiliateController } from './controllers/affiliate.controller';
 import { AffiliateService } from './services/affiliate.service';
+import { PublicAffiliatePortalController } from './controllers/public-affiliate-portal.controller';
+import { AffiliatePortalGuard } from './guards/affiliate-portal.guard';
 
 // Epic D1 (GHL parity) — agency / sub-account hierarchy (agency owns location
 // workspaces; scoped cross-into-child management behind assertAgencyOwns).
@@ -454,6 +456,7 @@ import { WalletService } from './wallet/wallet.service';
     GoogleCalendarController,
     GoogleCalendarPublicController,
     AffiliateController,
+    PublicAffiliatePortalController,
     AgencyController,
     SnapshotController,
     RebillingController,
@@ -644,6 +647,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingGuard,
     MarketingRolesGuard,
     IngestTokenGuard,
+    AffiliatePortalGuard,
     FeatureGuard,
     ApiKeyGuard,
   ],

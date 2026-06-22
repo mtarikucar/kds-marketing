@@ -2625,6 +2625,10 @@ model Affiliate {
   commissionType  String   // PERCENT | FLAT
   commissionValue Decimal  @db.Decimal(10, 2)
   status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED
+  // Self-serve portal (Epic 11a): sha256 of the affiliate's portal bearer token
+  // (shown once on generation, like IngestToken). null = no portal access yet.
+  portalTokenHash String?  @unique
+  lastLoginAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

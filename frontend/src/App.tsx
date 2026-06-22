@@ -48,6 +48,7 @@ const CourseEditorPage         = lazy(() => import('./pages/marketing/membership
 const CommunitiesPage          = lazy(() => import('./pages/marketing/memberships/communities'));
 const CommunityDetailPage      = lazy(() => import('./pages/marketing/memberships/communities/CommunityDetailPage'));
 const LeaderboardPage          = lazy(() => import('./pages/marketing/memberships/gamification/LeaderboardPage'));
+const AffiliatePortalPage      = lazy(() => import('./pages/marketing/affiliate-portal/AffiliatePortalPage'));
 const AgencyLocationsPage      = lazy(() => import('./pages/marketing/agency/LocationsPage'));
 const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/SnapshotsPage'));
 const AgencyRebillingPage      = lazy(() => import('./pages/marketing/agency/RebillingPage'));
@@ -120,6 +121,8 @@ export default function App() {
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
       <Route path="/widget"   element={<S><WidgetChatPage /></S>} />
+      {/* Standalone affiliate self-serve portal (token-authenticated, no session). */}
+      <Route path="/affiliate-portal" element={<S><AffiliatePortalPage /></S>} />
 
       {/* Platform (superadmin) realm — separate auth store + token. The login
           page sits OUTSIDE the layout; PlatformLayout carries the realm auth
