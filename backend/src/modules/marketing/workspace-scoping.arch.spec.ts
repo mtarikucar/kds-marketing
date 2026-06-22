@@ -159,6 +159,8 @@ const OWNED_DELEGATES = [
   // Trigger links (GHL parity): trackable short links + their click rows.
   'triggerLink',
   'triggerLinkClick',
+  // Tax rates (GHL parity): reusable per-workspace KDV/VAT rates.
+  'taxRate',
 ] as const;
 
 /**

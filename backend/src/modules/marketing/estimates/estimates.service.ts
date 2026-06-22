@@ -3,18 +3,15 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { TaxRatesService } from '../tax-rates/tax-rates.service';
+import { computeMoneyTotals, PricedItem, PG_INT_MAX } from '../invoicing/money.util';
 import { CreateEstimateDto, UpdateEstimateDto } from '../dto/estimate.dto';
-
-interface EstimateItem {
-  description: string;
-  qty: number;
-  unitPrice: number;
-}
 
 /**
  * Estimates / quotes (GoHighLevel parity). A priced document of line items that
@@ -31,17 +28,8 @@ export class EstimatesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly invoices: InvoicesService,
+    private readonly taxRates: TaxRatesService,
   ) {}
-
-  private computeTotal(items: EstimateItem[]): number {
-    return (items ?? []).reduce(
-      (sum, it) =>
-        sum +
-        Math.max(0, Math.round(Number(it.qty) || 0)) *
-          Math.max(0, Math.round(Number(it.unitPrice) || 0)),
-      0,
-    );
-  }
 
   async list(workspaceId: string) {
     return this.prisma.estimate.findMany({
@@ -68,7 +56,12 @@ export class EstimatesService {
   }
 
   async create(workspaceId: string, dto: CreateEstimateDto) {
-    const items = Array.isArray(dto.items) ? dto.items : [];
+    const items = await this.taxRates.resolveItemTaxes(
+      workspaceId,
+      (Array.isArray(dto.items) ? dto.items : []) as PricedItem[],
+    );
+    const totals = computeMoneyTotals(items);
+    if (totals.total > PG_INT_MAX) throw new BadRequestException('Amount exceeds the maximum supported total');
     return this.prisma.estimate.create({
       data: {
         workspaceId,
@@ -76,7 +69,9 @@ export class EstimatesService {
         number: `EST-${randomBytes(4).toString('hex').toUpperCase()}`,
         items: items as unknown as Prisma.InputJsonValue,
         currency: dto.currency ?? 'TRY',
-        total: this.computeTotal(items),
+        subtotal: totals.subtotal,
+        taxTotal: totals.taxTotal,
+        total: totals.total,
         notes: dto.notes ?? null,
         validUntil: dto.validUntil ? new Date(dto.validUntil) : null,
         publicToken: `es_${randomBytes(18).toString('hex')}`,
@@ -93,8 +88,13 @@ export class EstimatesService {
     }
     const data: Prisma.EstimateUpdateInput = {};
     if (dto.items !== undefined) {
-      data.items = dto.items as unknown as Prisma.InputJsonValue;
-      data.total = this.computeTotal(dto.items);
+      const items = await this.taxRates.resolveItemTaxes(workspaceId, dto.items as PricedItem[]);
+      const totals = computeMoneyTotals(items);
+    if (totals.total > PG_INT_MAX) throw new BadRequestException('Amount exceeds the maximum supported total');
+      data.items = items as unknown as Prisma.InputJsonValue;
+      data.subtotal = totals.subtotal;
+      data.taxTotal = totals.taxTotal;
+      data.total = totals.total;
     }
     if (dto.notes !== undefined) data.notes = dto.notes;
     if (dto.currency !== undefined) data.currency = dto.currency;
@@ -151,7 +151,7 @@ export class EstimatesService {
     }
     const invoice = await this.invoices.create(workspaceId, {
       leadId: estimate.leadId ?? undefined,
-      items: estimate.items as unknown as EstimateItem[],
+      items: estimate.items as unknown as PricedItem[],
       currency: estimate.currency,
       notes: estimate.notes ?? undefined,
     });
@@ -185,6 +185,8 @@ export class EstimatesService {
         number: true,
         items: true,
         currency: true,
+        subtotal: true,
+        taxTotal: true,
         total: true,
         notes: true,
         status: true,
@@ -192,7 +194,13 @@ export class EstimatesService {
       },
     });
     if (!estimate) throw new NotFoundException('Estimate not found');
-    return estimate;
+    // Legacy estimates predate the breakdown columns (both 0) — show subtotal=total.
+    const subtotal = estimate.subtotal || estimate.total;
+    return {
+      ...estimate,
+      subtotal,
+      taxLines: computeMoneyTotals(estimate.items as unknown as PricedItem[]).taxLines,
+    };
   }
 
   async publicAccept(token: string) {

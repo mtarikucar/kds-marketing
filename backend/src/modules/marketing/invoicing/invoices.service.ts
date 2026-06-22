@@ -12,8 +12,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 import { MarketingEventTypes } from '../events/marketing-event-types';
-
-interface InvoiceItem { description: string; qty: number; unitPrice: number }
+import { TaxRatesService } from '../tax-rates/tax-rates.service';
+import { computeMoneyTotals, PricedItem, PG_INT_MAX } from './money.util';
 
 /**
  * End-customer invoicing. The workspace bills ITS customers; payment runs
@@ -27,6 +27,7 @@ export class InvoicesService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly outbox: OutboxService,
+    private readonly taxRates: TaxRatesService,
   ) {}
 
   // ---- invoices ----
@@ -45,7 +46,7 @@ export class InvoicesService {
     workspaceId: string,
     dto: {
       leadId?: string;
-      items: InvoiceItem[];
+      items: PricedItem[];
       currency?: string;
       notes?: string;
       dueDate?: string;
@@ -56,7 +57,14 @@ export class InvoicesService {
       subscriptionPeriodKey?: string;
     },
   ) {
-    const items = Array.isArray(dto.items) ? dto.items : [];
+    // Re-snapshot each line's tax rate from the workspace's TaxRate rows, then
+    // compute subtotal/taxTotal/total from those trusted snapshots.
+    const items = await this.taxRates.resolveItemTaxes(
+      workspaceId,
+      (Array.isArray(dto.items) ? dto.items : []) as PricedItem[],
+    );
+    const totals = computeMoneyTotals(items);
+    this.assertInRange(totals.total);
     return this.prisma.invoice.create({
       data: {
         workspaceId,
@@ -64,7 +72,9 @@ export class InvoicesService {
         number: `INV-${randomBytes(4).toString('hex').toUpperCase()}`,
         items: items as unknown as Prisma.InputJsonValue,
         currency: (dto.currency ?? 'TRY').toUpperCase(),
-        total: this.computeTotal(items),
+        subtotal: totals.subtotal,
+        taxTotal: totals.taxTotal,
+        total: totals.total,
         notes: dto.notes ?? null,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
         publicToken: `in_${randomBytes(18).toString('hex')}`,
@@ -81,7 +91,15 @@ export class InvoicesService {
     if (dto.notes !== undefined) data.notes = dto.notes;
     if (dto.currency !== undefined) data.currency = String(dto.currency).toUpperCase();
     if (dto.dueDate !== undefined) data.dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
-    if (dto.items !== undefined) { data.items = dto.items; data.total = this.computeTotal(dto.items); }
+    if (dto.items !== undefined) {
+      const items = await this.taxRates.resolveItemTaxes(workspaceId, dto.items as PricedItem[]);
+      const totals = computeMoneyTotals(items);
+      this.assertInRange(totals.total);
+      data.items = items as unknown as Prisma.InputJsonValue;
+      data.subtotal = totals.subtotal;
+      data.taxTotal = totals.taxTotal;
+      data.total = totals.total;
+    }
     return this.prisma.invoice.update({ where: { id: existing.id }, data });
   }
   async send(workspaceId: string, id: string) {
@@ -131,12 +149,21 @@ export class InvoicesService {
   async publicInvoice(token: string) {
     const inv = await this.prisma.invoice.findUnique({
       where: { publicToken: token },
-      select: { number: true, items: true, currency: true, total: true, notes: true, status: true, dueDate: true, workspaceId: true },
+      select: { number: true, items: true, currency: true, subtotal: true, taxTotal: true, total: true, notes: true, status: true, dueDate: true, workspaceId: true },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
     const psp = await this.prisma.workspacePspConfig.findUnique({ where: { workspaceId: inv.workspaceId }, select: { provider: true, configPublic: true } });
     const { workspaceId, ...pub } = inv;
-    return { ...pub, provider: psp?.provider ?? 'MANUAL', payInstructions: psp?.configPublic ?? null };
+    // Legacy invoices predate the breakdown columns (both 0) — show subtotal=total.
+    const subtotal = pub.subtotal || pub.total;
+    return {
+      ...pub,
+      subtotal,
+      taxTotal: pub.taxTotal,
+      taxLines: computeMoneyTotals(pub.items as unknown as PricedItem[]).taxLines,
+      provider: psp?.provider ?? 'MANUAL',
+      payInstructions: psp?.configPublic ?? null,
+    };
   }
 
   async pay(token: string): Promise<{ redirectUrl?: string; manual?: unknown }> {
@@ -191,8 +218,11 @@ export class InvoicesService {
     if (!sealed || !isSecretBoxConfigured()) return {};
     try { return JSON.parse(openSecret(sealed)); } catch { return {}; }
   }
-  private computeTotal(items: InvoiceItem[]): number {
-    return (items ?? []).reduce((sum, it) => sum + Math.max(0, Math.round(Number(it.qty) || 0)) * Math.max(0, Math.round(Number(it.unitPrice) || 0)), 0);
+  /** Reject a total that would overflow the int4 money columns (and mis-store). */
+  private assertInRange(total: number): void {
+    if (total > PG_INT_MAX) {
+      throw new BadRequestException('Amount exceeds the maximum supported total');
+    }
   }
   private base(): string {
     return this.config.get<string>('PUBLIC_BASE_URL') ?? '';

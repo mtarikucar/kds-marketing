@@ -26,13 +26,23 @@ describe('InvoicesService', () => {
     };
     outbox = { append: jest.fn().mockResolvedValue('e') };
     const config = { get: jest.fn().mockReturnValue('https://m.example') };
-    svc = new InvoicesService(prisma as any, config as any, outbox as any);
+    // Default: no tax (pct 0) — totals equal the pre-tax subtotal, as before.
+    const taxRates = { resolveItemTaxes: jest.fn((_ws: string, items: unknown[]) => Promise.resolve(items ?? [])) };
+    svc = new InvoicesService(prisma as any, config as any, outbox as any, taxRates as any);
   });
 
   it('computes the total from line items (minor units)', async () => {
     await svc.create(WS, { items: [{ description: 'A', qty: 2, unitPrice: 1000 }, { description: 'B', qty: 1, unitPrice: 500 }] });
     expect(prisma.invoice.create.mock.calls[0][0].data.total).toBe(2500);
     expect(prisma.invoice.create.mock.calls[0][0].data.workspaceId).toBe(WS);
+  });
+
+  it('rejects a total that would overflow the int4 money column', async () => {
+    const { BadRequestException } = require('@nestjs/common');
+    await expect(
+      svc.create(WS, { items: [{ description: 'X', qty: 1_000_000, unitPrice: 1_000_000 }] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
   });
 
   it('markPaid settles the invoice + emits invoice.paid', async () => {

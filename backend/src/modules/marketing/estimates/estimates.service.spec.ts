@@ -5,13 +5,16 @@ import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-
 describe('EstimatesService', () => {
   let prisma: MockPrismaClient;
   let invoices: { create: jest.Mock };
+  let taxRates: { resolveItemTaxes: jest.Mock };
   let svc: EstimatesService;
   const WS = 'ws-1';
 
   beforeEach(() => {
     prisma = mockPrismaClient();
     invoices = { create: jest.fn().mockResolvedValue({ id: 'inv-1' }) };
-    svc = new EstimatesService(prisma as any, invoices as any);
+    // Default: no tax (pct 0) — totals equal the pre-tax subtotal, as before.
+    taxRates = { resolveItemTaxes: jest.fn((_ws, items) => Promise.resolve(items ?? [])) };
+    svc = new EstimatesService(prisma as any, invoices as any, taxRates as any);
   });
 
   describe('create', () => {

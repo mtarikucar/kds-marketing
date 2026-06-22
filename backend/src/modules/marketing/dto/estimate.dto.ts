@@ -7,6 +7,7 @@ import {
   IsIn,
   IsInt,
   Min,
+  Max,
   MaxLength,
   ValidateNested,
   ArrayMaxSize,
@@ -17,8 +18,10 @@ import { Type } from 'class-transformer';
 /** A single estimate line item. unitPrice is in minor units (kuruş/cents). */
 export class EstimateItemDto {
   @IsString() @IsNotEmpty() @MaxLength(300) description: string;
-  @IsInt() @Min(0) qty: number;
-  @IsInt() @Min(0) unitPrice: number;
+  @IsInt() @Min(0) @Max(1_000_000) qty: number;
+  @IsInt() @Min(0) @Max(1_000_000) unitPrice: number;
+  /** Optional TaxRate id; the server re-snapshots the rate (client pct ignored). */
+  @IsOptional() @IsString() @MaxLength(64) taxRateId?: string;
 }
 
 export class CreateEstimateDto {

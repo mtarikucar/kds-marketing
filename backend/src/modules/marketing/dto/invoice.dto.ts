@@ -31,6 +31,12 @@ export class InvoiceItemDto {
   @Min(0)
   @Max(1_000_000)
   unitPrice: number;
+
+  /** Optional TaxRate id; the server re-snapshots the rate (client pct ignored). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  taxRateId?: string;
 }
 
 export class CreateInvoiceDto {

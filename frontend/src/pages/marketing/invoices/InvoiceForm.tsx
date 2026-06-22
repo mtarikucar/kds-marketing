@@ -7,6 +7,7 @@
  *   unitPrice = Math.round((Number(price) || 0) * 100)  ← financial math unchanged
  */
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Trash2, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -19,15 +20,18 @@ import {
   SelectContent,
   SelectItem,
 } from '@/components/ui/Select';
+import { listTaxRates } from '../../../features/marketing/api/tax-rates.service';
 
-interface Item { description: string; qty: number; price: string }
+interface Item { description: string; qty: number; price: string; taxRateId?: string }
+
+const NO_TAX = '__none__';
 
 interface Props {
   isPending: boolean;
   onSubmit: (payload: {
     currency: string;
     notes?: string;
-    items: { description: string; qty: number; unitPrice: number }[];
+    items: { description: string; qty: number; unitPrice: number; taxRateId?: string }[];
   }) => void;
   onCancel: () => void;
 }
@@ -39,8 +43,16 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<Item[]>([{ description: '', qty: 1, price: '' }]);
 
-  // Live total (display only — unitPrice conversion happens in onSubmit)
-  const total = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.price) || 0), 0);
+  const { data: taxRates = [] } = useQuery({ queryKey: ['marketing', 'tax-rates'], queryFn: listTaxRates });
+  const pctOf = (taxRateId?: string) => Number(taxRates.find((r) => r.id === taxRateId)?.rate ?? 0);
+
+  // Live breakdown (display only — unitPrice ×100 conversion happens in onSubmit).
+  const subtotal = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.price) || 0), 0);
+  const tax = items.reduce(
+    (s, i) => s + Math.round((Number(i.qty) || 0) * (Number(i.price) || 0) * pctOf(i.taxRateId)) / 100,
+    0,
+  );
+  const total = subtotal + tax;
 
   const handleSubmit = () => {
     onSubmit({
@@ -53,6 +65,7 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
           qty: Number(i.qty) || 1,
           // Financial conversion — preserved verbatim from original InvoicesPage
           unitPrice: Math.round((Number(i.price) || 0) * 100),
+          ...(i.taxRateId ? { taxRateId: i.taxRateId } : {}),
         })),
     });
   };
@@ -92,6 +105,24 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
                 onChange={(e) => updateItem(idx, { price: e.target.value })}
                 placeholder={t('invoices.unitPrice', 'Unit price')}
               />
+              {taxRates.length > 0 && (
+                <Select
+                  value={it.taxRateId ?? NO_TAX}
+                  onValueChange={(v) => updateItem(idx, { taxRateId: v === NO_TAX ? undefined : v })}
+                >
+                  <SelectTrigger className="w-28">
+                    <SelectValue placeholder={t('invoices.tax', 'Tax')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_TAX}>{t('invoices.noTax', 'No tax')}</SelectItem>
+                    {taxRates.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.name} (%{Number(r.rate)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <button
                 type="button"
                 onClick={() => setItems((prev) => prev.filter((_, j) => j !== idx))}
@@ -140,9 +171,16 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
               placeholder={t('invoices.notesPlaceholder', 'Optional notes…')}
             />
           </div>
-          <p className="font-display text-h2 tabular-nums text-foreground">
-            {total.toLocaleString()} {currency}
-          </p>
+          <div className="text-right">
+            {tax > 0 && (
+              <p className="text-xs tabular-nums text-muted-foreground">
+                {t('invoices.subtotal', 'Subtotal')} {subtotal.toLocaleString()} · {t('invoices.tax', 'Tax')} {tax.toLocaleString()}
+              </p>
+            )}
+            <p className="font-display text-h2 tabular-nums text-foreground">
+              {total.toLocaleString()} {currency}
+            </p>
+          </div>
         </div>
       </CardContent>
       <CardFooter className="justify-end gap-2">
