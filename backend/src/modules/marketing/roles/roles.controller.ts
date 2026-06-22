@@ -57,7 +57,7 @@ class AssignRoleDto {
 // so reads stay open to OWNER/MANAGER via the legacy MarketingRolesGuard while
 // the mutating handlers below additionally require the `users.manage` grant.
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 export class RolesController {
   constructor(private readonly svc: RolesService) {}
 

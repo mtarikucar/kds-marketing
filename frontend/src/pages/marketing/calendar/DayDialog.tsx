@@ -4,7 +4,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { taskSchema, type TaskFormValues } from '../../../features/marketing/schemas';
-import type { MarketingTask } from '../../../features/marketing/types';
+import type { MarketingTask, MarketingUserInfo } from '../../../features/marketing/types';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { toLocalYmd, toLocalHm } from '../../../features/marketing/utils/datetime';
 import {
   Dialog,
   DialogContent,
@@ -66,6 +68,13 @@ const PRIORITIES = [
   { value: 'URGENT', label: 'Urgent' },
 ] as const;
 
+// Sensible default hour for a new task when none is picked.
+const DEFAULT_DUE_TIME = '09:00';
+
+interface RepRow extends MarketingUserInfo {
+  role: string;
+}
+
 interface DayDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -74,6 +83,8 @@ interface DayDialogProps {
   locale: string;
   onCreateTask: (values: TaskFormValues) => void;
   isPending: boolean;
+  /** Workspace marketing users for the assignee picker (managers only). */
+  reps?: RepRow[];
 }
 
 export function DayDialog({
@@ -84,8 +95,11 @@ export function DayDialog({
   locale,
   onCreateTask,
   isPending,
+  reps = [],
 }: DayDialogProps) {
   const { t } = useTranslation('marketing');
+  const { user } = useMarketingAuthStore();
+  const currentUserId = user?.id;
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskSchema),
@@ -95,7 +109,9 @@ export function DayDialog({
       description: '',
       type: 'FOLLOW_UP',
       priority: 'MEDIUM',
-      dueDate: selectedDate ?? new Date().toISOString().split('T')[0],
+      dueDate: selectedDate ?? toLocalYmd(new Date()),
+      dueTime: DEFAULT_DUE_TIME,
+      assignedToId: currentUserId,
     },
   });
 
@@ -108,9 +124,11 @@ export function DayDialog({
         type: 'FOLLOW_UP',
         priority: 'MEDIUM',
         dueDate: selectedDate,
+        dueTime: DEFAULT_DUE_TIME,
+        assignedToId: currentUserId,
       });
     }
-  }, [open, selectedDate, form]);
+  }, [open, selectedDate, form, currentUserId]);
 
   const fieldErr = (msg?: string) =>
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;
@@ -272,25 +290,71 @@ export function DayDialog({
             </Field>
           </div>
 
-          <Field
-            label={t('leadDetail.taskDialog.dueDateLabel', { defaultValue: 'Due Date' })}
-            error={fieldErr(errors.dueDate?.message)}
-            required
-          >
-            {() => (
-              <Controller
-                control={form.control}
-                name="dueDate"
-                render={({ field }) => (
-                  <DatePicker
-                    aria-label={t('leadDetail.taskDialog.dueDateLabel', { defaultValue: 'Due Date' })}
-                    value={field.value ? new Date(field.value + 'T12:00:00') : null}
-                    onChange={(date) => field.onChange(date.toISOString().split('T')[0])}
-                  />
-                )}
-              />
-            )}
-          </Field>
+          <div className="grid grid-cols-[1fr_auto] gap-3">
+            <Field
+              label={t('leadDetail.taskDialog.dueDateLabel', { defaultValue: 'Due Date' })}
+              error={fieldErr(errors.dueDate?.message)}
+              required
+            >
+              {() => (
+                <Controller
+                  control={form.control}
+                  name="dueDate"
+                  render={({ field }) => (
+                    <DatePicker
+                      aria-label={t('leadDetail.taskDialog.dueDateLabel', { defaultValue: 'Due Date' })}
+                      value={field.value ? new Date(field.value + 'T12:00:00') : null}
+                      onChange={(date) => field.onChange(toLocalYmd(date))}
+                    />
+                  )}
+                />
+              )}
+            </Field>
+
+            <Field
+              label={t('leadDetail.taskDialog.timeLabel', { defaultValue: 'Time' })}
+              error={fieldErr(errors.dueTime?.message)}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  type="time"
+                  className="w-32"
+                  {...form.register('dueTime')}
+                />
+              )}
+            </Field>
+          </div>
+
+          {reps.length > 0 && (
+            <Field
+              label={t('leadDetail.taskDialog.assigneeLabel', { defaultValue: 'Assignee' })}
+              error={fieldErr(errors.assignedToId?.message)}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Controller
+                  control={form.control}
+                  name="assignedToId"
+                  render={({ field }) => (
+                    <Select value={field.value || ''} onValueChange={field.onChange}>
+                      <SelectTrigger id={id} aria-describedby={describedBy} aria-invalid={invalid}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {reps.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.firstName} {r.lastName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              )}
+            </Field>
+          )}
 
           <Field
             label={t('leadDetail.taskDialog.descriptionLabel', { defaultValue: 'Description (optional)' })}

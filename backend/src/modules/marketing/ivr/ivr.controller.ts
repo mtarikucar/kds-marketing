@@ -68,7 +68,7 @@ class CreateOptionDto {
 @MarketingRoute()
 @Controller('marketing/ivr')
 @UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 @RequiresFeature('voiceAi')
 export class IvrController {
   constructor(private readonly ivr: IvrService) {}

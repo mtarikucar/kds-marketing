@@ -4,8 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
-import type { MarketingTask } from '../../../features/marketing/types';
+import type { MarketingTask, MarketingUserInfo } from '../../../features/marketing/types';
 import type { TaskFormValues } from '../../../features/marketing/schemas';
+import { localDateTimeToIso } from '../../../features/marketing/utils/datetime';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import {
   PageHeader,
   Card,
@@ -25,10 +27,24 @@ function toLocalDateKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+interface RepRow extends MarketingUserInfo {
+  role: string;
+}
+
 export default function CalendarPage() {
   const queryClient = useQueryClient();
   const { t, i18n } = useTranslation('marketing');
   const locale = i18n.language || 'tr';
+
+  const { user } = useMarketingAuthStore();
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+
+  const { data: reps = [] } = useQuery<RepRow[]>({
+    queryKey: ['marketing', 'users'],
+    queryFn: () => marketingApi.get('/users').then((r) => r.data),
+    enabled: isManager,
+    staleTime: 60_000,
+  });
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -53,7 +69,7 @@ export default function CalendarPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: TaskFormValues) => marketingApi.post('/tasks', data),
+    mutationFn: (data: Record<string, unknown>) => marketingApi.post('/tasks', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'tasks'] });
       setSelectedDate(null);
@@ -196,7 +212,19 @@ export default function CalendarPage() {
         selectedDate={selectedDate}
         dayTasks={selectedDayTasks}
         locale={locale}
-        onCreateTask={(values) => createMutation.mutate(values)}
+        reps={reps}
+        onCreateTask={(values: TaskFormValues) =>
+          createMutation.mutate({
+            title: values.title,
+            type: values.type,
+            priority: values.priority,
+            // Combine local date + time into a full ISO datetime so the picked
+            // hour is stored exactly (no off-by-one, no end-of-day default).
+            dueDate: localDateTimeToIso(values.dueDate, values.dueTime),
+            ...(values.description ? { description: values.description } : {}),
+            ...(values.assignedToId ? { assignedToId: values.assignedToId } : {}),
+          })
+        }
         isPending={createMutation.isPending}
       />
     </div>

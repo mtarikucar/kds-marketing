@@ -55,7 +55,7 @@ class UpdateSlackDto {
 @MarketingRoute()
 @Controller('marketing/integrations/slack')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 export class SlackController {
   constructor(private readonly svc: SlackService) {}
 

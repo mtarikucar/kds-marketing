@@ -78,7 +78,7 @@ class SchedulePostDto {
 @MarketingRoute()
 @Controller('marketing/social-planner')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 export class SocialPlannerController {
   constructor(private readonly svc: SocialPlannerService) {}
 
