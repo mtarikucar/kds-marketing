@@ -13,6 +13,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { TaxRatesService } from '../tax-rates/tax-rates.service';
+import { WalletService } from '../wallet/wallet.service';
 import { computeMoneyTotals, PricedItem, PG_INT_MAX } from './money.util';
 
 /**
@@ -28,6 +29,7 @@ export class InvoicesService {
     private readonly config: ConfigService,
     private readonly outbox: OutboxService,
     private readonly taxRates: TaxRatesService,
+    private readonly wallet: WalletService,
   ) {}
 
   // ---- invoices ----
@@ -124,6 +126,58 @@ export class InvoicesService {
     if (!inv) throw new NotFoundException('Invoice not found');
     return this.settle(inv, via);
   }
+  /**
+   * Settle an invoice fully from the contact's wallet. The wallet debit (the
+   * money movement) runs FIRST and is race-safe + insufficient-guarded; only on
+   * a successful debit do we mark the invoice PAID. No partial payments: the
+   * balance must cover the whole total.
+   */
+  async payWithWallet(workspaceId: string, id: string) {
+    const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId } });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    if (inv.status === 'PAID') return inv;
+    if (inv.status === 'VOID') throw new BadRequestException('A void invoice cannot be paid');
+    if (!inv.leadId) throw new BadRequestException('Invoice has no contact wallet to charge');
+    if (inv.total <= 0) throw new BadRequestException('Nothing to pay');
+    const leadId = inv.leadId;
+    // Claim-then-charge, ALL in ONE transaction so the debit and the settle commit
+    // together (a settle failure rolls back the debit — no drained-wallet money
+    // loss) and concurrent calls can't double-debit: only the request whose
+    // conditional flip (unpaid → PAID) matches a row proceeds to debit.
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.invoice.updateMany({
+        where: { id: inv.id, workspaceId, status: { in: ['DRAFT', 'SENT'] } },
+        data: { status: 'PAID', paidAt: new Date(), paidVia: 'wallet' },
+      });
+      if (claimed.count === 0) {
+        // A concurrent payer / retry already settled it — do NOT debit again.
+        return tx.invoice.findFirst({ where: { id: inv.id, workspaceId } });
+      }
+      await this.wallet.debit(workspaceId, leadId, inv.total, `Invoice ${inv.number}`, {
+        reason: 'DEBIT',
+        invoiceId: inv.id,
+        tx,
+      });
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.InvoicePaid,
+          idempotencyKey: `invoice-paid:${inv.id}`,
+          payload: {
+            workspaceId,
+            invoiceId: inv.id,
+            leadId,
+            total: inv.total,
+            currency: inv.currency,
+            via: 'wallet',
+            occurredAt: new Date().toISOString(),
+          },
+        },
+        tx as any,
+      );
+      return tx.invoice.findFirst({ where: { id: inv.id, workspaceId } });
+    });
+  }
+
   async voidInvoice(workspaceId: string, id: string) {
     const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId }, select: { id: true } });
     if (!inv) throw new NotFoundException('Invoice not found');

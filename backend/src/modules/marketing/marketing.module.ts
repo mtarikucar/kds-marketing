@@ -296,6 +296,10 @@ import { TaxRatesService } from './tax-rates/tax-rates.service';
 import { MarketingCouponsController } from './controllers/marketing-coupons.controller';
 import { CouponsService } from './coupons/coupons.service';
 
+// Customer store-credit wallet (GoHighLevel parity).
+import { MarketingWalletController } from './controllers/marketing-wallet.controller';
+import { WalletService } from './wallet/wallet.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -396,6 +400,7 @@ import { CouponsService } from './coupons/coupons.service';
     PublicTriggerLinkController,
     MarketingTaxRatesController,
     MarketingCouponsController,
+    MarketingWalletController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -550,6 +555,7 @@ import { CouponsService } from './coupons/coupons.service';
     TriggerLinksService,
     TaxRatesService,
     CouponsService,
+    WalletService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

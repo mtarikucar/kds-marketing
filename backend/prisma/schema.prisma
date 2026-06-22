@@ -1723,6 +1723,44 @@ model IvrOption {
 /// An invoice the workspace sends to its OWN end customer. `items` is an array
 /// of { description, qty, unitPrice }; `total` is denormalized. Paid via the
 /// workspace's own PSP (WorkspacePspConfig) on the public /i/:token page.
+/// Customer store-credit wallet (GHL parity). One per (workspace, lead). The
+/// ledger is the source of truth; `balance` is a cached running total kept in
+/// sync inside the same transaction as every entry (so a read is O(1) and a
+/// concurrent credit/debit can't lose an update — the increment is atomic).
+model CustomerWallet {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  balance     Int      @default(0) // minor units (cached ledger sum)
+  currency    String   @default("TRY")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ledger WalletLedgerEntry[]
+
+  @@unique([workspaceId, leadId])
+  @@index([workspaceId])
+  @@map("customer_wallets")
+}
+
+/// One append-only movement on a CustomerWallet. `delta` is signed minor units
+/// (credit > 0, debit < 0). Cascade-deleted with the wallet.
+model WalletLedgerEntry {
+  id          String         @id @default(uuid())
+  workspaceId String
+  walletId    String
+  wallet      CustomerWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  delta       Int // signed minor units
+  reason      String // CREDIT | DEBIT | REFUND | MANUAL_ADJUST
+  invoiceId   String?
+  note        String?
+  createdAt   DateTime       @default(now())
+
+  @@index([walletId, createdAt])
+  @@index([workspaceId])
+  @@map("wallet_ledger_entries")
+}
+
 /// A discount coupon (GHL parity). PERCENT (value = whole percent) or FIXED
 /// (value = minor units off). Server-validated on redemption: active + within
 /// the optional window + under maxRedemptions + over minSubtotal. `code` is

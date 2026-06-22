@@ -24,6 +24,7 @@ import {
 import { LeadStatusBadge, AssignCell } from '../../../features/marketing/components';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import ContactInfo from './ContactInfo';
+import { WalletPanel } from './WalletPanel';
 import ActivityTimelineTab from './ActivityTimelineTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
@@ -254,7 +255,7 @@ export default function LeadDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left: Info */}
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-4">
           <ContactInfo
             lead={lead}
             isManager={isManager}
@@ -263,6 +264,7 @@ export default function LeadDetailPage() {
             onStatusChange={(s) => statusMutation.mutate(s)}
             statusPending={statusMutation.isPending}
           />
+          <WalletPanel leadId={lead.id} isManager={isManager} />
         </div>
 
         {/* Right: Tabs */}

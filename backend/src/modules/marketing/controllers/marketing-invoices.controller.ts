@@ -53,4 +53,11 @@ export class MarketingInvoicesController {
   @Post(':id/void')
   @RequirePermission('settings.manage')
   voidInvoice(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.invoices.voidInvoice(a.workspaceId, id); }
+
+  /** Settle the invoice fully from the contact's store-credit wallet. Gated on
+   *  leads.manage — it debits a contact wallet, the same money permission the
+   *  direct wallet credit/debit endpoints require (not just invoice settings). */
+  @Post(':id/pay-with-wallet')
+  @RequirePermission('leads.manage')
+  payWithWallet(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.invoices.payWithWallet(a.workspaceId, id); }
 }

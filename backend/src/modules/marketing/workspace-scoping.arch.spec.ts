@@ -164,6 +164,9 @@ const OWNED_DELEGATES = [
   // Coupons (GHL parity): discount codes + their redemption log.
   'coupon',
   'couponRedemption',
+  // Customer wallet (GHL parity): store-credit + its append-only ledger.
+  'customerWallet',
+  'walletLedgerEntry',
 ] as const;
 
 /**
