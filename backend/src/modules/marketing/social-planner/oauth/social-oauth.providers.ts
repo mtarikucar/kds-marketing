@@ -219,7 +219,75 @@ export const linkedinProvider: SocialOAuthProvider = {
   },
 };
 
-/** Dispatch to the right provider. TikTok added in a later phase. */
+// ──────────────────────────────────────────────────────────────── TikTok
+
+const TIKTOK_TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
+
+async function tiktokTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  const res = await safeFetch(TIKTOK_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.error_description ?? json?.error ?? 'tiktok token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/** TikTok — a single creator account; the open_id identifies it for publishing. */
+export const tiktokProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    return tiktokTokenRequest({
+      client_key: clientId('TIKTOK') ?? '',
+      client_secret: clientSecret('TIKTOK') ?? '',
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri('TIKTOK'),
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return tiktokTokenRequest({
+      client_key: clientId('TIKTOK') ?? '',
+      client_secret: clientSecret('TIKTOK') ?? '',
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const res = await safeFetch(
+      'https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name',
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        timeoutMs: 15000,
+      },
+    );
+    const json = (await res.json()) as any;
+    const user = json?.data?.user;
+    if (!res.ok || !user?.open_id) {
+      throw new Error(json?.error?.message ?? 'failed to fetch TikTok account');
+    }
+    return [
+      {
+        externalId: user.open_id,
+        displayName: user.display_name ? `${user.display_name} (TikTok)` : 'My TikTok account',
+        accountType: 'TIKTOK',
+        token,
+      },
+    ];
+  },
+};
+
+/** Dispatch to the right provider. */
 export function providerFor(network: Network): SocialOAuthProvider {
   switch (network) {
     case 'FACEBOOK':
@@ -227,6 +295,8 @@ export function providerFor(network: Network): SocialOAuthProvider {
       return metaProvider;
     case 'LINKEDIN':
       return linkedinProvider;
+    case 'TIKTOK':
+      return tiktokProvider;
     default:
       throw new Error(`OAuth provider not implemented for ${network}`);
   }

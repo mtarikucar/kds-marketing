@@ -1,5 +1,5 @@
 import * as fetchMod from '../../../../common/util/safe-fetch';
-import { metaProvider, linkedinProvider, buildAuthorizeUrl } from './social-oauth.providers';
+import { metaProvider, linkedinProvider, tiktokProvider, buildAuthorizeUrl } from './social-oauth.providers';
 
 jest.mock('../../../../common/util/safe-fetch');
 const mockFetch = fetchMod.safeFetch as jest.Mock;
@@ -74,6 +74,31 @@ describe('linkedinProvider.listAssets', () => {
     const assets = await linkedinProvider.listAssets('TOKEN');
     expect(assets).toHaveLength(1);
     expect(assets[0].accountType).toBe('LI_PERSON');
+  });
+});
+
+describe('tiktokProvider', () => {
+  beforeEach(() => {
+    process.env.TIKTOK_CLIENT_KEY = 'k';
+    process.env.TIKTOK_CLIENT_SECRET = 's';
+    mockFetch.mockReset();
+  });
+
+  it('exchangeCode returns token + refresh + expiry', async () => {
+    mockFetch.mockResolvedValueOnce(
+      res({ access_token: 'tt', refresh_token: 'rt', expires_in: 86400, open_id: 'oid' }),
+    );
+    const r = await tiktokProvider.exchangeCode('TIKTOK', 'CODE');
+    expect(r.accessToken).toBe('tt');
+    expect(r.refreshToken).toBe('rt');
+    expect(r.expiresAt).toBeInstanceOf(Date);
+  });
+
+  it('listAssets returns the single TikTok account', async () => {
+    mockFetch.mockResolvedValueOnce(res({ data: { user: { open_id: 'oid', display_name: 'Acme' } } }));
+    const assets = await tiktokProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ externalId: 'oid', accountType: 'TIKTOK' });
   });
 });
 
