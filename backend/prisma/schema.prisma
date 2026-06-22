@@ -2681,6 +2681,9 @@ model Opportunity {
   notes      String?   @db.Text
   position   Int       @default(0) // order within the stage column (lower = top)
   lostReason String?
+  /// Forecasting (GHL parity): when the rep expects this deal to close. Drives
+  /// the time-phased forecast month buckets; nullable = unscheduled.
+  expectedCloseDate DateTime?
   wonAt      DateTime?
   lostAt     DateTime?
   createdAt  DateTime  @default(now())

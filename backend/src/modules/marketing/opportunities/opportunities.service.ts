@@ -19,6 +19,10 @@ import {
   OpportunityFilterDto,
 } from '../dto/opportunity.dto';
 
+/** Round a major-unit money sum to 2dp — float sums of Decimal(12,2) values
+ *  drift (e.g. 10×0.10 → 0.9999999999999999), so every surfaced total is rounded. */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 /**
  * Opportunities — deals moving across a pipeline's stages on a kanban board
  * (GoHighLevel parity). Status (OPEN/WON/LOST/ABANDONED) is kept in sync with
@@ -135,9 +139,87 @@ export class OpportunitiesService {
       pipeline: { id: pipeline.id, name: pipeline.name, isDefault: pipeline.isDefault },
       stages: pipeline.stages.map((s) => {
         const items = byStage.get(s.id) ?? [];
-        const value = items.reduce((sum, o) => sum + Number(o.value), 0);
-        return { ...s, opportunities: items, totalValue: value, count: items.length };
+        const value = round2(items.reduce((sum, o) => sum + Number(o.value), 0));
+        // weightedValue = expected value = Σ(value) × stage.probability%. Surfaced
+        // alongside the raw total so the board header can show both (GHL parity).
+        const weightedValue = Math.round(value * s.probability) / 100;
+        return { ...s, opportunities: items, totalValue: value, weightedValue, count: items.length };
       }),
+    };
+  }
+
+  /**
+   * Weighted pipeline forecast (GoHighLevel parity): for the OPEN deals in a
+   * pipeline, the per-stage raw and probability-weighted (expected) value, the
+   * pipeline totals, and a time-phased breakdown bucketed by expectedCloseDate
+   * month. REP sees only their own deals (mirrors board()). Terminal (won/lost)
+   * stages are excluded — a resolved deal is no longer "in the forecast".
+   *
+   * Values are summed in their stored major units without currency conversion
+   * (matching board()); a workspace mixing currencies in one pipeline is an
+   * existing edge the forecast inherits, surfaced via `currencies`.
+   */
+  async forecast(workspaceId: string, pipelineId: string | undefined, user: MarketingUserPayload) {
+    const pipeline = pipelineId
+      ? await this.pipelines.get(workspaceId, pipelineId)
+      : await this.pipelines.ensureDefaultPipeline(workspaceId);
+
+    const opps = await this.prisma.opportunity.findMany({
+      where: {
+        workspaceId,
+        pipelineId: pipeline.id,
+        status: 'OPEN',
+        ...(user.role === 'REP' ? { assignedToId: user.id } : {}),
+      },
+      select: { stageId: true, value: true, currency: true, expectedCloseDate: true },
+    });
+
+    const byStage = new Map<string, typeof opps>();
+    const currencies = new Set<string>();
+    for (const o of opps) {
+      currencies.add(o.currency);
+      const list = byStage.get(o.stageId) ?? [];
+      list.push(o);
+      byStage.set(o.stageId, list);
+    }
+
+    const stages = pipeline.stages
+      .filter((s) => !s.isWon && !s.isLost)
+      .map((s) => {
+        const items = byStage.get(s.id) ?? [];
+        const rawValue = round2(items.reduce((sum, o) => sum + Number(o.value), 0));
+        const weightedValue = Math.round(rawValue * s.probability) / 100;
+        return { stageId: s.id, name: s.name, probability: s.probability, count: items.length, rawValue, weightedValue };
+      });
+
+    const rawTotal = round2(stages.reduce((sum, s) => sum + s.rawValue, 0));
+    const weightedTotal = round2(stages.reduce((sum, s) => sum + s.weightedValue, 0));
+
+    // Time-phased: open deals grouped by expected-close month (YYYY-MM), with an
+    // 'unscheduled' bucket for deals without a date.
+    const buckets = new Map<string, { month: string; rawValue: number; count: number }>();
+    for (const o of opps) {
+      const d = o.expectedCloseDate;
+      const key = d ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}` : 'unscheduled';
+      const b = buckets.get(key) ?? { month: key, rawValue: 0, count: 0 };
+      b.rawValue += Number(o.value);
+      b.count += 1;
+      buckets.set(key, b);
+    }
+    const months = [...buckets.values()]
+      .map((b) => ({ ...b, rawValue: round2(b.rawValue) }))
+      .sort((a, b) =>
+        a.month === 'unscheduled' ? 1 : b.month === 'unscheduled' ? -1 : a.month.localeCompare(b.month),
+      );
+
+    return {
+      pipeline: { id: pipeline.id, name: pipeline.name },
+      currencies: [...currencies],
+      stages,
+      rawTotal,
+      weightedTotal,
+      openCount: opps.length,
+      months,
     };
   }
 
@@ -179,6 +261,7 @@ export class OpportunitiesService {
         currency: dto.currency ?? 'TRY',
         source: dto.source ?? null,
         notes: dto.notes ?? null,
+        expectedCloseDate: dto.expectedCloseDate ? new Date(dto.expectedCloseDate) : null,
         status,
         position: 0,
         wonAt: stage.isWon ? now : null,
@@ -224,6 +307,13 @@ export class OpportunitiesService {
         source: dto.source,
         notes: dto.notes,
         leadId: dto.leadId,
+        // undefined = leave as-is; null clears the date; a string sets it.
+        expectedCloseDate:
+          dto.expectedCloseDate === undefined
+            ? undefined
+            : dto.expectedCloseDate === null
+              ? null
+              : new Date(dto.expectedCloseDate),
         // Reps cannot reassign; only managers may change ownership.
         assignedToId: user.role === 'REP' ? undefined : dto.assignedToId,
       },

@@ -148,6 +148,17 @@ export class MarketingOpportunitiesController {
     return this.opportunities.board(a.workspaceId, pipelineId, a);
   }
 
+  /** Weighted pipeline forecast (raw + expected value per stage + month buckets).
+   *  Declared before the `:id` route so the literal path wins. REP-scoped. */
+  @Get('opportunities/forecast')
+  @RequirePermission('leads.read')
+  forecast(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query('pipelineId') pipelineId?: string,
+  ) {
+    return this.opportunities.forecast(a.workspaceId, pipelineId, a);
+  }
+
   @Get('opportunities/:id')
   @RequirePermission('leads.read')
   getOpportunity(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {

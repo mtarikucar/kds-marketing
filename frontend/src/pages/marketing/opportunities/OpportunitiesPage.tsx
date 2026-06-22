@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical } from 'lucide-react';
+import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, TrendingUp, ChevronDown } from 'lucide-react';
 
 import {
   getBoard,
+  getForecast,
   listPipelines,
   createOpportunity,
   updateOpportunity,
@@ -15,6 +16,7 @@ import {
   loseOpportunity,
   deleteOpportunity,
   type Board,
+  type Forecast,
   type Opportunity,
 } from '../../../features/marketing/api/opportunities.service';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
@@ -59,9 +61,10 @@ interface OppFormState {
   currency: string;
   stageId?: string;
   notes: string;
+  expectedCloseDate: string; // 'YYYY-MM-DD' or ''
 }
 
-const EMPTY_FORM: OppFormState = { name: '', value: '', currency: 'TRY', notes: '' };
+const EMPTY_FORM: OppFormState = { name: '', value: '', currency: 'TRY', notes: '', expectedCloseDate: '' };
 
 /** Small label+control wrapper for the deal dialog. */
 function Labeled({
@@ -137,6 +140,7 @@ export default function OpportunitiesPage() {
             value: f.value === '' ? undefined : Number(f.value),
             currency: f.currency,
             notes: f.notes || undefined,
+            expectedCloseDate: f.expectedCloseDate === '' ? null : f.expectedCloseDate,
           })
         : createOpportunity({
             name: f.name,
@@ -145,6 +149,7 @@ export default function OpportunitiesPage() {
             value: f.value === '' ? undefined : Number(f.value),
             currency: f.currency,
             notes: f.notes || undefined,
+            expectedCloseDate: f.expectedCloseDate || undefined,
           }),
     onSuccess: () => {
       invalidateBoard();
@@ -184,6 +189,18 @@ export default function OpportunitiesPage() {
   );
   const boardCurrency = board?.stages.find((s) => s.opportunities[0])?.opportunities[0]?.currency ?? 'TRY';
 
+  const [showForecast, setShowForecast] = useState(false);
+  const { data: forecast } = useQuery<Forecast>({
+    queryKey: ['marketing', 'opportunities', 'forecast', activePipelineId],
+    queryFn: () => getForecast(activePipelineId),
+    enabled: showForecast && !!activePipelineId,
+  });
+  // Single-currency tenants (the common case) get a real currency symbol; a
+  // mixed-currency pipeline falls back to a plain number to avoid implying a
+  // false conversion.
+  const forecastCurrency = forecast && forecast.currencies.length === 1 ? forecast.currencies[0] : '';
+  const fmtForecast = (n: number) => (forecastCurrency ? money(n, forecastCurrency) : n.toLocaleString());
+
   const openNew = (stageId?: string) => {
     setForm({ ...EMPTY_FORM, stageId });
     setDialogOpen(true);
@@ -196,6 +213,7 @@ export default function OpportunitiesPage() {
       currency: o.currency,
       stageId: o.stageId,
       notes: o.notes ?? '',
+      expectedCloseDate: o.expectedCloseDate ? o.expectedCloseDate.slice(0, 10) : '',
     });
     setDialogOpen(true);
   };
@@ -251,12 +269,78 @@ export default function OpportunitiesPage() {
             ))}
           </SelectContent>
         </Select>
-        {board && (
-          <p className="text-sm text-muted-foreground">
-            {t('opportunities.openTotal', 'Open total')}: {money(boardTotal, boardCurrency)}
-          </p>
-        )}
+        <div className="flex items-center gap-3">
+          {board && (
+            <p className="text-sm text-muted-foreground">
+              {t('opportunities.openTotal', 'Open total')}: {money(boardTotal, boardCurrency)}
+            </p>
+          )}
+          <Button variant="outline" size="sm" onClick={() => setShowForecast((v) => !v)}>
+            <TrendingUp className="w-4 h-4" aria-hidden="true" />
+            {t('opportunities.forecast', 'Forecast')}
+            <ChevronDown className={`w-4 h-4 transition-transform ${showForecast ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </Button>
+        </div>
       </div>
+
+      {/* Weighted forecast */}
+      {showForecast && forecast && (
+        <div className="rounded-lg border border-border bg-surface p-4 space-y-4">
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            <div>
+              <div className="text-caption text-muted-foreground">{t('opportunities.weightedTotal', 'Weighted (expected)')}</div>
+              <div className="text-xl font-semibold text-foreground">{fmtForecast(forecast.weightedTotal)}</div>
+            </div>
+            <div>
+              <div className="text-caption text-muted-foreground">{t('opportunities.openTotal', 'Open total')}</div>
+              <div className="text-lg text-muted-foreground">{fmtForecast(forecast.rawTotal)}</div>
+            </div>
+            <div>
+              <div className="text-caption text-muted-foreground">{t('opportunities.openDeals', 'Open deals')}</div>
+              <div className="text-lg text-muted-foreground">{forecast.openCount}</div>
+            </div>
+            {forecast.currencies.length > 1 && (
+              <Badge tone="warning" size="sm">{t('opportunities.mixedCurrency', 'Mixed currencies')}: {forecast.currencies.join(', ')}</Badge>
+            )}
+          </div>
+
+          {/* Per-stage weighted bars */}
+          <div className="space-y-1.5">
+            {forecast.stages.map((s) => {
+              const pct = forecast.rawTotal > 0 ? Math.round((s.weightedValue / forecast.weightedTotal || 0) * 100) : 0;
+              return (
+                <div key={s.stageId} className="flex items-center gap-3 text-sm">
+                  <div className="w-40 shrink-0 truncate">
+                    {s.name} <span className="text-muted-foreground">· {s.probability}%</span>
+                  </div>
+                  <div className="flex-1 h-2 rounded-full bg-surface-muted overflow-hidden">
+                    <div className="h-full bg-primary" style={{ width: `${Math.max(2, pct)}%` }} />
+                  </div>
+                  <div className="w-40 shrink-0 text-right tabular-nums">
+                    {fmtForecast(s.weightedValue)}
+                    <span className="text-muted-foreground"> / {fmtForecast(s.rawValue)} · {s.count}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {forecast.stages.length === 0 && (
+              <p className="text-caption text-muted-foreground">{t('opportunities.noOpenDeals', 'No open deals to forecast.')}</p>
+            )}
+          </div>
+
+          {/* Month buckets by expected close date */}
+          {forecast.months.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1 border-t border-border">
+              {forecast.months.map((m) => (
+                <div key={m.month} className="rounded border border-border px-2 py-1 text-caption">
+                  <span className="font-medium">{m.month === 'unscheduled' ? t('opportunities.unscheduled', 'Unscheduled') : m.month}</span>
+                  <span className="text-muted-foreground"> · {fmtForecast(m.rawValue)} · {m.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {isError && (
         <div className="flex flex-col items-center gap-3 py-10">
@@ -391,6 +475,13 @@ export default function OpportunitiesPage() {
                 </Select>
               </Labeled>
             </div>
+            <Labeled label={t('opportunities.expectedClose', 'Expected close date')}>
+              <Input
+                type="date"
+                value={form.expectedCloseDate}
+                onChange={(e) => setForm((f) => ({ ...f, expectedCloseDate: e.target.value }))}
+              />
+            </Labeled>
             <Labeled label={t('opportunities.notes', 'Notes')}>
               <Textarea
                 rows={3}

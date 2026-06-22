@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsArray,
   IsIn,
+  IsDateString,
   Min,
   Max,
   MaxLength,
@@ -73,6 +74,7 @@ export class CreateOpportunityDto {
   @IsOptional() @IsString() @IsIn(['TRY', 'USD', 'EUR']) currency?: string;
   @IsOptional() @IsString() @MaxLength(40) source?: string;
   @IsOptional() @IsString() @MaxLength(4000) notes?: string;
+  @IsOptional() @IsDateString() expectedCloseDate?: string;
 }
 
 export class UpdateOpportunityDto {
@@ -83,6 +85,8 @@ export class UpdateOpportunityDto {
   @IsOptional() @IsString() @MaxLength(4000) notes?: string;
   @IsOptional() @IsString() assignedToId?: string;
   @IsOptional() @IsString() leadId?: string;
+  // null clears the expected close date; an ISO date sets it.
+  @IsOptional() @IsDateString() expectedCloseDate?: string | null;
 }
 
 export class MoveOpportunityDto {

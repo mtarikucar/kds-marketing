@@ -45,6 +45,7 @@ export interface Opportunity {
   notes: string | null;
   position: number;
   lostReason: string | null;
+  expectedCloseDate: string | null;
   wonAt: string | null;
   lostAt: string | null;
   createdAt: string;
@@ -54,12 +55,40 @@ export interface Opportunity {
 export interface BoardStage extends PipelineStage {
   opportunities: Opportunity[];
   totalValue: number;
+  weightedValue: number;
   count: number;
 }
 
 export interface Board {
   pipeline: { id: string; name: string; isDefault: boolean };
   stages: BoardStage[];
+}
+
+// ── Forecast ─────────────────────────────────────────────────────────────────
+
+export interface ForecastStage {
+  stageId: string;
+  name: string;
+  probability: number;
+  count: number;
+  rawValue: number;
+  weightedValue: number;
+}
+
+export interface ForecastMonth {
+  month: string; // 'YYYY-MM' or 'unscheduled'
+  rawValue: number;
+  count: number;
+}
+
+export interface Forecast {
+  pipeline: { id: string; name: string };
+  currencies: string[];
+  stages: ForecastStage[];
+  rawTotal: number;
+  weightedTotal: number;
+  openCount: number;
+  months: ForecastMonth[];
 }
 
 // ── Payload types ────────────────────────────────────────────────────────────
@@ -95,6 +124,7 @@ export interface CreateOpportunityPayload {
   currency?: string;
   source?: string;
   notes?: string;
+  expectedCloseDate?: string;
 }
 
 export interface UpdateOpportunityPayload {
@@ -105,6 +135,7 @@ export interface UpdateOpportunityPayload {
   notes?: string;
   assignedToId?: string;
   leadId?: string;
+  expectedCloseDate?: string | null;
 }
 
 export interface OpportunityListParams {
@@ -156,6 +187,11 @@ export const reorderStages = (pipelineId: string, stageIds: string[]): Promise<P
 export const getBoard = (pipelineId?: string): Promise<Board> =>
   marketingApi
     .get('/opportunities/board', { params: pipelineId ? { pipelineId } : {} })
+    .then((r) => r.data);
+
+export const getForecast = (pipelineId?: string): Promise<Forecast> =>
+  marketingApi
+    .get('/opportunities/forecast', { params: pipelineId ? { pipelineId } : {} })
     .then((r) => r.data);
 
 export const listOpportunities = (

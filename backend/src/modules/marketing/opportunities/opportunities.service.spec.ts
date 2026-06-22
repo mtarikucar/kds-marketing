@@ -192,4 +192,78 @@ describe('OpportunitiesService', () => {
       expect(newCol.totalValue).toBe(150);
     });
   });
+
+  describe('forecast', () => {
+    const FORECAST_PIPELINE = {
+      id: 'p1',
+      name: 'Sales Pipeline',
+      stages: [
+        { id: 's-new', name: 'New', position: 0, probability: 20, isWon: false, isLost: false },
+        { id: 's-neg', name: 'Negotiation', position: 1, probability: 60, isWon: false, isLost: false },
+        { id: 's-won', name: 'Won', position: 2, probability: 100, isWon: true, isLost: false },
+      ],
+    };
+
+    beforeEach(() => {
+      pipelines.get.mockResolvedValue(FORECAST_PIPELINE);
+      pipelines.ensureDefaultPipeline.mockResolvedValue(FORECAST_PIPELINE);
+    });
+
+    it('weights each open stage by its probability and excludes terminal stages', async () => {
+      prisma.opportunity.findMany.mockResolvedValue([
+        { stageId: 's-new', value: 1000, currency: 'TRY', expectedCloseDate: new Date('2026-07-15T00:00:00Z') },
+        { stageId: 's-new', value: 500, currency: 'TRY', expectedCloseDate: null },
+        { stageId: 's-neg', value: 2000, currency: 'TRY', expectedCloseDate: new Date('2026-08-02T00:00:00Z') },
+      ] as any);
+
+      const res = await svc.forecast(WS, 'p1', MGR);
+
+      // Won/Lost stages excluded from the forecast.
+      expect(res.stages.map((s: any) => s.stageId)).toEqual(['s-new', 's-neg']);
+      const newStage = res.stages.find((s: any) => s.stageId === 's-new');
+      expect(newStage).toMatchObject({ count: 2, rawValue: 1500, weightedValue: 300 }); // 1500 × 20%
+      const negStage = res.stages.find((s: any) => s.stageId === 's-neg');
+      expect(negStage).toMatchObject({ count: 1, rawValue: 2000, weightedValue: 1200 }); // 2000 × 60%
+      expect(res.rawTotal).toBe(3500);
+      expect(res.weightedTotal).toBe(1500); // 300 + 1200
+      expect(res.openCount).toBe(3);
+    });
+
+    it('buckets open deals by expected-close month with an unscheduled bucket', async () => {
+      prisma.opportunity.findMany.mockResolvedValue([
+        { stageId: 's-new', value: 1000, currency: 'TRY', expectedCloseDate: new Date('2026-07-15T00:00:00Z') },
+        { stageId: 's-new', value: 500, currency: 'TRY', expectedCloseDate: null },
+        { stageId: 's-neg', value: 2000, currency: 'TRY', expectedCloseDate: new Date('2026-08-02T00:00:00Z') },
+      ] as any);
+
+      const res = await svc.forecast(WS, 'p1', MGR);
+      expect(res.months).toEqual([
+        { month: '2026-07', rawValue: 1000, count: 1 },
+        { month: '2026-08', rawValue: 2000, count: 1 },
+        { month: 'unscheduled', rawValue: 500, count: 1 },
+      ]);
+    });
+
+    it('rounds raw money sums to 2dp (no float drift in the surfaced totals)', async () => {
+      // Ten 0.10 deals: a naive float sum is 0.9999999999999999.
+      prisma.opportunity.findMany.mockResolvedValue(
+        Array.from({ length: 10 }, () => ({ stageId: 's-new', value: 0.1, currency: 'TRY', expectedCloseDate: new Date('2026-07-01T00:00:00Z') })) as any,
+      );
+      const res = await svc.forecast(WS, 'p1', MGR);
+      const newStage = res.stages.find((s: any) => s.stageId === 's-new');
+      expect(newStage.rawValue).toBe(1);
+      expect(res.rawTotal).toBe(1);
+      expect(res.months[0].rawValue).toBe(1);
+    });
+
+    it('scopes a REP to their own open deals', async () => {
+      prisma.opportunity.findMany.mockResolvedValue([] as any);
+      await svc.forecast(WS, 'p1', REP);
+      expect(prisma.opportunity.findMany.mock.calls[0][0].where).toMatchObject({
+        workspaceId: WS,
+        status: 'OPEN',
+        assignedToId: REP.id,
+      });
+    });
+  });
 });
