@@ -196,6 +196,8 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
+import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
+import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
@@ -449,6 +451,7 @@ import { WalletService } from './wallet/wallet.service';
     SnapshotController,
     RebillingController,
     SocialPlannerController,
+    SocialOAuthController,
   ],
   providers: [
     // Services
@@ -626,6 +629,7 @@ import { WalletService } from './wallet/wallet.service';
     SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
+    SocialOAuthService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
