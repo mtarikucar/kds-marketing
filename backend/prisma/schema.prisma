@@ -3203,3 +3203,27 @@ model ProspectAudit {
   @@index([workspaceId, status])
   @@map("prospect_audits")
 }
+
+/// A workspace's own email sending domain (GHL parity, Epic 13 — inert until
+/// SENDING_DOMAIN_ESP). We mint an RSA DKIM keypair (private sealed, public
+/// published in the DKIM TXT record); a verify job re-polls DNS until DKIM/SPF/
+/// DMARC appear. Once VERIFIED, marketing email can be sent From this domain.
+model SendingDomain {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  domain            String
+  status            String    @default("PENDING") // PENDING | VERIFIED | FAILED
+  fromEmail         String? // the From address used once VERIFIED (noreply@domain)
+  fromName          String?
+  dkimSelector      String
+  dkimPublicKey     String // base64 DER (the DKIM `p=` value we publish)
+  dkimPrivateSealed String // AES-GCM-sealed PKCS8 PEM private key (for future signing)
+  lastError         String?
+  verifiedAt        DateTime?
+  providerDomainId  String? // set when an ESP manages the domain
+  createdAt         DateTime  @default(now())
+
+  @@unique([workspaceId, domain])
+  @@index([workspaceId, status])
+  @@map("sending_domains")
+}

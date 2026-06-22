@@ -48,8 +48,10 @@ describe('CampaignSenderService.batch', () => {
     const runner = { registerHandler: jest.fn() };
     const registry = { get: jest.fn(), resolveConfig: jest.fn() };
     const quota = { reserve: jest.fn(), refund: jest.fn() };
+    // Inert by default: no ESP transport → platform-default From (null).
+    const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any,
     );
   });
 
@@ -58,7 +60,7 @@ describe('CampaignSenderService.batch', () => {
 
     // Only the opted-in lead got an email.
     expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
-    expect(email.sendPlainEmail).toHaveBeenCalledWith('ok@lead.com', 'S', expect.any(String));
+    expect(email.sendPlainEmail).toHaveBeenCalledWith('ok@lead.com', 'S', expect.any(String), undefined);
 
     const statuses = prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status);
     expect(statuses).toContain('SKIPPED'); // the opted-out one

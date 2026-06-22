@@ -18,6 +18,13 @@ export interface EmailOptions {
   context: Record<string, any>;
 }
 
+/** A per-workspace sender identity (Epic 13 sending domains). When omitted, the
+ *  platform default From (EMAIL_FROM/EMAIL_USER + EMAIL_FROM_NAME) is used. */
+export interface EmailFrom {
+  email: string;
+  name?: string;
+}
+
 @Injectable()
 export class EmailService {
   private transporter: Transporter;
@@ -147,23 +154,36 @@ export class EmailService {
    * multipart message: `text` is the plain-text fallback, `html` (when present)
    * is what clients render. Mirrors sendPlainEmail's mock + masking + timeout.
    */
+  /** Build the RFC-5322 From header — a per-workspace override when supplied,
+   *  otherwise the platform default. Centralised so every send path is consistent. */
+  private fromHeader(fromOverride?: EmailFrom): string {
+    const email =
+      fromOverride?.email ||
+      this.configService.get<string>("EMAIL_FROM") ||
+      this.configService.get<string>("EMAIL_USER");
+    const name =
+      fromOverride?.name ||
+      this.configService.get<string>("EMAIL_FROM_NAME") ||
+      this.configService.get<string>("APP_NAME") ||
+      "Marketing";
+    return `"${name}" <${email}>`;
+  }
+
   async sendCampaignEmail(
     to: string,
     subject: string,
     text: string,
     html?: string,
+    fromOverride?: EmailFrom,
   ): Promise<boolean> {
     try {
       if (!this.transporter) {
         this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)} (html=${html ? html.length : 0} chars)`);
         return true;
       }
-      const from =
-        this.configService.get<string>("EMAIL_FROM") ||
-        this.configService.get<string>("EMAIL_USER");
       await withTimeout(
         this.transporter.sendMail({
-          from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
+          from: this.fromHeader(fromOverride),
           to,
           subject,
           text,
@@ -191,6 +211,7 @@ export class EmailService {
     to: string,
     subject: string,
     body: string,
+    fromOverride?: EmailFrom,
   ): Promise<boolean> {
     try {
       if (!this.transporter) {
@@ -202,12 +223,9 @@ export class EmailService {
         this.logger.log(`[EMAIL MOCK] Body length: ${body.length} chars`);
         return true;
       }
-      const from =
-        this.configService.get<string>("EMAIL_FROM") ||
-        this.configService.get<string>("EMAIL_USER");
       await withTimeout(
         this.transporter.sendMail({
-          from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
+          from: this.fromHeader(fromOverride),
           to,
           subject,
           text: body,

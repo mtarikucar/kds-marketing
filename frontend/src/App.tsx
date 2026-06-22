@@ -59,6 +59,7 @@ const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudi
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
 const ChannelsSettingsPage     = lazy(() => import('./pages/marketing/ChannelsSettingsPage'));
 const SnippetsPage             = lazy(() => import('./pages/marketing/settings/snippets'));
+const SendingDomainsPage       = lazy(() => import('./pages/marketing/settings/SendingDomainsPage'));
 const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLinks'));
 const TaxRatesPage             = lazy(() => import('./pages/marketing/settings/taxRates'));
 const CouponsPage              = lazy(() => import('./pages/marketing/settings/coupons'));
@@ -190,6 +191,7 @@ export default function App() {
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
             <Route path="/channels"    element={<S><ChannelsSettingsPage /></S>} />
             <Route path="/settings/snippets" element={<S><SnippetsPage /></S>} />
+            <Route path="/settings/sending-domains" element={<S><SendingDomainsPage /></S>} />
             <Route path="/settings/tax-rates" element={<S><TaxRatesPage /></S>} />
             <Route path="/settings/coupons"   element={<S><CouponsPage /></S>} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />

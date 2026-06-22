@@ -188,6 +188,12 @@ const OWNED_DELEGATES = [
   // Customer wallet (GHL parity): store-credit + its append-only ledger.
   'customerWallet',
   'walletLedgerEntry',
+  // Prospecting audits (GHL parity, Epic 13): workspace-owned website audits;
+  // every multi-row/create call carries workspaceId (public read is by token).
+  'prospectAudit',
+  // Sending domains / DKIM (GHL parity, Epic 13): workspace-owned email sending
+  // domains; every multi-row/create call carries workspaceId.
+  'sendingDomain',
 ] as const;
 
 /**
