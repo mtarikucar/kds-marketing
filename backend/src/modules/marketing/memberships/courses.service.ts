@@ -21,6 +21,7 @@ interface UpdateCourseInput {
   currency?: string;
   coverImageUrl?: string;
   status?: string;
+  dripMode?: string | null;
 }
 interface LessonInput {
   title?: string;
@@ -29,6 +30,8 @@ interface LessonInput {
   videoUrl?: string;
   durationSec?: number;
   isPreview?: boolean;
+  gating?: string;
+  dripDays?: number | null;
 }
 
 /**
@@ -107,6 +110,7 @@ export class CoursesService {
         ...(dto.currency !== undefined && { currency: dto.currency }),
         ...(dto.coverImageUrl !== undefined && { coverImageUrl: dto.coverImageUrl }),
         ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.dripMode !== undefined && { dripMode: dto.dripMode }),
       },
     });
   }
@@ -180,6 +184,8 @@ export class CoursesService {
         videoUrl: dto.videoUrl,
         durationSec: dto.durationSec,
         isPreview: dto.isPreview ?? false,
+        gating: dto.gating ?? 'FREE',
+        dripDays: dto.dripDays ?? null,
         position,
       },
     });
@@ -205,6 +211,8 @@ export class CoursesService {
         ...(dto.videoUrl !== undefined && { videoUrl: dto.videoUrl }),
         ...(dto.durationSec !== undefined && { durationSec: dto.durationSec }),
         ...(dto.isPreview !== undefined && { isPreview: dto.isPreview }),
+        ...(dto.gating !== undefined && { gating: dto.gating }),
+        ...(dto.dripDays !== undefined && { dripDays: dto.dripDays }),
       },
     });
   }

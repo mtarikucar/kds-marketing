@@ -20,6 +20,8 @@ export const courseSchema = z.object({
     .refine((v) => v === undefined || (Number.isFinite(v) && v >= 0), { message: 'priceInvalid' }),
   currency: z.string().trim().max(8).optional(),
   coverImageUrl: z.string().trim().max(2000).optional(),
+  // Course-level default lesson gating (Epic 10a drip).
+  dripMode: z.enum(['FREE', 'SEQUENTIAL', 'DRIP']).optional(),
 });
 
 export type CourseFormValues = z.input<typeof courseSchema>;
@@ -42,6 +44,13 @@ export const lessonSchema = z.object({
     .transform((v) => (v === '' || v === undefined ? undefined : Number(v)))
     .refine((v) => v === undefined || (Number.isFinite(v) && v >= 0), { message: 'durationInvalid' }),
   isPreview: z.boolean().optional(),
+  // Per-lesson access gating (Epic 10a drip).
+  gating: z.enum(['FREE', 'SEQUENTIAL', 'DRIP']).optional(),
+  dripDays: z
+    .union([z.string(), z.number()])
+    .optional()
+    .transform((v) => (v === '' || v === undefined ? undefined : Number(v)))
+    .refine((v) => v === undefined || (Number.isFinite(v) && v >= 0 && v <= 3650), { message: 'dripDaysInvalid' }),
 });
 export type LessonFormValues = z.input<typeof lessonSchema>;
 

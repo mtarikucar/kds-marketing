@@ -7,6 +7,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -46,6 +47,9 @@ export class UpdateCourseDto {
 
   @IsOptional() @IsIn(['DRAFT', 'PUBLISHED', 'ARCHIVED'])
   status?: string;
+
+  @IsOptional() @IsIn(['FREE', 'SEQUENTIAL', 'DRIP'])
+  dripMode?: string;
 }
 
 export class ModuleDto {
@@ -71,6 +75,12 @@ export class LessonDto {
 
   @IsOptional() @IsBoolean()
   isPreview?: boolean;
+
+  @IsOptional() @IsIn(['FREE', 'SEQUENTIAL', 'DRIP'])
+  gating?: string;
+
+  @IsOptional() @IsInt() @Min(0) @Max(3650)
+  dripDays?: number;
 }
 
 export class ReorderDto {

@@ -2198,6 +2198,10 @@ model Course {
   currency      String?
   coverImageUrl String?
   position      Int      @default(0)
+  // Course-level default lesson gating (Epic 10a drip). A lesson keeps its own
+  // gating unless that is FREE, in which case this course default applies — so an
+  // operator can gate/drip a whole course without editing every lesson.
+  dripMode      String?  // null/FREE | SEQUENTIAL | DRIP
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -2337,6 +2341,11 @@ model Lesson {
   durationSec Int?
   position    Int     @default(0)
   isPreview   Boolean @default(false)
+  // Per-lesson access gating (Epic 10a drip). FREE = always open; SEQUENTIAL =
+  // locked until the immediately-prior lesson is completed; DRIP = locked until
+  // `dripDays` after enrollment. isPreview always bypasses gating.
+  gating      String  @default("FREE") // FREE | SEQUENTIAL | DRIP
+  dripDays    Int? // for DRIP: days after enrollment before the lesson unlocks
 
   module CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 

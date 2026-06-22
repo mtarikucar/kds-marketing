@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { EnrollmentService } from './enrollment.service';
 import {
   mockPrismaClient,
@@ -10,6 +10,11 @@ const WS = 'ws-1';
 function makeSvc() {
   const prisma = mockPrismaClient();
   return { prisma, svc: new EnrollmentService(prisma as any) };
+}
+
+/** A course shape for courseLessons() — modules→lessons in order. */
+function course(dripMode: string | null, lessons: any[]) {
+  return { dripMode, modules: [{ lessons }] };
 }
 
 describe('EnrollmentService', () => {
@@ -30,8 +35,11 @@ describe('EnrollmentService', () => {
 
   it('marks a lesson complete and recomputes progress to 50% (stays ACTIVE)', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1' } as any);
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
     prisma.lesson.findFirst.mockResolvedValue({ id: 'l1' } as any);
+    // ungated course → no lock check blocks the write
+    prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
     (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
     (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
@@ -43,8 +51,10 @@ describe('EnrollmentService', () => {
 
   it('flips to COMPLETED at 100%', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1' } as any);
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
     prisma.lesson.findFirst.mockResolvedValue({ id: 'l2' } as any);
+    prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l2', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
     (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
     (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(2);
@@ -61,5 +71,57 @@ describe('EnrollmentService', () => {
     prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1' } as any);
     prisma.lesson.findFirst.mockResolvedValue(null as any);
     await expect(svc.markLessonComplete(WS, 'e1', 'lx')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('403s completing a SEQUENTIAL lesson whose prior lesson is not done', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l2' } as any);
+    prisma.course.findUnique.mockResolvedValue(
+      course(null, [
+        { id: 'l1', position: 0, isPreview: false, gating: 'SEQUENTIAL', dripDays: null },
+        { id: 'l2', position: 1, isPreview: false, gating: 'SEQUENTIAL', dripDays: null },
+      ]) as any,
+    );
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]); // l1 not completed
+    await expect(svc.markLessonComplete(WS, 'e1', 'l2')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.lessonProgress.upsert).not.toHaveBeenCalled();
+  });
+
+  it('allows completing the SEQUENTIAL lesson once its prior is done', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l2' } as any);
+    prisma.course.findUnique.mockResolvedValue(
+      course(null, [
+        { id: 'l1', position: 0, isPreview: false, gating: 'SEQUENTIAL', dripDays: null },
+        { id: 'l2', position: 1, isPreview: false, gating: 'SEQUENTIAL', dripDays: null },
+      ]) as any,
+    );
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([{ lessonId: 'l1' }]); // l1 done
+    (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(2);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
+    await expect(svc.markLessonComplete(WS, 'e1', 'l2')).resolves.toBeTruthy();
+    expect(prisma.lessonProgress.upsert).toHaveBeenCalled();
+  });
+
+  it('getProgress annotates each lesson with locked + unlockAt', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([{ lessonId: 'l1', completed: true }]);
+    prisma.course.findUnique.mockResolvedValue(
+      course(null, [
+        { id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null },
+        { id: 'l2', position: 1, isPreview: false, gating: 'SEQUENTIAL', dripDays: null },
+        { id: 'l3', position: 2, isPreview: false, gating: 'SEQUENTIAL', dripDays: null },
+      ]) as any,
+    );
+    const out: any = await svc.getProgress(WS, 'e1');
+    const byId = Object.fromEntries(out.lessons.map((l: any) => [l.lessonId, l]));
+    expect(byId.l1).toMatchObject({ completed: true, locked: false });
+    expect(byId.l2).toMatchObject({ locked: false }); // prior (l1) done → open
+    expect(byId.l3).toMatchObject({ locked: true, lockReason: 'SEQUENTIAL' }); // prior (l2) not done
   });
 });

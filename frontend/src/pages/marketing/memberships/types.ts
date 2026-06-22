@@ -28,6 +28,8 @@
 export type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 export type LessonType = 'VIDEO' | 'TEXT' | 'PDF' | 'QUIZ';
 
+export type Gating = 'FREE' | 'SEQUENTIAL' | 'DRIP';
+
 export interface Lesson {
   id: string;
   moduleId: string;
@@ -37,6 +39,9 @@ export interface Lesson {
   videoUrl: string | null;
   durationSec: number | null;
   isPreview: boolean;
+  // Epic 10a drip / gating.
+  gating: Gating;
+  dripDays: number | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -62,6 +67,8 @@ export interface Course {
   priceCents: number | null;
   currency: string | null;
   coverImageUrl: string | null;
+  /** Course-level default lesson gating (Epic 10a drip). */
+  dripMode: Gating | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -95,9 +102,20 @@ export interface Enrollment {
   completedAt: string | null;
 }
 
+/** Per-lesson access state (Epic 10a drip) returned alongside progress. */
+export interface LessonAccessState {
+  lessonId: string;
+  completed: boolean;
+  locked: boolean;
+  unlockAt: string | null;
+  lockReason: 'SEQUENTIAL' | 'DRIP' | null;
+}
+
 /** GET /enrollments/:id returns the enrollment + its per-lesson progress rows. */
 export interface EnrollmentWithProgress extends Enrollment {
   progress: LessonProgress[];
+  /** Per-lesson lock state for the member view (Epic 10a). */
+  lessons: LessonAccessState[];
 }
 
 // ── Communities ───────────────────────────────────────────────────────────────

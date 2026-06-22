@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useForm, type SubmitHandler } from 'react-hook-form';
+import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
 import {
@@ -13,6 +13,11 @@ import {
   Field,
   Input,
   Textarea,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@/components/ui';
 import { courseSchema, type CourseFormValues } from '../schemas';
 import type { Course } from '../types';
@@ -33,7 +38,7 @@ export function CourseFormDialog({ open, onOpenChange, course, onSubmit, isPendi
   const form = useForm<CourseFormValues>({
     resolver: zodResolver(courseSchema),
     mode: 'onBlur',
-    defaultValues: { title: '', description: '', price: '', currency: '', coverImageUrl: '' },
+    defaultValues: { title: '', description: '', price: '', currency: '', coverImageUrl: '', dripMode: 'FREE' },
   });
 
   useEffect(() => {
@@ -45,11 +50,18 @@ export function CourseFormDialog({ open, onOpenChange, course, onSubmit, isPendi
         price: course.priceCents != null ? String(course.priceCents / 100) : '',
         currency: course.currency ?? '',
         coverImageUrl: course.coverImageUrl ?? '',
+        dripMode: course.dripMode ?? 'FREE',
       });
     } else {
-      form.reset({ title: '', description: '', price: '', currency: '', coverImageUrl: '' });
+      form.reset({ title: '', description: '', price: '', currency: '', coverImageUrl: '', dripMode: 'FREE' });
     }
   }, [course, open, form]);
+
+  const GATING = [
+    { value: 'FREE', label: 'Open — all lessons available' },
+    { value: 'SEQUENTIAL', label: 'Sequential — unlock one at a time' },
+    { value: 'DRIP', label: 'Drip — by per-lesson schedule' },
+  ] as const;
 
   const fieldErr = (msg?: string) =>
     msg ? t([`memberships.validation.${msg}`, `validation.${msg}`, msg], { defaultValue: msg }) : undefined;
@@ -121,6 +133,32 @@ export function CourseFormDialog({ open, onOpenChange, course, onSubmit, isPendi
           <Field label={t('memberships.courses.coverImage', { defaultValue: 'Cover image URL' })} error={fieldErr(errors.coverImageUrl?.message)}>
             {({ id, describedBy, invalid }) => (
               <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="https://…" {...form.register('coverImageUrl')} />
+            )}
+          </Field>
+
+          <Field
+            label={t('memberships.courses.dripMode', { defaultValue: 'Lesson release' })}
+            hint={t('memberships.courses.dripModeHint', { defaultValue: 'Course-wide default; a lesson can override it.' })}
+          >
+            {({ id, describedBy }) => (
+              <Controller
+                control={form.control}
+                name="dripMode"
+                render={({ field: f }) => (
+                  <Select value={f.value ?? 'FREE'} onValueChange={f.onChange}>
+                    <SelectTrigger id={id} aria-describedby={describedBy}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GATING.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {t(`memberships.courses.dripModeOpts.${opt.value}`, { defaultValue: opt.label })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             )}
           </Field>
 

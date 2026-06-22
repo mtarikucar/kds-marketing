@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { resolveLessonAccess, AccessLesson } from './lesson-access';
 
 /**
  * Epic C2 — enrolls Leads (contacts) into courses and tracks lesson progress.
@@ -48,12 +50,49 @@ export class EnrollmentService {
     return e;
   }
 
+  /**
+   * Course lessons in play order (module.position, then lesson.position) with
+   * the fields gating needs, plus the course's drip-mode default.
+   */
+  private async courseLessons(courseId: string): Promise<{ dripMode: string | null; ordered: AccessLesson[] }> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        dripMode: true,
+        modules: {
+          orderBy: { position: 'asc' },
+          select: {
+            lessons: {
+              orderBy: { position: 'asc' },
+              select: { id: true, position: true, isPreview: true, gating: true, dripDays: true },
+            },
+          },
+        },
+      },
+    });
+    const ordered: AccessLesson[] = (course?.modules ?? []).flatMap((m) => m.lessons);
+    return { dripMode: course?.dripMode ?? null, ordered };
+  }
+
   async getProgress(workspaceId: string, id: string) {
     const enrollment = await this.assertEnrollment(workspaceId, id);
     const progress = await this.prisma.lessonProgress.findMany({
       where: { enrollmentId: id },
     });
-    return { ...enrollment, progress };
+    const { dripMode, ordered } = await this.courseLessons(enrollment.courseId);
+    const completed = new Set(progress.filter((p) => p.completed).map((p) => p.lessonId));
+    // Per-lesson access state for the member view — lock badges + unlock dates.
+    const lessons = ordered.map((l) => {
+      const access = resolveLessonAccess(l, ordered, completed, dripMode, enrollment.enrolledAt);
+      return {
+        lessonId: l.id,
+        completed: completed.has(l.id),
+        locked: access.locked,
+        unlockAt: access.unlockAt,
+        lockReason: access.reason,
+      };
+    });
+    return { ...enrollment, progress, lessons };
   }
 
   async unenroll(workspaceId: string, id: string) {
@@ -70,6 +109,26 @@ export class EnrollmentService {
     });
     if (!lesson) {
       throw new BadRequestException("Lesson is not part of this enrollment's course");
+    }
+    // Drip / gating: a locked lesson can't be completed (no skipping a sequential
+    // gate or jumping ahead of a drip release). Resolve against the same ordered
+    // list + completed set the progress view uses.
+    const { dripMode, ordered } = await this.courseLessons(enrollment.courseId);
+    const doneRows = await this.prisma.lessonProgress.findMany({
+      where: { enrollmentId: id, completed: true },
+      select: { lessonId: true },
+    });
+    const completedSet = new Set(doneRows.map((p) => p.lessonId));
+    const target = ordered.find((l) => l.id === lessonId);
+    if (target) {
+      const access = resolveLessonAccess(target, ordered, completedSet, dripMode, enrollment.enrolledAt);
+      if (access.locked) {
+        throw new ForbiddenException(
+          access.reason === 'DRIP'
+            ? 'This lesson is not unlocked yet'
+            : 'Complete the previous lesson first',
+        );
+      }
     }
     await this.prisma.lessonProgress.upsert({
       where: { enrollmentId_lessonId: { enrollmentId: id, lessonId } },
