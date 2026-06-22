@@ -198,6 +198,7 @@ import { SocialPlannerController } from './social-planner/social-planner.control
 import { SocialPlannerService } from './social-planner/social-planner.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
+import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
 
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
@@ -630,6 +631,7 @@ import { WalletService } from './wallet/wallet.service';
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
     SocialOAuthService,
+    SocialTokenRefreshService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
