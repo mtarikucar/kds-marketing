@@ -103,10 +103,15 @@ export const taskSchema = z.object({
   description: z.string().trim().max(2000).optional(),
   type: z.enum(['CALL', 'VISIT', 'DEMO', 'FOLLOW_UP', 'MEETING', 'OTHER']).default('FOLLOW_UP'),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
-  dueDate: z
+  // Local YYYY-MM-DD. Combined with dueTime into a full ISO datetime on submit.
+  // Past dates are allowed (back-dating a task is legitimate); the backend
+  // parseDueDate accepts them too.
+  dueDate: z.string().min(1, 'required'),
+  // Optional HH:mm (24h). Defaults to a sensible hour in the form when blank.
+  dueTime: z
     .string()
-    .min(1, 'required')
-    .refine((v) => new Date(v).getTime() > Date.now() - 5 * 60 * 1000, { message: 'dateFuture' }),
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'timeInvalid')
+    .optional(),
   leadId: z.string().optional(),
   assignedToId: z.string().optional(),
 });
