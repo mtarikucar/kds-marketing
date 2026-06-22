@@ -277,6 +277,13 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // id-keyed salesCall.update of recordingUrl; idempotent (re-stamps the same URL).
   'telephony/recording-sync.service.ts:salesCall.findMany':
     'hourly call-recording sweep reads ended calls missing a recording across all workspaces (system cron)',
+  // Review-sync sweep (Epic 13, inert): the hourly cron reads ACTIVE review
+  // sources with a token across ALL workspaces — a system job, same shape as the
+  // ads/recording sweeps. Every write it triggers (review upsert / source update)
+  // is workspace-scoped or id-keyed, and the (sourceId, externalReviewId) unique
+  // makes a re-sync idempotent.
+  'reviews/review-sync.service.ts:reviewSource.findMany':
+    'hourly review-sync sweep reads ACTIVE review sources with a token across all workspaces (system cron)',
   // OAuth token-refresh sweep: the hourly cron reads OAUTH social accounts with a
   // refresh token nearing expiry across ALL workspaces — a system job, same shape
   // as the subscription/ads sweeps. Every write it triggers (socialAccount.update)

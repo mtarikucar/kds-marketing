@@ -158,6 +158,7 @@ import { BookingService } from './sites/booking.service';
 import { MarketingReviewsController } from './controllers/marketing-reviews.controller';
 import { ReviewGateController } from './controllers/review-gate.controller';
 import { ReviewsService } from './reviews/reviews.service';
+import { ReviewSyncService } from './reviews/review-sync.service';
 
 // Phase F P8 — Voice AI (Twilio).
 import { MarketingVoiceController } from './controllers/marketing-voice.controller';
@@ -608,6 +609,7 @@ import { WalletService } from './wallet/wallet.service';
     CouponsService,
     WalletService,
     ReviewsService,
+    ReviewSyncService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
     VoiceAdapter,

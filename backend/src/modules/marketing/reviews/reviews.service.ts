@@ -6,6 +6,7 @@ import {
 import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { sealSecret } from '../../../common/crypto/secret-box.helper';
 import { OutboxService } from '../../outbox/outbox.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
@@ -32,8 +33,10 @@ export class ReviewsService {
   ) {}
 
   // ---- sources ----
-  listSources(workspaceId: string) {
-    return this.prisma.reviewSource.findMany({ where: { workspaceId }, orderBy: { createdAt: 'asc' } });
+  /** Sources with the sealed sync token masked out (only a `tokenSet` flag). */
+  async listSources(workspaceId: string) {
+    const rows = await this.prisma.reviewSource.findMany({ where: { workspaceId }, orderBy: { createdAt: 'asc' } });
+    return rows.map(({ accessToken, ...r }: any) => ({ ...r, tokenSet: !!accessToken }));
   }
   createSource(workspaceId: string, dto: { name: string; placeUrl: string; type?: string }) {
     return this.prisma.reviewSource.create({ data: { workspaceId, name: dto.name, placeUrl: dto.placeUrl, type: dto.type ?? 'GOOGLE' } });
@@ -42,8 +45,18 @@ export class ReviewsService {
     const existing = await this.prisma.reviewSource.findFirst({ where: { id, workspaceId } });
     if (!existing) throw new NotFoundException('Source not found');
     const data: any = {};
-    for (const k of ['name', 'placeUrl', 'type'] as const) if (dto[k] !== undefined) data[k] = dto[k];
-    return this.prisma.reviewSource.update({ where: { id: existing.id }, data });
+    for (const k of ['name', 'placeUrl', 'type', 'placeId', 'externalRef', 'syncStatus'] as const) {
+      if (dto[k] !== undefined) data[k] = dto[k];
+    }
+    // A raw sync token (Epic 13 review-sync) is sealed at rest; never stored
+    // plaintext, never echoed (listSources masks it).
+    if (typeof dto.accessToken === 'string' && dto.accessToken.length > 0) {
+      data.accessToken = sealSecret(dto.accessToken);
+    } else if (dto.accessToken === null) {
+      data.accessToken = null; // explicit disconnect
+    }
+    const { accessToken, ...row }: any = await this.prisma.reviewSource.update({ where: { id: existing.id }, data });
+    return { ...row, tokenSet: !!accessToken };
   }
   async removeSource(workspaceId: string, id: string) {
     const res = await this.prisma.reviewSource.deleteMany({ where: { id, workspaceId } });

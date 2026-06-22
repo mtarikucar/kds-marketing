@@ -1782,9 +1782,17 @@ model Booking {
 model ReviewSource {
   id          String @id @default(uuid())
   workspaceId String
-  type        String @default("GOOGLE") // GOOGLE
+  type        String @default("GOOGLE") // GOOGLE | FACEBOOK
   name        String
   placeUrl    String
+  // Review-sync (Epic 13, inert until a Google Business / FB page token): the
+  // place/location/page id, a SEALED OAuth token, and the sweep bookkeeping.
+  placeId      String?
+  accessToken  String? // SEALED (secret-box) — masked out of responses
+  externalRef  String? // provider account/location ref (e.g. accounts/{a}/locations/{l})
+  syncStatus   String  @default("ACTIVE") // ACTIVE | PAUSED | ERROR
+  lastSyncedAt DateTime?
+  lastError    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1805,14 +1813,21 @@ model Review {
   rating      Int?
   text        String? @db.Text
   authorName  String?
-  status      String  @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED
+  status      String  @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED | SYNCED
   replyDraft  String? @db.Text
   replyText   String? @db.Text
   token       String  @unique
+  // Review-sync (Epic 13): a synced public review carries the provider's review
+  // id (idempotency key per source) + origin + authored time. Gate reviews leave
+  // these null.
+  source          String  @default("GATE") // GATE | GOOGLE | FACEBOOK
+  externalReviewId String?
+  authoredAt      DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([sourceId, externalReviewId])
   @@index([workspaceId, status])
   @@map("reviews")
 }
