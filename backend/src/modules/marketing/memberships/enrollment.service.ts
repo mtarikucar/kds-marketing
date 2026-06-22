@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { resolveLessonAccess, AccessLesson } from './lesson-access';
 import { CertificateService } from './certificate.service';
+import { GamificationService } from './gamification.service';
 
 /**
  * Epic C2 — enrolls Leads (contacts) into courses and tracks lesson progress.
@@ -21,6 +22,7 @@ export class EnrollmentService {
   constructor(
     private prisma: PrismaService,
     private readonly certificates: CertificateService,
+    private readonly gamification: GamificationService,
   ) {}
 
   private async assertCourse(workspaceId: string, courseId: string) {
@@ -158,6 +160,17 @@ export class EnrollmentService {
         completedAt: completed ? new Date() : null,
       },
     });
+    // Gamification (Epic 10c) — award points; idempotent per (lead, source, ref),
+    // so re-completing a lesson can't double-award. Best-effort.
+    try {
+      await this.gamification.award(workspaceId, enrollment.leadId, 'LESSON_COMPLETE', lessonId);
+      if (completed) {
+        await this.gamification.award(workspaceId, enrollment.leadId, 'COURSE_COMPLETE', enrollment.courseId);
+      }
+    } catch (e: any) {
+      this.logger.warn(`gamification award failed for enrollment ${id}: ${e?.message ?? e}`);
+    }
+
     // Course completion → issue a certificate if the course has them enabled.
     // Idempotent + best-effort: a failure here must not undo the lesson progress.
     if (completed) {

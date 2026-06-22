@@ -2277,6 +2277,55 @@ model Certificate {
   @@map("certificates")
 }
 
+/// Epic 10c — append-only points ledger for membership gamification. Points
+/// accrue to a Lead (member) from learning/community activity. The
+/// (workspaceId, leadId, source, refId) unique makes each award idempotent — the
+/// same lesson/course/post can't double-award. `points` is a signed delta.
+model PointsLedger {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  source      String // LESSON_COMPLETE | COURSE_COMPLETE | POST_CREATED | COMMENT
+  points      Int
+  refId       String? // the lesson/course/post/comment id this award is for
+  createdAt   DateTime @default(now())
+
+  @@unique([workspaceId, leadId, source, refId])
+  @@index([workspaceId, leadId])
+  @@map("points_ledger")
+}
+
+/// Epic 10c — a workspace-defined badge. `ruleType` + `threshold` decide when a
+/// member earns it (POINTS = total points; LESSONS = distinct lessons completed;
+/// COURSES = courses completed).
+model Badge {
+  id          String   @id @default(uuid())
+  workspaceId String
+  key         String
+  name        String
+  iconUrl     String?
+  ruleType    String // POINTS | LESSONS | COURSES
+  threshold   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId])
+  @@map("badges")
+}
+
+/// Epic 10c — a badge a member (Lead) has earned (idempotent per lead+badge).
+model EarnedBadge {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  badgeId     String
+  earnedAt    DateTime @default(now())
+
+  @@unique([workspaceId, leadId, badgeId])
+  @@index([workspaceId, leadId])
+  @@map("earned_badges")
+}
+
 /// Epic C3 — a community space. Members are Leads; posts/comments may be
 /// authored by a staff MarketingUser (authorUserId) or a member Lead
 /// (authorLeadId), both soft refs.

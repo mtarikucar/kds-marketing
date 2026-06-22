@@ -107,6 +107,10 @@ const OWNED_DELEGATES = [
   'lessonProgress',
   // Epic 10b (memberships: completion certificates).
   'certificate',
+  // Epic 10c (memberships: gamification — points ledger + badges).
+  'pointsLedger',
+  'badge',
+  'earnedBadge',
   // Epic C (memberships: communities).
   'community',
   'communityMember',

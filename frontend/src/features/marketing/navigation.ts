@@ -33,6 +33,7 @@ import {
   Filter,
   FileUp,
   GraduationCap,
+  Trophy,
   Building2,
   Camera,
   Receipt,
@@ -194,6 +195,7 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, managerOnly: true },
       { path: '/memberships/communities', labelKey: 'nav.communities', label: 'Communities', icon: MessagesSquare, managerOnly: true },
+      { path: '/memberships/leaderboard', labelKey: 'nav.leaderboard', label: 'Leaderboard', icon: Trophy, managerOnly: true },
     ],
   },
   {
