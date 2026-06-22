@@ -758,6 +758,10 @@ model SalesCall {
   externalCallId  String?
   durationSec     Int?
   recordingUrl    String?
+  // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
+  // the back of the queue (a CONNECTED call with no recording yet, or never), and
+  // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
+  recordingCheckedAt DateTime?
   notes           String?   @db.Text
   startedAt       DateTime  @default(now())
   endedAt         DateTime?

@@ -271,6 +271,12 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (adAccountId, date, campaignId) unique index makes a re-pull idempotent.
   'ads/ads-pull.service.ts:adAccount.findMany':
     'hourly ad-insights sweep reads due ad accounts across all workspaces (system cron)',
+  // Call-recording retrieval sweep (Epic 13, inert): the hourly cron reads ended
+  // api-dial calls missing a recording across ALL workspaces — a system job, same
+  // shape as the ads/subscription sweeps. The only write it triggers is an
+  // id-keyed salesCall.update of recordingUrl; idempotent (re-stamps the same URL).
+  'telephony/recording-sync.service.ts:salesCall.findMany':
+    'hourly call-recording sweep reads ended calls missing a recording across all workspaces (system cron)',
   // OAuth token-refresh sweep: the hourly cron reads OAUTH social accounts with a
   // refresh token nearing expiry across ALL workspaces — a system job, same shape
   // as the subscription/ads sweeps. Every write it triggers (socialAccount.update)

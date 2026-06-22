@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Phone } from 'lucide-react';
+import { Phone, PlayCircle } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import { ClickToDialButton } from '../../features/marketing/components';
@@ -198,7 +198,23 @@ export default function CallsPage() {
               <TBody>
                 {calls.map((c) => (
                   <TR key={c.id}>
-                    <TD className="font-medium text-foreground">{c.toPhone}</TD>
+                    <TD className="font-medium text-foreground">
+                      <span className="inline-flex items-center gap-1.5">
+                        {c.toPhone}
+                        {c.recordingUrl && (
+                          <a
+                            href={c.recordingUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Play recording"
+                            className="text-primary hover:text-primary/80"
+                          >
+                            <PlayCircle className="h-4 w-4" aria-hidden="true" />
+                            <span className="sr-only">Play recording</span>
+                          </a>
+                        )}
+                      </span>
+                    </TD>
                     <TD>
                       <Badge tone={CALL_STATUS_TONE[c.status] ?? 'neutral'}>
                         {CALL_STATUS_LABELS[c.status] || c.status}
