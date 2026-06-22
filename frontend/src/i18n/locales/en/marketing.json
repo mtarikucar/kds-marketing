@@ -1119,7 +1119,16 @@
     "saveFailed": "Save failed",
     "drafted": "Draft ready — review and save",
     "draftFailed": "Could not draft",
-    "empty": "No automations yet — describe one and let AI draft it."
+    "empty": "No automations yet — describe one and let AI draft it.",
+    "enrollTitle": "Enroll contacts",
+    "enrollHint": "Add every contact matching this filter into “{{name}}”.",
+    "enrollBtn": "Enroll",
+    "enrollQueued": "Enrolling {{n}} contacts in the background",
+    "enrollFailed": "Could not enroll",
+    "enrollAll": "Enroll ALL contacts — this starts sending messages and cannot be undone",
+    "filterStatus": "Status (optional)",
+    "filterBusinessType": "Business type (optional)",
+    "filterSearch": "Search name/email (optional)"
   },
   "campaigns": {
     "title": "Campaigns",

@@ -245,8 +245,7 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'dedup lookup keyed by (kind, dedupKey) — matches the partial-unique index, global by design',
   'scheduling/scheduled-job.service.ts:scheduledJob.updateMany':
     'cancel by (kind, dedupKey) or by id — control-plane mutation; dedupKey embeds a row UUID',
-  'scheduling/scheduled-job-runner.service.ts:scheduledJob.updateMany':
-    'stuck-reaper resets RUNNING rows across all workspaces (crash recovery sweeper)',
+  // (the stuck-reaper now runs conflict-safe raw SQL, not a Prisma delegate call)
   // Recurring-subscription sweep: the hourly cron reads due ACTIVE subscriptions
   // across ALL workspaces (status + nextBillingAt) — a system job, same shape as
   // the scheduled-job runner. Every write it triggers (billOne) is workspace-

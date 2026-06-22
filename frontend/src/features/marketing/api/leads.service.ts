@@ -160,13 +160,13 @@ export function bulkDeleteLeads(leadIds: string[]): Promise<{ deleted: number }>
   return marketingApi.post<{ deleted: number }>('/leads/bulk-delete', { leadIds }).then((r) => r.data);
 }
 
-/** POST /leads/bulk-enroll — manually enroll many leads into a workflow. */
+/** POST /leads/bulk-enroll — queue a background enroll of many leads into a workflow. */
 export function bulkEnrollLeads(
   leadIds: string[],
   workflowId: string,
-): Promise<{ enrolled: number; skipped: number }> {
+): Promise<{ queued: number }> {
   return marketingApi
-    .post<{ enrolled: number; skipped: number }>('/leads/bulk-enroll', { leadIds, workflowId })
+    .post<{ queued: number }>('/leads/bulk-enroll', { leadIds, workflowId })
     .then((r) => r.data);
 }
 

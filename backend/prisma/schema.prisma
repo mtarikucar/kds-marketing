@@ -1108,7 +1108,7 @@ model PaymentOrder {
 model ScheduledJob {
   id          String    @id @default(uuid())
   workspaceId String
-  kind        String // 'workflow.resume' | 'conversation.followup' | 'campaign.batch' | 'booking.reminder' | ...
+  kind        String // 'workflow.resume' | 'conversation.followup' | 'campaign.batch' | 'booking.reminder' | 'lead.enroll_batch' | ...
   runAt       DateTime
   payload     Json
   /// Deterministic key; rescheduling collapses onto the same PENDING row

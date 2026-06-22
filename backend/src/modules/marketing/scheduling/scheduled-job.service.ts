@@ -49,18 +49,37 @@ export class ScheduledJobService {
         return existing.id;
       }
     }
-    const job = await db.scheduledJob.create({
-      data: {
-        workspaceId: opts.workspaceId,
-        kind: opts.kind,
-        runAt: opts.runAt,
-        payload: opts.payload,
-        dedupKey: opts.dedupKey ?? null,
-        maxAttempts: opts.maxAttempts ?? 5,
-      },
-      select: { id: true },
-    });
-    return job.id;
+    try {
+      const job = await db.scheduledJob.create({
+        data: {
+          workspaceId: opts.workspaceId,
+          kind: opts.kind,
+          runAt: opts.runAt,
+          payload: opts.payload,
+          dedupKey: opts.dedupKey ?? null,
+          maxAttempts: opts.maxAttempts ?? 5,
+        },
+        select: { id: true },
+      });
+      return job.id;
+    } catch (e) {
+      // Lost a race with a concurrent scheduler for the same (kind, dedupKey):
+      // the partial-unique index rejected this create. Collapse onto the winner's
+      // PENDING row (same semantic as the findFirst path above) rather than
+      // surfacing the raw P2002 as a 500.
+      if (
+        opts.dedupKey &&
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        const winner = await db.scheduledJob.findFirst({
+          where: { kind: opts.kind, dedupKey: opts.dedupKey, status: 'PENDING' },
+          select: { id: true },
+        });
+        if (winner) return winner.id;
+      }
+      throw e;
+    }
   }
 
   /** Cancel the PENDING job for (kind, dedupKey). Returns true if one was cancelled. */

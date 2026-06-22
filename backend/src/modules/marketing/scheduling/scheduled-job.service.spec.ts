@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { ScheduledJobService } from './scheduled-job.service';
 
 /**
@@ -72,6 +73,33 @@ describe('ScheduledJobService', () => {
       where: { id: 'job-existing' },
       data: { runAt: RUN_AT, payload: { n: 2 }, workspaceId: WS },
     });
+  });
+
+  it('collapses a P2002 create race onto the winner PENDING row (clean, not a 500)', async () => {
+    // Lost the findFirst→create race: no PENDING seen, create rejected by the
+    // partial-unique index. Collapse onto the concurrent winner instead of throwing.
+    prisma.scheduledJob.findFirst
+      .mockResolvedValueOnce(null) // initial dedup check: nothing PENDING yet
+      .mockResolvedValueOnce({ id: 'job-winner' }); // post-conflict re-read
+    prisma.scheduledJob.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'x' }),
+    );
+    const id = await svc.schedule({
+      workspaceId: WS,
+      kind: 'lead.enroll_batch',
+      runAt: RUN_AT,
+      payload: {},
+      dedupKey: 'enroll:wf1',
+    });
+    expect(id).toBe('job-winner');
+  });
+
+  it('rethrows a non-P2002 create error', async () => {
+    prisma.scheduledJob.findFirst.mockResolvedValue(null);
+    prisma.scheduledJob.create.mockRejectedValueOnce(new Error('db down'));
+    await expect(
+      svc.schedule({ workspaceId: WS, kind: 'k', runAt: RUN_AT, payload: {}, dedupKey: 'd' }),
+    ).rejects.toThrow('db down');
   });
 
   it('cancel flips the PENDING (kind, dedupKey) row and reports whether it hit', async () => {
