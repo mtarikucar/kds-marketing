@@ -27,7 +27,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { FileText, Clipboard, CheckCircle, Trash2, Plus } from 'lucide-react';
+import { FileText, Clipboard, CheckCircle, Trash2, Plus, MessageSquare, Wallet } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -115,6 +115,20 @@ export default function InvoicesPage() {
   const markPaid = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/mark-paid`),
     onSuccess: invalidate,
+  });
+
+  // Text-to-pay: send the public pay link to the contact via SMS.
+  const textToPay = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/text-to-pay`, { channel: 'SMS' }),
+    onSuccess: () => { invalidate(); toast.success(t('invoices.texted', { defaultValue: 'Pay link sent' })); },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.textFailed', { defaultValue: 'Could not send' })),
+  });
+
+  // Settle the invoice from the contact's store-credit wallet.
+  const payWallet = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/pay-with-wallet`),
+    onSuccess: () => { invalidate(); toast.success(t('invoices.paidWallet', { defaultValue: 'Paid from wallet' })); },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.walletFailed', { defaultValue: 'Wallet payment failed' })),
   });
 
   const voidInv = useMutation({
@@ -300,6 +314,20 @@ export default function InvoicesPage() {
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <Clipboard className="h-4 w-4" aria-hidden />
+                          </button>
+                          <button
+                            onClick={() => textToPay.mutate(inv.id)}
+                            title={t('invoices.textToPay', 'Text pay link (SMS)')}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <MessageSquare className="h-4 w-4" aria-hidden />
+                          </button>
+                          <button
+                            onClick={() => payWallet.mutate(inv.id)}
+                            title={t('invoices.payWithWallet', 'Pay from store credit')}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <Wallet className="h-4 w-4" aria-hidden />
                           </button>
                           <button
                             onClick={() => markPaid.mutate(inv.id)}

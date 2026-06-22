@@ -10,12 +10,17 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { InvoiceTextService } from '../invoicing/invoice-text.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from '../dto/invoice.dto';
 
 class PspConfigDto {
   @IsIn(['STRIPE', 'MANUAL']) provider: string;
   @IsOptional() @IsObject() secrets?: Record<string, string>;
   @IsOptional() @IsObject() configPublic?: Record<string, unknown>;
+}
+
+class TextToPayDto {
+  @IsIn(['SMS', 'WHATSAPP']) channel: 'SMS' | 'WHATSAPP';
 }
 
 /** End-customer invoicing. MANAGER+ behind the `invoicing` feature. */
@@ -25,7 +30,10 @@ class PspConfigDto {
 @MarketingRoles('MANAGER')
 @RequiresFeature('invoicing')
 export class MarketingInvoicesController {
-  constructor(private readonly invoices: InvoicesService) {}
+  constructor(
+    private readonly invoices: InvoicesService,
+    private readonly invoiceText: InvoiceTextService,
+  ) {}
 
   @Get()
   list(@CurrentMarketingUser() a: MarketingUserPayload) { return this.invoices.list(a.workspaceId); }
@@ -60,4 +68,15 @@ export class MarketingInvoicesController {
   @Post(':id/pay-with-wallet')
   @RequirePermission('leads.manage')
   payWithWallet(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.invoices.payWithWallet(a.workspaceId, id); }
+
+  /** Text-to-pay: send the public pay link to the contact via SMS or WhatsApp. */
+  @Post(':id/text-to-pay')
+  @RequirePermission('settings.manage')
+  textToPay(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: TextToPayDto,
+  ) {
+    return this.invoiceText.sendByText(a.workspaceId, id, dto.channel);
+  }
 }

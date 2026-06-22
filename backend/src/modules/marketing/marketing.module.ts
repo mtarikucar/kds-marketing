@@ -169,6 +169,7 @@ import { IvrService } from './ivr/ivr.service';
 import { MarketingInvoicesController } from './controllers/marketing-invoices.controller';
 import { PublicInvoiceController } from './controllers/public-invoice.controller';
 import { InvoicesService } from './invoicing/invoices.service';
+import { InvoiceTextService } from './invoicing/invoice-text.service';
 
 // Phase F P10 — white-label-lite branding.
 import { MarketingBrandingController } from './controllers/marketing-branding.controller';
@@ -565,6 +566,7 @@ import { WalletService } from './wallet/wallet.service';
     IvrService,
     // Phase F P9 — end-customer invoicing (per-workspace PSP, public pay page).
     InvoicesService,
+    InvoiceTextService,
     // Phase F P10 — white-label-lite branding (logo upload + public theming).
     BrandingService,
     // Epic C — memberships.
