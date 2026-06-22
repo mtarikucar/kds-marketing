@@ -25,6 +25,7 @@ import { LeadStatusBadge, AssignCell } from '../../../features/marketing/compone
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import ContactInfo from './ContactInfo';
 import { WalletPanel } from './WalletPanel';
+import { CompanyPanel } from './CompanyPanel';
 import ActivityTimelineTab from './ActivityTimelineTab';
 import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
@@ -264,6 +265,7 @@ export default function LeadDetailPage() {
             onStatusChange={(s) => statusMutation.mutate(s)}
             statusPending={statusMutation.isPending}
           />
+          <CompanyPanel leadId={lead.id} companyId={lead.companyId} onUpdated={invalidate} />
           <WalletPanel leadId={lead.id} isManager={isManager} />
         </div>
 

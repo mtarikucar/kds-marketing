@@ -292,6 +292,8 @@ import { MarketingInboundWebhooksController } from './controllers/marketing-inbo
 import { PublicInboundWebhookController } from './controllers/public-inbound-webhook.controller';
 import { InboundWebhooksService } from './inbound-webhooks/inbound-webhooks.service';
 import { InboundWebhookGuard } from './guards/inbound-webhook.guard';
+import { MarketingCompaniesController } from './controllers/marketing-companies.controller';
+import { CompaniesService } from './companies/companies.service';
 
 // Tax rates (GoHighLevel parity) — KDV/VAT on invoices + estimates.
 import { MarketingTaxRatesController } from './controllers/marketing-tax-rates.controller';
@@ -405,6 +407,7 @@ import { WalletService } from './wallet/wallet.service';
     PublicTriggerLinkController,
     MarketingInboundWebhooksController,
     PublicInboundWebhookController,
+    MarketingCompaniesController,
     MarketingTaxRatesController,
     MarketingCouponsController,
     MarketingWalletController,
@@ -562,6 +565,7 @@ import { WalletService } from './wallet/wallet.service';
     TriggerLinksService,
     InboundWebhooksService,
     InboundWebhookGuard,
+    CompaniesService,
     TaxRatesService,
     CouponsService,
     WalletService,

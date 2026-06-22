@@ -134,6 +134,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'contacts', labelKey: 'nav.group.contacts', label: 'Contacts', icon: Users,
     children: [
       { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
+      { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
       { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database, managerOnly: true },
       { path: '/settings/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
       { path: '/settings/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },

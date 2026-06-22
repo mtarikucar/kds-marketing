@@ -64,6 +64,16 @@ export class MarketingLeadsService {
     private readonly customFields: CustomFieldsService,
   ) {}
 
+  /** Epic 6 — a contact's companyId must reference a Company in the same
+   *  workspace (soft ref; reject a missing/cross-tenant id at the boundary). */
+  private async assertCompanyInWorkspace(workspaceId: string, companyId: string): Promise<void> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, workspaceId },
+      select: { id: true },
+    });
+    if (!company) throw new BadRequestException('Company not found in this workspace');
+  }
+
   async create(workspaceId: string, dto: CreateLeadDto, userId: string, userRole: string) {
     // Idempotency: refuse to create a second OPEN lead for the same
     // email. Two reps logging the same prospect was the actual
@@ -138,11 +148,15 @@ export class MarketingLeadsService {
       'create',
     );
 
+    // Epic 6 — a supplied company must belong to this workspace (soft ref).
+    if (dto.companyId) await this.assertCompanyInWorkspace(workspaceId, dto.companyId);
+
     const { customFields: _ignoredCustomFields, ...leadData } = dto;
     const lead = await this.prisma.lead.create({
       data: {
         ...leadData,
         workspaceId,
+        companyId: dto.companyId || null, // normalize '' → null
         nextFollowUp: dto.nextFollowUp ? new Date(dto.nextFollowUp) : undefined,
         assignedToId: resolvedAssignee,
         customFields: customFields as Prisma.InputJsonValue,
@@ -387,7 +401,10 @@ export class MarketingLeadsService {
       }),
       ...(dto.phone !== undefined && { phoneNormalized: normalizePhone(dto.phone) }),
       ...(dto.email !== undefined && { emailNormalized: normalizeEmail(dto.email) }),
+      // Epic 6 — link/unlink the contact's B2B account ('' unlinks).
+      ...(dto.companyId !== undefined && { companyId: dto.companyId || null }),
     };
+    if (dto.companyId) await this.assertCompanyInWorkspace(workspaceId, dto.companyId);
 
     // Epic A1 — merge validated custom field values onto the existing map (a
     // partial update only touches the keys it sends; required is not enforced).

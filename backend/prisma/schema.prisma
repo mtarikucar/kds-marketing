@@ -165,6 +165,9 @@ model Lead {
   id            String    @id @default(uuid())
   workspaceId   String
   businessName  String
+  /// Optional B2B account this contact belongs to (GHL Companies parity). Soft
+  /// ref to companies.id; the flat businessName stays for display/legacy.
+  companyId     String?
   contactPerson String
   phone         String?
   whatsapp      String?
@@ -249,6 +252,7 @@ model Lead {
   @@index([workspaceId])
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, companyId])
   @@index([assignedToId])
   @@index([status])
   @@index([city])
@@ -290,6 +294,29 @@ model CustomFieldDef {
   @@unique([workspaceId, entity, key])
   @@index([workspaceId, entity, archived])
   @@map("custom_field_defs")
+}
+
+/// A B2B account/company (GoHighLevel Companies parity). Contacts (Lead.companyId)
+/// belong to a company; the company rolls up their opportunities + conversations.
+/// `customFields` holds values for the workspace's COMPANY CustomFieldDefs (same
+/// pattern as leads). No FK — soft `workspaceId` scoping like the rest of CRM.
+model Company {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  domain      String?
+  phone       String?
+  email       String?
+  address     String?
+  city        String?
+  notes       String?  @db.Text
+  customFields Json?
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId, archived])
+  @@map("companies")
 }
 
 /// Custom Objects (GoHighLevel parity) — a workspace-defined record type beyond

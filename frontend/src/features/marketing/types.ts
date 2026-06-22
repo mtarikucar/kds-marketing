@@ -98,6 +98,7 @@ export interface MarketingUserInfo {
 export interface Lead {
   id: string;
   businessName: string;
+  companyId?: string | null;
   contactPerson: string;
   phone?: string;
   whatsapp?: string;

@@ -138,6 +138,13 @@ export class CreateLeadDto {
   @IsString()
   assignedToId?: string;
 
+  /** Epic 6 — B2B account this contact belongs to (Company.id, same workspace).
+   *  Empty string on update unlinks; validated against the workspace's companies. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  companyId?: string;
+
   /**
    * Epic A1 — workspace-defined custom field values, keyed by CustomFieldDef.key.
    * Validated/coerced against the workspace's definitions before persist.

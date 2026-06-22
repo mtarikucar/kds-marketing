@@ -161,6 +161,8 @@ const OWNED_DELEGATES = [
   'triggerLinkClick',
   // Inbound webhooks (GHL parity): per-workspace public hook endpoints.
   'inboundWebhook',
+  // Companies (GHL parity): B2B accounts grouping contacts.
+  'company',
   // Tax rates (GHL parity): reusable per-workspace KDV/VAT rates.
   'taxRate',
   // Coupons (GHL parity): discount codes + their redemption log.

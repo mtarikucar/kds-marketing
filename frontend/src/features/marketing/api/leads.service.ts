@@ -92,6 +92,11 @@ export function updateLeadStatus(id: string, status: string): Promise<void> {
   return marketingApi.patch(`/leads/${id}/status`, { status }).then(() => undefined);
 }
 
+/** PATCH /leads/:id — link/unlink the contact's B2B company ('' unlinks). */
+export function setLeadCompany(id: string, companyId: string): Promise<Lead> {
+  return marketingApi.patch<Lead>(`/leads/${id}`, { companyId }).then((r) => r.data);
+}
+
 /** POST /leads/:id/convert — mark lead as won and provision tenant. */
 export function convertLead(id: string, data: ConvertLeadPayload): Promise<void> {
   return marketingApi.post(`/leads/${id}/convert`, data).then(() => undefined);
