@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/Table';
 import { SiteBlockBuilder, type AnyBlock } from './sites/SiteBlockBuilder';
 import { FormFieldsEditor, type FormField } from './sites/FormFieldsEditor';
+import { FunnelsCard } from './sites/FunnelsCard';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -412,6 +413,9 @@ export default function SitesPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Multi-step funnels */}
+      <FunnelsCard pages={pages ?? []} wsId={wsId} />
 
       {/* Create / Edit page dialog */}
       <Dialog

@@ -1573,6 +1573,26 @@ model FormDef {
   @@map("form_defs")
 }
 
+/// A multi-step funnel (GoHighLevel parity): an ordered sequence of SitePages
+/// served as one published flow. `steps` is a JSON array of { sitePageId, name? }
+/// — the funnel is the publish unit, and the public renderer reuses the page's
+/// block list per step + appends a "Continue" link to the next step.
+model Funnel {
+  id          String  @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String
+  /// Ordered [{ sitePageId, name? }] — each step renders that page's blocks.
+  steps       Json
+  published   Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@map("funnels")
+}
+
 /// A bookable calendar with weekly availability. `availability` is a per-weekday
 /// list of {start,end} HH:mm windows; bookable slots = windows sliced into
 /// slotMinutes, minus existing bookings, plus bufferMinutes between.
