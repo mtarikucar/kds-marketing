@@ -38,11 +38,12 @@ describe('OAuthConnectButtons', () => {
     });
   });
 
-  it('renders a button only for configured networks', () => {
+  it('enables configured networks and disables unconfigured ones', () => {
     wrap(<OAuthConnectButtons status={status} />);
-    expect(screen.getByText(/Connect Facebook/i)).toBeTruthy();
-    expect(screen.getByText(/Connect Instagram/i)).toBeTruthy();
-    expect(screen.queryByText(/Connect LinkedIn/i)).toBeNull();
+    expect(screen.getByText(/Connect Facebook/i).closest('button')).not.toBeDisabled();
+    expect(screen.getByText(/Connect Instagram/i).closest('button')).not.toBeDisabled();
+    expect(screen.getByText(/Connect LinkedIn/i).closest('button')).toBeDisabled();
+    expect(screen.getByText(/Connect TikTok/i).closest('button')).toBeDisabled();
   });
 
   it('starts OAuth and redirects to the authorize URL', async () => {

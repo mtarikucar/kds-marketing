@@ -10,36 +10,56 @@ interface Props {
 }
 
 /**
- * One "Connect <Network>" button per network whose platform app is configured
- * (env creds present, reported by the status endpoint). Clicking starts the
- * OAuth redirect. Networks without configured app creds are omitted — the
- * manual "Connect account" dialog remains available as the fallback.
+ * One "Connect <Network>" button per network. A network whose platform app is
+ * configured (env creds present, per the status endpoint) is clickable and
+ * starts the OAuth redirect; an unconfigured network shows the button DISABLED
+ * with a hint, so the one-click path is always discoverable and it's obvious
+ * why it's not yet active (admin must add the app credentials). The manual
+ * "Connect account" dialog remains as the fallback.
  */
 export function OAuthConnectButtons({ status }: Props) {
   const { t } = useTranslation('marketing');
   const { startConnect } = useSocialConnect();
 
   if (!status) return null;
-  const configured = SOCIAL_NETWORKS.filter((n) => status[n]);
-  if (configured.length === 0) return null;
+  const anyConfigured = SOCIAL_NETWORKS.some((n) => status[n]);
 
   return (
-    <div className="flex flex-wrap gap-2">
-      {configured.map((network: SocialNetwork) => {
-        const meta = NETWORK_META[network];
-        const Icon = meta.icon;
-        return (
-          <Button
-            key={network}
-            variant="outline"
-            size="sm"
-            onClick={() => startConnect(network)}
-          >
-            <Icon className="h-4 w-4" aria-hidden="true" />
-            {t('social.oauth.connect', { defaultValue: 'Connect' })} {meta.label}
-          </Button>
-        );
-      })}
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {SOCIAL_NETWORKS.map((network: SocialNetwork) => {
+          const meta = NETWORK_META[network];
+          const Icon = meta.icon;
+          const configured = !!status[network];
+          return (
+            <Button
+              key={network}
+              variant="outline"
+              size="sm"
+              disabled={!configured}
+              title={
+                configured
+                  ? undefined
+                  : t('social.oauth.notConfigured', {
+                      defaultValue: 'An admin must add this network’s app credentials first',
+                    })
+              }
+              onClick={() => configured && startConnect(network)}
+            >
+              <Icon className="h-4 w-4" aria-hidden="true" />
+              {t('social.oauth.connect', { defaultValue: 'Connect' })} {meta.label}
+            </Button>
+          );
+        })}
+      </div>
+      {!anyConfigured && (
+        <p className="text-micro text-muted-foreground">
+          {t('social.oauth.setupHint', {
+            defaultValue:
+              'One-click connect activates once an admin adds each network’s app credentials. Until then, use “Connect account” below to add a token manually.',
+          })}
+        </p>
+      )}
     </div>
   );
 }
