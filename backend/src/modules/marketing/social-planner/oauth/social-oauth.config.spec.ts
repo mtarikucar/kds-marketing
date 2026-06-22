@@ -6,13 +6,13 @@ describe('social oauth config', () => {
     process.env = { ...env };
   });
 
-  it('builds the redirect uri from API_URL', () => {
-    process.env.API_URL = 'https://api.example.com/api';
+  it('builds the redirect uri from PUBLIC_BASE_URL + /api', () => {
+    process.env.PUBLIC_BASE_URL = 'https://marketing.example.com';
     expect(redirectUri('FACEBOOK')).toBe(
-      'https://api.example.com/api/marketing/social/oauth/facebook/callback',
+      'https://marketing.example.com/api/marketing/social/oauth/facebook/callback',
     );
     expect(redirectUri('TIKTOK')).toBe(
-      'https://api.example.com/api/marketing/social/oauth/tiktok/callback',
+      'https://marketing.example.com/api/marketing/social/oauth/tiktok/callback',
     );
   });
 

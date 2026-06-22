@@ -63,8 +63,13 @@ export function isOAuthConfigured(n: Network): boolean {
   return !!(clientId(n) && clientSecret(n));
 }
 
-/** The provider redirect URI — must be registered in each provider's app. */
+/**
+ * The provider redirect URI — must be registered verbatim in each provider's
+ * app. Built from the PUBLIC backend origin (`PUBLIC_BASE_URL`, e.g.
+ * https://marketing.hummytummy.com) plus the global `/api` prefix the backend
+ * is served under — the same construction as the netgsm public callback.
+ */
 export function redirectUri(n: Network): string {
-  const base = (process.env.API_URL ?? '').replace(/\/$/, '');
-  return `${base}/marketing/social/oauth/${n.toLowerCase()}/callback`;
+  const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
+  return `${base}/api/marketing/social/oauth/${n.toLowerCase()}/callback`;
 }
