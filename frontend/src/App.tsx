@@ -36,6 +36,7 @@ const CommissionsPage          = lazy(() => import('./pages/marketing/Commission
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
 const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
 const DialerPage               = lazy(() => import('./pages/marketing/DialerPage'));
+const ProspectingPage          = lazy(() => import('./pages/marketing/ProspectingPage'));
 const PerformancePage          = lazy(() => import('./pages/marketing/PerformancePage'));
 const BillingPage              = lazy(() => import('./pages/marketing/billing'));
 // Manager-only pages
@@ -159,6 +160,7 @@ export default function App() {
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           <Route path="/calls"          element={<S><CallsPage /></S>} />
           <Route path="/dialer"         element={<S><DialerPage /></S>} />
+          <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
           <Route path="/performance"    element={<S><PerformancePage /></S>} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
           {/* Self-service 2FA — available to every authenticated marketing user. */}

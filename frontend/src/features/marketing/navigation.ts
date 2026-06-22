@@ -159,6 +159,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: FileText },
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
       { path: '/dialer', labelKey: 'nav.dialer', label: 'Power Dialer', icon: PhoneCall, feature: 'telephony' },
+      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe },
       { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
       { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
     ],

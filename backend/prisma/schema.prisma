@@ -3180,3 +3180,26 @@ model AdMetric {
   @@index([workspaceId, date])
   @@map("ad_metrics")
 }
+
+/// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).
+/// A workspace user points the tool at a prospect's website; an async
+/// ScheduledJob grades the page (on-page SEO + Google PageSpeed) into `sections`
+/// and the unguessable `publicToken` exposes a branded report that can be
+/// converted to a Lead (idempotent via `convertedLeadId`).
+model ProspectAudit {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  targetUrl       String
+  businessName    String?
+  status          String    @default("PENDING") // PENDING | RUNNING | DONE | FAILED
+  score           Int? // 0–100 overall, null until DONE
+  sections        Json? // AuditSection[] — per-check scores + findings
+  error           String?
+  publicToken     String    @unique
+  convertedLeadId String? // set once when converted to a lead (idempotent)
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@index([workspaceId, status])
+  @@map("prospect_audits")
+}
