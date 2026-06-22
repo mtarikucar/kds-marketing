@@ -27,7 +27,7 @@ import { CreateWebhookDto, UpdateWebhookDto } from '../dto/webhook.dto';
 @MarketingRoute()
 @Controller('marketing/webhooks')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 export class MarketingWebhooksController {
   constructor(private readonly svc: WebhookOutboundService) {}
 

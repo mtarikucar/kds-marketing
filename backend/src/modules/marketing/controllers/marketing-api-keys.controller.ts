@@ -26,7 +26,7 @@ import { CreateApiKeyDto } from '../dto/api-key.dto';
 @MarketingRoute()
 @Controller('marketing/api-keys')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 export class MarketingApiKeysController {
   constructor(private readonly svc: ApiKeysService) {}
 

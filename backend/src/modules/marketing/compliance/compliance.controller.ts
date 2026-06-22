@@ -33,7 +33,7 @@ class RecordConsentDto {
 @MarketingRoute()
 @Controller('marketing/compliance')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
-@MarketingRoles('OWNER', 'MANAGER')
+@MarketingRoles('MANAGER')
 export class ComplianceController {
   constructor(private readonly svc: ComplianceService) {}
 
