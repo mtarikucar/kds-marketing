@@ -182,7 +182,14 @@ export class CampaignsService {
   buildAudienceWhere(workspaceId: string, channel: string, audienceFilter: unknown): Prisma.LeadWhereInput {
     // Tombstoned (merged) and soft-deleted leads must never become recipients.
     const where: any = { workspaceId, mergedIntoId: null, deletedAt: null };
-    if (channel === 'EMAIL') { where.emailOptOut = false; where.email = { not: null }; }
+    // Epic 9a — exclude syntactically/MX-INVALID and hard-bounced emails so a
+    // campaign never burns sender reputation on an address that can't receive.
+    if (channel === 'EMAIL') {
+      where.emailOptOut = false;
+      where.email = { not: null };
+      where.emailBouncedAt = null;
+      where.emailVerifiedStatus = { not: 'INVALID' };
+    }
     else if (channel === 'SMS') { where.smsOptOut = false; where.phone = { not: null }; }
     else if (channel === 'WHATSAPP') { where.waOptOut = false; where.OR = [{ whatsapp: { not: null } }, { phone: { not: null } }]; }
 

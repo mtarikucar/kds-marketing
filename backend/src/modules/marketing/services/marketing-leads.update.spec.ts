@@ -31,6 +31,7 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
       {} as any, // provisioning — unused by update()
       {} as any, // outbox — unused by update()
       { validateAndNormalize: jest.fn().mockResolvedValue({}) } as any, // customFields
+      { verify: jest.fn().mockResolvedValue('UNKNOWN') } as any, // hygiene
     );
     prisma.lead.update.mockResolvedValue({ id: 'lead-1' } as any);
   });

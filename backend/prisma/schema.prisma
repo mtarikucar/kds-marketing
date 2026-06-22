@@ -228,6 +228,13 @@ model Lead {
   // Phase F P2 — per-channel marketing opt-out. Campaigns AND the Conversation
   // AI engine check these before sending. Default false = opted-in.
   emailOptOut Boolean @default(false)
+  /// List-hygiene tier-1 (GHL parity): syntax+MX verification result, set at
+  /// ingest. UNKNOWN | VALID | INVALID | RISKY. INVALID is excluded from email
+  /// campaign audiences.
+  emailVerifiedStatus String @default("UNKNOWN")
+  /// Stamped when the ESP reports a hard bounce/complaint for this email — the
+  /// lead is then suppressed from email campaigns (with emailOptOut).
+  emailBouncedAt DateTime?
   smsOptOut   Boolean @default(false)
   waOptOut    Boolean @default(false)
 

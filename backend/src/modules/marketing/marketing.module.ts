@@ -299,6 +299,7 @@ import { PublicFunnelController } from './controllers/public-funnel.controller';
 import { PageFunnelsService } from './page-funnels/page-funnels.service';
 import { MarketingEmailTemplatesController } from './controllers/marketing-email-templates.controller';
 import { EmailTemplatesService } from './email-templates/email-templates.service';
+import { EmailHygieneService } from './leads/email-hygiene.service';
 
 // Tax rates (GoHighLevel parity) — KDV/VAT on invoices + estimates.
 import { MarketingTaxRatesController } from './controllers/marketing-tax-rates.controller';
@@ -576,6 +577,7 @@ import { WalletService } from './wallet/wallet.service';
     CompaniesService,
     PageFunnelsService,
     EmailTemplatesService,
+    EmailHygieneService,
     TaxRatesService,
     CouponsService,
     WalletService,

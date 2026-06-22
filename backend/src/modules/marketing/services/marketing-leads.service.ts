@@ -13,6 +13,7 @@ import { EmailService } from '../../../common/services/email.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from './lead-auto-assigner.service';
 import { CustomFieldsService } from './custom-fields.service';
+import { EmailHygieneService } from '../leads/email-hygiene.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { CreateLeadDto } from '../dto/create-lead.dto';
@@ -62,6 +63,7 @@ export class MarketingLeadsService {
     private readonly provisioning: CoreProvisioningPort,
     private readonly outbox: OutboxService,
     private readonly customFields: CustomFieldsService,
+    private readonly hygiene: EmailHygieneService,
   ) {}
 
   /** Epic 6 — a contact's companyId must reference a Company in the same
@@ -151,12 +153,18 @@ export class MarketingLeadsService {
     // Epic 6 — a supplied company must belong to this workspace (soft ref).
     if (dto.companyId) await this.assertCompanyInWorkspace(workspaceId, dto.companyId);
 
+    // Epic 9a — list-hygiene tier-1: classify the email (syntax + MX) at ingest
+    // so an INVALID address is kept out of email campaign audiences. Best-effort
+    // + timeout-bounded; a transient DNS blip leaves it UNKNOWN (still mailable).
+    const emailVerifiedStatus = await this.hygiene.verify(dto.email);
+
     const { customFields: _ignoredCustomFields, ...leadData } = dto;
     const lead = await this.prisma.lead.create({
       data: {
         ...leadData,
         workspaceId,
         companyId: dto.companyId || null, // normalize '' → null
+        emailVerifiedStatus,
         nextFollowUp: dto.nextFollowUp ? new Date(dto.nextFollowUp) : undefined,
         assignedToId: resolvedAssignee,
         customFields: customFields as Prisma.InputJsonValue,

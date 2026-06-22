@@ -26,6 +26,7 @@ describe('MarketingLeadsService — customFields validation', () => {
       {} as any, // provisioning
       outbox as any, // outbox
       cf as any, // customFields
+      { verify: jest.fn().mockResolvedValue('VALID') } as any, // hygiene
     );
     prisma.lead.findFirst.mockResolvedValue(null);
     prisma.lead.create.mockResolvedValue({ id: 'lead-1', customFields: { budget: 1500 } } as any);
