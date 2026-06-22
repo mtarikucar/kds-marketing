@@ -178,7 +178,8 @@
     "dateFuture": "Date must be in the future",
     "passwordMin": "Password must be at least 8 characters",
     "passwordWeak": "Use upper/lower case + a number",
-    "passwordMismatch": "Passwords do not match"
+    "passwordMismatch": "Passwords do not match",
+    "timeInvalid": "Invalid time"
   },
   "login": {
     "title": "Marketing Panel",
@@ -350,6 +351,8 @@
       "typeLabel": "Type",
       "priorityLabel": "Priority",
       "dueDateLabel": "Due date",
+      "timeLabel": "Time",
+      "assigneeLabel": "Assignee",
       "descriptionLabel": "Description"
     },
     "deletedActivity": "Activity removed",
@@ -633,7 +636,12 @@
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
-    "emptyHint": "Create a follow-up so leads don't go cold."
+    "emptyHint": "Create a follow-up so leads don't go cold.",
+    "presets": {
+      "today6pm": "Today 6:00 PM",
+      "tomorrow9am": "Tomorrow 9:00 AM",
+      "nextWeek": "+1 week"
+    }
   },
   "calendar": {
     "title": "Calendar",
