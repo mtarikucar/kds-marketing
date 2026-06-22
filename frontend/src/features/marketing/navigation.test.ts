@@ -29,7 +29,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(ids).not.toContain('agency');
     expect(childPaths(hubs, 'contacts')).toEqual(['/leads']);
     expect(childPaths(hubs, 'sales')).toEqual(['/opportunities', '/estimates', '/documents', '/offers']);
-    expect(childPaths(hubs, 'reporting')).toEqual(['/reports', '/performance']);
+    expect(childPaths(hubs, 'reporting')).toEqual(['/reports', '/ads', '/performance']);
     expect(childPaths(hubs, 'settings')).toEqual(['/settings/two-factor']);
   });
 
@@ -45,7 +45,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
 
   it('reveals exactly the entitled modules, nothing more', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle('conversationAi') });
-    expect(childPaths(hubs, 'conversations').sort()).toEqual(['/channels', '/inbox']);
+    expect(childPaths(hubs, 'conversations').sort()).toEqual(['/channels', '/inbox', '/settings/snippets']);
     expect(hubs.find((h) => h.id === 'voice')).toBeUndefined();
   });
 

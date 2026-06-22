@@ -29,6 +29,7 @@ import { cn } from '@/components/ui/cn';
 import { taskSchema, type TaskFormValues } from '../../../features/marketing/schemas';
 import { TaskType } from '../../../features/marketing/types';
 import type { MarketingTask } from '../../../features/marketing/types';
+import { localDateTimeToIso, toLocalYmd } from '../../../features/marketing/utils/datetime';
 
 const taskPriorityColor: Record<string, string> = {
   LOW: 'text-muted-foreground',
@@ -69,7 +70,8 @@ export default function TasksTab({
       description: '',
       type: 'FOLLOW_UP',
       priority: 'MEDIUM',
-      dueDate: '',
+      dueDate: toLocalYmd(new Date()),
+      dueTime: '09:00',
       leadId,
     },
   });
@@ -82,7 +84,7 @@ export default function TasksTab({
       title: values.title,
       type: values.type,
       priority: values.priority,
-      dueDate: values.dueDate,
+      dueDate: localDateTimeToIso(values.dueDate, values.dueTime),
       leadId,
       ...(values.description ? { description: values.description } : {}),
     });
@@ -91,7 +93,8 @@ export default function TasksTab({
       description: '',
       type: 'FOLLOW_UP',
       priority: 'MEDIUM',
-      dueDate: '',
+      dueDate: toLocalYmd(new Date()),
+      dueTime: '09:00',
       leadId,
     });
     setOpen(false);
@@ -236,17 +239,31 @@ export default function TasksTab({
                 )}
               />
             </div>
-            <Field label="Due Date" required error={fieldErr(form.formState.errors.dueDate?.message)}>
-              {({ id, describedBy, invalid }) => (
-                <Input
-                  id={id}
-                  aria-describedby={describedBy}
-                  aria-invalid={invalid}
-                  type="date"
-                  {...form.register('dueDate')}
-                />
-              )}
-            </Field>
+            <div className="grid grid-cols-[1fr_auto] gap-3">
+              <Field label="Due Date" required error={fieldErr(form.formState.errors.dueDate?.message)}>
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    type="date"
+                    {...form.register('dueDate')}
+                  />
+                )}
+              </Field>
+              <Field label="Time" error={fieldErr(form.formState.errors.dueTime?.message)}>
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    type="time"
+                    className="w-32"
+                    {...form.register('dueTime')}
+                  />
+                )}
+              </Field>
+            </div>
             <Field label="Description" error={fieldErr(form.formState.errors.description?.message)}>
               {({ id, describedBy }) => (
                 <Textarea

@@ -12,10 +12,8 @@ import { TaskFilterDto } from '../dto/task-filter.dto';
 import { MarketingNotificationsService } from './marketing-notifications.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
+import { parseDueDate } from './marketing-task-date.util';
 
-// Allow a small grace for clock skew before rejecting a dueDate as
-// "in the past". 5 minutes is enough for any sane client drift.
-const PAST_DUE_GRACE_MS = 5 * 60 * 1000;
 const MAX_CALENDAR_RANGE_DAYS = 62;
 
 @Injectable()
@@ -27,24 +25,6 @@ export class MarketingTasksService {
     private notificationsService: MarketingNotificationsService,
     private outbox: OutboxService,
   ) {}
-
-  private assertDueDateNotInPast(dueDate: Date | string): Date {
-    // A date-only value (YYYY-MM-DD) is interpreted as the END of that day, not
-    // UTC midnight — otherwise a task due "today", created in the afternoon by a
-    // UTC+ user (e.g. UTC+3 / Turkey), parses as hours in the past and is wrongly
-    // rejected. Full datetimes are used as-is.
-    const d =
-      typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate.trim())
-        ? new Date(`${dueDate.trim()}T23:59:59.999Z`)
-        : new Date(dueDate);
-    if (Number.isNaN(d.getTime())) {
-      throw new BadRequestException('Invalid dueDate');
-    }
-    if (d.getTime() < Date.now() - PAST_DUE_GRACE_MS) {
-      throw new BadRequestException('dueDate must not be in the past');
-    }
-    return d;
-  }
 
   /** Cross-reference guard: the assignee must live in the actor's workspace. */
   private async assertAssigneeInWorkspace(workspaceId: string, assignedToId: string) {
@@ -81,7 +61,7 @@ export class MarketingTasksService {
         description: dto.description,
         type: dto.type,
         priority: dto.priority || 'MEDIUM',
-        dueDate: this.assertDueDateNotInPast(dto.dueDate),
+        dueDate: parseDueDate(dto.dueDate),
         leadId: dto.leadId,
         assignedToId: dto.assignedToId || userId,
       },
@@ -274,7 +254,7 @@ export class MarketingTasksService {
     // workflow trigger. The generic editor must NOT silently complete a task and
     // skip that side effect; other status moves (IN_PROGRESS/CANCELLED) are fine.
     if (status && status !== 'COMPLETED') data.status = status;
-    if (dto.dueDate) data.dueDate = new Date(dto.dueDate);
+    if (dto.dueDate) data.dueDate = parseDueDate(dto.dueDate);
 
     return this.prisma.marketingTask.update({
       where: { id: task.id },

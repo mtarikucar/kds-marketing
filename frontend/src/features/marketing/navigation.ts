@@ -126,7 +126,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'conversations', labelKey: 'nav.group.conversations', label: 'Conversations', icon: MessagesSquare,
     children: [
       { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, feature: 'conversationAi' },
-      { path: '/settings/snippets', labelKey: 'nav.snippets', label: 'Canned Responses', icon: MessageSquareText },
+      { path: '/settings/snippets', labelKey: 'nav.snippets', label: 'Canned Responses', icon: MessageSquareText, feature: 'conversationAi', managerOnly: true },
       { path: '/channels', labelKey: 'nav.channels', label: 'Channels', icon: MessagesSquare, feature: 'conversationAi', managerOnly: true },
     ],
   },
@@ -134,7 +134,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'contacts', labelKey: 'nav.group.contacts', label: 'Contacts', icon: Users,
     children: [
       { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
-      { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database },
+      { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database, managerOnly: true },
       { path: '/settings/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
       { path: '/settings/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
       { path: '/settings/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
