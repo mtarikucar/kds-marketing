@@ -1723,6 +1723,51 @@ model IvrOption {
 /// An invoice the workspace sends to its OWN end customer. `items` is an array
 /// of { description, qty, unitPrice }; `total` is denormalized. Paid via the
 /// workspace's own PSP (WorkspacePspConfig) on the public /i/:token page.
+/// A discount coupon (GHL parity). PERCENT (value = whole percent) or FIXED
+/// (value = minor units off). Server-validated on redemption: active + within
+/// the optional window + under maxRedemptions + over minSubtotal. `code` is
+/// unique per workspace. Workspace-owned.
+model Coupon {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  code           String
+  kind           String // PERCENT | FIXED
+  value          Int // PERCENT: 1–100; FIXED: minor units
+  currency       String? // FIXED only — must match the document currency
+  minSubtotal    Int? // minor units; coupon invalid below this
+  maxRedemptions Int? // null = unlimited
+  timesRedeemed  Int       @default(0)
+  startsAt       DateTime?
+  expiresAt      DateTime?
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  redemptions CouponRedemption[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId, active])
+  @@map("coupons")
+}
+
+/// One redemption of a Coupon (append-only). `amountOff` is the server-resolved
+/// discount in minor units. Tied to the invoice/order-form it discounted.
+model CouponRedemption {
+  id          String   @id @default(uuid())
+  workspaceId String
+  couponId    String
+  coupon      Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  invoiceId   String?
+  orderFormId String?
+  leadId      String?
+  amountOff   Int
+  redeemedAt  DateTime @default(now())
+
+  @@index([couponId, redeemedAt])
+  @@index([workspaceId])
+  @@map("coupon_redemptions")
+}
+
 /// A reusable tax rate (GHL parity) — e.g. "KDV %20". `rate` is a percentage
 /// (20.00 = 20%); applied EXCLUSIVELY (added on top of the line subtotal).
 /// Workspace-owned. Per-line a document snapshots the resolved rate so editing a
@@ -1753,6 +1798,9 @@ model Invoice {
   // when both breakdown columns are 0).
   subtotal    Int       @default(0)
   taxTotal    Int       @default(0)
+  // Coupon discount applied after tax (minor units). total = subtotal + taxTotal
+  // − discount (clamped ≥ 0). Default 0 = no discount.
+  discount    Int       @default(0)
   total       Int       @default(0) // minor units (kuruş/cents)
   notes       String?
   dueDate     DateTime?

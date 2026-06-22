@@ -54,6 +54,7 @@ import {
   MessageSquareText,
   Link2,
   Percent,
+  Ticket,
 } from 'lucide-react';
 
 /**
@@ -216,6 +217,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/order-forms', labelKey: 'nav.orderForms', label: 'Order forms', icon: ShoppingCart, managerOnly: true },
       { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
       { path: '/settings/tax-rates', labelKey: 'nav.taxRates', label: 'Tax Rates', icon: Percent, managerOnly: true },
+      { path: '/settings/coupons', labelKey: 'nav.coupons', label: 'Coupons', icon: Ticket, managerOnly: true },
       { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
     ],
   },

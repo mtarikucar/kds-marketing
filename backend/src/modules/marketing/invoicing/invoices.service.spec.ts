@@ -45,6 +45,14 @@ describe('InvoicesService', () => {
     expect(prisma.invoice.create).not.toHaveBeenCalled();
   });
 
+  it('re-applies the stored coupon discount when items are edited (no silent revert to full price)', async () => {
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', status: 'SENT', discount: 500 });
+    await svc.update(WS, 'inv1', { items: [{ description: 'A', qty: 1, unitPrice: 2500 }] });
+    const data = prisma.invoice.update.mock.calls[0][0].data;
+    expect(data.discount).toBe(500);
+    expect(data.total).toBe(2000); // 2500 gross − 500 discount
+  });
+
   it('markPaid settles the invoice + emits invoice.paid', async () => {
     prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: 'lead1', status: 'SENT', total: 2500, currency: 'TRY' });
     await svc.markPaid(WS, 'inv1');

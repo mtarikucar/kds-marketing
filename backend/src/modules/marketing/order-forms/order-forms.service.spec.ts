@@ -20,12 +20,17 @@ describe('OrderFormsService', () => {
       create: jest.fn().mockResolvedValue({ id: 'inv-1' }),
       send: jest.fn().mockResolvedValue({ payUrl: 'https://x/api/public/i/in_tok' }),
     };
+    const coupons = {
+      validate: jest.fn().mockResolvedValue({ couponId: 'c1', code: 'X', amountOff: 0 }),
+      redeem: jest.fn().mockResolvedValue({ couponId: 'c1', code: 'X', amountOff: 0 }),
+    };
     svc = new OrderFormsService(
       prisma as any,
       outbox as any,
       autoAssigner as any,
       products as any,
       invoices as any,
+      coupons as any,
     );
     (prisma.$transaction as any).mockImplementation(async (arg: any) =>
       typeof arg === 'function' ? arg(prisma) : Promise.all(arg),

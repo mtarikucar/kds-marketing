@@ -59,13 +59,15 @@ export class PublicOrderFormController {
         (f.collectPhone
           ? `<label>Phone${f.phoneRequired ? ' *' : ''}<input type="text" id="phone" maxlength="40"${f.phoneRequired ? ' required' : ''}></label>`
           : '') +
+        `<label>Discount code<input type="text" id="couponCode" maxlength="40" autocomplete="off"></label>` +
         `<button type="button" id="go">Continue to payment</button><div id="msg"></div></form>` +
         `<script>var b=${JSON.stringify(`/api/public/o/${token}`)};` +
         `document.getElementById('go').onclick=function(){` +
         `var n=document.getElementById('fullName').value.trim();` +
         `if(!n){document.getElementById('msg').textContent='Please enter your name.';return;}` +
         `var p=document.getElementById('phone');` +
-        `var payload={fullName:n,email:document.getElementById('email').value.trim()||undefined,phone:p&&p.value.trim()||undefined};` +
+        `var c=document.getElementById('couponCode');` +
+        `var payload={fullName:n,email:document.getElementById('email').value.trim()||undefined,phone:p&&p.value.trim()||undefined,couponCode:c&&c.value.trim()||undefined};` +
         `this.disabled=true;this.textContent='…';` +
         `fetch(b,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})` +
         `.then(function(r){return r.json();}).then(function(d){` +

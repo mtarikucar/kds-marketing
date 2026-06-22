@@ -292,6 +292,10 @@ import { TriggerLinksService } from './trigger-links/trigger-links.service';
 import { MarketingTaxRatesController } from './controllers/marketing-tax-rates.controller';
 import { TaxRatesService } from './tax-rates/tax-rates.service';
 
+// Coupons (GoHighLevel parity) — discount codes on order forms + invoices.
+import { MarketingCouponsController } from './controllers/marketing-coupons.controller';
+import { CouponsService } from './coupons/coupons.service';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -391,6 +395,7 @@ import { TaxRatesService } from './tax-rates/tax-rates.service';
     MarketingTriggerLinksController,
     PublicTriggerLinkController,
     MarketingTaxRatesController,
+    MarketingCouponsController,
     MarketingReviewsController,
     ReviewGateController,
     MarketingVoiceController,
@@ -544,6 +549,7 @@ import { TaxRatesService } from './tax-rates/tax-rates.service';
     LeadBulkService,
     TriggerLinksService,
     TaxRatesService,
+    CouponsService,
     ReviewsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.

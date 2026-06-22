@@ -48,6 +48,8 @@ export class InvoicesService {
       leadId?: string;
       items: PricedItem[];
       currency?: string;
+      /** Coupon discount applied after tax (minor units). */
+      discount?: number;
       notes?: string;
       dueDate?: string;
       // Set by the CustomerSubscription sweep so the invoice is born already
@@ -65,6 +67,8 @@ export class InvoicesService {
     );
     const totals = computeMoneyTotals(items);
     this.assertInRange(totals.total);
+    // Coupon discount is applied AFTER tax and clamped to the gross total.
+    const discount = Math.max(0, Math.min(Math.round(dto.discount ?? 0), totals.total));
     return this.prisma.invoice.create({
       data: {
         workspaceId,
@@ -74,7 +78,8 @@ export class InvoicesService {
         currency: (dto.currency ?? 'TRY').toUpperCase(),
         subtotal: totals.subtotal,
         taxTotal: totals.taxTotal,
-        total: totals.total,
+        discount,
+        total: totals.total - discount,
         notes: dto.notes ?? null,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
         publicToken: `in_${randomBytes(18).toString('hex')}`,
@@ -95,10 +100,14 @@ export class InvoicesService {
       const items = await this.taxRates.resolveItemTaxes(workspaceId, dto.items as PricedItem[]);
       const totals = computeMoneyTotals(items);
       this.assertInRange(totals.total);
+      // Re-apply the existing coupon discount (re-clamped to the new gross) so an
+      // items edit can't silently revert a discounted invoice back to full price.
+      const discount = Math.max(0, Math.min(existing.discount, totals.total));
       data.items = items as unknown as Prisma.InputJsonValue;
       data.subtotal = totals.subtotal;
       data.taxTotal = totals.taxTotal;
-      data.total = totals.total;
+      data.discount = discount;
+      data.total = totals.total - discount;
     }
     return this.prisma.invoice.update({ where: { id: existing.id }, data });
   }
@@ -149,7 +158,7 @@ export class InvoicesService {
   async publicInvoice(token: string) {
     const inv = await this.prisma.invoice.findUnique({
       where: { publicToken: token },
-      select: { number: true, items: true, currency: true, subtotal: true, taxTotal: true, total: true, notes: true, status: true, dueDate: true, workspaceId: true },
+      select: { number: true, items: true, currency: true, subtotal: true, taxTotal: true, discount: true, total: true, notes: true, status: true, dueDate: true, workspaceId: true },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
     const psp = await this.prisma.workspacePspConfig.findUnique({ where: { workspaceId: inv.workspaceId }, select: { provider: true, configPublic: true } });

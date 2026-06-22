@@ -11,6 +11,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { ProductsService } from '../products/products.service';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { CouponsService } from '../coupons/coupons.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import {
@@ -47,6 +48,7 @@ export class OrderFormsService {
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly products: ProductsService,
     private readonly invoices: InvoicesService,
+    private readonly coupons: CouponsService,
   ) {}
 
   // ─── Manager CRUD (workspace-scoped) ────────────────────────────────────────
@@ -186,6 +188,16 @@ export class OrderFormsService {
   }
 
   /** Buyer submit → lead create-or-dedupe → invoice → pay URL. */
+  /** Public: preview a coupon's discount against the form's resolved subtotal. */
+  async previewCoupon(token: string, code: string) {
+    const form = await this.prisma.orderForm.findUnique({ where: { publicToken: token } });
+    if (!form || !form.active) throw new NotFoundException('Order form not found');
+    const { items, currency } = await this.resolveLineItems(form);
+    const subtotal = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
+    const app = await this.coupons.validate(form.workspaceId, (code || '').trim(), subtotal, currency);
+    return { code: app.code, amountOff: app.amountOff, total: Math.max(0, subtotal - app.amountOff), currency };
+  }
+
   async submit(
     token: string,
     body: PublicOrderSubmitDto,
@@ -198,6 +210,15 @@ export class OrderFormsService {
     const { items, currency } = await this.resolveLineItems(form);
     if (items.length === 0 || items.every((it) => it.qty * it.unitPrice === 0)) {
       throw new BadRequestException('This order form has no payable items');
+    }
+
+    // Validate any coupon UP FRONT (side-effect-free) so an invalid code fails
+    // cleanly before a lead/invoice is created. It is actually CONSUMED only on
+    // the new-invoice path below (never on the idempotent reuse path).
+    const subtotal = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
+    const couponCode = (body.couponCode || '').trim();
+    if (couponCode) {
+      await this.coupons.validate(workspaceId, couponCode, subtotal, currency);
     }
 
     const name = (body.fullName || '').trim();
@@ -272,18 +293,38 @@ export class OrderFormsService {
         notes: orderNote,
         status: { in: ['DRAFT', 'SENT'] },
         createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
+        // When the buyer supplies a coupon, only reuse an ALREADY-discounted
+        // invoice — otherwise a coupon-on-retry would silently reuse the earlier
+        // full-price invoice and drop the discount. A fresh discounted invoice is
+        // minted instead (and the coupon is consumed once, on that mint).
+        ...(couponCode ? { discount: { gt: 0 } } : {}),
       },
       orderBy: { createdAt: 'desc' },
       select: { id: true },
     });
-    const invoiceId =
-      recent?.id ??
-      ((await this.invoices.create(workspaceId, {
-        leadId,
-        items,
-        currency,
-        notes: orderNote,
-      })) as { id: string }).id;
+    let invoiceId: string;
+    if (recent?.id) {
+      invoiceId = recent.id; // reuse — do NOT consume another coupon redemption
+    } else {
+      // Consume the coupon (atomic) only when actually minting an invoice. A
+      // raced exhaustion between validate and redeem degrades to no discount.
+      let discount = 0;
+      if (couponCode) {
+        const app = await this.coupons
+          .redeem(workspaceId, couponCode, subtotal, currency, { leadId, orderFormId: form.id })
+          .catch(() => null);
+        if (app) discount = app.amountOff;
+      }
+      invoiceId = (
+        (await this.invoices.create(workspaceId, {
+          leadId,
+          items,
+          currency,
+          discount,
+          notes: orderNote,
+        })) as { id: string }
+      ).id;
+    }
     const { payUrl } = await this.invoices.send(workspaceId, invoiceId);
 
     void this.outbox

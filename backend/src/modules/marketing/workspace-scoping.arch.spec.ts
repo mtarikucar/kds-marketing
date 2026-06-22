@@ -161,6 +161,9 @@ const OWNED_DELEGATES = [
   'triggerLinkClick',
   // Tax rates (GHL parity): reusable per-workspace KDV/VAT rates.
   'taxRate',
+  // Coupons (GHL parity): discount codes + their redemption log.
+  'coupon',
+  'couponRedemption',
 ] as const;
 
 /**

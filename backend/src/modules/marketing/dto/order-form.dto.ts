@@ -65,4 +65,6 @@ export class PublicOrderSubmitDto {
   @IsString() @IsNotEmpty() @MaxLength(200) fullName: string;
   @IsOptional() @IsEmail() @MaxLength(200) email?: string;
   @IsOptional() @IsString() @MaxLength(40) phone?: string;
+  /** Optional discount code; the discount amount is resolved server-side. */
+  @IsOptional() @IsString() @MaxLength(40) couponCode?: string;
 }
