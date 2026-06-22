@@ -143,6 +143,46 @@ export class EmailService {
   }
 
   /**
+   * Campaign email with an optional HTML part (GHL email block builder). Sends a
+   * multipart message: `text` is the plain-text fallback, `html` (when present)
+   * is what clients render. Mirrors sendPlainEmail's mock + masking + timeout.
+   */
+  async sendCampaignEmail(
+    to: string,
+    subject: string,
+    text: string,
+    html?: string,
+  ): Promise<boolean> {
+    try {
+      if (!this.transporter) {
+        this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)} (html=${html ? html.length : 0} chars)`);
+        return true;
+      }
+      const from =
+        this.configService.get<string>("EMAIL_FROM") ||
+        this.configService.get<string>("EMAIL_USER");
+      await withTimeout(
+        this.transporter.sendMail({
+          from: `"${this.configService.get<string>("EMAIL_FROM_NAME") || this.configService.get<string>("APP_NAME") || "Marketing"}" <${from}>`,
+          to,
+          subject,
+          text,
+          ...(html ? { html } : {}),
+        }),
+        25_000,
+        `sendMail to ${maskEmail(to)}`,
+      );
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send campaign email to ${maskEmail(to)}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return false;
+    }
+  }
+
+  /**
    * Send a short plain-text email without a Handlebars template.
    * Use only for transactional system notices (status changes, etc.) where
    * a bespoke template would be overkill.

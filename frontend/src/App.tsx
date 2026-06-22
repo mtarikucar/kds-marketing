@@ -30,6 +30,7 @@ const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPag
 const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
 const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
+const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTemplates'));
 const CustomObjectDetailPage   = lazy(() => import('./pages/marketing/customObjects/CustomObjectDetailPage'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
@@ -184,6 +185,7 @@ export default function App() {
             <Route path="/settings/coupons"   element={<S><CouponsPage /></S>} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
             <Route path="/campaigns"   element={<S><CampaignsPage /></S>} />
+            <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />
             <Route path="/booking"     element={<S><BookingSettingsPage /></S>} />
             <Route path="/reviews"     element={<S><ReviewsPage /></S>} />

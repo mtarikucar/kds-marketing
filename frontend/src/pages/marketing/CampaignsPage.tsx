@@ -16,6 +16,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -73,6 +74,8 @@ const campaignSchema = z.object({
   channel: z.enum(CHANNELS),
   subject: z.string().max(200).optional(),
   body: z.string().min(1, 'Required').max(20000),
+  bodyHtml: z.string().optional(),
+  emailTemplateId: z.string().optional(),
   filters: z.array(filterRowSchema),
 });
 type CampaignFormValues = z.infer<typeof campaignSchema>;
@@ -82,6 +85,8 @@ const DEFAULT_VALUES: CampaignFormValues = {
   channel: 'EMAIL',
   subject: '',
   body: '',
+  bodyHtml: '',
+  emailTemplateId: '',
   filters: [],
 };
 
@@ -119,6 +124,30 @@ export default function CampaignsPage() {
     defaultValues: DEFAULT_VALUES,
   });
   const selectedChannel = useWatch({ control: form.control, name: 'channel' });
+  const selectedTemplateId = useWatch({ control: form.control, name: 'emailTemplateId' });
+
+  const { data: emailTemplates } = useQuery<EmailTemplateRow[]>({
+    queryKey: ['marketing', 'email-templates'],
+    queryFn: listEmailTemplates,
+    enabled: selectedChannel === 'EMAIL',
+  });
+
+  // Attach an HTML template (fetches its compiled HTML) or clear it ('' = plain text).
+  const pickTemplate = async (id: string) => {
+    if (!id) {
+      form.setValue('emailTemplateId', '');
+      form.setValue('bodyHtml', '');
+      return;
+    }
+    try {
+      const tpl = await getEmailTemplate(id);
+      form.setValue('emailTemplateId', id);
+      form.setValue('bodyHtml', tpl.compiledHtml ?? '');
+    } catch {
+      toast.error(t('campaigns.templateLoadFailed', 'Could not load the template'));
+    }
+  };
+
   const { fields: filterFields, append: appendFilter, remove: removeFilter } = useFieldArray({
     control: form.control,
     name: 'filters',
@@ -139,6 +168,8 @@ export default function CampaignsPage() {
       channel: full.channel,
       subject: full.subject ?? '',
       body: full.body,
+      bodyHtml: full.bodyHtml ?? '',
+      emailTemplateId: full.emailTemplateId ?? '',
       filters: (full.audienceFilter ?? []).map((f: any) => ({
         field: String(f.field).replace('lead.', ''),
         op: f.op,
@@ -155,6 +186,11 @@ export default function CampaignsPage() {
     channel: values.channel,
     subject: values.subject || undefined,
     body: values.body,
+    // Always send these (as '' when cleared) so the backend actually CLEARS a
+    // previously-attached template — sending undefined would leave the stale
+    // HTML in the DB and keep shipping it. The service maps '' → null.
+    bodyHtml: values.channel === 'EMAIL' ? (values.bodyHtml || '') : '',
+    emailTemplateId: values.channel === 'EMAIL' ? (values.emailTemplateId || '') : '',
     audienceFilter: values.filters
       .filter((f) => f.field && f.value)
       .map((f) => ({
@@ -418,9 +454,35 @@ export default function CampaignsPage() {
               </Field>
             )}
 
+            {/* HTML email template (EMAIL only) */}
+            {selectedChannel === 'EMAIL' && (
+              <Field label={t('campaigns.emailTemplate', 'HTML template (optional)')}>
+                {({ id }) => (
+                  <div className="flex items-center gap-2">
+                    <Select value={selectedTemplateId || '__none__'} onValueChange={(v) => pickTemplate(v === '__none__' ? '' : v)}>
+                      <SelectTrigger id={id} className="flex-1">
+                        <SelectValue placeholder={t('campaigns.plainText', 'Plain text only')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">{t('campaigns.plainText', 'Plain text only')}</SelectItem>
+                        {(emailTemplates ?? []).map((tpl) => (
+                          <SelectItem key={tpl.id} value={tpl.id}>{tpl.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {form.watch('bodyHtml') ? (
+                      <Badge tone="success" size="sm">{t('campaigns.htmlAttached', 'HTML attached')}</Badge>
+                    ) : null}
+                  </div>
+                )}
+              </Field>
+            )}
+
             {/* Body */}
             <Field
-              label={t('campaigns.body', 'Message')}
+              label={selectedChannel === 'EMAIL' && form.watch('bodyHtml')
+                ? t('campaigns.bodyPlainFallback', 'Plain-text fallback')
+                : t('campaigns.body', 'Message')}
               error={form.formState.errors.body?.message}
               required
             >

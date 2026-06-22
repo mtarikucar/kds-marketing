@@ -8,7 +8,7 @@ import { CampaignSenderService } from './campaign-sender.service';
 describe('CampaignSenderService.batch', () => {
   const WS = 'ws-1';
   let prisma: any;
-  let email: { sendPlainEmail: jest.Mock };
+  let email: { sendPlainEmail: jest.Mock; sendCampaignEmail: jest.Mock };
   let svc: CampaignSenderService;
 
   beforeEach(() => {
@@ -36,8 +36,10 @@ describe('CampaignSenderService.batch', () => {
         ),
       },
     };
-    email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
-    const config = { get: jest.fn().mockReturnValue('') };
+    email = { sendPlainEmail: jest.fn().mockResolvedValue(true), sendCampaignEmail: jest.fn().mockResolvedValue(true) };
+    // A base URL is required now — the sender refuses to send without one (the
+    // unsubscribe link is mandatory and built from PUBLIC_BASE_URL).
+    const config = { get: jest.fn().mockReturnValue('https://m.test') };
     const scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     const registry = { get: jest.fn(), resolveConfig: jest.fn() };

@@ -12,6 +12,20 @@ import { CAMPAIGN_BATCH_KIND } from './campaigns.service';
 const BATCH_SIZE = 50;
 const BATCH_INTERVAL_SEC = 60; // ~50 sends/min throttle
 
+/** Pair each link with its original index, ordered longest-first — so a tracked
+ *  rewrite replaces a longer URL before a shorter URL that is its prefix, while
+ *  the original index still drives the ?i= redirect lookup. */
+function byLengthDesc(links: string[]): Array<{ url: string; i: number }> {
+  return links.map((url, i) => ({ url, i })).sort((a, b) => b.url.length - a.url.length);
+}
+
+/** HTML-escape (used to match escaped hrefs in the compiled email HTML). */
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
+  );
+}
+
 /**
  * Sends a SENDING campaign in throttled batches via the `campaign.batch`
  * ScheduledJob (dedupKey = campaignId → one batch in flight per campaign;
@@ -83,7 +97,13 @@ export class CampaignSenderService implements OnModuleInit {
         continue;
       }
       const body = this.render(campaign.channel, campaign.body, r.token, links);
-      const result = await this.send(workspaceId, campaign.channel, to, campaign.subject, body);
+      // EMAIL campaigns built with the block editor carry an HTML body; render it
+      // (tracked links + HTML unsubscribe footer) and send it as the html part.
+      const html =
+        campaign.channel === 'EMAIL' && (campaign as any).bodyHtml
+          ? this.renderHtml((campaign as any).bodyHtml as string, r.token, links)
+          : undefined;
+      const result = await this.send(workspaceId, campaign.channel, to, campaign.subject, body, html);
       if (result.ok) {
         await this.mark(r.id, 'SENT', { messageId: result.messageId, sentAt: new Date() });
       } else {
@@ -123,11 +143,19 @@ export class CampaignSenderService implements OnModuleInit {
   }
 
   private async send(
-    workspaceId: string, channel: string, to: string, subject: string | null, body: string,
+    workspaceId: string, channel: string, to: string, subject: string | null, body: string, html?: string,
   ): Promise<{ ok: boolean; messageId?: string | null; error?: string }> {
     try {
+      // The unsubscribe link is mandatory and is built from PUBLIC_BASE_URL; if
+      // it's unset the rendered body has no opt-out, so refuse to send rather
+      // than ship non-compliant mail (a misconfigured deploy fails closed).
+      if (!(this.config.get<string>('PUBLIC_BASE_URL') ?? '')) {
+        return { ok: false, error: 'PUBLIC_BASE_URL not configured (unsubscribe link required)' };
+      }
       if (channel === 'EMAIL') {
-        const ok = await this.email.sendPlainEmail(to, subject ?? 'Update', body);
+        const ok = html
+          ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html)
+          : await this.email.sendPlainEmail(to, subject ?? 'Update', body);
         return { ok, messageId: null, error: ok ? undefined : 'email send failed' };
       }
       const channelType = channel === 'SMS' ? 'SMS' : 'WHATSAPP';
@@ -158,11 +186,38 @@ export class CampaignSenderService implements OnModuleInit {
     const base = this.config.get<string>('PUBLIC_BASE_URL') ?? '';
     let out = body;
     if (base) {
-      links.forEach((url, i) => {
+      // Rewrite longest URLs first (keeping the original index for ?i=) so a URL
+      // that is a string-prefix of another isn't matched inside the longer one.
+      for (const { url, i } of byLengthDesc(links)) {
         out = out.split(url).join(`${base}/api/public/t/c/${token}?i=${i}`);
-      });
+      }
       const unsub = `${base}/api/public/u/${token}`;
       out += channel === 'SMS' ? `\nStop: ${unsub}` : `\n\n—\nUnsubscribe: ${unsub}`;
+    }
+    return out;
+  }
+
+  /**
+   * HTML body variant: rewrite the campaign-authored links to click-tracked URLs
+   * (matching BOTH the raw and HTML-escaped form, since the compiled HTML escapes
+   * hrefs) and append a mandatory HTML unsubscribe footer. `links` holds the real
+   * (decoded) URLs so the tracked redirect target stays correct.
+   */
+  private renderHtml(html: string, token: string, links: string[]): string {
+    const base = this.config.get<string>('PUBLIC_BASE_URL') ?? '';
+    let out = html;
+    if (base) {
+      for (const { url, i } of byLengthDesc(links)) {
+        const tracked = `${base}/api/public/t/c/${token}?i=${i}`;
+        out = out.split(esc(url)).join(tracked).split(url).join(tracked);
+      }
+      const unsub = `${base}/api/public/u/${token}`;
+      const footer =
+        `<table role="presentation" width="100%"><tr><td align="center" style="padding:16px;font-size:12px;color:#94a3b8">` +
+        `<a href="${esc(unsub)}" style="color:#94a3b8">Unsubscribe</a></td></tr></table>`;
+      // The compiled email HTML always has </body>; fall back to appending for a
+      // hand-authored fragment so the mandatory unsubscribe link is never lost.
+      out = out.includes('</body>') ? out.replace('</body>', `${footer}</body>`) : out + footer;
     }
     return out;
   }

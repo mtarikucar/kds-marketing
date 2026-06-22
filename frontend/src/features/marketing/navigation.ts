@@ -21,6 +21,7 @@ import {
   MessagesSquare,
   Zap,
   Megaphone,
+  Mail,
   Globe,
   CalendarDays,
   Star,
@@ -165,6 +166,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'marketing', labelKey: 'nav.group.marketing', label: 'Marketing', icon: Megaphone,
     children: [
       { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
+      { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
       { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
       { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
       { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },

@@ -49,7 +49,7 @@ export class CampaignsService {
     return c;
   }
 
-  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; audienceFilter?: unknown; scheduledAt?: string }) {
+  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string }) {
     if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(dto.channel)) {
       throw new BadRequestException('Invalid channel');
     }
@@ -60,6 +60,8 @@ export class CampaignsService {
         channel: dto.channel,
         subject: dto.subject ?? null,
         body: dto.body,
+        bodyHtml: dto.bodyHtml || null,
+        emailTemplateId: dto.emailTemplateId || null,
         audienceFilter: (dto.audienceFilter ?? []) as Prisma.InputJsonValue,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
         status: 'DRAFT',
@@ -74,7 +76,10 @@ export class CampaignsService {
       throw new BadRequestException('Only a draft/scheduled campaign can be edited');
     }
     const data: any = {};
-    for (const k of ['name', 'subject', 'body'] as const) if (dto[k] !== undefined) data[k] = dto[k];
+    for (const k of ['name', 'subject', 'body', 'bodyHtml', 'emailTemplateId'] as const) if (dto[k] !== undefined) data[k] = dto[k];
+    // An explicit '' for the HTML fields means "revert to plain text" → clear them.
+    if (data.bodyHtml === '') data.bodyHtml = null;
+    if (data.emailTemplateId === '') data.emailTemplateId = null;
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
     return this.prisma.campaign.update({ where: { id: existing.id }, data });
@@ -125,7 +130,14 @@ export class CampaignsService {
     const leads = await this.prisma.lead.findMany({ where: { ...where, workspaceId }, select: { id: true } });
     if (leads.length === 0) throw new BadRequestException('Audience is empty (no opted-in, reachable leads match)');
 
-    const links = this.extractLinks(campaign.body);
+    // Track links from the plain-text body AND the HTML body (decoded first, so a
+    // tracked link's redirect target is the real URL, not an HTML-escaped one).
+    const links = [
+      ...new Set([
+        ...this.extractLinks(campaign.body),
+        ...this.extractLinks(this.decodeHtml((campaign as any).bodyHtml ?? '')),
+      ]),
+    ];
     // Materialize recipients (skip dupes if a previous partial launch raced).
     await this.prisma.campaignRecipient.createMany({
       data: leads.map((l) => ({
@@ -194,5 +206,17 @@ export class CampaignsService {
   private extractLinks(body: string): string[] {
     const urls = body.match(/https?:\/\/[^\s)\]<>"']+/g) ?? [];
     return [...new Set(urls)];
+  }
+
+  /** Reverse the renderer's HTML escaping so URLs extracted from compiled email
+   *  HTML are the real targets (&amp;→& etc.). &amp; is decoded last to avoid
+   *  double-decoding (e.g. "&amp;lt;" → "&lt;", not "<"). */
+  private decodeHtml(s: string): string {
+    return s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&');
   }
 }

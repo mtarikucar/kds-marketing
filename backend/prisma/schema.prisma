@@ -1497,6 +1497,13 @@ model Campaign {
   status         String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | PAUSED | CANCELLED
   subject        String?
   body           String    @db.Text
+  /// Optional rendered HTML body (GHL email block builder). When set, EMAIL
+  /// campaigns send this as the html part; `body` stays the plain-text fallback.
+  /// Snapshotted from the EmailTemplate at launch so a later edit can't change
+  /// an in-flight send.
+  bodyHtml       String?   @db.Text
+  /// Soft ref to the EmailTemplate this campaign was built from (display only).
+  emailTemplateId String?
   audienceFilter Json?
   links          Json?
   scheduledAt    DateTime?
@@ -1510,6 +1517,25 @@ model Campaign {
 
   @@index([workspaceId, status])
   @@map("campaigns")
+}
+
+/// A reusable HTML email template built from a block list (GoHighLevel parity).
+/// `blocks` is the ordered typed list (heading/text/image/button/divider/spacer/
+/// columns); `compiledHtml` is the table-based inlined-CSS render cached on save
+/// (emailtemplate.render.ts). Shared by campaigns: a campaign snapshots the
+/// compiled HTML into Campaign.bodyHtml at launch.
+model EmailTemplate {
+  id           String  @id @default(uuid())
+  workspaceId  String
+  name         String
+  blocks       Json
+  theme        Json?
+  compiledHtml String? @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("email_templates")
 }
 
 /// A frozen recipient of a Campaign. `token` is the unguessable handle in the
