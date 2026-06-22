@@ -1431,6 +1431,32 @@ model WorkflowStepRun {
   @@map("workflow_step_runs")
 }
 
+/// An inbound-webhook endpoint (GoHighLevel parity). An external system POSTs
+/// JSON to the public hook URL identified by the globally-unique `slug`;
+/// possession of the `slug` plus the `x-webhook-secret` (whose sha256 is stored
+/// in `secretHash` — the raw secret is shown once at mint time and never again)
+/// authenticates the call. Each accepted POST emits a `marketing.webhook.
+/// received.v1` event that fires `webhook.received` workflows.
+model InboundWebhook {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  name           String
+  /// Globally-unique public handle in the hook URL (no workspace context in
+  /// the path; the secret authenticates).
+  slug           String    @unique
+  /// sha256(secret) — the raw secret is never stored.
+  secretHash     String
+  enabled        Boolean   @default(true)
+  lastReceivedAt DateTime?
+  receivedCount  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("inbound_webhooks")
+}
+
 /// A one-to-many marketing blast on one channel. `audienceFilter` reuses the
 /// workflow Filter DSL (lead.* fields). At launch the recipient set is frozen
 /// into CampaignRecipient rows and sent in throttled batches. `links` is the

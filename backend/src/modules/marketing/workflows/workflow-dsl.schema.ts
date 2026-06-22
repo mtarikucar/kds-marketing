@@ -27,6 +27,10 @@ export const TRIGGER_TYPES = [
   'opportunity.lost',
   // Standalone trigger link clicked (GHL parity). Filter on trigger.triggerLinkId.
   'link.clicked',
+  // Inbound webhook received (GHL parity). An external system POSTs to the
+  // workspace's public hook URL; filter on trigger.body.<field> (the posted
+  // JSON is carried under trigger.body) or trigger.webhookId.
+  'webhook.received',
 ] as const;
 export type WorkflowTriggerType = (typeof TRIGGER_TYPES)[number];
 

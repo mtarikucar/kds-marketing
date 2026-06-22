@@ -72,6 +72,7 @@ const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/
 // GHL-parity settings/tools UIs
 const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/apiKeys'));
 const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
+const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
 const ConnectionsPage          = lazy(() => import('./pages/marketing/settings/connections'));
 const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
 const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
@@ -195,6 +196,7 @@ export default function App() {
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
             <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
             <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
+            <Route path="/settings/inbound-webhooks" element={<S><InboundWebhooksPage /></S>} />
             <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />
             <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
