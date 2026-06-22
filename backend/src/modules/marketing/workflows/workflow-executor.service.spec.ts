@@ -10,10 +10,10 @@ import { WorkflowExecutorService } from './workflow-executor.service';
 describe('WorkflowExecutorService', () => {
   const WS = 'ws-1';
 
-  function build(steps: any[], outcomes: any[]) {
+  function build(steps: any[], outcomes: any[], goal?: any, seedContext?: any) {
     let status = 'RUNNING';
     let cursor: any = { stepIndex: 0 };
-    let context: any = { _trigger: {} };
+    let context: any = { _trigger: {}, ...(seedContext ?? {}) };
     const prisma: any = {
       workflowRun: {
         create: jest.fn().mockResolvedValue({ id: 'run-1' }),
@@ -25,18 +25,19 @@ describe('WorkflowExecutorService', () => {
           if (data.status) status = data.status;
           if (data.cursor) cursor = data.cursor;
           if (data.context) context = data.context;
-          return {};
+          return { workspaceId: WS, workflowId: 'wf-1' };
         }),
       },
       workflow: {
         findFirst: jest.fn().mockResolvedValue({
-          id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps,
+          id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps, goal: goal ?? null,
         }),
       },
       lead: { findFirst: jest.fn().mockResolvedValue({ id: 'lead-1', workspaceId: WS }) },
       workflowStepRun: { create: jest.fn().mockResolvedValue({}) },
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
-    const handler: any = { execute: jest.fn() };
+    const handler: any = { execute: jest.fn(), matchesAll: jest.fn().mockReturnValue(false) };
     outcomes.forEach((o) => handler.execute.mockResolvedValueOnce(o));
     handler.execute.mockResolvedValue({});
     const scheduledJobs: any = { schedule: jest.fn().mockResolvedValue('job') };
@@ -44,6 +45,9 @@ describe('WorkflowExecutorService', () => {
     const executor = new WorkflowExecutorService(prisma, handler, scheduledJobs, runner);
     return { executor, prisma, handler, scheduledJobs, status: () => status };
   }
+
+  /** Pull the interpolated values of a $executeRaw tagged-template call. */
+  const rawValues = (prisma: any, callIndex: number) => prisma.$executeRaw.mock.calls[callIndex]?.slice(1) ?? [];
 
   it('runs a linear automation to DONE', async () => {
     const h = build(
@@ -97,5 +101,70 @@ describe('WorkflowExecutorService', () => {
       { leadId: 'lead-1' }, {},
     );
     expect(runId).toBeNull();
+  });
+
+  it('bumps stats: started on create, completed on DONE', async () => {
+    const h = build([{ type: 'notify_user', message: 'm' }], [{}]);
+    await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
+    // started (in start) then completed (in finish) — two atomic bumps.
+    expect(h.prisma.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(rawValues(h.prisma, 0)).toContain('started');
+    expect(rawValues(h.prisma, 1)).toContain('completed');
+  });
+
+  it('counts a FAILED run under the failed stat', async () => {
+    const h = build([{ type: 'notify_user', message: 'm' }], []);
+    h.handler.execute.mockReset();
+    h.handler.execute.mockRejectedValue(new Error('boom'));
+    await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
+    expect(h.status()).toBe('FAILED');
+    expect(rawValues(h.prisma, 0)).toContain('started');
+    expect(rawValues(h.prisma, 1)).toContain('failed');
+  });
+
+  it('a met "exit" goal short-circuits the run to DONE before any step runs', async () => {
+    const h = build(
+      [{ type: 'notify_user', message: 'm' }],
+      [{}],
+      { filters: [{ field: 'lead.status', op: 'eq', value: 'customer' }], onMet: 'exit' },
+    );
+    h.handler.matchesAll.mockReturnValue(true); // goal met immediately
+    await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
+    expect(h.status()).toBe('DONE');
+    expect(h.handler.execute).not.toHaveBeenCalled(); // exited before the step
+  });
+
+  it('a met "goto" goal jumps the cursor to the target step', async () => {
+    const h = build(
+      [
+        { type: 'notify_user', message: 'first' },
+        { type: 'notify_user', message: 'second' },
+      ],
+      [{}],
+      { filters: [{ field: 'lead.status', op: 'eq', value: 'hot' }], onMet: 'goto', gotoStep: 1 },
+    );
+    // Goal matches once (jump 0→1), then must NOT re-fire at the target (skip
+    // when already AT gotoStep) so step 1 executes and the run completes.
+    h.handler.matchesAll.mockReturnValueOnce(true).mockReturnValue(false);
+    await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
+    expect(h.status()).toBe('DONE');
+    expect(h.handler.execute).toHaveBeenCalledTimes(1); // only the target step (index 1)
+    expect(h.handler.execute.mock.calls[0][0]).toMatchObject({ message: 'second' });
+  });
+
+  it('caps lifetime goal goto-jumps per run (cross-resume cycle backstop)', async () => {
+    // Seed the run near the cap, as if 100 jumps already happened across prior
+    // resumes. A goto goal that loops back over a `wait` would otherwise re-fire
+    // forever; the persisted __goalJumps counter (not the per-advance step
+    // ceiling) is what bounds it. The next jump must FAIL the run.
+    const h = build(
+      [{ type: 'notify_user', message: 'a' }, { type: 'notify_user', message: 'b' }],
+      [{}],
+      { filters: [{ field: 'lead.status', op: 'eq', value: 'loop' }], onMet: 'goto', gotoStep: 0 },
+      { __goalJumps: 100 },
+    );
+    h.handler.matchesAll.mockReturnValue(true); // goal always met → would loop
+    await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
+    expect(h.status()).toBe('FAILED');
   });
 });

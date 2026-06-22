@@ -1372,6 +1372,9 @@ model Workflow {
   trigger     Json
   /// DSL: ordered step list (send_x, ai_x, branch, wait, and so on).
   steps       Json
+  /// Optional goal: { filters[], onMet: 'exit'|'goto', gotoStep? }. When the
+  /// subject reaches this target state the run short-circuits (GHL parity).
+  goal        Json?
   version     Int     @default(1)
   /// Lightweight counters for the list UI ({ started, completed, failed }).
   stats       Json?

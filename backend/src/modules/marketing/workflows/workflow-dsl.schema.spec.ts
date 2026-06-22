@@ -92,4 +92,42 @@ describe('workflow DSL', () => {
       expect(() => parseWorkflowParts(okTrigger, classifyAt({ hot: 5 }))).toThrow();
     });
   });
+
+  describe('goal (GHL parity)', () => {
+    const goalFilters = [{ field: 'lead.status', op: 'eq', value: 'customer' }];
+
+    it('accepts an exit goal and defaults onMet to "exit"', () => {
+      const dsl = parseWorkflowParts(okTrigger, okSteps, { filters: goalFilters });
+      expect(dsl.goal).toMatchObject({ onMet: 'exit' });
+      expect(dsl.goal?.filters).toHaveLength(1);
+    });
+
+    it('accepts a goto goal with an in-bounds target', () => {
+      const dsl = parseWorkflowParts(okTrigger, okSteps, { filters: goalFilters, onMet: 'goto', gotoStep: 1 });
+      expect(dsl.goal).toMatchObject({ onMet: 'goto', gotoStep: 1 });
+    });
+
+    it('rejects a goto goal missing gotoStep', () => {
+      expect(() => parseWorkflowParts(okTrigger, okSteps, { filters: goalFilters, onMet: 'goto' })).toThrow();
+    });
+
+    it('rejects a goto target that overruns steps.length', () => {
+      // okSteps has 3 steps → valid indexes 0,1,2; 9 is out of bounds.
+      expect(() => parseWorkflowParts(okTrigger, okSteps, { filters: goalFilters, onMet: 'goto', gotoStep: 9 })).toThrow();
+    });
+
+    it('rejects an empty goal filter set (a goal with no condition never fires)', () => {
+      expect(() => parseWorkflowParts(okTrigger, okSteps, { filters: [], onMet: 'exit' })).toThrow();
+    });
+
+    it('rejects a goal filter field outside the whitelist', () => {
+      expect(() =>
+        parseWorkflowParts(okTrigger, okSteps, { filters: [{ field: 'process.env.X', op: 'eq', value: '1' }] }),
+      ).toThrow();
+    });
+
+    it('leaves goal undefined when not supplied', () => {
+      expect(parseWorkflowParts(okTrigger, okSteps).goal).toBeUndefined();
+    });
+  });
 });

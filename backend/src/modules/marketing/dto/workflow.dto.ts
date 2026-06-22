@@ -22,6 +22,10 @@ export class CreateWorkflowDto {
 
   @IsArray()
   steps: unknown[];
+
+  // Goal shape is validated by the Zod DSL in WorkflowsService; coarse-typed here.
+  @IsOptional() @IsObject()
+  goal?: Record<string, unknown>;
 }
 
 export class UpdateWorkflowDto {
@@ -36,6 +40,10 @@ export class UpdateWorkflowDto {
 
   @IsOptional() @IsArray()
   steps?: unknown[];
+
+  // null clears the goal; an object replaces it (validated by the DSL).
+  @IsOptional() @IsObject()
+  goal?: Record<string, unknown> | null;
 }
 
 export class SetWorkflowStatusDto {

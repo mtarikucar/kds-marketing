@@ -134,11 +134,37 @@ export const TriggerSchema = z.object({
 });
 export type WorkflowTrigger = z.infer<typeof TriggerSchema>;
 
+/**
+ * A workflow goal (GoHighLevel parity): when the subject reaches a target state
+ * (the filter set matches), the run short-circuits — either leaving the workflow
+ * (`onMet: 'exit'`) or jumping ahead to `gotoStep`. Evaluated before every step
+ * so a state change between waits is honoured at the next checkpoint. The goto
+ * target is bounds-checked against steps.length at the top level (like the
+ * ai_classify routes). A persistently-true `goto` goal that points backward is a
+ * config-level cycle, bounded by the executor's per-run goto-jump cap
+ * (MAX_GOAL_JUMPS_PER_RUN, which survives wait/resume checkpoints) so the run
+ * fails fast rather than re-firing forever.
+ */
+export const GoalSchema = z
+  .object({
+    filters: z.array(FilterSchema).min(1).max(20),
+    onMet: z.enum(['exit', 'goto']).default('exit'),
+    /** Required when onMet === 'goto'. Step index to jump to. */
+    gotoStep: z.number().int().nonnegative().optional(),
+  })
+  .refine((g) => g.onMet !== 'goto' || g.gotoStep != null, {
+    message: 'goal.gotoStep is required when onMet is "goto"',
+    path: ['gotoStep'],
+  });
+export type WorkflowGoal = z.infer<typeof GoalSchema>;
+
 export const WorkflowDslSchema = z
   .object({
     version: z.number().int().default(1),
     trigger: TriggerSchema,
     steps: z.array(StepSchema).min(1).max(100), // hard 100-step/run cap
+    /** Optional goal: short-circuit the run when the subject hits a target state. */
+    goal: GoalSchema.optional(),
   })
   // Every ai_classify route target must point at a real step index (< steps.length).
   // steps.length is only reachable here at the top level, so the in-bounds check
@@ -152,6 +178,11 @@ export const WorkflowDslSchema = z
           Object.values(s.routes).every((idx) => idx < dsl.steps.length),
       ),
     { message: 'ai_classify route targets must be valid step indexes (< steps.length)', path: ['steps'] },
+  )
+  // A goto goal must point at a real step index (same bounds rule as ai_classify).
+  .refine(
+    (dsl) => dsl.goal?.onMet !== 'goto' || (dsl.goal.gotoStep ?? -1) < dsl.steps.length,
+    { message: 'goal.gotoStep must be a valid step index (< steps.length)', path: ['goal', 'gotoStep'] },
   );
 export type WorkflowDsl = z.infer<typeof WorkflowDslSchema>;
 
@@ -162,7 +193,12 @@ export function parseWorkflowDsl(input: unknown): WorkflowDsl {
   return WorkflowDslSchema.parse(input);
 }
 
-/** Validate a (trigger, steps) pair as stored on the Workflow row. */
-export function parseWorkflowParts(trigger: unknown, steps: unknown): WorkflowDsl {
-  return WorkflowDslSchema.parse({ version: 1, trigger, steps });
+/** Validate a (trigger, steps, goal?) tuple as stored on the Workflow row. */
+export function parseWorkflowParts(trigger: unknown, steps: unknown, goal?: unknown): WorkflowDsl {
+  return WorkflowDslSchema.parse({
+    version: 1,
+    trigger,
+    steps,
+    ...(goal == null ? {} : { goal }),
+  });
 }

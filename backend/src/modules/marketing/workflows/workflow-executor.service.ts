@@ -4,12 +4,17 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { WorkflowActionHandler, WorkflowContext } from './workflow-action.handler';
-import { parseWorkflowParts, MAX_WORKFLOW_DEPTH, WorkflowStep } from './workflow-dsl.schema';
+import { parseWorkflowParts, MAX_WORKFLOW_DEPTH, WorkflowStep, WorkflowGoal } from './workflow-dsl.schema';
 
 const RESUME_KIND = 'workflow.resume';
 // Belt against a mis-authored goto cycle: a single advance() can execute at
 // most this many steps before yielding (the DSL also hard-caps step COUNT).
 const MAX_STEPS_PER_ADVANCE = 200;
+// Lifetime cap on goal goto-jumps PER RUN (persisted in context, so it survives
+// resumes). MAX_STEPS_PER_ADVANCE only bounds a single advance() — a goto goal
+// that loops back across a `wait` step would otherwise reset that counter every
+// resume and re-fire forever. This is the cross-checkpoint backstop.
+const MAX_GOAL_JUMPS_PER_RUN = 100;
 const UNTIL_REPLY_FALLBACK_SEC = 86_400;
 
 interface StartSubject {
@@ -71,6 +76,9 @@ export class WorkflowExecutorService implements OnModuleInit {
       }
       throw e;
     }
+    // Count the run as started only once it actually exists (the P2002 no-op
+    // above is NOT counted). Stats are best-effort: never fail a run on them.
+    await this.bumpStat(workflow.workspaceId, workflow.id, 'started').catch(() => undefined);
     await this.advance(run.id);
     return run.id;
   }
@@ -92,8 +100,11 @@ export class WorkflowExecutorService implements OnModuleInit {
     }
 
     let steps: WorkflowStep[];
+    let goal: WorkflowGoal | undefined;
     try {
-      steps = parseWorkflowParts(workflow.trigger, workflow.steps).steps;
+      const dsl = parseWorkflowParts(workflow.trigger, workflow.steps, (workflow as any).goal ?? undefined);
+      steps = dsl.steps;
+      goal = dsl.goal;
     } catch (e: any) {
       await this.finish(runId, 'FAILED', `invalid DSL: ${e?.message ?? e}`);
       return;
@@ -116,6 +127,39 @@ export class WorkflowExecutorService implements OnModuleInit {
     }
 
     for (let i = 0; i < MAX_STEPS_PER_ADVANCE; i++) {
+      // Goal short-circuit (GHL parity): before each step, if the subject has
+      // reached the goal's target state, leave the workflow ('exit') or jump
+      // ahead ('goto'). Checked here — not just at start — so a state change
+      // between waits is honoured at the next resume checkpoint. The skip when
+      // already AT the goto target prevents the trivial same-step re-jump loop;
+      // a backward goto whose condition persists is bounded by the per-run
+      // MAX_GOAL_JUMPS_PER_RUN cap (which survives resumes), and within a single
+      // advance also by the per-advance step ceiling below.
+      if (goal && !(goal.onMet === 'goto' && stepIndex === goal.gotoStep)) {
+        if (this.handler.matchesAll(goal.filters, ctx)) {
+          if (goal.onMet === 'goto' && goal.gotoStep != null) {
+            // Lifetime per-run jump cap (persisted in context → survives the
+            // wait/resume cycle that resets the per-advance step counter). A
+            // goto goal looping back across a `wait` is the only path that can
+            // re-fire across checkpoints; this is its backstop.
+            const jumps = (Number(ctx.context.__goalJumps) || 0) + 1;
+            if (jumps > MAX_GOAL_JUMPS_PER_RUN) {
+              await this.recordStep(run.workspaceId, runId, stepIndex, 'goal', 'FAILED', null, 'goal goto-jump cap exceeded (cycle?)');
+              await this.finish(runId, 'FAILED', `goal exceeded ${MAX_GOAL_JUMPS_PER_RUN} goto-jumps (cycle?)`);
+              return;
+            }
+            ctx.context.__goalJumps = jumps;
+            await this.recordStep(run.workspaceId, runId, stepIndex, 'goal', 'DONE', { jumpedTo: goal.gotoStep });
+            stepIndex = goal.gotoStep;
+            await this.persistContext(runId, ctx, stepIndex);
+            continue;
+          }
+          await this.recordStep(run.workspaceId, runId, stepIndex, 'goal', 'DONE', { met: true });
+          await this.persistContext(runId, ctx, stepIndex);
+          await this.finish(runId, 'DONE', null);
+          return;
+        }
+      }
       if (stepIndex >= steps.length) {
         await this.persistContext(runId, ctx, stepIndex);
         await this.finish(runId, 'DONE', null);
@@ -186,10 +230,33 @@ export class WorkflowExecutorService implements OnModuleInit {
   }
 
   private async finish(runId: string, status: string, error: string | null): Promise<void> {
-    await this.prisma.workflowRun.update({
+    const updated = await this.prisma.workflowRun.update({
       where: { id: runId },
       data: { status, lastError: error, completedAt: new Date() },
+      select: { workspaceId: true, workflowId: true },
     });
+    // DONE/STOPPED both count as completed; FAILED as failed. advance() is
+    // guarded against re-entry on a terminal run, so finish() runs once per run.
+    const key = status === 'FAILED' ? 'failed' : status === 'DONE' || status === 'STOPPED' ? 'completed' : null;
+    if (key) await this.bumpStat(updated.workspaceId, updated.workflowId, key).catch(() => undefined);
+  }
+
+  /**
+   * Atomic per-row JSON counter bump on Workflow.stats. A raw UPDATE with
+   * jsonb_set under the row lock is race-free under concurrent finishes of the
+   * same workflow — a read-modify-write on the JSON column would lose updates.
+   * The whitelisted `key` is interpolated as an identifier-safe literal only.
+   */
+  private async bumpStat(workspaceId: string, workflowId: string, key: 'started' | 'completed' | 'failed'): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE "workflows"
+      SET "stats" = jsonb_set(
+        COALESCE("stats", '{}'::jsonb),
+        ARRAY[${key}]::text[],
+        to_jsonb(COALESCE(("stats" ->> ${key})::int, 0) + 1)
+      )
+      WHERE "id" = ${workflowId} AND "workspaceId" = ${workspaceId}
+    `;
   }
 
   private async recordStep(

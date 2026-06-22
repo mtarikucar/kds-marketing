@@ -54,7 +54,7 @@ export class WorkflowsService {
     return this.prisma.workflow.findMany({
       where: { workspaceId },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, name: true, status: true, description: true, trigger: true, version: true, stats: true, updatedAt: true },
+      select: { id: true, name: true, status: true, description: true, trigger: true, goal: true, version: true, stats: true, updatedAt: true },
     });
   }
 
@@ -64,8 +64,8 @@ export class WorkflowsService {
     return wf;
   }
 
-  async create(workspaceId: string, dto: { name: string; description?: string; trigger: unknown; steps: unknown }) {
-    const dsl = this.validate(dto.trigger, dto.steps);
+  async create(workspaceId: string, dto: { name: string; description?: string; trigger: unknown; steps: unknown; goal?: unknown }) {
+    const dsl = this.validate(dto.trigger, dto.steps, dto.goal);
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxWorkflows;
     if (limit !== -1) {
@@ -81,6 +81,7 @@ export class WorkflowsService {
         description: dto.description ?? null,
         trigger: dsl.trigger as any,
         steps: dsl.steps as any,
+        goal: (dsl.goal ?? null) as any,
         status: 'DRAFT',
       },
     });
@@ -89,26 +90,32 @@ export class WorkflowsService {
   async update(
     workspaceId: string,
     id: string,
-    dto: { name?: string; description?: string; trigger?: unknown; steps?: unknown },
+    dto: { name?: string; description?: string; trigger?: unknown; steps?: unknown; goal?: unknown },
   ) {
     const existing = await this.prisma.workflow.findFirst({ where: { id, workspaceId } });
     if (!existing) throw new NotFoundException('Workflow not found');
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-    if (dto.trigger !== undefined || dto.steps !== undefined) {
-      const dsl = this.validate(dto.trigger ?? existing.trigger, dto.steps ?? existing.steps);
+    // Any DSL-touching field re-validates the WHOLE definition (a goto goal's
+    // bounds depend on steps.length, so shrinking steps must re-check the goal)
+    // and bumps version so in-flight runs keep the definition they started on.
+    if (dto.trigger !== undefined || dto.steps !== undefined || dto.goal !== undefined) {
+      // undefined = keep existing goal; null = clear it; object = replace it.
+      const effectiveGoal = dto.goal === undefined ? existing.goal : dto.goal;
+      const dsl = this.validate(dto.trigger ?? existing.trigger, dto.steps ?? existing.steps, effectiveGoal);
       data.trigger = dsl.trigger;
       data.steps = dsl.steps;
+      data.goal = (dsl.goal ?? null) as any;
       data.version = { increment: 1 };
     }
     return this.prisma.workflow.update({ where: { id: existing.id }, data });
   }
 
   async setStatus(workspaceId: string, id: string, status: 'ACTIVE' | 'PAUSED' | 'DRAFT') {
-    const existing = await this.prisma.workflow.findFirst({ where: { id, workspaceId }, select: { id: true, trigger: true, steps: true } });
+    const existing = await this.prisma.workflow.findFirst({ where: { id, workspaceId }, select: { id: true, trigger: true, steps: true, goal: true } });
     if (!existing) throw new NotFoundException('Workflow not found');
-    if (status === 'ACTIVE') this.validate(existing.trigger, existing.steps); // can't activate an invalid DSL
+    if (status === 'ACTIVE') this.validate(existing.trigger, existing.steps, existing.goal); // can't activate an invalid DSL
     return this.prisma.workflow.update({ where: { id: existing.id }, data: { status } });
   }
 
@@ -149,9 +156,9 @@ export class WorkflowsService {
     }
   }
 
-  private validate(trigger: unknown, steps: unknown): WorkflowDsl {
+  private validate(trigger: unknown, steps: unknown, goal?: unknown): WorkflowDsl {
     try {
-      return parseWorkflowParts(trigger, steps);
+      return parseWorkflowParts(trigger, steps, goal);
     } catch (e) {
       if (e instanceof ZodError) {
         const first = e.issues[0];
