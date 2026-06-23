@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { googleOAuthClientId, googleOAuthClientSecret } from '../../../common/util/google-oauth-env';
 import {
   sealSecret,
   openSecret,
@@ -102,10 +103,10 @@ export class GoogleCalendarService {
   // ===================================================================== //
 
   private envClientId(): string | undefined {
-    return process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() || undefined;
+    return googleOAuthClientId();
   }
   private envClientSecret(): string | undefined {
-    return process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim() || undefined;
+    return googleOAuthClientSecret();
   }
 
   /**

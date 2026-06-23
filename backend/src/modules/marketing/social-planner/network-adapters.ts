@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
+import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 
 const logger = new Logger('NetworkAdapters');
 
@@ -45,7 +46,7 @@ export function isNetworkConfigured(network: string): boolean {
     case 'PINTEREST':
       return !!(process.env.PINTEREST_APP_ID && process.env.PINTEREST_APP_SECRET);
     case 'GMB':
-      return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+      return isGoogleOAuthConfigured();
     default:
       return false;
   }

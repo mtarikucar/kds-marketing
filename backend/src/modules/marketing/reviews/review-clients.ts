@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
+import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 
 const logger = new Logger('ReviewClients');
 
@@ -25,7 +26,7 @@ export interface ReviewSourceRow {
 export function isReviewSyncConfigured(type: string): boolean {
   switch (type) {
     case 'GOOGLE':
-      return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+      return isGoogleOAuthConfigured();
     case 'FACEBOOK':
       return !!(process.env.META_APP_ID && process.env.META_APP_SECRET);
     default:
