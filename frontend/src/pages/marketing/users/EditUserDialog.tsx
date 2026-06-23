@@ -17,6 +17,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 import {
   Select,
   SelectTrigger,
@@ -133,12 +134,10 @@ export function EditUserDialog({
 
           <Field label="Phone" error={errors.phone?.message}>
             {({ id, describedBy, invalid }) => (
-              <Input
+              <PhoneInput
                 id={id}
-                type="tel"
                 aria-describedby={describedBy}
                 aria-invalid={invalid}
-                placeholder="+1234567890 (optional)"
                 {...register('phone')}
               />
             )}

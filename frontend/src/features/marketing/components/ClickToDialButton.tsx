@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Phone } from 'lucide-react';
 import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 import type { SalesCall, StartCallResult } from '../types';
 import { CALL_OUTCOMES } from '../types';
 
@@ -65,11 +66,10 @@ export default function ClickToDialButton({
   return (
     <>
       <div className="flex items-center gap-2">
-        <input
+        <PhoneInput
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          placeholder="+90 5xx xxx xx xx"
-          className="px-3 py-2 border border-input rounded-lg text-sm flex-1 min-w-0 sm:flex-none sm:w-44 bg-background text-foreground"
+          className="flex-1 min-w-0 sm:flex-none sm:w-44"
         />
         <button
           onClick={() => {

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 
 interface TelephonyConfigView {
   status: string;
@@ -212,7 +213,7 @@ export default function TelephonySettingsPage() {
           >
             <Field label={t('telephony.myPhone', 'My phone (cell)')}>
               {({ id }) => (
-                <Input id={id} placeholder="05XXXXXXXXX" {...dahiliForm.register('phone')} />
+                <PhoneInput id={id} {...dahiliForm.register('phone')} />
               )}
             </Field>
             <p className="text-caption text-muted-foreground pt-2">
