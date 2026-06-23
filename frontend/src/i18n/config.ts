@@ -40,6 +40,25 @@ const applyDir = (lng: string) => {
   document.documentElement.dir = rtlLanguages.includes(lng) ? 'rtl' : 'ltr';
 };
 
+// Dev-only: surface every key that has NO catalog entry (so it renders its inline
+// `defaultValue` instead of a translation). Each missing key is logged ONCE so the
+// console isn't spammed — the list is the to-do for extracting + translating
+// remaining inline strings into the en/tr catalogs (ru/uz/ar fall back to en).
+const isDev = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV);
+const seenMissing = new Set<string>();
+const missingKeyHandler = (
+  lngs: readonly string[],
+  ns: string,
+  key: string,
+  fallbackValue: string,
+): void => {
+  const id = `${ns}:${key}`;
+  if (seenMissing.has(id)) return;
+  seenMissing.add(id);
+  // eslint-disable-next-line no-console
+  console.warn(`[i18n] missing key ${id} (${lngs.join(',')}) — rendering default "${fallbackValue}"`);
+};
+
 i18next
   .use(LanguageDetector)
   .use(initReactI18next)
@@ -52,6 +71,9 @@ i18next
     interpolation: { escapeValue: false },
     detection: { order: ['localStorage', 'navigator'], caches: ['localStorage'] },
     returnEmptyString: false,
+    // Catch untranslated keys during development without shipping the cost to prod.
+    saveMissing: isDev,
+    missingKeyHandler: isDev ? missingKeyHandler : undefined,
   });
 
 applyDir(getInitialLanguage());
