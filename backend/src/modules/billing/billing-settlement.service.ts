@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
+import { withAdvisoryLock } from '../../common/scheduling/advisory-lock';
 import { EntitlementsService } from './entitlements.service';
 
 const ADDON_GRANTS: Record<string, Record<string, number>> = {
@@ -21,13 +23,38 @@ const ADDON_GRANTS: Record<string, Record<string, number>> = {
  * customer retries with a fresh checkout instead of resurrecting a dead one.
  */
 @Injectable()
-export class BillingSettlementService {
+export class BillingSettlementService implements OnModuleInit {
   private readonly logger = new Logger(BillingSettlementService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly entitlements: EntitlementsService,
   ) {}
+
+  /**
+   * Recover any order that SUCCEEDED but whose entitlement grant failed (e.g. a
+   * crash/deploy mid-settlement) — at boot AND every 5 min. Without this, a
+   * paying customer can stay un-provisioned indefinitely. Advisory-locked so
+   * only one replica sweeps; the boot run closes the gap a deploy opens.
+   */
+  onModuleInit(): void {
+    void this.reconcileSweep().catch((e) =>
+      this.logger.error(`boot reconcile failed: ${(e as Error)?.message}`),
+    );
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'billing-reconcile-ungranted' })
+  async reconcileSweep(): Promise<void> {
+    await withAdvisoryLock(
+      this.prisma,
+      'billing:reconcile-ungranted',
+      async () => {
+        const n = await this.reconcileUngrantedOrders();
+        if (n > 0) this.logger.warn(`billing reconcile: re-granted ${n} ungranted order(s)`);
+      },
+      this.logger,
+    );
+  }
 
   async settleSuccess(
     orderId: string,
@@ -142,9 +169,8 @@ export class BillingSettlementService {
    * have a subscription are assumed granted (the common case); the sweep only
    * spends an upsert on the genuinely-ungranted tail.
    *
-   * TODO(ops): wire a scheduler to call this every ~5min AND once at boot — a
-   * grant that failed during a deploy must not wait for the next manual run.
-   * Intentionally not cron-wired here (no scheduler dep added to this module).
+   * Driven by reconcileSweep() — @Cron every 5 min + a boot run (onModuleInit),
+   * advisory-locked for single-replica safety.
    */
   async reconcileUngrantedOrders(limit = 100): Promise<number> {
     const candidates = await this.prisma.paymentOrder.findMany({
