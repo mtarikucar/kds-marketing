@@ -1548,6 +1548,15 @@ model Campaign {
   /// assigned a weighted-random variantKey at launch and gets that variant's
   /// subject/body. `subject`/`body` below remain the control/fallback.
   abEnabled      Boolean   @default(false)
+  /// A/B mode: SPLIT = send every variant to its weighted share (default, legacy
+  /// behaviour). WINNER = send the variants to abTestPercent% of the audience,
+  /// then auto-send the winning variant (by abWinnerMetric) to the held-back
+  /// remainder. abDecideAt schedules the decision; abWinnerKey is set once decided.
+  abMode         String?   // SPLIT | WINNER
+  abTestPercent  Int?      // 5–50: % of the audience used as the WINNER test cohort
+  abWinnerMetric String?   // OPEN | CLICK
+  abWinnerKey    String?   // the variant key chosen as the winner
+  abDecideAt     DateTime?
   subject        String?
   body           String    @db.Text
   /// Optional rendered HTML body (GHL email block builder). When set, EMAIL

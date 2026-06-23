@@ -9,6 +9,7 @@ describe('CampaignSenderService.batch', () => {
   const WS = 'ws-1';
   let prisma: any;
   let email: { sendPlainEmail: jest.Mock; sendCampaignEmail: jest.Mock };
+  let scheduledJobs: { schedule: jest.Mock };
   let svc: CampaignSenderService;
 
   beforeEach(() => {
@@ -44,7 +45,7 @@ describe('CampaignSenderService.batch', () => {
     // A base URL is required now — the sender refuses to send without one (the
     // unsubscribe link is mandatory and built from PUBLIC_BASE_URL).
     const config = { get: jest.fn().mockReturnValue('https://m.test') };
-    const scheduledJobs = { schedule: jest.fn() };
+    scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     const registry = { get: jest.fn(), resolveConfig: jest.fn() };
     const quota = { reserve: jest.fn(), refund: jest.fn() };
@@ -121,5 +122,37 @@ describe('CampaignSenderService.batch', () => {
     expect(statsUpdate[0].data.stats).toEqual(
       expect.objectContaining({ sent: 3, failed: 1, skipped: 2 }),
     );
+  });
+
+  describe('A/B WINNER mode', () => {
+    it('does NOT mark a campaign SENT while HOLD recipients await the winner', async () => {
+      prisma.campaignRecipient.findMany.mockResolvedValue([]); // test cohort all sent → no PENDING
+      prisma.campaignRecipient.count.mockResolvedValue(8); // but 8 remainder are HELD
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(prisma.campaign.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }));
+    });
+
+    it('picks the variant with most opens, releases the remainder to it, and kicks the batch', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abWinnerKey: null, abWinnerMetric: 'OPEN' });
+      prisma.campaignVariant.findMany.mockResolvedValue([
+        { key: 'A', stats: { opened: 5 } },
+        { key: 'B', stats: { opened: 12 } }, // winner
+      ]);
+      prisma.campaign.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      await (svc as any).decideAbWinner({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      // claims the winner atomically (only the first decider)
+      expect(prisma.campaign.updateMany.mock.calls[0][0]).toMatchObject({ where: { abWinnerKey: null, status: 'SENDING' }, data: { abWinnerKey: 'B' } });
+      // releases the HELD remainder to the winning variant
+      const release = prisma.campaignRecipient.updateMany.mock.calls.find((c: any) => c[0].where.status === 'HOLD');
+      expect(release[0].data).toEqual({ status: 'PENDING', variantKey: 'B' });
+      // and kicks the send batch
+      expect(scheduledJobs.schedule.mock.calls.some((c: any) => c[0].kind === 'campaign.batch')).toBe(true);
+    });
+
+    it('does nothing if the winner was already decided (concurrent decide)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abWinnerKey: 'A', abWinnerMetric: 'OPEN' });
+      await (svc as any).decideAbWinner({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(prisma.campaignVariant.findMany).not.toHaveBeenCalled();
+    });
   });
 });

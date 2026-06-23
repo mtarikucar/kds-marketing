@@ -78,6 +78,9 @@ export class CampaignVariantDto {
 
 export class SetVariantsDto {
   @IsOptional() @IsBoolean() abEnabled?: boolean;
+  @IsOptional() @IsIn(['SPLIT', 'WINNER']) abMode?: 'SPLIT' | 'WINNER';
+  @IsOptional() @IsInt() @Min(5) @Max(50) abTestPercent?: number;
+  @IsOptional() @IsIn(['OPEN', 'CLICK']) abWinnerMetric?: 'OPEN' | 'CLICK';
   @IsArray() @ArrayMaxSize(6) @ValidateNested({ each: true }) @Type(() => CampaignVariantDto)
   variants: CampaignVariantDto[];
 }

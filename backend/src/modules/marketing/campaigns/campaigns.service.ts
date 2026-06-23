@@ -9,6 +9,10 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 
 export const CAMPAIGN_BATCH_KIND = 'campaign.batch';
+/** A/B WINNER mode: the job that picks the winner + releases the held remainder. */
+export const CAMPAIGN_AB_DECIDE_KIND = 'campaign.ab.decide';
+/** How long the test cohort runs before the winner is auto-decided. */
+export const AB_TEST_WINDOW_MS = 4 * 60 * 60 * 1000; // 4h
 
 // Audience filters may only target these scalar lead columns (no arbitrary
 // Prisma path injection).
@@ -60,7 +64,13 @@ export class CampaignsService {
   async setVariants(
     workspaceId: string,
     campaignId: string,
-    dto: { abEnabled?: boolean; variants: Array<{ key: string; weight?: number; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string }> },
+    dto: {
+      abEnabled?: boolean;
+      abMode?: 'SPLIT' | 'WINNER';
+      abTestPercent?: number;
+      abWinnerMetric?: 'OPEN' | 'CLICK';
+      variants: Array<{ key: string; weight?: number; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string }>;
+    },
   ) {
     const c = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId }, select: { id: true, status: true } });
     if (!c) throw new NotFoundException('Campaign not found');
@@ -74,6 +84,12 @@ export class CampaignsService {
       keys.add(key);
       if ((v.weight ?? 1) < 1 || (v.weight ?? 1) > 1000) throw new BadRequestException('Variant weight must be 1–1000');
     }
+    const abEnabled = !!dto.abEnabled && dto.variants.length > 1;
+    const winner = abEnabled && dto.abMode === 'WINNER';
+    // WINNER mode: test cohort is 5–50% of the audience; default 20% / pick by opens.
+    const abMode = abEnabled ? (winner ? 'WINNER' : 'SPLIT') : null;
+    const abTestPercent = winner ? Math.min(50, Math.max(5, Math.round(dto.abTestPercent ?? 20))) : null;
+    const abWinnerMetric = winner ? (dto.abWinnerMetric === 'CLICK' ? 'CLICK' : 'OPEN') : null;
     await this.prisma.$transaction([
       this.prisma.campaignVariant.deleteMany({ where: { campaignId, workspaceId } }),
       ...(dto.variants.length
@@ -92,7 +108,7 @@ export class CampaignsService {
         : []),
       this.prisma.campaign.updateMany({
         where: { id: campaignId, workspaceId },
-        data: { abEnabled: !!dto.abEnabled && dto.variants.length > 1 },
+        data: { abEnabled, abMode, abTestPercent, abWinnerMetric, abWinnerKey: null, abDecideAt: null },
       }),
     ]);
     return this.getVariants(workspaceId, campaignId);
@@ -191,15 +207,35 @@ export class CampaignsService {
     for (const v of variants) srcs.push(v.body, this.decodeHtml(v.bodyHtml ?? ''));
     const links = [...new Set(srcs.flatMap((s) => this.extractLinks(s)))];
 
+    // WINNER mode: only abTestPercent% of the audience is the test cohort (sent
+    // now across variants); the remainder is HELD until the winner is decided.
+    const winnerMode = useAb && (campaign as any).abMode === 'WINNER';
+    let testLeads = leads;
+    let holdLeads: typeof leads = [];
+    let abDecideAt: Date | null = null;
+    if (winnerMode) {
+      const shuffled = [...leads].sort(() => Math.random() - 0.5);
+      const pct = (campaign as any).abTestPercent ?? 20;
+      // hold back at least 1; test at least one per variant
+      const testCount = Math.max(variants.length, Math.min(Math.ceil((leads.length * pct) / 100), leads.length - 1));
+      testLeads = shuffled.slice(0, testCount);
+      holdLeads = shuffled.slice(testCount);
+      abDecideAt = new Date(Date.now() + AB_TEST_WINDOW_MS);
+    }
+
     // Materialize recipients (skip dupes if a previous partial launch raced).
+    const tok = () => `cr_${randomBytes(18).toString('hex')}`;
     await this.prisma.campaignRecipient.createMany({
-      data: leads.map((l) => ({
-        workspaceId,
-        campaignId: campaign.id,
-        leadId: l.id,
-        token: `cr_${randomBytes(18).toString('hex')}`,
-        variantKey: useAb ? this.pickVariant(variants) : null,
-      })),
+      data: [
+        ...testLeads.map((l) => ({
+          workspaceId, campaignId: campaign.id, leadId: l.id, token: tok(),
+          variantKey: useAb ? this.pickVariant(variants) : null,
+        })),
+        ...holdLeads.map((l) => ({
+          workspaceId, campaignId: campaign.id, leadId: l.id, token: tok(),
+          variantKey: null, status: 'HOLD', // released to PENDING when the winner is picked
+        })),
+      ],
       skipDuplicates: true,
     });
     await this.prisma.campaign.update({
@@ -207,12 +243,22 @@ export class CampaignsService {
       data: {
         status: 'SENDING',
         startedAt: new Date(),
+        ...(abDecideAt ? { abDecideAt } : {}),
         links: links as Prisma.InputJsonValue,
         stats: { recipients: leads.length, sent: 0, failed: 0, skipped: 0, opened: 0, clicked: 0, unsubscribed: 0 },
       },
     });
+    if (winnerMode && abDecideAt) {
+      await this.scheduledJobs.schedule({
+        workspaceId,
+        kind: CAMPAIGN_AB_DECIDE_KIND,
+        runAt: abDecideAt,
+        dedupKey: `ab-decide:${campaign.id}`,
+        payload: { workspaceId, campaignId: campaign.id },
+      });
+    }
     await this.kickBatch(workspaceId, campaign.id);
-    return { message: 'Campaign launched', recipients: leads.length };
+    return { message: 'Campaign launched', recipients: leads.length, testCohort: winnerMode ? testLeads.length : undefined };
   }
 
   private async kickBatch(workspaceId: string, campaignId: string) {

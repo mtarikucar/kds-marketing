@@ -32,12 +32,18 @@ export function VariantsDialog({ campaignId, open, onOpenChange }: { campaignId:
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [abEnabled, setAbEnabled] = useState(false);
+  const [abMode, setAbMode] = useState<'SPLIT' | 'WINNER'>('SPLIT');
+  const [abTestPercent, setAbTestPercent] = useState(20);
+  const [abWinnerMetric, setAbWinnerMetric] = useState<'OPEN' | 'CLICK'>('OPEN');
   const [variants, setVariants] = useState<Variant[]>([]);
 
   useEffect(() => {
     if (!open) return;
     marketingApi.get(`/campaigns/${campaignId}`).then((r) => {
       setAbEnabled(!!r.data.abEnabled);
+      setAbMode(r.data.abMode === 'WINNER' ? 'WINNER' : 'SPLIT');
+      setAbTestPercent(r.data.abTestPercent ?? 20);
+      setAbWinnerMetric(r.data.abWinnerMetric === 'CLICK' ? 'CLICK' : 'OPEN');
       setVariants((r.data.variants ?? []).map((v: any) => ({ key: v.key, weight: v.weight ?? 1, subject: v.subject ?? '', body: v.body ?? '', stats: v.stats })));
     }).catch(() => undefined);
   }, [open, campaignId]);
@@ -45,6 +51,8 @@ export function VariantsDialog({ campaignId, open, onOpenChange }: { campaignId:
   const save = useMutation({
     mutationFn: () => marketingApi.put(`/campaigns/${campaignId}/variants`, {
       abEnabled,
+      abMode,
+      ...(abMode === 'WINNER' ? { abTestPercent, abWinnerMetric } : {}),
       variants: variants.map((v) => ({ key: v.key, weight: v.weight, subject: v.subject || undefined, body: v.body })),
     }),
     onSuccess: () => {
@@ -77,6 +85,31 @@ export function VariantsDialog({ campaignId, open, onOpenChange }: { campaignId:
         </label>
         {abEnabled && variants.length < 2 && (
           <p className="text-[11px] text-amber-600">{t('campaigns.abNeeds2', 'An A/B split needs at least 2 variants — add another or it sends as a single campaign.')}</p>
+        )}
+        {abEnabled && (
+          <div className="rounded-lg border border-border p-3 space-y-2 text-sm">
+            <label className="flex items-center gap-2">
+              <Switch checked={abMode === 'WINNER'} onCheckedChange={(c) => setAbMode(c ? 'WINNER' : 'SPLIT')} />
+              {t('campaigns.abWinnerMode', 'Auto-send the winner (test on a sample, then send the best variant to the rest)')}
+            </label>
+            {abMode === 'WINNER' && (
+              <div className="flex flex-wrap items-center gap-3 pl-1 text-muted-foreground">
+                <label className="flex items-center gap-1">
+                  {t('campaigns.abTestPct', 'Test on')}
+                  <input type="number" min={5} max={50} value={abTestPercent} onChange={(e) => setAbTestPercent(Math.min(50, Math.max(5, Number(e.target.value) || 20)))}
+                    className="w-16 rounded border border-border bg-surface-muted px-2 py-1" />%
+                </label>
+                <label className="flex items-center gap-1">
+                  {t('campaigns.abWinBy', 'pick winner by')}
+                  <select value={abWinnerMetric} onChange={(e) => setAbWinnerMetric(e.target.value === 'CLICK' ? 'CLICK' : 'OPEN')}
+                    className="rounded border border-border bg-surface-muted px-2 py-1">
+                    <option value="OPEN">{t('campaigns.abOpens', 'opens')}</option>
+                    <option value="CLICK">{t('campaigns.abClicks', 'clicks')}</option>
+                  </select>
+                </label>
+              </div>
+            )}
+          </div>
         )}
 
         <div className="space-y-3 max-h-[55vh] overflow-y-auto">
