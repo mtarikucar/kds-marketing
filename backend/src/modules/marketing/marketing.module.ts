@@ -273,6 +273,7 @@ import {
   OutlookCalendarPublicController,
 } from './integrations/outlook-calendar.controller';
 import { OutlookCalendarService } from './integrations/outlook-calendar.service';
+import { OutlookCalendarSyncService } from './integrations/outlook-calendar-sync.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -677,6 +678,7 @@ import { WalletService } from './wallet/wallet.service';
     GoogleCalendarService,
     OutlookCalendarService,
     GoogleCalendarSyncService,
+    OutlookCalendarSyncService,
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,

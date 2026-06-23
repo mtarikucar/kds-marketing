@@ -1779,11 +1779,17 @@ model Booking {
   // blocks pulled FROM Google (status EXTERNAL_BUSY) it is the source event id.
   googleEventId String?
 
+  // Outlook/O365 (Microsoft Graph) 2-way sync, same shape as googleEventId. A
+  // transient `pending:<uuid>` value claims the create so two concurrent push
+  // paths can't mint duplicate Graph events (Graph has no client-supplied ids).
+  outlookEventId String?
+
   createdAt DateTime @default(now())
 
   @@index([calendarId, startAt])
   @@index([workspaceId])
   @@index([workspaceId, googleEventId])
+  @@index([workspaceId, outlookEventId])
   @@map("bookings")
 }
 

@@ -16,6 +16,7 @@ import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-j
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { GoogleCalendarSyncService } from '../integrations/google-calendar-sync.service';
+import { OutlookCalendarSyncService } from '../integrations/outlook-calendar-sync.service';
 
 const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
@@ -40,6 +41,7 @@ export class BookingService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly googleSync: GoogleCalendarSyncService,
+    private readonly outlookSync: OutlookCalendarSyncService,
   ) {}
 
   onModuleInit(): void {
@@ -388,10 +390,11 @@ export class BookingService implements OnModuleInit {
         payload: { workspaceId, bookingId: booking.id },
       });
     }
-    // Push the new booking to a connected Google Calendar (best-effort, inert
-    // when the integration is unconfigured); the BookingCreated domain event
-    // also drives this, so a missed direct call self-heals on the next pull.
+    // Push the new booking to a connected Google / Outlook calendar (best-effort,
+    // inert when unconfigured); the BookingCreated domain event also drives both,
+    // so a missed direct call self-heals.
     this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
   }
@@ -416,8 +419,9 @@ export class BookingService implements OnModuleInit {
         where: { id: existing.id, workspaceId },
         data: { status: 'CANCELLED' },
       });
-      // Remove the Google mirror so the slot frees up on both sides.
+      // Remove the Google / Outlook mirror so the slot frees up on both sides.
       this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
+      this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
     }
     return { id: existing.id, status: 'CANCELLED' };
   }
