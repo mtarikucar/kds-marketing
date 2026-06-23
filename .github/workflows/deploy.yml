@@ -137,6 +137,9 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           META_APP_ID: ${{ secrets.META_APP_ID }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          # Facebook Login for Business: the configuration id that bundles the
+          # publish permissions (avoids "Invalid Scopes" on the raw scope flow).
+          META_LOGIN_CONFIG_ID: ${{ secrets.META_LOGIN_CONFIG_ID }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -190,6 +193,7 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
           META_APP_ID=${META_APP_ID}
           META_APP_SECRET=${META_APP_SECRET}
+          META_LOGIN_CONFIG_ID=${META_LOGIN_CONFIG_ID}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}

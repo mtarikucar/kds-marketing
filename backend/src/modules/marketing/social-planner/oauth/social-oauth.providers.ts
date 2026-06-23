@@ -37,8 +37,21 @@ export function buildAuthorizeUrl(network: Network, state: string): string {
     redirect_uri: redirectUri(network),
     state,
     response_type: 'code',
-    scope: def.scopes.join(def.scopeSep),
   });
+  // Facebook Login for Business (FLB) grants permissions via a *configuration*
+  // (config_id), NOT raw scopes — passing scope to an FLB app yields
+  // "Invalid Scopes: pages_manage_posts". When META_LOGIN_CONFIG_ID is set we
+  // use the FLB config flow (scope is defined by the configuration); otherwise
+  // fall back to the classic scope-based request.
+  const metaConfigId =
+    network === 'FACEBOOK' || network === 'INSTAGRAM'
+      ? process.env.META_LOGIN_CONFIG_ID
+      : undefined;
+  if (metaConfigId) {
+    p.set('config_id', metaConfigId);
+  } else {
+    p.set('scope', def.scopes.join(def.scopeSep));
+  }
   if (network === 'TIKTOK') {
     p.set('client_key', clientId(network) ?? '');
   } else {
