@@ -220,6 +220,39 @@ describe('AdAccountService', () => {
       expect(prisma.adMetric.upsert).not.toHaveBeenCalled();
     });
 
+    it('marks TOKEN_EXPIRED + reauth_required on a Meta auth error', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      const err: any = new Error('Meta ads 401: invalid OAuth token');
+      err.isAuthError = true; // set by meta-ads.client from the helper's classification
+      jest.spyOn(metaClient, 'pullMetaInsights').mockRejectedValue(err);
+      const written = await svc.pullAccount(account, '2026-06-01', '2026-06-03');
+      expect(written).toBe(0);
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      expect(upd.data.status).toBe('TOKEN_EXPIRED');
+      expect(upd.data.lastError).toBe('reauth_required');
+      expect(prisma.adMetric.upsert).not.toHaveBeenCalled();
+    });
+
+    it('does NOT mark TOKEN_EXPIRED for a non-auth provider error', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(metaClient, 'pullMetaInsights').mockRejectedValue(new Error('Meta ads 500: server error'));
+      await svc.pullAccount(account, '2026-06-01', '2026-06-03');
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      expect(upd.data.status).toBeUndefined();
+      expect(upd.data.lastError).toContain('Meta ads 500');
+    });
+
+    it('a successful pull resets status to ACTIVE (recovery from reauth)', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+        { date: '2026-06-01', campaignId: 'c1', spend: 1, impressions: 1, clicks: 1, leads: 0 },
+      ]);
+      await svc.pullAccount(account, '2026-06-01', '2026-06-03');
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      expect(upd.data.status).toBe('ACTIVE');
+      expect(upd.data.lastError).toBeNull();
+    });
+
     it('idempotently upserts each row with an inline workspaceId, then clears lastError', async () => {
       jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
       jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([

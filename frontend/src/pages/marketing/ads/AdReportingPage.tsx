@@ -505,7 +505,9 @@ function AccountsView({
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {accounts.map((acc) => (
+      {accounts.map((acc) => {
+        const needsReauth = acc.status === 'TOKEN_EXPIRED' || acc.lastError === 'reauth_required';
+        return (
         <Card key={acc.id} className="flex flex-col gap-3 p-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -533,15 +535,30 @@ function AccountsView({
               : t('ads.accounts.neverPulled', { defaultValue: 'Not refreshed yet' })}
           </p>
 
-          {acc.lastError && (
+          {needsReauth ? (
+            <p className="flex items-start gap-1 text-micro text-warning">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+              <span>
+                {t('ads.accounts.reauthNeeded', {
+                  defaultValue: 'Access expired — reconnect this account to resume reporting.',
+                })}
+              </span>
+            </p>
+          ) : acc.lastError ? (
             <p className="flex items-start gap-1 text-micro text-danger">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
               <span className="line-clamp-2">{acc.lastError}</span>
             </p>
-          )}
+          ) : null}
 
           {isManager && (
             <div className="mt-auto flex items-center justify-end gap-1 pt-1">
+              {needsReauth && (
+                <Button variant="outline" size="sm" onClick={onConnect}>
+                  <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t('ads.action.reconnect', { defaultValue: 'Reconnect' })}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -562,7 +579,8 @@ function AccountsView({
             </div>
           )}
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }
