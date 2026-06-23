@@ -1,4 +1,5 @@
 import { safeFetch } from '../../../../common/util/safe-fetch';
+import { metaGraphFetch, graphBaseUrl } from '../../../../common/util/meta-graph.util';
 import {
   NETWORK_OAUTH,
   Network,
@@ -11,9 +12,12 @@ import {
 export interface ConnectableAsset {
   externalId: string;
   displayName: string;
-  accountType: string; // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK
+  // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK | WHATSAPP_NUMBER | AD_ACCOUNT
+  accountType: string;
   /** Per-asset token (e.g. FB page token); falls back to the user token. */
   token?: string;
+  /** Typed extras the provisioner needs (phoneNumberId, wabaId, accountId, currency…). */
+  meta?: Record<string, unknown>;
 }
 
 /** Normalized result of exchanging an auth code for tokens. */
@@ -60,13 +64,15 @@ export function buildAuthorizeUrl(network: Network, state: string): string {
   return `${def.authorizeUrl}?${p.toString()}`;
 }
 
-const GRAPH = 'https://graph.facebook.com/v19.0';
-
-/** Meta (Facebook + Instagram) share one app/token; IG accounts hang off Pages. */
+/** Meta (Facebook + Instagram) share one app/token; IG accounts hang off Pages.
+ *  Token EXCHANGE uses plain safeFetch (no appsecret_proof — there's no token
+ *  yet, only client_secret); all authenticated READS go through metaGraphFetch
+ *  so they carry appsecret_proof + the configured Graph version. */
 export const metaProvider: SocialOAuthProvider = {
   async exchangeCode(network: Network, code: string): Promise<ExchangeResult> {
+    const base = graphBaseUrl();
     const shortRes = await safeFetch(
-      `${GRAPH}/oauth/access_token?` +
+      `${base}/oauth/access_token?` +
         new URLSearchParams({
           client_id: clientId(network) ?? '',
           client_secret: clientSecret(network) ?? '',
@@ -82,7 +88,7 @@ export const metaProvider: SocialOAuthProvider = {
     // Upgrade to a long-lived user token (~60d); page tokens derived from it
     // are effectively non-expiring.
     const llRes = await safeFetch(
-      `${GRAPH}/oauth/access_token?` +
+      `${base}/oauth/access_token?` +
         new URLSearchParams({
           grant_type: 'fb_exchange_token',
           client_id: clientId(network) ?? '',
@@ -99,43 +105,127 @@ export const metaProvider: SocialOAuthProvider = {
 
   async listAssets(userToken: string): Promise<ConnectableAsset[]> {
     const out: ConnectableAsset[] = [];
-    const pagesRes = await safeFetch(
-      `${GRAPH}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(userToken)}`,
-      { method: 'GET', timeoutMs: 15000 },
-    );
-    const pages = (await pagesRes.json()) as any;
+    // Pages (+ linked IG business accounts) — the core publishing assets; throws
+    // on failure (this is the minimum the connect flow needs).
+    const pagesRes = await metaGraphFetch('/me/accounts', {
+      accessToken: userToken,
+      query: { fields: 'id,name,access_token' },
+      timeoutMs: 15000,
+    });
     if (!pagesRes.ok) {
-      throw new Error(pages?.error?.message ?? 'failed to list Facebook pages');
+      throw new Error(pagesRes.error?.message ?? 'failed to list Facebook pages');
     }
-    for (const pg of pages?.data ?? []) {
+    for (const pg of pagesRes.data?.data ?? []) {
       out.push({
         externalId: pg.id,
         displayName: pg.name,
         accountType: 'PAGE',
         token: pg.access_token,
+        meta: { pageId: pg.id },
       });
       try {
-        const igRes = await safeFetch(
-          `${GRAPH}/${pg.id}?fields=instagram_business_account{id,username}&access_token=${encodeURIComponent(pg.access_token)}`,
-          { method: 'GET', timeoutMs: 15000 },
-        );
-        const ig = (await igRes.json()) as any;
-        const iga = ig?.instagram_business_account;
+        const igRes = await metaGraphFetch(`/${pg.id}`, {
+          accessToken: pg.access_token,
+          query: { fields: 'instagram_business_account{id,username}' },
+          timeoutMs: 15000,
+        });
+        const iga = igRes.ok ? igRes.data?.instagram_business_account : null;
         if (iga?.id) {
           out.push({
             externalId: iga.id,
             displayName: iga.username ? `@${iga.username}` : `${pg.name} (Instagram)`,
             accountType: 'IG_BUSINESS',
             token: pg.access_token,
+            meta: { pageId: pg.id },
           });
         }
       } catch {
         /* page without a linked IG business account — skip */
       }
     }
+    // Ad accounts + WhatsApp numbers are OPTIONAL (need ads_read /
+    // whatsapp_business_management — App-Review-gated). Degrade gracefully so a
+    // publish-only grant still yields the page assets.
+    try {
+      out.push(...(await discoverAdAccounts(userToken)));
+    } catch {
+      /* no ads_read — skip ad accounts */
+    }
+    try {
+      out.push(...(await discoverWhatsApp(userToken)));
+    } catch {
+      /* no WhatsApp scope — skip numbers */
+    }
     return out;
   },
 };
+
+/** /me/adaccounts → AD_ACCOUNT assets (active only). Returns [] on any failure. */
+async function discoverAdAccounts(userToken: string): Promise<ConnectableAsset[]> {
+  const r = await metaGraphFetch('/me/adaccounts', {
+    accessToken: userToken,
+    query: { fields: 'account_id,name,currency,account_status' },
+    timeoutMs: 15000,
+  });
+  if (!r.ok) return [];
+  const out: ConnectableAsset[] = [];
+  for (const a of r.data?.data ?? []) {
+    // account_status 1 = ACTIVE — skip disabled/closed accounts so the cron
+    // doesn't hammer Meta for dead act_ ids.
+    if (a?.account_status != null && Number(a.account_status) !== 1) continue;
+    const accountId = String(a?.account_id ?? '');
+    if (!accountId) continue;
+    out.push({
+      externalId: accountId,
+      displayName: a?.name ? `${a.name} (Ads)` : `Ad account ${accountId}`,
+      accountType: 'AD_ACCOUNT',
+      token: userToken,
+      meta: { accountId, currency: a?.currency ?? null },
+    });
+  }
+  return out;
+}
+
+/** /me/businesses → WABAs → phone numbers → WHATSAPP_NUMBER assets. [] on failure. */
+async function discoverWhatsApp(userToken: string): Promise<ConnectableAsset[]> {
+  const out: ConnectableAsset[] = [];
+  const bizRes = await metaGraphFetch('/me/businesses', {
+    accessToken: userToken,
+    query: { fields: 'id,name' },
+    timeoutMs: 15000,
+  });
+  if (!bizRes.ok) return out;
+  for (const biz of bizRes.data?.data ?? []) {
+    const wabaRes = await metaGraphFetch(`/${biz.id}/owned_whatsapp_business_accounts`, {
+      accessToken: userToken,
+      query: { fields: 'id,name' },
+      timeoutMs: 15000,
+    });
+    if (!wabaRes.ok) continue;
+    for (const waba of wabaRes.data?.data ?? []) {
+      const phRes = await metaGraphFetch(`/${waba.id}/phone_numbers`, {
+        accessToken: userToken,
+        query: { fields: 'id,display_phone_number,verified_name' },
+        timeoutMs: 15000,
+      });
+      if (!phRes.ok) continue;
+      for (const ph of phRes.data?.data ?? []) {
+        const pid = String(ph?.id ?? '');
+        if (!pid) continue;
+        out.push({
+          externalId: pid,
+          displayName: ph?.verified_name
+            ? `${ph.verified_name} (WhatsApp)`
+            : (ph?.display_phone_number ?? `WhatsApp ${pid}`),
+          accountType: 'WHATSAPP_NUMBER',
+          token: userToken,
+          meta: { phoneNumberId: pid, wabaId: waba.id, displayPhoneNumber: ph?.display_phone_number ?? null },
+        });
+      }
+    }
+  }
+  return out;
+}
 
 // ──────────────────────────────────────────────────────────────── LinkedIn
 

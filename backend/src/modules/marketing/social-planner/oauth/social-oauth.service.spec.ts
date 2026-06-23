@@ -5,6 +5,8 @@ import { sealSecret } from '../../../../common/crypto/secret-box.helper';
 describe('SocialOAuthService', () => {
   const WS = 'ws-1';
   let prisma: any;
+  let channels: any;
+  let ads: any;
   let svc: SocialOAuthService;
 
   const sealedPayload = (assets: any[], token = 'usertok', refreshToken: string | null = null) =>
@@ -24,7 +26,9 @@ describe('SocialOAuthService', () => {
       },
       socialAccount: { upsert: jest.fn().mockResolvedValue({ id: 'a' }) },
     };
-    svc = new SocialOAuthService(prisma as any);
+    channels = { create: jest.fn().mockResolvedValue({ id: 'ch' }) };
+    ads = { connect: jest.fn().mockResolvedValue({ id: 'ad' }) };
+    svc = new SocialOAuthService(prisma as any, channels as any, ads as any);
   });
 
   describe('start', () => {
@@ -103,7 +107,7 @@ describe('SocialOAuthService', () => {
 
     it('creates an OAUTH SocialAccount only for the selected asset and deletes the pending row', async () => {
       const out = await svc.confirm(WS, 'p1', ['P1']);
-      expect(out).toEqual({ connected: 1 });
+      expect(out).toMatchObject({ connected: 1, socialAccounts: 1, channels: 0, adAccounts: 0 });
       expect(prisma.socialAccount.upsert).toHaveBeenCalledTimes(1);
       const arg = prisma.socialAccount.upsert.mock.calls[0][0];
       expect(arg.where.workspaceId_network_externalId).toEqual({
@@ -121,12 +125,67 @@ describe('SocialOAuthService', () => {
 
     it('connects multiple selected assets', async () => {
       const out = await svc.confirm(WS, 'p1', ['P1', 'IG1']);
-      expect(out).toEqual({ connected: 2 });
+      expect(out).toMatchObject({ connected: 2, socialAccounts: 2 });
       expect(prisma.socialAccount.upsert).toHaveBeenCalledTimes(2);
     });
 
     it('throws when nothing is selected', async () => {
       await expect(svc.confirm(WS, 'p1', [])).rejects.toThrow(BadRequestException);
+    });
+
+    it('provisions a WHATSAPP number as a WHATSAPP Channel (no SocialAccount)', async () => {
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() + 60000),
+        payload: sealedPayload([
+          { externalId: 'PN1', displayName: 'Acme WA', accountType: 'WHATSAPP_NUMBER', token: 'usertok', meta: { phoneNumberId: 'PN1' } },
+        ]),
+      });
+      const out = await svc.confirm(WS, 'p1', ['PN1']);
+      expect(out).toMatchObject({ channels: 1, socialAccounts: 0 });
+      expect(channels.create).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({ type: 'WHATSAPP', externalId: 'PN1', secrets: { accessToken: 'usertok', phoneNumberId: 'PN1' } }),
+      );
+      expect(prisma.socialAccount.upsert).not.toHaveBeenCalled();
+    });
+
+    it('provisions an AD_ACCOUNT via AdAccountService.connect', async () => {
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() + 60000),
+        payload: sealedPayload([
+          { externalId: '123', displayName: 'Biz Ads', accountType: 'AD_ACCOUNT', token: 'usertok', meta: { accountId: '123', currency: 'USD' } },
+        ]),
+      });
+      const out = await svc.confirm(WS, 'p1', ['123']);
+      expect(out).toMatchObject({ adAccounts: 1 });
+      expect(ads.connect).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({ provider: 'META', externalAdId: '123', accessToken: 'usertok', currency: 'USD' }),
+      );
+    });
+
+    it('also creates a MESSENGER Channel for a Page when opted in via provisionMessaging', async () => {
+      const out = await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      expect(out).toMatchObject({ socialAccounts: 1, channels: 1 });
+      expect(channels.create).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({ type: 'MESSENGER', externalId: 'P1', secrets: { pageAccessToken: 'pt1' } }),
+      );
+    });
+
+    it('records a (type,externalId) collision in skipped instead of aborting', async () => {
+      const { ConflictException } = require('@nestjs/common');
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() + 60000),
+        payload: sealedPayload([
+          { externalId: 'PN1', displayName: 'WA', accountType: 'WHATSAPP_NUMBER', token: 'usertok', meta: { phoneNumberId: 'PN1' } },
+        ]),
+      });
+      channels.create.mockRejectedValueOnce(new ConflictException('taken'));
+      const out = await svc.confirm(WS, 'p1', ['PN1']);
+      expect(out.channels).toBe(0);
+      expect(out.skipped).toEqual([{ externalId: 'PN1', reason: 'taken' }]);
+      expect(prisma.pendingSocialConnection.delete).toHaveBeenCalled();
     });
   });
 });

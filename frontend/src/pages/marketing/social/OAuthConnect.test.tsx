@@ -89,4 +89,21 @@ describe('AccountSelectDialog', () => {
       ),
     );
   });
+
+  it('includes provisionMessaging when the per-account messaging toggle is on', async () => {
+    const onOpenChange = vi.fn();
+    wrap(<AccountSelectDialog pendingId="pend-1" onOpenChange={onOpenChange} />);
+
+    await waitFor(() => expect(screen.getByText('Acme')).toBeTruthy());
+    // Both Page + IG are selected by default → their messaging toggles render.
+    fireEvent.click(screen.getByLabelText('messaging:P1'));
+
+    fireEvent.click(screen.getByText(/Connect selected/i));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(
+        '/social/oauth/pending/pend-1/confirm',
+        { selected: ['P1', 'IG1'], provisionMessaging: ['P1'] },
+      ),
+    );
+  });
 });

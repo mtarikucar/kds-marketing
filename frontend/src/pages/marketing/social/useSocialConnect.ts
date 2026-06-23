@@ -52,8 +52,20 @@ export function useSocialConnect() {
     });
 
   const confirm = useMutation({
-    mutationFn: ({ pendingId, selected }: { pendingId: string; selected: string[] }) =>
-      marketingApi.post(`/social/oauth/pending/${pendingId}/confirm`, { selected }),
+    mutationFn: ({
+      pendingId,
+      selected,
+      provisionMessaging,
+    }: {
+      pendingId: string;
+      selected: string[];
+      /** externalIds of Pages/IG accounts to ALSO wire up as a messaging Channel. */
+      provisionMessaging?: string[];
+    }) =>
+      marketingApi.post(`/social/oauth/pending/${pendingId}/confirm`, {
+        selected,
+        ...(provisionMessaging && provisionMessaging.length ? { provisionMessaging } : {}),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'social', 'accounts'] });
       toast.success(t('social.toast.connected', { defaultValue: 'Account connected' }));

@@ -19,7 +19,20 @@ interface OAuthDef {
 export const NETWORK_OAUTH: Record<Network, OAuthDef> = {
   FACEBOOK: {
     authorizeUrl: 'https://www.facebook.com/v19.0/dialog/oauth',
-    scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement', 'business_management'],
+    // Publishing + messaging-channel + ad-account onboarding in one consent.
+    // Only sent on the classic flow; the FLB config (META_LOGIN_CONFIG_ID)
+    // defines the grant when set. Messaging/WhatsApp/ads scopes need App Review,
+    // so they stay inert (the connect path is env-gated) until approved.
+    scopes: [
+      'pages_show_list',
+      'pages_manage_posts',
+      'pages_read_engagement',
+      'business_management',
+      'pages_messaging',
+      'whatsapp_business_management',
+      'whatsapp_business_messaging',
+      'ads_read',
+    ],
     clientIdEnv: 'META_APP_ID',
     clientSecretEnv: 'META_APP_SECRET',
     scopeSep: ',',

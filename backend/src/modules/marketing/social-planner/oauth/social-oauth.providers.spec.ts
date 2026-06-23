@@ -163,4 +163,33 @@ describe('metaProvider.listAssets', () => {
     expect(assets).toHaveLength(1);
     expect(assets[0]).toMatchObject({ externalId: 'P2', accountType: 'PAGE' });
   });
+
+  it('discovers ad accounts and WhatsApp numbers when those scopes are granted', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: 'P1', name: 'Acme', access_token: 'pt1' }] })) // pages
+      .mockResolvedValueOnce(res({})) // IG (none)
+      .mockResolvedValueOnce(res({ data: [{ account_id: '123', name: 'Biz', currency: 'USD', account_status: 1 }] })) // /me/adaccounts
+      .mockResolvedValueOnce(res({ data: [{ id: 'B1', name: 'Biz' }] })) // /me/businesses
+      .mockResolvedValueOnce(res({ data: [{ id: 'WABA1', name: 'WA' }] })) // owned WABAs
+      .mockResolvedValueOnce(res({ data: [{ id: 'PN1', display_phone_number: '+90', verified_name: 'Acme' }] })); // phone_numbers
+    const assets = await metaProvider.listAssets('USERTOKEN');
+    expect(assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ externalId: 'P1', accountType: 'PAGE' }),
+        expect.objectContaining({ externalId: '123', accountType: 'AD_ACCOUNT', meta: expect.objectContaining({ currency: 'USD' }) }),
+        expect.objectContaining({ externalId: 'PN1', accountType: 'WHATSAPP_NUMBER', meta: expect.objectContaining({ phoneNumberId: 'PN1' }) }),
+      ]),
+    );
+  });
+
+  it('still returns pages when ad-account/WhatsApp scopes are missing (graceful)', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: 'P1', name: 'Acme', access_token: 'pt1' }] })) // pages
+      .mockResolvedValueOnce(res({})) // IG none
+      .mockResolvedValueOnce(res({ error: { message: 'no ads_read' } }, false)) // /me/adaccounts 4xx
+      .mockResolvedValueOnce(res({ error: { message: 'no wa' } }, false)); // /me/businesses 4xx
+    const assets = await metaProvider.listAssets('USERTOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ externalId: 'P1', accountType: 'PAGE' });
+  });
 });
