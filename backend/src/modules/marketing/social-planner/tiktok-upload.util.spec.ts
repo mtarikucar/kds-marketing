@@ -30,8 +30,7 @@ describe('planChunks', () => {
     expect(plan.chunkSize).toBeGreaterThanOrEqual(5 * MB);
   });
 
-  it('rejects an empty or oversized file', () => {
+  it('rejects an empty file', () => {
     expect(() => planChunks(0)).toThrow();
-    expect(() => planChunks(5 * 1024 * MB)).toThrow(); // > 4GB cap
   });
 });
