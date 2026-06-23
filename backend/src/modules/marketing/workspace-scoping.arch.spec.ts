@@ -194,6 +194,10 @@ const OWNED_DELEGATES = [
   // Sending domains / DKIM (GHL parity, Epic 13): workspace-owned email sending
   // domains; every multi-row/create call carries workspaceId.
   'sendingDomain',
+  // Custom-domain white-label (GHL parity, Epic 13): workspace-owned hostnames.
+  // Writes/reads are workspaceId-scoped; the host lookup is findUnique (by the
+  // globally-unique hostname) and the verify sweep is whitelisted below.
+  'customDomain',
 ] as const;
 
 /**
@@ -296,6 +300,12 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // is id-keyed, and the refresh is idempotent (re-seals the latest token).
   'social-planner/oauth/social-token-refresh.service.ts:socialAccount.findMany':
     'hourly OAuth token-refresh sweep reads expiring accounts across all workspaces (system cron)',
+  // Custom-domain verify sweep (Epic 13, inert): the hourly cron reads PENDING
+  // custom domains across ALL workspaces — a system job, same shape as the
+  // ads/review/recording sweeps. Every write it triggers (customDomain.updateMany
+  // → VERIFIED) is keyed by (id, workspaceId), and re-verifying is idempotent.
+  'custom-domains/custom-domains.service.ts:customDomain.findMany':
+    'hourly custom-domain verify sweep reads PENDING domains across all workspaces (system cron)',
   // Public e-signature sign/decline: the document id is resolved from a
   // token-scoped findUnique(publicToken) (the unguessable token IS the
   // capability), then the status-conditional updateMany flips SENT→SIGNED/DECLINED

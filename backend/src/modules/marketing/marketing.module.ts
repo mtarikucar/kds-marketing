@@ -166,6 +166,9 @@ import { PublicAuditController } from './controllers/public-audit.controller';
 // Epic 13 — sending domains / DKIM (inert until SENDING_DOMAIN_ESP).
 import { SendingDomainsService } from './sending-domains/sending-domains.service';
 import { SendingDomainsController } from './controllers/sending-domains.controller';
+// Epic 13 — custom-domain white-label (inert until CUSTOM_DOMAINS_ENABLED).
+import { CustomDomainsService } from './custom-domains/custom-domains.service';
+import { CustomDomainsController } from './controllers/custom-domains.controller';
 
 // Phase F P8 — Voice AI (Twilio).
 import { MarketingVoiceController } from './controllers/marketing-voice.controller';
@@ -434,6 +437,7 @@ import { WalletService } from './wallet/wallet.service';
     ProspectingController,
     PublicAuditController,
     SendingDomainsController,
+    CustomDomainsController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
@@ -622,6 +626,7 @@ import { WalletService } from './wallet/wallet.service';
     ReviewSyncService,
     AuditService,
     SendingDomainsService,
+    CustomDomainsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
     VoiceAdapter,

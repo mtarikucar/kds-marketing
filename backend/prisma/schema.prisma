@@ -3227,3 +3227,26 @@ model SendingDomain {
   @@index([workspaceId, status])
   @@map("sending_domains")
 }
+
+/// A tenant's own hostname pointed at the platform to white-label its public
+/// site (GHL parity, Epic 13 — inert until CUSTOM_DOMAINS_ENABLED + ops wires
+/// wildcard ingress + on-demand TLS). hostname is globally unique (one host →
+/// one workspace); a verify sweep flips PENDING→VERIFIED once the DNS TXT token
+/// is published, after which the Host-header middleware serves the workspace's
+/// public SitePage for that host.
+model CustomDomain {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  hostname      String    @unique
+  verifyToken   String
+  homeSlug      String    @default("home") // the SitePage slug served at '/'
+  status        String    @default("PENDING") // PENDING | VERIFIED | ACTIVE | FAILED
+  txtVerifiedAt DateTime?
+  sslStatus     String    @default("PENDING") // PENDING | ISSUED (ACME/ops-managed)
+  lastError     String?
+  lastCheckedAt DateTime? // verify-sweep cursor (nulls-first ordering = anti-starvation)
+  createdAt     DateTime  @default(now())
+
+  @@index([workspaceId])
+  @@map("custom_domains")
+}

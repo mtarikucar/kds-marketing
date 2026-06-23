@@ -3,6 +3,9 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+import { customDomainHostMiddleware } from './modules/marketing/custom-domains/custom-domain.middleware';
+import { CustomDomainsService } from './modules/marketing/custom-domains/custom-domains.service';
+import { SitesService } from './modules/marketing/sites/sites.service';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { setupSwagger } from './swagger';
@@ -74,6 +77,14 @@ export function configureApp(app: NestExpressApplication): void {
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
+
+  // Custom-domain white-label (Epic 13). A pure pass-through unless
+  // CUSTOM_DOMAINS_ENABLED is set — on the live deploy this only adds an env
+  // check. Registered AFTER helmet so a served white-label page carries the same
+  // security headers (CSP/nosniff/frame-ancestors) as every other public page.
+  // When enabled, a request whose Host matches a VERIFIED custom domain is served
+  // that workspace's public site; everything else (incl. /api) falls through.
+  app.use(customDomainHostMiddleware(app.get(CustomDomainsService), app.get(SitesService)));
 
   // SAME global prefix as the monorepo backend, so every existing route
   // (/api/marketing/..., /api/internal/...) is unchanged and the marketing
