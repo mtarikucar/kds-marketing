@@ -7,7 +7,7 @@ import { Plus, Trash2, Image as ImageIcon, CalendarClock } from 'lucide-react';
 import { postSchema, type PostFormValues } from './socialSchemas';
 import type { SocialAccount, SocialPost, TikTokPostOptions } from './types';
 import { NETWORK_META } from './networks';
-import { getTiktokCreatorInfo } from '../../../features/marketing/api/social-planner.service';
+import { getTiktokCreatorInfo, type TiktokCreatorInfo } from '../../../features/marketing/api/social-planner.service';
 import {
   Dialog,
   DialogContent,
@@ -380,14 +380,6 @@ export function PostComposerDialog({
 }
 
 // ── TikTok controls panel ─────────────────────────────────────────────────────
-
-interface TiktokCreatorInfo {
-  privacyLevelOptions: string[];
-  commentDisabled: boolean;
-  duetDisabled: boolean;
-  stitchDisabled: boolean;
-  maxVideoPostDurationSec: number;
-}
 
 interface TiktokControlsProps {
   creatorInfo: TiktokCreatorInfo | null;

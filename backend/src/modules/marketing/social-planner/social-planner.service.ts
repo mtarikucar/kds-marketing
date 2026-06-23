@@ -146,6 +146,7 @@ export class SocialPlannerService implements OnModuleInit {
       content: string;
       mediaUrls?: string[];
       targetAccountIds?: string[];
+      options?: Record<string, unknown>;
     },
   ) {
     const post = await this.prisma.socialPost.create({
@@ -154,6 +155,7 @@ export class SocialPlannerService implements OnModuleInit {
         content: dto.content,
         mediaUrls: dto.mediaUrls ?? [],
         status: 'DRAFT',
+        ...(dto.options !== undefined ? { options: dto.options } : {}),
       },
     });
 
@@ -184,7 +186,7 @@ export class SocialPlannerService implements OnModuleInit {
   async updatePost(
     workspaceId: string,
     postId: string,
-    dto: { content?: string; mediaUrls?: string[] },
+    dto: { content?: string; mediaUrls?: string[]; options?: Record<string, unknown> },
   ) {
     await this.assertDraftPost(workspaceId, postId);
     return this.prisma.socialPost.update({
@@ -192,6 +194,7 @@ export class SocialPlannerService implements OnModuleInit {
       data: {
         ...(dto.content !== undefined ? { content: dto.content } : {}),
         ...(dto.mediaUrls !== undefined ? { mediaUrls: dto.mediaUrls } : {}),
+        ...(dto.options !== undefined ? { options: dto.options } : {}),
       },
       include: { targets: true },
     });

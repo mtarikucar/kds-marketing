@@ -12,6 +12,7 @@ import {
   IsArray,
   IsDateString,
   IsIn,
+  IsObject,
   IsOptional,
   IsString,
   IsUrl,
@@ -57,6 +58,9 @@ class CreatePostDto {
 
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
+
+  @IsOptional() @IsObject()
+  options?: Record<string, unknown>;
 }
 
 class UpdatePostDto {
@@ -65,6 +69,9 @@ class UpdatePostDto {
 
   @IsOptional() @IsArray() @IsUrl({}, { each: true }) @ArrayMaxSize(10)
   mediaUrls?: string[];
+
+  @IsOptional() @IsObject()
+  options?: Record<string, unknown>;
 }
 
 class SchedulePostDto {
