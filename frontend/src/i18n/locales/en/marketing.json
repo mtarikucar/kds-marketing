@@ -138,7 +138,34 @@
     "products": "Products",
     "subscriptions": "Subscriptions",
     "orderForms": "Order forms",
-    "branding": "Branding"
+    "branding": "Branding",
+    "prospecting": "Prospecting",
+    "sendingDomains": "Sending Domains",
+    "customDomains": "Custom Domains",
+    "dialer": "Power Dialer",
+    "telephony": "Phone (Netsantral)",
+    "apiKeys": "API Keys",
+    "webhooks": "Webhooks",
+    "inboundWebhooks": "Inbound webhooks",
+    "compliance": "Compliance",
+    "twoFactor": "Two-factor auth",
+    "affiliates": "Affiliates",
+    "analytics": "Analytics",
+    "communities": "Communities",
+    "companies": "Companies",
+    "connections": "Connections",
+    "courses": "Courses",
+    "emailTemplates": "Email Templates",
+    "experiments": "Experiments",
+    "import": "Import",
+    "leaderboard": "Leaderboard",
+    "roles": "Roles & permissions",
+    "social": "Social",
+    "surveys": "Surveys",
+    "agencyLocations": "Agency Locations",
+    "agencyRebilling": "Agency Rebilling",
+    "agencySnapshots": "Agency Snapshots",
+    "ivr": "IVR Menus"
   },
   "common": {
     "save": "Save",
@@ -453,9 +480,21 @@
     "pause": "Pause",
     "resume": "Resume",
     "cancel": "Cancel",
-    "status": { "ACTIVE": "Active", "PAUSED": "Paused", "CANCELLED": "Cancelled" },
-    "intervalUnit": { "WEEK": "week(s)", "MONTH": "month(s)", "YEAR": "year(s)" },
-    "intervalEvery": { "WEEK": "Weekly", "MONTH": "Monthly", "YEAR": "Yearly" }
+    "status": {
+      "ACTIVE": "Active",
+      "PAUSED": "Paused",
+      "CANCELLED": "Cancelled"
+    },
+    "intervalUnit": {
+      "WEEK": "week(s)",
+      "MONTH": "month(s)",
+      "YEAR": "year(s)"
+    },
+    "intervalEvery": {
+      "WEEK": "Weekly",
+      "MONTH": "Monthly",
+      "YEAR": "Yearly"
+    }
   },
   "products": {
     "title": "Products",
@@ -735,10 +774,20 @@
       "title": "No custom objects yet",
       "description": "Create your first custom object to model records specific to your business."
     },
-    "detail": { "subtitle": "Browse records and manage fields.", "back": "All objects" },
-    "tabs": { "records": "Records", "fields": "Fields" },
-    "col": { "name": "Name" },
-    "action": { "archive": "Archive" },
+    "detail": {
+      "subtitle": "Browse records and manage fields.",
+      "back": "All objects"
+    },
+    "tabs": {
+      "records": "Records",
+      "fields": "Fields"
+    },
+    "col": {
+      "name": "Name"
+    },
+    "action": {
+      "archive": "Archive"
+    },
     "form": {
       "newTitle": "New custom object",
       "editTitle": "Edit object",
@@ -799,9 +848,18 @@
     "connectAccount": "Connect account",
     "viewToggle": "Ad reporting view",
     "rangeToggle": "Date range",
-    "tabs": { "overview": "Overview", "accounts": "Accounts" },
-    "filter": { "allProviders": "All providers" },
-    "range": { "7": "7d", "30": "30d", "90": "90d" },
+    "tabs": {
+      "overview": "Overview",
+      "accounts": "Accounts"
+    },
+    "filter": {
+      "allProviders": "All providers"
+    },
+    "range": {
+      "7": "7d",
+      "30": "30d",
+      "90": "90d"
+    },
     "stat": {
       "spend": "Spend",
       "impressions": "Impressions",
@@ -810,10 +868,22 @@
       "ctr": "CTR",
       "cpl": "Cost / lead"
     },
-    "col": { "provider": "Provider", "date": "Date" },
-    "byProvider": { "title": "By provider" },
-    "byDay": { "title": "Daily breakdown", "empty": "No metrics in this range yet." },
-    "status": { "ACTIVE": "Active", "TOKEN_EXPIRED": "Token expired", "DISCONNECTED": "Disconnected" },
+    "col": {
+      "provider": "Provider",
+      "date": "Date"
+    },
+    "byProvider": {
+      "title": "By provider"
+    },
+    "byDay": {
+      "title": "Daily breakdown",
+      "empty": "No metrics in this range yet."
+    },
+    "status": {
+      "ACTIVE": "Active",
+      "TOKEN_EXPIRED": "Token expired",
+      "DISCONNECTED": "Disconnected"
+    },
     "empty": {
       "title": "No ad accounts connected",
       "description": "Connect a Meta or TikTok ad account to start seeing spend and conversion reporting."
@@ -824,7 +894,10 @@
       "lastPulled": "Last refreshed {{when}}",
       "neverPulled": "Not refreshed yet"
     },
-    "action": { "refresh": "Refresh", "disconnect": "Disconnect" },
+    "action": {
+      "refresh": "Refresh",
+      "disconnect": "Disconnect"
+    },
     "confirm": {
       "disconnectTitle": "Disconnect ad account",
       "disconnectBody": "This removes the account and all of its pulled metrics. This cannot be undone."
