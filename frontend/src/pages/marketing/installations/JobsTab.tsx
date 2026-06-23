@@ -47,6 +47,7 @@ import {
   Skeleton,
   Pagination,
 } from '../../../components/ui';
+import { PhoneInput } from '../../../components/ui/PhoneInput';
 import type { BadgeProps } from '../../../components/ui/Badge';
 
 const STATUSES = Object.values(InstallationStatus);
@@ -365,11 +366,10 @@ export function JobsTab({
               </Field>
               <Field label="Contact phone" error={errors.contactPhone?.message}>
                 {({ id, describedBy, invalid }) => (
-                  <Input
+                  <PhoneInput
                     id={id}
                     aria-describedby={describedBy}
                     aria-invalid={invalid || undefined}
-                    placeholder="Contact phone"
                     {...register('contactPhone')}
                   />
                 )}

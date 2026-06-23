@@ -15,6 +15,7 @@ import {
   CardContent,
   Field,
   Input,
+  PhoneInput,
   Textarea,
   Button,
   Select,
@@ -285,10 +286,8 @@ export default function CreateLeadPage() {
                   error={fieldErr(errors.phone?.message)}
                 >
                   {({ id, describedBy, invalid }) => (
-                    <Input
+                    <PhoneInput
                       id={id}
-                      type="tel"
-                      placeholder="+90555..."
                       aria-describedby={describedBy}
                       aria-invalid={invalid || undefined}
                       {...form.register('phone')}
@@ -301,10 +300,8 @@ export default function CreateLeadPage() {
                   error={fieldErr(errors.whatsapp?.message)}
                 >
                   {({ id, describedBy, invalid }) => (
-                    <Input
+                    <PhoneInput
                       id={id}
-                      type="tel"
-                      placeholder="+90555..."
                       aria-describedby={describedBy}
                       aria-invalid={invalid || undefined}
                       {...form.register('whatsapp')}
