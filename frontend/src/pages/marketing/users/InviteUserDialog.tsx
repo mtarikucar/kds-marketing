@@ -4,7 +4,7 @@
  * then fires the createMutation from the parent.
  */
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { UserPlus } from 'lucide-react';
 import {
@@ -57,6 +57,7 @@ export function InviteUserDialog({
 }: InviteUserDialogProps) {
   const {
     register,
+    control,
     handleSubmit,
     setValue,
     watch,
@@ -141,11 +142,19 @@ export function InviteUserDialog({
 
           <Field label="Phone" error={errors.phone ? msg(errors.phone.message ?? '') : undefined}>
             {({ id, describedBy, invalid }) => (
-              <PhoneInput
-                id={id}
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                {...register('phone')}
+              <Controller
+                name="phone"
+                control={control}
+                render={({ field }) => (
+                  <PhoneInput
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    value={field.value ?? ''}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                  />
+                )}
               />
             )}
           </Field>

@@ -101,7 +101,7 @@ export default function CompaniesPage() {
                 {({ id }) => <Input id={id} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} />}
               </Field>
               <Field label={t('companies.phone', 'Phone')}>
-                {({ id }) => <PhoneInput id={id} value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />}
+                {({ id }) => <PhoneInput id={id} value={form.phone} onChange={(v) => setForm((f) => ({ ...f, phone: v }))} />}
               </Field>
               <Field label={t('companies.email', 'Email')}>
                 {({ id }) => <Input id={id} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
@@ -132,6 +132,7 @@ export function JobsTab({
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     formState: { errors },
@@ -366,11 +367,19 @@ export function JobsTab({
               </Field>
               <Field label="Contact phone" error={errors.contactPhone?.message}>
                 {({ id, describedBy, invalid }) => (
-                  <PhoneInput
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid || undefined}
-                    {...register('contactPhone')}
+                  <Controller
+                    name="contactPhone"
+                    control={control}
+                    render={({ field }) => (
+                      <PhoneInput
+                        id={id}
+                        aria-describedby={describedBy}
+                        aria-invalid={invalid || undefined}
+                        value={field.value ?? ''}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                      />
+                    )}
                   />
                 )}
               </Field>

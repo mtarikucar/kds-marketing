@@ -3,7 +3,7 @@
  * Uses a subset of marketingUserSchema (no password required on edit).
  */
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
@@ -61,6 +61,7 @@ export function EditUserDialog({
 }: EditUserDialogProps) {
   const {
     register,
+    control,
     handleSubmit,
     setValue,
     watch,
@@ -134,11 +135,19 @@ export function EditUserDialog({
 
           <Field label="Phone" error={errors.phone?.message}>
             {({ id, describedBy, invalid }) => (
-              <PhoneInput
-                id={id}
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                {...register('phone')}
+              <Controller
+                name="phone"
+                control={control}
+                render={({ field }) => (
+                  <PhoneInput
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    value={field.value ?? ''}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                  />
+                )}
               />
             )}
           </Field>

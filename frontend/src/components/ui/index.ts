@@ -41,7 +41,7 @@ export { cn } from './cn';
 export { Label } from './Label';
 export { Field, type FieldProps } from './Field';
 export { Input } from './Input';
-export { PhoneInput, normalizePhone, PHONE_PLACEHOLDER } from './PhoneInput';
+export { PhoneInput, splitPhone, combinePhone, PHONE_PLACEHOLDER, PHONE_COUNTRIES, type PhoneInputProps } from './PhoneInput';
 export { Textarea } from './Textarea';
 export {
   Select,
