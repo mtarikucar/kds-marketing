@@ -300,6 +300,35 @@ const X_MAX_MEDIA = 4;
 const X_MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — X's per-image image limit.
 
 /**
+ * Read a response body into a Buffer, streaming with a hard cap: as soon as the
+ * accumulated size would EXCEED maxBytes, cancel the stream and return null (the
+ * image is over the limit). Never buffers the whole body first.
+ */
+async function readCappedBytes(res: Response, maxBytes: number): Promise<Buffer | null> {
+  const body = (res as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body || typeof body.getReader !== 'function') {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > maxBytes ? null : buf;
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) return null; // over cap — stop, don't buffer the rest
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks, total);
+}
+
+/**
  * Upload one image URL to X's v2 media endpoint (OAuth2 user context, scope
  * media.write) and return its media id. Fetches the bytes SSRF-guarded, caps
  * the size, and posts multipart/form-data. Returns null on any failure (the
@@ -309,12 +338,17 @@ async function uploadXMedia(token: string, mediaUrl: string): Promise<string | n
   try {
     const imgRes = await safeFetch(mediaUrl, { method: 'GET', timeoutMs: 15_000 });
     if (!imgRes.ok) return null;
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    if (buf.length === 0 || buf.length > X_MEDIA_MAX_BYTES) return null;
+    // Stream with a hard byte cap and abort once exceeded — never buffer the whole
+    // (caller-supplied) body into one arrayBuffer() allocation, which a hostile/
+    // misbehaving host could make multi-GB within the timeout (OOM on the worker).
+    const buf = await readCappedBytes(imgRes, X_MEDIA_MAX_BYTES);
+    if (!buf || buf.length === 0) return null;
     const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
 
     const form = new FormData();
-    form.append('media', new Blob([buf], { type: contentType }), 'media');
+    // Wrap in a fresh Uint8Array so the Blob part is ArrayBuffer-backed (Buffer.concat
+    // yields an ArrayBufferLike that the Blob constructor's types reject).
+    form.append('media', new Blob([new Uint8Array(buf)], { type: contentType }), 'media');
     form.append('media_category', 'tweet_image');
     const upRes = await safeFetch('https://api.x.com/2/media/upload', {
       method: 'POST',

@@ -1,13 +1,16 @@
+import { isIP } from "node:net";
 import type { Request } from "express";
 
 /**
  * Resolve the client IP for audit logging and rate-limit keying.
  *
- * `X-Forwarded-For` is comma-separated when traffic passes multiple proxies
- * (`client, proxy1, proxy2`). Taking the whole string fails downstream IP
- * validation, so we keep only the left-most hop. We prefer Express's
- * `req.ip` first — when `trust proxy` is configured correctly it already
- * does this and respects the trusted-hop count.
+ * We rely on Express's `req.ip`, which — with `trust proxy` configured (it is,
+ * `app.set('trust proxy', 1)`) — already returns the real client IP honouring
+ * the trusted-hop count. We do NOT fall back to the raw left-most
+ * `X-Forwarded-For` value: that hop is client-supplied and fully spoofable, and
+ * this value is persisted as audit attribution and used as a PSP fraud signal —
+ * trusting raw XFF would let a caller forge it. If `req.ip` is somehow unset we
+ * accept a forwarded value ONLY when it parses as a real IP, never arbitrary text.
  */
 export function getClientIp(req: Request): string | undefined {
   if (req.ip) return req.ip;
@@ -16,5 +19,6 @@ export function getClientIp(req: Request): string | undefined {
   if (!xff) return undefined;
 
   const raw = Array.isArray(xff) ? xff[0] : xff;
-  return raw?.split(",")[0]?.trim() || undefined;
+  const candidate = raw?.split(",")[0]?.trim();
+  return candidate && isIP(candidate) ? candidate : undefined;
 }

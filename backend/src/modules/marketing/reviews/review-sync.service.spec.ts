@@ -14,10 +14,13 @@ import { fetchSourceReviews } from './review-clients';
 const ENV = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET'];
 
 function makeSvc() {
-  const prisma = {
+  const prisma: any = {
     reviewSource: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
     review: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
   };
+  // upsertReview now creates the review + enqueues the event in ONE tx; run the
+  // callback against the same prisma mock (tx === prisma in the test).
+  prisma.$transaction = jest.fn((fn: any) => fn(prisma));
   const outbox = { append: jest.fn().mockResolvedValue('e') };
   return { prisma, outbox, svc: new ReviewSyncService(prisma as any, outbox as any) };
 }

@@ -8,6 +8,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
+import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import {
@@ -43,8 +44,13 @@ import {
 const GRAPH_API_BASE = 'https://graph.microsoft.com/v1.0';
 const SUBSCRIPTIONS_ENDPOINT = `${GRAPH_API_BASE}/subscriptions`;
 const EXTERNAL_BUSY = 'EXTERNAL_BUSY';
-// A transient outlookEventId value claiming an in-flight create.
+// A transient outlookEventId value claiming an in-flight create. Format is
+// `pending:<epochMs>:<uuid>` so a claim that died before linking (process crash
+// / lost Graph response) can be detected as STALE and re-claimed, rather than
+// wedging the booking out of sync forever.
 const PENDING_PREFIX = 'pending:';
+// A pending claim older than this is treated as abandoned and re-claimable.
+const STALE_PENDING_MS = 5 * 60 * 1000;
 // Page cap so one notification/scheduler tick can't spin forever on a backlog.
 const MAX_PULL_PAGES = 10;
 // Graph caps `me/events` subscription expiry at 4230 minutes (~70.5h); request
@@ -164,11 +170,21 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
       }
 
       // Claim the create so a sibling push path (direct call vs BookingCreated
-      // domain event) can't mint a SECOND Graph event for the same booking.
-      const claim = await this.prisma.booking.updateMany({
+      // domain event) can't mint a SECOND Graph event for the same booking. Match
+      // an empty slot OR re-claim a STALE pending sentinel (a prior push that
+      // crashed/timed-out after claiming but before linking) via a CAS on its
+      // exact value, so the booking can recover instead of being stuck forever.
+      const newSentinel = `${PENDING_PREFIX}${Date.now()}:${randomUUID()}`;
+      let claim = await this.prisma.booking.updateMany({
         where: { id: booking.id, workspaceId, outlookEventId: null },
-        data: { outlookEventId: `${PENDING_PREFIX}${randomUUID()}` },
+        data: { outlookEventId: newSentinel },
       });
+      if (claim.count === 0 && booking.outlookEventId && isStalePending(booking.outlookEventId)) {
+        claim = await this.prisma.booking.updateMany({
+          where: { id: booking.id, workspaceId, outlookEventId: booking.outlookEventId },
+          data: { outlookEventId: newSentinel },
+        });
+      }
       if (claim.count === 0) {
         // Sibling owns the in-flight create (or it's already linked).
         const fresh = await this.prisma.booking.findFirst({
@@ -451,30 +467,38 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
   /**
    * Renew subscriptions within the renewal window so the real-time feed never
    * lapses. Runs every 6h; only touches connections that ALREADY have one.
-   * Single-replica assumption (mirrors the other marketing @Cron jobs).
+   * Advisory-locked so a multi-replica deploy renews each due subscription ONCE
+   * (the 404-recreate branch of renewSubscription mints a fresh subscription and
+   * would otherwise strand a sibling replica's new one).
    */
   @Cron(CronExpression.EVERY_6_HOURS, { name: 'outlook-subscription-renew' })
   async renewSubscriptions(): Promise<{ renewed: number }> {
     if (!this.outlook.isConfigured()) return { renewed: 0 };
-    const cutoff = new Date(Date.now() + SUB_RENEW_BEFORE_MS);
-    const due = (await this.prisma.outlookCalendarConnection.findMany({
-      where: {
-        enabled: true,
-        subscriptionId: { not: null },
-        OR: [
-          { subscriptionExpiration: null },
-          { subscriptionExpiration: { lte: cutoff } },
-        ],
-      },
-    })) as OutlookConnectionRow[];
-
     let renewed = 0;
-    for (const conn of due) {
-      if (await this.renewSubscription(conn)) renewed++;
-    }
-    if (renewed) {
-      this.logger.log(`Outlook: renewed ${renewed} subscription(s)`);
-    }
+    await withAdvisoryLock(
+      this.prisma,
+      'outlook:subscription-renew',
+      async () => {
+        const cutoff = new Date(Date.now() + SUB_RENEW_BEFORE_MS);
+        const due = (await this.prisma.outlookCalendarConnection.findMany({
+          where: {
+            enabled: true,
+            subscriptionId: { not: null },
+            OR: [
+              { subscriptionExpiration: null },
+              { subscriptionExpiration: { lte: cutoff } },
+            ],
+          },
+        })) as OutlookConnectionRow[];
+        for (const conn of due) {
+          if (await this.renewSubscription(conn)) renewed++;
+        }
+        if (renewed) {
+          this.logger.log(`Outlook: renewed ${renewed} subscription(s)`);
+        }
+      },
+      this.logger,
+    );
     return { renewed };
   }
 
@@ -540,6 +564,7 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
           url = this.initialDeltaUrl(connection);
           upserted = 0;
           deleted = 0;
+          nextDeltaLink = undefined; // clear any deltaLink captured from a prior page
           resyncRequired = true;
           continue;
         }
@@ -805,6 +830,13 @@ interface BookingCreatedPayload {
   calendarId?: string;
   leadId?: string | null;
   startAt?: string;
+}
+
+/** True for a `pending:<epochMs>:<uuid>` sentinel older than STALE_PENDING_MS. */
+function isStalePending(value: string): boolean {
+  if (!value.startsWith(PENDING_PREFIX)) return false;
+  const ts = Number(value.slice(PENDING_PREFIX.length).split(':')[0]);
+  return Number.isFinite(ts) && Date.now() - ts > STALE_PENDING_MS;
 }
 
 /** A UTC Date as Graph's "no-offset" dateTime (paired with timeZone:"UTC"). */

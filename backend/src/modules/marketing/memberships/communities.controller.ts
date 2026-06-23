@@ -12,6 +12,7 @@ import {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
@@ -37,7 +38,10 @@ export class CommunitiesController {
     return this.svc.list(u.workspaceId);
   }
 
+  // Admin/moderation surface — MANAGER+. (Day-to-day rep actions below — join a
+  // lead, post, comment — stay open to any authenticated staff member.)
   @Post()
+  @MarketingRoles('MANAGER')
   @Audit({ action: 'community.create', resourceType: 'community' })
   create(@Body() dto: CreateCommunityDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.create(u.workspaceId, dto);
@@ -46,12 +50,14 @@ export class CommunitiesController {
   // --- post routes (literal-prefixed, before :id) ---
 
   @Post('posts/:postId/pin')
+  @MarketingRoles('MANAGER')
   @Audit({ action: 'community.post.pin', resourceType: 'community-post', resourceIdParam: 'postId' })
   pin(@Param('postId') postId: string, @Body() dto: PinPostDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.pinPost(u.workspaceId, postId, dto.pinned);
   }
 
   @Delete('posts/:postId')
+  @MarketingRoles('MANAGER')
   @Audit({ action: 'community.post.delete', resourceType: 'community-post', resourceIdParam: 'postId' })
   removePost(@Param('postId') postId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.removePost(u.workspaceId, postId);
@@ -76,12 +82,14 @@ export class CommunitiesController {
   }
 
   @Patch(':id')
+  @MarketingRoles('MANAGER')
   @Audit({ action: 'community.update', resourceType: 'community', resourceIdParam: 'id' })
   update(@Param('id') id: string, @Body() dto: UpdateCommunityDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.update(u.workspaceId, id, dto);
   }
 
   @Delete(':id')
+  @MarketingRoles('MANAGER')
   @Audit({ action: 'community.delete', resourceType: 'community', resourceIdParam: 'id' })
   remove(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.remove(u.workspaceId, id);

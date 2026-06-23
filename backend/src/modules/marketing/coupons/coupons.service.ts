@@ -115,6 +115,19 @@ export class CouponsService {
     });
     const app = this.resolve(coupon, subtotal, currency); // throws if invalid
     return this.prisma.$transaction(async (tx) => {
+      // Per-order idempotency: a redemption already logged for this invoice/order
+      // means the coupon was already applied (double-submit / retry) — return it
+      // WITHOUT consuming a second slot.
+      if (ctx.invoiceId || ctx.orderFormId) {
+        const existing = await tx.couponRedemption.findFirst({
+          where: {
+            workspaceId,
+            couponId: coupon!.id,
+            ...(ctx.invoiceId ? { invoiceId: ctx.invoiceId } : { orderFormId: ctx.orderFormId }),
+          },
+        });
+        if (existing) return { ...app, amountOff: existing.amountOff };
+      }
       if (coupon!.maxRedemptions != null) {
         const res = await tx.coupon.updateMany({
           where: { id: coupon!.id, workspaceId, timesRedeemed: { lt: coupon!.maxRedemptions } },
@@ -124,16 +137,26 @@ export class CouponsService {
       } else {
         await tx.coupon.update({ where: { id: coupon!.id }, data: { timesRedeemed: { increment: 1 } } });
       }
-      await tx.couponRedemption.create({
-        data: {
-          workspaceId,
-          couponId: coupon!.id,
-          invoiceId: ctx.invoiceId ?? null,
-          orderFormId: ctx.orderFormId ?? null,
-          leadId: ctx.leadId ?? null,
-          amountOff: app.amountOff,
-        },
-      });
+      try {
+        await tx.couponRedemption.create({
+          data: {
+            workspaceId,
+            couponId: coupon!.id,
+            invoiceId: ctx.invoiceId ?? null,
+            orderFormId: ctx.orderFormId ?? null,
+            leadId: ctx.leadId ?? null,
+            amountOff: app.amountOff,
+          },
+        });
+      } catch (e) {
+        // Lost the true-concurrent race on the per-order partial-unique index —
+        // the sibling already consumed + logged. Roll the whole tx back (so our
+        // increment is undone) and report it; the coupon WAS applied once.
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new ConflictException('Coupon already applied to this order');
+        }
+        throw e;
+      }
       return app;
     });
   }

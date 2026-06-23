@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { navigateExternal } from '../../../lib/navigateExternal';
 import type { SocialNetwork } from './socialSchemas';
 
 export interface PendingAsset {
@@ -30,9 +31,7 @@ export function useSocialConnect() {
       const { data } = await marketingApi.post(
         `/social/oauth/${network.toLowerCase()}/start`,
       );
-      if (data?.authorizeUrl) {
-        window.location.href = data.authorizeUrl as string;
-      }
+      navigateExternal(data?.authorizeUrl as string | undefined);
     } catch {
       toast.error(
         t('social.oauth.startFailed', { defaultValue: 'Could not start the connection' }),

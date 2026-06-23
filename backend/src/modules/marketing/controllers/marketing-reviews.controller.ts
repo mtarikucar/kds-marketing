@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
-import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsUrl, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -14,7 +14,11 @@ import { ReviewOAuthService } from '../reviews/review-oauth.service';
 
 class ReviewSourceDto {
   @IsString() @IsNotEmpty() @MaxLength(120) name: string;
-  @IsString() @IsNotEmpty() @MaxLength(1000) placeUrl: string;
+  // The public rating-gate page assigns this to location.href for ≥4-star
+  // raters, so it MUST be a real http(s) URL — without this an `javascript:`/
+  // off-site value would execute / open-redirect on the workspace's own raters.
+  // (Mirrors the survey redirectUrl DTO; the gate page also guards the sink.)
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true }) @MaxLength(1000) placeUrl: string;
   @IsOptional() @IsString() @MaxLength(40) type?: string;
 }
 class ReviewReplyDto {

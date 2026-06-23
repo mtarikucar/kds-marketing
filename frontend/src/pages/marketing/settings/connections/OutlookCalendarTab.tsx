@@ -9,6 +9,7 @@ import {
 import { useOutlookCalendarStatus, useOutlookCalendarMutations } from './hooks';
 import type { OutlookCalendarConnection } from './types';
 import { apiError } from './util';
+import { navigateExternal } from '@/lib/navigateExternal';
 
 function formatDate(value: string): string {
   const d = new Date(value);
@@ -33,7 +34,7 @@ export function OutlookCalendarTab() {
 
   const handleConnect = () => {
     connect.mutate(undefined, {
-      onSuccess: ({ url }) => window.location.assign(url),
+      onSuccess: ({ url }) => navigateExternal(url),
       onError: (e) => toast.error(apiError(e, t('connections.outlook.connectError', { defaultValue: 'Could not start Outlook connect' }))),
     });
   };

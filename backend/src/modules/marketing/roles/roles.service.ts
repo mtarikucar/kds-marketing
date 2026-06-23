@@ -87,15 +87,24 @@ export class RolesService {
     return { userId, customRoleId: roleId };
   }
 
-  async resolvePermissions(user: { role: string; customRoleId?: string | null }) {
+  async resolvePermissions(user: { workspaceId: string; role: string; customRoleId?: string | null }) {
     if (user.customRoleId) {
-      const r = await this.prisma.customRole.findUnique({ where: { id: user.customRoleId } });
+      // Scope the custom-role read to the user's workspace (defence in depth: the
+      // only writer of customRoleId already gates via owned(), but a workspace-
+      // scoped read guarantees a stray customRoleId can never grant another
+      // tenant's permission set).
+      const r = await this.prisma.customRole.findFirst({
+        where: { id: user.customRoleId, workspaceId: user.workspaceId },
+      });
       return ((r?.permissions as string[]) ?? []);
     }
     return LEGACY_ROLE_PERMISSIONS[user.role] ?? [];
   }
 
-  async hasPermission(user: { role: string; customRoleId?: string | null }, permission: string) {
+  async hasPermission(
+    user: { workspaceId: string; role: string; customRoleId?: string | null },
+    permission: string,
+  ) {
     return (await this.resolvePermissions(user)).includes(permission);
   }
 
@@ -105,6 +114,6 @@ export class RolesService {
       select: { role: true, customRoleId: true },
     });
     if (!user) return false;
-    return this.hasPermission(user, permission);
+    return this.hasPermission({ workspaceId, ...user }, permission);
   }
 }

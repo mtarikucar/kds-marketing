@@ -717,6 +717,8 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
       resourceId: 'old-res',
       channelExpiration: new Date(Date.now() + 3600_000), // ~1h out ⇒ due
     });
+    // renewWatches is now advisory-locked; make the try-lock acquire.
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ locked: true }] as never);
     prisma.googleCalendarConnection.findMany.mockResolvedValue([near] as never);
     safeFetchSpy
       .mockResolvedValueOnce(

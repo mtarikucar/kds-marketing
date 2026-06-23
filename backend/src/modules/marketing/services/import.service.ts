@@ -249,12 +249,6 @@ export class ImportService implements OnModuleInit {
       try {
         const { native, cf, tags } = this.buildLeadData(mapping, row.raw as Record<string, string>);
         if (!native.businessName) throw new Error('missing businessName');
-        const customFields = await this.customFields.validateAndNormalize(
-          job.workspaceId,
-          'LEAD',
-          cf,
-          'update',
-        );
         const emailNormalized = normalizeEmail(native.email);
         const phoneNormalized = normalizePhone(native.phone);
         const existing = await this.findExisting(job.workspaceId, emailNormalized, phoneNormalized);
@@ -272,20 +266,43 @@ export class ImportService implements OnModuleInit {
               : 'created';
         if (action === 'skipped') rowStatus = 'SKIPPED';
 
+        // Validate custom fields in the action-appropriate mode: a CREATED lead
+        // must satisfy `required` custom fields exactly like a POST /leads create
+        // (the old code always used 'update', silently bypassing required on
+        // imported leads); an UPDATE keeps the lenient partial mode.
+        const customFields = await this.customFields.validateAndNormalize(
+          job.workspaceId,
+          'LEAD',
+          cf,
+          action === 'created' ? 'create' : 'update',
+        );
+
         // The lead write AND the row outcome commit together, so a crash can
         // never leave an imported lead with a PENDING/FAILED row (or vice-versa).
         await this.prisma.$transaction(async (tx) => {
           if (action === 'updated' && existing) {
+            // findExisting matches on email OR phone. A SINGLE-key match (phone
+            // only / email only) must NOT silently overwrite the OTHER, conflicting
+            // identifier — two different people can share a phone (or email), and
+            // clobbering it corrupts contact identity. Preserve the existing key in
+            // that case (fills-blanks + both-match updates still apply normally).
+            const matchedEmail = !!emailNormalized && existing.emailNormalized === emailNormalized;
+            const matchedPhone = !!phoneNormalized && existing.phoneNormalized === phoneNormalized;
+            const keepEmail = matchedPhone && !matchedEmail && !!existing.emailNormalized && existing.emailNormalized !== emailNormalized;
+            const keepPhone = matchedEmail && !matchedPhone && !!existing.phoneNormalized && existing.phoneNormalized !== phoneNormalized;
+            const scalars = this.nativeScalars(native);
+            if (keepEmail) delete scalars.email;
+            if (keepPhone) delete scalars.phone;
             await tx.lead.update({
               where: { id: existing.id },
               data: {
-                ...this.nativeScalars(native),
+                ...scalars,
                 customFields: {
                   ...((existing.customFields as Record<string, unknown>) ?? {}),
                   ...customFields,
                 } as Prisma.InputJsonValue,
-                phoneNormalized,
-                emailNormalized,
+                ...(keepPhone ? {} : { phoneNormalized }),
+                ...(keepEmail ? {} : { emailNormalized }),
               },
             });
             leadId = existing.id;
