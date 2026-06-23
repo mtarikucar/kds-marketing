@@ -73,7 +73,7 @@ export async function transferChunks(
         'Content-Length': String(slice.length),
         'Content-Range': `bytes ${r.start}-${r.end}/${bytes.length}`,
       },
-      body: slice,
+      body: slice as unknown as BodyInit,
       timeoutMs: 60_000,
     });
     if (!res.ok && res.status !== 201 && res.status !== 206) {

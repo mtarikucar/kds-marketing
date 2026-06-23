@@ -274,7 +274,6 @@ export class SocialPlannerService implements OnModuleInit {
         target.account,
         post.content,
         post.mediaUrls as string[],
-        (post.options as any) ?? undefined,
       );
 
       if (result.ok) {
