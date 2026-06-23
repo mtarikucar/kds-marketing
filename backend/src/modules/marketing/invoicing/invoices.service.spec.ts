@@ -189,4 +189,35 @@ describe('InvoicesService', () => {
       expect(ok).toBe(false);
     });
   });
+
+  describe('Iyzico (Epic 13, inert)', () => {
+    const { sealSecret } = require('../../../common/crypto/secret-box.helper');
+    const sealedIyzico = () => sealSecret(JSON.stringify({ apiKey: 'ak', secretKey: 'sk' }));
+
+    it('callback: a SUCCESS retrieve with a matching amount settles the invoice', async () => {
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      prisma.invoice.updateMany.mockResolvedValue({ count: 1 });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00' }) });
+      const ok = await svc.iyzicoCallback('tok', 'iyz-token');
+      expect(ok).toBe(true);
+      expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PAID', paidVia: 'iyzico' }) }));
+    });
+
+    it('callback: a SUCCESS retrieve with a MISMATCHED amount does NOT settle', async () => {
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00' }) });
+      const ok = await svc.iyzicoCallback('tok', 'iyz-token');
+      expect(ok).toBe(false);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('callback: a non-success retrieve is rejected', async () => {
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'FAILURE' }) });
+      expect(await svc.iyzicoCallback('tok', 'iyz-token')).toBe(false);
+    });
+  });
 });
