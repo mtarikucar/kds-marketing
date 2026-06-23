@@ -48,25 +48,33 @@ export class SalesCallService {
    * or written here is scoped to the actor's workspace.
    */
   async startCall(workspaceId: string, marketingUserId: string, dto: StartCallDto) {
-    // FIX 8: Fetch rep's dahili FIRST — skip the expensive DB+AES resolve when
-    // the rep has no extension (api-dial is only possible with both).
+    // Fetch the rep's phone + dahili FIRST — skip the expensive DB+AES resolve
+    // when the rep has neither (api-dial is impossible without a leg to ring).
     const rep = await this.prisma.marketingUser.findFirst({
       where: { id: marketingUserId, workspaceId },
-      select: { dahili: true },
+      select: { dahili: true, phone: true },
     });
 
-    // Per-workspace provider selection: an ACTIVE Netsantral config + rep dahili
-    // → api-dial (call originates from the 0850 trunk); otherwise click-to-dial.
+    // Per-workspace provider selection. An ACTIVE Netsantral config lets the call
+    // originate from the 0850 trunk; how the rep's leg is rung depends on what's set:
+    //  - rep has a phone → 'bridge': NetGSM rings the rep's own phone + the customer
+    //    and bridges them (no extension/softphone needed — works without Netsipp).
+    //  - else rep has a dahili → 'dahili': rings the extension first (needs a
+    //    registered device on it).
+    //  - else → click-to-dial fallback (tel: link).
     let providerId = 'netgsm-lite';
     let resolvedConfig: PrepareCallRequest['config'] | undefined;
-    if (rep?.dahili) {
+    if (rep?.phone || rep?.dahili) {
       const netsantral = await this.telephonyConfig.resolveForWorkspace(workspaceId);
       if (netsantral) {
         providerId = 'netgsm-netsantral';
-        resolvedConfig = {
+        const base = {
           username: netsantral.username, password: netsantral.password,
-          trunk: netsantral.trunk, pbxnum: netsantral.pbxnum, internalNum: rep.dahili,
+          trunk: netsantral.trunk, pbxnum: netsantral.pbxnum,
         };
+        resolvedConfig = rep.phone
+          ? { ...base, callMode: 'bridge' as const, callerNum: rep.phone }
+          : { ...base, callMode: 'dahili' as const, internalNum: rep.dahili ?? undefined };
       }
     }
     const provider = this.registry.get(providerId);
@@ -124,6 +132,7 @@ export class SalesCallService {
       prepared = await provider.prepareOutboundCall({
         toPhone: dto.toPhone,
         marketingUserId,
+        crmId: created.id,
         config: resolvedConfig,
       });
     } catch (err: any) {

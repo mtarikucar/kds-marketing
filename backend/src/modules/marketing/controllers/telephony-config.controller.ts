@@ -33,7 +33,7 @@ export class TelephonyConfigController {
   @Patch('users/:id/dahili')
   @RequirePermission('settings.manage')
   setDahili(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: SetDahiliDto) {
-    return this.telephony.setDahili(a.workspaceId, id, dto.dahili ?? null, dto.sipPassword);
+    return this.telephony.setDahili(a.workspaceId, id, dto.dahili ?? null, dto.sipPassword, dto.phone);
   }
 }
 

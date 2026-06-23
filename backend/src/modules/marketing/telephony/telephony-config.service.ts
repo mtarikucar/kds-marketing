@@ -76,15 +76,25 @@ export class TelephonyConfigService {
     return { username: creds.username, password: creds.password, trunk: c.trunk, pbxnum: c.pbxnum ?? undefined };
   }
 
-  /** Set a rep's Netsantral extension (workspace-scoped). */
-  async setDahili(workspaceId: string, marketingUserId: string, dahili: string | null, sipPassword?: string) {
-    const data: { dahili: string | null; dahiliSecret?: string | null } = { dahili: dahili?.trim() || null };
+  /** Set a rep's Netsantral extension + own phone (workspace-scoped). */
+  async setDahili(
+    workspaceId: string,
+    marketingUserId: string,
+    dahili: string | null,
+    sipPassword?: string,
+    phone?: string | null,
+  ) {
+    const data: { dahili: string | null; dahiliSecret?: string | null; phone?: string | null } = {
+      dahili: dahili?.trim() || null,
+    };
     if (sipPassword !== undefined) {
       if (sipPassword && !isSecretBoxConfigured()) {
         throw new ServiceUnavailableException('MARKETING_SECRET_KEY is not configured — cannot store the SIP password');
       }
       data.dahiliSecret = sipPassword ? sealSecret(sipPassword) : null;
     }
+    // Only touch phone when explicitly provided (undefined = leave as-is).
+    if (phone !== undefined) data.phone = phone?.trim() || null;
     const res = await this.prisma.marketingUser.updateMany({ where: { id: marketingUserId, workspaceId }, data });
     if (res.count === 0) throw new NotFoundException('User not found');
     return { ok: true };

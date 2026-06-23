@@ -21,6 +21,8 @@ export interface PrepareCallRequest {
   toPhone: string;
   /** The rep initiating the call. */
   marketingUserId: string;
+  /** Correlation id (the SalesCall id) echoed on CDR/webhooks so the outcome can be matched back. */
+  crmId?: string;
   /**
    * Resolved provider config for api-dial providers (Netsantral). The Lite
    * (click-to-dial) provider ignores it. Supplied by SalesCallService after a
@@ -31,8 +33,19 @@ export interface PrepareCallRequest {
     password: string;
     trunk: string;
     pbxnum?: string;
-    /** The rep's extension; api-dial requires it. */
-    internalNum: string;
+    /**
+     * How the call is placed:
+     * - 'bridge' (default): NetGSM rings the rep's own phone (`callerNum`) and the
+     *   customer as two external legs and bridges them over the trunk — needs NO
+     *   registered extension/softphone (works without Netsipp).
+     * - 'dahili': rings the rep's extension first (`internalNum`) — needs a
+     *   registered device on that extension (webphone/Netsipp).
+     */
+    callMode?: 'bridge' | 'dahili';
+    /** The rep's extension; required for callMode 'dahili'. */
+    internalNum?: string;
+    /** The rep's own phone (cell); required for callMode 'bridge'. */
+    callerNum?: string;
   };
 }
 
