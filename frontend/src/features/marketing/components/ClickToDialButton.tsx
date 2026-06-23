@@ -68,7 +68,7 @@ export default function ClickToDialButton({
       <div className="flex items-center gap-2">
         <PhoneInput
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={setPhone}
           className="flex-1 min-w-0 sm:flex-none sm:w-44"
         />
         <button

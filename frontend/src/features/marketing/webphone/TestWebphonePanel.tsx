@@ -42,7 +42,7 @@ export default function TestWebphonePanel() {
         <span className="text-caption text-muted-foreground">durum: {state.status}{state.error ? ` (${state.error})` : ''}</span>
       </div>
       <div className="flex items-center gap-2">
-        <PhoneInput value={number} onChange={(e) => setNumber(e.target.value)} />
+        <PhoneInput value={number} onChange={setNumber} />
         <Button disabled={state.status !== 'registered' || !number.trim()} onClick={() => wpRef.current?.call(number).catch((e) => toast.error(e?.message ?? 'call failed'))}>Ara</Button>
         <Button variant="outline" disabled={state.status !== 'incall'} onClick={() => wpRef.current?.hangup()}>Kapat</Button>
       </div>
