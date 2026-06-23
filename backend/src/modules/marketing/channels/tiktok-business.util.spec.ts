@@ -39,18 +39,18 @@ describe('tiktok-business.util', () => {
     );
     const res = await tiktokBusinessFetch('/report/integrated/get/', { accessToken: 't' });
     expect(res.ok).toBe(false);
-    const errRes = res as { ok: false; error: TiktokBusinessError };
-    expect(errRes.error).toBeInstanceOf(TiktokBusinessError);
-    expect(errRes.error.code).toBe(40105);
-    expect(isTiktokBusinessAuthError(errRes.error)).toBe(true);
+    if (!res.ok) {
+      expect(res.error).toBeInstanceOf(TiktokBusinessError);
+      expect(res.error.code).toBe(40105);
+      expect(isTiktokBusinessAuthError(res.error)).toBe(true);
+    }
   });
 
   it('classifies a non-auth business error as non-auth', async () => {
     mockedFetch.mockResolvedValue(jsonResponse({ code: 40000, message: 'param error' }, 200));
     const res = await tiktokBusinessFetch('/x/', { accessToken: 't' });
     expect(res.ok).toBe(false);
-    const errRes = res as { ok: false; error: TiktokBusinessError };
-    expect(isTiktokBusinessAuthError(errRes.error)).toBe(false);
+    if (!res.ok) expect(isTiktokBusinessAuthError(res.error)).toBe(false);
   });
 
   it('treats a thrown network error as a (retryable) auth-agnostic failure', async () => {
