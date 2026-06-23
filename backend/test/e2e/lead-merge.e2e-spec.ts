@@ -55,6 +55,9 @@ describe('Lead dedupe + merge (e2e)', () => {
     ] as never);
     ctx.prisma.leadTag.findMany.mockResolvedValue([] as never);
     ctx.prisma.campaignRecipient.findMany.mockResolvedValue([] as never);
+    // The tombstone updateMany's .count is checked against dupIds.length (TOCTOU guard);
+    // without this the deep-mock returns undefined → undefined.count → 500.
+    (ctx.prisma.lead.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
     (ctx.prisma.$transaction as jest.Mock).mockImplementation(async (fn: any) => fn(ctx.prisma));
 
     const res = await request(app.getHttpServer())
@@ -66,7 +69,8 @@ describe('Lead dedupe + merge (e2e)', () => {
     expect(res.body).toEqual({ canonicalId: 'a', merged: 1 });
     expect(ctx.prisma.lead.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: { in: ['b'] }, workspaceId: 'ws-1' },
+        // convertedTenantId:null is the TOCTOU claim — a dup converted mid-merge is not tombstoned.
+        where: { id: { in: ['b'] }, workspaceId: 'ws-1', convertedTenantId: null },
         data: expect.objectContaining({ mergedIntoId: 'a' }),
       }),
     );
