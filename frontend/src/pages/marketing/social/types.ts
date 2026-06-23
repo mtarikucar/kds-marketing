@@ -37,10 +37,26 @@ export interface SocialPostTarget {
   error: string | null;
 }
 
+/** Per-post publish options stored as JSON on the backend. */
+export interface TikTokPostOptions {
+  privacyLevel?: string;
+  disableComment?: boolean;
+  disableDuet?: boolean;
+  disableStitch?: boolean;
+  mediaType?: 'VIDEO' | 'PHOTO';
+  coverIndex?: number;
+}
+
+export interface PostOptions {
+  tiktok?: TikTokPostOptions;
+}
+
 export interface SocialPost {
   id: string;
   content: string;
   mediaUrls: string[];
+  /** Per-post publish options (e.g. TikTok privacy level, interaction caps). */
+  options?: PostOptions | null;
   status: PostStatus;
   scheduledAt: string | null;
   publishedAt: string | null;
