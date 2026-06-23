@@ -35,6 +35,9 @@ describe('SocialOAuthService', () => {
     afterEach(() => {
       delete process.env.META_APP_ID;
       delete process.env.META_APP_SECRET;
+      delete process.env.X_CLIENT_ID;
+      delete process.env.X_CLIENT_SECRET;
+      delete process.env.PUBLIC_BASE_URL;
     });
 
     it('throws when the network is not OAuth-configured', () => {
@@ -53,6 +56,24 @@ describe('SocialOAuthService', () => {
 
     it('rejects an unsupported network', () => {
       expect(() => svc.start(WS, 'MYSPACE')).toThrow(BadRequestException);
+    });
+
+    it('X/Twitter: emits a PKCE challenge and a state carrying the SEALED verifier', () => {
+      process.env.X_CLIENT_ID = 'xid';
+      process.env.X_CLIENT_SECRET = 'xsecret';
+      process.env.PUBLIC_BASE_URL = 'https://api.x';
+      const { authorizeUrl } = svc.start(WS, 'TWITTER');
+      const u = new URL(authorizeUrl);
+      const challenge = u.searchParams.get('code_challenge');
+      const state = u.searchParams.get('state');
+      expect(u.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(challenge).toBeTruthy();
+      // The state body decodes to a payload with a sealed `cv`, NOT a plaintext
+      // verifier or the challenge (PKCE secrecy: an interceptor can't recover it).
+      const body = JSON.parse(Buffer.from(state!.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
+      expect(typeof body.cv).toBe('string');
+      expect(body.cv).toMatch(/^v1:/); // sealSecret envelope, not plaintext
+      expect(body.cv).not.toContain(challenge);
     });
   });
 

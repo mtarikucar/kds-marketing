@@ -31,7 +31,11 @@ function makePrisma() {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       delete: jest.fn().mockResolvedValue({}),
     },
-    couponRedemption: { create: jest.fn().mockResolvedValue({ id: 'r1' }) },
+    couponRedemption: {
+      // No prior redemption for the order by default (idempotency pre-check).
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'r1' }),
+    },
     $transaction: jest.fn((fn: any) => fn(prisma)),
   };
   return prisma;

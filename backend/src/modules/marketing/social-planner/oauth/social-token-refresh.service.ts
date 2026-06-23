@@ -41,7 +41,7 @@ export class SocialTokenRefreshService {
         },
         orderBy: { tokenExpiresAt: 'asc' },
         take: SocialTokenRefreshService.BATCH,
-        select: { id: true, network: true, refreshToken: true },
+        select: { id: true, workspaceId: true, network: true, refreshToken: true },
       });
       for (const acc of due) {
         await this.refreshOne(acc);
@@ -51,6 +51,7 @@ export class SocialTokenRefreshService {
 
   private async refreshOne(acc: {
     id: string;
+    workspaceId: string;
     network: string;
     refreshToken: string | null;
   }): Promise<void> {
@@ -59,8 +60,12 @@ export class SocialTokenRefreshService {
       const provider = providerFor(acc.network);
       if (!provider.refresh) return; // non-refreshable (e.g. Meta page token)
       const result = await provider.refresh(openSecret(acc.refreshToken));
-      await this.prisma.socialAccount.update({
-        where: { id: acc.id },
+      // Compare-and-swap on the refreshToken snapshot: if the user RECONNECTED the
+      // account during our (slow) provider round-trip, the stored sealed token has
+      // changed and this updateMany matches 0 rows — so we never overwrite the
+      // fresh reconnect with the result of refreshing the now-stale token.
+      await this.prisma.socialAccount.updateMany({
+        where: { id: acc.id, workspaceId: acc.workspaceId, refreshToken: acc.refreshToken },
         data: {
           accessToken: sealSecret(result.accessToken),
           refreshToken: result.refreshToken ? sealSecret(result.refreshToken) : acc.refreshToken,
@@ -70,8 +75,11 @@ export class SocialTokenRefreshService {
       });
     } catch (e) {
       this.logger.warn(`social token refresh failed for ${acc.id}: ${(e as Error).message}`);
+      // Same CAS guard: only disable if the row STILL holds the stale token we
+      // tried. A concurrent reconnect (new token) must not be disabled by a
+      // failed refresh of the old one.
       await this.prisma.socialAccount
-        .update({ where: { id: acc.id }, data: { enabled: false, lastError: 'reauth_required' } })
+        .updateMany({ where: { id: acc.id, workspaceId: acc.workspaceId, refreshToken: acc.refreshToken }, data: { enabled: false, lastError: 'reauth_required' } })
         .catch(() => {});
     }
   }

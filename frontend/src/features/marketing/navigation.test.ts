@@ -40,6 +40,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(childPaths(hubs, 'memberships').sort()).toEqual([
       '/memberships/communities',
       '/memberships/courses',
+      '/memberships/leaderboard',
     ]);
   });
 

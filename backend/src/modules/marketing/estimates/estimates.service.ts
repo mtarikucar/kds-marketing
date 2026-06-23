@@ -155,15 +155,23 @@ export class EstimatesService {
       currency: estimate.currency,
       notes: estimate.notes ?? undefined,
     });
-    // Mark converted + accepted (a SENT estimate is implicitly accepted on convert).
-    await this.prisma.estimate.updateMany({
-      where: { id, workspaceId },
+    // Mark converted + accepted via an ATOMIC conditional claim (convertedInvoiceId
+    // still null). The pre-check above is just a fast path — two concurrent converts
+    // (double-click / retry) both pass it, so without this guard each would mint a
+    // separate invoice and the second would silently orphan the first. The loser
+    // here voids the invoice it just minted and reports the conflict.
+    const claimed = await this.prisma.estimate.updateMany({
+      where: { id, workspaceId, convertedInvoiceId: null, status: { in: ['ACCEPTED', 'SENT'] } },
       data: {
         convertedInvoiceId: (invoice as { id: string }).id,
         status: 'ACCEPTED',
         acceptedAt: estimate.acceptedAt ?? new Date(),
       },
     });
+    if (claimed.count === 0) {
+      await this.invoices.voidInvoice(workspaceId, (invoice as { id: string }).id).catch(() => undefined);
+      throw new ConflictException('Estimate already converted to an invoice');
+    }
     return invoice;
   }
 

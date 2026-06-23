@@ -18,6 +18,7 @@ import {
 import { useGoogleCalendarStatus, useGoogleCalendarMutations } from './hooks';
 import type { GoogleCalendarConnection } from './types';
 import { apiError } from './util';
+import { navigateExternal } from '@/lib/navigateExternal';
 
 function formatDate(value: string): string {
   const d = new Date(value);
@@ -43,7 +44,7 @@ export function GoogleCalendarTab() {
         // the login page (losing the ?gcal= result). Staying in this tab keeps
         // the session; Google returns us to /settings/connections?gcal=...
         // authenticated, where the result toast fires and status re-fetches.
-        window.location.assign(url);
+        navigateExternal(url);
       },
       onError: (e) =>
         toast.error(apiError(e, t('connections.gcal.connectError', { defaultValue: 'Could not start Google connect' }))),

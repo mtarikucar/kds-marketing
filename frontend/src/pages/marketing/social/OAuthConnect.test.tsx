@@ -34,10 +34,10 @@ describe('OAuthConnectButtons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     postMock.mockResolvedValue({ data: { authorizeUrl: 'https://provider/auth' } });
-    // jsdom: make location.href assignable without navigating
+    // jsdom: stub location.assign (navigateExternal uses it) without navigating.
     Object.defineProperty(window, 'location', {
       configurable: true,
-      value: { href: '' },
+      value: { href: '', assign: vi.fn() },
     });
   });
 
@@ -55,7 +55,7 @@ describe('OAuthConnectButtons', () => {
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith('/social/oauth/facebook/start'),
     );
-    await waitFor(() => expect(window.location.href).toBe('https://provider/auth'));
+    await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith('https://provider/auth'));
   });
 });
 

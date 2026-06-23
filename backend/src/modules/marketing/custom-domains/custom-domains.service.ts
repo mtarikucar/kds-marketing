@@ -88,7 +88,10 @@ export class CustomDomainsService {
     const data = ok
       ? { status: 'VERIFIED', txtVerifiedAt: new Date(), lastError: null, lastCheckedAt: new Date() }
       : { lastError: 'Verification TXT record not found yet — DNS can take a while to propagate.', lastCheckedAt: new Date() };
-    await this.prisma.customDomain.updateMany({ where: { id, workspaceId }, data });
+    // Guard on status:'PENDING' so a domain promoted to ACTIVE/ISSUED by a
+    // concurrent tlsAsk (between the read above and this write) is NOT demoted
+    // back to VERIFIED, losing its issued-cert state.
+    await this.prisma.customDomain.updateMany({ where: { id, workspaceId, status: 'PENDING' }, data });
     this.hostCache.delete(dom.hostname);
     return this.present({ ...dom, ...data });
   }
@@ -167,13 +170,21 @@ export class CustomDomainsService {
         for (const dom of pending) {
           try {
             const ok = await this.checkTxt(dom.hostname, dom.verifyToken);
-            await this.prisma.customDomain.updateMany({
-              where: { id: dom.id, workspaceId: dom.workspaceId },
-              data: ok
-                ? { status: 'VERIFIED', txtVerifiedAt: new Date(), lastError: null, lastCheckedAt: new Date() }
-                : { lastCheckedAt: new Date() },
-            });
-            if (ok) this.hostCache.delete(dom.hostname);
+            if (ok) {
+              // Promote ONLY while still PENDING — a concurrent tlsAsk may have
+              // already moved it to ACTIVE/ISSUED during checkTxt; don't demote it.
+              await this.prisma.customDomain.updateMany({
+                where: { id: dom.id, workspaceId: dom.workspaceId, status: 'PENDING' },
+                data: { status: 'VERIFIED', txtVerifiedAt: new Date(), lastError: null, lastCheckedAt: new Date() },
+              });
+              this.hostCache.delete(dom.hostname);
+            } else {
+              // Watermark stamp only — safe on any status (never demotes).
+              await this.prisma.customDomain.updateMany({
+                where: { id: dom.id, workspaceId: dom.workspaceId },
+                data: { lastCheckedAt: new Date() },
+              });
+            }
           } catch (e) {
             this.logger.warn(`custom-domain verify failed for ${dom.hostname}: ${(e as Error)?.message}`);
             await this.prisma.customDomain

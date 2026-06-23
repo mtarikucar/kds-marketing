@@ -11,15 +11,20 @@ import {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { SurveysService } from './surveys.service';
 import { CreateSurveyDto, UpdateSurveyDto } from './funnels.dto';
 
+// Authoring surface only (create/update/delete) — MANAGER+, matching the
+// campaigns controller. MarketingRolesGuard is a no-op without this decorator,
+// so its presence here closes a gap where any REP could mutate survey defs.
 @MarketingRoute()
 @Controller('marketing/surveys')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
+@MarketingRoles('MANAGER')
 export class SurveysController {
   constructor(private readonly svc: SurveysService) {}
 

@@ -9,8 +9,9 @@ import {
   Network,
   isOAuthNetwork,
   isOAuthConfigured,
+  usesPkce,
 } from './social-oauth.config';
-import { signState, verifyState } from './social-oauth-state.util';
+import { signState, verifyState, generatePkce } from './social-oauth-state.util';
 import { buildAuthorizeUrl, providerFor, ConnectableAsset } from './social-oauth.providers';
 import { ChannelsService } from '../../channels/channels.service';
 import { AdAccountService } from '../../ads/ad-account.service';
@@ -57,6 +58,14 @@ export class SocialOAuthService {
     if (!isOAuthConfigured(n)) {
       throw new BadRequestException(`${n} is not configured — the platform app credentials are missing`);
     }
+    // PKCE networks (X): mint a verifier/challenge, SEAL the verifier into the
+    // signed state (so the callback can recover it without a server session),
+    // and put only the S256 challenge on the authorize URL.
+    if (usesPkce(n)) {
+      const { verifier, challenge } = generatePkce();
+      const state = signState({ workspaceId, network: n, cv: sealSecret(verifier) });
+      return { authorizeUrl: buildAuthorizeUrl(n, state, challenge) };
+    }
     const state = signState({ workspaceId, network: n });
     return { authorizeUrl: buildAuthorizeUrl(n, state) };
   }
@@ -71,8 +80,18 @@ export class SocialOAuthService {
     if (!payload || payload.network !== n) {
       throw new BadRequestException('Invalid or expired OAuth state');
     }
+    // Recover the sealed PKCE verifier from the (signed, tamper-proof) state for
+    // PKCE networks; a tampered/missing verifier simply fails the exchange.
+    let codeVerifier: string | undefined;
+    if (usesPkce(n) && payload.cv) {
+      try {
+        codeVerifier = openSecret(payload.cv);
+      } catch {
+        throw new BadRequestException('Invalid or expired OAuth state');
+      }
+    }
     const provider = providerFor(n);
-    const exchange = await provider.exchangeCode(n, code);
+    const exchange = await provider.exchangeCode(n, code, codeVerifier);
     const assets = await provider.listAssets(exchange.accessToken);
 
     const sealed = sealSecret(

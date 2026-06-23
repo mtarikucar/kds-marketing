@@ -61,23 +61,23 @@ describe('PermissionsGuard — live granular permission enforcement', () => {
     const { guard, prisma } = guardWith('settings.manage');
     // A custom role whose permission set omits settings.manage — even though
     // the user's legacy role is MANAGER, the custom role OVERRIDES it.
-    prisma.customRole.findUnique.mockResolvedValue({
+    prisma.customRole.findFirst.mockResolvedValue({
       id: 'role-1',
       permissions: ['leads.read', 'reports.read'],
     } as any);
     await expect(
-      guard.canActivate(ctxFor({ role: 'MANAGER', customRoleId: 'role-1' })),
+      guard.canActivate(ctxFor({ workspaceId: 'ws-1', role: 'MANAGER', customRoleId: 'role-1' })),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('allows a custom role that explicitly grants the required permission', async () => {
     const { guard, prisma } = guardWith('settings.manage');
-    prisma.customRole.findUnique.mockResolvedValue({
+    prisma.customRole.findFirst.mockResolvedValue({
       id: 'role-2',
       permissions: ['settings.manage', 'leads.read'],
     } as any);
     await expect(
-      guard.canActivate(ctxFor({ role: 'REP', customRoleId: 'role-2' })),
+      guard.canActivate(ctxFor({ workspaceId: 'ws-1', role: 'REP', customRoleId: 'role-2' })),
     ).resolves.toBe(true);
   });
 

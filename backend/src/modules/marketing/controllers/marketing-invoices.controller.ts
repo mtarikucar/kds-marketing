@@ -14,7 +14,7 @@ import { InvoiceTextService } from '../invoicing/invoice-text.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from '../dto/invoice.dto';
 
 class PspConfigDto {
-  @IsIn(['STRIPE', 'MANUAL']) provider: string;
+  @IsIn(['STRIPE', 'MANUAL', 'PAYTR', 'IYZICO']) provider: string;
   @IsOptional() @IsObject() secrets?: Record<string, string>;
   @IsOptional() @IsObject() configPublic?: Record<string, unknown>;
 }

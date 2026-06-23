@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { redactUrl } from '../util/redact-url';
 
 /**
  * Global error envelope (Reliability / Observability / API consistency).
@@ -58,15 +59,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
       };
     }
 
+    // Redact secret query params (e.g. the SSE `?access_token=`) before the URL
+    // is reflected into the response body OR written to the error log.
+    const safePath = redactUrl(req.originalUrl ?? req.url);
     body.requestId = req.id ?? null;
-    body.path = req.originalUrl ?? req.url;
+    body.path = safePath;
     body.timestamp = new Date().toISOString();
 
     // 5xx is on us — log the cause with the correlation id. 4xx is client input
     // and already visible in access logs, so we don't spam error logs with it.
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
-        `[${req.id ?? '-'}] ${req.method} ${req.originalUrl ?? req.url} -> ${status}`,
+        `[${req.id ?? '-'}] ${req.method} ${safePath} -> ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     }

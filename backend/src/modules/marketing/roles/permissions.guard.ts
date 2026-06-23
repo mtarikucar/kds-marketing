@@ -30,7 +30,7 @@ export class PermissionsGuard implements CanActivate {
     const user = context.switchToHttp().getRequest().marketingUser;
     if (!user) throw new ForbiddenException('Not authenticated');
     const ok = await this.roles.hasPermission(
-      { role: user.role, customRoleId: user.customRoleId },
+      { workspaceId: user.workspaceId, role: user.role, customRoleId: user.customRoleId },
       required,
     );
     if (!ok) throw new ForbiddenException(`Missing permission: ${required}`);

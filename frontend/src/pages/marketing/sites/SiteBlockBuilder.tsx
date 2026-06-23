@@ -25,6 +25,7 @@ const PALETTE: { type: string; label: string; icon: typeof Type }[] = [
   { type: 'cta', label: 'Call to action', icon: MousePointerClick },
   { type: 'text', label: 'Text', icon: Type },
   { type: 'form', label: 'Form', icon: FileText },
+  { type: 'popup', label: 'Popup', icon: MousePointerClick },
 ];
 
 const NEW_BLOCK: Record<string, AnyBlock> = {
@@ -35,6 +36,7 @@ const NEW_BLOCK: Record<string, AnyBlock> = {
   cta: { type: 'cta', heading: 'Ready to start?', buttonText: 'Get started', buttonUrl: '/' },
   text: { type: 'text', text: 'Some paragraph text.' },
   form: { type: 'form', formId: '', heading: '', submitText: 'Submit' },
+  popup: { type: 'popup', heading: 'Wait — before you go!', text: 'Get 10% off your first order.', ctaText: 'Claim offer', ctaUrl: '/' },
 };
 
 function clone<T>(v: T): T {
@@ -130,6 +132,18 @@ function BlockEditor({ block, forms, onPatch }: { block: AnyBlock; forms: FormOp
       );
     case 'text':
       return <L label={t('sites.text', 'Text')}><Textarea className="min-h-20" value={block.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} /></L>;
+    case 'popup':
+      return (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">{t('sites.popupHint', 'Shows on page load; visitors close it with the × (no JavaScript).')}</p>
+          <L label={t('sites.heading', 'Heading')}><Input value={block.heading ?? ''} onChange={(e) => onPatch({ heading: e.target.value })} /></L>
+          <L label={t('sites.text', 'Text')}><Textarea className="min-h-16" value={block.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} /></L>
+          <div className="grid grid-cols-2 gap-2">
+            <L label={t('sites.ctaText', 'Button text')}><Input value={block.ctaText ?? ''} onChange={(e) => onPatch({ ctaText: e.target.value })} /></L>
+            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.ctaUrl ?? ''} onChange={(e) => onPatch({ ctaUrl: e.target.value })} /></L>
+          </div>
+        </div>
+      );
     case 'features':
       return (
         <Repeater

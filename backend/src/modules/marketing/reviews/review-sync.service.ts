@@ -103,35 +103,44 @@ export class ReviewSyncService {
       });
       return 0;
     }
-    let row: { id: string };
+    const lowRating = r.rating != null && r.rating < LOW_RATING_THRESHOLD;
     try {
-      row = await this.prisma.review.create({
-        data: {
-          workspaceId,
-          sourceId,
-          source: type,
-          externalReviewId: r.externalReviewId,
-          rating: r.rating,
-          text: r.text,
-          authorName: r.authorName,
-          authoredAt: r.authoredAt,
-          status: 'SYNCED',
-          token: `syn_${randomBytes(16).toString('hex')}`,
-        },
-        select: { id: true },
+      // Create the review AND (for a low rating) enqueue the ReviewReceived event
+      // in the SAME transaction, so the event is durable iff the row is. Emitting
+      // it best-effort AFTER the commit (the old shape) silently dropped the
+      // workflow trigger on a transient outbox blip — and the next sweep finds the
+      // existing row and returns before re-emitting, so it was lost forever.
+      await this.prisma.$transaction(async (tx) => {
+        const row = await tx.review.create({
+          data: {
+            workspaceId,
+            sourceId,
+            source: type,
+            externalReviewId: r.externalReviewId,
+            rating: r.rating,
+            text: r.text,
+            authorName: r.authorName,
+            authoredAt: r.authoredAt,
+            status: 'SYNCED',
+            token: `syn_${randomBytes(16).toString('hex')}`,
+          },
+          select: { id: true },
+        });
+        if (lowRating) {
+          await this.outbox.append(
+            {
+              type: MarketingEventTypes.ReviewReceived,
+              idempotencyKey: `review-received:${row.id}`,
+              payload: { workspaceId, reviewId: row.id, leadId: null, rating: r.rating, public: false, occurredAt: new Date().toISOString() },
+            },
+            tx,
+          );
+        }
       });
     } catch (e: any) {
       // Lost a race on the (sourceId, externalReviewId) unique — already synced.
       if (e?.code === 'P2002') return 0;
       throw e;
-    }
-    // A low-rating new review raises the workflow trigger (deduped by the key).
-    if (r.rating != null && r.rating < LOW_RATING_THRESHOLD) {
-      await this.outbox.append({
-        type: MarketingEventTypes.ReviewReceived,
-        idempotencyKey: `review-received:${row.id}`,
-        payload: { workspaceId, reviewId: row.id, leadId: null, rating: r.rating, public: false, occurredAt: new Date().toISOString() },
-      }).catch(() => undefined);
     }
     return 1;
   }

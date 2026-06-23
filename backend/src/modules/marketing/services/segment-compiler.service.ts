@@ -45,6 +45,10 @@ const CF_CMP = ['eq', 'ne', 'in', 'nin', 'gt', 'gte', 'lt', 'lte', 'contains', '
 
 const MAX_DEPTH = 6;
 const MAX_NODES = 100;
+// Per-leaf value-array cap. MAX_NODES bounds the TREE, but a single `in`/`nin`
+// leaf expands into one OR clause per array element — so without this cap one
+// node ({cf:x in [100k items]}) compiles to a 100k-clause OR that stalls the DB.
+const MAX_VALUE_ARRAY = 500;
 
 function isGroup(node: SegmentNode): node is SegmentGroup {
   return !!node && typeof node === 'object' && 'op' in node;
@@ -204,9 +208,19 @@ export class SegmentCompilerService {
     if (needsValue && leaf.value === undefined) {
       throw new BadRequestException(`Leaf "${field}" needs a value at ${path}`);
     }
+    // Bound the value-array size (in/nin/between) so one leaf can't expand into a
+    // pathological OR. (MAX_NODES counts nodes, not array elements.)
+    if (Array.isArray(leaf.value) && leaf.value.length > MAX_VALUE_ARRAY) {
+      throw new BadRequestException(`Too many values (${leaf.value.length} > ${MAX_VALUE_ARRAY}) at ${path}`);
+    }
     if (field === 'tag') {
       if (!TAG_CMP.includes(cmp)) {
         throw new BadRequestException(`tag supports ${TAG_CMP.join('/')} at ${path}`);
+      }
+      // The tag value is cast to a string into `{ tags: { some: { tagId } } }` —
+      // require an actual non-empty string so a non-string can't reach Prisma.
+      if (typeof leaf.value !== 'string' || !leaf.value) {
+        throw new BadRequestException(`tag "${field}" needs a tagId string at ${path}`);
       }
       return;
     }
@@ -224,6 +238,23 @@ export class SegmentCompilerService {
     if (!type) throw new BadRequestException(`Unknown segment field "${field}" at ${path}`);
     if (!CMP_BY_TYPE[type].includes(cmp)) {
       throw new BadRequestException(`Comparator "${cmp}" not allowed for ${type} field "${field}" at ${path}`);
+    }
+    // Validate the value AGAINST the field type at save time, so a saved segment
+    // can't compile to an Invalid Date / NaN Prisma filter that 500s on every
+    // later evaluation (count/preview/audience). Mirrors custom-fields.coerce.
+    if (needsValue) {
+      const bad = (v: unknown) =>
+        (type === 'number' && Number.isNaN(Number(v))) ||
+        (type === 'date' && Number.isNaN(new Date(v as string).getTime()));
+      if (cmp === 'between') {
+        if (!Array.isArray(leaf.value) || leaf.value.length !== 2 || leaf.value.some(bad)) {
+          throw new BadRequestException(`"${field}" between needs two valid ${type} values at ${path}`);
+        }
+      } else if (Array.isArray(leaf.value)) {
+        if (leaf.value.some(bad)) throw new BadRequestException(`"${field}" has an invalid ${type} value at ${path}`);
+      } else if (bad(leaf.value)) {
+        throw new BadRequestException(`"${field}" needs a valid ${type} value at ${path}`);
+      }
     }
   }
 }

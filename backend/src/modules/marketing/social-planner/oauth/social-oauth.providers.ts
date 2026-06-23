@@ -28,14 +28,22 @@ export interface ExchangeResult {
 }
 
 export interface SocialOAuthProvider {
-  exchangeCode(network: Network, code: string): Promise<ExchangeResult>;
+  /** Exchange the auth code for tokens. `codeVerifier` is supplied for PKCE networks. */
+  exchangeCode(network: Network, code: string, codeVerifier?: string): Promise<ExchangeResult>;
   listAssets(token: string): Promise<ConnectableAsset[]>;
   /** Refresh an access token; throws if the provider/refresh fails. */
   refresh?(refreshToken: string): Promise<ExchangeResult>;
 }
 
-/** Config-driven authorize URL — handles per-network scope delimiter + client key param. */
-export function buildAuthorizeUrl(network: Network, state: string): string {
+/**
+ * Config-driven authorize URL — handles per-network scope delimiter, client key
+ * param, extra params (Google offline access), and the PKCE challenge (X).
+ */
+export function buildAuthorizeUrl(
+  network: Network,
+  state: string,
+  codeChallenge?: string,
+): string {
   const def = NETWORK_OAUTH[network];
   const p = new URLSearchParams({
     redirect_uri: redirectUri(network),
@@ -61,7 +69,20 @@ export function buildAuthorizeUrl(network: Network, state: string): string {
   } else {
     p.set('client_id', clientId(network) ?? '');
   }
+  for (const [k, v] of Object.entries(def.extraAuthParams ?? {})) {
+    p.set(k, v);
+  }
+  if (def.pkce && codeChallenge) {
+    p.set('code_challenge', codeChallenge);
+    p.set('code_challenge_method', 'S256');
+  }
   return `${def.authorizeUrl}?${p.toString()}`;
+}
+
+/** Basic-auth header for a confidential-client token exchange (X, Pinterest). */
+function basicAuth(network: Network): string {
+  const raw = `${clientId(network) ?? ''}:${clientSecret(network) ?? ''}`;
+  return `Basic ${Buffer.from(raw).toString('base64')}`;
 }
 
 /** Meta (Facebook + Instagram) share one app/token; IG accounts hang off Pages.
@@ -390,6 +411,223 @@ export const tiktokProvider: SocialOAuthProvider = {
   },
 };
 
+// ──────────────────────────────────────────────────────────────── X / Twitter
+
+const X_TOKEN_URL = 'https://api.twitter.com/2/oauth2/token';
+
+async function xTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  // Confidential client ⇒ HTTP Basic auth (client_id:client_secret).
+  const res = await safeFetch(X_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      Authorization: basicAuth('TWITTER'),
+    },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.error_description ?? json?.error ?? 'X token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/** X/Twitter — OAuth2 + PKCE; connects the authenticated user's own account. */
+export const twitterProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string, codeVerifier?: string): Promise<ExchangeResult> {
+    return xTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('TWITTER'),
+      client_id: clientId('TWITTER') ?? '',
+      code_verifier: codeVerifier ?? '',
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return xTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId('TWITTER') ?? '',
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const res = await safeFetch('https://api.twitter.com/2/users/me', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 15000,
+    });
+    const json = (await res.json()) as any;
+    const user = json?.data;
+    if (!res.ok || !user?.id) {
+      throw new Error(json?.detail ?? json?.title ?? 'failed to fetch X account');
+    }
+    return [
+      {
+        externalId: user.id,
+        displayName: user.username ? `@${user.username} (X)` : 'My X account',
+        accountType: 'TWITTER',
+        token,
+      },
+    ];
+  },
+};
+
+// ──────────────────────────────────────────────────────────────── Pinterest
+
+const PINTEREST_TOKEN_URL = 'https://api.pinterest.com/v5/oauth/token';
+
+async function pinterestTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  const res = await safeFetch(PINTEREST_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      Authorization: basicAuth('PINTEREST'),
+    },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.message ?? json?.error_description ?? json?.error ?? 'pinterest token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/** Pinterest — each board the user owns is a publishable asset (board_id). */
+export const pinterestProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    return pinterestTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('PINTEREST'),
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return pinterestTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const res = await safeFetch('https://api.pinterest.com/v5/boards?page_size=100', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 15000,
+    });
+    const json = (await res.json()) as any;
+    if (!res.ok) {
+      throw new Error(json?.message ?? 'failed to list Pinterest boards');
+    }
+    return (json?.items ?? [])
+      .filter((b: any) => b?.id)
+      .map((b: any) => ({
+        externalId: String(b.id),
+        displayName: b.name ? `${b.name} (Pinterest board)` : `Board ${b.id}`,
+        accountType: 'PINTEREST_BOARD',
+        token,
+      }));
+  },
+};
+
+// ──────────────────────────────────────────────────── Google Business Profile
+
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GBP_ACCOUNTS_URL = 'https://mybusinessaccountmanagement.googleapis.com/v1/accounts';
+
+async function googleTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  const res = await safeFetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.error_description ?? json?.error ?? 'google token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/**
+ * Google Business Profile — locations across the user's GBP accounts. externalId
+ * is the full `accounts/{a}/locations/{l}` resource (what the Local Post publish
+ * adapter posts to). Inert until Google allowlists the Business Profile APIs.
+ */
+export const gmbProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    return googleTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('GMB'),
+      client_id: clientId('GMB') ?? '',
+      client_secret: clientSecret('GMB') ?? '',
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return googleTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId('GMB') ?? '',
+      client_secret: clientSecret('GMB') ?? '',
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const acctRes = await safeFetch(GBP_ACCOUNTS_URL, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 15000,
+    });
+    const acctJson = (await acctRes.json()) as any;
+    if (!acctRes.ok) {
+      throw new Error(acctJson?.error?.message ?? 'failed to list Google Business accounts');
+    }
+    const out: ConnectableAsset[] = [];
+    for (const acct of acctJson?.accounts ?? []) {
+      const acctName: string = acct?.name ?? ''; // "accounts/{a}"
+      if (!acctName) continue;
+      try {
+        const locRes = await safeFetch(
+          `https://mybusinessbusinessinformation.googleapis.com/v1/${acctName}/locations?readMask=name,title&pageSize=100`,
+          { method: 'GET', headers: { Authorization: `Bearer ${token}` }, timeoutMs: 15000 },
+        );
+        const locJson = (await locRes.json()) as any;
+        for (const loc of locJson?.locations ?? []) {
+          const locName: string = loc?.name ?? ''; // "locations/{l}"
+          if (!locName) continue;
+          out.push({
+            externalId: `${acctName}/${locName}`,
+            displayName: loc?.title ? `${loc.title} (Google Business)` : locName,
+            accountType: 'GMB_LOCATION',
+            token,
+          });
+        }
+      } catch {
+        /* a single account's locations being unavailable shouldn't fail the rest */
+      }
+    }
+    return out;
+  },
+};
+
 /** Dispatch to the right provider. */
 export function providerFor(network: Network): SocialOAuthProvider {
   switch (network) {
@@ -400,6 +638,12 @@ export function providerFor(network: Network): SocialOAuthProvider {
       return linkedinProvider;
     case 'TIKTOK':
       return tiktokProvider;
+    case 'TWITTER':
+      return twitterProvider;
+    case 'PINTEREST':
+      return pinterestProvider;
+    case 'GMB':
+      return gmbProvider;
     default:
       throw new Error(`OAuth provider not implemented for ${network}`);
   }

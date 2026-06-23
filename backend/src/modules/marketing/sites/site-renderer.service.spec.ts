@@ -28,6 +28,19 @@ describe('SiteRendererService', () => {
     expect(html).toContain('href="#"');
   });
 
+  it('renders a popup block as a JS-free checkbox-hack modal (escaped, no inline JS)', () => {
+    const html = svc.render(
+      { title: 'T', blocks: [{ type: 'popup', heading: 'Wait! <b>10% off</b>', text: 'Join now', ctaText: 'Claim', ctaUrl: 'https://x.example' }] },
+      new Map(),
+      'https://m.example',
+    );
+    expect(html).toContain('class="pp-cb" checked'); // shows on load
+    expect(html).toContain('class="pp-ov"');
+    expect(html).not.toContain('<script'); // JS-free
+    expect(html).toContain('&lt;b&gt;10% off'); // heading escaped
+    expect(html).toContain('href="https://x.example"');
+  });
+
   it('renders a form block as a POST form to the public endpoint', () => {
     const forms = new Map([['f1', { id: 'f1', name: 'Contact', fields: [{ name: 'email', label: 'Email', type: 'email', required: true }] }]]);
     const html = svc.render(

@@ -160,6 +160,9 @@ import { MarketingReviewsController } from './controllers/marketing-reviews.cont
 import { ReviewGateController } from './controllers/review-gate.controller';
 import { ReviewsService } from './reviews/reviews.service';
 import { ReviewSyncService } from './reviews/review-sync.service';
+// Review-source OAuth connect (A9) — inert until provider creds + secret-box.
+import { ReviewOAuthService } from './reviews/review-oauth.service';
+import { PublicReviewOAuthController } from './controllers/public-review-oauth.controller';
 // Epic 13 — prospecting audit (inert until PAGESPEED_API_KEY).
 import { AuditService } from './prospecting/audit.service';
 import { ProspectingController } from './controllers/prospecting.controller';
@@ -271,6 +274,7 @@ import {
   OutlookCalendarPublicController,
 } from './integrations/outlook-calendar.controller';
 import { OutlookCalendarService } from './integrations/outlook-calendar.service';
+import { OutlookCalendarSyncService } from './integrations/outlook-calendar-sync.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -448,6 +452,7 @@ import { WalletService } from './wallet/wallet.service';
     PublicCustomDomainController,
     EspFeedbackController,
     PublicReferralController,
+    PublicReviewOAuthController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
@@ -635,6 +640,7 @@ import { WalletService } from './wallet/wallet.service';
     WalletService,
     ReviewsService,
     ReviewSyncService,
+    ReviewOAuthService,
     AuditService,
     SendingDomainsService,
     CustomDomainsService,
@@ -674,6 +680,7 @@ import { WalletService } from './wallet/wallet.service';
     GoogleCalendarService,
     OutlookCalendarService,
     GoogleCalendarSyncService,
+    OutlookCalendarSyncService,
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,

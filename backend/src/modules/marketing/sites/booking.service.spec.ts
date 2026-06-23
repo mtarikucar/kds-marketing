@@ -37,13 +37,17 @@ describe('BookingService', () => {
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };
-    // Google Calendar sync is inert in this suite (push/cancel are best-effort
-    // no-ops here); the dedicated google-calendar specs exercise it for real.
+    // Google / Outlook calendar sync are inert in this suite (push/cancel are
+    // best-effort no-ops here); the dedicated calendar specs exercise them for real.
     const googleSync = {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
-    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any);
+    const outlookSync = {
+      pushBooking: jest.fn().mockResolvedValue(null),
+      cancelBooking: jest.fn().mockResolvedValue(false),
+    };
+    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any);
   });
 
   it('slices the availability window into slots', async () => {

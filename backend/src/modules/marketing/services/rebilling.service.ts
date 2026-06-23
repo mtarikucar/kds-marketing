@@ -58,6 +58,11 @@ function money(value: Prisma.Decimal): Prisma.Decimal {
   return value.toDecimalPlaces(TWO_DP, Prisma.Decimal.ROUND_HALF_UP);
 }
 
+/** Snap a Date to the start of its UTC day (00:00:00.000Z) — canonical period key. */
+function startOfUtcDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
 /** All UTC month keys (YYYY-MM) the half-open window [start, end) touches. */
 export function monthKeysInRange(start: Date, end: Date): string[] {
   if (!(start instanceof Date) || !(end instanceof Date) || isNaN(+start) || isNaN(+end)) {
@@ -208,10 +213,16 @@ export class RebillingService {
   async computeCharge(
     agencyWorkspaceId: string,
     locationWorkspaceId: string,
-    periodStart: Date,
-    periodEnd: Date,
+    periodStartRaw: Date,
+    periodEndRaw: Date,
   ) {
     await this.agency.assertAgencyOwns(agencyWorkspaceId, locationWorkspaceId);
+
+    // Snap the period bounds to UTC-day boundaries so a re-run of the SAME logical
+    // period with a slightly different time-of-day (UI vs scheduled run) dedups to
+    // the same (periodStart, periodEnd) key instead of minting a second charge.
+    const periodStart = startOfUtcDay(periodStartRaw);
+    const periodEnd = startOfUtcDay(periodEndRaw);
 
     const plan = await this.prisma.rebillingPlan.findUnique({
       where: {
@@ -256,19 +267,31 @@ export class RebillingService {
     });
     if (existing) return existing;
 
-    return this.prisma.rebillCharge.create({
-      data: {
-        workspaceId: agencyWorkspaceId,
-        locationWorkspaceId,
-        periodStart,
-        periodEnd,
-        baseAmount,
-        usageAmount,
-        totalAmount,
-        usageUnits,
-        status: 'DRAFT',
-      },
-    });
+    try {
+      return await this.prisma.rebillCharge.create({
+        data: {
+          workspaceId: agencyWorkspaceId,
+          locationWorkspaceId,
+          periodStart,
+          periodEnd,
+          baseAmount,
+          usageAmount,
+          totalAmount,
+          usageUnits,
+          status: 'DRAFT',
+        },
+      });
+    } catch (e) {
+      // Lost the true-concurrent race on the per-period partial-unique index —
+      // a sibling compute already inserted the charge. Return it (no duplicate).
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const row = await this.prisma.rebillCharge.findFirst({
+          where: { workspaceId: agencyWorkspaceId, locationWorkspaceId, periodStart, periodEnd, status: { not: 'FAILED' } },
+        });
+        if (row) return row;
+      }
+      throw e;
+    }
   }
 
   /** Every settlement line this agency owns (optionally filtered to one location). */

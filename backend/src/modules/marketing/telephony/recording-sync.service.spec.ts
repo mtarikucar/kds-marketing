@@ -71,6 +71,49 @@ describe('RecordingSyncService (Epic 13, inert call-recording)', () => {
     const c2 = prisma.salesCall.update.mock.calls.find((c: any) => c[0].where.id === 'call-2')![0];
     expect(c2.data.recordingUrl).toBe('https://rec.example/r/x2.mp3');
   });
+
+  describe('thicker behaviors', () => {
+    beforeEach(() => { process.env.NETGSM_RECORDING_BASE_URL = 'https://rec.example/api'; });
+
+    it('resolves telephony creds ONCE per distinct workspace and reuses them', async () => {
+      const { prisma, client, telephonyConfig, svc } = makeSvc();
+      // 3 calls across 2 workspaces (ws-1 twice, ws-2 once).
+      prisma.salesCall.findMany.mockResolvedValue([
+        { id: 'c1', workspaceId: 'ws-1', externalCallId: 'x1' },
+        { id: 'c2', workspaceId: 'ws-1', externalCallId: 'x2' },
+        { id: 'c3', workspaceId: 'ws-2', externalCallId: 'x3' },
+      ]);
+      telephonyConfig.resolveForWorkspace.mockResolvedValue({ username: 'u', password: 'p', trunk: '0850' });
+      client.fetchRecordingUrl.mockResolvedValue(null);
+      await svc.pullDueRecordings();
+      // creds memoised per workspace: 2 distinct workspaces → 2 resolves (not 3).
+      expect(telephonyConfig.resolveForWorkspace).toHaveBeenCalledTimes(2);
+      expect(telephonyConfig.resolveForWorkspace).toHaveBeenCalledWith('ws-1');
+      expect(telephonyConfig.resolveForWorkspace).toHaveBeenCalledWith('ws-2');
+      // every call still stamped its watermark (so dead rows leave the front).
+      expect(prisma.salesCall.update).toHaveBeenCalledTimes(3);
+    });
+
+    it('a workspace with no telephony config still attempts (undefined creds) and stamps the watermark', async () => {
+      const { prisma, client, telephonyConfig, svc } = makeSvc();
+      prisma.salesCall.findMany.mockResolvedValue([{ id: 'c1', workspaceId: 'ws-noconf', externalCallId: 'x1' }]);
+      telephonyConfig.resolveForWorkspace.mockResolvedValue(null); // no per-ws creds
+      client.fetchRecordingUrl.mockResolvedValue(null);
+      await svc.pullDueRecordings();
+      // called with the external id + undefined creds (falls back to global endpoint creds).
+      expect(client.fetchRecordingUrl).toHaveBeenCalledWith('x1', undefined);
+      expect(prisma.salesCall.update.mock.calls[0][0].data.recordingCheckedAt).toBeInstanceOf(Date);
+    });
+
+    it('the DUE query bounds the window (endedAt gte) and batches (take=200)', async () => {
+      const { prisma, svc } = makeSvc();
+      await svc.pullDueRecordings();
+      const arg = prisma.salesCall.findMany.mock.calls[0][0];
+      expect(arg.where.endedAt).toMatchObject({ not: null });
+      expect(arg.where.endedAt.gte).toBeInstanceOf(Date);
+      expect(arg.take).toBe(200);
+    });
+  });
 });
 
 describe('NetsantralClient.fetchRecordingUrl', () => {

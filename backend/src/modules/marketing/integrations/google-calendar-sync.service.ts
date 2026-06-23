@@ -8,6 +8,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
+import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import {
@@ -412,31 +413,39 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
    * have a channel (a connection whose initial watch failed — e.g. unverified
    * domain — is re-attempted on the next connect, not spammed here).
    *
-   * Single-replica assumption (mirrors the other marketing @Cron jobs); a
-   * multi-replica deploy would fire this on each instance.
+   * Advisory-locked so a multi-replica deploy renews each due channel ONCE — two
+   * replicas firing on the same tick would each mint a fresh watch channel and
+   * strand the other's (startWatch is not idempotent; every call creates a new
+   * channelId), leaking a live channel that pushes to a channelId no row matches.
    */
   @Cron(CronExpression.EVERY_6_HOURS, { name: 'gcal-watch-renew' })
   async renewWatches(): Promise<{ renewed: number }> {
     if (!this.google.isConfigured()) return { renewed: 0 };
-    const cutoff = new Date(Date.now() + WATCH_RENEW_BEFORE_MS);
-    const due = (await this.prisma.googleCalendarConnection.findMany({
-      where: {
-        enabled: true,
-        channelId: { not: null },
-        OR: [
-          { channelExpiration: null },
-          { channelExpiration: { lte: cutoff } },
-        ],
-      },
-    })) as GoogleCalendarConnectionRow[];
-
     let renewed = 0;
-    for (const conn of due) {
-      if (await this.startWatch(conn)) renewed++;
-    }
-    if (renewed) {
-      this.logger.log(`Google Calendar: renewed ${renewed} push channel(s)`);
-    }
+    await withAdvisoryLock(
+      this.prisma,
+      'gcal:watch-renew',
+      async () => {
+        const cutoff = new Date(Date.now() + WATCH_RENEW_BEFORE_MS);
+        const due = (await this.prisma.googleCalendarConnection.findMany({
+          where: {
+            enabled: true,
+            channelId: { not: null },
+            OR: [
+              { channelExpiration: null },
+              { channelExpiration: { lte: cutoff } },
+            ],
+          },
+        })) as GoogleCalendarConnectionRow[];
+        for (const conn of due) {
+          if (await this.startWatch(conn)) renewed++;
+        }
+        if (renewed) {
+          this.logger.log(`Google Calendar: renewed ${renewed} push channel(s)`);
+        }
+      },
+      this.logger,
+    );
     return { renewed };
   }
 
