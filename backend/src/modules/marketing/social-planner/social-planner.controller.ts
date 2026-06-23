@@ -113,6 +113,11 @@ export class SocialPlannerController {
     return this.svc.disconnectAccount(u.workspaceId, accountId);
   }
 
+  @Get('accounts/:id/tiktok/creator-info')
+  tiktokCreatorInfo(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.tiktokCreatorInfo(u.workspaceId, id);
+  }
+
   // ── Posts CRUD ──────────────────────────────────────────────────────────
 
   @Get('posts')

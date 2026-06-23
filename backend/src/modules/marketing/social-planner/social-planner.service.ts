@@ -10,10 +10,12 @@ import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import {
   sealSecret,
+  openSecret,
   isSecretBoxConfigured,
   maskSecret,
 } from '../../../common/crypto/secret-box.helper';
 import { publishToNetwork, isNetworkConfigured } from './network-adapters';
+import { queryCreatorInfo } from './tiktok-creator-info.util';
 
 export const SOCIAL_PUBLISH_KIND = 'social.publish';
 
@@ -123,6 +125,17 @@ export class SocialPlannerService implements OnModuleInit {
       GMB: isNetworkConfigured('GMB'),
       secretBoxConfigured: isSecretBoxConfigured(),
     };
+  }
+
+  // ────────────────────────────────────────────────────────────── TikTok enrichment
+
+  async tiktokCreatorInfo(workspaceId: string, accountId: string) {
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: accountId, workspaceId, network: 'TIKTOK' },
+    });
+    if (!account) throw new NotFoundException('TikTok account not found');
+    const token = openSecret(account.accessToken);
+    return queryCreatorInfo(token);
   }
 
   // ────────────────────────────────────────────────────────────── Posts CRUD
