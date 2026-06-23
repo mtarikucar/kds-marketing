@@ -476,6 +476,15 @@ function TiktokControls({ creatorInfo, isLoading, value, onChange, mediaUrls }: 
         </Field>
       )}
 
+      {/* Max video duration — informational, only when the cap is known */}
+      {!isLoading && (creatorInfo?.maxVideoPostDurationSec ?? 0) > 0 && (
+        <p className="text-sm text-muted-foreground" data-testid="tiktok-max-duration">
+          {t('social.composer.tiktok.maxDuration', { defaultValue: 'Max video length:' })}{' '}
+          <span data-testid="tiktok-max-duration-value">{creatorInfo!.maxVideoPostDurationSec}s</span>{' '}
+          {t('social.composer.tiktok.maxDurationContext', { defaultValue: 'for this account' })}
+        </p>
+      )}
+
       {/* Interaction toggles */}
       <div className="space-y-2">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
