@@ -14,6 +14,7 @@ import {
   Plus,
   Pencil,
   LayoutTemplate,
+  UserPlus,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -43,6 +44,7 @@ import {
 } from '@/components/ui/Select';
 import { Callout } from '@/components/ui/Callout';
 import { WorkflowCanvas } from './automations/WorkflowCanvas';
+import { EnrollByFilterDialog } from './automations/EnrollByFilterDialog';
 import type { AnyStep } from './automations/workflowGraph';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -139,6 +141,7 @@ export default function AutomationsPage() {
   const [editId, setEditId] = useState<string>('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<WorkflowRow | null>(null);
+  const [enrollTarget, setEnrollTarget] = useState<WorkflowRow | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [builderView, setBuilderView] = useState<'canvas' | 'json'>('canvas');
   // The goal isn't an editable form field yet (full goal editing lands with the
@@ -553,6 +556,16 @@ export default function AutomationsPage() {
         onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
       />
 
+      {/* ── Bulk-enroll-by-filter dialog ───────────────────────────────────── */}
+      {enrollTarget && (
+        <EnrollByFilterDialog
+          workflowId={enrollTarget.id}
+          workflowName={enrollTarget.name}
+          open={!!enrollTarget}
+          onOpenChange={(o) => { if (!o) setEnrollTarget(null); }}
+        />
+      )}
+
       {/* ── Workflow list ─────────────────────────────────────────────────── */}
       <div className="space-y-3">
         {(workflows ?? []).map((w) => (
@@ -593,6 +606,14 @@ export default function AutomationsPage() {
                     ) : (
                       <Play className="h-5 w-5" />
                     )}
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t('automations.enrollBtn', 'Enroll')}
+                    onClick={() => setEnrollTarget(w)}
+                  >
+                    <UserPlus className="h-5 w-5" />
                   </IconButton>
                   <Button variant="outline" size="sm" onClick={() => openEdit(w)}>
                     <Pencil className="h-3.5 w-3.5" />

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useForm, type SubmitHandler } from 'react-hook-form';
+import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
 import {
@@ -13,6 +13,12 @@ import {
   Field,
   Input,
   Textarea,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
 } from '@/components/ui';
 import { courseSchema, type CourseFormValues } from '../schemas';
 import type { Course } from '../types';
@@ -33,7 +39,7 @@ export function CourseFormDialog({ open, onOpenChange, course, onSubmit, isPendi
   const form = useForm<CourseFormValues>({
     resolver: zodResolver(courseSchema),
     mode: 'onBlur',
-    defaultValues: { title: '', description: '', price: '', currency: '', coverImageUrl: '' },
+    defaultValues: { title: '', description: '', price: '', currency: '', coverImageUrl: '', dripMode: 'FREE', certificateEnabled: false, certTitle: '', certSignature: '', certLogoUrl: '' },
   });
 
   useEffect(() => {
@@ -45,11 +51,24 @@ export function CourseFormDialog({ open, onOpenChange, course, onSubmit, isPendi
         price: course.priceCents != null ? String(course.priceCents / 100) : '',
         currency: course.currency ?? '',
         coverImageUrl: course.coverImageUrl ?? '',
+        dripMode: course.dripMode ?? 'FREE',
+        certificateEnabled: course.certificateEnabled ?? false,
+        certTitle: course.certificateTemplate?.title ?? '',
+        certSignature: course.certificateTemplate?.signature ?? '',
+        certLogoUrl: course.certificateTemplate?.logoUrl ?? '',
       });
     } else {
-      form.reset({ title: '', description: '', price: '', currency: '', coverImageUrl: '' });
+      form.reset({ title: '', description: '', price: '', currency: '', coverImageUrl: '', dripMode: 'FREE', certificateEnabled: false, certTitle: '', certSignature: '', certLogoUrl: '' });
     }
   }, [course, open, form]);
+
+  const certOn = form.watch('certificateEnabled');
+
+  const GATING = [
+    { value: 'FREE', label: 'Open — all lessons available' },
+    { value: 'SEQUENTIAL', label: 'Sequential — unlock one at a time' },
+    { value: 'DRIP', label: 'Drip — by per-lesson schedule' },
+  ] as const;
 
   const fieldErr = (msg?: string) =>
     msg ? t([`memberships.validation.${msg}`, `validation.${msg}`, msg], { defaultValue: msg }) : undefined;
@@ -123,6 +142,64 @@ export function CourseFormDialog({ open, onOpenChange, course, onSubmit, isPendi
               <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="https://…" {...form.register('coverImageUrl')} />
             )}
           </Field>
+
+          <Field
+            label={t('memberships.courses.dripMode', { defaultValue: 'Lesson release' })}
+            hint={t('memberships.courses.dripModeHint', { defaultValue: 'Course-wide default; a lesson can override it.' })}
+          >
+            {({ id, describedBy }) => (
+              <Controller
+                control={form.control}
+                name="dripMode"
+                render={({ field: f }) => (
+                  <Select value={f.value ?? 'FREE'} onValueChange={f.onChange}>
+                    <SelectTrigger id={id} aria-describedby={describedBy}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GATING.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {t(`memberships.courses.dripModeOpts.${opt.value}`, { defaultValue: opt.label })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            )}
+          </Field>
+
+          <Controller
+            control={form.control}
+            name="certificateEnabled"
+            render={({ field: f }) => (
+              <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-medium text-foreground">{t('memberships.courses.certificate', { defaultValue: 'Completion certificate' })}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('memberships.courses.certificateHint', { defaultValue: 'Issued automatically when a learner reaches 100%.' })}
+                  </p>
+                </div>
+                <Switch checked={!!f.value} onCheckedChange={f.onChange} />
+              </div>
+            )}
+          />
+
+          {certOn && (
+            <div className="space-y-3 rounded-lg border border-dashed border-border p-3">
+              <Field label={t('memberships.courses.certTitle', { defaultValue: 'Certificate title' })}>
+                {({ id }) => <Input id={id} placeholder="Certificate of Completion" {...form.register('certTitle')} />}
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={t('memberships.courses.certSignature', { defaultValue: 'Signature line' })}>
+                  {({ id }) => <Input id={id} placeholder="e.g. Jane Doe, Director" {...form.register('certSignature')} />}
+                </Field>
+                <Field label={t('memberships.courses.certLogo', { defaultValue: 'Logo URL' })} error={fieldErr(errors.certLogoUrl?.message)}>
+                  {({ id, invalid }) => <Input id={id} aria-invalid={invalid} placeholder="https://…" {...form.register('certLogoUrl')} />}
+                </Field>
+              </div>
+            </div>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>

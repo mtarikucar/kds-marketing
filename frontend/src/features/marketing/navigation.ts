@@ -33,6 +33,7 @@ import {
   Filter,
   FileUp,
   GraduationCap,
+  Trophy,
   Building2,
   Camera,
   Receipt,
@@ -157,6 +158,8 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
       { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: FileText },
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
+      { path: '/dialer', labelKey: 'nav.dialer', label: 'Power Dialer', icon: PhoneCall, feature: 'telephony' },
+      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe },
       { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
       { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
     ],
@@ -194,6 +197,7 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, managerOnly: true },
       { path: '/memberships/communities', labelKey: 'nav.communities', label: 'Communities', icon: MessagesSquare, managerOnly: true },
+      { path: '/memberships/leaderboard', labelKey: 'nav.leaderboard', label: 'Leaderboard', icon: Trophy, managerOnly: true },
     ],
   },
   {
@@ -245,6 +249,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/inbound-webhooks', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
+      { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true },
       { path: '/settings/telephony', labelKey: 'nav.telephony', label: 'Phone (Netsantral)', icon: PhoneCall, feature: 'telephony', managerOnly: true },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },

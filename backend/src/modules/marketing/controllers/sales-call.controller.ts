@@ -66,4 +66,18 @@ export class SalesCallController {
   ) {
     return this.calls.get(user.workspaceId, id, user);
   }
+
+  /**
+   * The call's recording URL, if one has been retrieved (Epic 13 call-recording —
+   * stamped by the RecordingSyncService when NetGSM exposes the download API).
+   * Reuses the rep-scoped get, so a REP only sees their own calls' recordings.
+   */
+  @Get(':id/recording')
+  async recording(
+    @Param('id') id: string,
+    @CurrentMarketingUser() user: MarketingUserPayload,
+  ) {
+    const call = (await this.calls.get(user.workspaceId, id, user)) as { recordingUrl?: string | null };
+    return { recordingUrl: call?.recordingUrl ?? null };
+  }
 }

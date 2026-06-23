@@ -4,8 +4,10 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AFFILIATE_TOKEN_PREFIX, hashAffiliateToken } from '../guards/affiliate-portal.guard';
 
 // ─── DTOs (inline — no separate file needed for a single-file service) ────────
 
@@ -90,6 +92,47 @@ export class AffiliateService {
     });
     if (!affiliate) throw new NotFoundException('Affiliate not found');
     return affiliate;
+  }
+
+  // ── Self-serve portal (Epic 11a) ────────────────────────────────────────────
+
+  /**
+   * Mint (or rotate) the affiliate's portal bearer token. The raw token is
+   * returned ONCE — only its sha256 is stored. A manager action.
+   */
+  async regeneratePortalToken(workspaceId: string, id: string) {
+    await this.getAffiliate(workspaceId, id); // 404 unless in this workspace
+    const token = `${AFFILIATE_TOKEN_PREFIX}${randomBytes(24).toString('hex')}`;
+    await this.prisma.affiliate.update({
+      where: { id },
+      data: { portalTokenHash: hashAffiliateToken(token) },
+    });
+    return { token };
+  }
+
+  /** Portal dashboard: the affiliate's own profile + referral/commission rollups. */
+  async portalSummary(workspaceId: string, affiliateId: string) {
+    const affiliate = await this.prisma.affiliate.findFirst({
+      where: { id: affiliateId, workspaceId },
+      select: {
+        id: true, name: true, email: true, code: true,
+        commissionType: true, commissionValue: true, status: true, lastLoginAt: true,
+      },
+    });
+    if (!affiliate) throw new NotFoundException('Affiliate not found');
+    const [refGroups, commGroups] = await Promise.all([
+      this.prisma.affiliateReferral.groupBy({
+        by: ['status'], where: { workspaceId, affiliateId }, _count: { _all: true },
+      }),
+      this.prisma.affiliateCommission.groupBy({
+        by: ['status'], where: { workspaceId, affiliateId }, _sum: { amount: true },
+      }),
+    ]);
+    const referrals = Object.fromEntries(refGroups.map((g) => [g.status, g._count._all]));
+    const commissions = Object.fromEntries(
+      commGroups.map((g) => [g.status, (g._sum.amount ?? new Prisma.Decimal(0)).toString()]),
+    );
+    return { affiliate, referrals, commissions };
   }
 
   async updateAffiliate(workspaceId: string, id: string, dto: UpdateAffiliateDto) {

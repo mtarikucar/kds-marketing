@@ -30,6 +30,12 @@ const TYPES: { value: LessonType; label: string }[] = [
   { value: 'QUIZ', label: 'Quiz' },
 ];
 
+const GATING: { value: 'FREE' | 'SEQUENTIAL' | 'DRIP'; label: string }[] = [
+  { value: 'FREE', label: 'Open' },
+  { value: 'SEQUENTIAL', label: 'After previous lesson' },
+  { value: 'DRIP', label: 'Drip (days after enrolling)' },
+];
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,10 +51,11 @@ export function LessonFormDialog({ open, onOpenChange, lesson, onSubmit, isPendi
   const form = useForm<LessonFormValues>({
     resolver: zodResolver(lessonSchema),
     mode: 'onBlur',
-    defaultValues: { title: '', type: 'VIDEO', content: '', videoUrl: '', durationSec: '', isPreview: false },
+    defaultValues: { title: '', type: 'VIDEO', content: '', videoUrl: '', durationSec: '', isPreview: false, gating: 'FREE', dripDays: '' },
   });
 
   const watchedType = form.watch('type');
+  const watchedGating = form.watch('gating');
 
   useEffect(() => {
     if (!open) return;
@@ -60,9 +67,11 @@ export function LessonFormDialog({ open, onOpenChange, lesson, onSubmit, isPendi
         videoUrl: lesson.videoUrl ?? '',
         durationSec: lesson.durationSec != null ? String(lesson.durationSec) : '',
         isPreview: lesson.isPreview,
+        gating: lesson.gating ?? 'FREE',
+        dripDays: lesson.dripDays != null ? String(lesson.dripDays) : '',
       });
     } else {
-      form.reset({ title: '', type: 'VIDEO', content: '', videoUrl: '', durationSec: '', isPreview: false });
+      form.reset({ title: '', type: 'VIDEO', content: '', videoUrl: '', durationSec: '', isPreview: false, gating: 'FREE', dripDays: '' });
     }
   }, [lesson, open, form]);
 
@@ -140,6 +149,40 @@ export function LessonFormDialog({ open, onOpenChange, lesson, onSubmit, isPendi
               <Input id={id} type="number" min="0" aria-describedby={describedBy} aria-invalid={invalid} {...form.register('durationSec')} />
             )}
           </Field>
+
+          <Field label={t('memberships.lessons.gating', { defaultValue: 'Access' })}>
+            {({ id, describedBy }) => (
+              <Controller
+                control={form.control}
+                name="gating"
+                render={({ field: f }) => (
+                  <Select value={f.value ?? 'FREE'} onValueChange={f.onChange}>
+                    <SelectTrigger id={id} aria-describedby={describedBy}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GATING.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {t(`memberships.lessons.gatingOpts.${opt.value}`, { defaultValue: opt.label })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            )}
+          </Field>
+
+          {watchedGating === 'DRIP' && (
+            <Field
+              label={t('memberships.lessons.dripDays', { defaultValue: 'Unlock after (days from enrollment)' })}
+              error={fieldErr(errors.dripDays?.message as string | undefined)}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input id={id} type="number" min="0" max="3650" aria-describedby={describedBy} aria-invalid={invalid} {...form.register('dripDays')} />
+              )}
+            </Field>
+          )}
 
           <Controller
             control={form.control}

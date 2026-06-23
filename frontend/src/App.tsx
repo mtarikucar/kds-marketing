@@ -35,6 +35,8 @@ const CustomObjectDetailPage   = lazy(() => import('./pages/marketing/customObje
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
 const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
+const DialerPage               = lazy(() => import('./pages/marketing/DialerPage'));
+const ProspectingPage          = lazy(() => import('./pages/marketing/ProspectingPage'));
 const PerformancePage          = lazy(() => import('./pages/marketing/PerformancePage'));
 const BillingPage              = lazy(() => import('./pages/marketing/billing'));
 // Manager-only pages
@@ -47,6 +49,8 @@ const CoursesPage              = lazy(() => import('./pages/marketing/membership
 const CourseEditorPage         = lazy(() => import('./pages/marketing/memberships/courses/CourseEditorPage'));
 const CommunitiesPage          = lazy(() => import('./pages/marketing/memberships/communities'));
 const CommunityDetailPage      = lazy(() => import('./pages/marketing/memberships/communities/CommunityDetailPage'));
+const LeaderboardPage          = lazy(() => import('./pages/marketing/memberships/gamification/LeaderboardPage'));
+const AffiliatePortalPage      = lazy(() => import('./pages/marketing/affiliate-portal/AffiliatePortalPage'));
 const AgencyLocationsPage      = lazy(() => import('./pages/marketing/agency/LocationsPage'));
 const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/SnapshotsPage'));
 const AgencyRebillingPage      = lazy(() => import('./pages/marketing/agency/RebillingPage'));
@@ -55,6 +59,7 @@ const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudi
 const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
 const ChannelsSettingsPage     = lazy(() => import('./pages/marketing/ChannelsSettingsPage'));
 const SnippetsPage             = lazy(() => import('./pages/marketing/settings/snippets'));
+const SendingDomainsPage       = lazy(() => import('./pages/marketing/settings/SendingDomainsPage'));
 const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLinks'));
 const TaxRatesPage             = lazy(() => import('./pages/marketing/settings/taxRates'));
 const CouponsPage              = lazy(() => import('./pages/marketing/settings/coupons'));
@@ -119,6 +124,8 @@ export default function App() {
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
       <Route path="/widget"   element={<S><WidgetChatPage /></S>} />
+      {/* Standalone affiliate self-serve portal (token-authenticated, no session). */}
+      <Route path="/affiliate-portal" element={<S><AffiliatePortalPage /></S>} />
 
       {/* Platform (superadmin) realm — separate auth store + token. The login
           page sits OUTSIDE the layout; PlatformLayout carries the realm auth
@@ -153,6 +160,8 @@ export default function App() {
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           <Route path="/calls"          element={<S><CallsPage /></S>} />
+          <Route path="/dialer"         element={<S><DialerPage /></S>} />
+          <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
           <Route path="/performance"    element={<S><PerformancePage /></S>} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
           {/* Self-service 2FA — available to every authenticated marketing user. */}
@@ -171,6 +180,7 @@ export default function App() {
             <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
             <Route path="/memberships/communities"        element={<S><CommunitiesPage /></S>} />
             <Route path="/memberships/communities/:id"    element={<S><CommunityDetailPage /></S>} />
+            <Route path="/memberships/leaderboard"        element={<S><LeaderboardPage /></S>} />
             {/* Agency console (Epic D) — each page self-guards on workspace.kind === AGENCY
                 (AgencyGuard); backend additionally 403s every /agency route for non-agencies. */}
             <Route path="/agency/locations"  element={<S><AgencyLocationsPage /></S>} />
@@ -181,6 +191,7 @@ export default function App() {
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
             <Route path="/channels"    element={<S><ChannelsSettingsPage /></S>} />
             <Route path="/settings/snippets" element={<S><SnippetsPage /></S>} />
+            <Route path="/settings/sending-domains" element={<S><SendingDomainsPage /></S>} />
             <Route path="/settings/tax-rates" element={<S><TaxRatesPage /></S>} />
             <Route path="/settings/coupons"   element={<S><CouponsPage /></S>} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />

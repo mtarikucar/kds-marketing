@@ -86,17 +86,28 @@ describe('InvoicesService', () => {
     });
   });
 
-  it('markPaid settles the invoice + emits invoice.paid', async () => {
+  it('markPaid settles the invoice + emits invoice.paid (conditional claim)', async () => {
     prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: 'lead1', status: 'SENT', total: 2500, currency: 'TRY' });
+    prisma.invoice.updateMany.mockResolvedValue({ count: 1 });
     await svc.markPaid(WS, 'inv1');
-    expect(prisma.invoice.update.mock.calls[0][0].data.status).toBe('PAID');
+    // the flip is a conditional claim — only an unpaid (DRAFT/SENT) row matches
+    expect(prisma.invoice.updateMany.mock.calls[0][0].where).toMatchObject({ id: 'inv1', workspaceId: WS, status: { in: ['DRAFT', 'SENT'] } });
+    expect(prisma.invoice.updateMany.mock.calls[0][0].data.status).toBe('PAID');
     expect(outbox.append.mock.calls[0][0].type).toBe('marketing.invoice.paid.v1');
   });
 
-  it('markPaid is idempotent (already paid → no second event)', async () => {
+  it('markPaid is idempotent (already paid → no claim, no second event)', async () => {
     prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, status: 'PAID', total: 100, currency: 'TRY' });
     await svc.markPaid(WS, 'inv1');
-    expect(prisma.invoice.update).not.toHaveBeenCalled();
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('settle never re-emits when the conditional claim matches 0 rows (VOID / concurrent retry)', async () => {
+    // a token minted just before a void: status flips out of DRAFT/SENT → claim is empty
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, status: 'SENT', total: 2500, currency: 'TRY' });
+    prisma.invoice.updateMany.mockResolvedValue({ count: 0 });
+    await svc.markPaid(WS, 'inv1');
     expect(outbox.append).not.toHaveBeenCalled();
   });
 
@@ -106,5 +117,76 @@ describe('InvoicesService', () => {
     const sealed = data.create.configSealed ?? data.update.configSealed;
     expect(sealed).toMatch(/^v1:/);
     expect(sealed).not.toContain('sk_live_secret');
+  });
+
+  describe('PayTR (Epic 13, inert)', () => {
+    const { sealSecret } = require('../../../common/crypto/secret-box.helper');
+    const { computeCallbackHash } = require('../../billing/payments/paytr.provider');
+    const PAYTR_SECRETS = { merchantId: 'mid', merchantKey: 'mkey', merchantSalt: 'msalt' };
+    const sealedPaytr = () => sealSecret(JSON.stringify(PAYTR_SECRETS));
+
+    it('refuses a non-TRY invoice (avoids the TL/$ footgun)', async () => {
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 10000, currency: 'USD', number: 'INV-1', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'PAYTR', configSealed: sealedPaytr() });
+      await expect(svc.pay('tok', '1.2.3.4')).rejects.toThrow(/PayTR collects TRY only/);
+    });
+
+    it('builds a PayTR get-token call and returns the hosted-iframe redirect URL', async () => {
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'a1b2c3d4-0000-0000-0000-000000000000', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', number: 'INV-7', status: 'SENT', publicToken: 'in_pub7' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'PAYTR', configSealed: sealedPaytr() });
+      prisma.lead = { findFirst: jest.fn().mockResolvedValue(null) };
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', token: 'PTK1' }) });
+      (global as any).fetch = fetchMock;
+      const out = await svc.pay('tok', '5.6.7.8');
+      expect(out.redirectUrl).toMatch(/\/odeme\/guvenli\/PTK1$/);
+      // sends the merchant_oid derived from the invoice id (alphanumeric)
+      const form = String(fetchMock.mock.calls[0][1].body);
+      expect(form).toContain('merchant_oid=INVa1b2c3d40000000000000000000000');
+      expect(form).toContain('currency=TL');
+      // the PayTR return URL points at the PUBLIC pay page (token), never the internal id (would 404)
+      expect(form).toContain('merchant_ok_url=');
+      expect(form).toContain(encodeURIComponent('/api/public/i/in_pub7'));
+      expect(form).not.toContain('a1b2c3d4-0000-0000-0000-000000000000');
+    });
+
+    it('callback: a valid hash with status=success settles the invoice + emits InvoicePaid', async () => {
+      const invoiceId = 'a1b2c3d4-0000-0000-0000-000000000000';
+      const oid = 'INV' + invoiceId.replace(/-/g, '');
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: invoiceId, workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.invoice.updateMany.mockResolvedValue({ count: 1 });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'PAYTR', configSealed: sealedPaytr() });
+      const hash = computeCallbackHash({ merchantOid: oid, merchantSalt: 'msalt', status: 'success', totalAmount: '19900', merchantKey: 'mkey' });
+      const ok = await svc.paytrCallback({ merchant_oid: oid, status: 'success', total_amount: '19900', hash });
+      expect(ok).toBe(true);
+      expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PAID', paidVia: 'paytr' }) }));
+      expect(outbox.append.mock.calls.some((c: any) => c[0].type === 'marketing.invoice.paid.v1')).toBe(true);
+    });
+
+    it('callback: a VALID hash but a MISMATCHED amount is ACKed but NOT settled (199$/199TL footgun)', async () => {
+      const invoiceId = 'a1b2c3d4-0000-0000-0000-000000000000';
+      const oid = 'INV' + invoiceId.replace(/-/g, '');
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: invoiceId, workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'PAYTR', configSealed: sealedPaytr() });
+      // PayTR reports a smaller collected amount than the invoice demands — hash is valid over THAT amount
+      const hash = computeCallbackHash({ merchantOid: oid, merchantSalt: 'msalt', status: 'success', totalAmount: '10000', merchantKey: 'mkey' });
+      const ok = await svc.paytrCallback({ merchant_oid: oid, status: 'success', total_amount: '10000', hash });
+      expect(ok).toBe(true); // ACK so PayTR stops retrying
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled(); // but the invoice is NOT flipped to PAID
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+
+    it('callback: a forged hash is rejected and does NOT settle', async () => {
+      const oid = 'INVa1b2c3d40000000000000000000000';
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'a1b2c3d4-0000-0000-0000-000000000000', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'PAYTR', configSealed: sealedPaytr() });
+      const ok = await svc.paytrCallback({ merchant_oid: oid, status: 'success', total_amount: '19900', hash: 'forged-hash' });
+      expect(ok).toBe(false);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('callback: an unknown/garbage merchant_oid is ignored', async () => {
+      const ok = await svc.paytrCallback({ merchant_oid: 'BOGUS', status: 'success', total_amount: '1', hash: 'x' });
+      expect(ok).toBe(false);
+    });
   });
 });

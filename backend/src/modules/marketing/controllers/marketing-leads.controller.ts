@@ -29,7 +29,7 @@ import { ConvertLeadDto } from '../dto/convert-lead.dto';
 import { UpdateLeadStatusDto } from '../dto/update-lead-status.dto';
 import { AssignLeadDto } from '../dto/assign-lead.dto';
 import { BulkAssignLeadDto } from '../dto/bulk-assign-lead.dto';
-import { BulkLeadIdsDto, BulkEnrollLeadsDto } from '../dto/lead-bulk.dto';
+import { BulkLeadIdsDto, BulkEnrollLeadsDto, EnrollByFilterDto } from '../dto/lead-bulk.dto';
 import { LeadBulkService } from '../inbox/lead-bulk.service';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
@@ -197,9 +197,26 @@ export class MarketingLeadsController {
   @Post('bulk-enroll')
   @MarketingRoles('MANAGER')
   @RequirePermission('leads.manage')
-  @Audit({ action: 'lead.bulk_enroll', resourceType: 'lead' })
+  @Audit({ action: 'lead.bulk_enroll', resourceType: 'lead', captureBody: ['workflowId'] })
   bulkEnroll(@Body() dto: BulkEnrollLeadsDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.leadBulk.bulkEnroll(actor.workspaceId, dto.leadIds, dto.workflowId, actor.id);
+  }
+
+  /** Bulk-enroll every lead matching an audience filter into a workflow (drip). */
+  @Post('enroll-by-filter')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('leads.manage')
+  // workflowId lives in the body (no route param), so it's captured via
+  // captureBody into metadata rather than resourceIdParam; the filter fields go
+  // alongside it so a mass-enroll is fully attributable in the audit log.
+  @Audit({
+    action: 'lead.enroll_by_filter',
+    resourceType: 'workflow',
+    captureBody: ['workflowId', 'status', 'assignedToId', 'businessType', 'source', 'city', 'search', 'enrollAll'],
+  })
+  enrollByFilter(@Body() dto: EnrollByFilterDto, @CurrentMarketingUser() actor: MarketingUserPayload) {
+    const { workflowId, enrollAll, ...filter } = dto;
+    return this.leadBulk.bulkEnrollByFilter(actor.workspaceId, filter, workflowId, actor.id, enrollAll);
   }
 
 

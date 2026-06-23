@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { LeadBulkService } from './lead-bulk.service';
+import { LeadBulkService, LEAD_ENROLL_BATCH_KIND } from './lead-bulk.service';
 
 const WS = 'ws-1';
 
@@ -8,20 +8,31 @@ function makePrisma() {
     lead: {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
     },
     workflow: { findFirst: jest.fn() },
+    scheduledJob: { findFirst: jest.fn().mockResolvedValue(null) },
   };
 }
 
 describe('LeadBulkService', () => {
   let prisma: ReturnType<typeof makePrisma>;
   let executor: { start: jest.Mock };
+  let scheduledJobs: { schedule: jest.Mock };
+  let runner: { registerHandler: jest.Mock };
   let svc: LeadBulkService;
 
   beforeEach(() => {
     prisma = makePrisma();
     executor = { start: jest.fn() };
-    svc = new LeadBulkService(prisma as any, executor as any);
+    scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
+    runner = { registerHandler: jest.fn() };
+    svc = new LeadBulkService(prisma as any, executor as any, scheduledJobs as any, runner as any);
+  });
+
+  it('registers the enroll-batch handler on init', () => {
+    svc.onModuleInit();
+    expect(runner.registerHandler).toHaveBeenCalledWith(LEAD_ENROLL_BATCH_KIND, expect.any(Function));
   });
 
   describe('bulkDelete', () => {
@@ -45,27 +56,151 @@ describe('LeadBulkService', () => {
       await expect(svc.bulkEnroll(WS, ['a'], 'wf-x', 'me')).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('starts the workflow once per scoped lead and counts only successful enrolls', async () => {
-      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf-1', workspaceId: WS, version: 1, trigger: {}, steps: [] });
+    it('queues a background job for the scoped leads (does not enroll inline)', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf-1' });
       prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }, { id: 'l2' }]);
-      // l1 enrolls (runId), l2 is a no-op duplicate (null)
-      executor.start.mockResolvedValueOnce('run-1').mockResolvedValueOnce(null);
       const res = await svc.bulkEnroll(WS, ['l1', 'l2'], 'wf-1', 'me');
-      expect(res).toEqual({ enrolled: 1, skipped: 1, failed: 0 });
-      expect(executor.start).toHaveBeenCalledTimes(2);
-      // enroll passes the lead subject + manual trigger payload
-      expect(executor.start.mock.calls[0][1]).toEqual({ leadId: 'l1' });
-      expect(executor.start.mock.calls[0][2]).toMatchObject({ manual: true, enrolledBy: 'me' });
+      expect(res).toEqual({ queued: 2 });
+      // no inline enroll — the executor is only touched by the batch handler
+      expect(executor.start).not.toHaveBeenCalled();
       // leads are resolved workspace-scoped + non-deleted
       expect(prisma.lead.findMany.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, deletedAt: null, mergedIntoId: null });
+      // an ids-mode job is enqueued with the resolved ids
+      const job = scheduledJobs.schedule.mock.calls[0][0];
+      expect(job).toMatchObject({ kind: LEAD_ENROLL_BATCH_KIND, workspaceId: WS, dedupKey: 'enroll:wf-1' });
+      expect(job.payload).toMatchObject({ mode: 'ids', workflowId: 'wf-1', actorId: 'me', ids: ['l1', 'l2'], offset: 0 });
     });
 
-    it('counts a real executor error as failed (not skipped)', async () => {
-      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf-1', workspaceId: WS, version: 1, trigger: {}, steps: [] });
+    it('rejects when none of the ids resolve to scoped leads', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf-1' });
+      prisma.lead.findMany.mockResolvedValue([]);
+      await expect(svc.bulkEnroll(WS, ['x'], 'wf-1', 'me')).rejects.toBeInstanceOf(BadRequestException);
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('rejects when an enroll is already in flight for the workflow', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf-1' });
+      prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }]);
+      prisma.scheduledJob.findFirst.mockResolvedValue({ id: 'busy' });
+      await expect(svc.bulkEnroll(WS, ['l1'], 'wf-1', 'me')).rejects.toBeInstanceOf(BadRequestException);
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('bulkEnrollByFilter', () => {
+    it('404s an unknown workflow', async () => {
+      prisma.workflow.findFirst.mockResolvedValue(null);
+      await expect(svc.bulkEnrollByFilter(WS, {}, 'wf1', 'actor')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects an empty filter without an explicit enrollAll confirmation', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1' });
+      await expect(svc.bulkEnrollByFilter(WS, {}, 'wf1', 'actor', false)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.lead.count).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty match set', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1' });
+      prisma.lead.count.mockResolvedValue(0);
+      await expect(svc.bulkEnrollByFilter(WS, { status: 'NEW' }, 'wf1', 'actor')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a match set over the cap (does not enqueue)', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1' });
+      prisma.lead.count.mockResolvedValue(9999);
+      await expect(svc.bulkEnrollByFilter(WS, {}, 'wf1', 'actor', true)).rejects.toBeInstanceOf(BadRequestException);
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('queues a filter-mode job (whole-list enroll requires enrollAll)', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1' });
+      prisma.lead.count.mockResolvedValue(3);
+      const res = await svc.bulkEnrollByFilter(WS, {}, 'wf1', 'actor', true);
+      expect(res).toEqual({ queued: 3 });
+      expect(executor.start).not.toHaveBeenCalled();
+      // count is workspace-scoped + excludes deleted/merged
+      const where = prisma.lead.count.mock.calls[0][0].where;
+      expect(where).toMatchObject({ workspaceId: WS, deletedAt: null, mergedIntoId: null });
+      const job = scheduledJobs.schedule.mock.calls[0][0];
+      expect(job).toMatchObject({ kind: LEAD_ENROLL_BATCH_KIND, dedupKey: 'enroll:wf1' });
+      expect(job.payload).toMatchObject({ mode: 'filter', workflowId: 'wf1', actorId: 'actor', afterId: null, processed: 0 });
+    });
+
+    it('queues with a single filter set (no enrollAll needed)', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1' });
+      prisma.lead.count.mockResolvedValue(2);
+      const res = await svc.bulkEnrollByFilter(WS, { status: 'NEW' }, 'wf1', 'actor');
+      expect(res).toEqual({ queued: 2 });
+      expect(prisma.lead.count.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, status: 'NEW' });
+    });
+  });
+
+  describe('enrollBatch handler', () => {
+    // Resolve the registered handler so we exercise the real fan-out logic.
+    function handler() {
+      svc.onModuleInit();
+      return runner.registerHandler.mock.calls[0][1] as (job: any) => Promise<void>;
+    }
+
+    it('stops the chain when the workflow was deleted mid-fanout', async () => {
+      prisma.workflow.findFirst.mockResolvedValue(null);
+      const r = await handler()({ payload: { mode: 'ids', workspaceId: WS, workflowId: 'wf1', actorId: 'a', ids: ['l1'], offset: 0 } });
+      expect(executor.start).not.toHaveBeenCalled();
+      expect(r).toBeUndefined(); // void → runner marks DONE
+    });
+
+    it('ids mode: enrolls the scoped slice and ends the chain when drained', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1', workspaceId: WS });
       prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }, { id: 'l2' }]);
-      executor.start.mockResolvedValueOnce('run-1').mockRejectedValueOnce(new Error('boom'));
-      const res = await svc.bulkEnroll(WS, ['l1', 'l2'], 'wf-1', 'me');
-      expect(res).toEqual({ enrolled: 1, skipped: 0, failed: 1 });
+      executor.start.mockResolvedValueOnce('run').mockResolvedValueOnce(null);
+      const r = await handler()({ payload: { mode: 'ids', workspaceId: WS, workflowId: 'wf1', actorId: 'a', ids: ['l1', 'l2'], offset: 0 } });
+      expect(executor.start).toHaveBeenCalledTimes(2);
+      expect(executor.start.mock.calls[0][1]).toEqual({ leadId: 'l1' });
+      expect(executor.start.mock.calls[0][2]).toMatchObject({ manual: true, enrolledBy: 'a' });
+      expect(r).toBeUndefined(); // offset 2 >= ids.length 2 → no reschedule
+    });
+
+    it('ids mode: returns an in-place reschedule for the next offset when ids remain', async () => {
+      const ids = Array.from({ length: 60 }, (_, i) => `l${i}`);
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1', workspaceId: WS });
+      prisma.lead.findMany.mockResolvedValue(ids.slice(0, 50).map((id) => ({ id })));
+      executor.start.mockResolvedValue('run');
+      const r: any = await handler()({ payload: { mode: 'ids', workspaceId: WS, workflowId: 'wf1', actorId: 'a', ids, offset: 0 } });
+      // The chain advances by RETURNING a directive — it never creates a child row.
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+      expect(r.reschedule.payload).toMatchObject({ mode: 'ids', offset: 50 });
+      expect(r.reschedule.runAt).toBeInstanceOf(Date);
+    });
+
+    it('filter mode: walks by id cursor and returns a reschedule on a full batch', async () => {
+      const page = Array.from({ length: 50 }, (_, i) => ({ id: `l${i}` }));
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1', workspaceId: WS });
+      prisma.lead.findMany.mockResolvedValue(page);
+      executor.start.mockResolvedValue('run');
+      const r: any = await handler()({ payload: { mode: 'filter', workspaceId: WS, workflowId: 'wf1', actorId: 'a', filter: { status: 'NEW' }, afterId: null, processed: 0 } });
+      // findMany is scoped + ordered by id asc + bounded
+      const q = prisma.lead.findMany.mock.calls[0][0];
+      expect(q.where).toMatchObject({ workspaceId: WS, status: 'NEW', deletedAt: null, mergedIntoId: null });
+      expect(q.orderBy).toEqual({ id: 'asc' });
+      expect(q.take).toBe(50);
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+      expect(r.reschedule.payload).toMatchObject({ mode: 'filter', afterId: 'l49', processed: 50 });
+    });
+
+    it('filter mode: a short batch drains the audience without rescheduling', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1', workspaceId: WS });
+      prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }]);
+      executor.start.mockResolvedValue('run');
+      const r = await handler()({ payload: { mode: 'filter', workspaceId: WS, workflowId: 'wf1', actorId: 'a', filter: {}, afterId: null, processed: 0 } });
+      expect(r).toBeUndefined();
+    });
+
+    it('filter mode: stops once the cap budget is exhausted', async () => {
+      prisma.workflow.findFirst.mockResolvedValue({ id: 'wf1', workspaceId: WS });
+      const r = await handler()({ payload: { mode: 'filter', workspaceId: WS, workflowId: 'wf1', actorId: 'a', filter: {}, afterId: 'x', processed: 5000 } });
+      expect(prisma.lead.findMany).not.toHaveBeenCalled();
+      expect(r).toBeUndefined();
     });
   });
 

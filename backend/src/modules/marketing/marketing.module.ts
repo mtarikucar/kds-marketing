@@ -70,11 +70,14 @@ import { HardwareQuoteConsumer } from './events/hardware-quote.consumer';
 // Phase 2 telephony — single-line Netgsm sales calls (click-to-dial + manual log).
 import { SalesCallController } from './controllers/sales-call.controller';
 import { SalesCallService } from './services/sales-call.service';
+import { DialerController } from './controllers/dialer.controller';
+import { DialerService } from './services/dialer.service';
 import { TelephonyProviderRegistry } from './telephony/telephony-provider.registry';
 import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { NetsantralClient } from './telephony/netsantral.client';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
+import { RecordingSyncService } from './telephony/recording-sync.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
@@ -155,6 +158,14 @@ import { BookingService } from './sites/booking.service';
 import { MarketingReviewsController } from './controllers/marketing-reviews.controller';
 import { ReviewGateController } from './controllers/review-gate.controller';
 import { ReviewsService } from './reviews/reviews.service';
+import { ReviewSyncService } from './reviews/review-sync.service';
+// Epic 13 — prospecting audit (inert until PAGESPEED_API_KEY).
+import { AuditService } from './prospecting/audit.service';
+import { ProspectingController } from './controllers/prospecting.controller';
+import { PublicAuditController } from './controllers/public-audit.controller';
+// Epic 13 — sending domains / DKIM (inert until SENDING_DOMAIN_ESP).
+import { SendingDomainsService } from './sending-domains/sending-domains.service';
+import { SendingDomainsController } from './controllers/sending-domains.controller';
 
 // Phase F P8 — Voice AI (Twilio).
 import { MarketingVoiceController } from './controllers/marketing-voice.controller';
@@ -179,6 +190,8 @@ import { BrandingService } from './branding/branding.service';
 // GHL parity — affiliate manager (affiliates, referrals, commissions, payouts).
 import { AffiliateController } from './controllers/affiliate.controller';
 import { AffiliateService } from './services/affiliate.service';
+import { PublicAffiliatePortalController } from './controllers/public-affiliate-portal.controller';
+import { AffiliatePortalGuard } from './guards/affiliate-portal.guard';
 
 // Epic D1 (GHL parity) — agency / sub-account hierarchy (agency owns location
 // workspaces; scoped cross-into-child management behind assertAgencyOwns).
@@ -196,12 +209,19 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
+import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
+import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
+import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
 
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
 import { CoursesController } from './memberships/courses.controller';
 import { CoursesService } from './memberships/courses.service';
 import { EnrollmentController } from './memberships/enrollment.controller';
 import { EnrollmentService } from './memberships/enrollment.service';
+import { CertificateService } from './memberships/certificate.service';
+import { PublicCertificateController } from './controllers/public-certificate.controller';
+import { GamificationService } from './memberships/gamification.service';
+import { GamificationController } from './memberships/gamification.controller';
 import { CommunitiesController } from './memberships/communities.controller';
 import { CommunitiesService } from './memberships/communities.service';
 // Epic G — analytics (read-only lead aggregations).
@@ -236,6 +256,11 @@ import {
 } from './integrations/google-calendar.controller';
 import { GoogleCalendarService } from './integrations/google-calendar.service';
 import { GoogleCalendarSyncService } from './integrations/google-calendar-sync.service';
+import {
+  OutlookCalendarController,
+  OutlookCalendarPublicController,
+} from './integrations/outlook-calendar.controller';
+import { OutlookCalendarService } from './integrations/outlook-calendar.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -376,6 +401,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingNotificationsController,
     MarketingDistributionController,
     SalesCallController,
+    DialerController,
     TelephonyConfigController,
     WebphoneConfigController,
     InstallationController,
@@ -404,6 +430,10 @@ import { WalletService } from './wallet/wallet.service';
     MarketingSubscriptionsController,
     MarketingDocumentsController,
     PublicDocumentController,
+    PublicCertificateController,
+    ProspectingController,
+    PublicAuditController,
+    SendingDomainsController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
@@ -431,6 +461,7 @@ import { WalletService } from './wallet/wallet.service';
     PublicBrandingController,
     CoursesController,
     EnrollmentController,
+    GamificationController,
     CommunitiesController,
     AnalyticsController,
     ComplianceController,
@@ -444,11 +475,15 @@ import { WalletService } from './wallet/wallet.service';
     SsoPublicController,
     GoogleCalendarController,
     GoogleCalendarPublicController,
+    OutlookCalendarController,
+    OutlookCalendarPublicController,
     AffiliateController,
+    PublicAffiliatePortalController,
     AgencyController,
     SnapshotController,
     RebillingController,
     SocialPlannerController,
+    SocialOAuthController,
   ],
   providers: [
     // Services
@@ -489,11 +524,13 @@ import { WalletService } from './wallet/wallet.service';
     HardwareQuoteConsumer,
     // Phase 2 telephony: sales-call log + single-line Netgsm provider.
     SalesCallService,
+    DialerService,
     TelephonyProviderRegistry,
     NetgsmLiteAdapter,
     NetgsmApiAdapter,
     NetsantralClient,
     TelephonyConfigService,
+    RecordingSyncService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
@@ -582,6 +619,9 @@ import { WalletService } from './wallet/wallet.service';
     CouponsService,
     WalletService,
     ReviewsService,
+    ReviewSyncService,
+    AuditService,
+    SendingDomainsService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
     VoiceAdapter,
@@ -596,6 +636,8 @@ import { WalletService } from './wallet/wallet.service';
     // Epic C — memberships.
     CoursesService,
     EnrollmentService,
+    CertificateService,
+    GamificationService,
     CommunitiesService,
     // Epic G — analytics.
     AnalyticsService,
@@ -613,6 +655,7 @@ import { WalletService } from './wallet/wallet.service';
     SsoService,
     // Integrations — env-gated Google Calendar 2-way sync.
     GoogleCalendarService,
+    OutlookCalendarService,
     GoogleCalendarSyncService,
     // Epic F — custom roles + permissions.
     RolesService,
@@ -626,10 +669,13 @@ import { WalletService } from './wallet/wallet.service';
     SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
+    SocialOAuthService,
+    SocialTokenRefreshService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
     IngestTokenGuard,
+    AffiliatePortalGuard,
     FeatureGuard,
     ApiKeyGuard,
   ],

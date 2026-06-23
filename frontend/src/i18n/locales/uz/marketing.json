@@ -768,7 +768,16 @@
     "saveFailed": "Saqlab bo'lmadi",
     "drafted": "Qoralama tayyor — ko'rib chiqing va saqlang",
     "draftFailed": "Tuzib bo'lmadi",
-    "empty": "Hali avtomatlashtirish yo'q — birini tasvirlang, AI tuzadi."
+    "empty": "Hali avtomatlashtirish yo'q — birini tasvirlang, AI tuzadi.",
+    "enrollTitle": "Kontaktlarni qo‘shish",
+    "enrollHint": "Ushbu filtrga mos keladigan barcha kontaktlarni “{{name}}” ga qo‘shish.",
+    "enrollBtn": "Qo‘shish",
+    "enrollQueued": "{{n}} ta kontakt fonda qo‘shilmoqda",
+    "enrollFailed": "Qo‘shib bo‘lmadi",
+    "enrollAll": "BARCHA kontaktlarni qo‘shish — bu xabar yuborishni boshlaydi va bekor qilib bo‘lmaydi",
+    "filterStatus": "Holat (ixtiyoriy)",
+    "filterBusinessType": "Biznes turi (ixtiyoriy)",
+    "filterSearch": "Ism/e-pochta bo‘yicha qidirish (ixtiyoriy)"
   },
   "campaigns": {
     "title": "Kampaniyalar",

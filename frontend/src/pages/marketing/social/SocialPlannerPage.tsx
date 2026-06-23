@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -23,6 +24,9 @@ import {
 } from './networks';
 import { PostComposerDialog, type PostComposerSubmit } from './PostComposerDialog';
 import { ConnectAccountDialog } from './ConnectAccountDialog';
+import { OAuthConnectButtons } from './OAuthConnectButtons';
+import { AccountSelectDialog } from './AccountSelectDialog';
+import { useSocialConnect } from './useSocialConnect';
 import type { ConnectAccountFormValues } from './socialSchemas';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -46,8 +50,11 @@ type View = 'posts' | 'accounts';
 export default function SocialPlannerPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
+  const { startConnect } = useSocialConnect();
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [view, setView] = useState<View>('posts');
+  const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingPost, setEditingPost] = useState<SocialPost | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -55,6 +62,30 @@ export default function SocialPlannerPage() {
   const [disconnectAccount, setDisconnectAccount] = useState<SocialAccount | null>(null);
   // post pending a schedule confirmation (carries the picked ISO time)
   const [publishTarget, setPublishTarget] = useState<SocialPost | null>(null);
+
+  // ── OAuth return handling ────────────────────────────────────────────────────
+  // The OAuth callback redirects back to /social?connect=<pendingId> (success)
+  // or ?connect_error=1 (failure). Pick up the param once, open the account
+  // selector, and strip it from the URL.
+  useEffect(() => {
+    const connectId = searchParams.get('connect');
+    const connectErr = searchParams.get('connect_error');
+    if (connectId) {
+      setPendingConnectId(connectId);
+      setView('accounts');
+      searchParams.delete('connect');
+      setSearchParams(searchParams, { replace: true });
+    } else if (connectErr) {
+      toast.error(
+        t('social.oauth.callbackError', {
+          defaultValue: 'Connection failed or was cancelled. Please try again.',
+        }),
+      );
+      searchParams.delete('connect_error');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -377,13 +408,18 @@ export default function SocialPlannerPage() {
           }
         />
       ) : (
-        <AccountsView
-          accounts={accounts}
-          isLoading={accountsLoading}
-          onConnect={() => setConnectOpen(true)}
-          onDisconnect={setDisconnectAccount}
-          canConnect={status ? status.secretBoxConfigured : true}
-        />
+        <div className="space-y-4">
+          {/* One-click OAuth connect — primary path; the manual dialog stays as fallback. */}
+          <OAuthConnectButtons status={status} />
+          <AccountsView
+            accounts={accounts}
+            isLoading={accountsLoading}
+            onConnect={() => setConnectOpen(true)}
+            onDisconnect={setDisconnectAccount}
+            onReconnect={(acc) => startConnect(acc.network)}
+            canConnect={status ? status.secretBoxConfigured : true}
+          />
+        </div>
       )}
 
       {/* Composer */}
@@ -396,7 +432,13 @@ export default function SocialPlannerPage() {
         isPending={composerMutation.isPending}
       />
 
-      {/* Connect account */}
+      {/* OAuth account selection (after the provider callback returns) */}
+      <AccountSelectDialog
+        pendingId={pendingConnectId}
+        onOpenChange={(open) => { if (!open) setPendingConnectId(null); }}
+      />
+
+      {/* Connect account (manual fallback) */}
       <ConnectAccountDialog
         open={connectOpen}
         onOpenChange={setConnectOpen}
@@ -459,10 +501,11 @@ interface AccountsViewProps {
   isLoading: boolean;
   onConnect: () => void;
   onDisconnect: (account: SocialAccount) => void;
+  onReconnect: (account: SocialAccount) => void;
   canConnect: boolean;
 }
 
-function AccountsView({ accounts, isLoading, onConnect, onDisconnect, canConnect }: AccountsViewProps) {
+function AccountsView({ accounts, isLoading, onConnect, onDisconnect, onReconnect, canConnect }: AccountsViewProps) {
   const { t } = useTranslation('marketing');
 
   if (isLoading) {
@@ -498,7 +541,8 @@ function AccountsView({ accounts, isLoading, onConnect, onDisconnect, canConnect
       {accounts.map((acc) => {
         const meta = NETWORK_META[acc.network];
         const Icon = meta.icon;
-        const expired = acc.tokenExpiresAt && new Date(acc.tokenExpiresAt) < new Date();
+        const needsReauth = acc.lastError === 'reauth_required';
+        const expired = (acc.tokenExpiresAt && new Date(acc.tokenExpiresAt) < new Date()) || needsReauth;
         return (
           <Card key={acc.id} className="flex items-start gap-3 p-4">
             <span className="rounded-lg bg-surface-muted p-2 text-muted-foreground" aria-hidden="true">
@@ -522,6 +566,17 @@ function AccountsView({ accounts, isLoading, onConnect, onDisconnect, canConnect
               </div>
               {/* Token is already masked by the backend — display verbatim, never raw. */}
               <p className="mt-1.5 font-mono text-micro text-muted-foreground">{acc.accessToken}</p>
+              {needsReauth && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => onReconnect(acc)}
+                >
+                  <Link2 className="h-4 w-4" aria-hidden="true" />
+                  {t('social.action.reconnect', { defaultValue: 'Reconnect' })}
+                </Button>
+              )}
             </div>
             <IconButton
               variant="ghost"

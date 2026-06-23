@@ -1116,7 +1116,16 @@
     "saveFailed": "Kaydedilemedi",
     "drafted": "Taslak hazır — gözden geçir ve kaydet",
     "draftFailed": "Taslak oluşturulamadı",
-    "empty": "Henüz otomasyon yok — birini anlat, AI taslaklasın."
+    "empty": "Henüz otomasyon yok — birini anlat, AI taslaklasın.",
+    "enrollTitle": "Kişileri ekle",
+    "enrollHint": "Bu filtreye uyan her kişiyi “{{name}}” otomasyonuna ekle.",
+    "enrollBtn": "Ekle",
+    "enrollQueued": "{{n}} kişi arka planda ekleniyor",
+    "enrollFailed": "Eklenemedi",
+    "enrollAll": "TÜM kişileri ekle — bu, mesaj göndermeyi başlatır ve geri alınamaz",
+    "filterStatus": "Durum (isteğe bağlı)",
+    "filterBusinessType": "İşletme türü (isteğe bağlı)",
+    "filterSearch": "Ad/e-posta ara (isteğe bağlı)"
   },
   "campaigns": {
     "title": "Kampanyalar",

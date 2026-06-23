@@ -7,6 +7,7 @@ import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { MessageQuotaService } from '../channels/message-quota.service';
+import { SendingDomainsService } from '../sending-domains/sending-domains.service';
 import { CAMPAIGN_BATCH_KIND } from './campaigns.service';
 
 const BATCH_SIZE = 50;
@@ -47,6 +48,7 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly runner: ScheduledJobRunnerService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly quota: MessageQuotaService,
+    private readonly sendingDomains: SendingDomainsService,
   ) {}
 
   onModuleInit(): void {
@@ -169,9 +171,12 @@ export class CampaignSenderService implements OnModuleInit {
         return { ok: false, error: 'PUBLIC_BASE_URL not configured (unsubscribe link required)' };
       }
       if (channel === 'EMAIL') {
+        // Per-workspace From from a VERIFIED sending domain — null (platform
+        // default) unless an ESP transport is configured, so this is inert today.
+        const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
         const ok = html
-          ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html)
-          : await this.email.sendPlainEmail(to, subject ?? 'Update', body);
+          ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
+          : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
         return { ok, messageId: null, error: ok ? undefined : 'email send failed' };
       }
       const channelType = channel === 'SMS' ? 'SMS' : 'WHATSAPP';

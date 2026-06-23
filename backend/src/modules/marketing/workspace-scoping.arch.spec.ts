@@ -31,6 +31,9 @@ const OWNED_DELEGATES = [
   'marketingNotification',
   'commission',
   'salesCall',
+  // Epic 11b (preview dialer: call-queue sessions).
+  'dialSession',
+  'dialSessionItem',
   'installationCrew',
   'installationJob',
   'installationTask',
@@ -105,6 +108,12 @@ const OWNED_DELEGATES = [
   'lesson',
   'enrollment',
   'lessonProgress',
+  // Epic 10b (memberships: completion certificates).
+  'certificate',
+  // Epic 10c (memberships: gamification — points ledger + badges).
+  'pointsLedger',
+  'badge',
+  'earnedBadge',
   // Epic C (memberships: communities).
   'community',
   'communityMember',
@@ -114,6 +123,8 @@ const OWNED_DELEGATES = [
   'ssoConnection',
   // Integrations (env-gated Google Calendar 2-way sync).
   'googleCalendarConnection',
+  // Integrations (env-gated Outlook/O365 calendar — Epic 12, inert).
+  'outlookCalendarConnection',
   // Affiliate manager (GHL parity).
   'affiliate',
   'affiliateReferral',
@@ -177,6 +188,12 @@ const OWNED_DELEGATES = [
   // Customer wallet (GHL parity): store-credit + its append-only ledger.
   'customerWallet',
   'walletLedgerEntry',
+  // Prospecting audits (GHL parity, Epic 13): workspace-owned website audits;
+  // every multi-row/create call carries workspaceId (public read is by token).
+  'prospectAudit',
+  // Sending domains / DKIM (GHL parity, Epic 13): workspace-owned email sending
+  // domains; every multi-row/create call carries workspaceId.
+  'sendingDomain',
 ] as const;
 
 /**
@@ -245,8 +262,7 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'dedup lookup keyed by (kind, dedupKey) — matches the partial-unique index, global by design',
   'scheduling/scheduled-job.service.ts:scheduledJob.updateMany':
     'cancel by (kind, dedupKey) or by id — control-plane mutation; dedupKey embeds a row UUID',
-  'scheduling/scheduled-job-runner.service.ts:scheduledJob.updateMany':
-    'stuck-reaper resets RUNNING rows across all workspaces (crash recovery sweeper)',
+  // (the stuck-reaper now runs conflict-safe raw SQL, not a Prisma delegate call)
   // Recurring-subscription sweep: the hourly cron reads due ACTIVE subscriptions
   // across ALL workspaces (status + nextBillingAt) — a system job, same shape as
   // the scheduled-job runner. Every write it triggers (billOne) is workspace-
@@ -261,6 +277,25 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (adAccountId, date, campaignId) unique index makes a re-pull idempotent.
   'ads/ads-pull.service.ts:adAccount.findMany':
     'hourly ad-insights sweep reads due ad accounts across all workspaces (system cron)',
+  // Call-recording retrieval sweep (Epic 13, inert): the hourly cron reads ended
+  // api-dial calls missing a recording across ALL workspaces — a system job, same
+  // shape as the ads/subscription sweeps. The only write it triggers is an
+  // id-keyed salesCall.update of recordingUrl; idempotent (re-stamps the same URL).
+  'telephony/recording-sync.service.ts:salesCall.findMany':
+    'hourly call-recording sweep reads ended calls missing a recording across all workspaces (system cron)',
+  // Review-sync sweep (Epic 13, inert): the hourly cron reads ACTIVE review
+  // sources with a token across ALL workspaces — a system job, same shape as the
+  // ads/recording sweeps. Every write it triggers (review upsert / source update)
+  // is workspace-scoped or id-keyed, and the (sourceId, externalReviewId) unique
+  // makes a re-sync idempotent.
+  'reviews/review-sync.service.ts:reviewSource.findMany':
+    'hourly review-sync sweep reads ACTIVE review sources with a token across all workspaces (system cron)',
+  // OAuth token-refresh sweep: the hourly cron reads OAUTH social accounts with a
+  // refresh token nearing expiry across ALL workspaces — a system job, same shape
+  // as the subscription/ads sweeps. Every write it triggers (socialAccount.update)
+  // is id-keyed, and the refresh is idempotent (re-seals the latest token).
+  'social-planner/oauth/social-token-refresh.service.ts:socialAccount.findMany':
+    'hourly OAuth token-refresh sweep reads expiring accounts across all workspaces (system cron)',
   // Public e-signature sign/decline: the document id is resolved from a
   // token-scoped findUnique(publicToken) (the unguessable token IS the
   // capability), then the status-conditional updateMany flips SENT→SIGNED/DECLINED

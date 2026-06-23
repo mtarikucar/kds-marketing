@@ -15,6 +15,8 @@ export interface AccountRow {
   network: string;
   externalId: string;
   accessToken: string; // SEALED
+  /** PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK — selects the LinkedIn author URN. */
+  accountType?: string | null;
 }
 
 /** Returns the access token or null if secret-box not configured / malformed. */
@@ -36,6 +38,14 @@ export function isNetworkConfigured(network: string): boolean {
       return !!(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
     case 'TIKTOK':
       return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
+    // Epic 12 (needs-external, inert until creds): X/Twitter, Pinterest, Google
+    // Business Profile. Each gates on its own platform app credentials.
+    case 'TWITTER':
+      return !!(process.env.X_CLIENT_ID && process.env.X_CLIENT_SECRET);
+    case 'PINTEREST':
+      return !!(process.env.PINTEREST_APP_ID && process.env.PINTEREST_APP_SECRET);
+    case 'GMB':
+      return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
     default:
       return false;
   }
@@ -159,8 +169,12 @@ async function publishLinkedIn(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
 
+  const author =
+    account.accountType === 'LI_ORG'
+      ? `urn:li:organization:${account.externalId}`
+      : `urn:li:person:${account.externalId}`;
   const body: Record<string, unknown> = {
-    author: `urn:li:person:${account.externalId}`,
+    author,
     lifecycleState: 'PUBLISHED',
     specificContent: {
       'com.linkedin.ugc.ShareContent': {
@@ -280,6 +294,117 @@ async function publishTikTok(
   }
 }
 
+/** Publish to X/Twitter (API v2 POST /2/tweets). Inert without a paid X app. */
+async function publishTwitter(
+  account: AccountRow,
+  content: string,
+  _mediaUrls: string[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('TWITTER')) {
+    return { ok: false, error: 'X/Twitter not configured: set X_CLIENT_ID and X_CLIENT_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  // Media upload uses the separate v1.1 endpoint (chunked) — text-only for now;
+  // attaching media is a follow-up once a paid X app is connected.
+  try {
+    const res = await safeFetch('https://api.twitter.com/2/tweets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: content.slice(0, 280) }),
+      timeoutMs: 15_000,
+    });
+    const json = (await res.json()) as Record<string, any>;
+    const id = json?.data?.id;
+    if (res.ok && id) return { ok: true, externalPostId: String(id) };
+    const err = String(json?.detail ?? json?.title ?? res.status);
+    logger.warn(`Twitter publish failed (${account.externalId}): ${err}`);
+    return { ok: false, error: err.slice(0, 500) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`Twitter publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
+/** Publish to Pinterest (API v5 POST /pins). board_id is the account externalId. */
+async function publishPinterest(
+  account: AccountRow,
+  content: string,
+  mediaUrls: string[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('PINTEREST')) {
+    return { ok: false, error: 'Pinterest not configured: set PINTEREST_APP_ID and PINTEREST_APP_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  if (mediaUrls.length === 0) return { ok: false, error: 'Pinterest requires an image media URL' };
+  try {
+    const res = await safeFetch('https://api.pinterest.com/v5/pins', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        board_id: account.externalId,
+        description: content.slice(0, 800),
+        media_source: { source_type: 'image_url', url: mediaUrls[0] },
+      }),
+      timeoutMs: 15_000,
+    });
+    const json = (await res.json()) as Record<string, any>;
+    if (res.ok && json?.id) return { ok: true, externalPostId: String(json.id) };
+    const err = String(json?.message ?? res.status);
+    logger.warn(`Pinterest publish failed (${account.externalId}): ${err}`);
+    return { ok: false, error: err.slice(0, 500) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`Pinterest publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
+/**
+ * Publish to Google Business Profile (Local Post). externalId is the location id
+ * `accounts/{a}/locations/{l}`. Inert until Google allowlists the Business
+ * Profile API. Builds a Local Post only (GBP messaging is sunset).
+ */
+async function publishGmb(
+  account: AccountRow,
+  content: string,
+  mediaUrls: string[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('GMB')) {
+    return { ok: false, error: 'Google Business Profile not configured: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  try {
+    const body: Record<string, unknown> = {
+      languageCode: 'tr',
+      summary: content.slice(0, 1500),
+      topicType: 'STANDARD',
+      ...(mediaUrls.length > 0 ? { media: [{ mediaFormat: 'PHOTO', sourceUrl: mediaUrls[0] }] } : {}),
+    };
+    const res = await safeFetch(
+      `https://mybusiness.googleapis.com/v4/${account.externalId}/localPosts`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        timeoutMs: 15_000,
+      },
+    );
+    const json = (await res.json()) as Record<string, any>;
+    if (res.ok && json?.name) return { ok: true, externalPostId: String(json.name) };
+    const err = String(json?.error?.message ?? res.status);
+    logger.warn(`GMB publish failed (${account.externalId}): ${err}`);
+    return { ok: false, error: err.slice(0, 500) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`GMB publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
 /** Dispatch to the correct per-network adapter. */
 export async function publishToNetwork(
   account: AccountRow,
@@ -295,6 +420,12 @@ export async function publishToNetwork(
       return publishLinkedIn(account, content, mediaUrls);
     case 'TIKTOK':
       return publishTikTok(account, content, mediaUrls);
+    case 'TWITTER':
+      return publishTwitter(account, content, mediaUrls);
+    case 'PINTEREST':
+      return publishPinterest(account, content, mediaUrls);
+    case 'GMB':
+      return publishGmb(account, content, mediaUrls);
     default:
       return { ok: false, error: `Unknown network: ${account.network}` };
   }

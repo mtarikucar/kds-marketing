@@ -127,6 +127,15 @@ export class AffiliateController {
     });
   }
 
+  /** Mint/rotate the affiliate's self-serve portal token (returned once). */
+  @Post(':id/portal-token')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'affiliate.portal_token.generate', resourceType: 'affiliate', resourceIdParam: 'id' })
+  generatePortalToken(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.affiliateService.regeneratePortalToken(user.workspaceId, id);
+  }
+
   // ── Commissions (literal routes — must appear before /:id) ────────────────
 
   @Get('commissions')

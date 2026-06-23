@@ -61,6 +61,11 @@ export const MarketingEventTypes = {
   // `webhook.received` workflow trigger; the posted JSON is carried under
   // payload.body, filter on trigger.body.<field> / trigger.webhookId.
   WebhookReceived: "marketing.webhook.received.v1",
+
+  // Memberships (Epic 10b) — emitted by CertificateService when a
+  // course-completion certificate is issued. Backs the `certificate.issued`
+  // workflow trigger; filter on trigger.courseId.
+  CertificateIssued: "marketing.certificate.issued.v1",
 } as const;
 
 export type MarketingEventType =

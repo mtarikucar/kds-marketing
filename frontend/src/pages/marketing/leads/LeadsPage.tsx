@@ -158,7 +158,9 @@ export default function LeadsPage() {
   const bulkEnroll = useMutation({
     mutationFn: (workflowId: string) => bulkEnrollLeads(Array.from(selected), workflowId),
     onSuccess: (res) => {
-      toast.success(t('leads.bulkEnroll.success', { defaultValue: '{{count}} lead(s) enrolled', count: res?.enrolled ?? 0 }));
+      // Enrollment now fans out in a background batch job; the API returns the
+      // queued count rather than a synchronous enrolled total.
+      toast.success(t('leads.bulkEnroll.success', { defaultValue: 'Enrolling {{count}} lead(s) in the background', count: res?.queued ?? 0 }));
       setSelected(new Set());
     },
     onError: () => toast.error(t('leads.bulkEnroll.error', { defaultValue: 'Failed to enroll leads' })),

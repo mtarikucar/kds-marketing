@@ -15,6 +15,7 @@ import {
 import marketingApi from '../../../../features/marketing/api/marketingApi';
 import type {
   GoogleCalendarStatus,
+  OutlookCalendarStatus,
   SlackIntegration,
   SsoConnection,
 } from './types';
@@ -99,6 +100,41 @@ export function useGoogleCalendarMutations() {
   });
 
   return { connect, sync, disconnect };
+}
+
+// ── Outlook Calendar (Epic 12, inert until MS_OAUTH creds) ────────────────────
+
+export const outlookCalendarKey = ['marketing', 'integrations', 'outlook-calendar'] as const;
+
+export function useOutlookCalendarStatus(): UseQueryResult<OutlookCalendarStatus> {
+  return useQuery({
+    queryKey: outlookCalendarKey,
+    queryFn: () =>
+      marketingApi
+        .get('/integrations/outlook-calendar/status')
+        .then((r) => r.data as OutlookCalendarStatus),
+  });
+}
+
+export function useOutlookCalendarMutations() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: outlookCalendarKey });
+
+  const connect = useMutation({
+    mutationFn: (calendarId?: string) =>
+      marketingApi
+        .get('/integrations/outlook-calendar/connect', {
+          params: calendarId ? { calendarId } : undefined,
+        })
+        .then((r) => r.data as { url: string }),
+  });
+  const disconnect = useMutation({
+    mutationFn: (id: string) =>
+      marketingApi.delete(`/integrations/outlook-calendar/${id}`).then((r) => r.data),
+    onSuccess: invalidate,
+  });
+
+  return { connect, disconnect };
 }
 
 // ── Slack ─────────────────────────────────────────────────────────────────────

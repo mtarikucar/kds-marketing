@@ -181,4 +181,48 @@ describe('AffiliateService — cross-workspace isolation', () => {
       where: { workspaceId: WS_B, code: 'ALICE10' },
     });
   });
+
+  describe('portal (Epic 11a)', () => {
+    it('regeneratePortalToken mints an aff_ token and stores only its hash', async () => {
+      const { prisma, svc } = makeSvc();
+      prisma.affiliate.findFirst.mockResolvedValue(mockAffiliate() as never);
+      (prisma.affiliate.update as jest.Mock).mockResolvedValue({} as never);
+      const { token } = await svc.regeneratePortalToken(WS_A, 'aff-1');
+      expect(token).toMatch(/^aff_[0-9a-f]{48}$/);
+      const data = (prisma.affiliate.update as jest.Mock).mock.calls[0][0].data;
+      expect(data.portalTokenHash).toHaveLength(64); // sha256 hex
+      expect(data.portalTokenHash).not.toContain(token); // raw never stored
+    });
+
+    it('regeneratePortalToken 404s an affiliate from another workspace', async () => {
+      const { prisma, svc } = makeSvc();
+      prisma.affiliate.findFirst.mockResolvedValue(null as never);
+      await expect(svc.regeneratePortalToken(WS_B, 'aff-1')).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.affiliate.update).not.toHaveBeenCalled();
+    });
+
+    it('portalSummary returns scoped profile + referral/commission rollups', async () => {
+      const { prisma, svc } = makeSvc();
+      prisma.affiliate.findFirst.mockResolvedValue({ id: 'aff-1', name: 'Alice', code: 'ALICE10', status: 'ACTIVE' } as never);
+      (prisma.affiliateReferral.groupBy as any).mockResolvedValue([
+        { status: 'PENDING', _count: { _all: 3 } },
+        { status: 'CONVERTED', _count: { _all: 2 } },
+      ]);
+      (prisma.affiliateCommission.groupBy as any).mockResolvedValue([
+        { status: 'OWED', _sum: { amount: new Prisma.Decimal('40.00') } },
+        { status: 'PAID', _sum: { amount: new Prisma.Decimal('120.00') } },
+      ]);
+      const out = await svc.portalSummary(WS_A, 'aff-1');
+      expect(out.referrals).toEqual({ PENDING: 3, CONVERTED: 2 });
+      expect(out.commissions).toEqual({ OWED: '40', PAID: '120' });
+      expect((prisma.affiliateReferral.groupBy as any).mock.calls[0][0].where).toEqual({ workspaceId: WS_A, affiliateId: 'aff-1' });
+      expect((prisma.affiliateCommission.groupBy as any).mock.calls[0][0].where).toEqual({ workspaceId: WS_A, affiliateId: 'aff-1' });
+    });
+
+    it('portalSummary 404s an unknown affiliate', async () => {
+      const { prisma, svc } = makeSvc();
+      prisma.affiliate.findFirst.mockResolvedValue(null as never);
+      await expect(svc.portalSummary(WS_A, 'ghost')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
 });

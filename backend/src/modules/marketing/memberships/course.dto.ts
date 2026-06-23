@@ -5,11 +5,21 @@ import {
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class CertificateTemplateDto {
+  @IsOptional() @IsString() @MaxLength(160) title?: string;
+  @IsOptional() @IsString() @MaxLength(120) signature?: string;
+  @IsOptional() @IsString() @MaxLength(2000) logoUrl?: string;
+}
 
 export class CreateCourseDto {
   @IsString() @IsNotEmpty() @MaxLength(160)
@@ -46,6 +56,15 @@ export class UpdateCourseDto {
 
   @IsOptional() @IsIn(['DRAFT', 'PUBLISHED', 'ARCHIVED'])
   status?: string;
+
+  @IsOptional() @IsIn(['FREE', 'SEQUENTIAL', 'DRIP'])
+  dripMode?: string;
+
+  @IsOptional() @IsBoolean()
+  certificateEnabled?: boolean;
+
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => CertificateTemplateDto)
+  certificateTemplate?: CertificateTemplateDto;
 }
 
 export class ModuleDto {
@@ -71,6 +90,12 @@ export class LessonDto {
 
   @IsOptional() @IsBoolean()
   isPreview?: boolean;
+
+  @IsOptional() @IsIn(['FREE', 'SEQUENTIAL', 'DRIP'])
+  gating?: string;
+
+  @IsOptional() @IsInt() @Min(0) @Max(3650)
+  dripDays?: number;
 }
 
 export class ReorderDto {

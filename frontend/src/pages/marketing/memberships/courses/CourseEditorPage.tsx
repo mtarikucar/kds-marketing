@@ -93,6 +93,15 @@ export default function CourseEditorPage() {
           ...(values.price !== undefined ? { priceCents: toCents(Number(values.price)) } : {}),
           ...(values.currency ? { currency: values.currency } : {}),
           coverImageUrl: values.coverImageUrl ?? '',
+          ...(values.dripMode ? { dripMode: values.dripMode } : {}),
+          certificateEnabled: values.certificateEnabled ?? false,
+          // Only meaningful when enabled; send the template either way so clearing
+          // a field persists.
+          certificateTemplate: {
+            title: values.certTitle || undefined,
+            signature: values.certSignature || undefined,
+            logoUrl: values.certLogoUrl || undefined,
+          },
         },
       },
       {
@@ -278,6 +287,7 @@ function ModulesEditor({ course, mutations }: { course: CourseWithModules; mutat
 
   const submitLesson = (values: LessonFormValues) => {
     if (!lessonDialog) return;
+    const gating = values.gating ?? 'FREE';
     const payload = {
       title: values.title,
       type: values.type,
@@ -285,6 +295,10 @@ function ModulesEditor({ course, mutations }: { course: CourseWithModules; mutat
       ...(values.videoUrl ? { videoUrl: values.videoUrl } : {}),
       ...(values.durationSec !== undefined ? { durationSec: Number(values.durationSec) } : {}),
       isPreview: values.isPreview ?? false,
+      gating,
+      // dripDays only matters for DRIP; clear it otherwise so a mode switch can't
+      // leave a stale value behind.
+      dripDays: gating === 'DRIP' && values.dripDays !== undefined ? Number(values.dripDays) : null,
     };
     if (lessonDialog.lesson) {
       mutations.updateLesson.mutate(

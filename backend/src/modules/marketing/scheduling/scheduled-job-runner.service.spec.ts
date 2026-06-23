@@ -31,6 +31,10 @@ describe('ScheduledJobRunnerService', () => {
         findUnique: jest.fn().mockResolvedValue({ maxAttempts: 5 }),
       },
       $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      // reapStuck batches its passes in a transaction; run them so a rejected
+      // $executeRaw surfaces (mirrors the array form awaiting all ops).
+      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
     runner = new ScheduledJobRunnerService(prisma as any);
   });
@@ -103,13 +107,51 @@ describe('ScheduledJobRunnerService', () => {
     expect(call.data.attempts).toBe(5);
   });
 
-  it('reaps RUNNING-stuck rows back to PENDING before claiming', async () => {
+  it('reaps stuck rows via conflict-safe SQL before claiming', async () => {
     await runner.tick();
-    expect(prisma.scheduledJob.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ status: 'RUNNING' }),
-        data: { status: 'PENDING', lockedAt: null },
-      }),
-    );
+    // Three-pass reap (retire-successor-covered, retire-losers, revive-survivors)
+    // wrapped in a transaction so REVIVE can never duplicate a (kind,dedupKey).
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(3);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('isolates a reaper failure so claiming still runs (no system-wide wedge)', async () => {
+    prisma.$executeRaw.mockRejectedValueOnce(new Error('unique_violation'));
+    const handler = jest.fn().mockResolvedValue(undefined);
+    runner.registerHandler('k', handler);
+    claim([{ id: 'j1', workspaceId: WS, kind: 'k', payload: {}, attempts: 0 }]);
+
+    await expect(runner.tick()).resolves.toBeUndefined();
+    // Dispatch proceeded despite the reaper throwing.
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('isolates a single job dispatch failure so the rest of the batch runs', async () => {
+    const bad = jest.fn().mockRejectedValue(new Error('boom'));
+    const good = jest.fn().mockResolvedValue(undefined);
+    runner.registerHandler('bad', bad);
+    runner.registerHandler('good', good);
+    // Make the FAILED-bookkeeping write throw too, so run() itself escapes.
+    prisma.scheduledJob.update.mockRejectedValueOnce(new Error('db blip'));
+    claim([
+      { id: 'j-bad', workspaceId: WS, kind: 'bad', payload: {}, attempts: 0 },
+      { id: 'j-good', workspaceId: WS, kind: 'good', payload: {}, attempts: 0 },
+    ]);
+
+    await runner.tick();
+    expect(good).toHaveBeenCalled(); // not starved by the first job's failure
+  });
+
+  it('advances a self-rescheduling chain in place (PENDING, new runAt) instead of marking DONE', async () => {
+    const runAt = new Date(Date.now() + 60_000);
+    runner.registerHandler('chain', async () => ({ reschedule: { runAt, payload: { step: 2 } } }));
+    claim([{ id: 'jc', workspaceId: WS, kind: 'chain', payload: { step: 1 }, attempts: 3 }]);
+
+    await runner.tick();
+
+    expect(prisma.scheduledJob.update).toHaveBeenCalledWith({
+      where: { id: 'jc' },
+      data: { status: 'PENDING', runAt, payload: { step: 2 }, lockedAt: null, attempts: 0, lastError: null },
+    });
   });
 });

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { UserPlus, Trash2, CheckCircle2, Circle, BookOpen } from 'lucide-react';
+import { UserPlus, Trash2, CheckCircle2, Circle, BookOpen, Award, Lock } from 'lucide-react';
+import marketingApi from '../../../../features/marketing/api/marketingApi';
+import type { Certificate } from '../types';
 import {
   Card,
   CardContent,
@@ -100,6 +102,7 @@ export function EnrolleesPanel({ course }: Props) {
                     <span className="w-10 text-right text-xs font-medium text-foreground">{e.progressPct}%</span>
                   </div>
                 </div>
+                {e.status === 'COMPLETED' && <CertificateButton enrollmentId={e.id} />}
                 <Button
                   size="sm"
                   variant="outline"
@@ -159,6 +162,38 @@ export function EnrolleesPanel({ course }: Props) {
   );
 }
 
+/**
+ * Opens the public certificate page (print-to-PDF) for a completed enrollment.
+ * Fetches the certificate on click so the list doesn't N+1 on every row.
+ */
+function CertificateButton({ enrollmentId }: { enrollmentId: string }) {
+  const { t } = useTranslation('marketing');
+  const [loading, setLoading] = useState(false);
+  const open = async () => {
+    setLoading(true);
+    try {
+      const cert = await marketingApi
+        .get<Certificate | null>(`/enrollments/${enrollmentId}/certificate`)
+        .then((r) => r.data);
+      if (cert?.serial) {
+        window.open(`${window.location.origin}/api/public/certificates/${cert.serial}`, '_blank', 'noopener');
+      } else {
+        toast.info(t('memberships.certificate.none', { defaultValue: 'No certificate for this course.' }));
+      }
+    } catch (e) {
+      toast.error(apiError(e, 'Failed to load certificate'));
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <Button size="sm" variant="outline" loading={loading} onClick={open}>
+      <Award className="h-4 w-4" aria-hidden="true" />
+      {t('memberships.certificate.view', { defaultValue: 'Certificate' })}
+    </Button>
+  );
+}
+
 interface LearnerViewProps {
   enrollmentId: string;
   course: CourseWithModules;
@@ -171,6 +206,8 @@ function LearnerView({ enrollmentId, course }: LearnerViewProps) {
   const { completeLesson } = useEnrollmentMutations(course.id);
 
   const completedIds = new Set((data?.progress ?? []).filter((p) => p.completed).map((p) => p.lessonId));
+  // Epic 10a: per-lesson lock state for the member view.
+  const lockById = new Map((data?.lessons ?? []).map((l) => [l.lessonId, l]));
 
   if (isLoading) {
     return (
@@ -201,20 +238,32 @@ function LearnerView({ enrollmentId, course }: LearnerViewProps) {
                 <ul>
                   {m.lessons.map((l) => {
                     const done = completedIds.has(l.id);
+                    const access = lockById.get(l.id);
+                    const locked = !done && !!access?.locked;
+                    const unlockAt = access?.unlockAt ? new Date(access.unlockAt) : null;
                     return (
                       <li key={l.id} className="flex items-center justify-between gap-2 px-3 py-2">
                         <span className="flex items-center gap-2 text-sm text-foreground">
                           {done ? (
                             <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
+                          ) : locked ? (
+                            <Lock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                           ) : (
                             <Circle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                           )}
-                          {l.title}
+                          <span className={locked ? 'text-muted-foreground' : undefined}>{l.title}</span>
+                          {locked && (
+                            <span className="text-[11px] text-muted-foreground">
+                              {access?.lockReason === 'DRIP' && unlockAt
+                                ? t('memberships.learner.unlocksOn', { defaultValue: 'unlocks {{date}}', date: unlockAt.toLocaleDateString() })
+                                : t('memberships.learner.lockedPrev', { defaultValue: 'finish the previous lesson' })}
+                            </span>
+                          )}
                         </span>
                         <Button
                           size="sm"
                           variant={done ? 'ghost' : 'outline'}
-                          disabled={done || completeLesson.isPending}
+                          disabled={done || locked || completeLesson.isPending}
                           onClick={() =>
                             completeLesson.mutate(
                               { id: enrollmentId, lessonId: l.id },
@@ -226,7 +275,9 @@ function LearnerView({ enrollmentId, course }: LearnerViewProps) {
                         >
                           {done
                             ? t('memberships.learner.completed', { defaultValue: 'Completed' })
-                            : t('memberships.learner.markComplete', { defaultValue: 'Mark complete' })}
+                            : locked
+                              ? t('memberships.learner.locked', { defaultValue: 'Locked' })
+                              : t('memberships.learner.markComplete', { defaultValue: 'Mark complete' })}
                         </Button>
                       </li>
                     );

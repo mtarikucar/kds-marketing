@@ -22,6 +22,7 @@ const EVENT_FOR_TRIGGER: Record<WorkflowTriggerType, string> = {
   'opportunity.lost': MarketingEventTypes.OpportunityLost,
   'link.clicked': MarketingEventTypes.LinkClicked,
   'webhook.received': MarketingEventTypes.WebhookReceived,
+  'certificate.issued': MarketingEventTypes.CertificateIssued,
 };
 
 /**

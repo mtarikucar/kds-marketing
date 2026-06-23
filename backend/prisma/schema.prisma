@@ -758,6 +758,10 @@ model SalesCall {
   externalCallId  String?
   durationSec     Int?
   recordingUrl    String?
+  // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
+  // the back of the queue (a CONNECTED call with no recording yet, or never), and
+  // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
+  recordingCheckedAt DateTime?
   notes           String?   @db.Text
   startedAt       DateTime  @default(now())
   endedAt         DateTime?
@@ -769,6 +773,44 @@ model SalesCall {
   @@index([leadId])
   @@index([status])
   @@map("sales_calls")
+}
+
+/// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
+/// one at a time (click-to-dial reusing SalesCallService, single-line). The rep
+/// previews each lead, dials, logs the outcome, and the queue auto-advances.
+model DialSession {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  marketingUserId String
+  status          String   @default("ACTIVE") // ACTIVE | DONE | CANCELLED
+  currentIndex    Int      @default(0)
+  total           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  items DialSessionItem[]
+
+  @@index([workspaceId, marketingUserId])
+  @@map("dial_sessions")
+}
+
+/// One lead in a dial session's queue. `outcome` is set when the rep logs or
+/// skips it; `callId` links to the SalesCall placed for it.
+model DialSessionItem {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  dialSessionId String
+  leadId        String
+  position      Int
+  outcome       String? // a SALES_CALL outcome, or SKIPPED
+  callId        String?
+  createdAt     DateTime @default(now())
+
+  session DialSession @relation(fields: [dialSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([dialSessionId, position])
+  @@index([workspaceId])
+  @@map("dial_session_items")
 }
 
 /// Phase-3 installation ops (inside the marketing context). A crew is an
@@ -1108,7 +1150,7 @@ model PaymentOrder {
 model ScheduledJob {
   id          String    @id @default(uuid())
   workspaceId String
-  kind        String // 'workflow.resume' | 'conversation.followup' | 'campaign.batch' | 'booking.reminder' | ...
+  kind        String // 'workflow.resume' | 'conversation.followup' | 'campaign.batch' | 'booking.reminder' | 'lead.enroll_batch' | ...
   runAt       DateTime
   payload     Json
   /// Deterministic key; rescheduling collapses onto the same PENDING row
@@ -1740,9 +1782,17 @@ model Booking {
 model ReviewSource {
   id          String @id @default(uuid())
   workspaceId String
-  type        String @default("GOOGLE") // GOOGLE
+  type        String @default("GOOGLE") // GOOGLE | FACEBOOK
   name        String
   placeUrl    String
+  // Review-sync (Epic 13, inert until a Google Business / FB page token): the
+  // place/location/page id, a SEALED OAuth token, and the sweep bookkeeping.
+  placeId      String?
+  accessToken  String? // SEALED (secret-box) — masked out of responses
+  externalRef  String? // provider account/location ref (e.g. accounts/{a}/locations/{l})
+  syncStatus   String  @default("ACTIVE") // ACTIVE | PAUSED | ERROR
+  lastSyncedAt DateTime?
+  lastError    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1763,14 +1813,21 @@ model Review {
   rating      Int?
   text        String? @db.Text
   authorName  String?
-  status      String  @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED
+  status      String  @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED | SYNCED
   replyDraft  String? @db.Text
   replyText   String? @db.Text
   token       String  @unique
+  // Review-sync (Epic 13): a synced public review carries the provider's review
+  // id (idempotency key per source) + origin + authored time. Gate reviews leave
+  // these null.
+  source          String  @default("GATE") // GATE | GOOGLE | FACEBOOK
+  externalReviewId String?
+  authoredAt      DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([sourceId, externalReviewId])
   @@index([workspaceId, status])
   @@map("reviews")
 }
@@ -2047,7 +2104,7 @@ model CustomerSubscription {
 model WorkspacePspConfig {
   id           String  @id @default(uuid())
   workspaceId  String  @unique
-  provider     String  @default("MANUAL") // STRIPE | MANUAL
+  provider     String  @default("MANUAL") // STRIPE | PAYTR | MANUAL
   configSealed String? @db.Text
   configPublic Json?
 
@@ -2198,11 +2255,21 @@ model Course {
   currency      String?
   coverImageUrl String?
   position      Int      @default(0)
+  // Course-level default lesson gating (Epic 10a drip). A lesson keeps its own
+  // gating unless that is FREE, in which case this course default applies — so an
+  // operator can gate/drip a whole course without editing every lesson.
+  dripMode      String?  // null/FREE | SEQUENTIAL | DRIP
+  // Completion certificates (Epic 10b). When enabled, a Certificate is issued
+  // the moment an enrollment reaches 100%. The template holds {title?, signature?,
+  // logoUrl?} for the rendered certificate.
+  certificateEnabled  Boolean @default(false)
+  certificateTemplate Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  modules     CourseModule[]
-  enrollments Enrollment[]
+  modules      CourseModule[]
+  enrollments  Enrollment[]
+  certificates Certificate[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status])
@@ -2243,6 +2310,77 @@ model LessonProgress {
   @@unique([enrollmentId, lessonId])
   @@index([enrollmentId, completed])
   @@map("lesson_progress")
+}
+
+/// Epic 10b — a completion certificate. Issued once per (course, lead)
+/// completion — keyed on the stable business identity, NOT the enrollment row,
+/// so an unenroll + re-enroll (which mints a new enrollment id) can't produce a
+/// duplicate credential. `enrollmentId` records the enrollment that triggered
+/// issuance (audit). `serial` is the unguessable public handle (verify page);
+/// `leadId` is a soft ref. Rendered to printable HTML on demand (no file storage).
+model Certificate {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  enrollmentId String
+  courseId     String
+  leadId       String
+  serial       String   @unique
+  issuedAt     DateTime @default(now())
+  pdfUrl       String? // reserved: a pre-rendered artifact URL if ever materialized
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, courseId, leadId])
+  @@map("certificates")
+}
+
+/// Epic 10c — append-only points ledger for membership gamification. Points
+/// accrue to a Lead (member) from learning/community activity. The
+/// (workspaceId, leadId, source, refId) unique makes each award idempotent — the
+/// same lesson/course/post can't double-award. `points` is a signed delta.
+model PointsLedger {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  source      String // LESSON_COMPLETE | COURSE_COMPLETE | POST_CREATED | COMMENT
+  points      Int
+  refId       String? // the lesson/course/post/comment id this award is for
+  createdAt   DateTime @default(now())
+
+  @@unique([workspaceId, leadId, source, refId])
+  @@index([workspaceId, leadId])
+  @@map("points_ledger")
+}
+
+/// Epic 10c — a workspace-defined badge. `ruleType` + `threshold` decide when a
+/// member earns it (POINTS = total points; LESSONS = distinct lessons completed;
+/// COURSES = courses completed).
+model Badge {
+  id          String   @id @default(uuid())
+  workspaceId String
+  key         String
+  name        String
+  iconUrl     String?
+  ruleType    String // POINTS | LESSONS | COURSES
+  threshold   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId])
+  @@map("badges")
+}
+
+/// Epic 10c — a badge a member (Lead) has earned (idempotent per lead+badge).
+model EarnedBadge {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  badgeId     String
+  earnedAt    DateTime @default(now())
+
+  @@unique([workspaceId, leadId, badgeId])
+  @@index([workspaceId, leadId])
+  @@map("earned_badges")
 }
 
 /// Epic C3 — a community space. Members are Leads; posts/comments may be
@@ -2337,6 +2475,11 @@ model Lesson {
   durationSec Int?
   position    Int     @default(0)
   isPreview   Boolean @default(false)
+  // Per-lesson access gating (Epic 10a drip). FREE = always open; SEQUENTIAL =
+  // locked until the immediately-prior lesson is completed; DRIP = locked until
+  // `dripDays` after enrollment. isPreview always bypasses gating.
+  gating      String  @default("FREE") // FREE | SEQUENTIAL | DRIP
+  dripDays    Int? // for DRIP: days after enrollment before the lesson unlocks
 
   module CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 
@@ -2512,6 +2655,32 @@ model GoogleCalendarConnection {
   @@map("google_calendar_connections")
 }
 
+/// Epic 12 (needs-external, inert until an Azure AD app + MS_OAUTH creds) —
+/// Microsoft Outlook/O365 calendar connection. Mirrors GoogleCalendarConnection:
+/// sealed access/refresh tokens, a Graph delta cursor, and (for the deferred
+/// real-time sync) a change-notification subscription.
+model OutlookCalendarConnection {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  marketingUserId String
+  outlookCalendarId String @default("primary")
+  accessToken     String // SEALED — masked out of API responses
+  refreshToken    String // SEALED — masked out of API responses
+  tokenExpiresAt  DateTime
+  deltaToken             String? // Graph /me/events delta cursor (nullable until first pull)
+  subscriptionId         String? // Graph change-notification subscription id; unique when set
+  clientState            String? // per-subscription verification nonce
+  subscriptionExpiration DateTime? // when the Graph subscription expires (drives renewal)
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, marketingUserId])
+  @@unique([subscriptionId])
+  @@map("outlook_calendar_connections")
+}
+
 /// Epic F — a workspace-defined custom role with a granular permission set
 /// (array of permission keys from the catalog). Assigned to MarketingUsers via
 /// `customRoleId`; overrides the legacy OWNER/MANAGER/REP mapping.
@@ -2539,6 +2708,10 @@ model Affiliate {
   commissionType  String   // PERCENT | FLAT
   commissionValue Decimal  @db.Decimal(10, 2)
   status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED
+  // Self-serve portal (Epic 11a): sha256 of the affiliate's portal bearer token
+  // (shown once on generation, like IngestToken). null = no portal access yet.
+  portalTokenHash String?  @unique
+  lastLoginAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -2597,6 +2770,10 @@ model SocialAccount {
   displayName    String
   accessToken    String   @db.Text // SEALED — never returned raw
   tokenExpiresAt DateTime?
+  refreshToken   String?  @db.Text // SEALED — provider refresh token (LinkedIn/TikTok)
+  accountType    String?  // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK
+  connectedVia   String   @default("MANUAL") // MANUAL | OAUTH
+  lastError      String?  // e.g. 'reauth_required' when token refresh fails
   enabled        Boolean  @default(true)
   createdAt      DateTime @default(now())
 
@@ -2605,6 +2782,21 @@ model SocialAccount {
   @@unique([workspaceId, network, externalId])
   @@index([workspaceId, network])
   @@map("social_accounts")
+}
+
+/// Short-lived handoff between the OAuth callback and the user's account-pick
+/// step. The callback stashes the provider token + the list of connectable
+/// assets here (sealed); the user then picks which to turn into SocialAccounts.
+model PendingSocialConnection {
+  id          String   @id @default(uuid())
+  workspaceId String
+  network     String
+  payload     String   @db.Text // SEALED JSON { token, refreshToken?, expiresAt?, assets:[...] }
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([workspaceId])
+  @@map("pending_social_connections")
 }
 
 /// A social post authored in the planner (may fan out to multiple networks).
@@ -2987,4 +3179,51 @@ model AdMetric {
   @@unique([adAccountId, date, campaignId])
   @@index([workspaceId, date])
   @@map("ad_metrics")
+}
+
+/// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).
+/// A workspace user points the tool at a prospect's website; an async
+/// ScheduledJob grades the page (on-page SEO + Google PageSpeed) into `sections`
+/// and the unguessable `publicToken` exposes a branded report that can be
+/// converted to a Lead (idempotent via `convertedLeadId`).
+model ProspectAudit {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  targetUrl       String
+  businessName    String?
+  status          String    @default("PENDING") // PENDING | RUNNING | DONE | FAILED
+  score           Int? // 0–100 overall, null until DONE
+  sections        Json? // AuditSection[] — per-check scores + findings
+  error           String?
+  publicToken     String    @unique
+  convertedLeadId String? // set once when converted to a lead (idempotent)
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@index([workspaceId, status])
+  @@map("prospect_audits")
+}
+
+/// A workspace's own email sending domain (GHL parity, Epic 13 — inert until
+/// SENDING_DOMAIN_ESP). We mint an RSA DKIM keypair (private sealed, public
+/// published in the DKIM TXT record); a verify job re-polls DNS until DKIM/SPF/
+/// DMARC appear. Once VERIFIED, marketing email can be sent From this domain.
+model SendingDomain {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  domain            String
+  status            String    @default("PENDING") // PENDING | VERIFIED | FAILED
+  fromEmail         String? // the From address used once VERIFIED (noreply@domain)
+  fromName          String?
+  dkimSelector      String
+  dkimPublicKey     String // base64 DER (the DKIM `p=` value we publish)
+  dkimPrivateSealed String // AES-GCM-sealed PKCS8 PEM private key (for future signing)
+  lastError         String?
+  verifiedAt        DateTime?
+  providerDomainId  String? // set when an ESP manages the domain
+  createdAt         DateTime  @default(now())
+
+  @@unique([workspaceId, domain])
+  @@index([workspaceId, status])
+  @@map("sending_domains")
 }

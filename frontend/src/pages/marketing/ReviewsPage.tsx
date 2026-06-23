@@ -35,7 +35,16 @@ interface Review {
   replyText?: string | null;
   createdAt: string;
 }
-interface Source { id: string; name: string; placeUrl: string }
+interface Source {
+  id: string;
+  name: string;
+  placeUrl: string;
+  // Epic 13 review-sync (inert): GOOGLE | FACEBOOK + whether a sync token is set.
+  type?: string;
+  tokenSet?: boolean;
+  syncStatus?: string;
+  lastSyncedAt?: string | null;
+}
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -208,6 +217,12 @@ export default function ReviewsPage() {
                       <span className="font-medium text-foreground">{s.name}</span>
                       {' '}
                       <span className="text-xs text-muted-foreground truncate">{s.placeUrl}</span>
+                      {' '}
+                      <Badge tone={s.tokenSet ? 'success' : 'neutral'} size="sm">
+                        {s.tokenSet
+                          ? t('reviews.syncOn', 'Auto-sync on')
+                          : t('reviews.syncOff', 'Auto-sync off')}
+                      </Badge>
                     </TD>
                     <TD>
                       <div className="flex justify-end">

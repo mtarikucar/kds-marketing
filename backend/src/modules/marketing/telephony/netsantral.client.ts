@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { interpretNetsantralOriginate, NetsantralOriginateOutcome } from './netsantral.util';
+import { safeFetch } from '../../../common/util/safe-fetch';
 
 export interface OriginateParams {
   username: string;
@@ -54,6 +55,42 @@ export class NetsantralClient {
   static readonly ORIGINATE_HOST = 'http://crmsntrl.netgsm.com.tr:9111';
   private static readonly TIMEOUT_MS = 15_000;
   private static readonly DEFAULT_RING_TIMEOUT = 30;
+
+  /**
+   * Call-recording retrieval (Epic 13, needs-external — INERT until NetGSM
+   * exposes a recording/CDR download API and the operator points us at it via
+   * NETGSM_RECORDING_BASE_URL). Given a provider call id, query the configured
+   * recording endpoint and return a playable URL, or null when not available /
+   * not enabled. Returns null (never throws) so a sweep over many calls is safe.
+   */
+  static recordingEnabled(): boolean {
+    return !!process.env.NETGSM_RECORDING_BASE_URL?.trim();
+  }
+
+  async fetchRecordingUrl(externalCallId: string, creds?: { username?: string; password?: string }): Promise<string | null> {
+    const base = process.env.NETGSM_RECORDING_BASE_URL?.trim();
+    if (!base || !externalCallId) return null;
+    try {
+      const u = new URL(base.replace(/\/+$/, '') + '/' + encodeURIComponent(externalCallId));
+      if (creds?.username) u.searchParams.set('username', creds.username);
+      if (creds?.password) u.searchParams.set('password', creds.password);
+      const res = await safeFetch(u.toString(), { method: 'GET', timeoutMs: NetsantralClient.TIMEOUT_MS });
+      if (!res.ok) return null;
+      // NetGSM is expected to return the recording URL (JSON {url} or a bare URL).
+      const text = (await res.text()).trim();
+      let url: string | null = null;
+      try {
+        const json = JSON.parse(text) as Record<string, unknown>;
+        url = typeof json.url === 'string' ? json.url : typeof json.recordingUrl === 'string' ? (json.recordingUrl as string) : null;
+      } catch {
+        url = /^https?:\/\//i.test(text) ? text : null;
+      }
+      return url && /^https?:\/\//i.test(url) ? url : null;
+    } catch {
+      // Never log: the URL may carry credentials in the query string.
+      return null;
+    }
+  }
 
   /** Ring the rep's extension first, then the customer (api-dial; needs a device on the extension). */
   async originate(p: OriginateParams): Promise<NetsantralOriginateOutcome> {
