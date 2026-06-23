@@ -13,7 +13,7 @@ describe('MetaWebhookController — signature + challenge', () => {
   beforeEach(() => {
     process.env.META_APP_SECRET = SECRET;
     process.env.META_WEBHOOK_VERIFY_TOKEN = 'verify-me';
-    controller = new MetaWebhookController({} as any, { has: () => false } as any, {} as any);
+    controller = new MetaWebhookController({} as any, { has: () => false } as any, {} as any, {} as any);
   });
 
   function sign(raw: Buffer): string {
@@ -67,5 +67,31 @@ describe('MetaWebhookController — signature + challenge', () => {
     expect(waId).toBe('99');
     const pageId = (controller as any).externalIdFor('MESSENGER', { id: 'page-7' });
     expect(pageId).toBe('page-7');
+  });
+
+  it('applies delivery/read receipts through MessageReceiptService', async () => {
+    const apply = jest.fn();
+    const adapter = {
+      parseInbound: () => [],
+      parseStatusUpdates: () => [{ externalMessageId: 'wamid.1', status: 'DELIVERED' as const }],
+    };
+    const registry = { has: () => true, get: () => adapter, resolveConfig: () => ({}) };
+    const resolver = {
+      byExternalId: jest.fn().mockResolvedValue({ id: 'c1', workspaceId: 'w1', type: 'WHATSAPP' }),
+    };
+    const ctrl = new MetaWebhookController(
+      resolver as any,
+      registry as any,
+      { ingest: jest.fn() } as any,
+      { apply } as any,
+    );
+    const body = {
+      object: 'whatsapp_business_account',
+      entry: [
+        { changes: [{ value: { metadata: { phone_number_id: 'PN' }, statuses: [{ id: 'wamid.1', status: 'delivered' }] } }] },
+      ],
+    };
+    await (ctrl as any).process(body);
+    expect(apply).toHaveBeenCalledWith('w1', [{ externalMessageId: 'wamid.1', status: 'DELIVERED' }]);
   });
 });

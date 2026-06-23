@@ -52,17 +52,47 @@ export interface ResolvedChannelConfig {
   public: Record<string, unknown>;
 }
 
+/** WhatsApp template send — reopens a closed 24h session window with an
+ *  already-approved template (name + language + optional body components). */
+export interface OutboundTemplate {
+  name: string;
+  languageCode: string;
+  components?: unknown[];
+}
+
+/** Media-by-URL send (image/document). The provider fetches the URL itself —
+ *  no upload/hosting on our side. */
+export interface OutboundMedia {
+  url: string;
+  kind: 'image' | 'document';
+  filename?: string;
+  caption?: string;
+}
+
 export interface OutboundSend {
   config: ResolvedChannelConfig;
   /** Recipient identity (E.164 / wa-id / psid / …). */
   to: string;
   text: string;
+  /** Optional richer payloads. Adapters pick the shape: template > media > text.
+   *  Templates are WhatsApp-only (ignored by Messenger/Instagram). */
+  template?: OutboundTemplate;
+  media?: OutboundMedia;
 }
 
 export interface SendResult {
   externalMessageId: string | null;
   status: 'SENT' | 'FAILED';
   error?: string;
+}
+
+/** A provider delivery/read receipt, transport-agnostic. Advances an OUTBOUND
+ *  Message's status (keyed by externalMessageId). Not a conversation message —
+ *  applied by MessageReceiptService, never through ConversationIngress. */
+export interface StatusUpdate {
+  externalMessageId: string;
+  status: 'DELIVERED' | 'READ' | 'FAILED';
+  reason?: string | null;
 }
 
 export interface ChannelAdapter {
@@ -76,6 +106,11 @@ export interface ChannelAdapter {
   /** Parse a raw inbound webhook body into normalized messages. Adapters that
    *  can't receive (e.g. a pure outbound SMS line) omit this. */
   parseInbound?(config: ResolvedChannelConfig, body: unknown): InboundMessage[];
+
+  /** Parse provider delivery/read receipts from a webhook body into status
+   *  updates (keyed by our externalMessageId). Adapters without receipts omit
+   *  this. Applied by MessageReceiptService, NOT ConversationIngress. */
+  parseStatusUpdates?(config: ResolvedChannelConfig, body: unknown): StatusUpdate[];
 
   /** Validate the channel's config (called on save / "verify" button). */
   healthCheck(

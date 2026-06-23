@@ -118,6 +118,7 @@ import { ConversationsService } from './channels/conversations.service';
 import { ConversationIngressService } from './channels/conversation-ingress.service';
 import { ConversationStreamService } from './channels/conversation-stream.service';
 import { MessageSenderService } from './channels/message-sender.service';
+import { MessageReceiptService } from './channels/message-receipt.service';
 import { ConversationAiEngineService } from './channels/conversation-ai-engine.service';
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
 import { NetgsmReportClient } from './channels/netgsm-report.client';
@@ -580,6 +581,7 @@ import { WalletService } from './wallet/wallet.service';
     ChannelsService,
     ConversationStreamService,
     MessageSenderService,
+    MessageReceiptService,
     ConversationIngressService,
     ConversationsService,
     ConversationAiEngineService,
