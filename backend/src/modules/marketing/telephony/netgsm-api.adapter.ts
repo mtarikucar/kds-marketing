@@ -30,13 +30,29 @@ export class NetgsmApiAdapter implements TelephonyProvider, OnModuleInit {
 
   async prepareOutboundCall(req: PrepareCallRequest): Promise<PreparedCall> {
     const c = req.config;
-    if (!c?.username || !c?.password || !c?.trunk || !c?.internalNum) {
-      throw new BadRequestException('Netsantral not configured (missing credentials, trunk, or rep extension).');
+    if (!c?.username || !c?.password || !c?.trunk) {
+      throw new BadRequestException('Netsantral not configured (missing credentials or trunk).');
     }
-    const outcome = await this.client.originate({
-      username: c.username, password: c.password,
-      customer_num: req.toPhone, internal_num: c.internalNum, trunk: c.trunk, pbxnum: c.pbxnum,
-    });
+    // Default to 'bridge' — the no-Netsipp path that rings the rep's own phone.
+    const mode = c.callMode ?? 'bridge';
+    let outcome;
+    if (mode === 'bridge') {
+      if (!c.callerNum) {
+        throw new BadRequestException('Bridge calling needs the rep\'s phone number — set it in telephony settings.');
+      }
+      outcome = await this.client.callBridge({
+        username: c.username, password: c.password,
+        caller: c.callerNum, called: req.toPhone, trunk: c.trunk, crmId: req.crmId,
+      });
+    } else {
+      if (!c.internalNum) {
+        throw new BadRequestException('Extension calling needs the rep\'s dahili — set it in telephony settings.');
+      }
+      outcome = await this.client.originate({
+        username: c.username, password: c.password,
+        customer_num: req.toPhone, internal_num: c.internalNum, trunk: c.trunk, pbxnum: c.pbxnum, crmId: req.crmId,
+      });
+    }
     if (!outcome.ok) {
       throw new BadRequestException(outcome.message ?? `Netsantral rejected the call (code ${outcome.code ?? '?'}).`);
     }

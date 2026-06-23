@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetGSM Webphone — Otomatik Kimlik Deneyici</title>
+<style>
+  :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  body { margin:0; padding:16px; background:#0f172a; color:#e2e8f0; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:160px 1fr; gap:8px 12px; max-width:640px; align-items:center; }
+  label { color:#cbd5e1; font-size:13px; }
+  input { width:100%; padding:7px 9px; border-radius:6px; border:1px solid #334155; background:#1e293b; color:#f1f5f9; font-size:14px; box-sizing:border-box; }
+  .btns { margin:14px 0; display:flex; gap:8px; flex-wrap:wrap; }
+  button { padding:10px 16px; border-radius:7px; border:0; background:#2563eb; color:#fff; font-size:15px; cursor:pointer; font-weight:600; }
+  button.sec { background:#475569; font-weight:400; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #winner { margin:12px 0; padding:12px; border-radius:8px; font-size:14px; display:none; }
+  #winner.ok { display:block; background:#052e16; border:1px solid #16a34a; color:#86efac; }
+  #winner.no { display:block; background:#3f1d1d; border:1px solid #b91c1c; color:#fca5a5; }
+  pre { background:#020617; border:1px solid #1e293b; border-radius:8px; padding:12px; height:300px; overflow:auto; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .ok { color:#4ade80; } .bad { color:#f87171; } .warn{color:#fbbf24;}
+</style>
+</head>
+<body>
+  <h1>NetGSM Webphone — Otomatik Kimlik Deneyici</h1>
+  <div class="sub">"Tümünü Otomatik Dene"ye bas → sayfa tüm kullanıcı-adı kombinasyonlarını sırayla register eder, hangisi <b class="ok">200 OK</b> verirse yazar.</div>
+
+  <div class="grid">
+    <label>WSS URL</label>     <input id="wss" value="wss://sip5.netsantral.com:8089/ws">
+    <label>SIP domain</label>  <input id="domain" value="sip5.netsantral.com">
+    <label>Şifre (SIP)</label> <input id="pass" value="i70NkMXz">
+  </div>
+
+  <div class="btns">
+    <button id="btnAuto">▶ Tümünü Otomatik Dene</button>
+    <button id="btnClear" class="sec">Logu temizle</button>
+  </div>
+
+  <div id="winner"></div>
+  <audio id="remote" autoplay></audio>
+  <pre id="log"></pre>
+
+<script type="module">
+  import { SimpleUser } from "https://esm.sh/sip.js@0.21.1/lib/platform/web";
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+  const log = (m) => { const t=new Date().toISOString().substr(11,12); logEl.textContent += `[${t}] ${m}\n`; logEl.scrollTop = logEl.scrollHeight; };
+
+  log("SIP.js yüklendi ✓ — 'Tümünü Otomatik Dene'ye basabilirsin.");
+
+  // SIP.js geçerli host ister; saf rakam (8508407303) domain olamaz → domain = sip5.netsantral.com sabit.
+  // @ içeren kullanıcı adı sadece AUTH alanına konur (AOR'a değil, yoksa geçersiz URI).
+  const COMBOS = [
+    { aor: "tarik",       auth: "tarik@8508407303" },
+    { aor: "101",         auth: "tarik@8508407303" },
+    { aor: "tarik",       auth: "tarik8508407303" },
+    { aor: "tarik",       auth: "tarik-8508407303" },
+    { aor: "8508407303",  auth: "tarik@8508407303" },
+    { aor: "tarik",       auth: "tarik" },
+    { aor: "101",         auth: "101" },
+    { aor: "tarik",       auth: "101" },
+  ];
+
+  function tryOne(combo, wss, domain, pass) {
+    return new Promise((resolve) => {
+      let done = false, u = null;
+      const finish = (r) => {
+        if (done) return; done = true; clearTimeout(timer);
+        (async () => { try { await u.unregister(); } catch(e){} try { await u.disconnect(); } catch(e){} })();
+        resolve(r);
+      };
+      const timer = setTimeout(() => finish("timeout"), 7000);
+      try {
+        u = new SimpleUser(wss, {
+          aor: `sip:${combo.aor}@${domain}`,
+          media: { remote: { audio: $("remote") } },
+          userAgentOptions: {
+            authorizationUsername: combo.auth,
+            authorizationPassword: pass,
+            logLevel: "debug",
+            logConnector: (lvl, cat, lbl, content) => {
+              if (typeof content !== "string") return;
+              if (/SIP\/2\.0\s+200/.test(content) && /REGISTER/.test(content)) finish("200");
+              else if (/SIP\/2\.0\s+403/.test(content)) finish("403");
+            },
+          },
+          delegate: { onRegistered: () => finish("200") },
+        });
+      } catch (e) { finish("URI-hata"); return; }
+      (async () => {
+        try { await u.connect(); await u.register(); }
+        catch (e) { finish("401/red"); }
+      })();
+    });
+  }
+
+  $("btnAuto").onclick = async () => {
+    $("btnAuto").disabled = true;
+    $("winner").className = ""; $("winner").style.display = "none";
+    const wss = $("wss").value.trim(), domain = $("domain").value.trim(), pass = $("pass").value;
+    log(`\n=== Otomatik deneme başladı (domain=${domain}, şifre=${pass}) ===`);
+    let won = null;
+    for (let i = 0; i < COMBOS.length; i++) {
+      const c = COMBOS[i];
+      log(`[#${i+1}/${COMBOS.length}] aor=${c.aor}  auth=${c.auth} ...`);
+      const r = await tryOne(c, wss, domain, pass);
+      if (r === "200") { log(`   ✅✅ 200 OK — ÇALIŞTI!`); won = c; break; }
+      log(`   ${r === "403" ? "⛔ 403 (yasak)" : r === "timeout" ? "⌛ yanıt yok" : "❌ " + r}`);
+    }
+    const w = $("winner");
+    if (won) {
+      w.className = "ok";
+      w.innerHTML = `✅ <b>ÇALIŞAN KOMBİNASYON:</b><br>SIP domain: <b>${domain}</b><br>AOR/From kullanıcı: <b>${won.aor}</b><br>Auth kullanıcı adı: <b>${won.auth}</b><br>Şifre: <b>${pass}</b><br><br>Bunu Claude'a yaz → uygulamaya o eklenecek.`;
+    } else {
+      w.className = "no";
+      w.innerHTML = `❌ Hiçbir kombinasyon 200 OK vermedi. Bu, ham SIP bilgisinin panelde gösterilenden farklı olduğunu (NetGSM provizyonu) gösterir → NetGSM desteğine "Netsipp+ kullanıcısının ham SIP kullanıcı adı/şifre/domain'i nedir?" diye sormamız gerekiyor. Logu Claude'a gönder.`;
+    }
+    $("btnAuto").disabled = false;
+  };
+  $("btnClear").onclick = () => { logEl.textContent = ""; $("winner").style.display = "none"; };
+  window.addEventListener("error", (e) => log("JS hata: " + e.message));
+</script>
+</body>
+</html>

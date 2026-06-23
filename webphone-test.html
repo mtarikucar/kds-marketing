@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetGSM Netsantral — Webphone Test (geçici)</title>
+<style>
+  :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  body { margin: 0; padding: 16px; background:#0f172a; color:#e2e8f0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns: 180px 1fr; gap:8px 12px; max-width:680px; align-items:center; }
+  label { color:#cbd5e1; font-size:13px; }
+  input { width:100%; padding:7px 9px; border-radius:6px; border:1px solid #334155; background:#1e293b; color:#f1f5f9; font-size:14px; box-sizing:border-box; }
+  .btns { margin:14px 0; display:flex; gap:8px; flex-wrap:wrap; max-width:680px; }
+  button { padding:9px 14px; border-radius:7px; border:0; background:#2563eb; color:#fff; font-size:14px; cursor:pointer; }
+  button.sec { background:#475569; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #status { font-weight:600; margin:10px 0; font-size:15px; }
+  pre { background:#020617; border:1px solid #1e293b; border-radius:8px; padding:12px; height:340px; overflow:auto; font-size:12px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
+  .hint { background:#1e293b; border-left:3px solid #f59e0b; padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:14px; max-width:680px; color:#fde68a; }
+  .ok { color:#4ade80; } .bad { color:#f87171; }
+</style>
+</head>
+<body>
+  <h1>NetGSM Netsantral — Webphone Test <span style="color:#f59e0b">(geçici)</span></h1>
+  <div class="sub">Hiçbir backend yok, hiçbir şey gizlenmez. Değerleri elle değiştir → Register → ekranda 200 / 401 gör.</div>
+
+  <div class="hint">
+    Sıra: <b>Register</b>'a bas → SIP logunda <span class="ok">200 OK</span> ararız.
+    <span class="bad">401</span> gelirse <b>Auth kullanıcı adı</b>nı değiştir ve tekrar dene:
+    önce <code>101</code>, sonra <code>101-8508407303</code>, sonra <code>8508407303</code>.
+    Şifre = dahili 101'in SIP şifresi.
+  </div>
+
+  <div class="grid">
+    <label>WSS URL</label>            <input id="wss" value="wss://sip5.netsantral.com:8089/ws">
+    <label>SIP domain</label>         <input id="domain" value="sip5.netsantral.com">
+    <label>AOR / From kullanıcı</label><input id="aor" value="101">
+    <label>Auth kullanıcı adı</label> <input id="authuser" value="101">
+    <label>Şifre (SIP)</label>        <input id="pass" value="" placeholder="dahili 101 SIP şifresi">
+    <label>Aranacak no</label>        <input id="target" value="" placeholder="05XXXXXXXXXX">
+  </div>
+
+  <div class="btns">
+    <button id="btnReg">Register</button>
+    <button id="btnUnreg" class="sec">Unregister</button>
+    <button id="btnCall">Ara</button>
+    <button id="btnHang" class="sec">Kapat</button>
+    <button id="btnClear" class="sec">Logu temizle</button>
+  </div>
+
+  <div id="status">durum: idle</div>
+  <audio id="remote" autoplay></audio>
+  <pre id="log"></pre>
+
+<script type="module">
+  import { SimpleUser } from "https://esm.sh/sip.js@0.21.1/lib/platform/web";
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+  const log = (m) => { const t = new Date().toISOString().substr(11, 12); logEl.textContent += `[${t}] ${m}\n`; logEl.scrollTop = logEl.scrollHeight; };
+  const setStatus = (s) => { $("status").textContent = "durum: " + s; };
+
+  log("SIP.js yüklendi ✓ — Register'a basabilirsin.");
+
+  // SIP.js debug loglarından sadece REGISTER/INVITE istek + 200/401 yanıt satırlarını ayıkla
+  function onLog(level, category, label, content) {
+    if (typeof content !== "string") return;
+    content.split(/\r?\n/).forEach((line) => {
+      const L = line.trim();
+      if (/^SIP\/2\.0\s+\d/.test(L)) {
+        let mark = "";
+        if (/\b200\b/.test(L)) mark = "   ✅ 200 OK";
+        else if (/\b401\b/.test(L)) mark = "   ❌ 401 (kullanıcı adı/şifre yanlış)";
+        else if (/\b403\b/.test(L)) mark = "   ❌ 403 (yetki yok)";
+        else if (/\b404\b/.test(L)) mark = "   ❌ 404 (numara/route yok)";
+        else if (/^SIP\/2\.0\s+[45]/.test(L)) mark = "   ❌";
+        log("  ⇐ " + L + mark);
+      } else if (/^(REGISTER|INVITE|ACK|BYE|CANCEL|OPTIONS)\s+sip:/.test(L)) {
+        log("  ⇒ " + L);
+      }
+    });
+  }
+
+  let user = null;
+
+  async function build() {
+    if (user) { try { await user.disconnect(); } catch (e) {} user = null; }
+    const wss = $("wss").value.trim();
+    const domain = $("domain").value.trim();
+    const aor = $("aor").value.trim();
+    const authUser = $("authuser").value.trim();
+    const pass = $("pass").value;
+    log(`— yeni oturum: aor=${aor}@${domain} | auth-user=${authUser} | wss=${wss}`);
+    user = new SimpleUser(wss, {
+      aor: `sip:${aor}@${domain}`,
+      media: { remote: { audio: $("remote") } },
+      userAgentOptions: {
+        authorizationUsername: authUser,
+        authorizationPassword: pass,
+        displayName: "webphone-test",
+        logLevel: "debug",
+        logConnector: onLog,
+      },
+      delegate: {
+        onServerConnect: () => log("WSS bağlandı ✓"),
+        onServerDisconnect: (e) => log("WSS koptu: " + (e?.message || "")),
+        onRegistered: () => { setStatus("REGISTERED ✅"); log("✅✅ onRegistered — kayıt BAŞARILI (200 OK). Doğru kullanıcı adı + şifre bu!"); },
+        onUnregistered: () => { setStatus("unregistered"); log("onUnregistered"); },
+        onCallCreated: () => log("çağrı oluşturuldu"),
+        onCallAnswered: () => { setStatus("GÖRÜŞMEDE 🔊"); log("çağrı CEVAPLANDI — ses var mı dinle"); },
+        onCallHangup: () => { setStatus("registered (çağrı bitti)"); log("çağrı kapandı"); },
+        onCallReceived: () => log("gelen çağrı"),
+      },
+    });
+    return user;
+  }
+
+  $("btnReg").onclick = async () => {
+    try {
+      setStatus("bağlanıyor...");
+      const u = await build();
+      await u.connect();
+      await u.register();
+      log("register() gönderildi — yukarıda ⇐ 200 OK mı yoksa ❌ 401 mi, ona bak.");
+    } catch (e) { setStatus("HATA"); log("❌ " + (e?.message || e)); }
+  };
+  $("btnUnreg").onclick = async () => { try { await user?.unregister(); } catch (e) { log("err " + e); } };
+  $("btnCall").onclick = async () => {
+    try {
+      if (!user) return log("önce Register");
+      const t = $("target").value.replace(/[^\d]/g, "");
+      log("Aranıyor: " + t);
+      await user.call(`sip:${t}@${$("domain").value.trim()}`);
+      setStatus("aranıyor...");
+    } catch (e) { log("❌ call: " + (e?.message || e)); }
+  };
+  $("btnHang").onclick = async () => { try { await user?.hangup(); } catch (e) {} };
+  $("btnClear").onclick = () => { logEl.textContent = ""; };
+
+  window.addEventListener("error", (e) => log("JS hata: " + e.message));
+</script>
+</body>
+</html>

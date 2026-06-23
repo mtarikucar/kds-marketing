@@ -13,4 +13,6 @@ export class SetDahiliDto {
   @IsOptional() @IsString() @ValidateIf((_, v) => v !== null) @MaxLength(10) dahili?: string | null;
   /** The dahili's SIP password (sealed at rest, served only to the owning rep). */
   @IsOptional() @IsString() @MaxLength(120) sipPassword?: string;
+  /** The rep's own phone (cell) — first leg for bridge calling (no Netsipp needed). */
+  @IsOptional() @IsString() @ValidateIf((_, v) => v !== null) @MaxLength(20) phone?: string | null;
 }

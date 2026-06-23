@@ -31,6 +31,7 @@ interface TelephonyFormValues {
 }
 
 interface DahiliFormValues {
+  phone: string;
   dahili: string;
   sipPassword: string;
 }
@@ -93,13 +94,14 @@ export default function TelephonySettingsPage() {
   });
 
   const dahiliForm = useForm<DahiliFormValues>({
-    defaultValues: { dahili: '', sipPassword: '' },
+    defaultValues: { phone: '', dahili: '', sipPassword: '' },
   });
 
   const saveDahili = useMutation({
     mutationFn: (v: DahiliFormValues) => {
       if (!userId) throw new Error('not authenticated');
       return marketingApi.patch(`/telephony/users/${userId}/dahili`, {
+        phone: v.phone || null,
         dahili: v.dahili || null,
         ...(v.sipPassword ? { sipPassword: v.sipPassword } : {}),
       });
@@ -107,8 +109,8 @@ export default function TelephonySettingsPage() {
     onSuccess: () => {
       // Re-fetch so the Test Webphone panel picks up the new dahili and registers.
       qc.invalidateQueries({ queryKey: ['marketing', 'telephony', 'webphone-config'] });
-      dahiliForm.reset({ dahili: dahiliForm.getValues('dahili'), sipPassword: '' });
-      toast.success(t('telephony.dahiliSaved', 'Extension saved'));
+      dahiliForm.reset({ phone: dahiliForm.getValues('phone'), dahili: dahiliForm.getValues('dahili'), sipPassword: '' });
+      toast.success(t('telephony.dahiliSaved', 'Saved'));
     },
     onError: (e: any) =>
       toast.error(e.response?.data?.message ?? t('telephony.saveFailed', 'Save failed')),
@@ -196,11 +198,11 @@ export default function TelephonySettingsPage() {
       <Card>
         <CardContent className="p-5 space-y-4">
           <div>
-            <p className="font-medium">{t('telephony.myExtension', 'Webphone — my extension')}</p>
+            <p className="font-medium">{t('telephony.myCalling', 'My calling')}</p>
             <p className="text-caption text-muted-foreground">
               {t(
-                'telephony.myExtensionHint',
-                'Assign your own Netsantral extension + its SIP password to ring/answer calls in this browser.',
+                'telephony.myPhoneHint',
+                'Phone (cell): when you click “Call”, NetGSM rings your phone then connects you to the customer over the 0850 line. No softphone/Netsipp needed.',
               )}
             </p>
           </div>
@@ -208,6 +210,17 @@ export default function TelephonySettingsPage() {
             onSubmit={dahiliForm.handleSubmit((v) => saveDahili.mutate(v))}
             className="space-y-4"
           >
+            <Field label={t('telephony.myPhone', 'My phone (cell)')}>
+              {({ id }) => (
+                <Input id={id} placeholder="05XXXXXXXXX" {...dahiliForm.register('phone')} />
+              )}
+            </Field>
+            <p className="text-caption text-muted-foreground pt-2">
+              {t(
+                'telephony.webphoneOptional',
+                'In-browser webphone (optional, needs a Netsipp+ license): extension + its SIP password.',
+              )}
+            </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="dahili">
                 {({ id }) => (

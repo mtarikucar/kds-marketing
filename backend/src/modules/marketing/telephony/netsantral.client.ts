@@ -15,20 +15,39 @@ export interface OriginateParams {
   ringTimeout?: number;
 }
 
+export interface BridgeParams {
+  username: string;
+  password: string;
+  /** First leg — the rep's own phone (external number). NetGSM rings this first. */
+  caller: string;
+  /** Second leg — the customer/lead number. */
+  called: string;
+  trunk: string;
+  /** Correlation id echoed on call-event webhooks/CDR (Phase 2); use the SalesCall id. */
+  crmId?: string;
+  ringTimeout?: number;
+  /** Record both legs (caller_record/called_record). Retrieval is via the report API. */
+  record?: boolean;
+}
+
 /**
- * Thin client for NetGSM Netsantral call origination ("dış arama" / tıkla-ara).
- * Rings the rep's extension first (`originate_order=if`), then dials the
- * customer, bridging over `trunk` (the 0850) so the customer sees the business
- * number.
+ * Thin client for NetGSM Netsantral call control ("dış arama" / tıkla-ara).
  *
- * Endpoint confirmed from the official `netgsm1/netsantral` package source:
- *   GET http://crmsntrl.netgsm.com.tr:9111/<username>/originate?username&password&customer_num&pbxnum&internal_num&ring_timeout&crm_id&wait_response&originate_order&trunk
+ * Two ways to place a call (endpoints confirmed from the official
+ * `netgsm1/netsantral` package source, host `crmsntrl.netgsm.com.tr:9111`):
+ *  - originate (`/originate`, cagribaslat): rings the rep's EXTENSION first, then
+ *    the customer. Needs a registered device on that extension (webphone/Netsipp).
+ *  - callBridge (`/linkup`, cagribagla): rings the rep's own PHONE and the customer
+ *    as two external legs and bridges them over the trunk — needs NO extension, so
+ *    it works without Netsipp. `originate_order=if` rings the rep (caller) first.
  *
- * SECURITY: NetGSM's PBX origination endpoint is plain HTTP (port 9111) and
- * takes credentials in the query string — its design, not ours. So we NEVER log
- * the URL and we scrub username+password from any error. (Open question for
- * teknikdestek@netgsm.com.tr: is an HTTPS variant available? If so switch the
- * scheme in ORIGINATE_HOST.) Inert until a workspace has an ACTIVE TelephonyConfig.
+ * Both show the trunk (0850) as the caller id, so the customer sees the business
+ * number and the rep's personal number stays hidden.
+ *
+ * SECURITY: this PBX endpoint is plain HTTP (port 9111) and takes credentials in
+ * the query string — NetGSM's design, not ours. So we NEVER log the URL and we
+ * scrub username+password from any error. Inert until a workspace has an ACTIVE
+ * TelephonyConfig.
  */
 @Injectable()
 export class NetsantralClient {
@@ -73,32 +92,71 @@ export class NetsantralClient {
     }
   }
 
+  /** Ring the rep's extension first, then the customer (api-dial; needs a device on the extension). */
   async originate(p: OriginateParams): Promise<NetsantralOriginateOutcome> {
     if (!p?.username || !p?.password || !p?.customer_num || !p?.internal_num || !p?.trunk) {
       return { ok: false, message: 'Netsantral originate called with missing parameters.' };
     }
+    const qs = new URLSearchParams({
+      username: p.username,
+      password: p.password,
+      customer_num: p.customer_num.replace(/[^\d]/g, ''),
+      pbxnum: p.pbxnum ?? '',
+      internal_num: p.internal_num,
+      ring_timeout: String(p.ringTimeout ?? NetsantralClient.DEFAULT_RING_TIMEOUT),
+      crm_id: p.crmId ?? '',
+      wait_response: '0',
+      // ring the rep's extension first, then the customer (matches the package default)
+      originate_order: 'if',
+      trunk: p.trunk.replace(/[^\d]/g, ''),
+    });
+    return this.call('originate', p.username, qs, p.password);
+  }
+
+  /**
+   * Bridge two external numbers: ring the rep's own phone (`caller`) and the
+   * customer (`called`), connect them over the trunk. No extension/softphone
+   * needed — the no-Netsipp click-to-call path.
+   */
+  async callBridge(p: BridgeParams): Promise<NetsantralOriginateOutcome> {
+    if (!p?.username || !p?.password || !p?.caller || !p?.called || !p?.trunk) {
+      return { ok: false, message: 'Netsantral callBridge called with missing parameters.' };
+    }
+    const qs = new URLSearchParams({
+      username: p.username,
+      password: p.password,
+      caller: p.caller.replace(/[^\d]/g, ''),
+      called: p.called.replace(/[^\d]/g, ''),
+      ring_timeout: String(p.ringTimeout ?? NetsantralClient.DEFAULT_RING_TIMEOUT),
+      crm_id: p.crmId ?? '',
+      wait_response: '0',
+      // ring the rep (caller/first leg) first, then the customer
+      originate_order: 'if',
+      trunk: p.trunk.replace(/[^\d]/g, ''),
+    });
+    if (p.record) {
+      qs.set('caller_record', '1');
+      qs.set('called_record', '1');
+    }
+    return this.call('linkup', p.username, qs, p.password);
+  }
+
+  /** Shared GET + status check + tolerant interpret + credential scrubbing. */
+  private async call(
+    path: 'originate' | 'linkup',
+    username: string,
+    qs: URLSearchParams,
+    password: string,
+  ): Promise<NetsantralOriginateOutcome> {
     try {
-      const qs = new URLSearchParams({
-        username: p.username,
-        password: p.password,
-        customer_num: p.customer_num.replace(/[^\d]/g, ''),
-        pbxnum: p.pbxnum ?? '',
-        internal_num: p.internal_num,
-        ring_timeout: String(p.ringTimeout ?? NetsantralClient.DEFAULT_RING_TIMEOUT),
-        crm_id: p.crmId ?? '',
-        wait_response: '0',
-        // ring the rep's extension first, then the customer (matches the package default)
-        originate_order: 'if',
-        trunk: p.trunk.replace(/[^\d]/g, ''),
-      });
-      const url = `${NetsantralClient.ORIGINATE_HOST}/${encodeURIComponent(p.username)}/originate?${qs.toString()}`;
+      const url = `${NetsantralClient.ORIGINATE_HOST}/${encodeURIComponent(username)}/${path}?${qs.toString()}`;
       const res = await fetch(url, {
         method: 'GET',
         signal: AbortSignal.timeout(NetsantralClient.TIMEOUT_MS),
       });
       if (typeof res.status === 'number' && res.status >= 400) {
         // never log the url — it carries the credentials in the query string
-        this.logger.warn(`netsantral originate HTTP ${res.status}`);
+        this.logger.warn(`netsantral ${path} HTTP ${res.status}`);
         return { ok: false, message: `Netsantral HTTP ${res.status}` };
       }
       return interpretNetsantralOriginate((await res.text()) ?? '');
@@ -106,7 +164,7 @@ export class NetsantralClient {
       const timedOut = e?.name === 'AbortError' || e?.name === 'TimeoutError';
       const raw = timedOut ? 'Netsantral request timed out' : (e?.message ?? String(e));
       // The URL carries username+password in the query — scrub both from any error.
-      const escaped = p.password.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = password.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const scrubbed = raw
         .replace(/password=[^&\s]+/gi, 'password=***')
         .replace(/username=[^&\s]+/gi, 'username=***')
