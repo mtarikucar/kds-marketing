@@ -109,6 +109,27 @@ describe('CustomDomainsService', () => {
     });
   });
 
+  describe('tlsAsk (Caddy on-demand TLS gate)', () => {
+    it('is inert (false, no DB) when custom domains are disabled', async () => {
+      expect(await svc.tlsAsk('go.acme.com')).toBe(false);
+      expect(prisma.customDomain.findUnique).not.toHaveBeenCalled();
+    });
+    it('authorizes a cert + flips ACTIVE/ISSUED for a VERIFIED host', async () => {
+      process.env.CUSTOM_DOMAINS_ENABLED = '1';
+      prisma.customDomain.findUnique.mockResolvedValue({ id: 'cd1', workspaceId: WS, status: 'VERIFIED', sslStatus: 'PENDING' });
+      expect(await svc.tlsAsk('go.acme.com')).toBe(true);
+      expect(prisma.customDomain.updateMany.mock.calls[0][0].data).toMatchObject({ sslStatus: 'ISSUED', status: 'ACTIVE' });
+    });
+    it('refuses a cert for an unknown/unverified host', async () => {
+      process.env.CUSTOM_DOMAINS_ENABLED = '1';
+      prisma.customDomain.findUnique.mockResolvedValueOnce(null);
+      expect(await svc.tlsAsk('evil.example')).toBe(false);
+      prisma.customDomain.findUnique.mockResolvedValueOnce({ id: 'cd2', workspaceId: WS, status: 'PENDING', sslStatus: 'PENDING' });
+      expect(await svc.tlsAsk('pending.example')).toBe(false);
+      expect(prisma.customDomain.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('verifySweep (system cron)', () => {
     it('is inert without CUSTOM_DOMAINS_ENABLED (no DNS, no read)', async () => {
       await svc.verifySweep();

@@ -169,6 +169,7 @@ import { SendingDomainsController } from './controllers/sending-domains.controll
 // Epic 13 — custom-domain white-label (inert until CUSTOM_DOMAINS_ENABLED).
 import { CustomDomainsService } from './custom-domains/custom-domains.service';
 import { CustomDomainsController } from './controllers/custom-domains.controller';
+import { PublicCustomDomainController } from './controllers/public-custom-domain.controller';
 // List-hygiene write side — ESP bounce/complaint suppression (inert w/o ESP_FEEDBACK_SECRET).
 import { EspFeedbackService } from './channels/esp-feedback.service';
 import { EspFeedbackController } from './controllers/esp-feedback.controller';
@@ -443,6 +444,7 @@ import { WalletService } from './wallet/wallet.service';
     PublicAuditController,
     SendingDomainsController,
     CustomDomainsController,
+    PublicCustomDomainController,
     EspFeedbackController,
     PublicReferralController,
     MarketingOrderFormsController,

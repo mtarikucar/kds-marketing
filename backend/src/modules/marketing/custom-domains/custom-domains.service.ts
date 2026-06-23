@@ -119,6 +119,33 @@ export class CustomDomainsService {
     return res;
   }
 
+  /**
+   * On-demand TLS gate for the edge (e.g. Caddy `on_demand_tls.ask`): may a cert
+   * be issued for this host? True only for a VERIFIED/ACTIVE custom domain — so
+   * the edge can never be tricked into issuing certs for arbitrary hostnames.
+   * On the first ask (= the cert is being provisioned) we stamp ISSUED/ACTIVE so
+   * the dead `sslStatus`/`status` states finally reflect reality. Inert (false)
+   * until CUSTOM_DOMAINS_ENABLED.
+   */
+  async tlsAsk(rawHost: string): Promise<boolean> {
+    if (!isCustomDomainsEnabled()) return false;
+    const host = normalizeHostname(String(rawHost ?? '').replace(/:\d+$/, ''));
+    if (!host) return false;
+    const dom = await this.prisma.customDomain.findUnique({
+      where: { hostname: host },
+      select: { id: true, workspaceId: true, status: true, sslStatus: true },
+    });
+    if (!dom || (dom.status !== 'VERIFIED' && dom.status !== 'ACTIVE')) return false;
+    if (dom.sslStatus !== 'ISSUED' || dom.status !== 'ACTIVE') {
+      await this.prisma.customDomain.updateMany({
+        where: { id: dom.id, workspaceId: dom.workspaceId },
+        data: { sslStatus: 'ISSUED', status: 'ACTIVE' },
+      });
+      this.hostCache.delete(host);
+    }
+    return true;
+  }
+
   // ---- verify sweep ----
 
   @Cron(CronExpression.EVERY_HOUR, { name: 'custom-domains-verify' })
