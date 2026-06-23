@@ -300,6 +300,12 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // is id-keyed, and the refresh is idempotent (re-seals the latest token).
   'social-planner/oauth/social-token-refresh.service.ts:socialAccount.findMany':
     'hourly OAuth token-refresh sweep reads expiring accounts across all workspaces (system cron)',
+  // ESP delivery-feedback suppression: a hard bounce / spam complaint reported by
+  // the ESP carries only the dead address, no workspace — and the address is
+  // undeliverable EVERYWHERE, so suppression (emailBouncedAt + emailOptOut) is
+  // intentionally global by normalized email across all workspaces.
+  'channels/esp-feedback.service.ts:lead.updateMany':
+    'ESP bounce/complaint suppression is global by address (no workspace in the event; a dead address is dead everywhere)',
   // Custom-domain verify sweep (Epic 13, inert): the hourly cron reads PENDING
   // custom domains across ALL workspaces — a system job, same shape as the
   // ads/review/recording sweeps. Every write it triggers (customDomain.updateMany

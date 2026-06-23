@@ -17,7 +17,7 @@ import {
   ClaimedJob,
   JobHandlerResult,
 } from '../scheduling/scheduled-job-runner.service';
-import { sealSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
+import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 import { EmailFrom } from '../../../common/services/email.service';
 import {
   isSendingDomainsConfigured,
@@ -155,10 +155,20 @@ export class SendingDomainsService implements OnModuleInit {
     const dom = await this.prisma.sendingDomain.findFirst({
       where: { workspaceId, status: 'VERIFIED' },
       orderBy: { verifiedAt: 'desc' },
-      select: { fromEmail: true, fromName: true },
+      select: { domain: true, fromEmail: true, fromName: true, dkimSelector: true, dkimPrivateSealed: true },
     });
     if (!dom?.fromEmail) return null;
-    return { email: dom.fromEmail, name: dom.fromName ?? undefined };
+    const from: EmailFrom = { email: dom.fromEmail, name: dom.fromName ?? undefined };
+    // Attach DKIM signing so the From-swap is authenticated (d= aligned to the
+    // From domain), not a deliverability-hurting unsigned spoof.
+    if (isSecretBoxConfigured() && dom.dkimPrivateSealed) {
+      try {
+        from.dkim = { domainName: dom.domain, keySelector: dom.dkimSelector, privateKey: openSecret(dom.dkimPrivateSealed) };
+      } catch {
+        /* unreadable key — send unsigned rather than crash the campaign */
+      }
+    }
+    return from;
   }
 
   // ---- verify job ----

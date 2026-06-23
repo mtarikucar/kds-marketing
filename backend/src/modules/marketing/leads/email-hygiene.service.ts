@@ -1,7 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { promises as dns } from 'dns';
+import { safeFetch } from '../../../common/util/safe-fetch';
 
 export type EmailVerifyStatus = 'UNKNOWN' | 'VALID' | 'INVALID' | 'RISKY';
+
+/** Tier-2 mailbox verification runs only when an operator wires a provider. */
+export function isEmailVerifyTier2Configured(): boolean {
+  return !!(process.env.EMAIL_VERIFY_API_URL && process.env.EMAIL_VERIFY_API_KEY);
+}
+
+/** Map a provider verdict onto our status. Covers ZeroBounce/NeverBounce/Kickbox vocab. */
+export function mapVerifyVerdict(status: string | undefined): EmailVerifyStatus | null {
+  const s = String(status ?? '').toLowerCase().replace(/[\s-]/g, '_');
+  if (['valid', 'deliverable', 'ok'].includes(s)) return 'VALID';
+  if (['invalid', 'undeliverable', 'do_not_mail', 'bounced'].includes(s)) return 'INVALID';
+  if (['catch_all', 'accept_all', 'role', 'disposable', 'unknown', 'risky', 'spamtrap', 'abuse'].includes(s)) return 'RISKY';
+  return null;
+}
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const MX_TIMEOUT_MS = 2500;
@@ -33,14 +48,39 @@ export class EmailHygieneService {
     if (!domain) return 'INVALID';
     if (DISPOSABLE.has(domain)) return 'RISKY';
 
+    let tier1: EmailVerifyStatus;
     try {
       const mx = await this.withTimeout(dns.resolveMx(domain), MX_TIMEOUT_MS);
-      return Array.isArray(mx) && mx.length > 0 ? 'VALID' : 'INVALID';
+      tier1 = Array.isArray(mx) && mx.length > 0 ? 'VALID' : 'INVALID';
     } catch (e: any) {
       // No such domain / no MX records = the address can't receive mail → INVALID.
       // A timeout or other transient DNS failure → UNKNOWN (don't penalize).
-      if (e?.code === 'ENOTFOUND' || e?.code === 'ENODATA') return 'INVALID';
-      return 'UNKNOWN';
+      tier1 = e?.code === 'ENOTFOUND' || e?.code === 'ENODATA' ? 'INVALID' : 'UNKNOWN';
+    }
+    // Tier-2 (real mailbox verification) — only when an operator wired a provider,
+    // and only for addresses tier-1 didn't already rule out (saves paid lookups).
+    if (tier1 !== 'INVALID' && isEmailVerifyTier2Configured()) {
+      const refined = await this.verifyExternal(addr);
+      if (refined) return refined;
+    }
+    return tier1;
+  }
+
+  /** POST {email} to the configured verification API; null on any failure (keep tier-1). */
+  private async verifyExternal(email: string): Promise<EmailVerifyStatus | null> {
+    try {
+      const res = await safeFetch(process.env.EMAIL_VERIFY_API_URL!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.EMAIL_VERIFY_API_KEY}` },
+        body: JSON.stringify({ email }),
+        timeoutMs: 4000,
+      } as any);
+      if (!res.ok) return null;
+      const body = (await res.json().catch(() => null)) as { status?: string; result?: string } | null;
+      return mapVerifyVerdict(body?.status ?? body?.result);
+    } catch (e) {
+      this.logger.warn(`tier-2 email verify failed: ${(e as Error)?.message}`);
+      return null;
     }
   }
 

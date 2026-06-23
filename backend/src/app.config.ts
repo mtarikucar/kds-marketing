@@ -51,6 +51,8 @@ export function configureApp(app: NestExpressApplication): void {
   app.use('/api/public/channels/tiktok/webhook', bodyParser.raw({ type: '*/*', limit: '1mb' }));
   // Inbound Email webhook — HMAC-SHA256 over the raw body (EMAIL_INBOUND_SECRET).
   app.use('/api/public/channels/email/webhook', bodyParser.raw({ type: '*/*', limit: '2mb' }));
+  // ESP delivery-feedback (bounces/complaints) — HMAC over the raw body too.
+  app.use('/api/public/esp/feedback', bodyParser.raw({ type: '*/*', limit: '2mb' }));
 
   // Tight generic body limit (the marketing API has no file/webhook payloads;
   // the bulk lead-ingest endpoint caps its batch size in the DTO).
