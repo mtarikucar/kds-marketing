@@ -295,24 +295,71 @@ async function publishTikTok(
   }
 }
 
-/** Publish to X/Twitter (API v2 POST /2/tweets). Inert without a paid X app. */
+// X allows up to 4 images per tweet; bound the upload work accordingly.
+const X_MAX_MEDIA = 4;
+const X_MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — X's per-image image limit.
+
+/**
+ * Upload one image URL to X's v2 media endpoint (OAuth2 user context, scope
+ * media.write) and return its media id. Fetches the bytes SSRF-guarded, caps
+ * the size, and posts multipart/form-data. Returns null on any failure (the
+ * caller degrades to a text-only tweet rather than failing the whole post).
+ */
+async function uploadXMedia(token: string, mediaUrl: string): Promise<string | null> {
+  try {
+    const imgRes = await safeFetch(mediaUrl, { method: 'GET', timeoutMs: 15_000 });
+    if (!imgRes.ok) return null;
+    const buf = Buffer.from(await imgRes.arrayBuffer());
+    if (buf.length === 0 || buf.length > X_MEDIA_MAX_BYTES) return null;
+    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+
+    const form = new FormData();
+    form.append('media', new Blob([buf], { type: contentType }), 'media');
+    form.append('media_category', 'tweet_image');
+    const upRes = await safeFetch('https://api.x.com/2/media/upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }, // let fetch set the multipart boundary
+      body: form,
+      timeoutMs: 30_000,
+    });
+    const json = (await upRes.json()) as Record<string, any>;
+    // v2 returns { data: { id } }; tolerate the legacy media_id_string too.
+    const id = json?.data?.id ?? json?.media_id_string;
+    if (upRes.ok && id) return String(id);
+    logger.warn(`X media upload failed: ${String(json?.detail ?? json?.title ?? upRes.status)}`);
+    return null;
+  } catch (e: any) {
+    logger.warn(`X media upload error: ${e?.message ?? String(e)}`);
+    return null;
+  }
+}
+
+/** Publish to X/Twitter (API v2 POST /2/tweets), with image media. Inert without a paid X app. */
 async function publishTwitter(
   account: AccountRow,
   content: string,
-  _mediaUrls: string[],
+  mediaUrls: string[],
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('TWITTER')) {
     return { ok: false, error: 'X/Twitter not configured: set X_CLIENT_ID and X_CLIENT_SECRET' };
   }
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
-  // Media upload uses the separate v1.1 endpoint (chunked) — text-only for now;
-  // attaching media is a follow-up once a paid X app is connected.
   try {
+    // Upload up to 4 images first (best-effort); a media failure degrades to a
+    // text-only tweet rather than dropping the whole post.
+    const mediaIds: string[] = [];
+    for (const url of mediaUrls.slice(0, X_MAX_MEDIA)) {
+      const id = await uploadXMedia(token, url);
+      if (id) mediaIds.push(id);
+    }
+    const body: Record<string, unknown> = { text: content.slice(0, 280) };
+    if (mediaIds.length > 0) body.media = { media_ids: mediaIds };
+
     const res = await safeFetch('https://api.twitter.com/2/tweets', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ text: content.slice(0, 280) }),
+      body: JSON.stringify(body),
       timeoutMs: 15_000,
     });
     const json = (await res.json()) as Record<string, any>;

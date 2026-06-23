@@ -1,6 +1,26 @@
-export type Network = 'FACEBOOK' | 'INSTAGRAM' | 'LINKEDIN' | 'TIKTOK';
+import {
+  googleOAuthClientId,
+  googleOAuthClientSecret,
+} from '../../../../common/util/google-oauth-env';
 
-export const OAUTH_NETWORKS: Network[] = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK'];
+export type Network =
+  | 'FACEBOOK'
+  | 'INSTAGRAM'
+  | 'LINKEDIN'
+  | 'TIKTOK'
+  | 'TWITTER'
+  | 'PINTEREST'
+  | 'GMB';
+
+export const OAUTH_NETWORKS: Network[] = [
+  'FACEBOOK',
+  'INSTAGRAM',
+  'LINKEDIN',
+  'TIKTOK',
+  'TWITTER',
+  'PINTEREST',
+  'GMB',
+];
 
 interface OAuthDef {
   authorizeUrl: string;
@@ -9,6 +29,10 @@ interface OAuthDef {
   clientSecretEnv: string;
   /** Scope delimiter the provider's authorize endpoint expects. */
   scopeSep: string;
+  /** OAuth2 PKCE (S256) — required by X/Twitter's confidential-client flow. */
+  pkce?: boolean;
+  /** Extra authorize-URL params (e.g. Google's access_type/prompt for a refresh token). */
+  extraAuthParams?: Record<string, string>;
 }
 
 /**
@@ -45,6 +69,35 @@ export const NETWORK_OAUTH: Record<Network, OAuthDef> = {
     clientSecretEnv: 'TIKTOK_CLIENT_SECRET',
     scopeSep: ',',
   },
+  // X/Twitter — OAuth2 Authorization Code WITH PKCE (S256), confidential client.
+  // `offline.access` yields a refresh token; `media.write` enables image upload.
+  TWITTER: {
+    authorizeUrl: 'https://twitter.com/i/oauth2/authorize',
+    scopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access', 'media.write'],
+    clientIdEnv: 'X_CLIENT_ID',
+    clientSecretEnv: 'X_CLIENT_SECRET',
+    scopeSep: ' ',
+    pkce: true,
+  },
+  // Pinterest — OAuth2 (Basic-auth token exchange); each board is a publishable asset.
+  PINTEREST: {
+    authorizeUrl: 'https://www.pinterest.com/oauth/',
+    scopes: ['boards:read', 'pins:read', 'pins:write'],
+    clientIdEnv: 'PINTEREST_APP_ID',
+    clientSecretEnv: 'PINTEREST_APP_SECRET',
+    scopeSep: ',',
+  },
+  // Google Business Profile — Google OAuth2 with the business.manage scope. Shares
+  // the Google app creds (dual env names handled below); access_type=offline +
+  // prompt=consent are required to receive a refresh token.
+  GMB: {
+    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    scopes: ['https://www.googleapis.com/auth/business.manage'],
+    clientIdEnv: 'GOOGLE_CLIENT_ID',
+    clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
+    scopeSep: ' ',
+    extraAuthParams: { access_type: 'offline', prompt: 'consent' },
+  },
 };
 
 export function isOAuthNetwork(n: string): n is Network {
@@ -52,15 +105,23 @@ export function isOAuthNetwork(n: string): n is Network {
 }
 
 export function clientId(n: Network): string | undefined {
+  // GMB shares the Google OAuth app, which has two historical env names.
+  if (n === 'GMB') return googleOAuthClientId();
   return process.env[NETWORK_OAUTH[n].clientIdEnv];
 }
 
 export function clientSecret(n: Network): string | undefined {
+  if (n === 'GMB') return googleOAuthClientSecret();
   return process.env[NETWORK_OAUTH[n].clientSecretEnv];
 }
 
 export function isOAuthConfigured(n: Network): boolean {
   return !!(clientId(n) && clientSecret(n));
+}
+
+/** True when the network's authorize/token flow uses OAuth2 PKCE (S256). */
+export function usesPkce(n: Network): boolean {
+  return NETWORK_OAUTH[n].pkce === true;
 }
 
 /**

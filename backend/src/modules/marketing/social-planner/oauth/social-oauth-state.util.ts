@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 /**
  * Signed, short-lived OAuth `state` for the social-connect flow. Carries the
@@ -21,6 +21,10 @@ export interface StatePayload {
   network: string;
   nonce: string;
   exp: number;
+  /** Sealed (AES-GCM) PKCE code_verifier — present only for PKCE networks (X).
+   *  Sealed, not plaintext, so an interceptor who sees the redirect state can't
+   *  recover the verifier and defeat PKCE's code-interception protection. */
+  cv?: string;
 }
 
 function b64url(buf: Buffer): string {
@@ -32,7 +36,7 @@ function fromB64url(s: string): Buffer {
 }
 
 export function signState(
-  data: { workspaceId: string; network: string },
+  data: { workspaceId: string; network: string; cv?: string },
   ttlMs: number = TTL_MS,
 ): string {
   const payload: StatePayload = {
@@ -40,10 +44,23 @@ export function signState(
     network: data.network,
     nonce: b64url(randomBytes(12)),
     exp: Date.now() + ttlMs,
+    ...(data.cv ? { cv: data.cv } : {}),
   };
   const body = b64url(Buffer.from(JSON.stringify(payload)));
   const sig = b64url(createHmac('sha256', key()).update(body).digest());
   return `${body}.${sig}`;
+}
+
+/**
+ * Generate a PKCE pair: a high-entropy `verifier` (43–128 chars per RFC 7636)
+ * and its S256 `challenge` (base64url(SHA-256(verifier))). The verifier is kept
+ * server-side (sealed into the OAuth state); only the challenge goes on the
+ * authorize URL.
+ */
+export function generatePkce(): { verifier: string; challenge: string } {
+  const verifier = b64url(randomBytes(48)); // 64 url-safe chars
+  const challenge = b64url(createHash('sha256').update(verifier).digest());
+  return { verifier, challenge };
 }
 
 export function verifyState(token: string): StatePayload | null {
