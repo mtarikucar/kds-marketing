@@ -5,6 +5,7 @@ import {
   BadRequestException,
   OnModuleInit,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
@@ -155,7 +156,7 @@ export class SocialPlannerService implements OnModuleInit {
         content: dto.content,
         mediaUrls: dto.mediaUrls ?? [],
         status: 'DRAFT',
-        ...(dto.options !== undefined ? { options: dto.options } : {}),
+        ...(dto.options !== undefined ? { options: dto.options as Prisma.InputJsonValue } : {}),
       },
     });
 
@@ -194,7 +195,7 @@ export class SocialPlannerService implements OnModuleInit {
       data: {
         ...(dto.content !== undefined ? { content: dto.content } : {}),
         ...(dto.mediaUrls !== undefined ? { mediaUrls: dto.mediaUrls } : {}),
-        ...(dto.options !== undefined ? { options: dto.options } : {}),
+        ...(dto.options !== undefined ? { options: dto.options as Prisma.InputJsonValue } : {}),
       },
       include: { targets: true },
     });
