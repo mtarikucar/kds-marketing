@@ -107,11 +107,6 @@ model MarketingUser {
   /// Netsantral extension this rep's outbound calls ring (e.g. "104"). Null = no
   /// api-dial; SalesCallService falls back to click-to-dial for this rep.
   dahili       String?
-  /// SIP authorization username for this rep's dahili — taken from NetGSM
-  /// "Netsantral > Santral Bilgileri > Dahili Durumları". MAY differ from the
-  /// extension number (`dahili`); the in-app webphone registers with this when
-  /// set, otherwise it falls back to `dahili`.
-  dahiliUsername String?
   /// AES-256-GCM sealed SIP password for this rep's dahili (in-app webphone).
   /// Served only to the owning rep over HTTPS; never returned raw.
   dahiliSecret String?
