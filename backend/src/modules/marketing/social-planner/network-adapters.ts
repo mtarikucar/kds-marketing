@@ -2,6 +2,19 @@ import { Logger } from '@nestjs/common';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
+import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
+
+export interface TikTokPostOptions {
+  privacyLevel?: string;
+  disableComment?: boolean;
+  disableDuet?: boolean;
+  disableStitch?: boolean;
+  mediaType?: 'VIDEO' | 'PHOTO';
+  coverIndex?: number;
+}
+export interface PublishOptions {
+  tiktok?: TikTokPostOptions;
+}
 
 const logger = new Logger('NetworkAdapters');
 
@@ -223,11 +236,16 @@ async function publishLinkedIn(
  * We init the post and briefly poll the publish status to surface immediate
  * failures; if it's still processing after the bounded wait we report success
  * with the publish_id (TikTok finishes the encode on its side).
+ *
+ * Supports per-post privacy/interaction controls and photo/carousel posts via
+ * the optional `options` arg. Creator-info is queried first to clip the
+ * requested privacy level to what the account actually allows.
  */
 async function publishTikTok(
   account: AccountRow,
   content: string,
   mediaUrls: string[],
+  options?: TikTokPostOptions,
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('TIKTOK')) {
     return { ok: false, error: 'TikTok not configured: set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET' };
@@ -235,25 +253,50 @@ async function publishTikTok(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
   if (mediaUrls.length === 0) {
-    return { ok: false, error: 'TikTok requires a video media URL' };
+    return { ok: false, error: 'TikTok requires at least one media URL' };
   }
 
   try {
-    // Step 1 — init the post; TikTok pulls the video from the URL.
-    const initRes = await safeFetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'content-type': 'application/json; charset=UTF-8',
-      },
-      body: JSON.stringify({
+    // Step 0 — creator info governs the allowed privacy options + interaction caps.
+    const info = await queryCreatorInfo(token);
+    const privacy = validatePrivacyLevel(options?.privacyLevel, info);
+    const isPhoto = options?.mediaType === 'PHOTO';
+
+    let initUrl: string;
+    let initBody: Record<string, any>;
+    if (isPhoto) {
+      initUrl = 'https://open.tiktokapis.com/v2/post/publish/content/init/';
+      initBody = {
+        media_type: 'PHOTO',
+        post_mode: 'DIRECT_POST',
+        post_info: {
+          title: content.slice(0, 90),
+          description: content.slice(0, 4000),
+          privacy_level: privacy,
+          disable_comment: options?.disableComment ?? info.commentDisabled,
+          photo_images: mediaUrls.slice(0, 35),
+          photo_cover_index: Math.min(options?.coverIndex ?? 0, mediaUrls.length - 1),
+        },
+        source_info: { source: 'PULL_FROM_URL' },
+      };
+    } else {
+      initUrl = 'https://open.tiktokapis.com/v2/post/publish/video/init/';
+      initBody = {
         post_info: {
           title: content.slice(0, 2200),
-          privacy_level: 'PUBLIC_TO_EVERYONE',
-          disable_comment: false,
+          privacy_level: privacy,
+          disable_comment: options?.disableComment ?? info.commentDisabled,
+          disable_duet: options?.disableDuet ?? info.duetDisabled,
+          disable_stitch: options?.disableStitch ?? info.stitchDisabled,
         },
         source_info: { source: 'PULL_FROM_URL', video_url: mediaUrls[0] },
-      }),
+      };
+    }
+
+    const initRes = await safeFetch(initUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify(initBody),
       timeoutMs: 15_000,
     });
     const initJson = (await initRes.json()) as Record<string, any>;
@@ -269,20 +312,15 @@ async function publishTikTok(
       await sleep(2_000);
       const statusRes = await safeFetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'content-type': 'application/json; charset=UTF-8',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8' },
         body: JSON.stringify({ publish_id: publishId }),
         timeoutMs: 10_000,
       });
       const statusJson = (await statusRes.json()) as Record<string, any>;
       const status = statusJson?.data?.status;
-      if (status === 'PUBLISH_COMPLETE') {
-        return { ok: true, externalPostId: String(publishId) };
-      }
+      if (status === 'PUBLISH_COMPLETE') return { ok: true, externalPostId: String(publishId) };
       if (status === 'FAILED') {
-        const reason = String(statusJson?.data?.fail_reason ?? 'TikTok rejected the video');
+        const reason = String(statusJson?.data?.fail_reason ?? 'TikTok rejected the media');
         return { ok: false, error: reason.slice(0, 500) };
       }
     }
@@ -411,6 +449,7 @@ export async function publishToNetwork(
   account: AccountRow,
   content: string,
   mediaUrls: string[],
+  options?: PublishOptions,
 ): Promise<PublishResult> {
   switch (account.network) {
     case 'FACEBOOK':
@@ -420,7 +459,7 @@ export async function publishToNetwork(
     case 'LINKEDIN':
       return publishLinkedIn(account, content, mediaUrls);
     case 'TIKTOK':
-      return publishTikTok(account, content, mediaUrls);
+      return publishTikTok(account, content, mediaUrls, options?.tiktok);
     case 'TWITTER':
       return publishTwitter(account, content, mediaUrls);
     case 'PINTEREST':
