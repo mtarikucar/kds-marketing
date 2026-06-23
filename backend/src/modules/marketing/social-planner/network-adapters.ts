@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
+import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 
 const logger = new Logger('NetworkAdapters');
 
@@ -9,6 +10,8 @@ export interface PublishResult {
   ok: boolean;
   externalPostId?: string;
   error?: string;
+  /** True when the failure is a Meta token problem needing reconnect. */
+  isAuthError?: boolean;
 }
 
 export interface AccountRow {
@@ -66,27 +69,25 @@ async function publishFacebook(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
 
-  const body: Record<string, unknown> = { message: content, access_token: token };
+  const body: Record<string, unknown> = { message: content };
   // Attach the first media url as a link if present
   if (mediaUrls.length > 0) body.link = mediaUrls[0];
 
   try {
-    const res = await safeFetch(
-      `https://graph.facebook.com/v19.0/${account.externalId}/feed`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        timeoutMs: 15_000,
-      },
-    );
-    const json = (await res.json()) as Record<string, unknown>;
-    if (res.ok && json.id) {
-      return { ok: true, externalPostId: String(json.id) };
+    const r = await metaGraphFetch(`/${account.externalId}/feed`, {
+      accessToken: token,
+      method: 'POST',
+      body,
+      timeoutMs: 15_000,
+    });
+    if (!r.ok) {
+      logger.warn(`Facebook publish failed (${account.externalId}): ${r.error.message}`);
+      return { ok: false, error: r.error.message.slice(0, 500), isAuthError: r.error.isAuthError };
     }
-    const err = String((json as any)?.error?.message ?? res.status);
-    logger.warn(`Facebook publish failed (${account.externalId}): ${err}`);
-    return { ok: false, error: err.slice(0, 500) };
+    const id = (r.data as any)?.id;
+    if (id) return { ok: true, externalPostId: String(id) };
+    logger.warn(`Facebook publish failed (${account.externalId}): no post id returned`);
+    return { ok: false, error: 'no post id returned' };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Facebook publish error (${account.externalId}): ${msg}`);
@@ -108,10 +109,7 @@ async function publishInstagram(
 
   try {
     // Step 1: create a media container
-    const mediaBody: Record<string, unknown> = {
-      caption: content,
-      access_token: token,
-    };
+    const mediaBody: Record<string, unknown> = { caption: content };
     if (mediaUrls.length > 0) {
       mediaBody.image_url = mediaUrls[0];
       mediaBody.media_type = 'IMAGE';
@@ -120,37 +118,41 @@ async function publishInstagram(
       return { ok: false, error: 'Instagram requires at least one media URL' };
     }
 
-    const createRes = await safeFetch(
-      `https://graph.facebook.com/v19.0/${account.externalId}/media`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(mediaBody),
-        timeoutMs: 15_000,
-      },
-    );
-    const createJson = (await createRes.json()) as Record<string, unknown>;
-    if (!createRes.ok || !createJson.id) {
-      const err = String((createJson as any)?.error?.message ?? createRes.status);
-      return { ok: false, error: `IG media create: ${err}`.slice(0, 500) };
+    const createRes = await metaGraphFetch(`/${account.externalId}/media`, {
+      accessToken: token,
+      method: 'POST',
+      body: mediaBody,
+      timeoutMs: 15_000,
+    });
+    if (!createRes.ok) {
+      return {
+        ok: false,
+        error: `IG media create: ${createRes.error.message}`.slice(0, 500),
+        isAuthError: createRes.error.isAuthError,
+      };
+    }
+    const containerId = (createRes.data as any)?.id;
+    if (!containerId) {
+      return { ok: false, error: 'IG media create: no container id returned' };
     }
 
     // Step 2: publish the container
-    const pubRes = await safeFetch(
-      `https://graph.facebook.com/v19.0/${account.externalId}/media_publish`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ creation_id: createJson.id, access_token: token }),
-        timeoutMs: 15_000,
-      },
-    );
-    const pubJson = (await pubRes.json()) as Record<string, unknown>;
-    if (pubRes.ok && pubJson.id) {
-      return { ok: true, externalPostId: String(pubJson.id) };
+    const pubRes = await metaGraphFetch(`/${account.externalId}/media_publish`, {
+      accessToken: token,
+      method: 'POST',
+      body: { creation_id: containerId },
+      timeoutMs: 15_000,
+    });
+    if (!pubRes.ok) {
+      return {
+        ok: false,
+        error: `IG media publish: ${pubRes.error.message}`.slice(0, 500),
+        isAuthError: pubRes.error.isAuthError,
+      };
     }
-    const err2 = String((pubJson as any)?.error?.message ?? pubRes.status);
-    return { ok: false, error: `IG media publish: ${err2}`.slice(0, 500) };
+    const postId = (pubRes.data as any)?.id;
+    if (postId) return { ok: true, externalPostId: String(postId) };
+    return { ok: false, error: 'IG media publish: no post id returned' };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Instagram publish error (${account.externalId}): ${msg}`);
