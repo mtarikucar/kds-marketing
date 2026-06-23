@@ -7,7 +7,8 @@ import { Button, Input, Card, CardContent, Badge, Skeleton } from '@/components/
 const TOKEN_KEY = 'affiliatePortalToken';
 
 interface PortalSummary {
-  affiliate: { name: string; email: string; code: string; commissionType: string; commissionValue: string; status: string };
+  affiliate: { name: string; email: string; code: string; commissionType: string; commissionValue: string; status: string; referralSlug?: string | null };
+  referralPath?: string;
   referrals: Record<string, number>;
   commissions: Record<string, string>;
 }
@@ -117,6 +118,20 @@ export default function AffiliatePortalPage() {
                 <Button size="sm" variant="outline" onClick={() => a?.code && navigator.clipboard.writeText(a.code)}>{t('common.copy', { defaultValue: 'Copy' })}</Button>
               </div>
             </div>
+            {summary.data?.referralPath && (
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground">{t('portal.yourLink', { defaultValue: 'Your shareable referral link' })}</p>
+                {(() => {
+                  const link = `${window.location.origin}${summary.data!.referralPath}`;
+                  return (
+                    <div className="flex items-center gap-2">
+                      <code className="min-w-0 flex-1 truncate rounded border border-border bg-surface-muted px-2 py-1.5 font-mono text-sm">{link}</code>
+                      <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(link)}>{t('common.copy', { defaultValue: 'Copy' })}</Button>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3 pt-1 sm:grid-cols-4">
               <Stat icon={<Users className="h-4 w-4" />} label={t('portal.referrals', { defaultValue: 'Referrals' })} value={Object.values(summary.data?.referrals ?? {}).reduce((s, n) => s + n, 0)} />
               <Stat icon={<Users className="h-4 w-4" />} label={t('portal.converted', { defaultValue: 'Converted' })} value={summary.data?.referrals?.CONVERTED ?? 0} />

@@ -172,6 +172,8 @@ import { CustomDomainsController } from './controllers/custom-domains.controller
 // List-hygiene write side — ESP bounce/complaint suppression (inert w/o ESP_FEEDBACK_SECRET).
 import { EspFeedbackService } from './channels/esp-feedback.service';
 import { EspFeedbackController } from './controllers/esp-feedback.controller';
+// Affiliate referral loop — public /r/:slug redirect + attribution + self-signup.
+import { PublicReferralController } from './controllers/public-referral.controller';
 
 // Phase F P8 — Voice AI (Twilio).
 import { MarketingVoiceController } from './controllers/marketing-voice.controller';
@@ -442,6 +444,7 @@ import { WalletService } from './wallet/wallet.service';
     SendingDomainsController,
     CustomDomainsController,
     EspFeedbackController,
+    PublicReferralController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,

@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
+import { AffiliateService } from '../services/affiliate.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 
@@ -19,9 +20,10 @@ export class FormsService {
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxService,
     private readonly autoAssigner: LeadAutoAssignerService,
+    private readonly affiliates: AffiliateService,
   ) {}
 
-  async submit(formId: string, data: Record<string, string>): Promise<{ redirectUrl: string | null }> {
+  async submit(formId: string, data: Record<string, string>, affRef?: string): Promise<{ redirectUrl: string | null }> {
     // Defensive backstop (independent of the controller): cap the untrusted
     // dynamic-field map to ≤50 fields, key ≤100 chars, value ≤2000 chars.
     const capped: Record<string, string> = {};
@@ -45,7 +47,7 @@ export class FormsService {
     const phoneNormalized = normalizePhone(phone);
     const businessName = (data.businessName || data.company || name || 'Form lead').trim();
 
-    const leadId = await this.prisma.$transaction(async (tx) => {
+    const { leadId, created } = await this.prisma.$transaction(async (tx) => {
       // De-dupe on the NORMALIZED keys, skipping tombstoned (merged-away) leads
       // so a merge can't be resurrected by a later submission.
       let existing = null as { id: string; status: string } | null;
@@ -68,7 +70,7 @@ export class FormsService {
         if (existing.status !== 'WON' && existing.status !== 'LOST') {
           await tx.lead.updateMany({ where: { id: existing.id, workspaceId }, data: { source: 'WEBSITE' } });
         }
-        return existing.id;
+        return { leadId: existing.id, created: false };
       }
       const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
       const lead = await tx.lead.create({
@@ -100,8 +102,15 @@ export class FormsService {
         },
         tx as any,
       );
-      return lead.id;
+      return { leadId: lead.id, created: true };
     });
+
+    // Affiliate attribution: a NEW lead carrying an aff_ref referral cookie is
+    // credited to the referring affiliate (same-workspace + ACTIVE only). Best-
+    // effort — never blocks lead capture.
+    if (created && affRef) {
+      await this.affiliates.attributeReferral(workspaceId, affRef, leadId);
+    }
 
     await this.outbox.append({
       type: MarketingEventTypes.FormSubmitted,

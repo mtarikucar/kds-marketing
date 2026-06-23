@@ -115,11 +115,13 @@ export class AffiliateService {
     const affiliate = await this.prisma.affiliate.findFirst({
       where: { id: affiliateId, workspaceId },
       select: {
-        id: true, name: true, email: true, code: true,
+        id: true, name: true, email: true, code: true, referralSlug: true,
         commissionType: true, commissionValue: true, status: true, lastLoginAt: true,
       },
     });
     if (!affiliate) throw new NotFoundException('Affiliate not found');
+    // Make sure the affiliate always has a shareable referral link in the portal.
+    const referralSlug = affiliate.referralSlug ?? (await this.ensureReferralSlug(workspaceId, affiliateId));
     const [refGroups, commGroups] = await Promise.all([
       this.prisma.affiliateReferral.groupBy({
         by: ['status'], where: { workspaceId, affiliateId }, _count: { _all: true },
@@ -132,7 +134,7 @@ export class AffiliateService {
     const commissions = Object.fromEntries(
       commGroups.map((g) => [g.status, (g._sum.amount ?? new Prisma.Decimal(0)).toString()]),
     );
-    return { affiliate, referrals, commissions };
+    return { affiliate: { ...affiliate, referralSlug }, referralPath: `/api/public/r/${referralSlug}`, referrals, commissions };
   }
 
   async updateAffiliate(workspaceId: string, id: string, dto: UpdateAffiliateDto) {
@@ -215,6 +217,72 @@ export class AffiliateService {
         affiliateId: affiliate.id,
         referredLeadId: referredLeadId ?? null,
         status: 'PENDING',
+      },
+    });
+  }
+
+  // ── Public referral loop (the shareable /r/:slug link) ─────────────────────
+
+  /** Mint (once) + return the affiliate's globally-unique referral slug. */
+  async ensureReferralSlug(workspaceId: string, affiliateId: string): Promise<string> {
+    const aff = await this.prisma.affiliate.findFirst({
+      where: { id: affiliateId, workspaceId },
+      select: { referralSlug: true },
+    });
+    if (!aff) throw new NotFoundException('Affiliate not found');
+    if (aff.referralSlug) return aff.referralSlug;
+    for (let i = 0; i < 5; i++) {
+      const slug = `r${randomBytes(6).toString('base64url')}`;
+      try {
+        await this.prisma.affiliate.update({ where: { id: affiliateId }, data: { referralSlug: slug } });
+        return slug;
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') continue; // slug race — retry
+        throw e;
+      }
+    }
+    throw new ConflictException('Could not allocate a referral slug');
+  }
+
+  /** Resolve a public referral slug to its affiliate (global by the unique slug). */
+  async resolveReferralSlug(slug: string): Promise<{ id: string; workspaceId: string; status: string } | null> {
+    if (!slug) return null;
+    return this.prisma.affiliate.findUnique({
+      where: { referralSlug: slug },
+      select: { id: true, workspaceId: true, status: true },
+    });
+  }
+
+  /**
+   * Attribute a freshly-created lead to a referral slug — only if the affiliate is
+   * ACTIVE and in the SAME workspace as the lead (a cookie from another tenant's
+   * link must never cross-attribute). Best-effort: never throws into the form flow.
+   */
+  async attributeReferral(workspaceId: string, slug: string | null | undefined, leadId: string): Promise<boolean> {
+    if (!slug) return false;
+    try {
+      const aff = await this.resolveReferralSlug(slug);
+      if (!aff || aff.workspaceId !== workspaceId || aff.status !== 'ACTIVE') return false;
+      await this.prisma.affiliateReferral.create({
+        data: { workspaceId, affiliateId: aff.id, referredLeadId: leadId, status: 'PENDING' },
+      });
+      return true;
+    } catch {
+      return false; // attribution is best-effort — never break lead capture
+    }
+  }
+
+  /** Public self-signup scoped to a referrer's workspace — creates a PENDING affiliate. */
+  async selfSignup(workspaceId: string, dto: { name: string; email: string }) {
+    return this.prisma.affiliate.create({
+      data: {
+        workspaceId,
+        name: String(dto.name ?? '').slice(0, 200),
+        email: String(dto.email ?? '').slice(0, 200),
+        code: `aff${randomBytes(4).toString('hex')}`,
+        commissionType: 'PERCENT',
+        commissionValue: new Prisma.Decimal(0),
+        status: 'PENDING', // staff approves → ACTIVE before it can earn
       },
     });
   }

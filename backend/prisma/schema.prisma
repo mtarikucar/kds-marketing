@@ -2707,10 +2707,14 @@ model Affiliate {
   code            String
   commissionType  String   // PERCENT | FLAT
   commissionValue Decimal  @db.Decimal(10, 2)
-  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED | PENDING (self-signup, awaiting approval)
   // Self-serve portal (Epic 11a): sha256 of the affiliate's portal bearer token
   // (shown once on generation, like IngestToken). null = no portal access yet.
   portalTokenHash String?  @unique
+  // Globally-unique public referral slug for the shareable /r/:slug link (the
+  // per-workspace `code` is NOT unique across workspaces, so it can't be the
+  // public key). Lazily minted; null until the affiliate first needs a link.
+  referralSlug    String?  @unique
   lastLoginAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
