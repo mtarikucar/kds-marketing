@@ -55,7 +55,7 @@ export class SiteRendererService {
           (branding.brandName ? `<strong>${esc(branding.brandName)}</strong>` : '') +
           `</header>`
         : '';
-    const body = header + blocks.map((b: any) => this.block(b, forms, publicBase, accent!)).join('\n');
+    const body = header + blocks.map((b: any, i: number) => this.block(b, forms, publicBase, accent!, i)).join('\n');
     return (
       `<!doctype html><html lang="${esc(seo.lang || 'en')}"><head><meta charset="utf-8">` +
       `<meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -66,12 +66,31 @@ export class SiteRendererService {
       `.btn{display:inline-block;background:var(--a);color:#fff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;border:none;cursor:pointer}` +
       `.grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.card{border:1px solid #e2e8f0;border-radius:14px;padding:20px}` +
       `.price{font-size:2rem;font-weight:700;color:var(--a)}input,textarea{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin:6px 0;font:inherit}` +
-      `label{font-size:.85rem;color:#475569;display:block;margin-top:8px}h2{font-size:1.6rem}</style></head><body>${body}</body></html>`
+      `label{font-size:.85rem;color:#475569;display:block;margin-top:8px}h2{font-size:1.6rem}` +
+      // JS-free, CSP-safe lead-capture popup (checkbox hack): the checkbox ships
+      // `checked` so the modal shows on load; the × label unchecks it to close.
+      // Adjacent `+` selector scopes each popup to its own overlay.
+      `.pp-cb{position:absolute;left:-9999px}.pp-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:20px}` +
+      `.pp-cb:checked+.pp-ov{display:flex}.pp-box{background:#fff;border-radius:16px;padding:32px;max-width:440px;width:100%;position:relative;text-align:center}` +
+      `.pp-x{position:absolute;top:8px;right:14px;font-size:1.6rem;line-height:1;cursor:pointer;color:#94a3b8;text-decoration:none}` +
+      `</style></head><body>${body}</body></html>`
     );
   }
 
-  private block(b: any, forms: Map<string, FormDefLite>, base: string, accent: string): string {
+  private block(b: any, forms: Map<string, FormDefLite>, base: string, accent: string, idx = 0): string {
     switch (b?.type) {
+      case 'popup': {
+        // JS-free modal shown on load (checkbox checked); the × closes it.
+        const id = `pp${idx}`;
+        return `<input type="checkbox" id="${id}" class="pp-cb" checked>` +
+          `<div class="pp-ov"><div class="pp-box">` +
+          `<label for="${id}" class="pp-x" aria-label="Close" role="button">&times;</label>` +
+          `<h2>${esc(b.heading)}</h2>` +
+          (b.text ? `<p>${esc(b.text)}</p>` : '') +
+          (b.formId ? this.formBlock({ formId: b.formId, heading: '' }, forms.get(b.formId), base)
+            : (b.ctaText ? `<a class="btn" href="${safeUrl(b.ctaUrl)}">${esc(b.ctaText)}</a>` : '')) +
+          `</div></div>`;
+      }
       case 'hero':
         return `<section class="s hero"><h1>${esc(b.heading)}</h1><p>${esc(b.sub)}</p>` +
           (b.ctaText ? `<a class="btn" href="${safeUrl(b.ctaUrl)}">${esc(b.ctaText)}</a>` : '') + `</section>`;
