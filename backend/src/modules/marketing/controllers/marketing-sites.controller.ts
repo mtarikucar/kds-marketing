@@ -9,7 +9,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { SitesService } from '../sites/sites.service';
-import { CreateSitePageDto, UpdateSitePageDto, DraftSiteDto, CreateFormDto, UpdateFormDto } from '../dto/site.dto';
+import { CreateSitePageDto, UpdateSitePageDto, DraftSiteDto, CreateFormDto, UpdateFormDto, FromTemplateDto } from '../dto/site.dto';
 
 /**
  * Funnel pages + forms. MANAGER+ behind the `funnels` feature. Literal routes
@@ -33,6 +33,15 @@ export class MarketingSitesController {
   @Post('draft')
   @RequirePermission('settings.manage')
   draft(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: DraftSiteDto) { return this.sites.draft(a.workspaceId, dto.prompt); }
+
+  @Get('templates')
+  templates() { return this.sites.listTemplates(); }
+
+  @Post('from-template')
+  @RequirePermission('settings.manage')
+  fromTemplate(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: FromTemplateDto) {
+    return this.sites.createFromTemplate(a.workspaceId, dto.templateId);
+  }
 
   @Get('forms')
   listForms(@CurrentMarketingUser() a: MarketingUserPayload) { return this.sites.listForms(a.workspaceId); }

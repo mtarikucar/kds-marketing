@@ -168,6 +168,17 @@ export default function SitesPage() {
     onSuccess: invalidate,
   });
 
+  const { data: templates } = useQuery<Array<{ id: string; name: string; description: string }>>({
+    queryKey: ['marketing', 'sites', 'templates'],
+    queryFn: () => marketingApi.get('/sites/templates').then((r) => r.data),
+    staleTime: 60 * 60_000,
+  });
+  const fromTemplate = useMutation({
+    mutationFn: (templateId: string) => marketingApi.post('/sites/from-template', { templateId }),
+    onSuccess: () => { invalidate(); toast.success(t('sites.fromTemplateCreated', 'Page created from template')); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.fromTemplateFailed', 'Could not create from template')),
+  });
+
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/sites/${id}`),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
@@ -259,6 +270,18 @@ export default function SitesPage() {
           </Button>
         }
       />
+
+      {/* Start from a starter template (audit A5) */}
+      {(templates?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">{t('sites.startFromTemplate', 'Start from a template:')}</span>
+          {templates!.map((tpl) => (
+            <Button key={tpl.id} size="sm" variant="outline" title={tpl.description} loading={fromTemplate.isPending} onClick={() => fromTemplate.mutate(tpl.id)}>
+              {tpl.name}
+            </Button>
+          ))}
+        </div>
+      )}
 
       {/* Pages list */}
       {(pages ?? []).length === 0 ? (
