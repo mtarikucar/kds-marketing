@@ -78,6 +78,19 @@ function isBlockedIpv6(raw: string): boolean {
   // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible — validate the embedded v4
   const mapped = ip.match(/(?:::ffff:|::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
   if (mapped) return isBlockedIpv4(mapped[1]);
+  // IPv4-mapped in HEX form: `new URL()` normalizes `::ffff:169.254.169.254` to
+  // `::ffff:a9fe:a9fe`, which the dotted regex above MISSES — so a literal like
+  // http://[::ffff:169.254.169.254]/ would otherwise slip past as "public" and
+  // reach cloud metadata / loopback / private nets. Reconstruct the embedded v4
+  // from the two trailing hextets (anchored so only genuine all-zero-prefix
+  // mapped/compat addresses match, never a real global like 2001:ffff:…).
+  const mappedHex = ip.match(/^(?:::ffff:|0:0:0:0:0:ffff:|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    const v4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    return isBlockedIpv4(v4);
+  }
   // NAT64 well-known prefix 64:ff9b::/96
   if (ip.startsWith('64:ff9b:')) return true;
   if (

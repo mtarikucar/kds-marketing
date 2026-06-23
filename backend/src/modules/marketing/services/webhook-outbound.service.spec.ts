@@ -1,3 +1,11 @@
+const mockLookup = jest.fn();
+// deliverOne now routes through safeFetch (SSRF guard), which DNS-resolves the
+// endpoint host before fetching — mock the resolver so test hosts look public.
+jest.mock('node:dns/promises', () => ({
+  __esModule: true,
+  lookup: (...args: unknown[]) => mockLookup(...args),
+}));
+
 import { WebhookOutboundService } from './webhook-outbound.service';
 import {
   mockPrismaClient,
@@ -65,6 +73,8 @@ describe('WebhookOutboundService.deliverOne', () => {
   let fetchMock: jest.Mock;
 
   beforeEach(() => {
+    mockLookup.mockReset();
+    mockLookup.mockResolvedValue([{ address: '93.184.216.34' }]); // public
     fetchMock = jest.fn();
     (global as any).fetch = fetchMock;
   });
@@ -80,7 +90,8 @@ describe('WebhookOutboundService.deliverOne', () => {
     await svc.deliverOne(dp, 0);
 
     const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe('https://hook.test');
+    // safeFetch passes a normalized URL object (so String() has the trailing /).
+    expect(String(url)).toBe('https://hook.test/');
     expect(opts.headers['x-webhook-signature']).toMatch(/^sha256=/);
     expect((prisma.webhookDelivery.update as jest.Mock).mock.calls[0][0].data).toMatchObject({ status: 'SUCCESS', responseCode: 200 });
   });
@@ -117,5 +128,16 @@ describe('WebhookOutboundService.deliverOne', () => {
     prisma.webhookDelivery.findUnique.mockResolvedValue({ id: 'd1', status: 'SUCCESS' } as any);
     await svc.deliverOne(dp, 0);
     expect(prisma.webhookEndpoint.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('refuses an SSRF endpoint (metadata/private host) and records a failure WITHOUT leaving the perimeter', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.webhookDelivery.findUnique.mockResolvedValue({ id: 'd1', endpointId: 'ep-1', status: 'PENDING' } as any);
+    prisma.webhookEndpoint.findUnique.mockResolvedValue({ id: 'ep-1', url: 'http://169.254.169.254/latest/meta-data/', secret: 's', status: 'ACTIVE' } as any);
+    (prisma.webhookDelivery.update as jest.Mock).mockResolvedValue({});
+    // safeFetch blocks the metadata IP literal up front (no DNS, no fetch).
+    await expect(svc.deliverOne(dp, 0)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((prisma.webhookDelivery.update as jest.Mock).mock.calls[0][0].data).toMatchObject({ attempts: 1 });
   });
 });

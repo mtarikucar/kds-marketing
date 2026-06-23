@@ -8,6 +8,7 @@ import {
 import { createHmac, randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { safeFetch } from '../../../common/util/safe-fetch';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import {
   ScheduledJobRunnerService,
@@ -232,7 +233,13 @@ export class WebhookOutboundService implements OnModuleInit {
     const signature = this.sign(ep.secret, body);
 
     try {
-      const res = await fetch(ep.url, {
+      // SSRF guard: `ep.url` is workspace-supplied (the DTO only checks @IsUrl,
+      // which passes http://169.254.169.254/, http://127.0.0.1/, internal hosts).
+      // Route through safeFetch so a tenant can't point a webhook at cloud
+      // metadata / loopback / private nets; a blocked target throws and is
+      // recorded as a delivery failure by the catch below (same as the
+      // workflow http_webhook_out action, which already uses safeFetch).
+      const res = await safeFetch(ep.url, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -240,7 +247,7 @@ export class WebhookOutboundService implements OnModuleInit {
           'x-webhook-event': event.type,
         },
         body,
-        signal: AbortSignal.timeout(10_000),
+        timeoutMs: 10_000,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await this.prisma.webhookDelivery.update({

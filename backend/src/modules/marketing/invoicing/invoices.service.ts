@@ -277,6 +277,11 @@ export class InvoicesService {
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         line_items: [{ price_data: { currency: inv.currency.toLowerCase(), product_data: { name: `Invoice ${inv.number}` }, unit_amount: inv.total }, quantity: 1 }],
+        // Bind the session to THIS invoice so the return handler can prove the
+        // payment is for this invoice (and not another paid session in the same
+        // workspace's Stripe account) before settling.
+        client_reference_id: inv.id,
+        metadata: { invoiceId: inv.id },
         success_url: `${this.base()}/api/public/i/${token}/return?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${this.base()}/api/public/i/${token}`,
       });
@@ -294,9 +299,22 @@ export class InvoicesService {
     const key = this.openPsp(psp?.configSealed).secretKey;
     if (!key) return { paid: false };
     const session = await new Stripe(key).checkout.sessions.retrieve(sessionId);
-    if (session.payment_status === 'paid') {
+    // Bind the session to THIS invoice. Without this, ANY `paid` session in the
+    // workspace's Stripe account (e.g. a cheap invoice the buyer really paid)
+    // could be replayed here to settle a different, more expensive invoice for
+    // free. Require the invoice id we stamped at creation AND an exact amount +
+    // currency match (defence in depth) before settling.
+    const boundToInvoice =
+      session.metadata?.invoiceId === inv.id || session.client_reference_id === inv.id;
+    const amountMatches =
+      session.amount_total === inv.total &&
+      (session.currency ?? '').toLowerCase() === inv.currency.toLowerCase();
+    if (session.payment_status === 'paid' && boundToInvoice && amountMatches) {
       await this.settle(inv, 'stripe');
       return { paid: true };
+    }
+    if (session.payment_status === 'paid' && (!boundToInvoice || !amountMatches)) {
+      this.logger.warn(`Stripe session/invoice mismatch for invoice ${inv.id} — refusing to settle`);
     }
     return { paid: false };
   }
@@ -478,6 +496,16 @@ export class InvoicesService {
     }
     const json = (await res.json().catch(() => null)) as Record<string, any> | null;
     if (!res.ok || json?.status !== 'success' || json?.paymentStatus !== 'SUCCESS') return false;
+    // Bind the retrieved payment to THIS invoice. The retrieve keys off the
+    // `token` alone and returns whatever payment that token represents — it
+    // ignores the request's conversationId — so without checking the RESPONSE's
+    // conversationId/basketId (both set to inv.id at init), a token for a
+    // same-amount paid invoice B could settle invoice A. (PayTR binds via the
+    // hashed merchant_oid; Iyzico has no equivalent, so we check it here.)
+    if (String(json.conversationId ?? '') !== inv.id && String(json.basketId ?? '') !== inv.id) {
+      this.logger.warn(`Iyzico token/invoice mismatch for invoice ${inv.id} — refusing to settle`);
+      return false;
+    }
     if (Math.round(Number(json.paidPrice) * 100) !== inv.total) {
       this.logger.warn(`Iyzico amount mismatch for invoice ${inv.id}: collected ${json.paidPrice} vs billed ${inv.total} — not settling`);
       return false;

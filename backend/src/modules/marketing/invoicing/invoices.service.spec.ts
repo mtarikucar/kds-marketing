@@ -194,11 +194,11 @@ describe('InvoicesService', () => {
     const { sealSecret } = require('../../../common/crypto/secret-box.helper');
     const sealedIyzico = () => sealSecret(JSON.stringify({ apiKey: 'ak', secretKey: 'sk' }));
 
-    it('callback: a SUCCESS retrieve with a matching amount settles the invoice', async () => {
+    it('callback: a SUCCESS retrieve with a matching amount + invoice binding settles the invoice', async () => {
       prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
       prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
       prisma.invoice.updateMany.mockResolvedValue({ count: 1 });
-      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00' }) });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', conversationId: 'inv1', basketId: 'inv1' }) });
       const ok = await svc.iyzicoCallback('tok', 'iyz-token');
       expect(ok).toBe(true);
       expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PAID', paidVia: 'iyzico' }) }));
@@ -207,8 +207,20 @@ describe('InvoicesService', () => {
     it('callback: a SUCCESS retrieve with a MISMATCHED amount does NOT settle', async () => {
       prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
       prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
-      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00' }) });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00', conversationId: 'inv1', basketId: 'inv1' }) });
       const ok = await svc.iyzicoCallback('tok', 'iyz-token');
+      expect(ok).toBe(false);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('callback: a retrieve bound to ANOTHER invoice (same amount) does NOT settle — cross-invoice token replay', async () => {
+      // Invoice A (this callback's token) has the same total as a paid invoice B
+      // whose Iyzico token is replayed here. The retrieve returns B's payment
+      // (conversationId/basketId = 'invB'), which must NOT settle invoice A.
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'invA', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', conversationId: 'invB', basketId: 'invB' }) });
+      const ok = await svc.iyzicoCallback('tok', 'iyz-token-of-invoice-B');
       expect(ok).toBe(false);
       expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
     });
