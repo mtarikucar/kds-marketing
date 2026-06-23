@@ -21,6 +21,16 @@ describe('buildAuthorizeUrl', () => {
     expect(decodeURIComponent(url)).toContain('/marketing/social/oauth/facebook/callback');
   });
 
+  it('Meta: uses config_id (FLB) and omits scope when META_LOGIN_CONFIG_ID is set', () => {
+    process.env.META_APP_ID = 'APPID';
+    process.env.API_URL = 'https://api.x/api';
+    process.env.META_LOGIN_CONFIG_ID = 'cfg-123';
+    const url = buildAuthorizeUrl('FACEBOOK', 'S');
+    expect(url).toContain('config_id=cfg-123');
+    expect(url).not.toContain('scope=');
+    delete process.env.META_LOGIN_CONFIG_ID;
+  });
+
   it('TikTok: uses client_key instead of client_id', () => {
     process.env.TIKTOK_CLIENT_KEY = 'TTKEY';
     process.env.API_URL = 'https://api.x/api';
