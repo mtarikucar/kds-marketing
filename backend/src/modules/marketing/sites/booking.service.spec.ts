@@ -52,6 +52,14 @@ describe('BookingService', () => {
     expect(slots[0]).toBe('2027-06-14T09:00:00.000Z');
   });
 
+  it('interprets availability windows in the calendar timezone (Istanbul = UTC+3)', async () => {
+    prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ timezone: 'Europe/Istanbul' }));
+    const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+    // the 09:00 Istanbul window now resolves to 06:00 UTC (was wrongly 09:00 UTC before C4)
+    expect(slots[0]).toBe('2027-06-14T06:00:00.000Z');
+    expect(slots).toHaveLength(2);
+  });
+
   it('subtracts an existing booking from the available slots', async () => {
     prisma.booking.findMany.mockResolvedValue([
       { startAt: new Date('2027-06-14T09:00:00.000Z'), endAt: new Date('2027-06-14T09:30:00.000Z') },
