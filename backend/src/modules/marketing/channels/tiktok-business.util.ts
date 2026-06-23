@@ -40,7 +40,7 @@ export class TiktokBusinessError extends Error {
 }
 
 export type TiktokBusinessResult<T = any> =
-  | { ok: true; data: T; requestId?: string; error: null }
+  | { ok: true; data: T; requestId?: string }
   | { ok: false; error: TiktokBusinessError };
 
 /** Auth/permission/token codes per the TikTok Business API error reference. */
@@ -93,7 +93,7 @@ export async function tiktokBusinessFetch<T = any>(
   const requestId = typeof json?.request_id === 'string' ? json.request_id : undefined;
 
   if (res.ok && code === 0) {
-    return { ok: true, data: json?.data as T, requestId, error: null };
+    return { ok: true, data: json?.data as T, requestId };
   }
 
   const isAuth = res.status === 401 || AUTH_CODES.has(code);
