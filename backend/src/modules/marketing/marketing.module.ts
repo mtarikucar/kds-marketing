@@ -159,6 +159,9 @@ import { MarketingReviewsController } from './controllers/marketing-reviews.cont
 import { ReviewGateController } from './controllers/review-gate.controller';
 import { ReviewsService } from './reviews/reviews.service';
 import { ReviewSyncService } from './reviews/review-sync.service';
+// Review-source OAuth connect (A9) — inert until provider creds + secret-box.
+import { ReviewOAuthService } from './reviews/review-oauth.service';
+import { PublicReviewOAuthController } from './controllers/public-review-oauth.controller';
 // Epic 13 — prospecting audit (inert until PAGESPEED_API_KEY).
 import { AuditService } from './prospecting/audit.service';
 import { ProspectingController } from './controllers/prospecting.controller';
@@ -447,6 +450,7 @@ import { WalletService } from './wallet/wallet.service';
     PublicCustomDomainController,
     EspFeedbackController,
     PublicReferralController,
+    PublicReviewOAuthController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
@@ -633,6 +637,7 @@ import { WalletService } from './wallet/wallet.service';
     WalletService,
     ReviewsService,
     ReviewSyncService,
+    ReviewOAuthService,
     AuditService,
     SendingDomainsService,
     CustomDomainsService,

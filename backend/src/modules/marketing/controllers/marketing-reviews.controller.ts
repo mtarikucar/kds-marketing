@@ -10,6 +10,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { ReviewsService } from '../reviews/reviews.service';
+import { ReviewOAuthService } from '../reviews/review-oauth.service';
 
 class ReviewSourceDto {
   @IsString() @IsNotEmpty() @MaxLength(120) name: string;
@@ -27,10 +28,19 @@ class ReviewReplyDto {
 @MarketingRoles('MANAGER')
 @RequiresFeature('reviews')
 export class MarketingReviewsController {
-  constructor(private readonly reviews: ReviewsService) {}
+  constructor(
+    private readonly reviews: ReviewsService,
+    private readonly reviewOAuth: ReviewOAuthService,
+  ) {}
 
   @Get('sources')
   listSources(@CurrentMarketingUser() a: MarketingUserPayload) { return this.reviews.listSources(a.workspaceId); }
+  /** Start the OAuth connect flow for a Google/Facebook review source. */
+  @Post('sources/:id/connect')
+  @RequirePermission('settings.manage')
+  connectSource(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.reviewOAuth.connectUrl(a.workspaceId, id);
+  }
   @Post('sources')
   @RequirePermission('settings.manage')
   createSource(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: ReviewSourceDto) { return this.reviews.createSource(a.workspaceId, dto); }

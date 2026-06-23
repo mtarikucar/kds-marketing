@@ -138,6 +138,13 @@ export default function ReviewsPage() {
     onSuccess: () => { invalidateSrc(); setDeleteSource(null); },
   });
 
+  // OAuth connect (A9/E4) — redirect the browser into the provider's consent flow.
+  const connectSource = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/reviews/sources/${id}/connect`).then((r) => r.data as { url: string }),
+    onSuccess: ({ url }) => { if (url) window.location.href = url; },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('reviews.connectFailed', 'Connect not available — ask your admin to enable it.')),
+  });
+
   const draft = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/reviews/${id}/draft`),
     onSuccess: ({ data }, id) => {
@@ -225,7 +232,10 @@ export default function ReviewsPage() {
                       </Badge>
                     </TD>
                     <TD>
-                      <div className="flex justify-end">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button size="sm" variant="outline" loading={connectSource.isPending} onClick={() => connectSource.mutate(s.id)}>
+                          {s.tokenSet ? t('reviews.reconnect', 'Reconnect') : t('reviews.connect', 'Connect')}
+                        </Button>
                         <IconButton
                           aria-label={t('common.delete', 'Delete')}
                           size="sm"
