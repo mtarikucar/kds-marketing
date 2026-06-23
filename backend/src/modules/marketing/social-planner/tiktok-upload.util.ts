@@ -2,7 +2,6 @@
 import { safeFetch } from '../../../common/util/safe-fetch';
 
 export const MB = 1024 * 1024;
-const MIN_CHUNK = 5 * MB;
 const MAX_CHUNK = 64 * MB;
 const FINAL_MAX = 128 * MB;
 const MAX_CHUNKS = 1000;
@@ -23,14 +22,19 @@ export interface ChunkPlan {
 /**
  * Compute the TikTok FILE_UPLOAD chunk plan for a video of `videoSize` bytes.
  * Rules (Content Posting media-transfer guide): chunk 5MB..64MB; the final
- * chunk folds in the remainder (<=128MB); <=1000 chunks; files <5MB upload
- * whole. Because chunkSize<=64MB, the folded final chunk is always <128MB.
+ * chunk folds in the remainder (<=128MB); <=1000 chunks. A file that fits in a
+ * single default chunk uploads whole (one chunk == the whole file, so its
+ * declared chunk_size equals video_size). Because chunkSize<=64MB, the folded
+ * final chunk of a multi-chunk plan is always <128MB.
  */
 export function planChunks(videoSize: number): ChunkPlan {
   if (!Number.isInteger(videoSize) || videoSize <= 0) {
     throw new Error('videoSize must be a positive integer');
   }
-  if (videoSize < MIN_CHUNK) {
+  // Whole-file upload when the video fits in one default chunk. Guarding on
+  // DEFAULT_CHUNK (not the 5MB minimum) avoids a 0-chunk plan for files in
+  // [5MB, 10MB), where floor(size / 10MB) would be 0.
+  if (videoSize < DEFAULT_CHUNK) {
     return { chunkSize: videoSize, totalChunkCount: 1, ranges: [{ index: 0, start: 0, end: videoSize - 1 }] };
   }
 

@@ -274,10 +274,14 @@ async function publishTikTok(
           description: content.slice(0, 4000),
           privacy_level: privacy,
           disable_comment: options?.disableComment ?? info.commentDisabled,
-          photo_images: mediaUrls.slice(0, 35),
-          photo_cover_index: Math.min(options?.coverIndex ?? 0, mediaUrls.length - 1),
         },
-        source_info: { source: 'PULL_FROM_URL' },
+        // TikTok's content/init contract puts the image URLs + cover index in
+        // source_info (NOT post_info) alongside the PULL_FROM_URL source.
+        source_info: {
+          source: 'PULL_FROM_URL',
+          photo_cover_index: Math.min(options?.coverIndex ?? 0, mediaUrls.length - 1),
+          photo_images: mediaUrls.slice(0, 35),
+        },
       };
     } else {
       initUrl = 'https://open.tiktokapis.com/v2/post/publish/video/init/';

@@ -85,8 +85,13 @@ describe('network-adapters — TikTok', () => {
     expect(initCall[0]).toContain('/v2/post/publish/content/init/');
     const body = JSON.parse((initCall[1] as any).body);
     expect(body.media_type).toBe('PHOTO');
-    expect(body.post_info.photo_images).toEqual(['https://cdn/1.jpg', 'https://cdn/2.jpg']);
-    expect(body.post_info.photo_cover_index).toBe(1);
+    // TikTok requires photo_images / photo_cover_index under source_info.
+    expect(body.source_info.source).toBe('PULL_FROM_URL');
+    expect(body.source_info.photo_images).toEqual(['https://cdn/1.jpg', 'https://cdn/2.jpg']);
+    expect(body.source_info.photo_cover_index).toBe(1);
+    // Video-only interaction fields must NOT leak into a photo post.
+    expect(body.post_info.disable_duet).toBeUndefined();
+    expect(body.post_info.disable_stitch).toBeUndefined();
   });
 
   it('clips an unavailable privacy level to the creator-info option set', async () => {
