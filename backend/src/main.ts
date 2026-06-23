@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
@@ -11,6 +12,7 @@ import { JsonLogger } from './common/logging/json-logger';
  * service actually reads.
  */
 function validateEnv(): void {
+  const logger = new Logger('validateEnv');
   const isProd = process.env.NODE_ENV === 'production';
   const required = [
     'DATABASE_URL',
@@ -103,9 +105,8 @@ function validateEnv(): void {
   // checked here. This warning fires in both dev and prod so developers
   // don't silently ship with the business integration inert.
   if (!process.env.TIKTOK_BUSINESS_APP_ID || !process.env.TIKTOK_BUSINESS_APP_SECRET) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[env] TikTok-for-Business not configured (TIKTOK_BUSINESS_APP_ID/SECRET unset) — TikTok ads & DM connect will be inert.',
+    logger.warn(
+      'TikTok-for-Business not configured (TIKTOK_BUSINESS_APP_ID/SECRET unset) — TikTok ads & DM connect will be inert.',
     );
   }
 }
