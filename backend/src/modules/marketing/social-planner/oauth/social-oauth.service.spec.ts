@@ -187,5 +187,23 @@ describe('SocialOAuthService', () => {
       expect(out.skipped).toEqual([{ externalId: 'PN1', reason: 'taken' }]);
       expect(prisma.pendingSocialConnection.delete).toHaveBeenCalled();
     });
+
+    it('keeps the publishing SocialAccount but skips a failed messaging channel (messaging: prefix)', async () => {
+      const { ConflictException } = require('@nestjs/common');
+      channels.create.mockRejectedValueOnce(new ConflictException('taken'));
+      const out = await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      expect(out).toMatchObject({ socialAccounts: 1, channels: 0, connected: 1 });
+      expect(out.skipped).toEqual([{ externalId: 'P1', reason: 'messaging: taken' }]);
+      expect(prisma.socialAccount.upsert).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('loadPending (expiry)', () => {
+    it('rejects an expired pending row', async () => {
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() - 1000), payload: 'x',
+      });
+      await expect(svc.listPending(WS, 'p1')).rejects.toThrow(BadRequestException);
+    });
   });
 });

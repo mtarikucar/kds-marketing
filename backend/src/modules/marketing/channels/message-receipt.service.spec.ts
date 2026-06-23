@@ -46,6 +46,13 @@ describe('MessageReceiptService.apply', () => {
     expect(prisma.message.update).not.toHaveBeenCalled();
   });
 
+  it('does NOT resurrect a terminal FAILED message to DELIVERED/READ (out-of-order)', async () => {
+    const { prisma, svc } = makeSvc('FAILED');
+    await svc.apply('w1', [{ externalMessageId: 'x', status: 'DELIVERED' }]);
+    await svc.apply('w1', [{ externalMessageId: 'x', status: 'READ' }]);
+    expect(prisma.message.update).not.toHaveBeenCalled();
+  });
+
   it('is a no-op for an unknown externalMessageId', async () => {
     const { prisma, stream, svc } = makeSvc(null);
     await svc.apply('w1', [{ externalMessageId: 'nope', status: 'DELIVERED' }]);

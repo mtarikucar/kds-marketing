@@ -49,6 +49,10 @@ export class MessageReceiptService {
         data: { status: 'FAILED', error: String(u.reason ?? 'delivery failed').slice(0, 500) },
       });
     } else {
+      // FAILED is terminal — never resurrect a failed message to DELIVERED/READ.
+      // (rankMetaStatus('FAILED') is 0, so the rank guard alone would let a later
+      // out-of-order DELIVERED/READ overwrite it.)
+      if (msg.status === 'FAILED') return;
       // Monotonic DELIVERED/READ advance — never regress on an out-of-order webhook.
       if (rankMetaStatus(u.status) <= rankMetaStatus(msg.status)) return;
       await this.prisma.message.update({ where: { id: msg.id }, data: { status: u.status } });
