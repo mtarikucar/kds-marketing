@@ -15,3 +15,6 @@ export function isMetaAdsConfigured(): boolean {
 export function isTiktokAdsConfigured(): boolean {
   return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
 }
+export function isLinkedinAdsConfigured(): boolean {
+  return !!(process.env.LINKEDIN_ADS_CLIENT_ID && process.env.LINKEDIN_ADS_CLIENT_SECRET);
+}
