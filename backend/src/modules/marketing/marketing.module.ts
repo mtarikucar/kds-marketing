@@ -129,6 +129,7 @@ import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
 import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-messaging.adapter';
 import { TiktokDmAdapter } from './channels/adapters/tiktok-dm.adapter';
 import { LinkedinEngagementAdapter } from './channels/adapters/linkedin-engagement.adapter';
+import { LinkedinEngagementPollService } from './channels/linkedin-engagement-poll.service';
 import { TiktokWebhookController } from './controllers/tiktok-webhook.controller';
 import { EmailChannelAdapter } from './channels/adapters/email.adapter';
 import { EmailWebhookController } from './controllers/email-webhook.controller';
@@ -601,6 +602,7 @@ import { WalletService } from './wallet/wallet.service';
     // locked sweeper that resolves still-pending outbound SMS via the report API.
     NetgsmReportClient,
     NetgsmDlrPollService,
+    LinkedinEngagementPollService,
     SseTokenGuard,
     // Phase F P3 — workflow automation: the trigger listener + executor (each
     // registers its bus/ScheduledJob hooks on init) + action handler + CRUD.
