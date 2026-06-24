@@ -193,7 +193,12 @@ export class AdRulesService {
     const since = new Date(Date.now() - rule.windowDays * 86_400_000);
     since.setUTCHours(0, 0, 0, 0);
     const rows = await this.prisma.adMetric.findMany({
-      where: { adAccountId: rule.adAccountId, date: { gte: since }, campaignId: { not: '' } },
+      where: {
+        workspaceId: rule.workspaceId,
+        adAccountId: rule.adAccountId,
+        date: { gte: since },
+        campaignId: { not: '' },
+      },
       select: { campaignId: true, spend: true, impressions: true, clicks: true, leads: true },
     });
     const agg = new Map<string, { spend: number; impressions: number; clicks: number; leads: number }>();
@@ -212,7 +217,7 @@ export class AdRulesService {
       const value = metricValue(rule.metric, m);
       if (value === null) continue;
       if (!compare(value, rule.operator, threshold)) continue;
-      if (await this.inCooldown(rule.id, campaignId, rule.cooldownHours)) continue;
+      if (await this.inCooldown(rule.workspaceId, rule.id, campaignId, rule.cooldownHours)) continue;
       const campaign = byId.get(campaignId);
       const outcome = await this.applyAction(rule, campaignId, campaign);
       await this.log(rule.workspaceId, rule.id, outcome);
@@ -257,10 +262,15 @@ export class AdRulesService {
   }
 
   /** A successful action for (rule, campaign) within cooldownHours blocks re-firing. */
-  private async inCooldown(ruleId: string, entityId: string, cooldownHours: number): Promise<boolean> {
+  private async inCooldown(
+    workspaceId: string,
+    ruleId: string,
+    entityId: string,
+    cooldownHours: number,
+  ): Promise<boolean> {
     const since = new Date(Date.now() - cooldownHours * 3_600_000);
     const recent = await this.prisma.adRuleLog.findFirst({
-      where: { ruleId, entityId, ok: true, createdAt: { gte: since } },
+      where: { workspaceId, ruleId, entityId, ok: true, createdAt: { gte: since } },
       select: { id: true },
     });
     return !!recent;
