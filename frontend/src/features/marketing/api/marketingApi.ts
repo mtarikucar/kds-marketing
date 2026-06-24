@@ -74,12 +74,35 @@ marketingApi.interceptors.request.use(async (config) => {
   return config;
 });
 
+// Unauthenticated auth endpoints. A 401 from these means "bad credentials /
+// bad or expired token" — NOT "access token expired mid-session". Running the
+// refresh-retry path here is wrong: when logged out there is no refresh token,
+// so refreshMarketingToken() rejects with 'no refresh token', and the response
+// interceptor then surfaces THAT error instead of the real 401. The login page
+// would show "no refresh token" instead of "wrong credentials". So these paths
+// must bypass refresh entirely and let the original 401 propagate.
+export const NO_REFRESH_PATHS = [
+  '/auth/login',
+  '/auth/register-workspace',
+  '/auth/2fa/verify',
+  '/auth/refresh',
+] as const;
+
+export function isNoRefreshPath(url: string | undefined | null): boolean {
+  if (!url) return false;
+  return NO_REFRESH_PATHS.some((path) => url.includes(path));
+}
+
 marketingApi.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (
+      error.response?.status === 401 &&
+      !originalRequest?._retry &&
+      !isNoRefreshPath(originalRequest?.url)
+    ) {
       originalRequest._retry = true;
       try {
         const accessToken = await refreshMarketingToken();

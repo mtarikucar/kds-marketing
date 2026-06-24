@@ -23,7 +23,11 @@ platformApi.interceptors.request.use((config) => {
 platformApi.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // A 401 from the login endpoint itself means "bad credentials", not an
+    // expired session — don't trigger a logout (and let the original error,
+    // with the backend message, propagate to the login page).
+    const isLogin = (error.config?.url ?? '').includes('/auth/login');
+    if (error.response?.status === 401 && !isLogin) {
       usePlatformAuthStore.getState().logout();
     }
     return Promise.reject(error);

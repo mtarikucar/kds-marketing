@@ -219,7 +219,11 @@
     "submit": "Sign in",
     "loading": "Signing in…",
     "wrongCreds": "Invalid email or password",
-    "locked": "Account locked. Try again in {{minutes}} minutes."
+    "locked": "Account locked. Try again in {{minutes}} minutes.",
+    "lockedTryLater": "Your account is temporarily locked. Please try again shortly.",
+    "inactive": "Your account is not active. Please contact your administrator.",
+    "failed": "Could not sign in. Please try again.",
+    "networkError": "Connection error. Please try again."
   },
   "dashboard": {
     "title": "Dashboard",
