@@ -18,6 +18,7 @@ import { assertTiktokDmSecrets } from './tiktok-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
 import { assertMetaSecrets, isMetaChannelType } from './meta-config.util';
 import { metaWebhookCallbackUrl } from './meta-callback.util';
+import { tiktokWebhookCallbackUrl } from './tiktok-callback.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -212,6 +213,16 @@ export class ChannelsService {
         ? {
             webhookUrl: metaWebhookCallbackUrl(process.env.PUBLIC_BASE_URL),
             verifyTokenConfigured: !!process.env.META_WEBHOOK_VERIFY_TOKEN,
+          }
+        : {}),
+      // TikTok DM (Business Messaging) inbound events arrive on a static, HMAC-
+      // signed webhook. Surface the URL operators paste into the TikTok for
+      // Business app dashboard, and the messaging-granted status from configPublic
+      // (set by the OAuth confirm flow). Token value is never returned.
+      ...(c.type === 'TIKTOK'
+        ? {
+            webhookUrl: tiktokWebhookCallbackUrl(process.env.PUBLIC_BASE_URL),
+            messaging: (c.configPublic as Record<string, unknown> | null)?.messaging ?? null,
           }
         : {}),
       lastVerifiedAt: c.lastVerifiedAt,
