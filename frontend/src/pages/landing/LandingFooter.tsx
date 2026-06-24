@@ -10,9 +10,9 @@ export default function LandingFooter() {
     {
       title: t('landing.footer.productCol'),
       links: [
-        { label: t('landing.footer.linkFeatures'), href: '#features' },
-        { label: t('landing.footer.linkHow'), href: '#how' },
-        { label: t('landing.footer.linkFaq'), href: '#faq' },
+        { label: t('landing.footer.linkFeatures'), href: '/#features' },
+        { label: t('landing.footer.linkHow'), href: '/#how' },
+        { label: t('landing.footer.linkFaq'), href: '/#faq' },
       ],
     },
     {
@@ -25,8 +25,8 @@ export default function LandingFooter() {
     {
       title: t('landing.footer.legalCol'),
       links: [
-        { label: t('landing.footer.linkPrivacy'), href: '#' },
-        { label: t('landing.footer.linkTerms'), href: '#' },
+        { label: t('landing.footer.linkPrivacy'), to: '/privacy' },
+        { label: t('landing.footer.linkTerms'), to: '/terms' },
       ],
     },
   ];

@@ -13,6 +13,8 @@ import { RouteFallback } from './components/RouteFallback';
 
 // ── Lazy page imports — marketing realm ───────────────────────────────────────
 const LandingPage              = lazy(() => import('./pages/landing/LandingPage'));
+const PrivacyPage              = lazy(() => import('./pages/legal/PrivacyPage'));
+const TermsPage                = lazy(() => import('./pages/legal/TermsPage'));
 const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
@@ -132,6 +134,9 @@ export default function App() {
       {/* Public marketing home (Jeeta landing). Stays public even when signed
           in — the nav surfaces an "Open app" CTA in that case. */}
       <Route path="/"         element={<S><LandingPage /></S>} />
+      {/* Public legal pages — linked from the landing footer. */}
+      <Route path="/privacy"  element={<S><PrivacyPage /></S>} />
+      <Route path="/terms"    element={<S><TermsPage /></S>} />
       <Route path="/login"    element={<S><MarketingLoginPage /></S>} />
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
