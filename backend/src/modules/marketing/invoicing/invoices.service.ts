@@ -22,6 +22,15 @@ import {
   encodeUserBasket,
   verifyCallbackHash,
 } from '../../billing/payments/paytr.provider';
+import {
+  IYZICO_DEFAULT_BASE_URL,
+  IYZICO_INIT_PATH,
+  IYZICO_RETRIEVE_PATH,
+  buildAuthHeader,
+  buildInitializeBody,
+  minorToPrice,
+  newRandomKey,
+} from './iyzico.provider';
 
 /**
  * End-customer invoicing. The workspace bills ITS customers; payment runs
@@ -253,6 +262,13 @@ export class InvoicesService {
       const redirectUrl = await this.payViaPaytr(inv, psp.configSealed, buyerIp);
       return { redirectUrl };
     }
+    // Iyzico (Epic 13, inert until a workspace stores Iyzico merchant creds).
+    // Hosted Checkout Form; a per-invoice callback (publicToken) lets the
+    // notification resolve the workspace's creds to retrieve + verify the result.
+    if (psp?.provider === 'IYZICO') {
+      const redirectUrl = await this.payViaIyzico(inv, psp.configSealed, buyerIp);
+      return { redirectUrl };
+    }
     if (psp?.provider === 'STRIPE') {
       const secrets = this.openPsp(psp.configSealed);
       const key = secrets.secretKey;
@@ -261,6 +277,11 @@ export class InvoicesService {
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         line_items: [{ price_data: { currency: inv.currency.toLowerCase(), product_data: { name: `Invoice ${inv.number}` }, unit_amount: inv.total }, quantity: 1 }],
+        // Bind the session to THIS invoice so the return handler can prove the
+        // payment is for this invoice (and not another paid session in the same
+        // workspace's Stripe account) before settling.
+        client_reference_id: inv.id,
+        metadata: { invoiceId: inv.id },
         success_url: `${this.base()}/api/public/i/${token}/return?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${this.base()}/api/public/i/${token}`,
       });
@@ -278,9 +299,22 @@ export class InvoicesService {
     const key = this.openPsp(psp?.configSealed).secretKey;
     if (!key) return { paid: false };
     const session = await new Stripe(key).checkout.sessions.retrieve(sessionId);
-    if (session.payment_status === 'paid') {
+    // Bind the session to THIS invoice. Without this, ANY `paid` session in the
+    // workspace's Stripe account (e.g. a cheap invoice the buyer really paid)
+    // could be replayed here to settle a different, more expensive invoice for
+    // free. Require the invoice id we stamped at creation AND an exact amount +
+    // currency match (defence in depth) before settling.
+    const boundToInvoice =
+      session.metadata?.invoiceId === inv.id || session.client_reference_id === inv.id;
+    const amountMatches =
+      session.amount_total === inv.total &&
+      (session.currency ?? '').toLowerCase() === inv.currency.toLowerCase();
+    if (session.payment_status === 'paid' && boundToInvoice && amountMatches) {
       await this.settle(inv, 'stripe');
       return { paid: true };
+    }
+    if (session.payment_status === 'paid' && (!boundToInvoice || !amountMatches)) {
+      this.logger.warn(`Stripe session/invoice mismatch for invoice ${inv.id} — refusing to settle`);
     }
     return { paid: false };
   }
@@ -388,6 +422,96 @@ export class InvoicesService {
       await this.settle(inv, 'paytr');
     }
     return true; // verified → ACK with "OK"
+  }
+
+  // ---- Iyzico (Epic 13, inert) ----
+
+  /** Initialize an Iyzico Checkout Form and return the hosted payment-page URL. */
+  private async payViaIyzico(
+    inv: { id: string; workspaceId: string; leadId: string | null; total: number; currency: string; number: string; publicToken: string },
+    configSealed: string | null,
+    buyerIp: string,
+  ): Promise<string> {
+    const { apiKey, secretKey } = this.openPsp(configSealed);
+    if (!apiKey || !secretKey) throw new ServiceUnavailableException('Iyzico is not configured for this workspace');
+    const lead = inv.leadId
+      ? await this.prisma.lead.findFirst({ where: { id: inv.leadId, workspaceId: inv.workspaceId }, select: { email: true, contactPerson: true } })
+      : null;
+    const [name, ...rest] = (lead?.contactPerson || 'Customer').trim().split(/\s+/);
+    const body = buildInitializeBody({
+      conversationId: inv.id,
+      price: minorToPrice(inv.total),
+      currency: inv.currency,
+      basketId: inv.id,
+      callbackUrl: `${this.base()}/api/public/i/${inv.publicToken}/iyzico-callback`,
+      buyer: { id: inv.leadId || inv.id, name, surname: rest.join(' ') || 'N/A', email: lead?.email || 'noreply@example.com', ip: buyerIp },
+      itemName: `Invoice ${inv.number}`,
+    });
+    const base = (this.config.get<string>('IYZICO_BASE_URL') ?? IYZICO_DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const rnd = newRandomKey();
+    let res: Response;
+    try {
+      res = await fetch(`${base}${IYZICO_INIT_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: buildAuthHeader({ apiKey, secretKey }, IYZICO_INIT_PATH, body, rnd), 'x-iyzi-rnd': rnd },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('Iyzico is currently unreachable');
+    }
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!res.ok || json?.status !== 'success' || !json?.paymentPageUrl) {
+      throw new ServiceUnavailableException(String(json?.errorMessage ?? 'Iyzico rejected the payment'));
+    }
+    return String(json.paymentPageUrl);
+  }
+
+  /**
+   * Iyzico callback: retrieve the result with the workspace's creds (resolved via
+   * the invoice publicToken) and settle on SUCCESS. An amount-tamper guard refuses
+   * a verified-but-mismatched paidPrice (same footgun the PayTR path guards).
+   */
+  async iyzicoCallback(publicToken: string, iyzicoToken: string): Promise<boolean> {
+    if (!publicToken || !iyzicoToken) return false;
+    const inv = await this.prisma.invoice.findUnique({ where: { publicToken } });
+    if (!inv) return false;
+    const psp = await this.prisma.workspacePspConfig.findUnique({ where: { workspaceId: inv.workspaceId } });
+    if (psp?.provider !== 'IYZICO') return false;
+    const { apiKey, secretKey } = this.openPsp(psp.configSealed);
+    if (!apiKey || !secretKey) return false;
+    const base = (this.config.get<string>('IYZICO_BASE_URL') ?? IYZICO_DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const body = JSON.stringify({ locale: 'tr', conversationId: inv.id, token: iyzicoToken });
+    const rnd = newRandomKey();
+    let res: Response;
+    try {
+      res = await fetch(`${base}${IYZICO_RETRIEVE_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: buildAuthHeader({ apiKey, secretKey }, IYZICO_RETRIEVE_PATH, body, rnd), 'x-iyzi-rnd': rnd },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      return false;
+    }
+    const json = (await res.json().catch(() => null)) as Record<string, any> | null;
+    if (!res.ok || json?.status !== 'success' || json?.paymentStatus !== 'SUCCESS') return false;
+    // Bind the retrieved payment to THIS invoice. The retrieve keys off the
+    // `token` alone and returns whatever payment that token represents — it
+    // ignores the request's conversationId — so without checking the RESPONSE's
+    // conversationId/basketId (both set to inv.id at init), a token for a
+    // same-amount paid invoice B could settle invoice A. (PayTR binds via the
+    // hashed merchant_oid; Iyzico has no equivalent, so we check it here.)
+    if (String(json.conversationId ?? '') !== inv.id && String(json.basketId ?? '') !== inv.id) {
+      this.logger.warn(`Iyzico token/invoice mismatch for invoice ${inv.id} — refusing to settle`);
+      return false;
+    }
+    if (Math.round(Number(json.paidPrice) * 100) !== inv.total) {
+      this.logger.warn(`Iyzico amount mismatch for invoice ${inv.id}: collected ${json.paidPrice} vs billed ${inv.total} — not settling`);
+      return false;
+    }
+    await this.settle(inv, 'iyzico');
+    return true;
   }
 
   // ---- helpers ----

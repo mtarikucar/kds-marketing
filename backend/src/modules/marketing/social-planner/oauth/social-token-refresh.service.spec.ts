@@ -19,7 +19,11 @@ describe('SocialTokenRefreshService', () => {
 
   beforeEach(() => {
     prisma = {
-      socialAccount: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
+      socialAccount: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     svc = new SocialTokenRefreshService(prisma as any);
     providerForMock.mockReset();
@@ -37,13 +41,16 @@ describe('SocialTokenRefreshService', () => {
       }),
     });
     await svc.refreshExpiring();
-    expect(prisma.socialAccount.update).toHaveBeenCalledTimes(1);
-    const data = prisma.socialAccount.update.mock.calls[0][0].data;
-    expect(data.lastError).toBeNull();
-    expect(data.accessToken).not.toBe('newtok'); // sealed
+    // The write is now a CAS updateMany (guarded on the refreshToken snapshot).
+    expect(prisma.socialAccount.updateMany).toHaveBeenCalledTimes(1);
+    const call = prisma.socialAccount.updateMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({ id: 'a1' });
+    expect(call.where.refreshToken).toBeDefined(); // CAS snapshot guard
+    expect(call.data.lastError).toBeNull();
+    expect(call.data.accessToken).not.toBe('newtok'); // sealed
   });
 
-  it('disables the account and flags reauth on refresh failure', async () => {
+  it('disables the account and flags reauth on refresh failure (CAS-guarded)', async () => {
     prisma.socialAccount.findMany.mockResolvedValue([
       { id: 'a2', network: 'TIKTOK', refreshToken: sealSecret('rt') },
     ]);
@@ -51,10 +58,10 @@ describe('SocialTokenRefreshService', () => {
       refresh: jest.fn().mockRejectedValue(new Error('invalid_grant')),
     });
     await svc.refreshExpiring();
-    expect(prisma.socialAccount.update).toHaveBeenCalledWith({
-      where: { id: 'a2' },
-      data: { enabled: false, lastError: 'reauth_required' },
-    });
+    const call = prisma.socialAccount.updateMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({ id: 'a2' });
+    expect(call.where.refreshToken).toBeDefined();
+    expect(call.data).toEqual({ enabled: false, lastError: 'reauth_required' });
   });
 
   it('skips a provider without a refresh method (non-refreshable token)', async () => {
@@ -63,6 +70,6 @@ describe('SocialTokenRefreshService', () => {
     ]);
     providerForMock.mockReturnValue({}); // no refresh()
     await svc.refreshExpiring();
-    expect(prisma.socialAccount.update).not.toHaveBeenCalled();
+    expect(prisma.socialAccount.updateMany).not.toHaveBeenCalled();
   });
 });

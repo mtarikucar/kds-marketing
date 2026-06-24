@@ -34,6 +34,19 @@ describe('safe-fetch', () => {
     it('refuses a non-IP string', () => {
       expect(isBlockedIp('not-an-ip')).toBe(true);
     });
+
+    // Regression: `new URL()` normalizes ::ffff:169.254.169.254 to the HEX form
+    // ::ffff:a9fe:a9fe — the dotted-decimal classifier missed it, so the live
+    // path (which always URL-parses first) let metadata/loopback/private through.
+    it.each([
+      ['metadata (hex-normalized)', '::ffff:a9fe:a9fe', true],
+      ['loopback (hex-normalized)', '::ffff:7f00:1', true],
+      ['private 10/8 (hex-normalized)', '::ffff:a00:5', true],
+      ['public 8.8.8.8 (hex-normalized)', '::ffff:808:808', false],
+      ['real global IPv6 (not mapped)', '2001:4860:4860::8888', false],
+    ])('classifies IPv4-mapped IPv6 in hex form: %s', (_label, ip, blocked) => {
+      expect(isBlockedIp(ip)).toBe(blocked);
+    });
   });
 
   describe('safeFetch', () => {

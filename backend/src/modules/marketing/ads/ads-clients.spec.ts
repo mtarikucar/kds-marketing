@@ -66,6 +66,22 @@ describe('pullMetaInsights', () => {
     await expect(pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02')).rejects.toThrow(/Meta ads 400/);
   });
 
+  it('flags an auth error (401 / code 190) on the thrown error → drives TOKEN_EXPIRED', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(false, 401, { error: { code: 190, type: 'OAuthException', message: 'expired' } }),
+    );
+    await expect(pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02')).rejects.toMatchObject({
+      isAuthError: true,
+    });
+  });
+
+  it('does NOT flag a non-auth (500) error as isAuthError (stays retry-friendly)', async () => {
+    mockSafeFetch.mockResolvedValue(res(false, 500, { error: { message: 'server error' } }));
+    await expect(pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02')).rejects.not.toMatchObject({
+      isAuthError: true,
+    });
+  });
+
   it('follows paging.next until exhausted (no first-page truncation)', async () => {
     mockSafeFetch
       .mockResolvedValueOnce(

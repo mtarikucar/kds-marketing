@@ -342,6 +342,19 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (id, workspaceId), so only this renewal sweep is legitimately unscoped.
   'integrations/google-calendar-sync.service.ts:googleCalendarConnection.findMany':
     'watch-renewal cron re-registers expiring push channels across all workspaces (control-plane sweep)',
+  // Outlook/O365 (Graph) sync — the exact analogues of the Google entries above.
+  // The notification webhook carries only the Graph subscriptionId (UNIQUE, one
+  // connection per subscription); pullBySubscription resolves the connection by
+  // it before any workspace context exists. The other findFirst calls in this
+  // file (activeConnection, ensureSubscription) DO key on workspaceId.
+  'integrations/outlook-calendar-sync.service.ts:outlookCalendarConnection.findFirst':
+    'graph notification webhook resolves the connection by its unique subscriptionId before any workspace context exists',
+  // The subscription-renewal @Cron is a global control-plane sweep: it renews
+  // Graph subscriptions nearing expiry across ALL workspaces. The other findMany
+  // (pullWorkspace) IS workspace-scoped; every create/update path keys on
+  // (id, workspaceId), so only this renewal sweep is legitimately unscoped.
+  'integrations/outlook-calendar-sync.service.ts:outlookCalendarConnection.findMany':
+    'subscription-renewal cron renews expiring Graph subscriptions across all workspaces (control-plane sweep)',
 
   // ---- Epic A imports — ImportJobRow has NO workspaceId column; it is owned by
   // its parent ImportJob (which carries workspaceId). Every row op keys on

@@ -61,6 +61,18 @@ export class PublicInvoiceController {
     return this.invoices.pay(token, getClientIp(req));
   }
 
+  /** Iyzico Checkout-Form callback — retrieve + settle, then show the result page. */
+  @Post('i/:token/iyzico-callback')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async iyzicoCallback(@Param('token') token: string, @Body() body: Record<string, string>, @Res() res: Response): Promise<void> {
+    let paid = false;
+    try { paid = await this.invoices.iyzicoCallback(token, body?.token); } catch { paid = false; }
+    res.type('html').send(
+      `<!doctype html><meta charset="utf-8"><title>Payment</title><div style="font-family:system-ui;max-width:480px;margin:80px auto;text-align:center">` +
+      `<h2>${paid ? 'Payment received ✓' : 'Payment pending'}</h2><p style="color:#64748b">${paid ? 'Thank you! Your invoice is now marked paid.' : 'We could not confirm the payment yet. If you completed checkout, it will update shortly.'}</p></div>`,
+    );
+  }
+
   @Get('i/:token/return')
   async stripeReturn(@Param('token') token: string, @Query('session_id') sessionId: string, @Res() res: Response): Promise<void> {
     let paid = false;

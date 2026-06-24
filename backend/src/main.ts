@@ -68,6 +68,18 @@ function validateEnv(): void {
     );
   }
 
+  // GRAPH_API_VERSION pins the Meta Graph API version for every outbound Graph
+  // call (messaging/social/ads/reviews). Unset → the built-in default (v19.0).
+  // A malformed value silently falls back, so warn to keep the default
+  // intentional rather than a typo.
+  const graphVersion = process.env.GRAPH_API_VERSION;
+  if (graphVersion && !/^v\d+\.\d+$/.test(graphVersion)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[env] GRAPH_API_VERSION="${graphVersion}" is malformed (expected like v19.0) — falling back to the built-in default.`,
+    );
+  }
+
   // MARKETING_SECRET_KEY is the AES-256-GCM master key that seals channel/PSP
   // secrets AND mints the NetGSM MO callback tokens. It is now load-bearing for
   // live omnichannel, so it is REQUIRED in production (fail fast rather than

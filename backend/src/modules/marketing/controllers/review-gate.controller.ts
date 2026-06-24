@@ -35,7 +35,7 @@ export class ReviewGateController {
       `if(r>=4){post('');}else{document.getElementById('fb').style.display='block';}};});` +
       `document.getElementById('send').onclick=()=>post(document.getElementById('t').value);` +
       `function post(text){fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:r,text})})` +
-      `.then(x=>x.json()).then(d=>{if(d.redirectUrl){location.href=d.redirectUrl;}else{s.style.display='none';document.getElementById('fb').style.display='none';document.getElementById('done').style.display='block';}});}</script></body></html>`,
+      `.then(x=>x.json()).then(d=>{if(d.redirectUrl&&/^https?:\\/\\//i.test(d.redirectUrl)){location.href=d.redirectUrl;}else{s.style.display='none';document.getElementById('fb').style.display='none';document.getElementById('done').style.display='block';}});}</script></body></html>`,
     );
   }
 

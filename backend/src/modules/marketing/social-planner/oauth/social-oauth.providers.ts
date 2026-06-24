@@ -1,4 +1,5 @@
 import { safeFetch } from '../../../../common/util/safe-fetch';
+import { metaGraphFetch, graphBaseUrl } from '../../../../common/util/meta-graph.util';
 import {
   NETWORK_OAUTH,
   Network,
@@ -11,9 +12,12 @@ import {
 export interface ConnectableAsset {
   externalId: string;
   displayName: string;
-  accountType: string; // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK
+  // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK | WHATSAPP_NUMBER | AD_ACCOUNT
+  accountType: string;
   /** Per-asset token (e.g. FB page token); falls back to the user token. */
   token?: string;
+  /** Typed extras the provisioner needs (phoneNumberId, wabaId, accountId, currency…). */
+  meta?: Record<string, unknown>;
 }
 
 /** Normalized result of exchanging an auth code for tokens. */
@@ -24,14 +28,22 @@ export interface ExchangeResult {
 }
 
 export interface SocialOAuthProvider {
-  exchangeCode(network: Network, code: string): Promise<ExchangeResult>;
+  /** Exchange the auth code for tokens. `codeVerifier` is supplied for PKCE networks. */
+  exchangeCode(network: Network, code: string, codeVerifier?: string): Promise<ExchangeResult>;
   listAssets(token: string): Promise<ConnectableAsset[]>;
   /** Refresh an access token; throws if the provider/refresh fails. */
   refresh?(refreshToken: string): Promise<ExchangeResult>;
 }
 
-/** Config-driven authorize URL — handles per-network scope delimiter + client key param. */
-export function buildAuthorizeUrl(network: Network, state: string): string {
+/**
+ * Config-driven authorize URL — handles per-network scope delimiter, client key
+ * param, extra params (Google offline access), and the PKCE challenge (X).
+ */
+export function buildAuthorizeUrl(
+  network: Network,
+  state: string,
+  codeChallenge?: string,
+): string {
   const def = NETWORK_OAUTH[network];
   const p = new URLSearchParams({
     redirect_uri: redirectUri(network),
@@ -57,16 +69,31 @@ export function buildAuthorizeUrl(network: Network, state: string): string {
   } else {
     p.set('client_id', clientId(network) ?? '');
   }
+  for (const [k, v] of Object.entries(def.extraAuthParams ?? {})) {
+    p.set(k, v);
+  }
+  if (def.pkce && codeChallenge) {
+    p.set('code_challenge', codeChallenge);
+    p.set('code_challenge_method', 'S256');
+  }
   return `${def.authorizeUrl}?${p.toString()}`;
 }
 
-const GRAPH = 'https://graph.facebook.com/v19.0';
+/** Basic-auth header for a confidential-client token exchange (X, Pinterest). */
+function basicAuth(network: Network): string {
+  const raw = `${clientId(network) ?? ''}:${clientSecret(network) ?? ''}`;
+  return `Basic ${Buffer.from(raw).toString('base64')}`;
+}
 
-/** Meta (Facebook + Instagram) share one app/token; IG accounts hang off Pages. */
+/** Meta (Facebook + Instagram) share one app/token; IG accounts hang off Pages.
+ *  Token EXCHANGE uses plain safeFetch (no appsecret_proof — there's no token
+ *  yet, only client_secret); all authenticated READS go through metaGraphFetch
+ *  so they carry appsecret_proof + the configured Graph version. */
 export const metaProvider: SocialOAuthProvider = {
   async exchangeCode(network: Network, code: string): Promise<ExchangeResult> {
+    const base = graphBaseUrl();
     const shortRes = await safeFetch(
-      `${GRAPH}/oauth/access_token?` +
+      `${base}/oauth/access_token?` +
         new URLSearchParams({
           client_id: clientId(network) ?? '',
           client_secret: clientSecret(network) ?? '',
@@ -82,7 +109,7 @@ export const metaProvider: SocialOAuthProvider = {
     // Upgrade to a long-lived user token (~60d); page tokens derived from it
     // are effectively non-expiring.
     const llRes = await safeFetch(
-      `${GRAPH}/oauth/access_token?` +
+      `${base}/oauth/access_token?` +
         new URLSearchParams({
           grant_type: 'fb_exchange_token',
           client_id: clientId(network) ?? '',
@@ -99,43 +126,127 @@ export const metaProvider: SocialOAuthProvider = {
 
   async listAssets(userToken: string): Promise<ConnectableAsset[]> {
     const out: ConnectableAsset[] = [];
-    const pagesRes = await safeFetch(
-      `${GRAPH}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(userToken)}`,
-      { method: 'GET', timeoutMs: 15000 },
-    );
-    const pages = (await pagesRes.json()) as any;
+    // Pages (+ linked IG business accounts) — the core publishing assets; throws
+    // on failure (this is the minimum the connect flow needs).
+    const pagesRes = await metaGraphFetch('/me/accounts', {
+      accessToken: userToken,
+      query: { fields: 'id,name,access_token' },
+      timeoutMs: 15000,
+    });
     if (!pagesRes.ok) {
-      throw new Error(pages?.error?.message ?? 'failed to list Facebook pages');
+      throw new Error(pagesRes.error?.message ?? 'failed to list Facebook pages');
     }
-    for (const pg of pages?.data ?? []) {
+    for (const pg of pagesRes.data?.data ?? []) {
       out.push({
         externalId: pg.id,
         displayName: pg.name,
         accountType: 'PAGE',
         token: pg.access_token,
+        meta: { pageId: pg.id },
       });
       try {
-        const igRes = await safeFetch(
-          `${GRAPH}/${pg.id}?fields=instagram_business_account{id,username}&access_token=${encodeURIComponent(pg.access_token)}`,
-          { method: 'GET', timeoutMs: 15000 },
-        );
-        const ig = (await igRes.json()) as any;
-        const iga = ig?.instagram_business_account;
+        const igRes = await metaGraphFetch(`/${pg.id}`, {
+          accessToken: pg.access_token,
+          query: { fields: 'instagram_business_account{id,username}' },
+          timeoutMs: 15000,
+        });
+        const iga = igRes.ok ? igRes.data?.instagram_business_account : null;
         if (iga?.id) {
           out.push({
             externalId: iga.id,
             displayName: iga.username ? `@${iga.username}` : `${pg.name} (Instagram)`,
             accountType: 'IG_BUSINESS',
             token: pg.access_token,
+            meta: { pageId: pg.id },
           });
         }
       } catch {
         /* page without a linked IG business account — skip */
       }
     }
+    // Ad accounts + WhatsApp numbers are OPTIONAL (need ads_read /
+    // whatsapp_business_management — App-Review-gated). Degrade gracefully so a
+    // publish-only grant still yields the page assets.
+    try {
+      out.push(...(await discoverAdAccounts(userToken)));
+    } catch {
+      /* no ads_read — skip ad accounts */
+    }
+    try {
+      out.push(...(await discoverWhatsApp(userToken)));
+    } catch {
+      /* no WhatsApp scope — skip numbers */
+    }
     return out;
   },
 };
+
+/** /me/adaccounts → AD_ACCOUNT assets (active only). Returns [] on any failure. */
+async function discoverAdAccounts(userToken: string): Promise<ConnectableAsset[]> {
+  const r = await metaGraphFetch('/me/adaccounts', {
+    accessToken: userToken,
+    query: { fields: 'account_id,name,currency,account_status' },
+    timeoutMs: 15000,
+  });
+  if (!r.ok) return [];
+  const out: ConnectableAsset[] = [];
+  for (const a of r.data?.data ?? []) {
+    // account_status 1 = ACTIVE — skip disabled/closed accounts so the cron
+    // doesn't hammer Meta for dead act_ ids.
+    if (a?.account_status != null && Number(a.account_status) !== 1) continue;
+    const accountId = String(a?.account_id ?? '');
+    if (!accountId) continue;
+    out.push({
+      externalId: accountId,
+      displayName: a?.name ? `${a.name} (Ads)` : `Ad account ${accountId}`,
+      accountType: 'AD_ACCOUNT',
+      token: userToken,
+      meta: { accountId, currency: a?.currency ?? null },
+    });
+  }
+  return out;
+}
+
+/** /me/businesses → WABAs → phone numbers → WHATSAPP_NUMBER assets. [] on failure. */
+async function discoverWhatsApp(userToken: string): Promise<ConnectableAsset[]> {
+  const out: ConnectableAsset[] = [];
+  const bizRes = await metaGraphFetch('/me/businesses', {
+    accessToken: userToken,
+    query: { fields: 'id,name' },
+    timeoutMs: 15000,
+  });
+  if (!bizRes.ok) return out;
+  for (const biz of bizRes.data?.data ?? []) {
+    const wabaRes = await metaGraphFetch(`/${biz.id}/owned_whatsapp_business_accounts`, {
+      accessToken: userToken,
+      query: { fields: 'id,name' },
+      timeoutMs: 15000,
+    });
+    if (!wabaRes.ok) continue;
+    for (const waba of wabaRes.data?.data ?? []) {
+      const phRes = await metaGraphFetch(`/${waba.id}/phone_numbers`, {
+        accessToken: userToken,
+        query: { fields: 'id,display_phone_number,verified_name' },
+        timeoutMs: 15000,
+      });
+      if (!phRes.ok) continue;
+      for (const ph of phRes.data?.data ?? []) {
+        const pid = String(ph?.id ?? '');
+        if (!pid) continue;
+        out.push({
+          externalId: pid,
+          displayName: ph?.verified_name
+            ? `${ph.verified_name} (WhatsApp)`
+            : (ph?.display_phone_number ?? `WhatsApp ${pid}`),
+          accountType: 'WHATSAPP_NUMBER',
+          token: userToken,
+          meta: { phoneNumberId: pid, wabaId: waba.id, displayPhoneNumber: ph?.display_phone_number ?? null },
+        });
+      }
+    }
+  }
+  return out;
+}
 
 // ──────────────────────────────────────────────────────────────── LinkedIn
 
@@ -300,6 +411,223 @@ export const tiktokProvider: SocialOAuthProvider = {
   },
 };
 
+// ──────────────────────────────────────────────────────────────── X / Twitter
+
+const X_TOKEN_URL = 'https://api.twitter.com/2/oauth2/token';
+
+async function xTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  // Confidential client ⇒ HTTP Basic auth (client_id:client_secret).
+  const res = await safeFetch(X_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      Authorization: basicAuth('TWITTER'),
+    },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.error_description ?? json?.error ?? 'X token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/** X/Twitter — OAuth2 + PKCE; connects the authenticated user's own account. */
+export const twitterProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string, codeVerifier?: string): Promise<ExchangeResult> {
+    return xTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('TWITTER'),
+      client_id: clientId('TWITTER') ?? '',
+      code_verifier: codeVerifier ?? '',
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return xTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId('TWITTER') ?? '',
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const res = await safeFetch('https://api.twitter.com/2/users/me', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 15000,
+    });
+    const json = (await res.json()) as any;
+    const user = json?.data;
+    if (!res.ok || !user?.id) {
+      throw new Error(json?.detail ?? json?.title ?? 'failed to fetch X account');
+    }
+    return [
+      {
+        externalId: user.id,
+        displayName: user.username ? `@${user.username} (X)` : 'My X account',
+        accountType: 'TWITTER',
+        token,
+      },
+    ];
+  },
+};
+
+// ──────────────────────────────────────────────────────────────── Pinterest
+
+const PINTEREST_TOKEN_URL = 'https://api.pinterest.com/v5/oauth/token';
+
+async function pinterestTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  const res = await safeFetch(PINTEREST_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      Authorization: basicAuth('PINTEREST'),
+    },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.message ?? json?.error_description ?? json?.error ?? 'pinterest token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/** Pinterest — each board the user owns is a publishable asset (board_id). */
+export const pinterestProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    return pinterestTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('PINTEREST'),
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return pinterestTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const res = await safeFetch('https://api.pinterest.com/v5/boards?page_size=100', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 15000,
+    });
+    const json = (await res.json()) as any;
+    if (!res.ok) {
+      throw new Error(json?.message ?? 'failed to list Pinterest boards');
+    }
+    return (json?.items ?? [])
+      .filter((b: any) => b?.id)
+      .map((b: any) => ({
+        externalId: String(b.id),
+        displayName: b.name ? `${b.name} (Pinterest board)` : `Board ${b.id}`,
+        accountType: 'PINTEREST_BOARD',
+        token,
+      }));
+  },
+};
+
+// ──────────────────────────────────────────────────── Google Business Profile
+
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GBP_ACCOUNTS_URL = 'https://mybusinessaccountmanagement.googleapis.com/v1/accounts';
+
+async function googleTokenRequest(form: Record<string, string>): Promise<ExchangeResult> {
+  const res = await safeFetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(form).toString(),
+    timeoutMs: 15000,
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok || !json.access_token) {
+    throw new Error(json?.error_description ?? json?.error ?? 'google token request failed');
+  }
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+  };
+}
+
+/**
+ * Google Business Profile — locations across the user's GBP accounts. externalId
+ * is the full `accounts/{a}/locations/{l}` resource (what the Local Post publish
+ * adapter posts to). Inert until Google allowlists the Business Profile APIs.
+ */
+export const gmbProvider: SocialOAuthProvider = {
+  exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    return googleTokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri('GMB'),
+      client_id: clientId('GMB') ?? '',
+      client_secret: clientSecret('GMB') ?? '',
+    });
+  },
+
+  refresh(refreshToken: string): Promise<ExchangeResult> {
+    return googleTokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId('GMB') ?? '',
+      client_secret: clientSecret('GMB') ?? '',
+    });
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const acctRes = await safeFetch(GBP_ACCOUNTS_URL, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 15000,
+    });
+    const acctJson = (await acctRes.json()) as any;
+    if (!acctRes.ok) {
+      throw new Error(acctJson?.error?.message ?? 'failed to list Google Business accounts');
+    }
+    const out: ConnectableAsset[] = [];
+    for (const acct of acctJson?.accounts ?? []) {
+      const acctName: string = acct?.name ?? ''; // "accounts/{a}"
+      if (!acctName) continue;
+      try {
+        const locRes = await safeFetch(
+          `https://mybusinessbusinessinformation.googleapis.com/v1/${acctName}/locations?readMask=name,title&pageSize=100`,
+          { method: 'GET', headers: { Authorization: `Bearer ${token}` }, timeoutMs: 15000 },
+        );
+        const locJson = (await locRes.json()) as any;
+        for (const loc of locJson?.locations ?? []) {
+          const locName: string = loc?.name ?? ''; // "locations/{l}"
+          if (!locName) continue;
+          out.push({
+            externalId: `${acctName}/${locName}`,
+            displayName: loc?.title ? `${loc.title} (Google Business)` : locName,
+            accountType: 'GMB_LOCATION',
+            token,
+          });
+        }
+      } catch {
+        /* a single account's locations being unavailable shouldn't fail the rest */
+      }
+    }
+    return out;
+  },
+};
+
 /** Dispatch to the right provider. */
 export function providerFor(network: Network): SocialOAuthProvider {
   switch (network) {
@@ -310,6 +638,12 @@ export function providerFor(network: Network): SocialOAuthProvider {
       return linkedinProvider;
     case 'TIKTOK':
       return tiktokProvider;
+    case 'TWITTER':
+      return twitterProvider;
+    case 'PINTEREST':
+      return pinterestProvider;
+    case 'GMB':
+      return gmbProvider;
     default:
       throw new Error(`OAuth provider not implemented for ${network}`);
   }

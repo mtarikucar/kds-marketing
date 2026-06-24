@@ -30,8 +30,10 @@ export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
   const { usePending, confirm } = useSocialConnect();
   const { data, isLoading, isError } = usePending(pendingId);
   const [selected, setSelected] = useState<string[]>([]);
+  // externalIds of Pages/IG accounts the user also wants as a messaging Channel.
+  const [messaging, setMessaging] = useState<string[]>([]);
 
-  // Default to all assets selected once they load.
+  // Default to all assets selected once they load (messaging stays opt-in/off).
   useEffect(() => {
     if (data?.assets) setSelected(data.assets.map((a) => a.externalId));
   }, [data]);
@@ -39,10 +41,13 @@ export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
   const toggle = (id: string) =>
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
+  const toggleMessaging = (id: string) =>
+    setMessaging((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
   const handleConfirm = () => {
     if (!pendingId || selected.length === 0) return;
     confirm.mutate(
-      { pendingId, selected },
+      { pendingId, selected, provisionMessaging: messaging.filter((id) => selected.includes(id)) },
       { onSuccess: () => onOpenChange(false) },
     );
   };
@@ -78,25 +83,49 @@ export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
           />
         ) : (
           <div className="max-h-72 space-y-1.5 overflow-y-auto py-1">
-            {data.assets.map((a) => (
-              <label
-                key={a.externalId}
-                htmlFor={`asset-${a.externalId}`}
-                className="flex cursor-pointer items-center gap-3 rounded-lg border border-border p-3 hover:bg-surface-muted"
-              >
-                <Checkbox
-                  id={`asset-${a.externalId}`}
-                  checked={selected.includes(a.externalId)}
-                  onCheckedChange={() => toggle(a.externalId)}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-foreground">
-                    {a.displayName}
-                  </span>
-                  <span className="block text-micro text-muted-foreground">{a.accountType}</span>
-                </span>
-              </label>
-            ))}
+            {data.assets.map((a) => {
+              const isMeta = a.accountType === 'PAGE' || a.accountType === 'IG_BUSINESS';
+              const isSelected = selected.includes(a.externalId);
+              return (
+                <div key={a.externalId} className="rounded-lg border border-border">
+                  <label
+                    htmlFor={`asset-${a.externalId}`}
+                    className="flex cursor-pointer items-center gap-3 p-3 hover:bg-surface-muted"
+                  >
+                    <Checkbox
+                      id={`asset-${a.externalId}`}
+                      checked={isSelected}
+                      onCheckedChange={() => toggle(a.externalId)}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-foreground">
+                        {a.displayName}
+                      </span>
+                      <span className="block text-micro text-muted-foreground">{a.accountType}</span>
+                    </span>
+                  </label>
+                  {/* Pages/IG can ALSO become a two-way messaging inbox channel —
+                      opt-in (off by default) so we don't surprise the operator
+                      with inbox/quota usage. WhatsApp numbers are messaging-only. */}
+                  {isMeta && isSelected && (
+                    <label
+                      htmlFor={`msg-${a.externalId}`}
+                      className="flex cursor-pointer items-center gap-2 border-t border-border px-3 py-2 text-micro text-muted-foreground hover:bg-surface-muted"
+                    >
+                      <Checkbox
+                        id={`msg-${a.externalId}`}
+                        aria-label={`messaging:${a.externalId}`}
+                        checked={messaging.includes(a.externalId)}
+                        onCheckedChange={() => toggleMessaging(a.externalId)}
+                      />
+                      {t('social.oauth.alsoMessaging', {
+                        defaultValue: 'Also enable the messaging inbox for this account',
+                      })}
+                    </label>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

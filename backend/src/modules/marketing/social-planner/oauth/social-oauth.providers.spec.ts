@@ -1,5 +1,13 @@
 import * as fetchMod from '../../../../common/util/safe-fetch';
-import { metaProvider, linkedinProvider, tiktokProvider, buildAuthorizeUrl } from './social-oauth.providers';
+import {
+  metaProvider,
+  linkedinProvider,
+  tiktokProvider,
+  twitterProvider,
+  pinterestProvider,
+  gmbProvider,
+  buildAuthorizeUrl,
+} from './social-oauth.providers';
 
 jest.mock('../../../../common/util/safe-fetch');
 const mockFetch = fetchMod.safeFetch as jest.Mock;
@@ -48,6 +56,118 @@ describe('buildAuthorizeUrl', () => {
     const decoded = decodeURIComponent(url);
     expect(decoded).toContain('w_organization_social');
     expect(decoded).toContain('w_member_social');
+  });
+
+  it('X/Twitter: adds the PKCE S256 challenge when one is supplied', () => {
+    process.env.X_CLIENT_ID = 'XID';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    const url = buildAuthorizeUrl('TWITTER', 'S', 'CHALLENGE123');
+    expect(url).toContain('client_id=XID');
+    expect(url).toContain('code_challenge=CHALLENGE123');
+    expect(url).toContain('code_challenge_method=S256');
+    expect(decodeURIComponent(url)).toContain('tweet.write');
+    expect(decodeURIComponent(url)).toContain('/marketing/social/oauth/twitter/callback');
+  });
+
+  it('Pinterest: comma-delimited scopes + board write', () => {
+    process.env.PINTEREST_APP_ID = 'PID';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    const url = buildAuthorizeUrl('PINTEREST', 'S');
+    expect(url).toContain('client_id=PID');
+    expect(decodeURIComponent(url)).toContain('pins:write');
+  });
+
+  it('GMB: Google authorize with business.manage + offline access', () => {
+    process.env.GOOGLE_CLIENT_ID = 'GID';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    const url = buildAuthorizeUrl('GMB', 'S');
+    expect(url).toContain('client_id=GID');
+    expect(url).toContain('access_type=offline');
+    expect(url).toContain('prompt=consent');
+    expect(decodeURIComponent(url)).toContain('business.manage');
+  });
+});
+
+describe('twitterProvider (X, PKCE)', () => {
+  beforeEach(() => {
+    process.env.X_CLIENT_ID = 'xid';
+    process.env.X_CLIENT_SECRET = 'xsecret';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    mockFetch.mockReset();
+  });
+
+  it('exchangeCode sends the code_verifier + Basic auth, returns tokens', async () => {
+    mockFetch.mockResolvedValueOnce(res({ access_token: 'xt', refresh_token: 'xr', expires_in: 7200 }));
+    const r = await twitterProvider.exchangeCode('TWITTER', 'CODE', 'VERIFIER123');
+    expect(r.accessToken).toBe('xt');
+    expect(r.refreshToken).toBe('xr');
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.body).toContain('code_verifier=VERIFIER123');
+    expect(init.headers.Authorization).toMatch(/^Basic /);
+  });
+
+  it('listAssets returns the authenticated X account', async () => {
+    mockFetch.mockResolvedValueOnce(res({ data: { id: 'u1', username: 'acme', name: 'Acme' } }));
+    const assets = await twitterProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ externalId: 'u1', accountType: 'TWITTER' });
+  });
+});
+
+describe('pinterestProvider', () => {
+  beforeEach(() => {
+    process.env.PINTEREST_APP_ID = 'pid';
+    process.env.PINTEREST_APP_SECRET = 'psecret';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    mockFetch.mockReset();
+  });
+
+  it('exchangeCode uses Basic auth + returns tokens', async () => {
+    mockFetch.mockResolvedValueOnce(res({ access_token: 'pt', refresh_token: 'pr', expires_in: 2592000 }));
+    const r = await pinterestProvider.exchangeCode('PINTEREST', 'CODE');
+    expect(r.accessToken).toBe('pt');
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers.Authorization).toMatch(/^Basic /);
+  });
+
+  it('listAssets returns one asset per board', async () => {
+    mockFetch.mockResolvedValueOnce(
+      res({ items: [{ id: 'b1', name: 'Recipes' }, { id: 'b2', name: 'Promos' }] }),
+    );
+    const assets = await pinterestProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(2);
+    expect(assets[0]).toMatchObject({ externalId: 'b1', accountType: 'PINTEREST_BOARD' });
+  });
+});
+
+describe('gmbProvider (Google Business Profile)', () => {
+  beforeEach(() => {
+    process.env.GOOGLE_CLIENT_ID = 'gid';
+    process.env.GOOGLE_CLIENT_SECRET = 'gsecret';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    mockFetch.mockReset();
+  });
+
+  it('listAssets walks accounts → locations into full resource ids', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ accounts: [{ name: 'accounts/123' }] }))
+      .mockResolvedValueOnce(res({ locations: [{ name: 'locations/456', title: 'Acme Store' }] }));
+    const assets = await gmbProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({
+      externalId: 'accounts/123/locations/456',
+      accountType: 'GMB_LOCATION',
+    });
+  });
+
+  it("a single account's location failure doesn't abort the rest", async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ accounts: [{ name: 'accounts/1' }, { name: 'accounts/2' }] }))
+      .mockRejectedValueOnce(new Error('403'))
+      .mockResolvedValueOnce(res({ locations: [{ name: 'locations/9', title: 'Store 2' }] }));
+    const assets = await gmbProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0].externalId).toBe('accounts/2/locations/9');
   });
 });
 
@@ -162,5 +282,34 @@ describe('metaProvider.listAssets', () => {
     const assets = await metaProvider.listAssets('USERTOKEN');
     expect(assets).toHaveLength(1);
     expect(assets[0]).toMatchObject({ externalId: 'P2', accountType: 'PAGE' });
+  });
+
+  it('discovers ad accounts and WhatsApp numbers when those scopes are granted', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: 'P1', name: 'Acme', access_token: 'pt1' }] })) // pages
+      .mockResolvedValueOnce(res({})) // IG (none)
+      .mockResolvedValueOnce(res({ data: [{ account_id: '123', name: 'Biz', currency: 'USD', account_status: 1 }] })) // /me/adaccounts
+      .mockResolvedValueOnce(res({ data: [{ id: 'B1', name: 'Biz' }] })) // /me/businesses
+      .mockResolvedValueOnce(res({ data: [{ id: 'WABA1', name: 'WA' }] })) // owned WABAs
+      .mockResolvedValueOnce(res({ data: [{ id: 'PN1', display_phone_number: '+90', verified_name: 'Acme' }] })); // phone_numbers
+    const assets = await metaProvider.listAssets('USERTOKEN');
+    expect(assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ externalId: 'P1', accountType: 'PAGE' }),
+        expect.objectContaining({ externalId: '123', accountType: 'AD_ACCOUNT', meta: expect.objectContaining({ currency: 'USD' }) }),
+        expect.objectContaining({ externalId: 'PN1', accountType: 'WHATSAPP_NUMBER', meta: expect.objectContaining({ phoneNumberId: 'PN1' }) }),
+      ]),
+    );
+  });
+
+  it('still returns pages when ad-account/WhatsApp scopes are missing (graceful)', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: 'P1', name: 'Acme', access_token: 'pt1' }] })) // pages
+      .mockResolvedValueOnce(res({})) // IG none
+      .mockResolvedValueOnce(res({ error: { message: 'no ads_read' } }, false)) // /me/adaccounts 4xx
+      .mockResolvedValueOnce(res({ error: { message: 'no wa' } }, false)); // /me/businesses 4xx
+    const assets = await metaProvider.listAssets('USERTOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ externalId: 'P1', accountType: 'PAGE' });
   });
 });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { CalendarDays, Link2, Unplug } from 'lucide-react';
+import { CalendarDays, Link2, RefreshCw, Unplug } from 'lucide-react';
 import {
   Card, CardHeader, CardTitle, CardDescription, CardContent,
   Button, Badge, Callout, Skeleton, EmptyState, ConfirmDialog,
@@ -9,6 +9,7 @@ import {
 import { useOutlookCalendarStatus, useOutlookCalendarMutations } from './hooks';
 import type { OutlookCalendarConnection } from './types';
 import { apiError } from './util';
+import { navigateExternal } from '@/lib/navigateExternal';
 
 function formatDate(value: string): string {
   const d = new Date(value);
@@ -16,14 +17,16 @@ function formatDate(value: string): string {
 }
 
 /**
- * Epic 12 (inert until MS_OAUTH creds) — Outlook/O365 calendar connect. Mirrors
- * the Google Calendar tab: connect starts the Microsoft OAuth round-trip;
- * inert ⇒ a "not configured" callout. (Two-way delta sync is a follow-up.)
+ * Epic 12 (inert until MS_OAUTH creds) — Outlook/O365 calendar connect + 2-way
+ * Graph sync. Mirrors the Google Calendar tab: connect starts the Microsoft
+ * OAuth round-trip; a "Live push" badge shows when the change-notification
+ * subscription is active; "Sync now" forces a delta pull. Inert ⇒ a "not
+ * configured" callout.
  */
 export function OutlookCalendarTab() {
   const { t } = useTranslation('marketing');
   const { data, isLoading } = useOutlookCalendarStatus();
-  const { connect, disconnect } = useOutlookCalendarMutations();
+  const { connect, sync, disconnect } = useOutlookCalendarMutations();
   const [disconnectTarget, setDisconnectTarget] = useState<OutlookCalendarConnection | null>(null);
 
   const configured = data?.configured ?? false;
@@ -31,8 +34,15 @@ export function OutlookCalendarTab() {
 
   const handleConnect = () => {
     connect.mutate(undefined, {
-      onSuccess: ({ url }) => window.location.assign(url),
+      onSuccess: ({ url }) => navigateExternal(url),
       onError: (e) => toast.error(apiError(e, t('connections.outlook.connectError', { defaultValue: 'Could not start Outlook connect' }))),
+    });
+  };
+
+  const handleSync = () => {
+    sync.mutate(undefined, {
+      onSuccess: () => toast.success(t('connections.outlook.syncStarted', { defaultValue: 'Sync started' })),
+      onError: (e) => toast.error(apiError(e, t('connections.outlook.syncError', { defaultValue: 'Sync failed' }))),
     });
   };
 
@@ -84,6 +94,11 @@ export function OutlookCalendarTab() {
                     <Badge tone={c.syncEnabled ? 'success' : 'neutral'} size="sm">
                       {c.syncEnabled ? t('connections.outlook.connected', { defaultValue: 'Connected' }) : t('connections.outlook.paused', { defaultValue: 'Paused' })}
                     </Badge>
+                    {c.subscriptionActive && (
+                      <Badge tone="info" size="sm">
+                        {t('connections.outlook.push', { defaultValue: 'Live push' })}
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {t('connections.outlook.tokenExpires', { defaultValue: 'Token renews around {{when}}', when: formatDate(c.tokenExpiresAt) })}
@@ -96,6 +111,15 @@ export function OutlookCalendarTab() {
               </li>
             ))}
           </ul>
+        )}
+
+        {configured && connections.length > 0 && (
+          <div className="flex justify-end border-t border-border pt-4">
+            <Button variant="outline" size="sm" onClick={handleSync} loading={sync.isPending}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              {t('connections.outlook.syncNow', { defaultValue: 'Sync now' })}
+            </Button>
+          </div>
         )}
       </CardContent>
 

@@ -17,7 +17,11 @@ export class PublicFunnelsController {
     private readonly surveys: SurveysService,
   ) {}
 
+  // This GET WRITES an IMPRESSION row, so it carries the same write throttle as
+  // the mutations below — without it an attacker can stuff impressions (diluting
+  // conversion rates) and grow experiment_events under only the loose global cap.
   @Get('exp/:id/variant')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async variant(@Param('id') id: string) {
     const chosen = await this.experiments.selectVariant(id);
     if (!chosen) throw new NotFoundException('No running experiment');

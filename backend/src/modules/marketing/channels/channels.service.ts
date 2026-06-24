@@ -16,6 +16,8 @@ import { PublicChannelResolverService } from './public-channel-resolver.service'
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
 import { assertTiktokDmSecrets } from './tiktok-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
+import { assertMetaSecrets, isMetaChannelType } from './meta-config.util';
+import { metaWebhookCallbackUrl } from './meta-callback.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -105,7 +107,8 @@ export class ChannelsService {
     }
     if (dto.secrets && Object.keys(dto.secrets).length) {
       if (dto.type === 'SMS') assertNetgsmSmsSecrets(dto.secrets);
-      if (dto.type === 'TIKTOK') assertTiktokDmSecrets(dto.secrets);
+      else if (dto.type === 'TIKTOK') assertTiktokDmSecrets(dto.secrets);
+      else if (isMetaChannelType(dto.type)) assertMetaSecrets(dto.type, dto.secrets);
       data.configSealed = this.seal(dto.secrets);
     }
     const c = await this.prisma.channel.create({ data: { ...data, workspaceId } });
@@ -138,7 +141,8 @@ export class ChannelsService {
       }
       const merged = { ...current, ...dto.secrets };
       if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
-      if (existing.type === 'TIKTOK') assertTiktokDmSecrets(merged);
+      else if (existing.type === 'TIKTOK') assertTiktokDmSecrets(merged);
+      else if (isMetaChannelType(existing.type)) assertMetaSecrets(existing.type, merged);
       data.configSealed = this.seal(merged);
     }
     const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
@@ -199,6 +203,16 @@ export class ChannelsService {
       // yönlendir"). Null until PUBLIC_BASE_URL + MARKETING_SECRET_KEY are set.
       ...(c.type === 'SMS'
         ? { callbackUrl: netgsmMoCallbackUrl(process.env.PUBLIC_BASE_URL, c.id) }
+        : {}),
+      // Meta (WhatsApp/Messenger/IG) inbound + receipts arrive on ONE static,
+      // signed webhook for the whole app. Surface the URL operators paste into
+      // the Meta App dashboard (and whether the verify token env is set), the
+      // way SMS surfaces its MO callback. Never expose the token value itself.
+      ...(isMetaChannelType(c.type)
+        ? {
+            webhookUrl: metaWebhookCallbackUrl(process.env.PUBLIC_BASE_URL),
+            verifyTokenConfigured: !!process.env.META_WEBHOOK_VERIFY_TOKEN,
+          }
         : {}),
       lastVerifiedAt: c.lastVerifiedAt,
       createdAt: c.createdAt,

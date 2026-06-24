@@ -135,7 +135,37 @@
     "products": "Ürünler",
     "subscriptions": "Abonelikler",
     "orderForms": "Sipariş Formları",
-    "branding": "Marka"
+    "branding": "Marka",
+    "prospecting": "Web Sitesi Denetimi",
+    "sendingDomains": "Gönderim Alanları",
+    "customDomains": "Özel Alan Adları",
+    "dialer": "Güç Çevirici",
+    "telephony": "Telefon (Netsantral)",
+    "apiKeys": "API Anahtarları",
+    "webhooks": "Webhook'lar",
+    "inboundWebhooks": "Gelen Webhook'lar",
+    "compliance": "Uyumluluk",
+    "twoFactor": "İki Adımlı Doğrulama",
+    "affiliates": "İş Ortakları",
+    "analytics": "Analitik",
+    "communities": "Topluluklar",
+    "companies": "Şirketler",
+    "connections": "Bağlantılar",
+    "courses": "Kurslar",
+    "customFields": "Özel Alanlar",
+    "emailTemplates": "E-posta Şablonları",
+    "experiments": "Deneyler",
+    "import": "İçe Aktar",
+    "leaderboard": "Liderlik Tablosu",
+    "roles": "Roller ve İzinler",
+    "segments": "Segmentler",
+    "social": "Sosyal Medya",
+    "surveys": "Anketler",
+    "tags": "Etiketler",
+    "agencyLocations": "Ajans Lokasyonları",
+    "agencyRebilling": "Ajans Yeniden Faturalama",
+    "agencySnapshots": "Ajans Anlık Görüntüleri",
+    "ivr": "Sesli Menü (IVR)"
   },
   "common": {
     "save": "Kaydet",
@@ -450,9 +480,21 @@
     "pause": "Duraklat",
     "resume": "Devam ettir",
     "cancel": "İptal et",
-    "status": { "ACTIVE": "Aktif", "PAUSED": "Duraklatıldı", "CANCELLED": "İptal edildi" },
-    "intervalUnit": { "WEEK": "hafta", "MONTH": "ay", "YEAR": "yıl" },
-    "intervalEvery": { "WEEK": "Haftalık", "MONTH": "Aylık", "YEAR": "Yıllık" }
+    "status": {
+      "ACTIVE": "Aktif",
+      "PAUSED": "Duraklatıldı",
+      "CANCELLED": "İptal edildi"
+    },
+    "intervalUnit": {
+      "WEEK": "hafta",
+      "MONTH": "ay",
+      "YEAR": "yıl"
+    },
+    "intervalEvery": {
+      "WEEK": "Haftalık",
+      "MONTH": "Aylık",
+      "YEAR": "Yıllık"
+    }
   },
   "products": {
     "title": "Ürünler",
@@ -732,10 +774,20 @@
       "title": "Henüz özel nesne yok",
       "description": "İşletmenize özel kayıtları modellemek için ilk özel nesnenizi oluşturun."
     },
-    "detail": { "subtitle": "Kayıtlara göz atın ve alanları yönetin.", "back": "Tüm nesneler" },
-    "tabs": { "records": "Kayıtlar", "fields": "Alanlar" },
-    "col": { "name": "Ad" },
-    "action": { "archive": "Arşivle" },
+    "detail": {
+      "subtitle": "Kayıtlara göz atın ve alanları yönetin.",
+      "back": "Tüm nesneler"
+    },
+    "tabs": {
+      "records": "Kayıtlar",
+      "fields": "Alanlar"
+    },
+    "col": {
+      "name": "Ad"
+    },
+    "action": {
+      "archive": "Arşivle"
+    },
     "form": {
       "newTitle": "Yeni özel nesne",
       "editTitle": "Nesneyi düzenle",
@@ -796,9 +848,18 @@
     "connectAccount": "Hesap bağla",
     "viewToggle": "Reklam raporu görünümü",
     "rangeToggle": "Tarih aralığı",
-    "tabs": { "overview": "Genel bakış", "accounts": "Hesaplar" },
-    "filter": { "allProviders": "Tüm sağlayıcılar" },
-    "range": { "7": "7g", "30": "30g", "90": "90g" },
+    "tabs": {
+      "overview": "Genel bakış",
+      "accounts": "Hesaplar"
+    },
+    "filter": {
+      "allProviders": "Tüm sağlayıcılar"
+    },
+    "range": {
+      "7": "7g",
+      "30": "30g",
+      "90": "90g"
+    },
     "stat": {
       "spend": "Harcama",
       "impressions": "Gösterim",
@@ -807,10 +868,22 @@
       "ctr": "TO",
       "cpl": "Müşteri adayı maliyeti"
     },
-    "col": { "provider": "Sağlayıcı", "date": "Tarih" },
-    "byProvider": { "title": "Sağlayıcıya göre" },
-    "byDay": { "title": "Günlük döküm", "empty": "Bu aralıkta henüz metrik yok." },
-    "status": { "ACTIVE": "Aktif", "TOKEN_EXPIRED": "Token süresi doldu", "DISCONNECTED": "Bağlantı kesildi" },
+    "col": {
+      "provider": "Sağlayıcı",
+      "date": "Tarih"
+    },
+    "byProvider": {
+      "title": "Sağlayıcıya göre"
+    },
+    "byDay": {
+      "title": "Günlük döküm",
+      "empty": "Bu aralıkta henüz metrik yok."
+    },
+    "status": {
+      "ACTIVE": "Aktif",
+      "TOKEN_EXPIRED": "Token süresi doldu",
+      "DISCONNECTED": "Bağlantı kesildi"
+    },
     "empty": {
       "title": "Bağlı reklam hesabı yok",
       "description": "Harcama ve dönüşüm raporlarını görmek için bir Meta veya TikTok reklam hesabı bağlayın."
@@ -821,7 +894,10 @@
       "lastPulled": "Son yenileme {{when}}",
       "neverPulled": "Henüz yenilenmedi"
     },
-    "action": { "refresh": "Yenile", "disconnect": "Bağlantıyı kes" },
+    "action": {
+      "refresh": "Yenile",
+      "disconnect": "Bağlantıyı kes"
+    },
     "confirm": {
       "disconnectTitle": "Reklam hesabının bağlantısını kes",
       "disconnectBody": "Bu, hesabı ve çekilen tüm metriklerini kaldırır. Bu işlem geri alınamaz."
@@ -1327,5 +1403,198 @@
     "unread": "Okunmamış konuşmalar",
     "pendingTasks": "Açık görevler",
     "openOffers": "Yanıt bekleyen teklifler"
+  },
+  "prospecting": {
+    "title": "Web Sitesi Denetimi",
+    "subtitle": "Bir adayın web sitesini puanlayın ve raporu bir potansiyel müşteriye dönüştürün.",
+    "url": "Web Sitesi URL'si",
+    "businessName": "İşletme adı (isteğe bağlı)",
+    "run": "Denetimi çalıştır",
+    "queued": "Denetim başlatıldı — rapor kısa süre içinde hazır olacak.",
+    "failed": "Denetim başlatılamadı",
+    "empty": "Henüz denetim yok",
+    "emptyHint": "Yukarıdan ilk web sitesi denetiminizi çalıştırın.",
+    "viewReport": "Rapor",
+    "convert": "Müşteriye çevir",
+    "isLead": "Müşteri oluşturuldu",
+    "convertedToLead": "Denetimden potansiyel müşteri oluşturuldu.",
+    "alreadyLead": "Bu denetim zaten bir müşteriye bağlı.",
+    "convertFailed": "Müşteriye dönüştürülemedi"
+  },
+  "sendingDomains": {
+    "title": "Gönderim Alanları",
+    "subtitle": "DKIM/SPF/DMARC ile kendi alan adınızdan pazarlama e-postası gönderin.",
+    "domain": "Alan adı",
+    "fromName": "Gönderen adı (isteğe bağlı)",
+    "add": "Ekle",
+    "added": "Alan adı eklendi — aşağıdaki DNS kayıtlarını yayınlayıp doğrulayın.",
+    "addFailed": "Alan adı eklenemedi",
+    "verify": "Doğrula",
+    "verified": "Alan adı doğrulandı!",
+    "notYet": "Kayıtlar henüz bulunamadı — DNS yayılması zaman alabilir.",
+    "verifyFailed": "Doğrulama başarısız",
+    "empty": "Gönderim alanı yok",
+    "emptyHint": "Markalı, kimliği doğrulanmış e-posta göndermek için bir alan adı ekleyin.",
+    "addRecords": "DNS sağlayıcınızda şu TXT kayıtlarını ekleyin:",
+    "copy": "Değeri kopyala",
+    "copied": "Kopyalandı"
+  },
+  "customDomains": {
+    "title": "Özel Alan Adları",
+    "subtitle": "Genel sitenizi kendi alan adınızda yayınlayın.",
+    "hostname": "Alan adı (hostname)",
+    "homeSlug": "Ana sayfa slug'ı (isteğe bağlı)",
+    "add": "Ekle",
+    "added": "Alan adı eklendi — aşağıdaki DNS kayıtlarını yayınlayıp doğrulayın.",
+    "addFailed": "Alan adı eklenemedi",
+    "verify": "Doğrula",
+    "verified": "Alan adı doğrulandı!",
+    "notYet": "Kayıtlar henüz bulunamadı — DNS yayılması zaman alabilir.",
+    "verifyFailed": "Doğrulama başarısız",
+    "empty": "Özel alan adı yok",
+    "emptyHint": "Sitenizi kendi URL'nizde yayınlamak için bir alan adı ekleyin.",
+    "addRecords": "DNS sağlayıcınızda şu kayıtları ekleyin:",
+    "copy": "Değeri kopyala",
+    "copied": "Kopyalandı"
+  },
+  "crm": {
+    "cf": {
+      "title": "Özel alanlar",
+      "subtitle": "Her potansiyel müşteride toplanan, çalışma alanına özel verileri tanımlayın.",
+      "createTitle": "Yeni özel alan",
+      "editTitle": "Özel alanı düzenle",
+      "dialogDesc": "Özel alanlar her potansiyel müşteride çalışma alanına özel veri toplar.",
+      "label": "Etiket",
+      "labelPlaceholder": "ör. Sadakat seviyesi",
+      "key": "Anahtar",
+      "keyHint": "İsteğe bağlı. Varsayılan olarak etiketin kısa adı kullanılır. küçük_harf_alt_çizgi.",
+      "keyImmutable": "Anahtar oluşturulduktan sonra değiştirilemez.",
+      "type": "Tür",
+      "typeImmutable": "Tür oluşturulduktan sonra değiştirilemez.",
+      "options": "Seçenekler",
+      "optionValue": "Değer",
+      "optionLabel": "Etiket",
+      "addOption": "Seçenek ekle",
+      "required": "Zorunlu",
+      "requiredHint": "Bir potansiyel müşteri oluşturulurken zorunlu tutulur.",
+      "state": "Durum",
+      "active": "Etkin",
+      "archived": "Arşivlendi",
+      "archive": "Arşivle",
+      "restore": "Geri yükle",
+      "showArchived": "Arşivlenenleri göster",
+      "archiveTitle": "Özel alanı arşivle",
+      "archiveDesc": "Alan yeni potansiyel müşterilerden gizlenir ancak mevcut değerler korunur. Daha sonra geri yükleyebilirsiniz.",
+      "empty": "Henüz özel alan yok",
+      "emptyHint": "Potansiyel müşterilerde ek veri toplamak için ilk özel alanınızı oluşturun.",
+      "created": "Özel alan oluşturuldu",
+      "updated": "Özel alan güncellendi",
+      "restored": "Özel alan geri yüklendi",
+      "saveError": "Özel alan kaydedilemedi",
+      "types": {
+        "TEXT": "Metin",
+        "TEXTAREA": "Metin alanı",
+        "NUMBER": "Sayı",
+        "DATE": "Tarih",
+        "DATETIME": "Tarih ve saat",
+        "BOOL": "Evet / Hayır",
+        "SELECT": "Seçim (tek)",
+        "MULTISELECT": "Çoklu seçim",
+        "URL": "URL",
+        "PHONE": "Telefon",
+        "EMAIL": "E-posta"
+      },
+      "validation": {
+        "keySnakeCase": "Anahtar küçük_harf_alt_çizgi biçiminde olmalıdır",
+        "optionsRequired": "En az bir seçenek gereklidir"
+      }
+    },
+    "tags": {
+      "title": "Etiketler",
+      "subtitle": "Potansiyel müşterileri etiketleyin ve etiket üyeliğinden segmentler oluşturun.",
+      "createTitle": "Yeni etiket",
+      "editTitle": "Etiketi düzenle",
+      "dialogDesc": "Etiketler potansiyel müşterileri etiketlemenizi ve segmentlere ayırmanızı sağlar.",
+      "name": "Ad",
+      "namePlaceholder": "ör. VIP",
+      "color": "Renk",
+      "colorHint": "İsteğe bağlı. Onaltılık renk, ör. #6366f1.",
+      "members": "Potansiyel müşteriler",
+      "empty": "Henüz etiket yok",
+      "emptyHint": "Potansiyel müşterileri etiketlemeye başlamak için bir etiket oluşturun.",
+      "deleteTitle": "Etiketi sil",
+      "deleteDesc": "Bu, etiketi tüm potansiyel müşterilerden kaldırır. Bu işlem geri alınamaz.",
+      "created": "Etiket oluşturuldu",
+      "updated": "Etiket güncellendi",
+      "deleted": "Etiket silindi",
+      "saveError": "Etiket kaydedilemedi",
+      "pickerLabel": "Etiket ekle",
+      "pickerCreate": "Etiket ekle veya oluştur…",
+      "pickerPlaceholder": "Etiket ekle…",
+      "validation": {
+        "colorHex": "#6366f1 gibi onaltılık bir renk olmalıdır"
+      }
+    },
+    "seg": {
+      "title": "Segmentler",
+      "subtitle": "Potansiyel müşterileriniz üzerinde kayıtlı, canlı filtreler.",
+      "createTitle": "Yeni segment",
+      "editTitle": "Segmenti düzenle",
+      "dialogDesc": "Segmentler, potansiyel müşterileriniz üzerinde kayıtlı, canlı filtrelerdir.",
+      "name": "Ad",
+      "namePlaceholder": "ör. İstanbul’daki sıcak potansiyeller",
+      "description": "Açıklama",
+      "descPlaceholder": "İsteğe bağlı",
+      "builderTab": "Oluşturucu",
+      "jsonTab": "Ham JSON",
+      "jsonLabel": "Koşul JSON’u",
+      "jsonHint": "Gelişmiş koşullar için kaçış yolu. Biçim: { op, children } veya { field, cmp, value }.",
+      "matchLabel": "Eşleştir",
+      "all": "TÜMÜ",
+      "any": "HERHANGİ BİRİ",
+      "ofTheFollowing": "aşağıdakilerden",
+      "addRule": "Kural ekle",
+      "addGroup": "Grup ekle",
+      "noRules": "Kural yok — bu her potansiyel müşteriyle eşleşir.",
+      "field": "Alan",
+      "operator": "Operatör",
+      "value": "Değer",
+      "min": "En az",
+      "max": "En çok",
+      "commaSeparated": "Virgülle ayrılmış değerler",
+      "pickTag": "Bir etiket seçin",
+      "rules": "kural",
+      "matchPreview": "Eşleşen potansiyel müşteriler",
+      "preview": "Önizleme",
+      "noMatches": "Bu segmentle henüz eşleşen potansiyel müşteri yok.",
+      "members": "Üyeler",
+      "recount": "Yeniden say",
+      "lastEvaluated": "Son değerlendirme",
+      "empty": "Henüz segment yok",
+      "emptyHint": "Potansiyel müşterileri alana, etikete veya özel alan değerlerine göre gruplamak için bir segment oluşturun.",
+      "deleteTitle": "Segmenti sil",
+      "deleteDesc": "Bu, segment tanımını kalıcı olarak siler.",
+      "created": "Segment oluşturuldu",
+      "updated": "Segment güncellendi",
+      "deleted": "Segment silindi",
+      "saveError": "Segment kaydedilemedi",
+      "cmp": {
+        "eq": "şudur",
+        "ne": "şu değildir",
+        "in": "şunlardan herhangi biridir",
+        "nin": "şunlardan hiçbiri değildir",
+        "contains": "şunu içerir",
+        "startsWith": "şununla başlar",
+        "gt": "şundan büyük",
+        "gte": "büyük veya eşit",
+        "lt": "şundan küçük",
+        "lte": "küçük veya eşit",
+        "between": "şu aralıkta",
+        "isSet": "tanımlı",
+        "isNotSet": "tanımlı değil",
+        "has": "etikete sahip",
+        "hasNot": "etikete sahip değil"
+      }
+    }
   }
 }

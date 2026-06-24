@@ -6,7 +6,7 @@ import { filter } from 'rxjs/operators';
  *  INTERNAL (team-only) kind — it reaches the agent Inbox (forWorkspace) but is
  *  hard-excluded from the public widget stream (forConversation). */
 export interface ConversationStreamEvent {
-  kind: 'message' | 'conversation' | 'ai_typing' | 'note';
+  kind: 'message' | 'conversation' | 'ai_typing' | 'note' | 'status';
   conversationId: string;
   payload: unknown;
 }

@@ -74,7 +74,8 @@ describe('EstimatesService', () => {
       );
       expect(prisma.estimate.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'e1', workspaceId: WS },
+          // Atomic claim: the where now also guards convertedInvoiceId:null + status.
+          where: expect.objectContaining({ id: 'e1', workspaceId: WS, convertedInvoiceId: null }),
           data: expect.objectContaining({ convertedInvoiceId: 'inv-1', status: 'ACCEPTED' }),
         }),
       );

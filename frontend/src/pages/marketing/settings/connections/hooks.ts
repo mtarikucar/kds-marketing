@@ -128,13 +128,18 @@ export function useOutlookCalendarMutations() {
         })
         .then((r) => r.data as { url: string }),
   });
+  const sync = useMutation({
+    mutationFn: () =>
+      marketingApi.post('/integrations/outlook-calendar/sync').then((r) => r.data),
+    onSuccess: invalidate,
+  });
   const disconnect = useMutation({
     mutationFn: (id: string) =>
       marketingApi.delete(`/integrations/outlook-calendar/${id}`).then((r) => r.data),
     onSuccess: invalidate,
   });
 
-  return { connect, disconnect };
+  return { connect, sync, disconnect };
 }
 
 // ── Slack ─────────────────────────────────────────────────────────────────────

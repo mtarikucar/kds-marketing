@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { navigateExternal } from '../../../lib/navigateExternal';
 import type { SocialNetwork } from './socialSchemas';
 
 export interface PendingAsset {
@@ -30,9 +31,7 @@ export function useSocialConnect() {
       const { data } = await marketingApi.post(
         `/social/oauth/${network.toLowerCase()}/start`,
       );
-      if (data?.authorizeUrl) {
-        window.location.href = data.authorizeUrl as string;
-      }
+      navigateExternal(data?.authorizeUrl as string | undefined);
     } catch {
       toast.error(
         t('social.oauth.startFailed', { defaultValue: 'Could not start the connection' }),
@@ -52,8 +51,20 @@ export function useSocialConnect() {
     });
 
   const confirm = useMutation({
-    mutationFn: ({ pendingId, selected }: { pendingId: string; selected: string[] }) =>
-      marketingApi.post(`/social/oauth/pending/${pendingId}/confirm`, { selected }),
+    mutationFn: ({
+      pendingId,
+      selected,
+      provisionMessaging,
+    }: {
+      pendingId: string;
+      selected: string[];
+      /** externalIds of Pages/IG accounts to ALSO wire up as a messaging Channel. */
+      provisionMessaging?: string[];
+    }) =>
+      marketingApi.post(`/social/oauth/pending/${pendingId}/confirm`, {
+        selected,
+        ...(provisionMessaging && provisionMessaging.length ? { provisionMessaging } : {}),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'social', 'accounts'] });
       toast.success(t('social.toast.connected', { defaultValue: 'Account connected' }));

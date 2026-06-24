@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
+import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 
 const logger = new Logger('ReviewClients');
 
@@ -98,12 +99,14 @@ async function fetchFacebookReviews(source: ReviewSourceRow): Promise<SyncedRevi
   const token = revealToken(source.accessToken);
   if (!token || !source.placeId) return [];
   try {
-    const u = new URL(`https://graph.facebook.com/v19.0/${encodeURIComponent(source.placeId)}/ratings`);
-    u.searchParams.set('fields', 'review_text,rating,recommendation_type,reviewer,created_time,open_graph_story');
-    u.searchParams.set('access_token', token);
-    const res = await safeFetch(u.toString(), { method: 'GET', timeoutMs: 15_000 });
-    if (!res.ok) return [];
-    const json = (await res.json()) as Record<string, any>;
+    const result = await metaGraphFetch(`/${encodeURIComponent(source.placeId)}/ratings`, {
+      accessToken: token,
+      method: 'GET',
+      query: { fields: 'review_text,rating,recommendation_type,reviewer,created_time,open_graph_story' },
+      timeoutMs: 15_000,
+    });
+    if (!result.ok) return [];
+    const json = result.data as Record<string, any>;
     const rows: any[] = Array.isArray(json?.data) ? json.data : [];
     return rows
       .map((r) => ({

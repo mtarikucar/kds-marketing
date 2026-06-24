@@ -65,6 +65,14 @@ export class CampaignSenderService implements OnModuleInit {
     const { workspaceId, campaignId } = job.payload;
     const campaign = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
     if (!campaign || (campaign as any).abWinnerKey || campaign.status !== 'SENDING') return;
+    // Recompute variant stats from the recipient rows FIRST. `campaignVariant.stats`
+    // is otherwise only written at the end of a batch() pass — and in WINNER mode
+    // no batch runs during the test window (the remainder is HELD), so the cached
+    // stats are frozen at ~0 from when the test cohort was just sent. Without this
+    // recompute the winner sort collapses to the alphabetical key tiebreak and the
+    // bulk audience gets the wrong variant. (Opens/clicks accrue on the recipient
+    // rows via the tracker; this rolls them up into the per-variant counts.)
+    await this.recomputeStats(workspaceId, campaignId);
     const variants = await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId } });
     if (variants.length < 2) return;
     const metric = (campaign as any).abWinnerMetric === 'CLICK' ? 'clicked' : 'opened';

@@ -5,6 +5,7 @@ import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { MessageQuotaService } from './message-quota.service';
 import { ConversationStreamService } from './conversation-stream.service';
+import { OutboundMedia, OutboundTemplate } from './channel-adapter.interface';
 
 export interface SendMessageInput {
   workspaceId: string;
@@ -14,6 +15,10 @@ export interface SendMessageInput {
   authorType: 'AI' | 'AGENT' | 'SYSTEM';
   /** MarketingUser id for AGENT sends; null for AI/SYSTEM. */
   authorId?: string | null;
+  /** Optional richer payloads forwarded to the adapter (WhatsApp template /
+   *  by-URL media). Text-only callers are unaffected. */
+  template?: OutboundTemplate;
+  media?: OutboundMedia;
 }
 
 /**
@@ -62,7 +67,7 @@ export class MessageSenderService {
       const adapter = this.registry.get(channel.type);
       const config = this.registry.resolveConfig(channel);
       result = to
-        ? await adapter.send({ config, to, text })
+        ? await adapter.send({ config, to, text, template: input.template, media: input.media })
         : { externalMessageId: null, status: 'FAILED', error: 'no recipient identity on conversation' };
     } catch (e: any) {
       result = { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };

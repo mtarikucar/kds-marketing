@@ -15,6 +15,7 @@ import { pullMetaInsights } from './meta-ads.client';
 import { pullTiktokInsights } from './tiktok-ads.client';
 import { isMetaAdsConfigured, isTiktokAdsConfigured, AdMetricRow } from './ads.types';
 import { ConnectAdAccountDto } from '../dto/ad-account.dto';
+import { isMetaAuthError } from '../../../common/util/meta-graph.util';
 
 const PROVIDERS = ['META', 'TIKTOK'];
 
@@ -178,11 +179,17 @@ export class AdAccountService {
           ? await pullMetaInsights(token, account.externalAdId, from, to)
           : await pullTiktokInsights(token, account.externalAdId, from, to);
     } catch (e) {
+      // A token problem → mark needs-reauth so the ACTIVE-only hourly sweep stops
+      // hammering the provider until the operator reconnects. Meta: Graph code
+      // 190 / HTTP 401 / auth subcode (isMetaAuthError). TikTok: business-API
+      // auth code or token message. Other errors keep the retry-friendly
+      // markError path (status stays ACTIVE).
       const msg = (e as Error).message ?? 'pull failed';
-      if (
-        account.provider === 'TIKTOK' &&
-        /access[_ ]?token|auth|not authorized|invalid token|\b(4000[12]|4010\d|40110)\b/i.test(msg)
-      ) {
+      const needsReauth =
+        (account.provider === 'META' && isMetaAuthError(e)) ||
+        (account.provider === 'TIKTOK' &&
+          /access[_ ]?token|auth|not authorized|invalid token|\b(4000[12]|4010\d|40110)\b/i.test(msg));
+      if (needsReauth) {
         await this.markReauth(account.id);
       } else {
         await this.markError(account.id, msg.slice(0, 1000));
@@ -224,7 +231,9 @@ export class AdAccountService {
       }
       await this.prisma.adAccount.update({
         where: { id: account.id },
-        data: { lastPulledAt: new Date(), lastError: null },
+        // A successful pull also clears a prior reauth state (status back to
+        // ACTIVE) so a reconnected account rejoins the sweep.
+        data: { lastPulledAt: new Date(), lastError: null, status: 'ACTIVE' },
       });
     } catch (e) {
       await this.markError(account.id, (e as Error).message?.slice(0, 1000) ?? 'metric write failed');
@@ -254,6 +263,8 @@ export class AdAccountService {
       .catch(() => undefined);
   }
 
+  /** Auth failure → needs-reconnect. status=TOKEN_EXPIRED drops the account out
+   *  of the ACTIVE-only sweep; the UI surfaces a Reconnect affordance. */
   private markReauth(id: string) {
     return this.prisma.adAccount
       .update({

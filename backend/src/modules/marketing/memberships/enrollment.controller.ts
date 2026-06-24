@@ -11,6 +11,7 @@ import {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
@@ -63,7 +64,10 @@ export class EnrollmentController {
     return this.certificates.getForEnrollment(u.workspaceId, id);
   }
 
+  // Destructive (drops the enrollment + its progress) — MANAGER+. enroll +
+  // complete-lesson above stay open as day-to-day rep actions on a lead.
   @Delete(':id')
+  @MarketingRoles('MANAGER')
   @Audit({ action: 'enrollment.delete', resourceType: 'enrollment', resourceIdParam: 'id' })
   unenroll(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.unenroll(u.workspaceId, id);

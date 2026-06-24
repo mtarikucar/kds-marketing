@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
+import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
 
 export interface TikTokPostOptions {
@@ -22,6 +23,8 @@ export interface PublishResult {
   ok: boolean;
   externalPostId?: string;
   error?: string;
+  /** True when the failure is a Meta token problem needing reconnect. */
+  isAuthError?: boolean;
 }
 
 export interface AccountRow {
@@ -79,27 +82,25 @@ async function publishFacebook(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
 
-  const body: Record<string, unknown> = { message: content, access_token: token };
+  const body: Record<string, unknown> = { message: content };
   // Attach the first media url as a link if present
   if (mediaUrls.length > 0) body.link = mediaUrls[0];
 
   try {
-    const res = await safeFetch(
-      `https://graph.facebook.com/v19.0/${account.externalId}/feed`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        timeoutMs: 15_000,
-      },
-    );
-    const json = (await res.json()) as Record<string, unknown>;
-    if (res.ok && json.id) {
-      return { ok: true, externalPostId: String(json.id) };
+    const r = await metaGraphFetch(`/${account.externalId}/feed`, {
+      accessToken: token,
+      method: 'POST',
+      body,
+      timeoutMs: 15_000,
+    });
+    if (!r.ok) {
+      logger.warn(`Facebook publish failed (${account.externalId}): ${r.error.message}`);
+      return { ok: false, error: r.error.message.slice(0, 500), isAuthError: r.error.isAuthError };
     }
-    const err = String((json as any)?.error?.message ?? res.status);
-    logger.warn(`Facebook publish failed (${account.externalId}): ${err}`);
-    return { ok: false, error: err.slice(0, 500) };
+    const id = (r.data as any)?.id;
+    if (id) return { ok: true, externalPostId: String(id) };
+    logger.warn(`Facebook publish failed (${account.externalId}): no post id returned`);
+    return { ok: false, error: 'no post id returned' };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Facebook publish error (${account.externalId}): ${msg}`);
@@ -121,10 +122,7 @@ async function publishInstagram(
 
   try {
     // Step 1: create a media container
-    const mediaBody: Record<string, unknown> = {
-      caption: content,
-      access_token: token,
-    };
+    const mediaBody: Record<string, unknown> = { caption: content };
     if (mediaUrls.length > 0) {
       mediaBody.image_url = mediaUrls[0];
       mediaBody.media_type = 'IMAGE';
@@ -133,37 +131,41 @@ async function publishInstagram(
       return { ok: false, error: 'Instagram requires at least one media URL' };
     }
 
-    const createRes = await safeFetch(
-      `https://graph.facebook.com/v19.0/${account.externalId}/media`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(mediaBody),
-        timeoutMs: 15_000,
-      },
-    );
-    const createJson = (await createRes.json()) as Record<string, unknown>;
-    if (!createRes.ok || !createJson.id) {
-      const err = String((createJson as any)?.error?.message ?? createRes.status);
-      return { ok: false, error: `IG media create: ${err}`.slice(0, 500) };
+    const createRes = await metaGraphFetch(`/${account.externalId}/media`, {
+      accessToken: token,
+      method: 'POST',
+      body: mediaBody,
+      timeoutMs: 15_000,
+    });
+    if (!createRes.ok) {
+      return {
+        ok: false,
+        error: `IG media create: ${createRes.error.message}`.slice(0, 500),
+        isAuthError: createRes.error.isAuthError,
+      };
+    }
+    const containerId = (createRes.data as any)?.id;
+    if (!containerId) {
+      return { ok: false, error: 'IG media create: no container id returned' };
     }
 
     // Step 2: publish the container
-    const pubRes = await safeFetch(
-      `https://graph.facebook.com/v19.0/${account.externalId}/media_publish`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ creation_id: createJson.id, access_token: token }),
-        timeoutMs: 15_000,
-      },
-    );
-    const pubJson = (await pubRes.json()) as Record<string, unknown>;
-    if (pubRes.ok && pubJson.id) {
-      return { ok: true, externalPostId: String(pubJson.id) };
+    const pubRes = await metaGraphFetch(`/${account.externalId}/media_publish`, {
+      accessToken: token,
+      method: 'POST',
+      body: { creation_id: containerId },
+      timeoutMs: 15_000,
+    });
+    if (!pubRes.ok) {
+      return {
+        ok: false,
+        error: `IG media publish: ${pubRes.error.message}`.slice(0, 500),
+        isAuthError: pubRes.error.isAuthError,
+      };
     }
-    const err2 = String((pubJson as any)?.error?.message ?? pubRes.status);
-    return { ok: false, error: `IG media publish: ${err2}`.slice(0, 500) };
+    const postId = (pubRes.data as any)?.id;
+    if (postId) return { ok: true, externalPostId: String(postId) };
+    return { ok: false, error: 'IG media publish: no post id returned' };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`Instagram publish error (${account.externalId}): ${msg}`);
@@ -337,24 +339,105 @@ async function publishTikTok(
   }
 }
 
-/** Publish to X/Twitter (API v2 POST /2/tweets). Inert without a paid X app. */
+// X allows up to 4 images per tweet; bound the upload work accordingly.
+const X_MAX_MEDIA = 4;
+const X_MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — X's per-image image limit.
+
+/**
+ * Read a response body into a Buffer, streaming with a hard cap: as soon as the
+ * accumulated size would EXCEED maxBytes, cancel the stream and return null (the
+ * image is over the limit). Never buffers the whole body first.
+ */
+async function readCappedBytes(res: Response, maxBytes: number): Promise<Buffer | null> {
+  const body = (res as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body || typeof body.getReader !== 'function') {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > maxBytes ? null : buf;
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) return null; // over cap — stop, don't buffer the rest
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks, total);
+}
+
+/**
+ * Upload one image URL to X's v2 media endpoint (OAuth2 user context, scope
+ * media.write) and return its media id. Fetches the bytes SSRF-guarded, caps
+ * the size, and posts multipart/form-data. Returns null on any failure (the
+ * caller degrades to a text-only tweet rather than failing the whole post).
+ */
+async function uploadXMedia(token: string, mediaUrl: string): Promise<string | null> {
+  try {
+    const imgRes = await safeFetch(mediaUrl, { method: 'GET', timeoutMs: 15_000 });
+    if (!imgRes.ok) return null;
+    // Stream with a hard byte cap and abort once exceeded — never buffer the whole
+    // (caller-supplied) body into one arrayBuffer() allocation, which a hostile/
+    // misbehaving host could make multi-GB within the timeout (OOM on the worker).
+    const buf = await readCappedBytes(imgRes, X_MEDIA_MAX_BYTES);
+    if (!buf || buf.length === 0) return null;
+    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+
+    const form = new FormData();
+    // Wrap in a fresh Uint8Array so the Blob part is ArrayBuffer-backed (Buffer.concat
+    // yields an ArrayBufferLike that the Blob constructor's types reject).
+    form.append('media', new Blob([new Uint8Array(buf)], { type: contentType }), 'media');
+    form.append('media_category', 'tweet_image');
+    const upRes = await safeFetch('https://api.x.com/2/media/upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }, // let fetch set the multipart boundary
+      body: form,
+      timeoutMs: 30_000,
+    });
+    const json = (await upRes.json()) as Record<string, any>;
+    // v2 returns { data: { id } }; tolerate the legacy media_id_string too.
+    const id = json?.data?.id ?? json?.media_id_string;
+    if (upRes.ok && id) return String(id);
+    logger.warn(`X media upload failed: ${String(json?.detail ?? json?.title ?? upRes.status)}`);
+    return null;
+  } catch (e: any) {
+    logger.warn(`X media upload error: ${e?.message ?? String(e)}`);
+    return null;
+  }
+}
+
+/** Publish to X/Twitter (API v2 POST /2/tweets), with image media. Inert without a paid X app. */
 async function publishTwitter(
   account: AccountRow,
   content: string,
-  _mediaUrls: string[],
+  mediaUrls: string[],
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('TWITTER')) {
     return { ok: false, error: 'X/Twitter not configured: set X_CLIENT_ID and X_CLIENT_SECRET' };
   }
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
-  // Media upload uses the separate v1.1 endpoint (chunked) — text-only for now;
-  // attaching media is a follow-up once a paid X app is connected.
   try {
+    // Upload up to 4 images first (best-effort); a media failure degrades to a
+    // text-only tweet rather than dropping the whole post.
+    const mediaIds: string[] = [];
+    for (const url of mediaUrls.slice(0, X_MAX_MEDIA)) {
+      const id = await uploadXMedia(token, url);
+      if (id) mediaIds.push(id);
+    }
+    const body: Record<string, unknown> = { text: content.slice(0, 280) };
+    if (mediaIds.length > 0) body.media = { media_ids: mediaIds };
+
     const res = await safeFetch('https://api.twitter.com/2/tweets', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ text: content.slice(0, 280) }),
+      body: JSON.stringify(body),
       timeoutMs: 15_000,
     });
     const json = (await res.json()) as Record<string, any>;

@@ -8,7 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { IsArray, IsString, ArrayMaxSize } from 'class-validator';
+import { IsArray, IsString, ArrayMaxSize, IsOptional } from 'class-validator';
 import type { Response } from 'express';
 import { MarketingGuard } from '../../guards/marketing.guard';
 import { MarketingRolesGuard } from '../../guards/marketing-roles.guard';
@@ -23,6 +23,14 @@ class ConfirmDto {
   @IsString({ each: true })
   @ArrayMaxSize(50)
   selected: string[];
+
+  /** externalIds of selected Pages/IG accounts that should ALSO be provisioned
+   *  as a messaging Channel (opt-in; default off to avoid surprise inbox use). */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(50)
+  provisionMessaging?: string[];
 }
 
 /**
@@ -84,6 +92,6 @@ export class SocialOAuthController {
     @Body() dto: ConfirmDto,
     @CurrentMarketingUser() u: MarketingUserPayload,
   ) {
-    return this.svc.confirm(u.workspaceId, id, dto.selected);
+    return this.svc.confirm(u.workspaceId, id, dto.selected, dto.provisionMessaging);
   }
 }
