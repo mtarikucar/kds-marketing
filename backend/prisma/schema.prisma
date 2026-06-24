@@ -3174,6 +3174,7 @@ model AdAccount {
   updatedAt      DateTime  @updatedAt
 
   metrics AdMetric[]
+  rules   AdRule[]
 
   @@unique([workspaceId, provider, externalAdId])
   @@index([workspaceId, provider])
@@ -3201,6 +3202,58 @@ model AdMetric {
   @@unique([adAccountId, date, campaignId])
   @@index([workspaceId, date])
   @@map("ad_metrics")
+}
+
+/// An automated ad-scaling rule (Meta only). The hourly evaluator computes
+/// `metric` over the trailing `windowDays` per campaign and, when the condition
+/// holds (respecting per-campaign `cooldownHours`), applies `action`:
+/// INCREASE_BUDGET / DECREASE_BUDGET (by `actionValue` %, clamped to min/max),
+/// PAUSE or RESUME. Every firing is recorded in AdRuleLog.
+model AdRule {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  adAccountId   String
+  account       AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  name          String
+  enabled       Boolean   @default(true)
+  level         String    @default("CAMPAIGN") // CAMPAIGN (adset = follow-up)
+  metric        String // SPEND | CPL | CTR | LEADS | CLICKS | IMPRESSIONS
+  operator      String // GT | LT | GTE | LTE
+  threshold     Decimal   @db.Decimal(14, 2)
+  windowDays    Int       @default(3)
+  action        String // INCREASE_BUDGET | DECREASE_BUDGET | PAUSE | RESUME
+  actionValue   Decimal?  @db.Decimal(10, 2) // percent for budget actions
+  maxBudget     Decimal?  @db.Decimal(14, 2) // major units (budget ceiling)
+  minBudget     Decimal?  @db.Decimal(14, 2) // major units (budget floor)
+  cooldownHours Int       @default(24)
+  lastRunAt     DateTime?
+  lastTriggeredAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  logs AdRuleLog[]
+
+  @@index([workspaceId, adAccountId])
+  @@index([enabled])
+  @@map("ad_rules")
+}
+
+/// Audit of each ad-rule firing (what entity, what action, before→after, ok?).
+model AdRuleLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  ruleId      String
+  rule        AdRule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  entityId    String // campaign/adset id acted on
+  entityName  String?
+  action      String
+  detail      String?  @db.Text // e.g. "daily_budget 100.00 → 120.00"
+  ok          Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, ruleId])
+  @@index([ruleId, entityId, action, createdAt])
+  @@map("ad_rule_logs")
 }
 
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).

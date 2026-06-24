@@ -8,6 +8,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { IsIn, IsNumber, IsString, MaxLength, Min } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -18,11 +19,29 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { AdAccountService } from '../ads/ad-account.service';
+import { AdManagementService } from '../ads/ad-management.service';
 import {
   ConnectAdAccountDto,
   AdMetricsQueryDto,
   PullAdAccountDto,
 } from '../dto/ad-account.dto';
+
+class SetBudgetDto {
+  @IsNumber() @Min(0.01)
+  dailyBudget: number;
+}
+class SetStatusDto {
+  @IsIn(['ACTIVE', 'PAUSED'])
+  status: 'ACTIVE' | 'PAUSED';
+}
+class CreateCampaignDto {
+  @IsString() @MaxLength(200)
+  name: string;
+
+  /** Meta outcome objective, e.g. OUTCOME_LEADS / OUTCOME_TRAFFIC / OUTCOME_SALES. */
+  @IsString() @MaxLength(60)
+  objective: string;
+}
 
 /**
  * Ad reporting (GoHighLevel parity): each workspace connects its OWN Meta/TikTok
@@ -37,7 +56,10 @@ import {
 @Controller('marketing/ads')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingAdsController {
-  constructor(private readonly adAccounts: AdAccountService) {}
+  constructor(
+    private readonly adAccounts: AdAccountService,
+    private readonly adMgmt: AdManagementService,
+  ) {}
 
   /** Which provider apps the platform has configured (global app creds). */
   @Get('status')
@@ -89,5 +111,79 @@ export class MarketingAdsController {
     @Body() dto: PullAdAccountDto,
   ) {
     return this.adAccounts.pullNow(a.workspaceId, id, dto.days ?? 7);
+  }
+
+  // ── Campaign management (Meta write — needs ads_management) ───────────────
+
+  /** Live campaigns for an account (budget in major units + status). */
+  @Get('accounts/:id/campaigns')
+  @RequirePermission('reports.read')
+  campaigns(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.adMgmt.campaigns(a.workspaceId, id);
+  }
+
+  /** Live ad sets for an account (optionally filtered to one campaign). */
+  @Get('accounts/:id/adsets')
+  @RequirePermission('reports.read')
+  adsets(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Query('campaignId') campaignId?: string,
+  ) {
+    return this.adMgmt.adsets(a.workspaceId, id, campaignId);
+  }
+
+  /** Set a campaign/adset daily budget (major units). */
+  @Post('accounts/:id/entities/:entityId/budget')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'ad.budget.set', resourceType: 'ad_entity', resourceIdParam: 'entityId', captureBody: ['dailyBudget'] })
+  setBudget(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Param('entityId') entityId: string,
+    @Body() dto: SetBudgetDto,
+  ) {
+    return this.adMgmt.setDailyBudget(a.workspaceId, id, entityId, dto.dailyBudget);
+  }
+
+  /** Pause/resume a campaign or ad set. */
+  @Post('accounts/:id/entities/:entityId/status')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'ad.status.set', resourceType: 'ad_entity', resourceIdParam: 'entityId', captureBody: ['status'] })
+  setStatus(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Param('entityId') entityId: string,
+    @Body() dto: SetStatusDto,
+  ) {
+    return this.adMgmt.setStatus(a.workspaceId, id, entityId, dto.status);
+  }
+
+  /** Deep-copy a campaign (leaves the copy PAUSED). */
+  @Post('accounts/:id/campaigns/:campaignId/duplicate')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'ad.campaign.duplicate', resourceType: 'ad_entity', resourceIdParam: 'campaignId' })
+  duplicate(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Param('campaignId') campaignId: string,
+  ) {
+    return this.adMgmt.duplicate(a.workspaceId, id, campaignId);
+  }
+
+  /** Create a campaign shell (PAUSED). Adset/ad/creative builder is a follow-up. */
+  @Post('accounts/:id/campaigns')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'ad.campaign.create', resourceType: 'ad_entity', captureBody: ['name', 'objective'] })
+  createCampaign(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: CreateCampaignDto,
+  ) {
+    return this.adMgmt.create(a.workspaceId, id, dto);
   }
 }

@@ -312,8 +312,11 @@ import { OrderFormsService } from './order-forms/order-forms.service';
 
 // Ad reporting — Meta Ads + TikTok Ads (GoHighLevel parity).
 import { MarketingAdsController } from './controllers/marketing-ads.controller';
+import { MarketingAdRulesController } from './controllers/marketing-ad-rules.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
+import { AdManagementService } from './ads/ad-management.service';
+import { AdRulesService } from './ads/ad-rules.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
 import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
@@ -457,6 +460,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
+    MarketingAdRulesController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -626,6 +630,8 @@ import { WalletService } from './wallet/wallet.service';
     OrderFormsService,
     AdAccountService,
     AdsPullService,
+    AdManagementService,
+    AdRulesService,
     CustomObjectsService,
     SnippetsService,
     LeadBulkService,
