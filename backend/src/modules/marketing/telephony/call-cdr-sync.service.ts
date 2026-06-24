@@ -4,6 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { NetgsmCdrClient, CdrRecord } from './netgsm-cdr.client';
+import { TelephonyConfigService } from './telephony-config.service';
 
 type Creds = { usercode: string; password: string };
 
@@ -30,6 +31,7 @@ export class CallCdrSyncService {
     private readonly prisma: PrismaService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly cdr: NetgsmCdrClient,
+    private readonly telephony: TelephonyConfigService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'call-cdr-sync' })
@@ -100,7 +102,7 @@ export class CallCdrSyncService {
     const creds = await this.getCreds(workspaceId);
     if (!creds) {
       throw new BadRequestException(
-        'No NetGSM SMS channel credentials found for this workspace — connect an SMS channel first (CDR reuses its usercode/password).',
+        'No NetGSM credentials found — configure telephony (account no + password) or an SMS channel first.',
       );
     }
     const from = startdate ?? fmtTr(new Date(Date.now() - 24 * 3_600_000));
@@ -109,7 +111,14 @@ export class CallCdrSyncService {
     return { usercode: creds.usercode, window: { startdate: from, stopdate: to }, ...raw };
   }
 
-  /** Reuse the workspace's ACTIVE NetGSM SMS channel usercode/password. */
+  /**
+   * NetGSM API creds for the CDR call. The api.netgsm.com.tr report API uses the
+   * main account usercode/password — which is the SAME credential the telephony
+   * config already stores for crmsntrl originate (account no + account password).
+   * Prefer an ACTIVE SMS channel's creds if present; otherwise fall back to the
+   * telephony config creds (so CDR works with zero extra setup once telephony is
+   * configured — no SMS channel required).
+   */
   private async getCreds(workspaceId: string): Promise<Creds | null> {
     const channels = await this.prisma.channel.findMany({
       where: { workspaceId, type: 'SMS', status: 'ACTIVE' },
@@ -118,6 +127,8 @@ export class CallCdrSyncService {
       const s = this.registry.resolveConfig(ch as any).secrets;
       if (s?.usercode && s?.password) return { usercode: s.usercode, password: s.password };
     }
+    const tel = await this.telephony.resolveForWorkspace(workspaceId);
+    if (tel?.username && tel?.password) return { usercode: tel.username, password: tel.password };
     return null;
   }
 }

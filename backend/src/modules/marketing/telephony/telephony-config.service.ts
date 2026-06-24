@@ -111,7 +111,14 @@ export class TelephonyConfigService {
     if (!rep?.dahili || !rep?.dahiliSecret) return null;
     let sipPassword: string;
     try { sipPassword = openSecret(rep.dahiliSecret); } catch { return null; }
-    return { wssUrl: c.wssUrl, sipDomain: c.sipDomain, dahili: rep.dahili, sipPassword, displayName: `${rep.firstName} ${rep.lastName}`.trim() };
+    // NetGSM Netsantral's SIP auth username is the FULL "<ext>-<santral>" (e.g.
+    // "101-8508407303"), NOT the bare extension — registering with just "101"
+    // 401s (extension stays unregistered → calls can't ring it). The bare
+    // extension is still what originate uses for internal_num; only the webphone
+    // register needs the full form, so derive it here from dahili + trunk.
+    const sipUsername =
+      rep.dahili.includes('-') || !c.trunk ? rep.dahili : `${rep.dahili}-${c.trunk}`;
+    return { wssUrl: c.wssUrl, sipDomain: c.sipDomain, dahili: sipUsername, sipPassword, displayName: `${rep.firstName} ${rep.lastName}`.trim() };
   }
 
   private mask(c: any) {

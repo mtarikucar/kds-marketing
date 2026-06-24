@@ -28,6 +28,7 @@ describe('CallCdrSyncService.syncWorkspace', () => {
   let prisma: any;
   let registry: any;
   let cdr: any;
+  let telephony: any;
   let svc: CallCdrSyncService;
 
   beforeEach(() => {
@@ -37,7 +38,8 @@ describe('CallCdrSyncService.syncWorkspace', () => {
     };
     registry = { resolveConfig: jest.fn().mockReturnValue({ secrets: { usercode: 'u', password: 'p' } }) };
     cdr = { fetchCdr: jest.fn() };
-    svc = new CallCdrSyncService(prisma, registry, cdr);
+    telephony = { resolveForWorkspace: jest.fn().mockResolvedValue(null) };
+    svc = new CallCdrSyncService(prisma, registry, cdr, telephony);
   });
 
   it('fills a matched call as CONNECTED with duration + recording', async () => {
@@ -78,5 +80,19 @@ describe('CallCdrSyncService.syncWorkspace', () => {
     const n = await svc.syncWorkspace('ws');
     expect(n).toBe(0);
     expect(prisma.salesCall.update).not.toHaveBeenCalled();
+  });
+
+  it('falls back to telephony-config creds when there is no SMS channel', async () => {
+    prisma.channel.findMany.mockResolvedValue([]); // no SMS channel
+    telephony.resolveForWorkspace.mockResolvedValue({ username: '8508407303', password: 'D.78ABC', trunk: 't' });
+    prisma.salesCall.findMany.mockResolvedValue([{ id: 'c1', toPhone: '5060687100', startedAt: new Date() }]);
+    cdr.fetchCdr.mockResolvedValue([{ destination: '5060687100', duration: 12 }]);
+    const n = await svc.syncWorkspace('ws');
+    expect(n).toBe(1);
+    expect(cdr.fetchCdr).toHaveBeenCalledWith(
+      { usercode: '8508407303', password: 'D.78ABC' },
+      expect.any(String),
+      expect.any(String),
+    );
   });
 });
