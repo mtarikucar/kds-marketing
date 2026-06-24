@@ -78,6 +78,8 @@ import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { NetsantralClient } from './telephony/netsantral.client';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { RecordingSyncService } from './telephony/recording-sync.service';
+import { NetgsmCdrClient } from './telephony/netgsm-cdr.client';
+import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
@@ -555,6 +557,8 @@ import { WalletService } from './wallet/wallet.service';
     NetsantralClient,
     TelephonyConfigService,
     RecordingSyncService,
+    NetgsmCdrClient,
+    CallCdrSyncService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
