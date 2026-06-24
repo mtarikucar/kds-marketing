@@ -1,8 +1,10 @@
 import { Logger } from '@nestjs/common';
+import Jimp from 'jimp';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
+import { R2StorageService } from './r2-storage.service';
 
 const logger = new Logger('NetworkAdapters');
 
@@ -136,6 +138,56 @@ async function igPublish(igId: string, token: string, creationId: string): Promi
   return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'IG publish: no id returned' };
 }
 
+/** Bytes cap for fetching a source image before transcoding (generous; the
+ *  re-encoded JPEG is far smaller and Instagram caps the final at 8MB). */
+const IG_IMAGE_FETCH_MAX_BYTES = 20 * 1024 * 1024;
+/** Instagram downscales feed images to 1080px wide regardless — do it ourselves
+ *  (controlled, sharper) so the only quality change is one clean resize. */
+const IG_JPEG_MAX_WIDTH = 1080;
+
+/**
+ * True when an item is an IMAGE that Instagram's API would reject. The Content
+ * Publishing API accepts ONLY JPEG — PNG/WebP/GIF image_urls create a container
+ * but fail media_publish with "Media ID is not available". Videos are exempt.
+ */
+export function igImageNeedsJpeg(item: MediaItem): boolean {
+  if (isVideoItem(item)) return false;
+  const mime = (item.mime ?? '').toLowerCase();
+  if (mime) return mime !== 'image/jpeg' && mime !== 'image/jpg';
+  // No/unknown mime → trust the URL extension; anything not .jpg/.jpeg is suspect.
+  return !/\.jpe?g(?:[?#]|$)/i.test(item.url);
+}
+
+/**
+ * Ensure an Instagram image item is JPEG. Transcodes a non-JPEG image to
+ * high-quality JPEG (≤1080px wide — Instagram's display width) and re-hosts it on
+ * R2 so Meta can pull it. This mirrors what the Instagram mobile app does silently
+ * (it re-encodes everything to JPEG); the Graph API does not, so we must. Videos
+ * and already-JPEG images pass through. Any failure — or R2 not configured —
+ * returns the original item, so behaviour is never worse than before.
+ */
+async function ensureIgJpegImage(item: MediaItem, igId: string): Promise<MediaItem> {
+  if (!igImageNeedsJpeg(item)) return item;
+  const r2 = new R2StorageService();
+  if (!r2.isConfigured()) return item;
+  try {
+    const res = await safeFetch(item.url, { method: 'GET', timeoutMs: 20_000 });
+    if (!res.ok) return item;
+    const src = await readCappedBytes(res, IG_IMAGE_FETCH_MAX_BYTES);
+    if (!src || src.length === 0) return item;
+    const img = await Jimp.read(src);
+    if (img.bitmap.width > IG_JPEG_MAX_WIDTH) img.resize(IG_JPEG_MAX_WIDTH, Jimp.AUTO);
+    img.quality(90);
+    const jpeg = await img.getBufferAsync(Jimp.MIME_JPEG);
+    const up = await r2.upload(igId, { mimetype: 'image/jpeg', buffer: jpeg, size: jpeg.length });
+    logger.log(`IG image transcoded to JPEG (${item.mime ?? 'unknown'} → image/jpeg) for ${igId}`);
+    return { url: up.url, mime: 'image/jpeg' };
+  } catch (e: any) {
+    logger.warn(`IG image JPEG transcode failed (${igId}); using original: ${e?.message ?? e}`);
+    return item;
+  }
+}
+
 /**
  * Publish to Instagram (Graph API container flow) — FEED (single image, single
  * video→Reel, or 2–10 carousel), REEL, or STORY (image/video). Videos are
@@ -156,6 +208,10 @@ async function publishInstagram(
   if (items.length === 0) return { ok: false, error: 'Instagram requires at least one media item' };
 
   try {
+    // Instagram accepts ONLY JPEG images; transcode any non-JPEG image up front so
+    // every container path below (story/feed/carousel) builds with a JPEG image_url.
+    items = await Promise.all(items.map((m) => ensureIgJpegImage(m, igId)));
+
     if (format === 'STORY') {
       const m = items[0];
       const body = isVideoItem(m)
@@ -163,10 +219,9 @@ async function publishInstagram(
         : { media_type: 'STORIES', image_url: m.url };
       const c = await igCreateContainer(igId, token, body);
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
-      if (isVideoItem(m)) {
-        const w = await igWaitContainerReady(c.id, token);
-        if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
-      }
+      // Poll to FINISHED for images too (not just video) — same race as FEED.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
       return igPublish(igId, token, c.id);
     }
 
@@ -203,6 +258,12 @@ async function publishInstagram(
       }
       const c = await igCreateContainer(igId, token, { image_url: m.url, caption: content });
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+      // Poll to FINISHED before publishing: Meta needs a moment to fetch/validate
+      // the (possibly just-transcoded) image, and publishing too early returns the
+      // opaque "Media ID is not available". On a genuinely bad image this surfaces
+      // the real status (ERROR/EXPIRED) instead of that generic message.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
       return igPublish(igId, token, c.id);
     }
 
