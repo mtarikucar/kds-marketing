@@ -67,10 +67,18 @@ export interface MediaItem {
   mime?: string;
 }
 
+/** LinkedIn-specific publish options (organic feed posts). */
+export interface LinkedinPostOptions {
+  /** Feed visibility for /rest/posts. Defaults to PUBLIC when unset. */
+  visibility?: 'PUBLIC' | 'CONNECTIONS';
+}
+
 export interface PublishOptions {
   format?: PostFormat;
   /** Per-item MIME, parallel to mediaUrls — lets adapters pick image vs video. */
   mediaMime?: (string | undefined)[];
+  /** LinkedIn organic post options (visibility). Honoured only by the LINKEDIN adapter. */
+  linkedin?: LinkedinPostOptions;
 }
 
 const VIDEO_EXT = /\.(mp4|mov|m4v|webm|qt)(?:[?#]|$)/i;
