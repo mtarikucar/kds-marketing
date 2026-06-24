@@ -310,10 +310,12 @@ import { MarketingOrderFormsController } from './controllers/marketing-order-for
 import { PublicOrderFormController } from './controllers/public-order-form.controller';
 import { OrderFormsService } from './order-forms/order-forms.service';
 
-// Ad reporting — Meta Ads + TikTok Ads (GoHighLevel parity).
+// Ad reporting — Meta Ads + TikTok Ads + LinkedIn Ads (GoHighLevel parity).
 import { MarketingAdsController } from './controllers/marketing-ads.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
+import { LinkedinAdsOAuthController } from './ads/linkedin-ads-oauth.controller';
+import { LinkedinAdsOAuthService } from './ads/linkedin-ads-oauth.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
 import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
@@ -504,6 +506,7 @@ import { WalletService } from './wallet/wallet.service';
     RebillingController,
     SocialPlannerController,
     SocialOAuthController,
+    LinkedinAdsOAuthController,
   ],
   providers: [
     // Services
@@ -697,6 +700,8 @@ import { WalletService } from './wallet/wallet.service';
     R2StorageService,
     SocialOAuthService,
     SocialTokenRefreshService,
+    // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
+    LinkedinAdsOAuthService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
