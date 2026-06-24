@@ -152,6 +152,7 @@ export default function SocialPlannerPage() {
           content: values.content,
           media: values.media,
           formats: values.formats,
+          options: values.options,
         });
         if (values.scheduledAt) {
           await marketingApi.post(`/social-planner/posts/${editingPost.id}/schedule`, {
@@ -167,6 +168,7 @@ export default function SocialPlannerPage() {
         media: values.media,
         formats: values.formats,
         targetAccountIds: values.targetAccountIds,
+        options: values.options,
       });
       const postId: string = created.data?.id;
       if (values.scheduledAt && postId) {

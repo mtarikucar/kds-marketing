@@ -901,7 +901,8 @@
     },
     "action": {
       "refresh": "Refresh",
-      "disconnect": "Disconnect"
+      "disconnect": "Disconnect",
+      "reconnect": "Reconnect"
     },
     "confirm": {
       "disconnectTitle": "Disconnect ad account",
@@ -931,7 +932,21 @@
       "disconnected": "Ad account disconnected",
       "disconnectFailed": "Failed to disconnect account",
       "pulled": "Refreshed — {{count}} day(s) updated",
-      "pullFailed": "Failed to refresh metrics"
+      "pullFailed": "Failed to refresh metrics",
+      "tiktokConnected": "TikTok advertiser(s) connected",
+      "tiktokConnectFailed": "Failed to connect TikTok account"
+    },
+    "oauth": {
+      "tiktokConnect": "Connect TikTok for Business",
+      "tiktokNotConfigured": "An admin must add TikTok Business app credentials first",
+      "selectTitle": "Choose TikTok advertiser accounts",
+      "selectBody": "Select the advertiser accounts to connect to this workspace.",
+      "noAdvertisers": "No advertiser accounts found",
+      "noAdvertisersHint": "Make sure you granted access to at least one TikTok advertiser account.",
+      "enableDm": "Also enable TikTok DM inbox",
+      "connectSelected": "Connect selected",
+      "callbackError": "TikTok connection failed or was cancelled. Please try again.",
+      "startFailed": "Could not start the TikTok connection"
     }
   },
   "reports": {

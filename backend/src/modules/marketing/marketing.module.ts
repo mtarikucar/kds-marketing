@@ -317,6 +317,9 @@ import { MarketingAdsController } from './controllers/marketing-ads.controller';
 import { MarketingAdRulesController } from './controllers/marketing-ad-rules.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
+// TikTok-for-Business OAuth (ads module — NOT social-planner)
+import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
+import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
 import { AdManagementService } from './ads/ad-management.service';
 import { AdRulesService } from './ads/ad-rules.service';
 
@@ -462,6 +465,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
+    TiktokBusinessOAuthController,
     MarketingAdRulesController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
@@ -634,6 +638,7 @@ import { WalletService } from './wallet/wallet.service';
     OrderFormsService,
     AdAccountService,
     AdsPullService,
+    TiktokBusinessOAuthService,
     AdManagementService,
     AdRulesService,
     CustomObjectsService,

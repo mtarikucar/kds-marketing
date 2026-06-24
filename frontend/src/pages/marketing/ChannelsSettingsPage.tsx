@@ -13,6 +13,7 @@ import {
   Plus,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { startTiktokAdsOAuth } from '../../features/marketing/api/ads.service';
 import { WhatsappSignupButton } from './WhatsappSignupButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -58,6 +59,8 @@ interface ChannelRow {
   // paste into the Meta App dashboard, + whether the verify-token env is set.
   webhookUrl?: string | null;
   verifyTokenConfigured?: boolean;
+  // TIKTOK only: whether messaging scope was granted via OAuth.
+  messaging?: boolean | null;
 }
 interface AgentRow {
   id: string;
@@ -538,6 +541,88 @@ export default function ChannelsSettingsPage() {
                           'Set META_WEBHOOK_VERIFY_TOKEN on the server, then use that value as the Verify Token in Meta.',
                         )}
                   </p>
+                </div>
+              )}
+
+              {/* TikTok DM: webhook URL to paste into the TikTok for Business app
+                  dashboard + OAuth shortcut to provision/refresh the DM channel
+                  (and ad accounts) in one step. Manual token field remains the
+                  fallback for operators who manage tokens directly. */}
+              {c.type === 'TIKTOK' && (
+                <div className="mt-3 pt-3 border-t border-border space-y-3">
+                  {/* Inbound webhook URL */}
+                  <div>
+                    <p className="text-caption text-muted-foreground mb-1">
+                      {t(
+                        'channels.tiktokWebhook',
+                        'TikTok webhook URL — paste into TikTok for Business App → Webhooks',
+                      )}
+                    </p>
+                    {c.webhookUrl ? (
+                      <div className="flex items-center gap-2">
+                        <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
+                          {c.webhookUrl}
+                        </code>
+                        <IconButton
+                          variant="outline"
+                          size="sm"
+                          aria-label={t('common.copy', 'Copy')}
+                          onClick={() => {
+                            navigator.clipboard.writeText(c.webhookUrl!);
+                            toast.success(t('common.copied', 'Copied'));
+                          }}
+                        >
+                          <Clipboard className="h-4 w-4" />
+                        </IconButton>
+                      </div>
+                    ) : (
+                      <p className="text-caption text-muted-foreground">
+                        {t(
+                          'channels.tiktokWebhookPending',
+                          'Set PUBLIC_BASE_URL on the server to reveal the webhook URL.',
+                        )}
+                      </p>
+                    )}
+                    {c.messaging != null && (
+                      <p className="text-caption text-muted-foreground mt-1">
+                        {c.messaging
+                          ? t('channels.tiktokMessagingOk', 'Messaging scope granted via OAuth.')
+                          : t(
+                              'channels.tiktokMessagingMissing',
+                              'Messaging scope not yet granted — reconnect via "Connect TikTok for Business" below.',
+                            )}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Connect for Business CTA */}
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-caption text-muted-foreground">
+                        {t(
+                          'channels.tiktokOAuthHint',
+                          'Use OAuth to provision this DM channel and ad accounts in one step. The manual token field above remains the fallback.',
+                        )}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={async () => {
+                        try {
+                          const { authorizeUrl } = await startTiktokAdsOAuth();
+                          window.location.href = authorizeUrl;
+                        } catch {
+                          toast.error(
+                            t('channels.tiktokOAuthFailed', 'Could not start TikTok OAuth — check server config.'),
+                          );
+                        }
+                      }}
+                    >
+                      {t('channels.tiktokConnect', 'Connect TikTok for Business')}
+                    </Button>
+                  </div>
                 </div>
               )}
             </CardContent>

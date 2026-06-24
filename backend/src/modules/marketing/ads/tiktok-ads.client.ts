@@ -53,7 +53,9 @@ export async function pullTiktokInsights(
     );
     const json: any = await res.json().catch(() => ({}));
     if (json?.code !== 0) {
-      throw new Error(`TikTok ads: ${String(json?.message ?? res.status).slice(0, 300)}`);
+      // Include the numeric code so the caller can classify auth failures
+      // (reauth_required) reliably, not just by parsing the English message.
+      throw new Error(`TikTok ads [${json?.code}]: ${String(json?.message ?? res.status).slice(0, 300)}`);
     }
     for (const item of json?.data?.list ?? []) rows.push(parseTiktokRow(item, since));
     // page_info.total_page tells us how many pages exist; clamp to MAX_PAGES.

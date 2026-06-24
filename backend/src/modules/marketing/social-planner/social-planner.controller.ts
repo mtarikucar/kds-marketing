@@ -83,6 +83,9 @@ class CreatePostDto {
 
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
+
+  @IsOptional() @IsObject()
+  options?: Record<string, unknown>;
 }
 
 class UpdatePostDto {
@@ -97,6 +100,9 @@ class UpdatePostDto {
 
   @IsOptional() @IsObject()
   formats?: Record<string, string>;
+
+  @IsOptional() @IsObject()
+  options?: Record<string, unknown>;
 }
 
 class SchedulePostDto {
@@ -146,6 +152,11 @@ export class SocialPlannerController {
   @RequirePermission('campaigns.send')
   disconnectAccount(@Param('accountId') accountId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.disconnectAccount(u.workspaceId, accountId);
+  }
+
+  @Get('accounts/:id/tiktok/creator-info')
+  tiktokCreatorInfo(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.tiktokCreatorInfo(u.workspaceId, id);
   }
 
   // ── Media upload ──────────────────────────────────────────────────────────

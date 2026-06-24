@@ -5,15 +5,18 @@ import {
   BadRequestException,
   OnModuleInit,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import {
   sealSecret,
+  openSecret,
   isSecretBoxConfigured,
   maskSecret,
 } from '../../../common/crypto/secret-box.helper';
 import { publishToNetwork, isNetworkConfigured, PostFormat } from './network-adapters';
+import { queryCreatorInfo } from './tiktok-creator-info.util';
 import { R2StorageService, UploadedMedia, UploadInput } from './r2-storage.service';
 
 export const SOCIAL_PUBLISH_KIND = 'social.publish';
@@ -32,6 +35,8 @@ interface PostOptions {
   formats?: Record<string, PostFormat>;
   media?: MediaDescriptor[];
   mediaDeletedAt?: string;
+  /** TikTok per-post privacy/interaction/photo controls. */
+  tiktok?: Record<string, unknown>;
 }
 
 const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK', 'TWITTER', 'PINTEREST', 'GMB'] as const;
@@ -91,15 +96,28 @@ export class SocialPlannerService implements OnModuleInit {
     return Object.keys(out).length ? out : undefined;
   }
 
-  /** Merge new formats/media into an existing post's options JSON. */
+  /** Merge new formats/media/options into an existing post's options JSON. The
+   *  optional `options` patch carries network-specific controls (e.g. TikTok
+   *  privacy/photo settings under `options.tiktok`). */
   private mergeOptions(
     existing: PostOptions | null | undefined,
-    patch: { formats?: Record<string, string>; media?: MediaDescriptor[] },
+    patch: {
+      formats?: Record<string, string>;
+      media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
+    },
   ): PostOptions | undefined {
     const base: PostOptions = { ...(existing ?? {}) };
     const formats = this.cleanFormats(patch.formats);
     if (formats) base.formats = { ...(base.formats ?? {}), ...formats };
     if (patch.media !== undefined) base.media = patch.media;
+    if (patch.options !== undefined) {
+      // Fold caller-supplied network-specific options into the same JSON. Known
+      // keys (formats/media/mediaDeletedAt) are managed above; pass the rest
+      // (notably `tiktok`) through so publish-time can read them.
+      const { formats: _f, media: _m, ...rest } = patch.options as Record<string, unknown>;
+      Object.assign(base, rest);
+    }
     return Object.keys(base).length ? base : undefined;
   }
 
@@ -182,6 +200,17 @@ export class SocialPlannerService implements OnModuleInit {
     };
   }
 
+  // ────────────────────────────────────────────────────────────── TikTok enrichment
+
+  async tiktokCreatorInfo(workspaceId: string, accountId: string) {
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: accountId, workspaceId, network: 'TIKTOK' },
+    });
+    if (!account) throw new NotFoundException('TikTok account not found');
+    const token = openSecret(account.accessToken);
+    return queryCreatorInfo(token);
+  }
+
   // ────────────────────────────────────────────────────────────── Posts CRUD
 
   async createPost(
@@ -192,16 +221,21 @@ export class SocialPlannerService implements OnModuleInit {
       targetAccountIds?: string[];
       formats?: Record<string, string>;
       media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
     },
   ) {
     const mediaUrls = dto.media?.length ? dto.media.map((m) => m.url) : dto.mediaUrls ?? [];
-    const options = this.mergeOptions(null, { formats: dto.formats, media: dto.media });
+    const options = this.mergeOptions(null, {
+      formats: dto.formats,
+      media: dto.media,
+      options: dto.options,
+    });
     const post = await this.prisma.socialPost.create({
       data: {
         workspaceId,
         content: dto.content,
         mediaUrls,
-        ...(options ? { options: options as any } : {}),
+        ...(options ? { options: options as Prisma.InputJsonValue } : {}),
         status: 'DRAFT',
       },
     });
@@ -238,6 +272,7 @@ export class SocialPlannerService implements OnModuleInit {
       mediaUrls?: string[];
       formats?: Record<string, string>;
       media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
     },
   ) {
     const existing = await this.assertDraftPost(workspaceId, postId);
@@ -246,13 +281,14 @@ export class SocialPlannerService implements OnModuleInit {
     const options = this.mergeOptions(existing.options as PostOptions, {
       formats: dto.formats,
       media: dto.media,
+      options: dto.options,
     });
     return this.prisma.socialPost.update({
       where: { id: postId },
       data: {
         ...(dto.content !== undefined ? { content: dto.content } : {}),
         ...(mediaUrls !== undefined ? { mediaUrls } : {}),
-        ...(options ? { options: options as any } : {}),
+        ...(options ? { options: options as Prisma.InputJsonValue } : {}),
       },
       include: { targets: true },
     });
@@ -364,6 +400,7 @@ export class SocialPlannerService implements OnModuleInit {
       const result = await publishToNetwork(target.account, post.content, mediaUrls, {
         format: formats[target.socialAccountId] ?? 'FEED',
         mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
+        tiktok: options.tiktok as any,
       });
 
       if (result.ok) {

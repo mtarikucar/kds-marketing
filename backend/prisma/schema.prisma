@@ -2825,7 +2825,11 @@ model SocialPost {
   content     String    @db.Text
   mediaUrls   String[]
   /// Free-form publish options: per-target formats ({accountId: FEED|REEL|STORY}),
-  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), and mediaDeletedAt.
+  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), mediaDeletedAt,
+  /// and per-post network-specific controls. For TikTok:
+  /// { tiktok?: { privacyLevel?: string, disableComment?: boolean,
+  ///   disableDuet?: boolean, disableStitch?: boolean, mediaType?: 'VIDEO'|'PHOTO',
+  ///   coverIndex?: number } }
   options     Json?
   status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
   scheduledAt DateTime?
