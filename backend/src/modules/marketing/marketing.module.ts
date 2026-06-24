@@ -308,6 +308,9 @@ import { OrderFormsService } from './order-forms/order-forms.service';
 import { MarketingAdsController } from './controllers/marketing-ads.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
+// TikTok-for-Business OAuth (ads module — NOT social-planner)
+import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
+import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
 import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
@@ -450,6 +453,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
+    TiktokBusinessOAuthController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -618,6 +622,7 @@ import { WalletService } from './wallet/wallet.service';
     OrderFormsService,
     AdAccountService,
     AdsPullService,
+    TiktokBusinessOAuthService,
     CustomObjectsService,
     SnippetsService,
     LeadBulkService,
