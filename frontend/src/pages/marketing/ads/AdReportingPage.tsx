@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
@@ -19,12 +20,14 @@ import {
   connectAdAccount,
   removeAdAccount,
   pullAdAccount,
+  startLinkedinAdsOAuth,
   type AdAccount,
   type AdProvider,
 } from '../../../features/marketing/api/ads.service';
 import type { ConnectAdAccountFormValues } from './adsSchemas';
 import { AD_PROVIDER_LABEL } from './adsSchemas';
 import { ConnectAdAccountDialog } from './ConnectAdAccountDialog';
+import { LinkedinAdsSelectDialog } from './LinkedinAdsSelectDialog';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
@@ -81,6 +84,51 @@ export default function AdReportingPage() {
   const [provider, setProvider] = useState<ProviderFilter>('ALL');
   const [connectOpen, setConnectOpen] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<AdAccount | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
+
+  // ── OAuth return handling ────────────────────────────────────────────────────
+  // The LinkedIn ads OAuth callback redirects back to /ads?connect=<pendingId>
+  // (success) or ?connect_error=1 (failure). Pick up the param once, open the
+  // account selector, and strip it from the URL.
+  useEffect(() => {
+    const connectId = searchParams.get('connect');
+    const connectErr = searchParams.get('connect_error');
+    if (connectId) {
+      setPendingConnectId(connectId);
+      setView('accounts');
+      searchParams.delete('connect');
+      setSearchParams(searchParams, { replace: true });
+    } else if (connectErr) {
+      toast.error(
+        t('ads.oauth.callbackError', {
+          defaultValue: 'LinkedIn connection failed or was cancelled. Please try again.',
+        }),
+      );
+      searchParams.delete('connect_error');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startLinkedinConnect = async () => {
+    try {
+      const { authorizeUrl } = await startLinkedinAdsOAuth();
+      window.location.href = authorizeUrl;
+    } catch {
+      toast.error(
+        t('ads.oauth.startFailed', { defaultValue: 'Could not start the LinkedIn connection' }),
+      );
+    }
+  };
+
+  const handleReconnect = (account: AdAccount) => {
+    if (account.provider === 'LINKEDIN') {
+      void startLinkedinConnect();
+    } else {
+      setConnectOpen(true);
+    }
+  };
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -181,10 +229,26 @@ export default function AdReportingPage() {
         })}
         actions={
           isManager ? (
-            <Button onClick={() => setConnectOpen(true)} disabled={!canConnect}>
-              <Link2 className="h-4 w-4" aria-hidden="true" />
-              {t('ads.connectAccount', { defaultValue: 'Connect account' })}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => void startLinkedinConnect()}
+                disabled={!status?.LINKEDIN}
+                title={
+                  status?.LINKEDIN
+                    ? undefined
+                    : t('ads.oauth.linkedinNotConfigured', {
+                        defaultValue: 'An admin must add LinkedIn ads app credentials first',
+                      })
+                }
+                variant="outline"
+              >
+                {t('ads.oauth.linkedinConnect', { defaultValue: 'Connect LinkedIn' })}
+              </Button>
+              <Button onClick={() => setConnectOpen(true)} disabled={!canConnect} variant="outline">
+                <Link2 className="h-4 w-4" aria-hidden="true" />
+                {t('ads.connectAccount', { defaultValue: 'Connect account' })}
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -210,6 +274,7 @@ export default function AdReportingPage() {
                 <SelectItem value="ALL">{t('ads.filter.allProviders', { defaultValue: 'All providers' })}</SelectItem>
                 <SelectItem value="META">{AD_PROVIDER_LABEL.META}</SelectItem>
                 <SelectItem value="TIKTOK">{AD_PROVIDER_LABEL.TIKTOK}</SelectItem>
+                <SelectItem value="LINKEDIN">{AD_PROVIDER_LABEL.LINKEDIN}</SelectItem>
               </SelectContent>
             </Select>
             <SegmentedControl<RangeKey>
@@ -246,6 +311,7 @@ export default function AdReportingPage() {
           isManager={isManager}
           canConnect={canConnect}
           onConnect={() => setConnectOpen(true)}
+          onReconnect={handleReconnect}
           onDisconnect={setDisconnectTarget}
           onPull={(id) => pullMutation.mutate(id)}
           pullingId={pullMutation.isPending ? (pullMutation.variables as string) : null}
@@ -258,6 +324,12 @@ export default function AdReportingPage() {
         onSubmit={(values) => connectMutation.mutate(values)}
         isPending={connectMutation.isPending}
         status={status}
+      />
+
+      <LinkedinAdsSelectDialog
+        pendingId={pendingConnectId}
+        onOpenChange={(open) => { if (!open) setPendingConnectId(null); }}
+        onSuccess={invalidateAccounts}
       />
 
       <ConfirmDialog
@@ -456,6 +528,7 @@ interface AccountsViewProps {
   isManager: boolean;
   canConnect: boolean;
   onConnect: () => void;
+  onReconnect: (account: AdAccount) => void;
   onDisconnect: (account: AdAccount) => void;
   onPull: (id: string) => void;
   pullingId: string | null;
@@ -467,6 +540,7 @@ function AccountsView({
   isManager,
   canConnect,
   onConnect,
+  onReconnect,
   onDisconnect,
   onPull,
   pullingId,
@@ -554,7 +628,7 @@ function AccountsView({
           {isManager && (
             <div className="mt-auto flex items-center justify-end gap-1 pt-1">
               {needsReauth && (
-                <Button variant="outline" size="sm" onClick={onConnect}>
+                <Button variant="outline" size="sm" onClick={() => onReconnect(acc)}>
                   <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('ads.action.reconnect', { defaultValue: 'Reconnect' })}
                 </Button>
