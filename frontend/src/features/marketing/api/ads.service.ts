@@ -74,3 +74,41 @@ export const removeAdAccount = (id: string): Promise<{ message: string }> =>
 
 export const pullAdAccount = (id: string, days?: number): Promise<{ written: number }> =>
   marketingApi.post(`/ads/accounts/${id}/pull`, days ? { days } : {}).then((r) => r.data);
+
+// ── TikTok for Business OAuth ───────────────────────────────────────────────
+
+export interface TiktokAdsPendingAdvertiser {
+  externalAdId: string;
+  displayName: string;
+  currency: string;
+}
+
+export interface TiktokAdsPending {
+  advertisers: TiktokAdsPendingAdvertiser[];
+  messaging: boolean;
+}
+
+export interface TiktokAdsConfirmPayload {
+  selected: string[];
+  enableMessaging?: boolean;
+}
+
+export interface TiktokAdsConfirmResult {
+  connectedAdAccounts: AdAccount[];
+  dmChannel: unknown | null;
+}
+
+/** POST /ads/oauth/tiktok/start → { authorizeUrl } */
+export const startTiktokAdsOAuth = (): Promise<{ authorizeUrl: string }> =>
+  marketingApi.post('/ads/oauth/tiktok/start').then((r) => r.data);
+
+/** GET /ads/oauth/tiktok/pending/:id */
+export const getTiktokAdsPending = (id: string): Promise<TiktokAdsPending> =>
+  marketingApi.get(`/ads/oauth/tiktok/pending/${id}`).then((r) => r.data);
+
+/** POST /ads/oauth/tiktok/pending/:id/confirm */
+export const confirmTiktokAdsPending = (
+  id: string,
+  payload: TiktokAdsConfirmPayload,
+): Promise<TiktokAdsConfirmResult> =>
+  marketingApi.post(`/ads/oauth/tiktok/pending/${id}/confirm`, payload).then((r) => r.data);
