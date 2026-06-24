@@ -411,6 +411,105 @@ export const tiktokProvider: SocialOAuthProvider = {
   },
 };
 
+// ─────────────────────────────────────────────── Instagram (Instagram Login)
+
+// Direct "Instagram API with Instagram Login" flow — the user authenticates at
+// instagram.com (no Facebook Page). Token exchange is 2-step (short-lived →
+// long-lived ~60d) and refresh re-issues the access token itself (there is no
+// separate refresh_token), so we store the long-lived token as BOTH accessToken
+// and refreshToken to keep the framework's refresh cron happy. Host is
+// graph.instagram.com, distinct from graph.facebook.com.
+const IG_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
+const IG_GRAPH = 'https://graph.instagram.com';
+
+export const instagramLoginProvider: SocialOAuthProvider = {
+  async exchangeCode(_network: Network, code: string): Promise<ExchangeResult> {
+    // Instagram appends a trailing `#_` to the code on web redirects — strip it
+    // before exchange or the short-lived token request fails.
+    const cleanCode = code.replace(/#_$/, '');
+    const shortRes = await safeFetch(IG_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId('INSTAGRAM_LOGIN') ?? '',
+        client_secret: clientSecret('INSTAGRAM_LOGIN') ?? '',
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri('INSTAGRAM_LOGIN'),
+        code: cleanCode,
+      }).toString(),
+      timeoutMs: 15000,
+    });
+    const short = (await shortRes.json()) as any;
+    if (!shortRes.ok || !short.access_token) {
+      throw new Error(short?.error_message ?? short?.error?.message ?? 'instagram token exchange failed');
+    }
+    // Upgrade the short-lived token to a long-lived (~60 day) token.
+    const llRes = await safeFetch(
+      `${IG_GRAPH}/access_token?` +
+        new URLSearchParams({
+          grant_type: 'ig_exchange_token',
+          client_secret: clientSecret('INSTAGRAM_LOGIN') ?? '',
+          access_token: short.access_token,
+        }).toString(),
+      { method: 'GET', timeoutMs: 15000 },
+    );
+    const ll = (await llRes.json()) as any;
+    if (!llRes.ok || !ll.access_token) {
+      throw new Error(ll?.error?.message ?? 'instagram long-lived token exchange failed');
+    }
+    const longToken: string = ll.access_token;
+    const expiresAt = ll?.expires_in ? new Date(Date.now() + ll.expires_in * 1000) : undefined;
+    return {
+      accessToken: longToken,
+      // No separate refresh_token: the long-lived access token is what gets
+      // refreshed, so seed refreshToken with it so the cron can refresh it.
+      refreshToken: longToken,
+      expiresAt,
+    };
+  },
+
+  async refresh(refreshToken: string): Promise<ExchangeResult> {
+    const res = await safeFetch(
+      `${IG_GRAPH}/refresh_access_token?` +
+        new URLSearchParams({
+          grant_type: 'ig_refresh_token',
+          access_token: refreshToken,
+        }).toString(),
+      { method: 'GET', timeoutMs: 15000 },
+    );
+    const json = (await res.json()) as any;
+    if (!res.ok || !json.access_token) {
+      throw new Error(json?.error?.message ?? 'instagram token refresh failed');
+    }
+    return {
+      accessToken: json.access_token,
+      refreshToken: json.access_token,
+      expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : undefined,
+    };
+  },
+
+  async listAssets(token: string): Promise<ConnectableAsset[]> {
+    const res = await safeFetch(
+      `${IG_GRAPH}/me?` +
+        new URLSearchParams({ fields: 'user_id,username', access_token: token }).toString(),
+      { method: 'GET', timeoutMs: 15000 },
+    );
+    const json = (await res.json()) as any;
+    const userId = json?.user_id;
+    if (!res.ok || !userId) {
+      throw new Error(json?.error?.message ?? 'failed to fetch Instagram account');
+    }
+    return [
+      {
+        externalId: String(userId),
+        displayName: json?.username ? `${json.username} (Instagram)` : 'My Instagram account',
+        accountType: 'IG_DIRECT',
+        token,
+      },
+    ];
+  },
+};
+
 // ──────────────────────────────────────────────────────────────── X / Twitter
 
 const X_TOKEN_URL = 'https://api.twitter.com/2/oauth2/token';
@@ -634,6 +733,8 @@ export function providerFor(network: Network): SocialOAuthProvider {
     case 'FACEBOOK':
     case 'INSTAGRAM':
       return metaProvider;
+    case 'INSTAGRAM_LOGIN':
+      return instagramLoginProvider;
     case 'LINKEDIN':
       return linkedinProvider;
     case 'TIKTOK':

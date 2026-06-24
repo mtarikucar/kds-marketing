@@ -13,6 +13,7 @@ export interface NetworkMeta {
 export const NETWORK_META: Record<SocialNetwork, NetworkMeta> = {
   FACEBOOK: { label: 'Facebook', icon: Facebook, tone: 'info' },
   INSTAGRAM: { label: 'Instagram', icon: Instagram, tone: 'danger' },
+  INSTAGRAM_LOGIN: { label: 'Instagram (Login)', icon: Instagram, tone: 'danger' },
   LINKEDIN: { label: 'LinkedIn', icon: Linkedin, tone: 'primary' },
   TIKTOK: { label: 'TikTok', icon: Music2, tone: 'neutral' },
   // Epic 12 (needs-external, inert until creds): X, Pinterest, Google Business.

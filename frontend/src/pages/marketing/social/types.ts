@@ -59,6 +59,7 @@ export interface SocialPost {
 export interface NetworkStatus {
   FACEBOOK: boolean;
   INSTAGRAM: boolean;
+  INSTAGRAM_LOGIN: boolean;
   LINKEDIN: boolean;
   TIKTOK: boolean;
   // Epic 12 (needs-external, inert until creds).
