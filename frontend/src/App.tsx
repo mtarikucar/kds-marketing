@@ -32,6 +32,7 @@ const EstimatesPage            = lazy(() => import('./pages/marketing/estimates/
 const DocumentsPage            = lazy(() => import('./pages/marketing/documents/DocumentsPage'));
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
+const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
 const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTemplates'));
@@ -181,6 +182,9 @@ export default function App() {
           <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
           <Route path="/performance"    element={<S><PerformancePage /></S>} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
+          {/* In-app help center (connection guides) — available to everyone. */}
+          <Route path="/help"           element={<S><HelpPage /></S>} />
+          <Route path="/help/:slug"     element={<S><HelpPage /></S>} />
           {/* Self-service 2FA — available to every authenticated marketing user. */}
           <Route path="/settings/two-factor" element={<S><TwoFactorPage /></S>} />
         </Route>

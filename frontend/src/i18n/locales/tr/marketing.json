@@ -176,7 +176,8 @@
     "agencyLocations": "Ajans Lokasyonları",
     "agencyRebilling": "Ajans Yeniden Faturalama",
     "agencySnapshots": "Ajans Anlık Görüntüleri",
-    "ivr": "Sesli Menü (IVR)"
+    "ivr": "Sesli Menü (IVR)",
+    "help": "Yardım"
   },
   "common": {
     "save": "Kaydet",

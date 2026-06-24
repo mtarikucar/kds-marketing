@@ -233,6 +233,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
     ],
   },
+  { id: 'help', labelKey: 'nav.help', label: 'Help', icon: BookOpen, path: '/help' },
   {
     id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true,
     children: [

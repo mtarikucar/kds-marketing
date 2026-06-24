@@ -165,7 +165,8 @@
     "agencyLocations": "Agency Locations",
     "agencyRebilling": "Agency Rebilling",
     "agencySnapshots": "Agency Snapshots",
-    "ivr": "IVR Menus"
+    "ivr": "IVR Menus",
+    "help": "Help"
   },
   "common": {
     "save": "Save",
