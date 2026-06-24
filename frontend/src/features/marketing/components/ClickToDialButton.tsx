@@ -38,8 +38,10 @@ export default function ClickToDialButton({
       setActiveCall(data.call);
       setLogForm({ status: 'CONNECTED', durationSec: '', notes: '' });
       if (data.mode === 'api') {
-        // api-dial: NetGSM rings the rep's extension then the customer — no tel:.
-        toast.success('Calling… your extension is ringing');
+        // api-dial: NetGSM rings the rep's extension first, then the customer. The
+        // request was accepted — the extension only actually rings if a device
+        // (the webphone) is registered on it. Keep the copy honest (not "ringing").
+        toast.success('Call request sent — your extension will ring (keep the webphone open).');
       } else if (data.dialUri) {
         window.location.href = data.dialUri; // click-to-dial hands off to the device
       }
