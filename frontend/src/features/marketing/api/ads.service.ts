@@ -94,8 +94,8 @@ export interface TiktokAdsConfirmPayload {
 }
 
 export interface TiktokAdsConfirmResult {
-  connectedAdAccounts: AdAccount[];
-  dmChannel: unknown | null;
+  connectedAdAccounts: number;
+  dmChannel: boolean;
 }
 
 /** POST /ads/oauth/tiktok/start → { authorizeUrl } */

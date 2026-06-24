@@ -210,6 +210,7 @@ describe('TiktokBusinessOAuthService', () => {
       prisma.pendingSocialConnection.findFirst.mockResolvedValue({
         id: PENDING_ID,
         payload: 'sealed-payload',
+        expiresAt: new Date(Date.now() + 600_000),
       });
       jest.spyOn(secretBox, 'openSecret').mockReturnValue(JSON.stringify(payloadObj));
 
@@ -220,6 +221,19 @@ describe('TiktokBusinessOAuthService', () => {
       });
       // MUST NOT leak the token
       expect(JSON.stringify(result)).not.toContain('secret-token');
+    });
+
+    it('treats an expired pending row as not-found and deletes it', async () => {
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: PENDING_ID,
+        payload: 'sealed-payload',
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      prisma.pendingSocialConnection.delete.mockResolvedValue({});
+      await expect(svc.listPending(WS, PENDING_ID)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.pendingSocialConnection.delete).toHaveBeenCalledWith({
+        where: { id: PENDING_ID },
+      });
     });
   });
 
@@ -239,6 +253,7 @@ describe('TiktokBusinessOAuthService', () => {
       prisma.pendingSocialConnection.findFirst.mockResolvedValue({
         id: PENDING_ID,
         payload: 'sealed',
+        expiresAt: new Date(Date.now() + 600_000),
       });
       jest.spyOn(secretBox, 'openSecret').mockReturnValue(JSON.stringify(payloadObj));
       adAccounts.connect.mockResolvedValue({ id: 'acc1' });

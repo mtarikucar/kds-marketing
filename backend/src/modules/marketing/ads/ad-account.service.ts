@@ -181,7 +181,7 @@ export class AdAccountService {
       const msg = (e as Error).message ?? 'pull failed';
       if (
         account.provider === 'TIKTOK' &&
-        /access[_ ]?token|auth|40105|40100|not authorized/i.test(msg)
+        /access[_ ]?token|auth|not authorized|invalid token|\b(4000[12]|4010\d|40110)\b/i.test(msg)
       ) {
         await this.markReauth(account.id);
       } else {

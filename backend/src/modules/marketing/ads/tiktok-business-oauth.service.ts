@@ -141,16 +141,31 @@ export class TiktokBusinessOAuthService {
     return { pendingId: row.id, workspaceId };
   }
 
+  /**
+   * Load a non-expired pending row scoped to the workspace, deleting it if the
+   * 15-minute TTL has lapsed — so an abandoned flow's sealed token doesn't
+   * linger in the DB. Mirrors social-oauth.service's expiry-checked loadPending.
+   */
+  private async loadPendingRow(workspaceId: string, id: string) {
+    const row = await this.prisma.pendingSocialConnection.findFirst({
+      where: { id, workspaceId, network: NETWORK },
+    });
+    if (!row) throw new BadRequestException('Pending connection not found or expired');
+    if (row.expiresAt.getTime() < Date.now()) {
+      await this.prisma.pendingSocialConnection
+        .delete({ where: { id: row.id } })
+        .catch(() => undefined);
+      throw new BadRequestException('Pending connection not found or expired');
+    }
+    return row;
+  }
+
   /** Step 3: Return the advertiser list + messaging flag (NEVER the token). */
   async listPending(
     workspaceId: string,
     id: string,
   ): Promise<{ advertisers: AdvertiserInfo[]; messaging: boolean }> {
-    const row = await this.prisma.pendingSocialConnection.findFirst({
-      where: { id, workspaceId, network: NETWORK },
-    });
-    if (!row) throw new BadRequestException('Pending connection not found or expired');
-
+    const row = await this.loadPendingRow(workspaceId, id);
     const payload = JSON.parse(openSecret(row.payload)) as PendingPayload;
     return { advertisers: payload.advertisers, messaging: payload.messaging };
   }
@@ -164,11 +179,7 @@ export class TiktokBusinessOAuthService {
     id: string,
     dto: ConfirmDto,
   ): Promise<{ connectedAdAccounts: number; dmChannel: boolean }> {
-    const row = await this.prisma.pendingSocialConnection.findFirst({
-      where: { id, workspaceId, network: NETWORK },
-    });
-    if (!row) throw new BadRequestException('Pending connection not found or expired');
-
+    const row = await this.loadPendingRow(workspaceId, id);
     const payload = JSON.parse(openSecret(row.payload)) as PendingPayload;
 
     const selectedSet = new Set(dto.selected);
