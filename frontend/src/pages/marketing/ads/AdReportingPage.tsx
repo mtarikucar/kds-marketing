@@ -28,6 +28,8 @@ import type { ConnectAdAccountFormValues } from './adsSchemas';
 import { AD_PROVIDER_LABEL } from './adsSchemas';
 import { ConnectAdAccountDialog } from './ConnectAdAccountDialog';
 import { LinkedinAdsSelectDialog } from './LinkedinAdsSelectDialog';
+import { AdManagementSection } from './AdManagementSection';
+import { AdRulesSection } from './AdRulesSection';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
@@ -50,7 +52,7 @@ import {
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Skeleton } from '@/components/ui/Skeleton';
 
-type View = 'overview' | 'accounts';
+type View = 'overview' | 'accounts' | 'manage';
 type RangeKey = '7' | '30' | '90';
 type ProviderFilter = 'ALL' | AdProvider;
 
@@ -86,6 +88,7 @@ export default function AdReportingPage() {
   const [disconnectTarget, setDisconnectTarget] = useState<AdAccount | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
+  const [manageAccountId, setManageAccountId] = useState<string | null>(null);
 
   // ── OAuth return handling ────────────────────────────────────────────────────
   // The LinkedIn ads OAuth callback redirects back to /ads?connect=<pendingId>
@@ -162,6 +165,11 @@ export default function AdReportingPage() {
     [accounts],
   );
 
+  // Only Meta accounts support campaign / rule management.
+  const metaAccounts = useMemo(() => accounts.filter((a) => a.provider === 'META'), [accounts]);
+  const selectedManageAccount =
+    metaAccounts.find((a) => a.id === manageAccountId) ?? metaAccounts[0] ?? null;
+
   // ── Mutations ────────────────────────────────────────────────────────────────
 
   const invalidateAccounts = () =>
@@ -223,9 +231,9 @@ export default function AdReportingPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={t('ads.title', { defaultValue: 'Ad Reporting' })}
+        title={t('ads.title', { defaultValue: 'Ads' })}
         description={t('ads.subtitle', {
-          defaultValue: 'Track Meta and TikTok ad spend, clicks and conversions across your accounts.',
+          defaultValue: 'Track Meta and TikTok ad performance, manage campaigns and auto-scale.',
         })}
         actions={
           isManager ? (
@@ -261,6 +269,7 @@ export default function AdReportingPage() {
           options={[
             { value: 'overview', label: t('ads.tabs.overview', { defaultValue: 'Overview' }) },
             { value: 'accounts', label: t('ads.tabs.accounts', { defaultValue: 'Accounts' }) },
+            { value: 'manage', label: t('ads.tabs.manage', { defaultValue: 'Manage' }) },
           ]}
         />
 
@@ -304,7 +313,7 @@ export default function AdReportingPage() {
           onGoToAccounts={() => setView('accounts')}
           canConnect={canConnect}
         />
-      ) : (
+      ) : view === 'accounts' ? (
         <AccountsView
           accounts={accounts}
           isLoading={accountsLoading}
@@ -315,6 +324,15 @@ export default function AdReportingPage() {
           onDisconnect={setDisconnectTarget}
           onPull={(id) => pullMutation.mutate(id)}
           pullingId={pullMutation.isPending ? (pullMutation.variables as string) : null}
+        />
+      ) : (
+        <ManageView
+          isLoading={accountsLoading}
+          metaAccounts={metaAccounts}
+          selectedAccount={selectedManageAccount}
+          onSelectAccount={setManageAccountId}
+          onGoToAccounts={() => setView('accounts')}
+          canConnect={canConnect}
         />
       )}
 
@@ -655,6 +673,84 @@ function AccountsView({
         </Card>
         );
       })}
+    </div>
+  );
+}
+
+// ── Manage (campaigns + scaling rules) ──────────────────────────────────────────
+
+interface ManageViewProps {
+  isLoading: boolean;
+  metaAccounts: AdAccount[];
+  selectedAccount: AdAccount | null;
+  onSelectAccount: (id: string) => void;
+  onGoToAccounts: () => void;
+  canConnect: boolean;
+}
+
+function ManageView({
+  isLoading,
+  metaAccounts,
+  selectedAccount,
+  onSelectAccount,
+  onGoToAccounts,
+  canConnect,
+}: ManageViewProps) {
+  const { t } = useTranslation('marketing');
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-40" />
+        <Skeleton className="h-40" />
+      </div>
+    );
+  }
+
+  if (metaAccounts.length === 0) {
+    return (
+      <EmptyState
+        icon={<Target className="h-10 w-10" />}
+        title={t('ads.manage.noMeta.title', { defaultValue: 'No Meta ad account connected' })}
+        description={t('ads.manage.noMeta.description', {
+          defaultValue:
+            'Campaign management and scaling rules are available for Meta ad accounts. Connect one to get started.',
+        })}
+        action={
+          <Button onClick={onGoToAccounts} variant="outline" disabled={!canConnect}>
+            <Link2 className="h-4 w-4" aria-hidden="true" />
+            {t('ads.connectAccount', { defaultValue: 'Connect account' })}
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {metaAccounts.length > 1 && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            {t('ads.manage.account', { defaultValue: 'Account' })}
+          </span>
+          <Select value={selectedAccount?.id ?? ''} onValueChange={onSelectAccount}>
+            <SelectTrigger className="w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {metaAccounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.displayName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {selectedAccount && <AdManagementSection key={selectedAccount.id} account={selectedAccount} />}
+
+      <AdRulesSection accounts={metaAccounts} selectedAccountId={selectedAccount?.id} />
     </div>
   );
 }

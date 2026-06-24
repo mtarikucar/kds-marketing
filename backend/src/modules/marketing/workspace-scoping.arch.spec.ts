@@ -159,6 +159,10 @@ const OWNED_DELEGATES = [
   // account (sealed token) and the pulled per-day metric rows are workspace-owned.
   'adAccount',
   'adMetric',
+  // Ad management + automated scaling rules (Meta) — workspace-owned; the
+  // hourly eval sweep (cross-workspace) is whitelisted in ALLOWED_GLOBAL.
+  'adRule',
+  'adRuleLog',
   // Custom Objects (GHL parity): workspace-defined record types, their records,
   // and record↔Contact links are all workspace-owned.
   'customObjectDef',
@@ -281,6 +285,14 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (adAccountId, date, campaignId) unique index makes a re-pull idempotent.
   'ads/ads-pull.service.ts:adAccount.findMany':
     'hourly ad-insights sweep reads due ad accounts across all workspaces (system cron)',
+  // Ad-rules eval sweep: the hourly cron reads ENABLED rules whose account is
+  // ACTIVE+META across ALL workspaces — a system job, same shape as the ads
+  // sweep. Every action it triggers is workspace-scoped (campaigns/setBudget/
+  // setStatus all resolve via the rule's workspaceId) and id-keyed; the per-
+  // (rule,campaign) cooldown log guards against thrashing. list() in the same
+  // file IS workspace-scoped.
+  'ads/ad-rules.service.ts:adRule.findMany':
+    'hourly ad-rules eval sweep reads enabled rules across all workspaces (system cron)',
   // Call-recording retrieval sweep (Epic 13, inert): the hourly cron reads ended
   // api-dial calls missing a recording across ALL workspaces — a system job, same
   // shape as the ads/subscription sweeps. The only write it triggers is an
