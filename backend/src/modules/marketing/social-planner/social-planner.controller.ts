@@ -83,6 +83,10 @@ class CreatePostDto {
 
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
+
+  /** Per-network publish options (currently { linkedin: { visibility } }). */
+  @IsOptional() @IsObject()
+  options?: Record<string, unknown>;
 }
 
 class UpdatePostDto {

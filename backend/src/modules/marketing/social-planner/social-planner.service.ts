@@ -32,6 +32,8 @@ interface PostOptions {
   formats?: Record<string, PostFormat>;
   media?: MediaDescriptor[];
   mediaDeletedAt?: string;
+  /** Per-network publish options (e.g. LinkedIn visibility). Forwarded to publishToNetwork. */
+  linkedin?: { visibility?: 'PUBLIC' | 'CONNECTIONS' };
 }
 
 const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK', 'TWITTER', 'PINTEREST', 'GMB'] as const;
@@ -94,12 +96,21 @@ export class SocialPlannerService implements OnModuleInit {
   /** Merge new formats/media into an existing post's options JSON. */
   private mergeOptions(
     existing: PostOptions | null | undefined,
-    patch: { formats?: Record<string, string>; media?: MediaDescriptor[] },
+    patch: {
+      formats?: Record<string, string>;
+      media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
+    },
   ): PostOptions | undefined {
     const base: PostOptions = { ...(existing ?? {}) };
     const formats = this.cleanFormats(patch.formats);
     if (formats) base.formats = { ...(base.formats ?? {}), ...formats };
     if (patch.media !== undefined) base.media = patch.media;
+    // Carry generic per-network options (currently LinkedIn visibility).
+    const liVisibility = (patch.options as any)?.linkedin?.visibility;
+    if (liVisibility === 'PUBLIC' || liVisibility === 'CONNECTIONS') {
+      base.linkedin = { visibility: liVisibility };
+    }
     return Object.keys(base).length ? base : undefined;
   }
 
@@ -191,10 +202,15 @@ export class SocialPlannerService implements OnModuleInit {
       targetAccountIds?: string[];
       formats?: Record<string, string>;
       media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
     },
   ) {
     const mediaUrls = dto.media?.length ? dto.media.map((m) => m.url) : dto.mediaUrls ?? [];
-    const options = this.mergeOptions(null, { formats: dto.formats, media: dto.media });
+    const options = this.mergeOptions(null, {
+      formats: dto.formats,
+      media: dto.media,
+      options: dto.options,
+    });
     const post = await this.prisma.socialPost.create({
       data: {
         workspaceId,
@@ -363,6 +379,7 @@ export class SocialPlannerService implements OnModuleInit {
       const result = await publishToNetwork(target.account, post.content, mediaUrls, {
         format: formats[target.socialAccountId] ?? 'FEED',
         mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
+        linkedin: options.linkedin,
       });
 
       if (result.ok) {

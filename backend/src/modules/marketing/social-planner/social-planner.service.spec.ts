@@ -139,6 +139,53 @@ describe('SocialPlannerService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
+  // ── createPost options ─────────────────────────────────────────────────────
+
+  it('createPost persists options.linkedin.visibility into SocialPost.options alongside formats', async () => {
+    prisma.socialPost.create.mockResolvedValue(makePost({ id: 'post-1' }));
+    prisma.socialPost.findFirst.mockResolvedValue(makePost({ id: 'post-1', targets: [] }));
+
+    await svc.createPost('ws-a', {
+      content: 'hello',
+      formats: { 'acc-1': 'FEED' },
+      options: { linkedin: { visibility: 'CONNECTIONS' } },
+    });
+
+    const created = prisma.socialPost.create.mock.calls[0][0];
+    expect(created.data.options.linkedin).toEqual({ visibility: 'CONNECTIONS' });
+    expect(created.data.options.formats).toEqual({ 'acc-1': 'FEED' });
+  });
+
+  it('publishDuePost forwards post.options.linkedin to publishToNetwork opts', async () => {
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockResolvedValue({ ok: true, externalPostId: 'ext-li' });
+
+    const liTarget = makeTarget({
+      id: 'tgt-li',
+      network: 'LINKEDIN',
+      account: makeAccount({ id: 'acc-li', network: 'LINKEDIN' }),
+    });
+    const postWithTargets = {
+      ...makePost({ status: 'SCHEDULED', options: { linkedin: { visibility: 'CONNECTIONS' } } }),
+      targets: [liTarget],
+    };
+    prisma.socialPost.findFirst.mockResolvedValue(postWithTargets);
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(mockPublish).toHaveBeenCalledWith(
+      liTarget.account,
+      'Hello world',
+      [],
+      expect.objectContaining({ linkedin: { visibility: 'CONNECTIONS' } }),
+    );
+
+    mockPublish.mockRestore();
+  });
+
   // ── publishDuePost ─────────────────────────────────────────────────────────
 
   it('publishDuePost fans out to all PENDING targets and records externalPostId on success', async () => {
