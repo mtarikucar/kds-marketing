@@ -27,7 +27,7 @@ export interface RuleInput {
   enabled?: boolean;
 }
 
-interface ActionOutcome {
+export interface ActionOutcome {
   entityId: string;
   entityName?: string;
   action: string;
