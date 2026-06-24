@@ -178,7 +178,15 @@ export class AdAccountService {
           ? await pullMetaInsights(token, account.externalAdId, from, to)
           : await pullTiktokInsights(token, account.externalAdId, from, to);
     } catch (e) {
-      await this.markError(account.id, (e as Error).message?.slice(0, 1000) ?? 'pull failed');
+      const msg = (e as Error).message ?? 'pull failed';
+      if (
+        account.provider === 'TIKTOK' &&
+        /access[_ ]?token|auth|40105|40100|not authorized/i.test(msg)
+      ) {
+        await this.markReauth(account.id);
+      } else {
+        await this.markError(account.id, msg.slice(0, 1000));
+      }
       return 0;
     }
     // Guard the DB writes too: if an upsert/update fails (serialization, deadlock,
@@ -243,6 +251,15 @@ export class AdAccountService {
   private markError(id: string, message: string) {
     return this.prisma.adAccount
       .update({ where: { id }, data: { lastError: message, lastPulledAt: new Date() } })
+      .catch(() => undefined);
+  }
+
+  private markReauth(id: string) {
+    return this.prisma.adAccount
+      .update({
+        where: { id },
+        data: { status: 'TOKEN_EXPIRED', lastError: 'reauth_required', lastPulledAt: new Date() },
+      })
       .catch(() => undefined);
   }
 }
