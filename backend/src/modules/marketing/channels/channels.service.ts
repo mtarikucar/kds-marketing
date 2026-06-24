@@ -14,6 +14,7 @@ import {
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
+import { assertTiktokDmSecrets } from './tiktok-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
 
 export interface CreateChannelInput {
@@ -104,6 +105,7 @@ export class ChannelsService {
     }
     if (dto.secrets && Object.keys(dto.secrets).length) {
       if (dto.type === 'SMS') assertNetgsmSmsSecrets(dto.secrets);
+      if (dto.type === 'TIKTOK') assertTiktokDmSecrets(dto.secrets);
       data.configSealed = this.seal(dto.secrets);
     }
     const c = await this.prisma.channel.create({ data: { ...data, workspaceId } });
@@ -136,6 +138,7 @@ export class ChannelsService {
       }
       const merged = { ...current, ...dto.secrets };
       if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
+      if (existing.type === 'TIKTOK') assertTiktokDmSecrets(merged);
       data.configSealed = this.seal(merged);
     }
     const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
