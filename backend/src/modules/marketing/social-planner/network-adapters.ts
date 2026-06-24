@@ -472,6 +472,56 @@ async function linkedinUploadImage(
   return { urn: imageUrn };
 }
 
+/**
+ * Register-upload a single video for an organic post: initializeUpload (owner =
+ * author urn, fileSizeBytes) → PUT each part to its uploadInstructions URL,
+ * collecting the per-part ETag → finalizeUpload with the ordered ETags. Returns
+ * the `urn:li:video:...` to reference, or an error.
+ */
+async function linkedinUploadVideo(
+  token: string,
+  author: string,
+  item: MediaItem,
+): Promise<{ urn?: string; error?: string; isAuthError?: boolean }> {
+  const dl = await safeFetch(item.url, { method: 'GET', timeoutMs: 30_000 });
+  if (!dl.ok) return { error: `LinkedIn video download failed: ${dl.status}` };
+  const bytes = Buffer.from(await dl.arrayBuffer());
+  if (bytes.length === 0) return { error: 'LinkedIn video download: empty body' };
+  const mime = item.mime || dl.headers.get('content-type') || 'video/mp4';
+
+  const init = await linkedinRest('/rest/videos?action=initializeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { initializeUploadRequest: { owner: author, fileSizeBytes: bytes.length, uploadCaptions: false, uploadThumbnail: false } },
+  });
+  if (!init.ok) {
+    return { error: `LinkedIn video init: ${init.error.message}`.slice(0, 500), isAuthError: init.error.isAuthError };
+  }
+  const value = (init.data as any)?.value;
+  const videoUrn: string = value?.video;
+  const instructions: { uploadUrl: string; firstByte: number; lastByte: number }[] = value?.uploadInstructions ?? [];
+  if (!videoUrn || instructions.length === 0) return { error: 'LinkedIn video init: missing video/uploadInstructions' };
+
+  const uploadedPartIds: string[] = [];
+  for (const part of instructions) {
+    const slice = bytes.subarray(part.firstByte, part.lastByte + 1);
+    const up = await linkedinUpload(part.uploadUrl, slice, mime);
+    if (!up.ok) return { error: `LinkedIn video part upload failed: ${up.status}` };
+    if (!up.etag) return { error: 'LinkedIn video part upload: missing ETag' };
+    uploadedPartIds.push(up.etag);
+  }
+
+  const fin = await linkedinRest('/rest/videos?action=finalizeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { finalizeUploadRequest: { video: videoUrn, uploadToken: '', uploadedPartIds } },
+  });
+  if (!fin.ok) {
+    return { error: `LinkedIn video finalize: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
+  }
+  return { urn: videoUrn };
+}
+
 /** Publish to LinkedIn via the versioned Posts API (POST /rest/posts). */
 async function publishLinkedIn(
   account: AccountRow,
@@ -491,10 +541,15 @@ async function publishLinkedIn(
       : `urn:li:person:${account.externalId}`;
   const visibility = options?.visibility ?? 'PUBLIC';
 
-  // Build content from media. Video is handled in task 1.3; here: images only.
+  // Build content from media. A single video takes precedence; otherwise images.
   let postContent: Record<string, unknown> | undefined;
+  const videoItem = (items || []).find(isVideoItem);
   const imageItems = (items || []).filter((m) => !isVideoItem(m));
-  if (imageItems.length > 0) {
+  if (videoItem) {
+    const up = await linkedinUploadVideo(token, author, videoItem);
+    if (up.error) return { ok: false, error: up.error, isAuthError: up.isAuthError };
+    postContent = { media: { id: up.urn } };
+  } else if (imageItems.length > 0) {
     const urns: string[] = [];
     for (const item of imageItems) {
       const up = await linkedinUploadImage(token, author, item);

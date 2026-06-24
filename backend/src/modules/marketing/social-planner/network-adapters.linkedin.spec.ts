@@ -173,4 +173,47 @@ describe('publishLinkedIn — /rest/posts (text + image + multiImage)', () => {
     expect(r.isAuthError).toBe(true);
     expect(r.error).toContain('token expired');
   });
+
+  it('single video: initialize → PUT part → finalize, reference video urn in content.media.id', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/rest/videos') && u.includes('finalizeUpload')) {
+        return Promise.resolve(res({ status: 200, json: {} }));
+      }
+      if (u.includes('/rest/videos')) {
+        return Promise.resolve(
+          res({
+            json: {
+              value: {
+                video: 'urn:li:video:vid-1',
+                uploadInstructions: [
+                  { uploadUrl: 'https://dms-uploads.example/part1', firstByte: 0, lastByte: 7 },
+                ],
+              },
+            },
+          }),
+        );
+      }
+      if (u.startsWith('https://dms-uploads')) return Promise.resolve(res({ status: 200, etag: 'part-etag-1' }));
+      if (u.includes('/rest/posts')) return Promise.resolve(res({ status: 201, restliId: 'urn:li:share:vid' }));
+      return Promise.resolve(res({ bytes: Buffer.from('VIDEOBYTES') }));
+    });
+
+    const r = await publishToNetwork(account('LI_ORG'), 'a video', ['https://cdn.example/clip.mp4']);
+    expect(r.ok).toBe(true);
+    expect(r.externalPostId).toBe('urn:li:share:vid');
+
+    const finalize = mockFetch.mock.calls.find(
+      (c) => String(c[0]).includes('/rest/videos') && String(c[0]).includes('finalizeUpload'),
+    );
+    expect(finalize).toBeTruthy();
+    const finalizeBody = JSON.parse(finalize![1].body);
+    expect(finalizeBody.finalizeUploadRequest.video).toBe('urn:li:video:vid-1');
+    expect(finalizeBody.finalizeUploadRequest.uploadedPartIds).toEqual(['part-etag-1']);
+
+    const postBody = JSON.parse(
+      mockFetch.mock.calls.find((c) => String(c[0]).includes('/rest/posts'))![1].body,
+    );
+    expect(postBody.content).toEqual({ media: { id: 'urn:li:video:vid-1' } });
+  });
 });
