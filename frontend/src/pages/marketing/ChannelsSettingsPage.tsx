@@ -58,6 +58,9 @@ interface ChannelRow {
   // paste into the Meta App dashboard, + whether the verify-token env is set.
   webhookUrl?: string | null;
   verifyTokenConfigured?: boolean;
+  // LinkedIn engagement only: mask() echoes configPublic so the card can show
+  // whether Community Management access has been granted (the capability flag).
+  configPublic?: Record<string, unknown> | null;
 }
 interface AgentRow {
   id: string;
@@ -66,7 +69,7 @@ interface AgentRow {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'EMAIL', 'VOICE'] as const;
+const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'LINKEDIN', 'EMAIL', 'VOICE'] as const;
 type ChannelType = (typeof CHANNEL_TYPES)[number];
 
 const SECRET_FIELDS: Record<ChannelType, string[]> = {
@@ -76,6 +79,7 @@ const SECRET_FIELDS: Record<ChannelType, string[]> = {
   INSTAGRAM: ['pageAccessToken'],
   MESSENGER: ['pageAccessToken'],
   TIKTOK: ['accessToken'],
+  LINKEDIN: ['accessToken'],
   EMAIL: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'fromEmail'],
   VOICE: ['accountSid', 'authToken'],
 };
@@ -84,6 +88,7 @@ const NEEDS_EXTERNAL_ID: Record<string, string> = {
   INSTAGRAM: 'Page ID',
   MESSENGER: 'Page ID',
   TIKTOK: 'TikTok business/creator ID',
+  LINKEDIN: 'Actor URN (urn:li:organization:… or urn:li:person:…)',
   EMAIL: 'Inbound email address',
   VOICE: 'Twilio phone number (E.164)',
 };
@@ -538,6 +543,30 @@ export default function ChannelsSettingsPage() {
                           'Set META_WEBHOOK_VERIFY_TOKEN on the server, then use that value as the Verify Token in Meta.',
                         )}
                   </p>
+                </div>
+              )}
+
+              {/* LinkedIn engagement (comments on OWNED org posts) is the DM
+                  substitute — there is no LinkedIn DM API. It is polling-based and
+                  stays DORMANT until LinkedIn Community Management access is granted
+                  (capability flag in configPublic.linkedinEngagement). */}
+              {c.type === 'LINKEDIN' && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  {(c.configPublic as any)?.linkedinEngagement === 'granted' ? (
+                    <p className="text-caption text-success">
+                      {t(
+                        'channels.linkedinGranted',
+                        'Engagement active — replies to comments on your organization posts are AI-answered. (LinkedIn has no DM API; this is sanctioned engagement on owned posts.)',
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-caption text-muted-foreground">
+                      {t(
+                        'channels.linkedinPending',
+                        'Dormant — comment engagement turns on once LinkedIn Community Management access is approved. LinkedIn exposes no DM API, so this answers comments on your OWN organization posts (polling-based, no webhook).',
+                      )}
+                    </p>
+                  )}
                 </div>
               )}
             </CardContent>
