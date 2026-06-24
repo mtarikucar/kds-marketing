@@ -171,6 +171,7 @@ export class SocialPlannerService implements OnModuleInit {
     return {
       FACEBOOK: isNetworkConfigured('FACEBOOK'),
       INSTAGRAM: isNetworkConfigured('INSTAGRAM'),
+      INSTAGRAM_LOGIN: isNetworkConfigured('INSTAGRAM_LOGIN'),
       LINKEDIN: isNetworkConfigured('LINKEDIN'),
       TIKTOK: isNetworkConfigured('TIKTOK'),
       // Epic 12 (needs-external, inert until creds).

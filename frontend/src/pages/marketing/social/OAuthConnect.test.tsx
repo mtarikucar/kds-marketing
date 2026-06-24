@@ -22,6 +22,7 @@ function wrap(node: React.ReactNode) {
 const status: NetworkStatus = {
   FACEBOOK: true,
   INSTAGRAM: true,
+  INSTAGRAM_LOGIN: false,
   LINKEDIN: false,
   TIKTOK: false,
   TWITTER: false,
@@ -44,7 +45,9 @@ describe('OAuthConnectButtons', () => {
   it('enables configured networks and disables unconfigured ones', () => {
     wrap(<OAuthConnectButtons status={status} />);
     expect(screen.getByText(/Connect Facebook/i).closest('button')).not.toBeDisabled();
-    expect(screen.getByText(/Connect Instagram/i).closest('button')).not.toBeDisabled();
+    // Anchor the Instagram match so it doesn't also catch "Connect Instagram (Login)".
+    expect(screen.getByText(/Connect Instagram$/i).closest('button')).not.toBeDisabled();
+    expect(screen.getByText(/Connect Instagram \(Login\)/i).closest('button')).toBeDisabled();
     expect(screen.getByText(/Connect LinkedIn/i).closest('button')).toBeDisabled();
     expect(screen.getByText(/Connect TikTok/i).closest('button')).toBeDisabled();
   });

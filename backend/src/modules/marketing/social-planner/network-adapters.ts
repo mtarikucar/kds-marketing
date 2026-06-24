@@ -44,6 +44,8 @@ export function isNetworkConfigured(network: string): boolean {
       return !!(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
     case 'TIKTOK':
       return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
+    case 'INSTAGRAM_LOGIN':
+      return !!(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET);
     // Epic 12 (needs-external, inert until creds): X/Twitter, Pinterest, Google
     // Business Profile. Each gates on its own platform app credentials.
     case 'TWITTER':
@@ -626,6 +628,99 @@ async function publishTikTok(
   }
 }
 
+// ─────────────────────────────────────── Instagram (direct Instagram Login)
+
+/** Host for the direct "Instagram API with Instagram Login" flow — distinct
+ *  from graph.facebook.com (the Page-linked IG_BUSINESS path). */
+const IG_DIRECT_GRAPH = 'https://graph.instagram.com';
+
+/**
+ * Publish to a direct-login Instagram account (graph.instagram.com): create a
+ * media container, poll to FINISHED for video, then media_publish. Mirrors the
+ * Page-based IG flow but uses the Instagram-hosted Graph and the per-account
+ * token directly (no Page token). image_url/video_url must be public HTTPS.
+ * Decides image vs video by URL extension / MIME.
+ */
+async function publishInstagramDirect(
+  account: AccountRow,
+  content: string,
+  items: MediaItem[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('INSTAGRAM_LOGIN')) {
+    return { ok: false, error: 'Instagram (Login) not configured: set INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  const igId = account.externalId;
+  if (items.length === 0) return { ok: false, error: 'Instagram requires at least one media item' };
+
+  const m = items[0];
+  const isVideo = isVideoItem(m);
+
+  try {
+    // Step 1 — create the media container.
+    const createBody = isVideo
+      ? { media_type: 'REELS', video_url: m.url, caption: content }
+      : { image_url: m.url, caption: content };
+    const createRes = await safeFetch(`${IG_DIRECT_GRAPH}/${igId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(createBody),
+      timeoutMs: 20_000,
+    });
+    const createJson = (await createRes.json()) as Record<string, any>;
+    const creationId = createJson?.id;
+    if (!createRes.ok || !creationId) {
+      const err = String(createJson?.error?.message ?? createRes.status);
+      logger.warn(`Instagram (Login) container failed (${igId}): ${err}`);
+      return { ok: false, error: `IG container: ${err}`.slice(0, 500) };
+    }
+
+    // Step 2 — videos process asynchronously; poll to FINISHED (bounded ≤10s).
+    if (isVideo) {
+      let finished = false;
+      for (let i = 0; i < 5; i++) {
+        await sleep(2_000);
+        const statusRes = await safeFetch(
+          `${IG_DIRECT_GRAPH}/${creationId}?` +
+            new URLSearchParams({ fields: 'status_code', access_token: token }).toString(),
+          { method: 'GET', timeoutMs: 15_000 },
+        );
+        const statusJson = (await statusRes.json()) as Record<string, any>;
+        const code = statusJson?.status_code;
+        if (code === 'FINISHED') {
+          finished = true;
+          break;
+        }
+        if (code === 'ERROR' || code === 'EXPIRED') {
+          return { ok: false, error: `IG processing ${code}`.slice(0, 300) };
+        }
+      }
+      if (!finished) return { ok: false, error: 'IG media processing timed out' };
+    }
+
+    // Step 3 — publish the finished container.
+    const pubRes = await safeFetch(`${IG_DIRECT_GRAPH}/${igId}/media_publish`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ creation_id: String(creationId) }),
+      timeoutMs: 20_000,
+    });
+    const pubJson = (await pubRes.json()) as Record<string, any>;
+    const postId = pubJson?.id;
+    if (!pubRes.ok || !postId) {
+      const err = String(pubJson?.error?.message ?? pubRes.status);
+      logger.warn(`Instagram (Login) publish failed (${igId}): ${err}`);
+      return { ok: false, error: `IG publish: ${err}`.slice(0, 500) };
+    }
+    return { ok: true, externalPostId: String(postId) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`Instagram (Login) publish error (${igId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
 // X allows up to 4 images per tweet; bound the upload work accordingly.
 const X_MAX_MEDIA = 4;
 const X_MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — X's per-image image limit.
@@ -833,6 +928,8 @@ export async function publishToNetwork(
       return publishFacebook(account, content, items, format);
     case 'INSTAGRAM':
       return publishInstagram(account, content, items, format);
+    case 'INSTAGRAM_LOGIN':
+      return publishInstagramDirect(account, content, items);
     case 'LINKEDIN':
       return publishLinkedIn(account, content, mediaUrls);
     case 'TIKTOK':
