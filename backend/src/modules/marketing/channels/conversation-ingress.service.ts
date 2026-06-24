@@ -29,6 +29,7 @@ const SOURCE_BY_CHANNEL: Record<string, string> = {
   SMS: 'PHONE',
   INSTAGRAM: 'INSTAGRAM',
   MESSENGER: 'OTHER',
+  LINKEDIN: 'OTHER',
 };
 
 /**
@@ -318,6 +319,8 @@ export class ConversationIngressService {
         return 'Instagram';
       case 'MESSENGER':
         return 'Messenger';
+      case 'LINKEDIN':
+        return 'LinkedIn';
       default:
         return 'Channel';
     }
