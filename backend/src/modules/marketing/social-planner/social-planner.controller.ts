@@ -101,6 +101,10 @@ class UpdatePostDto {
 
   @IsOptional() @IsObject()
   formats?: Record<string, string>;
+
+  /** Per-network publish options (currently { linkedin: { visibility } }). */
+  @IsOptional() @IsObject()
+  options?: Record<string, unknown>;
 }
 
 class SchedulePostDto {

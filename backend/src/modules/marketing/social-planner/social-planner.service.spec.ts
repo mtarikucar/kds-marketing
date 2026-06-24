@@ -156,6 +156,21 @@ describe('SocialPlannerService', () => {
     expect(created.data.options.formats).toEqual({ 'acc-1': 'FEED' });
   });
 
+  it('updatePost persists options.linkedin.visibility and preserves existing formats', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue(
+      makePost({ id: 'post-1', status: 'DRAFT', options: { formats: { 'acc-1': 'FEED' } } }),
+    );
+    prisma.socialPost.update.mockResolvedValue(makePost({ id: 'post-1' }));
+
+    await svc.updatePost('ws-a', 'post-1', {
+      options: { linkedin: { visibility: 'PUBLIC' } },
+    });
+
+    const updated = prisma.socialPost.update.mock.calls[0][0];
+    expect(updated.data.options.linkedin).toEqual({ visibility: 'PUBLIC' });
+    expect(updated.data.options.formats).toEqual({ 'acc-1': 'FEED' });
+  });
+
   it('publishDuePost forwards post.options.linkedin to publishToNetwork opts', async () => {
     const mockPublish = jest
       .spyOn(networkAdapters, 'publishToNetwork')

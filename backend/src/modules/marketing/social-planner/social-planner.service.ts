@@ -253,6 +253,7 @@ export class SocialPlannerService implements OnModuleInit {
       mediaUrls?: string[];
       formats?: Record<string, string>;
       media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
     },
   ) {
     const existing = await this.assertDraftPost(workspaceId, postId);
@@ -261,6 +262,7 @@ export class SocialPlannerService implements OnModuleInit {
     const options = this.mergeOptions(existing.options as PostOptions, {
       formats: dto.formats,
       media: dto.media,
+      options: dto.options,
     });
     return this.prisma.socialPost.update({
       where: { id: postId },
