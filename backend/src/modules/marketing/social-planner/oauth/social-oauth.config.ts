@@ -70,7 +70,10 @@ export const NETWORK_OAUTH: Record<Network, OAuthDef> = {
   },
   LINKEDIN: {
     authorizeUrl: 'https://www.linkedin.com/oauth/v2/authorization',
-    scopes: ['openid', 'profile', 'w_member_social', 'w_organization_social', 'r_organization_admin'],
+    // openid/profile/w_member_social are self-serve; w_organization_social +
+    // r_organization_social need Community Management API review (org assets stay
+    // inert until granted). r_organization_admin was never a real LinkedIn scope.
+    scopes: ['openid', 'profile', 'w_member_social', 'w_organization_social', 'r_organization_social'],
     clientIdEnv: 'LINKEDIN_CLIENT_ID',
     clientSecretEnv: 'LINKEDIN_CLIENT_SECRET',
     scopeSep: ' ',

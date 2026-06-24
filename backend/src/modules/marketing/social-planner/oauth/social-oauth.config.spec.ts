@@ -44,3 +44,15 @@ describe('social oauth config', () => {
     expect(isOAuthNetwork('MYSPACE')).toBe(false);
   });
 });
+
+describe('LinkedIn OAuth scopes', () => {
+  it('uses the real r_organization_social read scope, not the non-existent r_organization_admin', () => {
+    expect(NETWORK_OAUTH.LINKEDIN.scopes).toContain('r_organization_social');
+    expect(NETWORK_OAUTH.LINKEDIN.scopes).not.toContain('r_organization_admin');
+  });
+  it('still requests member posting + org posting + openid identity', () => {
+    expect(NETWORK_OAUTH.LINKEDIN.scopes).toEqual(
+      expect.arrayContaining(['openid', 'profile', 'w_member_social', 'w_organization_social']),
+    );
+  });
+});
