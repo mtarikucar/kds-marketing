@@ -219,7 +219,11 @@
     "submit": "Giriş yap",
     "loading": "Giriş yapılıyor…",
     "wrongCreds": "E-posta veya parola hatalı",
-    "locked": "Hesap kilitli. {{minutes}} dakika sonra dene."
+    "locked": "Hesap kilitli. {{minutes}} dakika sonra dene.",
+    "lockedTryLater": "Hesabınız geçici olarak kilitlendi. Lütfen birazdan tekrar deneyin.",
+    "inactive": "Hesabınız aktif değil. Lütfen yöneticinizle iletişime geçin.",
+    "failed": "Giriş yapılamadı. Lütfen tekrar deneyin.",
+    "networkError": "Bağlantı hatası. Lütfen tekrar deneyin."
   },
   "dashboard": {
     "title": "Gösterge Paneli",

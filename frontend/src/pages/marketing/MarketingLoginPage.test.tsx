@@ -83,4 +83,36 @@ describe('MarketingLoginPage', () => {
     renderPage();
     expect(screen.getByRole('link', { name: /register.cta/i })).toBeInTheDocument();
   });
+
+  it('shows the localized wrong-credentials message on a 401 (not "no refresh token")', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    vi.mocked(marketingApi.post).mockRejectedValueOnce({
+      response: { status: 401, data: { message: 'Invalid credentials' } },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByLabelText(/login.emailLabel/i), 'test@example.com');
+    await user.type(screen.getByLabelText(/login.passwordLabel/i), 'wrong-password');
+    await user.click(screen.getByRole('button', { name: /login.submit/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('login.wrongCreds')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/no refresh token/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a generic connection message when the error has no HTTP response', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    vi.mocked(marketingApi.post).mockRejectedValueOnce(new Error('no refresh token'));
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByLabelText(/login.emailLabel/i), 'test@example.com');
+    await user.type(screen.getByLabelText(/login.passwordLabel/i), 'whatever');
+    await user.click(screen.getByRole('button', { name: /login.submit/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('login.networkError')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/no refresh token/i)).not.toBeInTheDocument();
+  });
 });
