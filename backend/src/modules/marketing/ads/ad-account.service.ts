@@ -13,11 +13,18 @@ import {
 } from '../../../common/crypto/secret-box.helper';
 import { pullMetaInsights } from './meta-ads.client';
 import { pullTiktokInsights } from './tiktok-ads.client';
-import { isMetaAdsConfigured, isTiktokAdsConfigured, AdMetricRow } from './ads.types';
+import { pullLinkedinInsights } from './linkedin-ads.client';
+import {
+  isMetaAdsConfigured,
+  isTiktokAdsConfigured,
+  isLinkedinAdsConfigured,
+  AdMetricRow,
+} from './ads.types';
 import { ConnectAdAccountDto } from '../dto/ad-account.dto';
 import { isMetaAuthError } from '../../../common/util/meta-graph.util';
+import { isLinkedinAuthError } from '../../../common/util/linkedin-api.util';
 
-const PROVIDERS = ['META', 'TIKTOK'];
+const PROVIDERS = ['META', 'TIKTOK', 'LINKEDIN'];
 
 /**
  * Ad-account connection + metrics (GoHighLevel parity). Each workspace connects
@@ -36,6 +43,7 @@ export class AdAccountService {
     return {
       META: isMetaAdsConfigured(),
       TIKTOK: isTiktokAdsConfigured(),
+      LINKEDIN: isLinkedinAdsConfigured(),
       secretBoxConfigured: isSecretBoxConfigured(),
     };
   }
@@ -61,7 +69,7 @@ export class AdAccountService {
 
   async connect(workspaceId: string, dto: ConnectAdAccountDto) {
     if (!PROVIDERS.includes(dto.provider)) {
-      throw new BadRequestException('provider must be META or TIKTOK');
+      throw new BadRequestException('provider must be META, TIKTOK or LINKEDIN');
     }
     // Env-gate the user path the same way the cron sweep is gated, so the whole
     // feature is inert (and /status is truthful) when a provider isn't enabled.
@@ -174,16 +182,19 @@ export class AdAccountService {
     }
     let rows: AdMetricRow[];
     try {
-      rows =
-        account.provider === 'META'
-          ? await pullMetaInsights(token, account.externalAdId, from, to)
-          : await pullTiktokInsights(token, account.externalAdId, from, to);
+      if (account.provider === 'META') {
+        rows = await pullMetaInsights(token, account.externalAdId, from, to);
+      } else if (account.provider === 'TIKTOK') {
+        rows = await pullTiktokInsights(token, account.externalAdId, from, to);
+      } else {
+        rows = await pullLinkedinInsights(token, account.externalAdId, from, to);
+      }
     } catch (e) {
       // A token problem (Graph code 190 / HTTP 401 / auth subcode) → mark
       // needs-reauth so the hourly sweep (which only pulls ACTIVE accounts) stops
       // hammering Meta until the operator reconnects. Other errors keep the
       // retry-friendly markError path (status stays ACTIVE).
-      if (isMetaAuthError(e)) {
+      if (isMetaAuthError(e) || isLinkedinAuthError(e)) {
         await this.markReauth(account.id);
       } else {
         await this.markError(account.id, (e as Error).message?.slice(0, 1000) ?? 'pull failed');
@@ -238,7 +249,9 @@ export class AdAccountService {
 
   /** True when the provider's app credentials are present (platform-enabled). */
   private isProviderConfigured(provider: string): boolean {
-    return provider === 'META' ? isMetaAdsConfigured() : isTiktokAdsConfigured();
+    if (provider === 'META') return isMetaAdsConfigured();
+    if (provider === 'TIKTOK') return isTiktokAdsConfigured();
+    return isLinkedinAdsConfigured();
   }
 
   /** Manual pull for one workspace-scoped account (last `days`). */
