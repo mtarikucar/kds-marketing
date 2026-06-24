@@ -1611,5 +1611,163 @@
         "hasNot": "etikete sahip değil"
       }
     }
+  },
+  "landing": {
+    "a11y": {
+      "skipToContent": "İçeriğe geç"
+    },
+    "mock": {
+      "panel": "Panel",
+      "last7": "Son 7 gün",
+      "leadLabel": "Lead",
+      "leadValue": "1.248",
+      "revenueLabel": "Gelir",
+      "revenueValue": "₺92K",
+      "convLabel": "Dönüşüm",
+      "convValue": "%24",
+      "chartTitle": "Pipeline geliri",
+      "chartBadge": "Aylık",
+      "row1Name": "Ayşe Yılmaz",
+      "row1Msg": "Fiyat listesini alabilir miyim?",
+      "row2Name": "Mert Kaya",
+      "row2Msg": "Randevu için uygun musunuz?",
+      "row3Name": "Selin Demir",
+      "row3Msg": "Teşekkürler, harika!",
+      "chip1Title": "Yeni mesaj",
+      "chip1Sub": "WhatsApp · şimdi",
+      "chip2Title": "Otomasyon çalıştı",
+      "chip2Sub": "3 lead atandı",
+      "inboxStatus": "WhatsApp · çevrimiçi",
+      "inboxAssigned": "Mert'e atandı",
+      "bubble1": "Merhaba, fiyat listenizi alabilir miyim?",
+      "bubble2": "Tabii! Hemen gönderiyorum 📄",
+      "bubble3": "Çok teşekkürler 🙏",
+      "replyPlaceholder": "Yanıt yaz…",
+      "flowTitle": "Karşılama akışı",
+      "flowActive": "Aktif",
+      "trigger": "Tetikleyici",
+      "triggerSub": "Yeni lead geldi",
+      "condition": "Koşul",
+      "conditionSub": "Kaynak = Instagram",
+      "action": "Aksiyon",
+      "actionSub": "WhatsApp mesajı gönder"
+    },
+    "nav": {
+      "features": "Özellikler",
+      "how": "Nasıl çalışır",
+      "faq": "SSS",
+      "login": "Giriş yap",
+      "getStarted": "Ücretsiz başla",
+      "openApp": "Panele git",
+      "menu": "Menü"
+    },
+    "hero": {
+      "badge": "Hepsi bir arada pazarlama & CRM platformu",
+      "titleLead": "Tüm pazarlaman",
+      "titleAccent": "tek panelde.",
+      "subtitle": "Lead'den satışa, kampanyadan otomasyona, gelen kutusundan analitiğe — Jeeta işletmenin büyümesini tek yerden yönetir.",
+      "ctaPrimary": "Ücretsiz başla",
+      "ctaSecondary": "Özellikleri keşfet",
+      "trust": "Kredi kartı gerekmez · Dakikalar içinde kurulum · KVKK uyumlu"
+    },
+    "stats": {
+      "modules": "13+",
+      "modulesLabel": "Entegre modül",
+      "channels": "5",
+      "channelsLabel": "Mesajlaşma kanalı",
+      "languages": "5 dil",
+      "languagesLabel": "Çoklu dil desteği",
+      "workspace": "Tek",
+      "workspaceLabel": "Birleşik çalışma alanı"
+    },
+    "features": {
+      "title": "Büyümek için ihtiyacın olan her şey",
+      "subtitle": "Onlarca ayrı araç yerine, birbiriyle konuşan tek bir platform.",
+      "crmTitle": "CRM & Lead Yönetimi",
+      "crmDesc": "Lead, kişi, şirket ve pipeline'lar; özel alanlar ve nesnelerle kendi veri modelini kur.",
+      "inboxTitle": "Omnichannel Gelen Kutusu",
+      "inboxDesc": "WhatsApp, Instagram, web-chat ve e-posta tek gelen kutusunda; ekipçe tek yerden yanıtla.",
+      "campaignsTitle": "Kampanyalar",
+      "campaignsDesc": "E-posta, SMS ve WhatsApp kampanyaları — segmentle, gönder, açılma ve tıklamayı izle.",
+      "automationTitle": "Otomasyon & Workflow",
+      "automationDesc": "Sürükle-bırak akışlarla takip, atama ve mesajları otomatikleştir.",
+      "funnelsTitle": "Funnel & Sayfalar",
+      "funnelsDesc": "Funnel, açılış sayfası, form ve online randevu — kod yazmadan yayında.",
+      "socialTitle": "Sosyal Medya Planlayıcı",
+      "socialDesc": "Facebook, Instagram, LinkedIn ve TikTok gönderilerini planla, yayınla ve ölç.",
+      "voiceTitle": "Ses AI & Telefon",
+      "voiceDesc": "Çağrı, otomatik arama, IVR ve yapay zekâ resepsiyonist — gerçek 0850 hattıyla.",
+      "billingTitle": "Faturalama & Ödemeler",
+      "billingDesc": "Teklif, fatura, abonelik ve ürünler — Iyzico ile online tahsilat."
+    },
+    "more": {
+      "title": "Ve dahası",
+      "analytics": "Analitik & Raporlama",
+      "ai": "Yapay Zekâ Asistanı",
+      "memberships": "Üyelik & Topluluk",
+      "reviews": "Değerlendirme & İtibar",
+      "affiliate": "Affiliate Programı",
+      "agency": "Ajans & White-label",
+      "security": "2FA & Roller",
+      "api": "Açık API & Webhook"
+    },
+    "how": {
+      "title": "Üç adımda başla",
+      "subtitle": "Kurulum dakikalar sürer — teknik ekip gerekmez.",
+      "step1Title": "Kaydol",
+      "step1Desc": "Saniyeler içinde çalışma alanını oluştur, ekibini davet et.",
+      "step2Title": "Kanallarını bağla",
+      "step2Desc": "WhatsApp, sosyal hesaplar, telefon ve ödeme — birkaç tıkla bağlan.",
+      "step3Title": "Büyü",
+      "step3Desc": "Otomasyon, kampanya ve analitikle satışlarını ölçekle."
+    },
+    "highlights": {
+      "inboxTag": "Omnichannel Gelen Kutusu",
+      "inboxTitle": "Tüm konuşmalar tek ekranda",
+      "inboxDesc": "Müşteri WhatsApp'tan yazsın, Instagram'dan yorum bıraksın ya da siteden sohbet başlatsın — hepsi aynı gelen kutusunda. Ekibin bağlamı kaybetmeden tek yerden yanıtlar.",
+      "inboxB1": "WhatsApp, Instagram, Messenger & web-chat",
+      "inboxB2": "Ekip atamaları ve dahili notlar",
+      "inboxB3": "Hazır yanıtlar ve yapay zekâ önerileri",
+      "autoTag": "Otomasyon",
+      "autoTitle": "İşini kendi kendine yürüt",
+      "autoDesc": "Yeni lead geldiğinde karşılama mesajı gönder, görev aç, etiketle ve doğru temsilciye ata — hepsi otomatik. Sürükle-bırak akış tasarımcısıyla kurması dakikalar.",
+      "autoB1": "Tetikleyici → koşul → aksiyon akışları",
+      "autoB2": "Otomatik takip ve hatırlatmalar",
+      "autoB3": "Kampanya ve pipeline ile entegre"
+    },
+    "faq": {
+      "title": "Sık sorulan sorular",
+      "q1": "Jeeta kimler için?",
+      "a1": "Lead toplayan ve müşteriyle çok kanaldan iletişim kuran her işletme için: KOBİ'ler, satış ekipleri, ajanslar ve hizmet sağlayıcılar.",
+      "q2": "Kurulum ne kadar sürer?",
+      "a2": "Dakikalar. Çalışma alanını oluştur, kanallarını bağla ve hemen kullanmaya başla — kurulum ücreti veya teknik ekip gerekmez.",
+      "q3": "Verilerim güvende mi?",
+      "a3": "Evet. Her çalışma alanı izole edilir, KVKK/GDPR uyumludur ve iki adımlı doğrulama (2FA) ile rol bazlı erişim sunar.",
+      "q4": "WhatsApp ve sosyal hesaplarımı bağlayabilir miyim?",
+      "a4": "Evet. WhatsApp, Instagram, Facebook, LinkedIn ve TikTok hesaplarını tek tıkla güvenli OAuth ile bağlarsın.",
+      "q5": "Ücretsiz başlayabilir miyim?",
+      "a5": "Evet. Çalışma alanını ücretsiz oluştur, platformu keşfet; plan yükseltmesini panelden istediğin zaman yaparsın."
+    },
+    "finalCta": {
+      "title": "Bugün Jeeta ile başla",
+      "subtitle": "İşletmenin tüm pazarlamasını tek panelde topla. Kredi kartı gerekmez.",
+      "cta": "Ücretsiz çalışma alanı oluştur"
+    },
+    "footer": {
+      "navLabel": "Alt menü",
+      "madeIn": "İstanbul, Türkiye'de geliştirildi",
+      "tagline": "Hepsi bir arada pazarlama ve CRM platformu.",
+      "productCol": "Ürün",
+      "companyCol": "Şirket",
+      "legalCol": "Yasal",
+      "linkFeatures": "Özellikler",
+      "linkHow": "Nasıl çalışır",
+      "linkFaq": "SSS",
+      "linkLogin": "Giriş yap",
+      "linkRegister": "Kayıt ol",
+      "linkPrivacy": "Gizlilik (KVKK)",
+      "linkTerms": "Kullanım şartları",
+      "rights": "Tüm hakları saklıdır."
+    }
   }
 }
