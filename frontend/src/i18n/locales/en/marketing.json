@@ -104,7 +104,7 @@
     "calendar": "Calendar",
     "commissions": "Commissions",
     "reports": "Reports",
-    "adReporting": "Ad Reporting",
+    "adReporting": "Ads",
     "customObjects": "Custom Objects",
     "triggerLinks": "Trigger Links",
     "installations": "Installations",
@@ -843,8 +843,8 @@
     }
   },
   "ads": {
-    "title": "Ad Reporting",
-    "subtitle": "Track Meta and TikTok ad spend, clicks and conversions across your accounts.",
+    "title": "Ads",
+    "subtitle": "Track Meta and TikTok ad performance, manage campaigns and auto-scale.",
     "connectAccount": "Connect account",
     "viewToggle": "Ad reporting view",
     "rangeToggle": "Date range",

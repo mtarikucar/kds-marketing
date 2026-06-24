@@ -89,8 +89,19 @@
   },
   "nav": {
     "group": {
-      "pipeline": "Pipeline",
+      "conversations": "Mesajlar",
+      "contacts": "Kişiler",
+      "calendar": "Takvim",
       "sales": "Satış",
+      "marketing": "Pazarlama",
+      "sites": "Siteler",
+      "automation": "Otomasyon",
+      "memberships": "Üyelikler",
+      "voice": "Sesli AI",
+      "reporting": "Raporlama",
+      "payments": "Ödemeler",
+      "agency": "Ajans",
+      "pipeline": "Pipeline",
       "growth": "Büyüme",
       "settings": "Ayarlar"
     },
@@ -104,7 +115,7 @@
     "calendar": "Takvim",
     "commissions": "Komisyonlar",
     "reports": "Raporlar",
-    "adReporting": "Reklam Raporları",
+    "adReporting": "Reklamlar",
     "customObjects": "Özel Nesneler",
     "triggerLinks": "Tetikleyici Bağlantılar",
     "installations": "Kurulumlar",
@@ -843,8 +854,8 @@
     }
   },
   "ads": {
-    "title": "Reklam Raporları",
-    "subtitle": "Hesaplarınızdaki Meta ve TikTok reklam harcaması, tıklama ve dönüşümlerini izleyin.",
+    "title": "Reklamlar",
+    "subtitle": "Meta ve TikTok reklam performansını izleyin; kampanyaları yönetin ve otomatik ölçekleyin.",
     "connectAccount": "Hesap bağla",
     "viewToggle": "Reklam raporu görünümü",
     "rangeToggle": "Tarih aralığı",

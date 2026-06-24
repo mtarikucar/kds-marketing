@@ -183,9 +183,9 @@ export default function AdReportingPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={t('ads.title', { defaultValue: 'Ad Reporting' })}
+        title={t('ads.title', { defaultValue: 'Ads' })}
         description={t('ads.subtitle', {
-          defaultValue: 'Track Meta and TikTok ad spend, clicks and conversions across your accounts.',
+          defaultValue: 'Track Meta and TikTok ad performance, manage campaigns and auto-scale.',
         })}
         actions={
           isManager ? (
