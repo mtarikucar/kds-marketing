@@ -1470,5 +1470,163 @@
         "hasNot": "doesn't have tag"
       }
     }
+  },
+  "landing": {
+    "a11y": {
+      "skipToContent": "Skip to content"
+    },
+    "mock": {
+      "panel": "Dashboard",
+      "last7": "Last 7 days",
+      "leadLabel": "Leads",
+      "leadValue": "1,248",
+      "revenueLabel": "Revenue",
+      "revenueValue": "$92K",
+      "convLabel": "Conversion",
+      "convValue": "24%",
+      "chartTitle": "Pipeline revenue",
+      "chartBadge": "Monthly",
+      "row1Name": "Ayşe Yılmaz",
+      "row1Msg": "Can I get your price list?",
+      "row2Name": "Mert Kaya",
+      "row2Msg": "Are you available for a meeting?",
+      "row3Name": "Selin Demir",
+      "row3Msg": "Thank you, great!",
+      "chip1Title": "New message",
+      "chip1Sub": "WhatsApp · now",
+      "chip2Title": "Automation ran",
+      "chip2Sub": "3 leads assigned",
+      "inboxStatus": "WhatsApp · online",
+      "inboxAssigned": "Assigned to Mert",
+      "bubble1": "Hi, can I get your price list?",
+      "bubble2": "Of course! Sending it right now 📄",
+      "bubble3": "Thank you so much 🙏",
+      "replyPlaceholder": "Write a reply…",
+      "flowTitle": "Welcome flow",
+      "flowActive": "Active",
+      "trigger": "Trigger",
+      "triggerSub": "New lead arrived",
+      "condition": "Condition",
+      "conditionSub": "Source = Instagram",
+      "action": "Action",
+      "actionSub": "Send WhatsApp message"
+    },
+    "nav": {
+      "features": "Features",
+      "how": "How it works",
+      "faq": "FAQ",
+      "login": "Log in",
+      "getStarted": "Get started",
+      "openApp": "Open app",
+      "menu": "Menu"
+    },
+    "hero": {
+      "badge": "All-in-one marketing & CRM platform",
+      "titleLead": "All your marketing,",
+      "titleAccent": "one panel.",
+      "subtitle": "From lead to sale, campaign to automation, inbox to analytics — Jeeta runs your whole growth engine in one place.",
+      "ctaPrimary": "Get started free",
+      "ctaSecondary": "Explore features",
+      "trust": "No credit card · Set up in minutes · GDPR/KVKK compliant"
+    },
+    "stats": {
+      "modules": "13+",
+      "modulesLabel": "Integrated modules",
+      "channels": "5",
+      "channelsLabel": "Messaging channels",
+      "languages": "5 langs",
+      "languagesLabel": "Multi-language",
+      "workspace": "One",
+      "workspaceLabel": "Unified workspace"
+    },
+    "features": {
+      "title": "Everything you need to grow",
+      "subtitle": "One platform that talks to itself — instead of a dozen disconnected tools.",
+      "crmTitle": "CRM & Lead Management",
+      "crmDesc": "Leads, contacts, companies and pipelines; model your own data with custom fields and objects.",
+      "inboxTitle": "Omnichannel Inbox",
+      "inboxDesc": "WhatsApp, Instagram, web-chat and email in one inbox — reply as a team from a single place.",
+      "campaignsTitle": "Campaigns",
+      "campaignsDesc": "Email, SMS and WhatsApp campaigns — segment, send, and track opens and clicks.",
+      "automationTitle": "Automation & Workflows",
+      "automationDesc": "Automate follow-ups, assignments and messages with a drag-and-drop flow builder.",
+      "funnelsTitle": "Funnels & Pages",
+      "funnelsDesc": "Funnels, landing pages, forms and online booking — live without writing code.",
+      "socialTitle": "Social Media Planner",
+      "socialDesc": "Schedule, publish and measure posts across Facebook, Instagram, LinkedIn and TikTok.",
+      "voiceTitle": "Voice AI & Telephony",
+      "voiceDesc": "Calls, power dialer, IVR and an AI receptionist — over a real business line.",
+      "billingTitle": "Billing & Payments",
+      "billingDesc": "Estimates, invoices, subscriptions and products — collect payments online."
+    },
+    "more": {
+      "title": "And more",
+      "analytics": "Analytics & Reporting",
+      "ai": "AI Assistant",
+      "memberships": "Memberships & Community",
+      "reviews": "Reviews & Reputation",
+      "affiliate": "Affiliate Program",
+      "agency": "Agency & White-label",
+      "security": "2FA & Roles",
+      "api": "Open API & Webhooks"
+    },
+    "how": {
+      "title": "Get started in three steps",
+      "subtitle": "Setup takes minutes — no technical team required.",
+      "step1Title": "Sign up",
+      "step1Desc": "Create your workspace in seconds and invite your team.",
+      "step2Title": "Connect your channels",
+      "step2Desc": "WhatsApp, social accounts, phone and payments — connect in a few clicks.",
+      "step3Title": "Grow",
+      "step3Desc": "Scale your sales with automation, campaigns and analytics."
+    },
+    "highlights": {
+      "inboxTag": "Omnichannel Inbox",
+      "inboxTitle": "Every conversation on one screen",
+      "inboxDesc": "Whether a customer messages on WhatsApp, comments on Instagram or starts a chat on your site — it all lands in the same inbox. Your team replies from one place without losing context.",
+      "inboxB1": "WhatsApp, Instagram, Messenger & web-chat",
+      "inboxB2": "Team assignments and internal notes",
+      "inboxB3": "Saved replies and AI suggestions",
+      "autoTag": "Automation",
+      "autoTitle": "Put your business on autopilot",
+      "autoDesc": "When a new lead arrives, send a welcome message, create a task, tag it and route it to the right rep — automatically. The drag-and-drop builder takes minutes to set up.",
+      "autoB1": "Trigger → condition → action flows",
+      "autoB2": "Automatic follow-ups and reminders",
+      "autoB3": "Integrated with campaigns and pipelines"
+    },
+    "faq": {
+      "title": "Frequently asked questions",
+      "q1": "Who is Jeeta for?",
+      "a1": "Any business that captures leads and talks to customers across channels: SMBs, sales teams, agencies and service providers.",
+      "q2": "How long does setup take?",
+      "a2": "Minutes. Create your workspace, connect your channels and start right away — no setup fee or technical team needed.",
+      "q3": "Is my data safe?",
+      "a3": "Yes. Every workspace is isolated, GDPR/KVKK compliant, with two-factor authentication (2FA) and role-based access.",
+      "q4": "Can I connect WhatsApp and my social accounts?",
+      "a4": "Yes. Connect WhatsApp, Instagram, Facebook, LinkedIn and TikTok with one-click secure OAuth.",
+      "q5": "Can I start for free?",
+      "a5": "Yes. Create your workspace for free and explore the platform; upgrade your plan from the dashboard whenever you want."
+    },
+    "finalCta": {
+      "title": "Start with Jeeta today",
+      "subtitle": "Bring all your marketing into one panel. No credit card required.",
+      "cta": "Create your free workspace"
+    },
+    "footer": {
+      "navLabel": "Footer",
+      "madeIn": "Made in İstanbul, Türkiye",
+      "tagline": "The all-in-one marketing and CRM platform.",
+      "productCol": "Product",
+      "companyCol": "Company",
+      "legalCol": "Legal",
+      "linkFeatures": "Features",
+      "linkHow": "How it works",
+      "linkFaq": "FAQ",
+      "linkLogin": "Log in",
+      "linkRegister": "Sign up",
+      "linkPrivacy": "Privacy (KVKK)",
+      "linkTerms": "Terms of use",
+      "rights": "All rights reserved."
+    }
   }
 }

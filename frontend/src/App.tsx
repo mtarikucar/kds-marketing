@@ -6,11 +6,13 @@ import { MarketingLayout, MarketingProtectedRoute } from './features/marketing/c
 import { MarketingRole } from './features/marketing/types';
 import PlatformLayout from './features/platform/components/PlatformLayout';
 import { useReferralCapture } from './features/marketing/hooks/useReferralCapture';
+import { useMarketingAuthStore } from './store/marketingAuthStore';
 
 // ── Route fallback ─────────────────────────────────────────────────────────────
 import { RouteFallback } from './components/RouteFallback';
 
 // ── Lazy page imports — marketing realm ───────────────────────────────────────
+const LandingPage              = lazy(() => import('./pages/landing/LandingPage'));
 const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
@@ -106,6 +108,13 @@ function S({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }
 
+// Unknown paths: signed-in users keep deep-link recovery into the app; everyone
+// else lands on the public marketing home rather than being bounced to /login.
+function CatchAllRedirect() {
+  const isAuthenticated = useMarketingAuthStore((s) => s.isAuthenticated);
+  return <Navigate to={isAuthenticated ? '/dashboard' : '/'} replace />;
+}
+
 /**
  * Standalone marketing console served at the ROOT of its own (sub)domain. This is
  * the sole home of the marketing panel now — the POS app no longer embeds it
@@ -120,6 +129,9 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Public marketing home (Jeeta landing). Stays public even when signed
+          in — the nav surfaces an "Open app" CTA in that case. */}
+      <Route path="/"         element={<S><LandingPage /></S>} />
       <Route path="/login"    element={<S><MarketingLoginPage /></S>} />
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
@@ -141,7 +153,6 @@ export default function App() {
       {/* Marketing realm — guarded by MarketingProtectedRoute (auth check). */}
       <Route element={<MarketingProtectedRoute />}>
         <Route element={<MarketingLayout />}>
-          <Route path="/"          element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
           <Route path="/inbox"     element={<S><InboxPage /></S>} />
           <Route path="/leads"     element={<S><LeadsPage /></S>} />
@@ -238,7 +249,7 @@ export default function App() {
           }
         />
       )}
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<CatchAllRedirect />} />
     </Routes>
   );
 }
