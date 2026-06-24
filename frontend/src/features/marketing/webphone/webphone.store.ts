@@ -37,11 +37,30 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
       try {
         user = new SimpleUser(cfg.wssUrl, {
           aor: `sip:${cfg.dahili}@${cfg.sipDomain}`,
-          media: { remote: { audio: remoteAudio } },
+          media: {
+            // Capture the mic (outbound audio) + render the remote leg into <audio>.
+            // Without explicit constraints some browsers send no audio track.
+            constraints: { audio: true, video: false },
+            remote: { audio: remoteAudio },
+          },
           userAgentOptions: {
             authorizationUsername: cfg.dahili,
             authorizationPassword: cfg.sipPassword,
             displayName: cfg.displayName,
+            // SIP.js defaults to NO ICE servers (host candidates only) → behind
+            // NAT the media never connects and the call has no audio either way.
+            // STUN lets the browser discover its public (srflx) candidate so RTP
+            // reaches NetGSM's gateway (which has a public IP).
+            sessionDescriptionHandlerFactoryOptions: {
+              iceGatheringTimeout: 3000,
+              peerConnectionConfiguration: {
+                iceServers: [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+                  { urls: 'stun:sip5.netsantral.com:3478' },
+                ],
+              },
+            },
           },
           delegate: {
             // NetGSM originate rings the extension first — auto-answer it so the
