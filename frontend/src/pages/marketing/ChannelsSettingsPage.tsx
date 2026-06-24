@@ -13,6 +13,7 @@ import {
   Plus,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { WhatsappSignupButton } from './WhatsappSignupButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -194,10 +195,13 @@ export default function ChannelsSettingsPage() {
           'Connect where your customers message you — web chat, WhatsApp, SMS, Instagram, Messenger. Pick which AI agent answers on each.',
         )}
         actions={
-          <Button onClick={openForm} size="md">
-            <Plus className="h-4 w-4" />
-            {t('channels.new', 'Connect a channel')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <WhatsappSignupButton />
+            <Button onClick={openForm} size="md">
+              <Plus className="h-4 w-4" />
+              {t('channels.new', 'Connect a channel')}
+            </Button>
+          </div>
         }
       />
 

@@ -146,6 +146,9 @@ jobs:
           META_WEBHOOK_VERIFY_TOKEN: ${{ secrets.META_WEBHOOK_VERIFY_TOKEN }}
           # Graph API version for ALL Meta calls (optional; empty = code default v19.0).
           GRAPH_API_VERSION: ${{ vars.GRAPH_API_VERSION }}
+          # WhatsApp Embedded Signup configuration id (Facebook Login for Business
+          # config) — enables the tenant one-click "Connect WhatsApp" button.
+          META_WHATSAPP_CONFIG_ID: ${{ vars.META_WHATSAPP_CONFIG_ID }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -202,6 +205,7 @@ jobs:
           META_LOGIN_CONFIG_ID=${META_LOGIN_CONFIG_ID}
           META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
           GRAPH_API_VERSION=${GRAPH_API_VERSION}
+          META_WHATSAPP_CONFIG_ID=${META_WHATSAPP_CONFIG_ID}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
