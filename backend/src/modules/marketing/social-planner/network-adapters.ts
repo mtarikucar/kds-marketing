@@ -180,6 +180,7 @@ async function ensureIgJpegImage(item: MediaItem, igId: string): Promise<MediaIt
     img.quality(90);
     const jpeg = await img.getBufferAsync(Jimp.MIME_JPEG);
     const up = await r2.upload(igId, { mimetype: 'image/jpeg', buffer: jpeg, size: jpeg.length });
+    logger.log(`IG image transcoded to JPEG (${item.mime ?? 'unknown'} → image/jpeg) for ${igId}`);
     return { url: up.url, mime: 'image/jpeg' };
   } catch (e: any) {
     logger.warn(`IG image JPEG transcode failed (${igId}); using original: ${e?.message ?? e}`);
@@ -218,10 +219,9 @@ async function publishInstagram(
         : { media_type: 'STORIES', image_url: m.url };
       const c = await igCreateContainer(igId, token, body);
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
-      if (isVideoItem(m)) {
-        const w = await igWaitContainerReady(c.id, token);
-        if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
-      }
+      // Poll to FINISHED for images too (not just video) — same race as FEED.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
       return igPublish(igId, token, c.id);
     }
 
@@ -258,6 +258,12 @@ async function publishInstagram(
       }
       const c = await igCreateContainer(igId, token, { image_url: m.url, caption: content });
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+      // Poll to FINISHED before publishing: Meta needs a moment to fetch/validate
+      // the (possibly just-transcoded) image, and publishing too early returns the
+      // opaque "Media ID is not available". On a genuinely bad image this surfaces
+      // the real status (ERROR/EXPIRED) instead of that generic message.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
       return igPublish(igId, token, c.id);
     }
 
