@@ -37,10 +37,16 @@ export interface SocialPostTarget {
   error: string | null;
 }
 
+/** LinkedIn organic post options surfaced in the composer. */
+export interface LinkedinPostOptions {
+  visibility?: 'PUBLIC' | 'CONNECTIONS';
+}
+
 export interface SocialPostOptions {
   formats?: Record<string, 'FEED' | 'REEL' | 'STORY'>;
   media?: { url: string; key?: string; mime?: string }[];
   mediaDeletedAt?: string;
+  linkedin?: LinkedinPostOptions;
 }
 
 export interface SocialPost {
