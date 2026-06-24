@@ -80,6 +80,19 @@ function validateEnv(): void {
     );
   }
 
+  // Instagram-Login (the direct instagram.com OAuth + publish flow) is gated on
+  // its own app credentials, distinct from META_APP_ID/SECRET. A half-set pair
+  // is almost always a misconfiguration (the network silently stays inert), so
+  // warn — never fail — when exactly one of the two is present.
+  const igLoginId = process.env.INSTAGRAM_APP_ID;
+  const igLoginSecret = process.env.INSTAGRAM_APP_SECRET;
+  if (!!igLoginId !== !!igLoginSecret) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[env] INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET must be set together for the Instagram-Login connector — it stays inert until BOTH are present.',
+    );
+  }
+
   // MARKETING_SECRET_KEY is the AES-256-GCM master key that seals channel/PSP
   // secrets AND mints the NetGSM MO callback tokens. It is now load-bearing for
   // live omnichannel, so it is REQUIRED in production (fail fast rather than

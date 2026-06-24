@@ -78,6 +78,8 @@ import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { NetsantralClient } from './telephony/netsantral.client';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { RecordingSyncService } from './telephony/recording-sync.service';
+import { NetgsmCdrClient } from './telephony/netgsm-cdr.client';
+import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
@@ -222,6 +224,7 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
+import { R2StorageService } from './social-planner/r2-storage.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
@@ -311,11 +314,14 @@ import { OrderFormsService } from './order-forms/order-forms.service';
 
 // Ad reporting — Meta Ads + TikTok Ads (GoHighLevel parity).
 import { MarketingAdsController } from './controllers/marketing-ads.controller';
+import { MarketingAdRulesController } from './controllers/marketing-ad-rules.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
 // TikTok-for-Business OAuth (ads module — NOT social-planner)
 import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
 import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
+import { AdManagementService } from './ads/ad-management.service';
+import { AdRulesService } from './ads/ad-rules.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
 import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
@@ -460,6 +466,7 @@ import { WalletService } from './wallet/wallet.service';
     PublicOrderFormController,
     MarketingAdsController,
     TiktokBusinessOAuthController,
+    MarketingAdRulesController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -554,6 +561,8 @@ import { WalletService } from './wallet/wallet.service';
     NetsantralClient,
     TelephonyConfigService,
     RecordingSyncService,
+    NetgsmCdrClient,
+    CallCdrSyncService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
@@ -630,6 +639,8 @@ import { WalletService } from './wallet/wallet.service';
     AdAccountService,
     AdsPullService,
     TiktokBusinessOAuthService,
+    AdManagementService,
+    AdRulesService,
     CustomObjectsService,
     SnippetsService,
     LeadBulkService,
@@ -698,6 +709,7 @@ import { WalletService } from './wallet/wallet.service';
     SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
+    R2StorageService,
     SocialOAuthService,
     SocialTokenRefreshService,
     // Guards

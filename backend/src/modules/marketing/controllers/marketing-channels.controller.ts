@@ -18,7 +18,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { ChannelsService } from '../channels/channels.service';
-import { CreateChannelDto, UpdateChannelDto } from '../dto/channel.dto';
+import { CreateChannelDto, UpdateChannelDto, WhatsappEmbeddedSignupDto } from '../dto/channel.dto';
 
 /**
  * Channel configuration (web-chat / WhatsApp / SMS / Instagram / Messenger).
@@ -37,6 +37,24 @@ export class MarketingChannelsController {
   @Get()
   list(@CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.channels.list(actor.workspaceId);
+  }
+
+  /** Non-secret config the frontend needs to launch WhatsApp Embedded Signup.
+   *  Declared BEFORE the `:id` route so the static path isn't captured by it. */
+  @Get('whatsapp/embedded-signup/config')
+  whatsappSignupConfig() {
+    return this.channels.whatsappSignupConfig();
+  }
+
+  /** Tenant self-serve WhatsApp connect — exchanges the Embedded Signup code and
+   *  provisions (or rotates) the WHATSAPP channel. */
+  @Post('whatsapp/embedded-signup')
+  @RequirePermission('settings.manage')
+  whatsappSignup(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: WhatsappEmbeddedSignupDto,
+  ) {
+    return this.channels.completeWhatsappSignup(actor.workspaceId, dto);
   }
 
   @Get(':id')

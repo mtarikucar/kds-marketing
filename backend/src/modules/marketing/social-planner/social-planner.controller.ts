@@ -7,7 +7,12 @@ import {
   Patch,
   Post,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDateString,
@@ -18,6 +23,7 @@ import {
   IsUrl,
   MaxLength,
   ArrayMaxSize,
+  ValidateNested,
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
@@ -49,12 +55,31 @@ class ConnectAccountDto {
   tokenExpiresAt?: string;
 }
 
+/** An uploaded (or pasted) media asset. `key` is empty for pasted URLs. */
+class MediaItemDto {
+  @IsUrl() @MaxLength(1000)
+  url: string;
+
+  @IsOptional() @IsString() @MaxLength(400)
+  key?: string;
+
+  @IsOptional() @IsString() @MaxLength(100)
+  mime?: string;
+}
+
 class CreatePostDto {
   @IsString() @MaxLength(5000)
   content: string;
 
   @IsOptional() @IsArray() @IsUrl({}, { each: true }) @ArrayMaxSize(10)
   mediaUrls?: string[];
+
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MediaItemDto) @ArrayMaxSize(10)
+  media?: MediaItemDto[];
+
+  /** Per-account format map: { [socialAccountId]: 'FEED'|'REEL'|'STORY' }. */
+  @IsOptional() @IsObject()
+  formats?: Record<string, string>;
 
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
@@ -70,6 +95,12 @@ class UpdatePostDto {
   @IsOptional() @IsArray() @IsUrl({}, { each: true }) @ArrayMaxSize(10)
   mediaUrls?: string[];
 
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MediaItemDto) @ArrayMaxSize(10)
+  media?: MediaItemDto[];
+
+  @IsOptional() @IsObject()
+  formats?: Record<string, string>;
+
   @IsOptional() @IsObject()
   options?: Record<string, unknown>;
 }
@@ -80,6 +111,9 @@ class SchedulePostDto {
 
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
+
+  @IsOptional() @IsObject()
+  formats?: Record<string, string>;
 }
 
 @MarketingRoute()
@@ -123,6 +157,33 @@ export class SocialPlannerController {
   @Get('accounts/:id/tiktok/creator-info')
   tiktokCreatorInfo(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.tiktokCreatorInfo(u.workspaceId, id);
+  }
+
+  // ── Media upload ──────────────────────────────────────────────────────────
+
+  /** Upload an image/video to R2 and return its public URL (for pull-from-URL
+   *  publishing). Returns { url, key, mime }; attach it to a post's `media`. */
+  @Post('media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+      fileFilter: (_req, file, cb) => {
+        const ok = [
+          'image/png',
+          'image/jpeg',
+          'image/webp',
+          'image/gif',
+          'video/mp4',
+          'video/quicktime',
+          'video/webm',
+        ].includes(file.mimetype);
+        cb(ok ? null : new BadRequestException('Unsupported media type'), ok);
+      },
+    }),
+  )
+  @RequirePermission('campaigns.send')
+  uploadMedia(@UploadedFile() file: any, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.uploadMedia(u.workspaceId, file);
   }
 
   // ── Posts CRUD ──────────────────────────────────────────────────────────
@@ -177,6 +238,7 @@ export class SocialPlannerController {
       postId,
       new Date(dto.scheduledAt),
       dto.targetAccountIds,
+      dto.formats,
     );
   }
 

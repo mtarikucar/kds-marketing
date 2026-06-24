@@ -15,10 +15,29 @@ import {
   isSecretBoxConfigured,
   maskSecret,
 } from '../../../common/crypto/secret-box.helper';
-import { publishToNetwork, isNetworkConfigured } from './network-adapters';
+import { publishToNetwork, isNetworkConfigured, PostFormat } from './network-adapters';
 import { queryCreatorInfo } from './tiktok-creator-info.util';
+import { R2StorageService, UploadedMedia, UploadInput } from './r2-storage.service';
 
 export const SOCIAL_PUBLISH_KIND = 'social.publish';
+/** Delete a published post's uploaded R2 media this long after success. */
+export const SOCIAL_MEDIA_CLEANUP_KIND = 'social.media.cleanup';
+const MEDIA_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const POST_FORMATS: PostFormat[] = ['FEED', 'REEL', 'STORY'];
+
+interface MediaDescriptor {
+  url: string;
+  /** R2 object key — present only for uploaded (not pasted) media. */
+  key?: string;
+  mime?: string;
+}
+interface PostOptions {
+  formats?: Record<string, PostFormat>;
+  media?: MediaDescriptor[];
+  mediaDeletedAt?: string;
+  /** TikTok per-post privacy/interaction/photo controls. */
+  tiktok?: Record<string, unknown>;
+}
 
 const NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK', 'TWITTER', 'PINTEREST', 'GMB'] as const;
 type Network = (typeof NETWORKS)[number];
@@ -42,12 +61,64 @@ export class SocialPlannerService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
+    private readonly r2: R2StorageService,
   ) {}
 
   onModuleInit(): void {
     this.runner.registerHandler(SOCIAL_PUBLISH_KIND, (job: ClaimedJob) =>
       this.publishDuePost(job.payload.postId, job.payload.workspaceId),
     );
+    this.runner.registerHandler(SOCIAL_MEDIA_CLEANUP_KIND, (job: ClaimedJob) =>
+      this.cleanupPostMedia(job.payload.postId, job.payload.workspaceId),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────── Media
+
+  /** Upload a media file to R2 and return its public URL + key + mime. */
+  async uploadMedia(workspaceId: string, file?: UploadInput): Promise<UploadedMedia> {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!this.r2.isConfigured()) {
+      throw new BadRequestException(
+        'Media upload is not configured (set R2_* env). Paste a public media URL instead.',
+      );
+    }
+    return this.r2.upload(workspaceId, file);
+  }
+
+  /** Sanitize a caller-supplied per-account format map to known formats only. */
+  private cleanFormats(formats?: Record<string, string>): Record<string, PostFormat> | undefined {
+    if (!formats || typeof formats !== 'object') return undefined;
+    const out: Record<string, PostFormat> = {};
+    for (const [accId, fmt] of Object.entries(formats)) {
+      if (POST_FORMATS.includes(fmt as PostFormat)) out[accId] = fmt as PostFormat;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  /** Merge new formats/media/options into an existing post's options JSON. The
+   *  optional `options` patch carries network-specific controls (e.g. TikTok
+   *  privacy/photo settings under `options.tiktok`). */
+  private mergeOptions(
+    existing: PostOptions | null | undefined,
+    patch: {
+      formats?: Record<string, string>;
+      media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
+    },
+  ): PostOptions | undefined {
+    const base: PostOptions = { ...(existing ?? {}) };
+    const formats = this.cleanFormats(patch.formats);
+    if (formats) base.formats = { ...(base.formats ?? {}), ...formats };
+    if (patch.media !== undefined) base.media = patch.media;
+    if (patch.options !== undefined) {
+      // Fold caller-supplied network-specific options into the same JSON. Known
+      // keys (formats/media/mediaDeletedAt) are managed above; pass the rest
+      // (notably `tiktok`) through so publish-time can read them.
+      const { formats: _f, media: _m, ...rest } = patch.options as Record<string, unknown>;
+      Object.assign(base, rest);
+    }
+    return Object.keys(base).length ? base : undefined;
   }
 
   // ────────────────────────────────────────────────────────────── Accounts
@@ -118,6 +189,7 @@ export class SocialPlannerService implements OnModuleInit {
     return {
       FACEBOOK: isNetworkConfigured('FACEBOOK'),
       INSTAGRAM: isNetworkConfigured('INSTAGRAM'),
+      INSTAGRAM_LOGIN: isNetworkConfigured('INSTAGRAM_LOGIN'),
       LINKEDIN: isNetworkConfigured('LINKEDIN'),
       TIKTOK: isNetworkConfigured('TIKTOK'),
       // Epic 12 (needs-external, inert until creds).
@@ -147,16 +219,24 @@ export class SocialPlannerService implements OnModuleInit {
       content: string;
       mediaUrls?: string[];
       targetAccountIds?: string[];
+      formats?: Record<string, string>;
+      media?: MediaDescriptor[];
       options?: Record<string, unknown>;
     },
   ) {
+    const mediaUrls = dto.media?.length ? dto.media.map((m) => m.url) : dto.mediaUrls ?? [];
+    const options = this.mergeOptions(null, {
+      formats: dto.formats,
+      media: dto.media,
+      options: dto.options,
+    });
     const post = await this.prisma.socialPost.create({
       data: {
         workspaceId,
         content: dto.content,
-        mediaUrls: dto.mediaUrls ?? [],
+        mediaUrls,
+        ...(options ? { options: options as Prisma.InputJsonValue } : {}),
         status: 'DRAFT',
-        ...(dto.options !== undefined ? { options: dto.options as Prisma.InputJsonValue } : {}),
       },
     });
 
@@ -187,15 +267,28 @@ export class SocialPlannerService implements OnModuleInit {
   async updatePost(
     workspaceId: string,
     postId: string,
-    dto: { content?: string; mediaUrls?: string[]; options?: Record<string, unknown> },
+    dto: {
+      content?: string;
+      mediaUrls?: string[];
+      formats?: Record<string, string>;
+      media?: MediaDescriptor[];
+      options?: Record<string, unknown>;
+    },
   ) {
-    await this.assertDraftPost(workspaceId, postId);
+    const existing = await this.assertDraftPost(workspaceId, postId);
+    const mediaUrls =
+      dto.media !== undefined ? dto.media.map((m) => m.url) : dto.mediaUrls;
+    const options = this.mergeOptions(existing.options as PostOptions, {
+      formats: dto.formats,
+      media: dto.media,
+      options: dto.options,
+    });
     return this.prisma.socialPost.update({
       where: { id: postId },
       data: {
         ...(dto.content !== undefined ? { content: dto.content } : {}),
-        ...(dto.mediaUrls !== undefined ? { mediaUrls: dto.mediaUrls } : {}),
-        ...(dto.options !== undefined ? { options: dto.options as Prisma.InputJsonValue } : {}),
+        ...(mediaUrls !== undefined ? { mediaUrls } : {}),
+        ...(options ? { options: options as Prisma.InputJsonValue } : {}),
       },
       include: { targets: true },
     });
@@ -218,6 +311,7 @@ export class SocialPlannerService implements OnModuleInit {
     postId: string,
     scheduledAt: Date,
     targetAccountIds?: string[],
+    formats?: Record<string, string>,
   ) {
     const post = await this.prisma.socialPost.findFirst({
       where: { id: postId, workspaceId },
@@ -226,6 +320,14 @@ export class SocialPlannerService implements OnModuleInit {
     if (!post) throw new NotFoundException('Social post not found');
     if (!['DRAFT', 'SCHEDULED'].includes(post.status)) {
       throw new BadRequestException(`Cannot schedule a post in status: ${post.status}`);
+    }
+
+    const mergedOptions = this.mergeOptions(post.options as PostOptions, { formats });
+    if (mergedOptions) {
+      await this.prisma.socialPost.update({
+        where: { id: postId },
+        data: { options: mergedOptions as any },
+      });
     }
 
     if (targetAccountIds?.length) {
@@ -282,17 +384,24 @@ export class SocialPlannerService implements OnModuleInit {
       data: { status: 'PUBLISHING' },
     });
 
+    const options = (post.options as PostOptions) ?? {};
+    const formats = options.formats ?? {};
+    const mimeByUrl: Record<string, string> = {};
+    for (const m of options.media ?? []) {
+      if (m?.url) mimeByUrl[m.url] = m.mime;
+    }
+    const mediaUrls = post.mediaUrls as string[];
+
     const pendingTargets = post.targets.filter((t) => t.status === 'PENDING');
     let publishedCount = 0;
     let failedCount = 0;
 
     for (const target of pendingTargets) {
-      const result = await publishToNetwork(
-        target.account,
-        post.content,
-        post.mediaUrls as string[],
-        (post.options as any) ?? undefined,
-      );
+      const result = await publishToNetwork(target.account, post.content, mediaUrls, {
+        format: formats[target.socialAccountId] ?? 'FEED',
+        mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
+        tiktok: options.tiktok as any,
+      });
 
       if (result.ok) {
         await this.prisma.socialPostTarget.update({
@@ -321,6 +430,39 @@ export class SocialPlannerService implements OnModuleInit {
         publishedAt: publishedCount > 0 ? new Date() : null,
       },
     });
+
+    // Schedule deletion of the uploaded R2 media 7 days after a successful
+    // publish (Meta has already pulled it; the objects are no longer needed).
+    const hasUploads = (options.media ?? []).some((m) => m?.key);
+    if (publishedCount > 0 && hasUploads && !options.mediaDeletedAt) {
+      await this.scheduledJobs.schedule({
+        workspaceId,
+        kind: SOCIAL_MEDIA_CLEANUP_KIND,
+        runAt: new Date(Date.now() + MEDIA_TTL_MS),
+        payload: { postId, workspaceId },
+        dedupKey: `social-media-cleanup-${postId}`,
+      });
+    }
+  }
+
+  /** Delete a published post's uploaded R2 objects, then mark them gone. */
+  async cleanupPostMedia(postId: string, workspaceId: string): Promise<void> {
+    const post = await this.prisma.socialPost.findFirst({
+      where: { id: postId, workspaceId },
+      select: { id: true, options: true },
+    });
+    if (!post) return;
+    const options = (post.options as PostOptions) ?? {};
+    if (options.mediaDeletedAt) return;
+    const keys = (options.media ?? []).map((m) => m?.key).filter(Boolean) as string[];
+    if (keys.length) {
+      await this.r2.deleteKeys(keys);
+      this.logger.log(`Deleted ${keys.length} R2 media object(s) for post ${postId}`);
+    }
+    await this.prisma.socialPost.update({
+      where: { id: postId },
+      data: { options: { ...options, mediaDeletedAt: new Date().toISOString() } as any },
+    });
   }
 
   async publishNow(workspaceId: string, postId: string) {
@@ -342,7 +484,7 @@ export class SocialPlannerService implements OnModuleInit {
   private async assertDraftPost(workspaceId: string, postId: string) {
     const post = await this.prisma.socialPost.findFirst({
       where: { id: postId, workspaceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, options: true },
     });
     if (!post) throw new NotFoundException('Social post not found');
     if (post.status !== 'DRAFT') {

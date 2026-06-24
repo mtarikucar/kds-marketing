@@ -10,7 +10,7 @@ import { z } from 'zod';
  * own validation surface.
  */
 
-export const SOCIAL_NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK', 'TWITTER', 'PINTEREST', 'GMB'] as const;
+export const SOCIAL_NETWORKS = ['FACEBOOK', 'INSTAGRAM', 'INSTAGRAM_LOGIN', 'LINKEDIN', 'TIKTOK', 'TWITTER', 'PINTEREST', 'GMB'] as const;
 export type SocialNetwork = (typeof SOCIAL_NETWORKS)[number];
 
 // A single http(s) URL — matches the backend @IsUrl() per-item validation.
@@ -21,11 +21,24 @@ const httpUrl = z
 
 // ── Post composer ───────────────────────────────────────────────────────────
 
+export const POST_FORMATS = ['FEED', 'REEL', 'STORY'] as const;
+export type PostFormat = (typeof POST_FORMATS)[number];
+
+// A media item — either uploaded (carries an R2 `key`) or a pasted URL.
+const mediaItem = z.object({
+  url: httpUrl,
+  key: z.string().optional(),
+  mime: z.string().optional(),
+});
+export type MediaItemValue = z.infer<typeof mediaItem>;
+
 export const postSchema = z.object({
   // content: required, max 5000 (mirrors @MaxLength(5000))
   content: z.string().trim().min(1, { message: 'required' }).max(5000, { message: 'tooLong' }),
-  // mediaUrls: up to 10 http(s) urls (mirrors @IsUrl + @ArrayMaxSize(10))
-  mediaUrls: z.array(httpUrl).max(10, { message: 'tooMany' }),
+  // media: up to 10 items (mirrors @ArrayMaxSize(10))
+  media: z.array(mediaItem).max(10, { message: 'tooMany' }),
+  // per-account format: { [socialAccountId]: FEED|REEL|STORY } (FB/IG only)
+  formats: z.record(z.string(), z.enum(POST_FORMATS)).default({}),
   // target accounts: up to 20 (mirrors @ArrayMaxSize(20))
   targetAccountIds: z.array(z.string()).max(20, { message: 'tooMany' }),
   // optional schedule datetime (local datetime-local string). Empty → publish later.

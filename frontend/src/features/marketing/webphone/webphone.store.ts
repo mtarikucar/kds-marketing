@@ -8,9 +8,14 @@ export interface WebphoneState { status: WebphoneStatus; error?: string; lastNum
 
 /**
  * Thin wrapper over SIP.js SimpleUser: register a rep's dahili to NetGSM's WSS
- * WebRTC endpoint and place an outbound call. Phase A — register + outbound only;
- * inbound + full controls come in Phase B. `remoteAudio` is the <audio> element
- * SIP.js renders the remote stream into.
+ * WebRTC endpoint, place outbound calls, AND auto-answer the inbound leg.
+ *
+ * Inbound auto-answer is what makes server-side click-to-dial (NetGSM `originate`
+ * / dahili mode) actually connect: NetGSM rings the rep's extension FIRST (an
+ * INVITE to this registered webphone) and only dials the customer once the
+ * extension answers. Without an `onCallReceived` handler the INVITE was dropped,
+ * so the extension "never rang" even though the PBX accepted the request.
+ * `remoteAudio` is the <audio> element SIP.js renders the remote stream into.
  */
 export function createWebphone(remoteAudio: HTMLAudioElement) {
   let user: SimpleUser | null = null;
@@ -32,13 +37,44 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
       try {
         user = new SimpleUser(cfg.wssUrl, {
           aor: `sip:${cfg.dahili}@${cfg.sipDomain}`,
-          media: { remote: { audio: remoteAudio } },
+          media: {
+            // Capture the mic (outbound audio) + render the remote leg into <audio>.
+            // Without explicit constraints some browsers send no audio track.
+            constraints: { audio: true, video: false },
+            remote: { audio: remoteAudio },
+          },
           userAgentOptions: {
             authorizationUsername: cfg.dahili,
             authorizationPassword: cfg.sipPassword,
             displayName: cfg.displayName,
+            // SIP.js defaults to NO ICE servers (host candidates only) → behind
+            // NAT the media never connects and the call has no audio either way.
+            // STUN lets the browser discover its public (srflx) candidate so RTP
+            // reaches NetGSM's gateway (which has a public IP).
+            sessionDescriptionHandlerFactoryOptions: {
+              iceGatheringTimeout: 3000,
+              peerConnectionConfiguration: {
+                iceServers: [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+                  { urls: 'stun:sip5.netsantral.com:3478' },
+                ],
+              },
+            },
           },
-          delegate: { onCallHangup: () => set({ status: 'registered' }) },
+          delegate: {
+            // NetGSM originate rings the extension first — auto-answer it so the
+            // rep is on the line when the customer leg connects (click-to-dial).
+            onCallReceived: async () => {
+              try {
+                await user!.answer();
+                set({ status: 'incall' });
+              } catch (e: any) {
+                set({ status: 'registered', error: e?.message ?? 'answer failed' });
+              }
+            },
+            onCallHangup: () => set({ status: 'registered' }),
+          },
         });
         await user.connect();
         await user.register();

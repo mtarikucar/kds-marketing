@@ -44,25 +44,14 @@ jobs:
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-  test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
-      - run: npm ci
-      - run: npx prisma generate
-      - run: npx tsc --noEmit
-      - run: npm test
+  # No test job here: a release tag is cut from a main commit that ci.yml has
+  # already fully validated (unit + e2e + realdb + build + migration parity), so
+  # re-running the unit suite here only duplicated that work and serialised the
+  # pipeline (~10 min on the critical path). The deploy health-gate is the final
+  # safety net. The two image builds run in PARALLEL instead of one sequential job.
 
-  build:
-    needs: [version, test]
+  build-backend:
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -72,7 +61,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Backend image
         uses: docker/build-push-action@v7
         with:
@@ -85,6 +73,17 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_BASE }}/backend:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/backend:buildcache,mode=max
 
+  build-frontend:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Frontend image
         uses: docker/build-push-action@v7
         with:
@@ -102,7 +101,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.IMAGE_BASE }}/frontend:buildcache,mode=max
 
   deploy:
-    needs: [version, build]
+    needs: [version, build-backend, build-frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -146,6 +145,16 @@ jobs:
           META_WEBHOOK_VERIFY_TOKEN: ${{ secrets.META_WEBHOOK_VERIFY_TOKEN }}
           # Graph API version for ALL Meta calls (optional; empty = code default v19.0).
           GRAPH_API_VERSION: ${{ vars.GRAPH_API_VERSION }}
+          # WhatsApp Embedded Signup configuration id (Facebook Login for Business
+          # config) — enables the tenant one-click "Connect WhatsApp" button.
+          META_WHATSAPP_CONFIG_ID: ${{ vars.META_WHATSAPP_CONFIG_ID }}
+          # Cloudflare R2 (S3-compatible) media storage for social-planner uploads.
+          # OPTIONAL — unset = upload endpoint inert, users paste public URLs instead.
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -202,6 +211,12 @@ jobs:
           META_LOGIN_CONFIG_ID=${META_LOGIN_CONFIG_ID}
           META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
           GRAPH_API_VERSION=${GRAPH_API_VERSION}
+          META_WHATSAPP_CONFIG_ID=${META_WHATSAPP_CONFIG_ID}
+          R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+          R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+          R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+          R2_BUCKET=${R2_BUCKET}
+          R2_PUBLIC_BASE_URL=${R2_PUBLIC_BASE_URL}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}

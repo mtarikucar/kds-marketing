@@ -24,18 +24,35 @@ export function interpretNetsantralOriginate(rawBody: string): NetsantralOrigina
   const body = (rawBody ?? '').trim();
   if (!body) return { ok: false, message: 'Netsantral returned an empty response.' };
 
-  // JSON shape: { status, unique_id, ... }
+  // JSON shape. The REAL success (with wait_response=0) carries NO id, e.g.
+  // {"response":"linkup","status":"Originate successfully queued","message":"Success"}
+  // so acceptance is by status/message, NOT the presence of a call id (the SIP id
+  // arrives later on the CDR, keyed by crm_id). An explicit numeric error code
+  // (e.g. {"code":"30",...}) is the only failure.
   if (body.startsWith('{') || body.startsWith('[')) {
     try {
       const j = JSON.parse(body);
       const obj = Array.isArray(j) ? j[0] : j;
       const id = obj?.unique_id ?? obj?.uniqueid ?? obj?.callid ?? obj?.id;
-      const status = String(obj?.status ?? '').toLowerCase();
-      if (id && (status === '' || status === 'success' || status === 'ok' || ['00', '01', '02'].includes(status))) {
-        return { ok: true, callId: String(id) };
-      }
       const code = obj?.code != null ? String(obj.code) : undefined;
-      return { ok: false, code, message: code ? ERROR_MESSAGES[code] : 'Netsantral did not return a call id.' };
+      const status = String(obj?.status ?? '').toLowerCase();
+      const message = String(obj?.message ?? '').toLowerCase();
+
+      // An explicit numeric error code (other than the accept codes) → failure.
+      if (code && /^\d+$/.test(code) && !['00', '01', '02'].includes(code)) {
+        return { ok: false, code, message: ERROR_MESSAGES[code] ?? `Netsantral rejected the call (code ${code}).` };
+      }
+      // Accepted when the PBX queued it: an id, an accept status/code, or a
+      // success-y status/message ("Originate successfully queued" / "Success").
+      const accepted =
+        !!id ||
+        ['00', '01', '02', 'success', 'ok'].includes(status) ||
+        status.includes('success') ||
+        status.includes('queued') ||
+        message.includes('success');
+      if (accepted) return id ? { ok: true, callId: String(id) } : { ok: true };
+
+      return { ok: false, code, message: 'Netsantral did not return a call id.' };
     } catch {
       return { ok: false, message: 'Netsantral returned an unreadable JSON body.' };
     }

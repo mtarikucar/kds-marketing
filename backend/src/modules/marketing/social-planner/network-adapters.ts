@@ -1,9 +1,11 @@
 import { Logger } from '@nestjs/common';
+import Jimp from 'jimp';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
+import { R2StorageService } from './r2-storage.service';
 
 export interface TikTokPostOptions {
   privacyLevel?: string;
@@ -12,9 +14,6 @@ export interface TikTokPostOptions {
   disableStitch?: boolean;
   mediaType?: 'VIDEO' | 'PHOTO';
   coverIndex?: number;
-}
-export interface PublishOptions {
-  tiktok?: TikTokPostOptions;
 }
 
 const logger = new Logger('NetworkAdapters');
@@ -55,6 +54,8 @@ export function isNetworkConfigured(network: string): boolean {
       return !!(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
     case 'TIKTOK':
       return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
+    case 'INSTAGRAM_LOGIN':
+      return !!(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET);
     // Epic 12 (needs-external, inert until creds): X/Twitter, Pinterest, Google
     // Business Profile. Each gates on its own platform app credentials.
     case 'TWITTER':
@@ -70,105 +71,434 @@ export function isNetworkConfigured(network: string): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Publish to Facebook (Graph API /me/feed). */
-async function publishFacebook(
-  account: AccountRow,
-  content: string,
-  mediaUrls: string[],
-): Promise<PublishResult> {
-  if (!isNetworkConfigured('FACEBOOK')) {
-    return { ok: false, error: 'Facebook not configured: set META_APP_ID and META_APP_SECRET' };
-  }
-  const token = revealToken(account);
-  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+/** Post format selectable per target. Meta (FB/IG) honours all three; the other
+ *  networks ignore it and always behave as FEED. */
+export type PostFormat = 'FEED' | 'REEL' | 'STORY';
 
-  const body: Record<string, unknown> = { message: content };
-  // Attach the first media url as a link if present
-  if (mediaUrls.length > 0) body.link = mediaUrls[0];
+export interface MediaItem {
+  url: string;
+  /** MIME type (from upload). Falls back to URL extension when absent. */
+  mime?: string;
+}
 
-  try {
-    const r = await metaGraphFetch(`/${account.externalId}/feed`, {
+export interface PublishOptions {
+  format?: PostFormat;
+  /** Per-item MIME, parallel to mediaUrls — lets adapters pick image vs video. */
+  mediaMime?: (string | undefined)[];
+  /** TikTok-specific privacy/interaction/photo controls. */
+  tiktok?: TikTokPostOptions;
+}
+
+const VIDEO_EXT = /\.(mp4|mov|m4v|webm|qt)(?:[?#]|$)/i;
+function isVideoItem(item: MediaItem): boolean {
+  if (item.mime) return item.mime.toLowerCase().startsWith('video/');
+  return VIDEO_EXT.test(item.url);
+}
+function toMediaItems(mediaUrls: string[], opts: PublishOptions): MediaItem[] {
+  return (mediaUrls || []).map((url, i) => ({ url, mime: opts.mediaMime?.[i] }));
+}
+
+// ───────────────────────────────────────────────────────── Instagram helpers
+
+/** Create an IG media container (`/{ig}/media`). Returns the container id. */
+async function igCreateContainer(
+  igId: string,
+  token: string,
+  body: Record<string, unknown>,
+): Promise<{ id?: string; error?: string; isAuthError?: boolean }> {
+  const r = await metaGraphFetch(`/${igId}/media`, {
+    accessToken: token,
+    method: 'POST',
+    body,
+    timeoutMs: 20_000,
+  });
+  if (!r.ok) return { error: `IG container: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+  const id = (r.data as any)?.id;
+  return id ? { id: String(id) } : { error: 'IG container: no id returned' };
+}
+
+/** Poll a container (video/reel/story/carousel) until it finishes processing. */
+async function igWaitContainerReady(
+  containerId: string,
+  token: string,
+): Promise<{ ok: boolean; error?: string; isAuthError?: boolean }> {
+  for (let i = 0; i < 30; i++) {
+    const r = await metaGraphFetch(`/${containerId}`, {
       accessToken: token,
-      method: 'POST',
-      body,
+      query: { fields: 'status_code,status' },
       timeoutMs: 15_000,
     });
-    if (!r.ok) {
-      logger.warn(`Facebook publish failed (${account.externalId}): ${r.error.message}`);
-      return { ok: false, error: r.error.message.slice(0, 500), isAuthError: r.error.isAuthError };
+    if (!r.ok) return { ok: false, error: `IG status: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+    const code = (r.data as any)?.status_code;
+    if (code === 'FINISHED') return { ok: true };
+    if (code === 'ERROR' || code === 'EXPIRED') {
+      return { ok: false, error: `IG processing ${code}: ${(r.data as any)?.status ?? ''}`.slice(0, 300) };
     }
-    const id = (r.data as any)?.id;
-    if (id) return { ok: true, externalPostId: String(id) };
-    logger.warn(`Facebook publish failed (${account.externalId}): no post id returned`);
-    return { ok: false, error: 'no post id returned' };
+    await sleep(3000);
+  }
+  return { ok: false, error: 'IG media processing timed out' };
+}
+
+/** Publish a finished container (`/{ig}/media_publish`). */
+async function igPublish(igId: string, token: string, creationId: string): Promise<PublishResult> {
+  const r = await metaGraphFetch(`/${igId}/media_publish`, {
+    accessToken: token,
+    method: 'POST',
+    body: { creation_id: creationId },
+    timeoutMs: 20_000,
+  });
+  if (!r.ok) return { ok: false, error: `IG publish: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+  const id = (r.data as any)?.id;
+  return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'IG publish: no id returned' };
+}
+
+/** Bytes cap for fetching a source image before transcoding (generous; the
+ *  re-encoded JPEG is far smaller and Instagram caps the final at 8MB). */
+const IG_IMAGE_FETCH_MAX_BYTES = 20 * 1024 * 1024;
+/** Instagram downscales feed images to 1080px wide regardless — do it ourselves
+ *  (controlled, sharper) so the only quality change is one clean resize. */
+const IG_JPEG_MAX_WIDTH = 1080;
+
+/**
+ * True when an item is an IMAGE that Instagram's API would reject. The Content
+ * Publishing API accepts ONLY JPEG — PNG/WebP/GIF image_urls create a container
+ * but fail media_publish with "Media ID is not available". Videos are exempt.
+ */
+export function igImageNeedsJpeg(item: MediaItem): boolean {
+  if (isVideoItem(item)) return false;
+  const mime = (item.mime ?? '').toLowerCase();
+  if (mime) return mime !== 'image/jpeg' && mime !== 'image/jpg';
+  // No/unknown mime → trust the URL extension; anything not .jpg/.jpeg is suspect.
+  return !/\.jpe?g(?:[?#]|$)/i.test(item.url);
+}
+
+/**
+ * Ensure an Instagram image item is JPEG. Transcodes a non-JPEG image to
+ * high-quality JPEG (≤1080px wide — Instagram's display width) and re-hosts it on
+ * R2 so Meta can pull it. This mirrors what the Instagram mobile app does silently
+ * (it re-encodes everything to JPEG); the Graph API does not, so we must. Videos
+ * and already-JPEG images pass through. Any failure — or R2 not configured —
+ * returns the original item, so behaviour is never worse than before.
+ */
+async function ensureIgJpegImage(item: MediaItem, igId: string): Promise<MediaItem> {
+  if (!igImageNeedsJpeg(item)) return item;
+  const r2 = new R2StorageService();
+  if (!r2.isConfigured()) return item;
+  try {
+    const res = await safeFetch(item.url, { method: 'GET', timeoutMs: 20_000 });
+    if (!res.ok) return item;
+    const src = await readCappedBytes(res, IG_IMAGE_FETCH_MAX_BYTES);
+    if (!src || src.length === 0) return item;
+    const img = await Jimp.read(src);
+    if (img.bitmap.width > IG_JPEG_MAX_WIDTH) img.resize(IG_JPEG_MAX_WIDTH, Jimp.AUTO);
+    img.quality(90);
+    const jpeg = await img.getBufferAsync(Jimp.MIME_JPEG);
+    const up = await r2.upload(igId, { mimetype: 'image/jpeg', buffer: jpeg, size: jpeg.length });
+    logger.log(`IG image transcoded to JPEG (${item.mime ?? 'unknown'} → image/jpeg) for ${igId}`);
+    return { url: up.url, mime: 'image/jpeg' };
   } catch (e: any) {
-    const msg = e?.message ?? String(e);
-    logger.warn(`Facebook publish error (${account.externalId}): ${msg}`);
-    return { ok: false, error: msg.slice(0, 500) };
+    logger.warn(`IG image JPEG transcode failed (${igId}); using original: ${e?.message ?? e}`);
+    return item;
   }
 }
 
-/** Publish to Instagram (Graph API /me/media + /me/media_publish). */
+/**
+ * Publish to Instagram (Graph API container flow) — FEED (single image, single
+ * video→Reel, or 2–10 carousel), REEL, or STORY (image/video). Videos are
+ * polled to FINISHED before publishing.
+ */
 async function publishInstagram(
   account: AccountRow,
   content: string,
-  mediaUrls: string[],
+  items: MediaItem[],
+  format: PostFormat,
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('INSTAGRAM')) {
     return { ok: false, error: 'Instagram not configured: set META_APP_ID and META_APP_SECRET' };
   }
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  const igId = account.externalId;
+  if (items.length === 0) return { ok: false, error: 'Instagram requires at least one media item' };
 
   try {
-    // Step 1: create a media container
-    const mediaBody: Record<string, unknown> = { caption: content };
-    if (mediaUrls.length > 0) {
-      mediaBody.image_url = mediaUrls[0];
-      mediaBody.media_type = 'IMAGE';
-    } else {
-      // Carousel/text not officially supported without media; use REELS or bail
-      return { ok: false, error: 'Instagram requires at least one media URL' };
+    // Instagram accepts ONLY JPEG images; transcode any non-JPEG image up front so
+    // every container path below (story/feed/carousel) builds with a JPEG image_url.
+    items = await Promise.all(items.map((m) => ensureIgJpegImage(m, igId)));
+
+    if (format === 'STORY') {
+      const m = items[0];
+      const body = isVideoItem(m)
+        ? { media_type: 'STORIES', video_url: m.url }
+        : { media_type: 'STORIES', image_url: m.url };
+      const c = await igCreateContainer(igId, token, body);
+      if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+      // Poll to FINISHED for images too (not just video) — same race as FEED.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
+      return igPublish(igId, token, c.id);
     }
 
-    const createRes = await metaGraphFetch(`/${account.externalId}/media`, {
-      accessToken: token,
-      method: 'POST',
-      body: mediaBody,
-      timeoutMs: 15_000,
-    });
-    if (!createRes.ok) {
-      return {
-        ok: false,
-        error: `IG media create: ${createRes.error.message}`.slice(0, 500),
-        isAuthError: createRes.error.isAuthError,
-      };
-    }
-    const containerId = (createRes.data as any)?.id;
-    if (!containerId) {
-      return { ok: false, error: 'IG media create: no container id returned' };
+    if (format === 'REEL') {
+      const vid = items.find(isVideoItem) ?? items[0];
+      if (!isVideoItem(vid)) return { ok: false, error: 'Instagram Reels requires a video' };
+      const c = await igCreateContainer(igId, token, {
+        media_type: 'REELS',
+        video_url: vid.url,
+        caption: content,
+        share_to_feed: true,
+      });
+      if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
+      return igPublish(igId, token, c.id);
     }
 
-    // Step 2: publish the container
-    const pubRes = await metaGraphFetch(`/${account.externalId}/media_publish`, {
-      accessToken: token,
-      method: 'POST',
-      body: { creation_id: containerId },
-      timeoutMs: 15_000,
-    });
-    if (!pubRes.ok) {
-      return {
-        ok: false,
-        error: `IG media publish: ${pubRes.error.message}`.slice(0, 500),
-        isAuthError: pubRes.error.isAuthError,
-      };
+    // FEED
+    if (items.length === 1) {
+      const m = items[0];
+      if (isVideoItem(m)) {
+        // Standalone feed video is published as a Reel (Meta deprecated VIDEO).
+        const c = await igCreateContainer(igId, token, {
+          media_type: 'REELS',
+          video_url: m.url,
+          caption: content,
+          share_to_feed: true,
+        });
+        if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+        const w = await igWaitContainerReady(c.id, token);
+        if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
+        return igPublish(igId, token, c.id);
+      }
+      const c = await igCreateContainer(igId, token, { image_url: m.url, caption: content });
+      if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+      // Poll to FINISHED before publishing: Meta needs a moment to fetch/validate
+      // the (possibly just-transcoded) image, and publishing too early returns the
+      // opaque "Media ID is not available". On a genuinely bad image this surfaces
+      // the real status (ERROR/EXPIRED) instead of that generic message.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
+      return igPublish(igId, token, c.id);
     }
-    const postId = (pubRes.data as any)?.id;
-    if (postId) return { ok: true, externalPostId: String(postId) };
-    return { ok: false, error: 'IG media publish: no post id returned' };
+
+    // CAROUSEL (2–10 items)
+    const children: string[] = [];
+    for (const m of items.slice(0, 10)) {
+      const childBody = isVideoItem(m)
+        ? { media_type: 'VIDEO', video_url: m.url, is_carousel_item: true }
+        : { image_url: m.url, is_carousel_item: true };
+      const child = await igCreateContainer(igId, token, childBody);
+      if (!child.id) return { ok: false, error: child.error, isAuthError: child.isAuthError };
+      if (isVideoItem(m)) {
+        const w = await igWaitContainerReady(child.id, token);
+        if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
+      }
+      children.push(child.id);
+    }
+    const parent = await igCreateContainer(igId, token, {
+      media_type: 'CAROUSEL',
+      caption: content,
+      children: children.join(','),
+    });
+    if (!parent.id) return { ok: false, error: parent.error, isAuthError: parent.isAuthError };
+    const w = await igWaitContainerReady(parent.id, token);
+    if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
+    return igPublish(igId, token, parent.id);
   } catch (e: any) {
     const msg = e?.message ?? String(e);
-    logger.warn(`Instagram publish error (${account.externalId}): ${msg}`);
+    logger.warn(`Instagram publish error (${igId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
+// ───────────────────────────────────────────────────────── Facebook helpers
+
+/** Start a resumable video upload (Reels/Stories): returns video_id + upload_url. */
+async function fbVideoPhaseStart(
+  pageId: string,
+  token: string,
+  edge: 'video_reels' | 'video_stories',
+): Promise<{ videoId?: string; uploadUrl?: string; error?: string; isAuthError?: boolean }> {
+  const r = await metaGraphFetch(`/${pageId}/${edge}`, {
+    accessToken: token,
+    method: 'POST',
+    query: { upload_phase: 'start' },
+    timeoutMs: 20_000,
+  });
+  if (!r.ok) return { error: `FB ${edge} start: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+  return {
+    videoId: (r.data as any)?.video_id ? String((r.data as any).video_id) : undefined,
+    uploadUrl: (r.data as any)?.upload_url,
+  };
+}
+
+/** Hosted upload: tell the rupload host to pull the video from a public URL. */
+async function fbUploadByUrl(
+  uploadUrl: string,
+  token: string,
+  fileUrl: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await safeFetch(uploadUrl, {
+      method: 'POST',
+      headers: { Authorization: `OAuth ${token}`, file_url: fileUrl },
+      timeoutMs: 120_000,
+    });
+    const json: any = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: `FB upload: HTTP ${res.status} ${JSON.stringify(json).slice(0, 200)}` };
+    if (json && json.success === false) return { ok: false, error: 'FB upload: rejected by host' };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: `FB upload: ${e?.message ?? e}` };
+  }
+}
+
+/**
+ * Publish to a Facebook Page — FEED (text / single photo / single video /
+ * multi-photo), REEL (resumable video upload), or STORY (photo or video).
+ */
+async function publishFacebook(
+  account: AccountRow,
+  content: string,
+  items: MediaItem[],
+  format: PostFormat,
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('FACEBOOK')) {
+    return { ok: false, error: 'Facebook not configured: set META_APP_ID and META_APP_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  const pageId = account.externalId;
+
+  try {
+    if (format === 'REEL') {
+      const vid = items.find(isVideoItem) ?? items[0];
+      if (!vid || !isVideoItem(vid)) return { ok: false, error: 'Facebook Reels requires a video' };
+      const start = await fbVideoPhaseStart(pageId, token, 'video_reels');
+      if (!start.videoId || !start.uploadUrl) {
+        return { ok: false, error: start.error ?? 'FB reels start failed', isAuthError: start.isAuthError };
+      }
+      const up = await fbUploadByUrl(start.uploadUrl, token, vid.url);
+      if (!up.ok) return { ok: false, error: up.error };
+      const fin = await metaGraphFetch(`/${pageId}/video_reels`, {
+        accessToken: token,
+        method: 'POST',
+        query: { upload_phase: 'finish', video_id: start.videoId, video_state: 'PUBLISHED' },
+        body: { description: content },
+        timeoutMs: 30_000,
+      });
+      if (!fin.ok) return { ok: false, error: `FB reels finish: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
+      return { ok: true, externalPostId: start.videoId };
+    }
+
+    if (format === 'STORY') {
+      const m = items[0];
+      if (!m) return { ok: false, error: 'Facebook Story requires a media item' };
+      if (isVideoItem(m)) {
+        const start = await fbVideoPhaseStart(pageId, token, 'video_stories');
+        if (!start.videoId || !start.uploadUrl) {
+          return { ok: false, error: start.error ?? 'FB story start failed', isAuthError: start.isAuthError };
+        }
+        const up = await fbUploadByUrl(start.uploadUrl, token, m.url);
+        if (!up.ok) return { ok: false, error: up.error };
+        const fin = await metaGraphFetch(`/${pageId}/video_stories`, {
+          accessToken: token,
+          method: 'POST',
+          query: { upload_phase: 'finish', video_id: start.videoId },
+          timeoutMs: 30_000,
+        });
+        if (!fin.ok) return { ok: false, error: `FB story finish: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
+        const pid = (fin.data as any)?.post_id;
+        return { ok: true, externalPostId: pid ? String(pid) : start.videoId };
+      }
+      // Photo story: upload unpublished photo, then attach it as a story.
+      const photo = await metaGraphFetch(`/${pageId}/photos`, {
+        accessToken: token,
+        method: 'POST',
+        body: { url: m.url, published: false },
+        timeoutMs: 20_000,
+      });
+      if (!photo.ok) return { ok: false, error: `FB story photo: ${photo.error.message}`.slice(0, 500), isAuthError: photo.error.isAuthError };
+      const photoId = (photo.data as any)?.id;
+      if (!photoId) return { ok: false, error: 'FB story photo: no id returned' };
+      const st = await metaGraphFetch(`/${pageId}/photo_stories`, {
+        accessToken: token,
+        method: 'POST',
+        body: { photo_id: String(photoId) },
+        timeoutMs: 20_000,
+      });
+      if (!st.ok) return { ok: false, error: `FB photo_stories: ${st.error.message}`.slice(0, 500), isAuthError: st.error.isAuthError };
+      const pid = (st.data as any)?.post_id;
+      return { ok: true, externalPostId: pid ? String(pid) : String(photoId) };
+    }
+
+    // FEED
+    if (items.length === 0) {
+      const r = await metaGraphFetch(`/${pageId}/feed`, {
+        accessToken: token,
+        method: 'POST',
+        body: { message: content },
+        timeoutMs: 15_000,
+      });
+      if (!r.ok) return { ok: false, error: r.error.message.slice(0, 500), isAuthError: r.error.isAuthError };
+      const id = (r.data as any)?.id;
+      return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'no post id returned' };
+    }
+
+    const videos = items.filter(isVideoItem);
+    const images = items.filter((m) => !isVideoItem(m));
+
+    if (videos.length > 0) {
+      // Single video feed post (FB has no video-carousel feed primitive).
+      const r = await metaGraphFetch(`/${pageId}/videos`, {
+        accessToken: token,
+        method: 'POST',
+        body: { file_url: videos[0].url, description: content },
+        timeoutMs: 60_000,
+      });
+      if (!r.ok) return { ok: false, error: `FB video: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+      const id = (r.data as any)?.id;
+      return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'FB video: no id returned' };
+    }
+
+    if (images.length === 1) {
+      const r = await metaGraphFetch(`/${pageId}/photos`, {
+        accessToken: token,
+        method: 'POST',
+        body: { url: images[0].url, caption: content },
+        timeoutMs: 20_000,
+      });
+      if (!r.ok) return { ok: false, error: `FB photo: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+      const pid = (r.data as any)?.post_id ?? (r.data as any)?.id;
+      return pid ? { ok: true, externalPostId: String(pid) } : { ok: false, error: 'FB photo: no id returned' };
+    }
+
+    // Multi-photo feed post: upload each unpublished, then attach to one post.
+    const mediaFbids: string[] = [];
+    for (const m of images.slice(0, 10)) {
+      const up = await metaGraphFetch(`/${pageId}/photos`, {
+        accessToken: token,
+        method: 'POST',
+        body: { url: m.url, published: false },
+        timeoutMs: 20_000,
+      });
+      if (!up.ok) return { ok: false, error: `FB photo upload: ${up.error.message}`.slice(0, 500), isAuthError: up.error.isAuthError };
+      const id = (up.data as any)?.id;
+      if (id) mediaFbids.push(String(id));
+    }
+    if (!mediaFbids.length) return { ok: false, error: 'FB multi-photo: no uploads succeeded' };
+    const r = await metaGraphFetch(`/${pageId}/feed`, {
+      accessToken: token,
+      method: 'POST',
+      body: { message: content, attached_media: mediaFbids.map((id) => ({ media_fbid: id })) },
+      timeoutMs: 20_000,
+    });
+    if (!r.ok) return { ok: false, error: r.error.message.slice(0, 500), isAuthError: r.error.isAuthError };
+    const id = (r.data as any)?.id;
+    return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'no post id returned' };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`Facebook publish error (${pageId}): ${msg}`);
     return { ok: false, error: msg.slice(0, 500) };
   }
 }
@@ -335,6 +665,99 @@ async function publishTikTok(
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`TikTok publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
+// ─────────────────────────────────────── Instagram (direct Instagram Login)
+
+/** Host for the direct "Instagram API with Instagram Login" flow — distinct
+ *  from graph.facebook.com (the Page-linked IG_BUSINESS path). */
+const IG_DIRECT_GRAPH = 'https://graph.instagram.com';
+
+/**
+ * Publish to a direct-login Instagram account (graph.instagram.com): create a
+ * media container, poll to FINISHED for video, then media_publish. Mirrors the
+ * Page-based IG flow but uses the Instagram-hosted Graph and the per-account
+ * token directly (no Page token). image_url/video_url must be public HTTPS.
+ * Decides image vs video by URL extension / MIME.
+ */
+async function publishInstagramDirect(
+  account: AccountRow,
+  content: string,
+  items: MediaItem[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('INSTAGRAM_LOGIN')) {
+    return { ok: false, error: 'Instagram (Login) not configured: set INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  const igId = account.externalId;
+  if (items.length === 0) return { ok: false, error: 'Instagram requires at least one media item' };
+
+  const m = items[0];
+  const isVideo = isVideoItem(m);
+
+  try {
+    // Step 1 — create the media container.
+    const createBody = isVideo
+      ? { media_type: 'REELS', video_url: m.url, caption: content }
+      : { image_url: m.url, caption: content };
+    const createRes = await safeFetch(`${IG_DIRECT_GRAPH}/${igId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(createBody),
+      timeoutMs: 20_000,
+    });
+    const createJson = (await createRes.json()) as Record<string, any>;
+    const creationId = createJson?.id;
+    if (!createRes.ok || !creationId) {
+      const err = String(createJson?.error?.message ?? createRes.status);
+      logger.warn(`Instagram (Login) container failed (${igId}): ${err}`);
+      return { ok: false, error: `IG container: ${err}`.slice(0, 500) };
+    }
+
+    // Step 2 — videos process asynchronously; poll to FINISHED (bounded ≤10s).
+    if (isVideo) {
+      let finished = false;
+      for (let i = 0; i < 5; i++) {
+        await sleep(2_000);
+        const statusRes = await safeFetch(
+          `${IG_DIRECT_GRAPH}/${creationId}?` +
+            new URLSearchParams({ fields: 'status_code', access_token: token }).toString(),
+          { method: 'GET', timeoutMs: 15_000 },
+        );
+        const statusJson = (await statusRes.json()) as Record<string, any>;
+        const code = statusJson?.status_code;
+        if (code === 'FINISHED') {
+          finished = true;
+          break;
+        }
+        if (code === 'ERROR' || code === 'EXPIRED') {
+          return { ok: false, error: `IG processing ${code}`.slice(0, 300) };
+        }
+      }
+      if (!finished) return { ok: false, error: 'IG media processing timed out' };
+    }
+
+    // Step 3 — publish the finished container.
+    const pubRes = await safeFetch(`${IG_DIRECT_GRAPH}/${igId}/media_publish`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ creation_id: String(creationId) }),
+      timeoutMs: 20_000,
+    });
+    const pubJson = (await pubRes.json()) as Record<string, any>;
+    const postId = pubJson?.id;
+    if (!pubRes.ok || !postId) {
+      const err = String(pubJson?.error?.message ?? pubRes.status);
+      logger.warn(`Instagram (Login) publish failed (${igId}): ${err}`);
+      return { ok: false, error: `IG publish: ${err}`.slice(0, 500) };
+    }
+    return { ok: true, externalPostId: String(postId) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`Instagram (Login) publish error (${igId}): ${msg}`);
     return { ok: false, error: msg.slice(0, 500) };
   }
 }
@@ -531,22 +954,27 @@ async function publishGmb(
   }
 }
 
-/** Dispatch to the correct per-network adapter. */
+/** Dispatch to the correct per-network adapter. `opts.format` (FEED|REEL|STORY)
+ *  and per-item MIME are honoured by FB/IG; the other networks ignore them. */
 export async function publishToNetwork(
   account: AccountRow,
   content: string,
   mediaUrls: string[],
-  options?: PublishOptions,
+  opts: PublishOptions = {},
 ): Promise<PublishResult> {
+  const format = opts.format ?? 'FEED';
+  const items = toMediaItems(mediaUrls, opts);
   switch (account.network) {
     case 'FACEBOOK':
-      return publishFacebook(account, content, mediaUrls);
+      return publishFacebook(account, content, items, format);
     case 'INSTAGRAM':
-      return publishInstagram(account, content, mediaUrls);
+      return publishInstagram(account, content, items, format);
+    case 'INSTAGRAM_LOGIN':
+      return publishInstagramDirect(account, content, items);
     case 'LINKEDIN':
       return publishLinkedIn(account, content, mediaUrls);
     case 'TIKTOK':
-      return publishTikTok(account, content, mediaUrls, options?.tiktok);
+      return publishTikTok(account, content, mediaUrls, opts.tiktok);
     case 'TWITTER':
       return publishTwitter(account, content, mediaUrls);
     case 'PINTEREST':
