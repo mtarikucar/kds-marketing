@@ -91,4 +91,14 @@ describe('MessageSenderService.send', () => {
     await expect(service.send(input)).rejects.toThrow();
     expect(stream.push).not.toHaveBeenCalled();
   });
+
+  it('forwards optional template/media through to the adapter', async () => {
+    const template = { name: 'promo', languageCode: 'tr' };
+    const media = { url: 'http://img', kind: 'image' as const };
+    await service.send({ ...input, template, media });
+    expect(adapter.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '+905551112233', text: 'hi', template, media }),
+    );
+    expect(quota.refund).not.toHaveBeenCalled();
+  });
 });

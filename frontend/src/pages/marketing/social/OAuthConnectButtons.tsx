@@ -11,12 +11,20 @@ interface Props {
 
 /**
  * Networks with a wired OAuth connect flow (mirrors the backend OAUTH_NETWORKS).
- * The Epic-12 publish adapters (TWITTER/PINTEREST/GMB) are publish-configured via
- * env but their per-network OAuth exchange classes are a deferred follow-up, so
- * one-click connect stays disabled for them even when their publish env is set —
- * otherwise the button would dead-end on an unsupported-network backend error.
+ * All seven now have a per-network OAuth exchange (X uses OAuth2 + PKCE,
+ * Pinterest Basic-auth token exchange, GMB Google OAuth) — one-click connect is
+ * enabled for each once its platform-app env creds are present (per the status
+ * endpoint); the manual token dialog remains as a fallback.
  */
-const OAUTH_CAPABLE = new Set<SocialNetwork>(['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'TIKTOK']);
+const OAUTH_CAPABLE = new Set<SocialNetwork>([
+  'FACEBOOK',
+  'INSTAGRAM',
+  'LINKEDIN',
+  'TIKTOK',
+  'TWITTER',
+  'PINTEREST',
+  'GMB',
+]);
 
 /**
  * One "Connect <Network>" button per network. A network is clickable only when

@@ -148,5 +148,20 @@ describe('SendingDomainsService', () => {
       expect(out).toEqual({ email: 'noreply@acme.com', name: 'Acme' });
       expect(prisma.sendingDomain.findFirst.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, status: 'VERIFIED' });
     });
+
+    it('attaches DKIM signing material (opened from the sealed key) so the From-swap is authenticated', async () => {
+      process.env.SENDING_DOMAIN_ESP = 'postmark';
+      const { sealSecret } = require('../../../common/crypto/secret-box.helper');
+      const pem = '-----BEGIN PRIVATE KEY-----\nMIItest\n-----END PRIVATE KEY-----';
+      prisma.sendingDomain.findFirst.mockResolvedValue({
+        domain: 'mail.acme.com', fromEmail: 'noreply@mail.acme.com', fromName: 'Acme',
+        dkimSelector: 'mkt1a2b', dkimPrivateSealed: sealSecret(pem),
+      });
+      const out = await svc.resolveFrom(WS);
+      expect(out).toMatchObject({
+        email: 'noreply@mail.acme.com', name: 'Acme',
+        dkim: { domainName: 'mail.acme.com', keySelector: 'mkt1a2b', privateKey: pem },
+      });
+    });
   });
 });

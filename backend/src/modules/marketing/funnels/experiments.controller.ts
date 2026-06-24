@@ -11,15 +11,19 @@ import {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { ExperimentsService } from './experiments.service';
 import { CreateExperimentDto, UpdateExperimentDto } from './funnels.dto';
 
+// Admin surface only (create/update/start/stop/delete) — MANAGER+; closes the
+// no-op MarketingRolesGuard gap (a REP could otherwise start/stop experiments).
 @MarketingRoute()
 @Controller('marketing/experiments')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
+@MarketingRoles('MANAGER')
 export class ExperimentsController {
   constructor(private readonly svc: ExperimentsService) {}
 

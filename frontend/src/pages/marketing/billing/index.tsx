@@ -32,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { CreditCard, Banknote, RefreshCw } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
+import { navigateExternal } from '@/lib/navigateExternal';
 import { useMarketingAuthStore } from '@/store/marketingAuthStore';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -113,7 +114,7 @@ export default function BillingPage() {
     onSuccess: ({ data }) => {
       const handle = data.handle;
       if (handle.kind === 'redirect') {
-        window.location.href = handle.url;
+        navigateExternal(handle.url);
       } else if (handle.kind === 'iframe') {
         setIframeUrl(handle.iframeUrl);
       } else if (handle.kind === 'bank_transfer') {

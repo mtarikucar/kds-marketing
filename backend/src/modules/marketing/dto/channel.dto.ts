@@ -9,6 +9,22 @@ import {
 
 const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'EMAIL'];
 
+/**
+ * Payload from the WhatsApp Embedded Signup flow: the short-lived OAuth `code`
+ * (exchanged server-side for a long-lived business token — never trust a token
+ * from the client) plus the WABA + phone-number ids the FB SDK returns.
+ */
+export class WhatsappEmbeddedSignupDto {
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  code: string;
+
+  @IsOptional() @IsString() @MaxLength(64)
+  wabaId?: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(64)
+  phoneNumberId: string;
+}
+
 export class CreateChannelDto {
   @IsIn(CHANNEL_TYPES)
   type: string;

@@ -69,7 +69,7 @@ export default function InvoicesPage() {
   const queryClient = useQueryClient();
 
   const [showForm, setShowForm] = useState(false);
-  const [psp, setPsp] = useState({ provider: 'MANUAL', secretKey: '', instructions: '', merchantId: '', merchantKey: '', merchantSalt: '' });
+  const [psp, setPsp] = useState({ provider: 'MANUAL', secretKey: '', instructions: '', merchantId: '', merchantKey: '', merchantSalt: '', apiKey: '' });
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -146,13 +146,18 @@ export default function InvoicesPage() {
         secrets:
           psp.provider === 'STRIPE' && psp.secretKey
             ? { secretKey: psp.secretKey }
-            : psp.provider === 'PAYTR' && (psp.merchantId || psp.merchantKey || psp.merchantSalt)
+            : psp.provider === 'IYZICO' && (psp.apiKey || psp.secretKey)
               ? {
-                  ...(psp.merchantId ? { merchantId: psp.merchantId } : {}),
-                  ...(psp.merchantKey ? { merchantKey: psp.merchantKey } : {}),
-                  ...(psp.merchantSalt ? { merchantSalt: psp.merchantSalt } : {}),
+                  ...(psp.apiKey ? { apiKey: psp.apiKey } : {}),
+                  ...(psp.secretKey ? { secretKey: psp.secretKey } : {}),
                 }
-              : undefined,
+              : psp.provider === 'PAYTR' && (psp.merchantId || psp.merchantKey || psp.merchantSalt)
+                ? {
+                    ...(psp.merchantId ? { merchantId: psp.merchantId } : {}),
+                    ...(psp.merchantKey ? { merchantKey: psp.merchantKey } : {}),
+                    ...(psp.merchantSalt ? { merchantSalt: psp.merchantSalt } : {}),
+                  }
+                : undefined,
         configPublic:
           psp.provider === 'MANUAL' && psp.instructions
             ? { instructions: psp.instructions }
@@ -160,7 +165,7 @@ export default function InvoicesPage() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'invoices', 'psp'] });
-      setPsp((p) => ({ ...p, secretKey: '', merchantKey: '', merchantSalt: '' }));
+      setPsp((p) => ({ ...p, secretKey: '', merchantKey: '', merchantSalt: '', apiKey: '' }));
       toast.success(t('invoices.pspSaved', 'Payment settings saved'));
     },
   });
@@ -208,6 +213,7 @@ export default function InvoicesPage() {
                   </SelectItem>
                   <SelectItem value="STRIPE">Stripe</SelectItem>
                   <SelectItem value="PAYTR">PayTR (TRY)</SelectItem>
+                  <SelectItem value="IYZICO">iyzico (TRY)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -251,6 +257,23 @@ export default function InvoicesPage() {
                     {pspCfg?.configuredSecrets?.includes('merchantSalt') && <span className="text-success">✓</span>}
                   </p>
                   <Input type="password" value={psp.merchantSalt} onChange={(e) => setPsp((p) => ({ ...p, merchantSalt: e.target.value }))} placeholder="••••" autoComplete="off" />
+                </div>
+              </div>
+            ) : psp.provider === 'IYZICO' ? (
+              <div className="flex flex-1 min-w-48 flex-wrap gap-2">
+                <div className="min-w-36 flex-1">
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">
+                    {t('invoices.iyzicoApiKey', 'API key')}{' '}
+                    {pspCfg?.configuredSecrets?.includes('apiKey') && <span className="text-success">✓</span>}
+                  </p>
+                  <Input value={psp.apiKey} onChange={(e) => setPsp((p) => ({ ...p, apiKey: e.target.value }))} placeholder="sandbox-…" autoComplete="off" />
+                </div>
+                <div className="min-w-36 flex-1">
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">
+                    {t('invoices.iyzicoSecretKey', 'Secret key')}{' '}
+                    {pspCfg?.configuredSecrets?.includes('secretKey') && <span className="text-success">✓</span>}
+                  </p>
+                  <Input type="password" value={psp.secretKey} onChange={(e) => setPsp((p) => ({ ...p, secretKey: e.target.value }))} placeholder="••••" autoComplete="off" />
                 </div>
               </div>
             ) : (

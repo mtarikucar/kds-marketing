@@ -10,6 +10,7 @@ import { EntitlementsService } from '../../billing/entitlements.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
+import { listSiteTemplates, findSiteTemplate } from './site-templates';
 import { SiteRendererService } from './site-renderer.service';
 import { BrandingService } from '../branding/branding.service';
 
@@ -72,6 +73,18 @@ export class SitesService {
       }
       throw e;
     });
+  }
+
+  /** Starter template catalog (audit A5). */
+  listTemplates() {
+    return listSiteTemplates();
+  }
+
+  /** Clone a starter template into a new draft SitePage. */
+  async createFromTemplate(workspaceId: string, templateId: string) {
+    const tpl = findSiteTemplate(templateId);
+    if (!tpl) throw new BadRequestException('Unknown template');
+    return this.create(workspaceId, { title: tpl.title, blocks: tpl.blocks });
   }
 
   async update(workspaceId: string, id: string, dto: any) {

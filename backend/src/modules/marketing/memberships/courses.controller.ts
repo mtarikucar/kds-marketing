@@ -11,6 +11,7 @@ import {
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
@@ -23,9 +24,13 @@ import {
   UpdateCourseDto,
 } from './course.dto';
 
+// Course/module/lesson authoring + publish — MANAGER+ (learners consume courses
+// via enrollment/public routes, never this authoring surface). Closes the no-op
+// MarketingRolesGuard gap.
 @MarketingRoute()
 @Controller('marketing/courses')
 @UseGuards(MarketingGuard, MarketingRolesGuard)
+@MarketingRoles('MANAGER')
 export class CoursesController {
   constructor(private readonly svc: CoursesService) {}
 

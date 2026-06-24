@@ -219,9 +219,19 @@ export class WorkflowActionHandler {
 
   private async assignLead(step: any, ctx: WorkflowContext): Promise<string> {
     if (!ctx.lead?.id) return 'skipped (no lead)';
-    const to = step.strategy === 'user' && step.userId
-      ? step.userId
-      : await this.autoAssigner.pickAssignee(ctx.workspaceId);
+    let to: string | null = null;
+    if (step.strategy === 'user' && step.userId) {
+      // step.userId is unvalidated DSL input — resolve it to a real user IN THIS
+      // workspace (same guard the manual lead-assign path uses). A foreign/unknown
+      // id must not become a dangling assignedToId (which a later notify_user
+      // would then address). Fall back to auto-assign if it doesn't resolve.
+      const u = await this.prisma.marketingUser.findFirst({
+        where: { id: step.userId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      to = u?.id ?? null;
+    }
+    if (!to) to = await this.autoAssigner.pickAssignee(ctx.workspaceId);
     if (!to) return 'skipped (no assignee)';
     await this.prisma.lead.updateMany({ where: { id: ctx.lead.id, workspaceId: ctx.workspaceId }, data: { assignedToId: to } });
     ctx.lead.assignedToId = to;

@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '@/components/ui/Dialog';
@@ -100,7 +101,7 @@ export default function CompaniesPage() {
                 {({ id }) => <Input id={id} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} />}
               </Field>
               <Field label={t('companies.phone', 'Phone')}>
-                {({ id }) => <Input id={id} value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />}
+                {({ id }) => <PhoneInput id={id} value={form.phone} onChange={(v) => setForm((f) => ({ ...f, phone: v }))} />}
               </Field>
               <Field label={t('companies.email', 'Email')}>
                 {({ id }) => <Input id={id} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />}

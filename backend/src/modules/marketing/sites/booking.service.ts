@@ -10,11 +10,13 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
+import { zonedParts, zonedWallTimeToUtcMs, parseHm } from './timezone-slots';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { GoogleCalendarSyncService } from '../integrations/google-calendar-sync.service';
+import { OutlookCalendarSyncService } from '../integrations/outlook-calendar-sync.service';
 
 const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
@@ -39,6 +41,7 @@ export class BookingService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly googleSync: GoogleCalendarSyncService,
+    private readonly outlookSync: OutlookCalendarSyncService,
   ) {}
 
   onModuleInit(): void {
@@ -207,12 +210,21 @@ export class BookingService implements OnModuleInit {
     const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
     const out: string[] = [];
 
-    for (let day = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate())); day <= to; day = new Date(day.getTime() + 86400_000)) {
-      const windows = avail[String(day.getUTCDay())] ?? [];
+    // Availability windows are wall-clock times in the calendar's TIMEZONE (not
+    // UTC) — so a Turkey calendar's "09:00" window is 09:00 in Istanbul. Iterate
+    // tz-local calendar days and convert each window to a UTC instant (DST-safe).
+    const tz = (cal as any).timezone || 'UTC';
+    const startD = zonedParts(from.getTime(), tz);
+    for (let n = 0; n < 400; n++) {
+      const dayMidnight = zonedWallTimeToUtcMs(startD.y, startD.mo, startD.d + n, 0, 0, tz);
+      if (dayMidnight > to.getTime()) break;
+      const { y, mo, d, weekday } = zonedParts(dayMidnight + 12 * 3600_000, tz); // noon = DST-safe parts
+      const windows = avail[String(weekday)] ?? [];
       for (const w of windows) {
-        const ws = this.atUtc(day, w.start);
-        const we = this.atUtc(day, w.end);
-        if (ws == null || we == null) continue;
+        const hs = parseHm(w.start), he = parseHm(w.end);
+        if (!hs || !he) continue;
+        const ws = zonedWallTimeToUtcMs(y, mo, d, hs[0], hs[1], tz);
+        const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
         for (let s = ws; s + slotMs <= we; s += stepMs) {
           const e = s + slotMs;
           if (s < now) continue;
@@ -378,10 +390,11 @@ export class BookingService implements OnModuleInit {
         payload: { workspaceId, bookingId: booking.id },
       });
     }
-    // Push the new booking to a connected Google Calendar (best-effort, inert
-    // when the integration is unconfigured); the BookingCreated domain event
-    // also drives this, so a missed direct call self-heals on the next pull.
+    // Push the new booking to a connected Google / Outlook calendar (best-effort,
+    // inert when unconfigured); the BookingCreated domain event also drives both,
+    // so a missed direct call self-heals.
     this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
   }
@@ -406,8 +419,9 @@ export class BookingService implements OnModuleInit {
         where: { id: existing.id, workspaceId },
         data: { status: 'CANCELLED' },
       });
-      // Remove the Google mirror so the slot frees up on both sides.
+      // Remove the Google / Outlook mirror so the slot frees up on both sides.
       this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
+      this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
     }
     return { id: existing.id, status: 'CANCELLED' };
   }
@@ -429,24 +443,26 @@ export class BookingService implements OnModuleInit {
    * direct reserve call could pass an arbitrary off-grid / out-of-hours time.
    */
   private isAlignedSlot(
-    cal: { availability: unknown; slotMinutes: number; bufferMinutes: number },
+    cal: { availability: unknown; slotMinutes: number; bufferMinutes: number; timezone?: string },
     start: Date,
   ): boolean {
     const avail = (cal.availability ?? {}) as Record<
       string,
       Array<{ start: string; end: string }>
     >;
-    const day = new Date(
-      Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()),
-    );
-    const windows = avail[String(start.getUTCDay())] ?? [];
+    // Same tz interpretation as availability() so a direct booking is validated
+    // against the calendar's wall-clock windows, not UTC.
+    const tz = cal.timezone || 'UTC';
+    const { y, mo, d, weekday } = zonedParts(start.getTime(), tz);
+    const windows = avail[String(weekday)] ?? [];
     const slotMs = cal.slotMinutes * 60_000;
     const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
     const target = start.getTime();
     for (const w of windows) {
-      const ws = this.atUtc(day, w.start);
-      const we = this.atUtc(day, w.end);
-      if (ws == null || we == null) continue;
+      const hs = parseHm(w.start), he = parseHm(w.end);
+      if (!hs || !he) continue;
+      const ws = zonedWallTimeToUtcMs(y, mo, d, hs[0], hs[1], tz);
+      const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
       for (let s = ws; s + slotMs <= we; s += stepMs) {
         if (s === target) return true;
       }
@@ -454,14 +470,6 @@ export class BookingService implements OnModuleInit {
     return false;
   }
 
-  private atUtc(day: Date, hhmm: string): number | null {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm ?? '');
-    if (!m) return null;
-    const h = Number(m[1]);
-    const min = Number(m[2]);
-    if (h > 23 || min > 59) return null;
-    return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h, min);
-  }
 
   private slugify(s: string): string {
     return (s || 'calendar').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').slice(0, 80) || 'calendar';

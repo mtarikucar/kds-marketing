@@ -1548,6 +1548,15 @@ model Campaign {
   /// assigned a weighted-random variantKey at launch and gets that variant's
   /// subject/body. `subject`/`body` below remain the control/fallback.
   abEnabled      Boolean   @default(false)
+  /// A/B mode: SPLIT = send every variant to its weighted share (default, legacy
+  /// behaviour). WINNER = send the variants to abTestPercent% of the audience,
+  /// then auto-send the winning variant (by abWinnerMetric) to the held-back
+  /// remainder. abDecideAt schedules the decision; abWinnerKey is set once decided.
+  abMode         String?   // SPLIT | WINNER
+  abTestPercent  Int?      // 5–50: % of the audience used as the WINNER test cohort
+  abWinnerMetric String?   // OPEN | CLICK
+  abWinnerKey    String?   // the variant key chosen as the winner
+  abDecideAt     DateTime?
   subject        String?
   body           String    @db.Text
   /// Optional rendered HTML body (GHL email block builder). When set, EMAIL
@@ -1770,11 +1779,17 @@ model Booking {
   // blocks pulled FROM Google (status EXTERNAL_BUSY) it is the source event id.
   googleEventId String?
 
+  // Outlook/O365 (Microsoft Graph) 2-way sync, same shape as googleEventId. A
+  // transient `pending:<uuid>` value claims the create so two concurrent push
+  // paths can't mint duplicate Graph events (Graph has no client-supplied ids).
+  outlookEventId String?
+
   createdAt DateTime @default(now())
 
   @@index([calendarId, startAt])
   @@index([workspaceId])
   @@index([workspaceId, googleEventId])
+  @@index([workspaceId, outlookEventId])
   @@map("bookings")
 }
 
@@ -2707,10 +2722,14 @@ model Affiliate {
   code            String
   commissionType  String   // PERCENT | FLAT
   commissionValue Decimal  @db.Decimal(10, 2)
-  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED | PENDING (self-signup, awaiting approval)
   // Self-serve portal (Epic 11a): sha256 of the affiliate's portal bearer token
   // (shown once on generation, like IngestToken). null = no portal access yet.
   portalTokenHash String?  @unique
+  // Globally-unique public referral slug for the shareable /r/:slug link (the
+  // per-workspace `code` is NOT unique across workspaces, so it can't be the
+  // public key). Lazily minted; null until the affiliate first needs a link.
+  referralSlug    String?  @unique
   lastLoginAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -2805,6 +2824,9 @@ model SocialPost {
   workspaceId String
   content     String    @db.Text
   mediaUrls   String[]
+  /// Free-form publish options: per-target formats ({accountId: FEED|REEL|STORY}),
+  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), and mediaDeletedAt.
+  options     Json?
   status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
   scheduledAt DateTime?
   publishedAt DateTime?
@@ -3152,6 +3174,7 @@ model AdAccount {
   updatedAt      DateTime  @updatedAt
 
   metrics AdMetric[]
+  rules   AdRule[]
 
   @@unique([workspaceId, provider, externalAdId])
   @@index([workspaceId, provider])
@@ -3179,6 +3202,58 @@ model AdMetric {
   @@unique([adAccountId, date, campaignId])
   @@index([workspaceId, date])
   @@map("ad_metrics")
+}
+
+/// An automated ad-scaling rule (Meta only). The hourly evaluator computes
+/// `metric` over the trailing `windowDays` per campaign and, when the condition
+/// holds (respecting per-campaign `cooldownHours`), applies `action`:
+/// INCREASE_BUDGET / DECREASE_BUDGET (by `actionValue` %, clamped to min/max),
+/// PAUSE or RESUME. Every firing is recorded in AdRuleLog.
+model AdRule {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  adAccountId   String
+  account       AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  name          String
+  enabled       Boolean   @default(true)
+  level         String    @default("CAMPAIGN") // CAMPAIGN (adset = follow-up)
+  metric        String // SPEND | CPL | CTR | LEADS | CLICKS | IMPRESSIONS
+  operator      String // GT | LT | GTE | LTE
+  threshold     Decimal   @db.Decimal(14, 2)
+  windowDays    Int       @default(3)
+  action        String // INCREASE_BUDGET | DECREASE_BUDGET | PAUSE | RESUME
+  actionValue   Decimal?  @db.Decimal(10, 2) // percent for budget actions
+  maxBudget     Decimal?  @db.Decimal(14, 2) // major units (budget ceiling)
+  minBudget     Decimal?  @db.Decimal(14, 2) // major units (budget floor)
+  cooldownHours Int       @default(24)
+  lastRunAt     DateTime?
+  lastTriggeredAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  logs AdRuleLog[]
+
+  @@index([workspaceId, adAccountId])
+  @@index([enabled])
+  @@map("ad_rules")
+}
+
+/// Audit of each ad-rule firing (what entity, what action, before→after, ok?).
+model AdRuleLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  ruleId      String
+  rule        AdRule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  entityId    String // campaign/adset id acted on
+  entityName  String?
+  action      String
+  detail      String?  @db.Text // e.g. "daily_budget 100.00 → 120.00"
+  ok          Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, ruleId])
+  @@index([ruleId, entityId, action, createdAt])
+  @@map("ad_rule_logs")
 }
 
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).
@@ -3226,4 +3301,27 @@ model SendingDomain {
   @@unique([workspaceId, domain])
   @@index([workspaceId, status])
   @@map("sending_domains")
+}
+
+/// A tenant's own hostname pointed at the platform to white-label its public
+/// site (GHL parity, Epic 13 — inert until CUSTOM_DOMAINS_ENABLED + ops wires
+/// wildcard ingress + on-demand TLS). hostname is globally unique (one host →
+/// one workspace); a verify sweep flips PENDING→VERIFIED once the DNS TXT token
+/// is published, after which the Host-header middleware serves the workspace's
+/// public SitePage for that host.
+model CustomDomain {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  hostname      String    @unique
+  verifyToken   String
+  homeSlug      String    @default("home") // the SitePage slug served at '/'
+  status        String    @default("PENDING") // PENDING | VERIFIED | ACTIVE | FAILED
+  txtVerifiedAt DateTime?
+  sslStatus     String    @default("PENDING") // PENDING | ISSUED (ACME/ops-managed)
+  lastError     String?
+  lastCheckedAt DateTime? // verify-sweep cursor (nulls-first ordering = anti-starvation)
+  createdAt     DateTime  @default(now())
+
+  @@index([workspaceId])
+  @@map("custom_domains")
 }

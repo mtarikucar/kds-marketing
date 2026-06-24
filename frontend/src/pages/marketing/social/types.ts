@@ -37,10 +37,17 @@ export interface SocialPostTarget {
   error: string | null;
 }
 
+export interface SocialPostOptions {
+  formats?: Record<string, 'FEED' | 'REEL' | 'STORY'>;
+  media?: { url: string; key?: string; mime?: string }[];
+  mediaDeletedAt?: string;
+}
+
 export interface SocialPost {
   id: string;
   content: string;
   mediaUrls: string[];
+  options?: SocialPostOptions | null;
   status: PostStatus;
   scheduledAt: string | null;
   publishedAt: string | null;

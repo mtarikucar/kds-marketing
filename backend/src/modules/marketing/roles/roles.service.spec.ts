@@ -23,18 +23,20 @@ describe('RolesService', () => {
 
   it('resolves a custom role permission set when assigned', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.customRole.findUnique.mockResolvedValue({ id: 'r1', permissions: ['leads.read', 'reports.read'] } as any);
-    const perms = await svc.resolvePermissions({ role: 'REP', customRoleId: 'r1' });
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read', 'reports.read'] } as any);
+    const perms = await svc.resolvePermissions({ workspaceId: 'ws-1', role: 'REP', customRoleId: 'r1' });
     expect(perms).toEqual(['leads.read', 'reports.read']);
-    expect(await svc.hasPermission({ role: 'REP', customRoleId: 'r1' }, 'reports.read')).toBe(true);
-    expect(await svc.hasPermission({ role: 'REP', customRoleId: 'r1' }, 'billing.manage')).toBe(false);
+    expect(await svc.hasPermission({ workspaceId: 'ws-1', role: 'REP', customRoleId: 'r1' }, 'reports.read')).toBe(true);
+    expect(await svc.hasPermission({ workspaceId: 'ws-1', role: 'REP', customRoleId: 'r1' }, 'billing.manage')).toBe(false);
+    // The custom-role read is workspace-scoped.
+    expect(prisma.customRole.findFirst.mock.calls[0][0].where).toMatchObject({ id: 'r1', workspaceId: 'ws-1' });
   });
 
   it('falls back to the legacy role mapping when no custom role', async () => {
     const { svc } = makeSvc();
-    expect(await svc.hasPermission({ role: 'OWNER' }, 'billing.manage')).toBe(true);
-    expect(await svc.hasPermission({ role: 'REP' }, 'billing.manage')).toBe(false);
-    expect(await svc.hasPermission({ role: 'REP' }, 'leads.write')).toBe(true);
+    expect(await svc.hasPermission({ workspaceId: 'ws-1', role: 'OWNER' }, 'billing.manage')).toBe(true);
+    expect(await svc.hasPermission({ workspaceId: 'ws-1', role: 'REP' }, 'billing.manage')).toBe(false);
+    expect(await svc.hasPermission({ workspaceId: 'ws-1', role: 'REP' }, 'leads.write')).toBe(true);
   });
 
   it('assignToUser validates the user + role belong to the workspace', async () => {

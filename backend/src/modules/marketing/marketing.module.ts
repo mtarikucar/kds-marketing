@@ -118,6 +118,7 @@ import { ConversationsService } from './channels/conversations.service';
 import { ConversationIngressService } from './channels/conversation-ingress.service';
 import { ConversationStreamService } from './channels/conversation-stream.service';
 import { MessageSenderService } from './channels/message-sender.service';
+import { MessageReceiptService } from './channels/message-receipt.service';
 import { ConversationAiEngineService } from './channels/conversation-ai-engine.service';
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
 import { NetgsmReportClient } from './channels/netgsm-report.client';
@@ -159,6 +160,9 @@ import { MarketingReviewsController } from './controllers/marketing-reviews.cont
 import { ReviewGateController } from './controllers/review-gate.controller';
 import { ReviewsService } from './reviews/reviews.service';
 import { ReviewSyncService } from './reviews/review-sync.service';
+// Review-source OAuth connect (A9) — inert until provider creds + secret-box.
+import { ReviewOAuthService } from './reviews/review-oauth.service';
+import { PublicReviewOAuthController } from './controllers/public-review-oauth.controller';
 // Epic 13 — prospecting audit (inert until PAGESPEED_API_KEY).
 import { AuditService } from './prospecting/audit.service';
 import { ProspectingController } from './controllers/prospecting.controller';
@@ -166,6 +170,15 @@ import { PublicAuditController } from './controllers/public-audit.controller';
 // Epic 13 — sending domains / DKIM (inert until SENDING_DOMAIN_ESP).
 import { SendingDomainsService } from './sending-domains/sending-domains.service';
 import { SendingDomainsController } from './controllers/sending-domains.controller';
+// Epic 13 — custom-domain white-label (inert until CUSTOM_DOMAINS_ENABLED).
+import { CustomDomainsService } from './custom-domains/custom-domains.service';
+import { CustomDomainsController } from './controllers/custom-domains.controller';
+import { PublicCustomDomainController } from './controllers/public-custom-domain.controller';
+// List-hygiene write side — ESP bounce/complaint suppression (inert w/o ESP_FEEDBACK_SECRET).
+import { EspFeedbackService } from './channels/esp-feedback.service';
+import { EspFeedbackController } from './controllers/esp-feedback.controller';
+// Affiliate referral loop — public /r/:slug redirect + attribution + self-signup.
+import { PublicReferralController } from './controllers/public-referral.controller';
 
 // Phase F P8 — Voice AI (Twilio).
 import { MarketingVoiceController } from './controllers/marketing-voice.controller';
@@ -209,6 +222,7 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
+import { R2StorageService } from './social-planner/r2-storage.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
@@ -261,6 +275,7 @@ import {
   OutlookCalendarPublicController,
 } from './integrations/outlook-calendar.controller';
 import { OutlookCalendarService } from './integrations/outlook-calendar.service';
+import { OutlookCalendarSyncService } from './integrations/outlook-calendar-sync.service';
 // Epic F — custom roles + granular permissions.
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -297,8 +312,11 @@ import { OrderFormsService } from './order-forms/order-forms.service';
 
 // Ad reporting — Meta Ads + TikTok Ads (GoHighLevel parity).
 import { MarketingAdsController } from './controllers/marketing-ads.controller';
+import { MarketingAdRulesController } from './controllers/marketing-ad-rules.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
+import { AdManagementService } from './ads/ad-management.service';
+import { AdRulesService } from './ads/ad-rules.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
 import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
@@ -434,9 +452,15 @@ import { WalletService } from './wallet/wallet.service';
     ProspectingController,
     PublicAuditController,
     SendingDomainsController,
+    CustomDomainsController,
+    PublicCustomDomainController,
+    EspFeedbackController,
+    PublicReferralController,
+    PublicReviewOAuthController,
     MarketingOrderFormsController,
     PublicOrderFormController,
     MarketingAdsController,
+    MarketingAdRulesController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -567,6 +591,7 @@ import { WalletService } from './wallet/wallet.service';
     ChannelsService,
     ConversationStreamService,
     MessageSenderService,
+    MessageReceiptService,
     ConversationIngressService,
     ConversationsService,
     ConversationAiEngineService,
@@ -605,6 +630,8 @@ import { WalletService } from './wallet/wallet.service';
     OrderFormsService,
     AdAccountService,
     AdsPullService,
+    AdManagementService,
+    AdRulesService,
     CustomObjectsService,
     SnippetsService,
     LeadBulkService,
@@ -620,8 +647,11 @@ import { WalletService } from './wallet/wallet.service';
     WalletService,
     ReviewsService,
     ReviewSyncService,
+    ReviewOAuthService,
     AuditService,
     SendingDomainsService,
+    CustomDomainsService,
+    EspFeedbackService,
     // Phase F P8 — Voice AI: the VOICE channel adapter (config-only) + the
     // Twilio TwiML turn engine.
     VoiceAdapter,
@@ -657,6 +687,7 @@ import { WalletService } from './wallet/wallet.service';
     GoogleCalendarService,
     OutlookCalendarService,
     GoogleCalendarSyncService,
+    OutlookCalendarSyncService,
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,
@@ -669,6 +700,7 @@ import { WalletService } from './wallet/wallet.service';
     SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
+    R2StorageService,
     SocialOAuthService,
     SocialTokenRefreshService,
     // Guards

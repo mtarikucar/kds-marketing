@@ -5,12 +5,15 @@ import {
   ChannelCapability,
   ContactKind,
   InboundMessage,
+  OutboundMedia,
   OutboundSend,
   ResolvedChannelConfig,
   SendResult,
+  StatusUpdate,
 } from '../channel-adapter.interface';
+import { metaGraphFetch } from '../../../../common/util/meta-graph.util';
+import { parseMessengerStatuses } from '../meta-status.util';
 
-const GRAPH = 'https://graph.facebook.com/v19.0';
 const CAPS: readonly ChannelCapability[] = ['send', 'receive', 'delivery-receipts'];
 
 /**
@@ -18,44 +21,58 @@ const CAPS: readonly ChannelCapability[] = ['send', 'receive', 'delivery-receipt
  * shape (entry[].messaging[]), differing only in the page-scoped user-id kind
  * (PSID for Messenger, IGSID for Instagram). One helper, two thin adapters.
  * Secrets: { pageAccessToken }. The channel's `externalId` is the page id the
- * webhook resolves by.
+ * webhook resolves by. Supports text + by-URL media (image/file). Templates are
+ * WhatsApp-only and ignored here. Never throws on a provider error — FAILED.
  */
 async function metaSend(
-  logger: Logger,
   token: string | undefined,
   recipientId: string,
-  text: string,
+  opts: { text: string; media?: OutboundMedia },
 ): Promise<SendResult> {
   if (!token) {
     return { externalMessageId: null, status: 'FAILED', error: 'page access token missing' };
   }
-  try {
-    const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient: { id: recipientId },
-        messaging_type: 'RESPONSE',
-        message: { text },
-      }),
-      // Bound the call: undici's fetch has no default total timeout, so a
-      // black-holed Graph endpoint would hang forever, wedging the sequential
-      // scheduled-job batch (AI auto-replies run inside it) and holding a
-      // reserved quota slot until the process is killed.
-      signal: AbortSignal.timeout(10_000),
-    });
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return {
-        externalMessageId: null,
-        status: 'FAILED',
-        error: `Meta ${res.status}: ${JSON.stringify(data?.error ?? data).slice(0, 300)}`,
-      };
-    }
-    return { externalMessageId: data?.message_id ?? null, status: 'SENT' };
-  } catch (e: any) {
-    return { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };
+  const message = opts.media
+    ? {
+        attachment: {
+          type: opts.media.kind === 'document' ? 'file' : 'image',
+          payload: { url: opts.media.url, is_reusable: false },
+        },
+      }
+    : { text: opts.text };
+  const r = await metaGraphFetch('/me/messages', {
+    accessToken: token,
+    method: 'POST',
+    body: { recipient: { id: recipientId }, messaging_type: 'RESPONSE', message },
+    timeoutMs: 10_000,
+  });
+  if (!r.ok) {
+    return {
+      externalMessageId: null,
+      status: 'FAILED',
+      error: `Meta ${r.status}: ${String(r.error?.message ?? '').slice(0, 300)}`,
+    };
   }
+  return { externalMessageId: r.data?.message_id ?? null, status: 'SENT' };
+}
+
+async function metaHealthCheck(
+  token: string | undefined,
+  externalId: string | null,
+): Promise<{ ok: boolean; details?: Record<string, unknown> }> {
+  if (!token || !externalId) {
+    return { ok: false, details: { hasToken: !!token, hasPageId: !!externalId } };
+  }
+  const r = await metaGraphFetch('/me', {
+    accessToken: token,
+    method: 'GET',
+    query: { fields: 'id,name' },
+    timeoutMs: 10_000,
+  });
+  if (!r.ok) {
+    return { ok: false, details: { error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300) } };
+  }
+  return { ok: true, details: { id: r.data?.id ?? null, name: r.data?.name ?? null } };
 }
 
 function parseMetaMessaging(body: unknown, kind: ContactKind): InboundMessage[] {
@@ -64,7 +81,8 @@ function parseMetaMessaging(body: unknown, kind: ContactKind): InboundMessage[] 
     for (const ev of entry?.messaging ?? []) {
       const senderId = ev?.sender?.id;
       const text = ev?.message?.text;
-      // Skip echoes (our own sends) and non-text events (delivery/read receipts).
+      // Skip echoes (our own sends) and non-text events (delivery/read receipts
+      // are handled by parseStatusUpdates, not here).
       if (!senderId || ev?.message?.is_echo || typeof text !== 'string') continue;
       out.push({
         externalUserId: String(senderId),
@@ -89,17 +107,20 @@ export class MessengerAdapter implements ChannelAdapter, OnModuleInit {
     this.registry.register(this);
   }
 
-  send({ config, to, text }: OutboundSend): Promise<SendResult> {
-    return metaSend(this.logger, config.secrets.pageAccessToken, to, text);
+  send({ config, to, text, media }: OutboundSend): Promise<SendResult> {
+    return metaSend(config.secrets.pageAccessToken, to, { text, media });
   }
 
   parseInbound(_config: ResolvedChannelConfig, body: unknown): InboundMessage[] {
     return parseMetaMessaging(body, 'PSID');
   }
 
-  async healthCheck(config: ResolvedChannelConfig) {
-    const ok = !!config.secrets.pageAccessToken && !!config.externalId;
-    return { ok, details: { hasToken: !!config.secrets.pageAccessToken, hasPageId: !!config.externalId } };
+  parseStatusUpdates(_config: ResolvedChannelConfig, body: unknown): StatusUpdate[] {
+    return parseMessengerStatuses(body);
+  }
+
+  healthCheck(config: ResolvedChannelConfig) {
+    return metaHealthCheck(config.secrets.pageAccessToken, config.externalId);
   }
 }
 
@@ -114,16 +135,19 @@ export class InstagramAdapter implements ChannelAdapter, OnModuleInit {
     this.registry.register(this);
   }
 
-  send({ config, to, text }: OutboundSend): Promise<SendResult> {
-    return metaSend(this.logger, config.secrets.pageAccessToken, to, text);
+  send({ config, to, text, media }: OutboundSend): Promise<SendResult> {
+    return metaSend(config.secrets.pageAccessToken, to, { text, media });
   }
 
   parseInbound(_config: ResolvedChannelConfig, body: unknown): InboundMessage[] {
     return parseMetaMessaging(body, 'IGSID');
   }
 
-  async healthCheck(config: ResolvedChannelConfig) {
-    const ok = !!config.secrets.pageAccessToken && !!config.externalId;
-    return { ok, details: { hasToken: !!config.secrets.pageAccessToken, hasPageId: !!config.externalId } };
+  parseStatusUpdates(_config: ResolvedChannelConfig, body: unknown): StatusUpdate[] {
+    return parseMessengerStatuses(body);
+  }
+
+  healthCheck(config: ResolvedChannelConfig) {
+    return metaHealthCheck(config.secrets.pageAccessToken, config.externalId);
   }
 }

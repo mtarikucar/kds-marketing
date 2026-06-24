@@ -159,6 +159,10 @@ const OWNED_DELEGATES = [
   // account (sealed token) and the pulled per-day metric rows are workspace-owned.
   'adAccount',
   'adMetric',
+  // Ad management + automated scaling rules (Meta) — workspace-owned; the
+  // hourly eval sweep (cross-workspace) is whitelisted in ALLOWED_GLOBAL.
+  'adRule',
+  'adRuleLog',
   // Custom Objects (GHL parity): workspace-defined record types, their records,
   // and record↔Contact links are all workspace-owned.
   'customObjectDef',
@@ -194,6 +198,10 @@ const OWNED_DELEGATES = [
   // Sending domains / DKIM (GHL parity, Epic 13): workspace-owned email sending
   // domains; every multi-row/create call carries workspaceId.
   'sendingDomain',
+  // Custom-domain white-label (GHL parity, Epic 13): workspace-owned hostnames.
+  // Writes/reads are workspaceId-scoped; the host lookup is findUnique (by the
+  // globally-unique hostname) and the verify sweep is whitelisted below.
+  'customDomain',
 ] as const;
 
 /**
@@ -277,6 +285,14 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (adAccountId, date, campaignId) unique index makes a re-pull idempotent.
   'ads/ads-pull.service.ts:adAccount.findMany':
     'hourly ad-insights sweep reads due ad accounts across all workspaces (system cron)',
+  // Ad-rules eval sweep: the hourly cron reads ENABLED rules whose account is
+  // ACTIVE+META across ALL workspaces — a system job, same shape as the ads
+  // sweep. Every action it triggers is workspace-scoped (campaigns/setBudget/
+  // setStatus all resolve via the rule's workspaceId) and id-keyed; the per-
+  // (rule,campaign) cooldown log guards against thrashing. list() in the same
+  // file IS workspace-scoped.
+  'ads/ad-rules.service.ts:adRule.findMany':
+    'hourly ad-rules eval sweep reads enabled rules across all workspaces (system cron)',
   // Call-recording retrieval sweep (Epic 13, inert): the hourly cron reads ended
   // api-dial calls missing a recording across ALL workspaces — a system job, same
   // shape as the ads/subscription sweeps. The only write it triggers is an
@@ -296,6 +312,18 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // is id-keyed, and the refresh is idempotent (re-seals the latest token).
   'social-planner/oauth/social-token-refresh.service.ts:socialAccount.findMany':
     'hourly OAuth token-refresh sweep reads expiring accounts across all workspaces (system cron)',
+  // ESP delivery-feedback suppression: a hard bounce / spam complaint reported by
+  // the ESP carries only the dead address, no workspace — and the address is
+  // undeliverable EVERYWHERE, so suppression (emailBouncedAt + emailOptOut) is
+  // intentionally global by normalized email across all workspaces.
+  'channels/esp-feedback.service.ts:lead.updateMany':
+    'ESP bounce/complaint suppression is global by address (no workspace in the event; a dead address is dead everywhere)',
+  // Custom-domain verify sweep (Epic 13, inert): the hourly cron reads PENDING
+  // custom domains across ALL workspaces — a system job, same shape as the
+  // ads/review/recording sweeps. Every write it triggers (customDomain.updateMany
+  // → VERIFIED) is keyed by (id, workspaceId), and re-verifying is idempotent.
+  'custom-domains/custom-domains.service.ts:customDomain.findMany':
+    'hourly custom-domain verify sweep reads PENDING domains across all workspaces (system cron)',
   // Public e-signature sign/decline: the document id is resolved from a
   // token-scoped findUnique(publicToken) (the unguessable token IS the
   // capability), then the status-conditional updateMany flips SENT→SIGNED/DECLINED
@@ -326,6 +354,19 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (id, workspaceId), so only this renewal sweep is legitimately unscoped.
   'integrations/google-calendar-sync.service.ts:googleCalendarConnection.findMany':
     'watch-renewal cron re-registers expiring push channels across all workspaces (control-plane sweep)',
+  // Outlook/O365 (Graph) sync — the exact analogues of the Google entries above.
+  // The notification webhook carries only the Graph subscriptionId (UNIQUE, one
+  // connection per subscription); pullBySubscription resolves the connection by
+  // it before any workspace context exists. The other findFirst calls in this
+  // file (activeConnection, ensureSubscription) DO key on workspaceId.
+  'integrations/outlook-calendar-sync.service.ts:outlookCalendarConnection.findFirst':
+    'graph notification webhook resolves the connection by its unique subscriptionId before any workspace context exists',
+  // The subscription-renewal @Cron is a global control-plane sweep: it renews
+  // Graph subscriptions nearing expiry across ALL workspaces. The other findMany
+  // (pullWorkspace) IS workspace-scoped; every create/update path keys on
+  // (id, workspaceId), so only this renewal sweep is legitimately unscoped.
+  'integrations/outlook-calendar-sync.service.ts:outlookCalendarConnection.findMany':
+    'subscription-renewal cron renews expiring Graph subscriptions across all workspaces (control-plane sweep)',
 
   // ---- Epic A imports — ImportJobRow has NO workspaceId column; it is owned by
   // its parent ImportJob (which carries workspaceId). Every row op keys on

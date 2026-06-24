@@ -37,19 +37,31 @@ describe('BookingService', () => {
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };
-    // Google Calendar sync is inert in this suite (push/cancel are best-effort
-    // no-ops here); the dedicated google-calendar specs exercise it for real.
+    // Google / Outlook calendar sync are inert in this suite (push/cancel are
+    // best-effort no-ops here); the dedicated calendar specs exercise them for real.
     const googleSync = {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
-    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any);
+    const outlookSync = {
+      pushBooking: jest.fn().mockResolvedValue(null),
+      cancelBooking: jest.fn().mockResolvedValue(false),
+    };
+    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any);
   });
 
   it('slices the availability window into slots', async () => {
     const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
     expect(slots).toHaveLength(2); // 09:00, 09:30
     expect(slots[0]).toBe('2027-06-14T09:00:00.000Z');
+  });
+
+  it('interprets availability windows in the calendar timezone (Istanbul = UTC+3)', async () => {
+    prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ timezone: 'Europe/Istanbul' }));
+    const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+    // the 09:00 Istanbul window now resolves to 06:00 UTC (was wrongly 09:00 UTC before C4)
+    expect(slots[0]).toBe('2027-06-14T06:00:00.000Z');
+    expect(slots).toHaveLength(2);
   });
 
   it('subtracts an existing booking from the available slots', async () => {

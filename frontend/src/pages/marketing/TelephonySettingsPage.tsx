@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 
 interface TelephonyConfigView {
   status: string;
@@ -212,7 +213,18 @@ export default function TelephonySettingsPage() {
           >
             <Field label={t('telephony.myPhone', 'My phone (cell)')}>
               {({ id }) => (
-                <Input id={id} placeholder="05XXXXXXXXX" {...dahiliForm.register('phone')} />
+                <Controller
+                  name="phone"
+                  control={dahiliForm.control}
+                  render={({ field }) => (
+                    <PhoneInput
+                      id={id}
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                    />
+                  )}
+                />
               )}
             </Field>
             <p className="text-caption text-muted-foreground pt-2">

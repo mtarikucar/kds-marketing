@@ -103,10 +103,12 @@ describe('Social Planner (e2e)', () => {
 
   it('POST /accounts with invalid network returns 400', async () => {
     const a = auth('OWNER');
+    // TIKTOK/TWITTER/PINTEREST/GMB are all valid networks now (Epic 12); use a
+    // genuinely unsupported value so this exercises the @IsIn(NETWORKS) guard.
     const res = await request(app.getHttpServer())
       .post('/api/marketing/social-planner/accounts')
       .set('Authorization', a)
-      .send({ network: 'TIKTOK', externalId: 'x', displayName: 'y', accessToken: 'z' });
+      .send({ network: 'MYSPACE', externalId: 'x', displayName: 'y', accessToken: 'z' });
     expect(res.status).toBe(400);
   });
 

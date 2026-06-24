@@ -4,19 +4,23 @@ import {
   ChannelAdapter,
   ChannelCapability,
   InboundMessage,
+  OutboundMedia,
   OutboundSend,
+  OutboundTemplate,
   ResolvedChannelConfig,
   SendResult,
+  StatusUpdate,
 } from '../channel-adapter.interface';
-
-const GRAPH = 'https://graph.facebook.com/v19.0';
+import { metaGraphFetch } from '../../../../common/util/meta-graph.util';
+import { parseWaStatuses } from '../meta-status.util';
 
 /**
  * WhatsApp Cloud API adapter. Secrets: { accessToken, phoneNumberId }. The
  * `phoneNumberId` doubles as the channel's `externalId` so the Meta webhook can
- * resolve which channel an inbound message belongs to. Sends are plain text
- * (the 24h customer-service window is the caller's concern — `session-window`
- * capability advertises it). Never throws on a provider error — returns FAILED.
+ * resolve which channel an inbound message belongs to. Supports text, an
+ * already-approved template (reopens the 24h window), and by-URL media. Inbound
+ * messages + delivery/read receipts both arrive on the shared Meta webhook.
+ * Never throws on a provider error — returns FAILED.
  */
 @Injectable()
 export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
@@ -35,7 +39,7 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
     this.registry.register(this);
   }
 
-  async send({ config, to, text }: OutboundSend): Promise<SendResult> {
+  async send({ config, to, text, template, media }: OutboundSend): Promise<SendResult> {
     const token = config.secrets.accessToken;
     const phoneNumberId = config.secrets.phoneNumberId || config.externalId;
     if (!token || !phoneNumberId) {
@@ -45,36 +49,63 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
         error: 'WhatsApp channel not configured (accessToken/phoneNumberId)',
       };
     }
-    try {
-      const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
+    const body = this.buildBody(to, text, template, media);
+    // Cloud API uses a Bearer token; appsecret_proof rides the query (harmless).
+    const r = await metaGraphFetch(`/${phoneNumberId}/messages`, {
+      accessToken: token,
+      bearer: true,
+      method: 'POST',
+      body,
+      timeoutMs: 10_000,
+    });
+    if (!r.ok) {
+      return {
+        externalMessageId: null,
+        status: 'FAILED',
+        error: `WA ${r.status}: ${String(r.error?.message ?? '').slice(0, 300)}`,
+      };
+    }
+    return { externalMessageId: r.data?.messages?.[0]?.id ?? null, status: 'SENT' };
+  }
+
+  /** Build the Graph message body; precedence template > media > text. */
+  private buildBody(
+    to: string,
+    text: string,
+    template?: OutboundTemplate,
+    media?: OutboundMedia,
+  ): Record<string, unknown> {
+    const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to };
+    if (template) {
+      return {
+        ...base,
+        type: 'template',
+        template: {
+          name: template.name,
+          language: { code: template.languageCode },
+          ...(template.components ? { components: template.components } : {}),
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to,
-          type: 'text',
-          text: { body: text },
-        }),
-        // undici fetch has no default total timeout — bound it so a black-holed
-        // Graph endpoint can't hang the sequential job batch / pin a quota slot.
-        signal: AbortSignal.timeout(10_000),
-      });
-      const data: any = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      };
+    }
+    if (media) {
+      if (media.kind === 'document') {
         return {
-          externalMessageId: null,
-          status: 'FAILED',
-          error: `WA ${res.status}: ${JSON.stringify(data?.error ?? data).slice(0, 300)}`,
+          ...base,
+          type: 'document',
+          document: {
+            link: media.url,
+            ...(media.filename ? { filename: media.filename } : {}),
+            ...(media.caption ? { caption: media.caption } : {}),
+          },
         };
       }
-      return { externalMessageId: data?.messages?.[0]?.id ?? null, status: 'SENT' };
-    } catch (e: any) {
-      return { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };
+      return {
+        ...base,
+        type: 'image',
+        image: { link: media.url, ...(media.caption ? { caption: media.caption } : {}) },
+      };
     }
+    return { ...base, type: 'text', text: { body: text } };
   }
 
   parseInbound(_config: ResolvedChannelConfig, body: unknown): InboundMessage[] {
@@ -109,11 +140,32 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
     return out;
   }
 
+  parseStatusUpdates(_config: ResolvedChannelConfig, body: unknown): StatusUpdate[] {
+    return parseWaStatuses(body);
+  }
+
   async healthCheck(
     config: ResolvedChannelConfig,
   ): Promise<{ ok: boolean; details?: Record<string, unknown> }> {
-    const hasToken = !!config.secrets.accessToken;
-    const hasPhone = !!(config.secrets.phoneNumberId || config.externalId);
-    return { ok: hasToken && hasPhone, details: { hasToken, hasPhoneNumberId: hasPhone } };
+    const token = config.secrets.accessToken;
+    const phoneNumberId = config.secrets.phoneNumberId || config.externalId;
+    if (!token || !phoneNumberId) {
+      return { ok: false, details: { hasToken: !!token, hasPhoneNumberId: !!phoneNumberId } };
+    }
+    // Live probe: a 200 proves the token can read the phone number; 401/190 ⇒ bad token.
+    const r = await metaGraphFetch(`/${phoneNumberId}`, {
+      accessToken: token,
+      bearer: true,
+      method: 'GET',
+      query: { fields: 'verified_name,quality_rating' },
+      timeoutMs: 10_000,
+    });
+    if (!r.ok) {
+      return { ok: false, details: { error: String(r.error?.message ?? `HTTP ${r.status}`).slice(0, 300) } };
+    }
+    return {
+      ok: true,
+      details: { verifiedName: r.data?.verified_name ?? null, qualityRating: r.data?.quality_rating ?? null },
+    };
   }
 }

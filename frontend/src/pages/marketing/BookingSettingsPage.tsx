@@ -67,9 +67,16 @@ const calSchema = z.object({
   capacity: z.coerce.number().int().min(1).max(1000),
   slotMinutes: z.coerce.number().int().min(5),
   bufferMinutes: z.coerce.number().int().min(0),
+  timezone: z.string().min(1),
   availability: z.record(z.array(z.object({ start: z.string(), end: z.string() }))),
 });
 type CalFormValues = z.infer<typeof calSchema>;
+
+/** A small curated IANA list; the backend accepts any valid IANA zone. */
+const TIMEZONES = [
+  'Europe/Istanbul', 'Europe/London', 'Europe/Berlin', 'Europe/Moscow', 'Asia/Dubai',
+  'Asia/Tashkent', 'America/New_York', 'America/Los_Angeles', 'UTC',
+];
 
 const DEFAULT_VALUES: CalFormValues = {
   name: '',
@@ -78,6 +85,7 @@ const DEFAULT_VALUES: CalFormValues = {
   capacity: 1,
   slotMinutes: 30,
   bufferMinutes: 0,
+  timezone: 'Europe/Istanbul',
   availability: {},
 };
 
@@ -136,6 +144,7 @@ export default function BookingSettingsPage() {
         capacity: values.type === 'CLASS' ? Number(values.capacity) : 1,
         slotMinutes: Number(values.slotMinutes),
         bufferMinutes: Number(values.bufferMinutes),
+        timezone: values.timezone,
         availability: values.availability,
       };
       const saved = editId
@@ -184,6 +193,7 @@ export default function BookingSettingsPage() {
       capacity: full.capacity ?? 1,
       slotMinutes: full.slotMinutes,
       bufferMinutes: full.bufferMinutes,
+      timezone: full.timezone ?? 'Europe/Istanbul',
       availability: full.availability ?? {},
     });
     // Load existing members for team calendars.
@@ -227,7 +237,7 @@ export default function BookingSettingsPage() {
     <div className="space-y-6">
       <PageHeader
         title={t('booking.title', 'Booking')}
-        description={t('booking.subtitle', 'Let leads book a slot. Availability windows are in UTC for now.')}
+        description={t('booking.subtitle', "Let leads book a slot. Availability windows use the calendar's timezone.")}
         actions={
           <Button onClick={openCreate} size="md">
             <Plus className="h-4 w-4" />
@@ -365,6 +375,13 @@ export default function BookingSettingsPage() {
                     type="number"
                     {...register('slotMinutes')}
                   />
+                )}
+              </Field>
+              <Field label={t('booking.timezone', 'Timezone')} error={errors.timezone?.message}>
+                {({ id }) => (
+                  <select id={id} className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('timezone')}>
+                    {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
+                  </select>
                 )}
               </Field>
               <Field label={t('booking.buffer', 'Buffer (min)')} error={errors.bufferMinutes?.message}>

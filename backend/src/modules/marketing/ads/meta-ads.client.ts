@@ -1,4 +1,4 @@
-import { safeFetch } from '../../../common/util/safe-fetch';
+import { metaGraphFetch, metaGraphFollow, MetaGraphResult } from '../../../common/util/meta-graph.util';
 import { AdMetricRow } from './ads.types';
 
 /** Bound the pagination loop so a pathological provider response can't run forever. */
@@ -20,12 +20,14 @@ function parseMetaRow(d: any, fallbackDate: string): AdMetricRow {
 }
 
 /**
- * Meta Ads insights via the Marketing API (Graph v19.0). Per-day, per-campaign
+ * Meta Ads insights via the Marketing API. Per-day, per-campaign
  * spend/impressions/clicks + lead conversions (from the `actions` breakdown).
  * Follows `paging.next` until exhausted (bounded by MAX_PAGES) so large accounts
  * are not silently truncated to the first page. Throws on a provider error so
- * the caller records lastError; returns [] for an empty range. SSRF-safe +
- * bounded via safeFetch on EVERY page (the `next` URL is provider-issued).
+ * the caller records lastError; the thrown error carries `isAuthError` so the
+ * caller can mark the account needs-reauth. Returns [] for an empty range.
+ * Every page goes through the shared meta-graph helper (SSRF-safe via safeFetch,
+ * appsecret_proof appended, version from GRAPH_API_VERSION).
  */
 export async function pullMetaInsights(
   token: string,
@@ -34,27 +36,33 @@ export async function pullMetaInsights(
   until: string,
 ): Promise<AdMetricRow[]> {
   const actId = externalAdId.startsWith('act_') ? externalAdId : `act_${externalAdId}`;
-  const qs = new URLSearchParams({
-    fields: 'spend,impressions,clicks,actions,campaign_id,date_start',
-    level: 'campaign',
-    time_increment: '1',
-    time_range: JSON.stringify({ since, until }),
-    limit: '500',
-    access_token: token,
+  const rows: AdMetricRow[] = [];
+  let result: MetaGraphResult = await metaGraphFetch(`/${actId}/insights`, {
+    accessToken: token,
+    method: 'GET',
+    query: {
+      fields: 'spend,impressions,clicks,actions,campaign_id,date_start',
+      level: 'campaign',
+      time_increment: '1',
+      time_range: JSON.stringify({ since, until }),
+      limit: '500',
+    },
+    timeoutMs: 20_000,
   });
 
-  const rows: AdMetricRow[] = [];
-  let url: string | null = `https://graph.facebook.com/v19.0/${actId}/insights?${qs}`;
-  for (let page = 0; url && page < MAX_PAGES; page++) {
-    const res = await safeFetch(url, { method: 'GET', timeoutMs: 20_000 });
-    const json: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(`Meta ads ${res.status}: ${String(json?.error?.message ?? '').slice(0, 300)}`);
+  for (let page = 0; page < MAX_PAGES; page++) {
+    if (!result.ok) {
+      const e: any = new Error(`Meta ads ${result.status}: ${result.error.message.slice(0, 300)}`);
+      e.isAuthError = result.error.isAuthError;
+      throw e;
     }
+    const json: any = result.data;
     for (const d of json?.data ?? []) rows.push(parseMetaRow(d, since));
     // `paging.next` is an absolute, provider-issued URL that already carries the
     // access_token and the `after` cursor; absent once the last page is reached.
-    url = typeof json?.paging?.next === 'string' ? json.paging.next : null;
+    const next = typeof json?.paging?.next === 'string' ? json.paging.next : null;
+    if (!next) break;
+    result = await metaGraphFollow(next, token, 20_000);
   }
   return rows;
 }

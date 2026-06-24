@@ -55,7 +55,8 @@ describe('Granular permission enforcement (e2e)', () => {
     ctx.prisma.marketingUser.findUnique.mockResolvedValue(
       mockMarketingUser({ role: 'OWNER', customRoleId: 'cr-1' }) as never,
     );
-    ctx.prisma.customRole.findUnique.mockResolvedValue({
+    // resolvePermissions now reads the custom role workspace-scoped via findFirst.
+    ctx.prisma.customRole.findFirst.mockResolvedValue({
       id: 'cr-1',
       permissions,
     } as never);

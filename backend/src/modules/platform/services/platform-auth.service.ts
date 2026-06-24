@@ -7,6 +7,10 @@ import { PlatformLoginDto } from '../dto/platform.dto';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
+// Constant-time login: an unknown operator email must cost roughly one bcrypt
+// compare, so response timing can't be used to enumerate which emails exist.
+// (Mirrors the marketing-auth defence; this is the highest-privilege realm.)
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password', 12);
 
 /**
  * Auth for the platform (superadmin) realm. Deliberately minimal: a 12h
@@ -32,7 +36,12 @@ export class PlatformAuthService {
       where: { email: dto.email },
     });
 
-    if (!operator) throw new UnauthorizedException('Invalid credentials');
+    if (!operator) {
+      // Burn ~one bcrypt compare so a missing email costs the same as a wrong
+      // password — no timing oracle distinguishing valid operator emails.
+      await bcrypt.compare(dto.password, DUMMY_BCRYPT_HASH);
+      throw new UnauthorizedException('Invalid credentials');
+    }
     if (operator.status !== 'ACTIVE') {
       throw new UnauthorizedException('Account is inactive');
     }

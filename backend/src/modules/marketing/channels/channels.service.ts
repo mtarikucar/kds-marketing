@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Logger,
+  BadRequestException,
   NotFoundException,
   ConflictException,
   ServiceUnavailableException,
@@ -11,10 +13,13 @@ import {
   openSecret,
   isSecretBoxConfigured,
 } from '../../../common/crypto/secret-box.helper';
+import { metaGraphFetch, graphApiVersion } from '../../../common/util/meta-graph.util';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
+import { assertMetaSecrets, isMetaChannelType } from './meta-config.util';
+import { metaWebhookCallbackUrl } from './meta-callback.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -41,6 +46,8 @@ export interface UpdateChannelInput {
  */
 @Injectable()
 export class ChannelsService {
+  private readonly logger = new Logger(ChannelsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: ChannelAdapterRegistry,
@@ -104,10 +111,107 @@ export class ChannelsService {
     }
     if (dto.secrets && Object.keys(dto.secrets).length) {
       if (dto.type === 'SMS') assertNetgsmSmsSecrets(dto.secrets);
+      else if (isMetaChannelType(dto.type)) assertMetaSecrets(dto.type, dto.secrets);
       data.configSealed = this.seal(dto.secrets);
     }
     const c = await this.prisma.channel.create({ data: { ...data, workspaceId } });
     return this.mask(c);
+  }
+
+  /**
+   * Public, non-secret config the frontend needs to launch WhatsApp Embedded
+   * Signup (the FB JS SDK FB.login config). `configured` is false when the
+   * platform app id / signup configuration id are absent — the button stays
+   * inert (the inert-feature rule), exactly like the SMS/Meta gates elsewhere.
+   */
+  whatsappSignupConfig(): {
+    configured: boolean;
+    appId: string | null;
+    configId: string | null;
+    graphVersion: string;
+  } {
+    const appId = process.env.META_APP_ID || null;
+    const configId = process.env.META_WHATSAPP_CONFIG_ID || null;
+    return { configured: !!(appId && configId), appId, configId, graphVersion: graphApiVersion() };
+  }
+
+  /**
+   * Finish WhatsApp Embedded Signup for a TENANT (self-serve, no manual token
+   * handling): exchange the short-lived `code` for a long-lived business token,
+   * subscribe our app to the tenant's WABA (so inbound + status webhooks flow),
+   * best-effort register the phone for Cloud API sending, then create — or
+   * rotate the token of — the workspace's WHATSAPP channel. The token is sealed
+   * by `create`/`update` and never returned. Reconnecting the same phone number
+   * rotates the stored token.
+   */
+  async completeWhatsappSignup(
+    workspaceId: string,
+    input: { code?: string; wabaId?: string; phoneNumberId?: string },
+  ) {
+    const appId = process.env.META_APP_ID;
+    const appSecret = process.env.META_APP_SECRET;
+    if (!appId || !appSecret) {
+      throw new BadRequestException('WhatsApp sign-up is not configured on this platform');
+    }
+    if (!isSecretBoxConfigured()) {
+      throw new ServiceUnavailableException('Secret storage is not configured (MARKETING_SECRET_KEY)');
+    }
+    const code = (input.code ?? '').trim();
+    const wabaId = (input.wabaId ?? '').trim();
+    const phoneNumberId = (input.phoneNumberId ?? '').trim();
+    if (!code) throw new BadRequestException('Missing sign-up code');
+    if (!phoneNumberId) throw new BadRequestException('Missing phoneNumberId');
+
+    // 1) Exchange the code for a long-lived business-integration access token.
+    const tok = await metaGraphFetch('/oauth/access_token', {
+      query: { client_id: appId, client_secret: appSecret, code },
+    });
+    const accessToken: string | undefined = tok.ok ? tok.data?.access_token : undefined;
+    if (!accessToken) {
+      throw new BadRequestException(
+        `WhatsApp token exchange failed: ${tok.error?.message ?? 'no access_token returned'}`,
+      );
+    }
+
+    // 2) Subscribe our app to the tenant's WABA — without this, real inbound /
+    //    delivery webhooks are never delivered to our callback.
+    if (wabaId) {
+      const sub = await metaGraphFetch(`/${wabaId}/subscribed_apps`, {
+        accessToken,
+        method: 'POST',
+      });
+      if (!sub.ok) {
+        this.logger.warn(`WA signup: subscribe WABA ${wabaId} failed: ${sub.error?.message ?? sub.status}`);
+      }
+    }
+
+    // 3) Best-effort: register the phone for Cloud API sending. Embedded Signup
+    //    usually pre-registers it; a failure here (already registered / PIN set)
+    //    must not block channel creation, so we log and continue.
+    const reg = await metaGraphFetch(`/${phoneNumberId}/register`, {
+      accessToken,
+      bearer: true,
+      method: 'POST',
+      body: { messaging_product: 'whatsapp', pin: '000000' },
+    });
+    if (!reg.ok) {
+      this.logger.log(`WA signup: phone ${phoneNumberId} register skipped: ${reg.error?.message ?? reg.status}`);
+    }
+
+    // 4) Create, or rotate the token of, the workspace's WHATSAPP channel.
+    const secrets = { accessToken, phoneNumberId };
+    const existing = await this.prisma.channel.findFirst({
+      where: { workspaceId, type: 'WHATSAPP', externalId: phoneNumberId },
+    });
+    if (existing) {
+      return this.update(workspaceId, existing.id, { secrets, status: 'ACTIVE' });
+    }
+    return this.create(workspaceId, {
+      type: 'WHATSAPP',
+      name: `WhatsApp ${phoneNumberId}`,
+      externalId: phoneNumberId,
+      secrets,
+    });
   }
 
   async update(workspaceId: string, id: string, dto: UpdateChannelInput) {
@@ -136,6 +240,7 @@ export class ChannelsService {
       }
       const merged = { ...current, ...dto.secrets };
       if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
+      else if (isMetaChannelType(existing.type)) assertMetaSecrets(existing.type, merged);
       data.configSealed = this.seal(merged);
     }
     const c = await this.prisma.channel.update({ where: { id: existing.id }, data });
@@ -196,6 +301,16 @@ export class ChannelsService {
       // yönlendir"). Null until PUBLIC_BASE_URL + MARKETING_SECRET_KEY are set.
       ...(c.type === 'SMS'
         ? { callbackUrl: netgsmMoCallbackUrl(process.env.PUBLIC_BASE_URL, c.id) }
+        : {}),
+      // Meta (WhatsApp/Messenger/IG) inbound + receipts arrive on ONE static,
+      // signed webhook for the whole app. Surface the URL operators paste into
+      // the Meta App dashboard (and whether the verify token env is set), the
+      // way SMS surfaces its MO callback. Never expose the token value itself.
+      ...(isMetaChannelType(c.type)
+        ? {
+            webhookUrl: metaWebhookCallbackUrl(process.env.PUBLIC_BASE_URL),
+            verifyTokenConfigured: !!process.env.META_WEBHOOK_VERIFY_TOKEN,
+          }
         : {}),
       lastVerifiedAt: c.lastVerifiedAt,
       createdAt: c.createdAt,

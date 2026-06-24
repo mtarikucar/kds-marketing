@@ -109,7 +109,13 @@ export class ExperimentsService {
   /** Public — record a conversion for a variant. */
   async trackConversion(experimentId: string, variantKey: string) {
     const exp = await this.prisma.experiment.findUnique({ where: { id: experimentId } });
-    if (!exp) return { ok: false };
+    // Mirror selectVariant's gating: only a RUNNING experiment, and only a
+    // variantKey that actually exists. Without this an attacker could POST
+    // arbitrary/looped conversions (rigging the winner, inflating beyond
+    // impressions, injecting junk variant keys) against any/DRAFT experiment.
+    if (!exp || exp.status !== 'RUNNING') return { ok: false };
+    const variants = (exp.variants as unknown as Variant[]) ?? [];
+    if (!variants.some((v) => v.key === variantKey)) return { ok: false };
     await this.prisma.experimentEvent.create({
       data: { experimentId, workspaceId: exp.workspaceId, variantKey, kind: 'CONVERSION' },
     });

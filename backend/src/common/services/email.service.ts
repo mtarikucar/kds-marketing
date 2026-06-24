@@ -19,10 +19,13 @@ export interface EmailOptions {
 }
 
 /** A per-workspace sender identity (Epic 13 sending domains). When omitted, the
- *  platform default From (EMAIL_FROM/EMAIL_USER + EMAIL_FROM_NAME) is used. */
+ *  platform default From (EMAIL_FROM/EMAIL_USER + EMAIL_FROM_NAME) is used. The
+ *  optional dkim signs the message with the workspace's verified-domain key so
+ *  the From-swap is authenticated (DKIM alignment) instead of hurting deliverability. */
 export interface EmailFrom {
   email: string;
   name?: string;
+  dkim?: { domainName: string; keySelector: string; privateKey: string };
 }
 
 @Injectable()
@@ -188,6 +191,7 @@ export class EmailService {
           subject,
           text,
           ...(html ? { html } : {}),
+          ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
         }),
         25_000,
         `sendMail to ${maskEmail(to)}`,
@@ -229,6 +233,7 @@ export class EmailService {
           to,
           subject,
           text: body,
+          ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
         }),
         25_000,
         `sendMail to ${maskEmail(to)}`,

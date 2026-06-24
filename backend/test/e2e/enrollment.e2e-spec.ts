@@ -46,6 +46,9 @@ describe('Enrollment (e2e)', () => {
   it('completes a lesson and recomputes progress', async () => {
     ctx.prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1' } as never);
     ctx.prisma.lesson.findFirst.mockResolvedValue({ id: 'l1' } as never);
+    // Epic 10a drip/gating reads the completed-lessons set before allowing a complete;
+    // without this the deep-mock returns undefined → undefined.map → 500.
+    (ctx.prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (ctx.prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
     (ctx.prisma.lesson.count as jest.Mock).mockResolvedValue(2);
     (ctx.prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);

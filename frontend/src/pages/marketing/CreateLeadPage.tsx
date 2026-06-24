@@ -15,6 +15,7 @@ import {
   CardContent,
   Field,
   Input,
+  PhoneInput,
   Textarea,
   Button,
   Select,
@@ -285,13 +286,19 @@ export default function CreateLeadPage() {
                   error={fieldErr(errors.phone?.message)}
                 >
                   {({ id, describedBy, invalid }) => (
-                    <Input
-                      id={id}
-                      type="tel"
-                      placeholder="+90555..."
-                      aria-describedby={describedBy}
-                      aria-invalid={invalid || undefined}
-                      {...form.register('phone')}
+                    <Controller
+                      name="phone"
+                      control={form.control}
+                      render={({ field }) => (
+                        <PhoneInput
+                          id={id}
+                          aria-describedby={describedBy}
+                          aria-invalid={invalid || undefined}
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          onBlur={field.onBlur}
+                        />
+                      )}
                     />
                   )}
                 </Field>
@@ -301,13 +308,19 @@ export default function CreateLeadPage() {
                   error={fieldErr(errors.whatsapp?.message)}
                 >
                   {({ id, describedBy, invalid }) => (
-                    <Input
-                      id={id}
-                      type="tel"
-                      placeholder="+90555..."
-                      aria-describedby={describedBy}
-                      aria-invalid={invalid || undefined}
-                      {...form.register('whatsapp')}
+                    <Controller
+                      name="whatsapp"
+                      control={form.control}
+                      render={({ field }) => (
+                        <PhoneInput
+                          id={id}
+                          aria-describedby={describedBy}
+                          aria-invalid={invalid || undefined}
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          onBlur={field.onBlur}
+                        />
+                      )}
                     />
                   )}
                 </Field>

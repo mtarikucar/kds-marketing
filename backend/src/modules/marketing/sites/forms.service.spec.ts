@@ -10,6 +10,7 @@ describe('FormsService', () => {
   let prisma: any;
   let outbox: { append: jest.Mock };
   let autoAssigner: { pickAssignee: jest.Mock };
+  let affiliates: { attributeReferral: jest.Mock };
   let svc: FormsService;
 
   beforeEach(() => {
@@ -26,7 +27,8 @@ describe('FormsService', () => {
     };
     outbox = { append: jest.fn().mockResolvedValue('evt') };
     autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
-    svc = new FormsService(prisma as any, outbox as any, autoAssigner as any);
+    affiliates = { attributeReferral: jest.fn().mockResolvedValue(false) };
+    svc = new FormsService(prisma as any, outbox as any, autoAssigner as any, affiliates as any);
   });
 
   it('creates a workspace-scoped lead and emits LeadCreated + FormSubmitted', async () => {

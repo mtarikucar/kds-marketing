@@ -88,7 +88,12 @@ export type FeatureKey =
   | 'askAi'
   | 'agentStudio'
   | 'voiceAi'
-  | 'invoicing';
+  | 'invoicing'
+  // Platform-level inert features (env-gated; surfaced via /billing/summary so the
+  // nav hides them until ops enables the feature, instead of showing a 503 button).
+  | 'prospecting'
+  | 'sendingDomains'
+  | 'customDomains';
 
 type IconType = LucideIcon;
 
@@ -159,7 +164,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: FileText },
       { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
       { path: '/dialer', labelKey: 'nav.dialer', label: 'Power Dialer', icon: PhoneCall, feature: 'telephony' },
-      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe },
+      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },
       { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
       { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
     ],
@@ -211,7 +216,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'reporting', labelKey: 'nav.group.reporting', label: 'Reporting', icon: PieChart,
     children: [
       { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
-      { path: '/ads', labelKey: 'nav.adReporting', label: 'Ad Reporting', icon: MousePointerClick },
+      { path: '/ads', labelKey: 'nav.adReporting', label: 'Ads', icon: MousePointerClick },
       { path: '/performance', labelKey: 'nav.performance', label: 'Performance', icon: LineChart },
       { path: '/analytics', labelKey: 'nav.analytics', label: 'Analytics', icon: PieChart, managerOnly: true },
     ],
@@ -249,7 +254,8 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/inbound-webhooks', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
-      { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true },
+      { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },
+      { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
       { path: '/settings/telephony', labelKey: 'nav.telephony', label: 'Phone (Netsantral)', icon: PhoneCall, feature: 'telephony', managerOnly: true },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },

@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { PublicChannelResolverService } from '../channels/public-channel-resolver.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { ConversationIngressService } from '../channels/conversation-ingress.service';
+import { MessageReceiptService } from '../channels/message-receipt.service';
 
 /** body.object → our ChannelType. */
 const TYPE_BY_OBJECT: Record<string, string> = {
@@ -28,6 +29,7 @@ export class MetaWebhookController {
     private readonly resolver: PublicChannelResolverService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly ingress: ConversationIngressService,
+    private readonly receipts: MessageReceiptService,
   ) {}
 
   @Get('webhook')
@@ -96,6 +98,12 @@ export class MetaWebhookController {
           { id: channel.id, workspaceId: channel.workspaceId, type: channel.type },
           msg,
         );
+      }
+      // Delivery/read receipts ride the same signed webhook — advance the
+      // matching OUTBOUND Message's status (no conversation side-effects).
+      if (adapter.parseStatusUpdates) {
+        const updates = adapter.parseStatusUpdates(config, { object: body.object, entry: [entry] });
+        if (updates.length) await this.receipts.apply(channel.workspaceId, updates);
       }
     }
   }

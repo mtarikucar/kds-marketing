@@ -8,7 +8,7 @@ import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-j
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
-import { CAMPAIGN_BATCH_KIND } from './campaigns.service';
+import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND } from './campaigns.service';
 
 const BATCH_SIZE = 50;
 const BATCH_INTERVAL_SEC = 60; // ~50 sends/min throttle
@@ -53,6 +53,48 @@ export class CampaignSenderService implements OnModuleInit {
 
   onModuleInit(): void {
     this.runner.registerHandler(CAMPAIGN_BATCH_KIND, (job) => this.batch(job));
+    this.runner.registerHandler(CAMPAIGN_AB_DECIDE_KIND, (job) => this.decideAbWinner(job));
+  }
+
+  /**
+   * A/B WINNER mode: after the test window, pick the variant with the most
+   * opens/clicks and release the held-back remainder to it. Atomic claim
+   * (abWinnerKey:null) so only one decider releases the remainder.
+   */
+  private async decideAbWinner(job: ClaimedJob): Promise<void> {
+    const { workspaceId, campaignId } = job.payload;
+    const campaign = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
+    if (!campaign || (campaign as any).abWinnerKey || campaign.status !== 'SENDING') return;
+    // Recompute variant stats from the recipient rows FIRST. `campaignVariant.stats`
+    // is otherwise only written at the end of a batch() pass — and in WINNER mode
+    // no batch runs during the test window (the remainder is HELD), so the cached
+    // stats are frozen at ~0 from when the test cohort was just sent. Without this
+    // recompute the winner sort collapses to the alphabetical key tiebreak and the
+    // bulk audience gets the wrong variant. (Opens/clicks accrue on the recipient
+    // rows via the tracker; this rolls them up into the per-variant counts.)
+    await this.recomputeStats(workspaceId, campaignId);
+    const variants = await this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId } });
+    if (variants.length < 2) return;
+    const metric = (campaign as any).abWinnerMetric === 'CLICK' ? 'clicked' : 'opened';
+    // Most opens/clicks wins; deterministic tiebreak by key so a no-data test is stable.
+    const winner = [...variants].sort((a, b) => {
+      const av = ((a.stats as any)?.[metric] ?? 0) as number;
+      const bv = ((b.stats as any)?.[metric] ?? 0) as number;
+      return bv - av || (a.key < b.key ? -1 : 1);
+    })[0];
+    const claimed = await this.prisma.campaign.updateMany({
+      where: { id: campaignId, workspaceId, abWinnerKey: null, status: 'SENDING' },
+      data: { abWinnerKey: winner.key },
+    });
+    if (claimed.count === 0) return; // a concurrent decide already released the remainder
+    await this.prisma.campaignRecipient.updateMany({
+      where: { workspaceId, campaignId, status: 'HOLD' },
+      data: { status: 'PENDING', variantKey: winner.key },
+    });
+    this.logger.log(`campaign ${campaignId} A/B winner: variant ${winner.key} (by ${metric})`);
+    await this.scheduledJobs.schedule({
+      workspaceId, kind: CAMPAIGN_BATCH_KIND, runAt: new Date(), dedupKey: campaignId, payload: { workspaceId, campaignId },
+    });
   }
 
   private async batch(job: ClaimedJob): Promise<void> {
@@ -75,6 +117,10 @@ export class CampaignSenderService implements OnModuleInit {
       take: BATCH_SIZE,
     });
     if (recipients.length === 0) {
+      // A/B WINNER mode: the test cohort is sent but the remainder is still HELD
+      // awaiting the winner decision — the campaign is NOT done yet.
+      const held = await this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, status: 'HOLD' } });
+      if (held > 0) return; // leave SENDING; the ab.decide job releases the remainder
       await this.prisma.campaign.update({ where: { id: campaignId }, data: { status: 'SENT', completedAt: new Date() } });
       return;
     }

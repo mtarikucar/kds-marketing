@@ -156,7 +156,12 @@ export class OrderFormsService {
     if (form.productId) {
       const product = await this.products.get(form.workspaceId, form.productId);
       if (!product.active) throw new NotFoundException('Order form not found');
-      const unitPrice = Math.max(0, Math.round(Number(product.price) * 100)); // major→minor
+      // Scale major→minor on the Decimal directly (not via a binary float) so a
+      // price like 19.99 can't mis-round by a minor unit.
+      const unitPrice = Math.max(
+        0,
+        new Prisma.Decimal(product.price).mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+      );
       return {
         items: [{ description: product.name, qty: 1, unitPrice }],
         currency: product.currency,

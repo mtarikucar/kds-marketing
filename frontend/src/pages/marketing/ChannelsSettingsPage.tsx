@@ -13,6 +13,7 @@ import {
   Plus,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { WhatsappSignupButton } from './WhatsappSignupButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -53,6 +54,10 @@ interface ChannelRow {
   // SMS (NetGSM) only: tokenized inbound-MO callback URL to paste into the NetGSM
   // panel. Null until the server has PUBLIC_BASE_URL + MARKETING_SECRET_KEY set.
   callbackUrl?: string | null;
+  // Meta (WhatsApp/Messenger/Instagram) only: the static signed webhook URL to
+  // paste into the Meta App dashboard, + whether the verify-token env is set.
+  webhookUrl?: string | null;
+  verifyTokenConfigured?: boolean;
 }
 interface AgentRow {
   id: string;
@@ -190,10 +195,13 @@ export default function ChannelsSettingsPage() {
           'Connect where your customers message you — web chat, WhatsApp, SMS, Instagram, Messenger. Pick which AI agent answers on each.',
         )}
         actions={
-          <Button onClick={openForm} size="md">
-            <Plus className="h-4 w-4" />
-            {t('channels.new', 'Connect a channel')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <WhatsappSignupButton />
+            <Button onClick={openForm} size="md">
+              <Plus className="h-4 w-4" />
+              {t('channels.new', 'Connect a channel')}
+            </Button>
+          </div>
         }
       />
 
@@ -479,6 +487,56 @@ export default function ChannelsSettingsPage() {
                       'channels.netgsmCallbackPending',
                       'Inbound (MO) reply URL appears here once the server has PUBLIC_BASE_URL and MARKETING_SECRET_KEY set.',
                     )}
+                  </p>
+                </div>
+              )}
+
+              {/* Meta (WhatsApp/Messenger/Instagram) inbound + delivery receipts
+                  arrive on ONE static, signed webhook for the whole app. Surface
+                  the URL operators paste into the Meta App dashboard. */}
+              {['WHATSAPP', 'MESSENGER', 'INSTAGRAM'].includes(c.type) && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <p className="text-caption text-muted-foreground mb-1">
+                    {t(
+                      'channels.metaWebhook',
+                      'Meta webhook URL — paste into Meta App → Webhooks (one URL for all Meta channels)',
+                    )}
+                  </p>
+                  {c.webhookUrl ? (
+                    <div className="flex items-center gap-2">
+                      <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
+                        {c.webhookUrl}
+                      </code>
+                      <IconButton
+                        variant="outline"
+                        size="sm"
+                        aria-label={t('common.copy', 'Copy')}
+                        onClick={() => {
+                          navigator.clipboard.writeText(c.webhookUrl!);
+                          toast.success(t('common.copied', 'Copied'));
+                        }}
+                      >
+                        <Clipboard className="h-4 w-4" />
+                      </IconButton>
+                    </div>
+                  ) : (
+                    <p className="text-caption text-muted-foreground">
+                      {t(
+                        'channels.metaWebhookPending',
+                        'Set PUBLIC_BASE_URL on the server to reveal the webhook URL.',
+                      )}
+                    </p>
+                  )}
+                  <p className="text-caption text-muted-foreground mt-1">
+                    {c.verifyTokenConfigured
+                      ? t(
+                          'channels.metaVerifyOk',
+                          'Verify token is configured — use the META_WEBHOOK_VERIFY_TOKEN value as the Verify Token in Meta.',
+                        )
+                      : t(
+                          'channels.metaVerifyMissing',
+                          'Set META_WEBHOOK_VERIFY_TOKEN on the server, then use that value as the Verify Token in Meta.',
+                        )}
                   </p>
                 </div>
               )}

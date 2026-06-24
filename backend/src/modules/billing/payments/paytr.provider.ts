@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -139,7 +140,7 @@ function describeOrder(order: PaymentOrder): string {
 }
 
 @Injectable()
-export class PaytrProvider implements BillingPaymentProvider {
+export class PaytrProvider implements BillingPaymentProvider, OnModuleInit {
   readonly id = 'paytr' as const;
   private readonly logger = new Logger(PaytrProvider.name);
 
@@ -147,6 +148,22 @@ export class PaytrProvider implements BillingPaymentProvider {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Footgun guard: merchant creds set but PAYTR_TEST_MODE not '0' means real
+   * customers complete checkouts in PayTR's TEST sandbox — "successful" payments
+   * that never actually settle. Shout at boot so a forgotten flip can't go unseen.
+   */
+  onModuleInit(): void {
+    const testMode = this.configService.get<string>('PAYTR_TEST_MODE') !== '0';
+    if (this.isConfigured() && testMode) {
+      this.logger.warn(
+        '⚠ PayTR merchant credentials are set but PAYTR_TEST_MODE is not "0" — ' +
+          'checkouts run in PayTR TEST mode and will NOT collect real money. ' +
+          'Set PAYTR_TEST_MODE=0 to go live.',
+      );
+    }
+  }
 
   isConfigured(): boolean {
     return Boolean(

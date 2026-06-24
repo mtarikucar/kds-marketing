@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Observable, tap } from 'rxjs';
 import type { Request, Response } from 'express';
+import { redactUrl } from '../util/redact-url';
 
 /**
  * One structured access-log line per request, stamped with the correlation id
@@ -27,7 +28,9 @@ export class HttpLoggingInterceptor implements NestInterceptor {
 
     const req = context.switchToHttp().getRequest<Request & { id?: string }>();
     const res = context.switchToHttp().getResponse<Response>();
-    const url = req.originalUrl ?? req.url;
+    // Redact secret query params (e.g. the SSE `?access_token=`) — this line is
+    // written to the access log on every request and must never carry a token.
+    const url = redactUrl(req.originalUrl ?? req.url);
 
     if (url.startsWith('/api/health')) return next.handle();
 

@@ -64,3 +64,7 @@ export class SetCalendarMembersDto {
   @Type(() => CalendarMemberDto)
   members: CalendarMemberDto[];
 }
+
+export class FromTemplateDto {
+  @IsString() @IsNotEmpty() @MaxLength(64) templateId: string;
+}

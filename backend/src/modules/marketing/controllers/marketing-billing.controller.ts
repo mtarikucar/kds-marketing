@@ -8,6 +8,9 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { isProspectingConfigured } from '../prospecting/prospecting.config';
+import { isSendingDomainsConfigured } from '../sending-domains/sending-domains.config';
+import { isCustomDomainsEnabled } from '../custom-domains/custom-domains.config';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -51,8 +54,17 @@ export class MarketingBillingController {
   }
 
   @Get('summary')
-  summary(@CurrentMarketingUser() actor: MarketingUserPayload) {
-    return this.billing.summary(actor.workspaceId);
+  async summary(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    const s = (await this.billing.summary(actor.workspaceId)) as any;
+    // Merge platform-level inert-feature capabilities (env-gated, global) into the
+    // SAME features map the nav reads — so a not-enabled Epic-13 feature hides its
+    // menu item instead of surfacing a button that 503s on click.
+    const platform = {
+      prospecting: isProspectingConfigured(),
+      sendingDomains: isSendingDomainsConfigured(),
+      customDomains: isCustomDomainsEnabled(),
+    };
+    return { ...s, entitlements: { ...s?.entitlements, features: { ...s?.entitlements?.features, ...platform } } };
   }
 
   @Get('orders')

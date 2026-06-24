@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
-import { Input } from '@/components/ui/Input';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 import { createWebphone, type WebphoneState, type WebphoneConfig } from './webphone.store';
 
 export default function TestWebphonePanel() {
@@ -42,7 +42,7 @@ export default function TestWebphonePanel() {
         <span className="text-caption text-muted-foreground">durum: {state.status}{state.error ? ` (${state.error})` : ''}</span>
       </div>
       <div className="flex items-center gap-2">
-        <Input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="+90 5xx xxx xx xx" />
+        <PhoneInput value={number} onChange={setNumber} />
         <Button disabled={state.status !== 'registered' || !number.trim()} onClick={() => wpRef.current?.call(number).catch((e) => toast.error(e?.message ?? 'call failed'))}>Ara</Button>
         <Button variant="outline" disabled={state.status !== 'incall'} onClick={() => wpRef.current?.hangup()}>Kapat</Button>
       </div>

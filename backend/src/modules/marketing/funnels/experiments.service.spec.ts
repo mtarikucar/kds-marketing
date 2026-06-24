@@ -38,12 +38,22 @@ describe('ExperimentsService', () => {
     expect((prisma.experimentEvent.create as jest.Mock).mock.calls[0][0].data.kind).toBe('IMPRESSION');
   });
 
-  it('trackConversion records a CONVERSION event', async () => {
+  it('trackConversion records a CONVERSION event for a RUNNING experiment + known variant', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.experiment.findUnique.mockResolvedValue({ id: 'e1', workspaceId: WS } as any);
+    prisma.experiment.findUnique.mockResolvedValue({ id: 'e1', workspaceId: WS, status: 'RUNNING', variants: [{ key: 'a' }, { key: 'b' }] } as any);
     (prisma.experimentEvent.create as jest.Mock).mockResolvedValue({});
     await svc.trackConversion('e1', 'a');
     expect((prisma.experimentEvent.create as jest.Mock).mock.calls[0][0].data).toMatchObject({ variantKey: 'a', kind: 'CONVERSION' });
+  });
+
+  it('trackConversion rejects an unknown variant + a non-RUNNING experiment (no write)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.experiment.findUnique.mockResolvedValue({ id: 'e1', workspaceId: WS, status: 'RUNNING', variants: [{ key: 'a' }] } as any);
+    (prisma.experimentEvent.create as jest.Mock).mockResolvedValue({});
+    expect(await svc.trackConversion('e1', 'ZZZ')).toEqual({ ok: false });
+    prisma.experiment.findUnique.mockResolvedValue({ id: 'e1', workspaceId: WS, status: 'DRAFT', variants: [{ key: 'a' }] } as any);
+    expect(await svc.trackConversion('e1', 'a')).toEqual({ ok: false });
+    expect(prisma.experimentEvent.create).not.toHaveBeenCalled();
   });
 
   it('results aggregates impressions/conversions + rate per variant', async () => {

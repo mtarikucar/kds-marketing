@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Delete,
   Get,
   Logger,
   Param,
+  Post,
   Query,
   Res,
   UseGuards,
@@ -21,6 +23,7 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { OutlookCalendarService, OUTLOOK_ERR } from './outlook-calendar.service';
+import { OutlookCalendarSyncService } from './outlook-calendar-sync.service';
 
 class ConnectQueryDto {
   @IsOptional() @IsString() @MaxLength(256)
@@ -38,7 +41,10 @@ class ConnectQueryDto {
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class OutlookCalendarController {
-  constructor(private readonly svc: OutlookCalendarService) {}
+  constructor(
+    private readonly svc: OutlookCalendarService,
+    private readonly sync: OutlookCalendarSyncService,
+  ) {}
 
   @Get('status')
   status(@CurrentMarketingUser() u: MarketingUserPayload) {
@@ -57,10 +63,21 @@ export class OutlookCalendarController {
     return { url };
   }
 
+  @Post('sync')
+  @Audit({ action: 'outlook-calendar.sync', resourceType: 'outlook-calendar-connection' })
+  @RequirePermission('settings.manage')
+  syncNow(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.sync.pullWorkspace(u.workspaceId);
+  }
+
   @Delete(':id')
   @Audit({ action: 'outlook-calendar.disconnect', resourceType: 'outlook-calendar-connection', resourceIdParam: 'id' })
   @RequirePermission('settings.manage')
-  disconnect(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+  async disconnect(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    // Stop the Graph subscription first (best-effort) so we don't leave an
+    // orphaned notification stream pointing at our webhook after the row is gone.
+    const row = await this.svc.owned(u.workspaceId, id);
+    await this.sync.stopSubscription(row).catch(() => undefined);
     return this.svc.disconnect(u.workspaceId, id);
   }
 }
@@ -72,13 +89,18 @@ const CALLBACK_THROTTLE = { default: { limit: 30, ttl: 60_000, blockDuration: 60
  * BROWSER here with code+state. We finish the exchange and 302 back into the SPA
  * connections page with a coarse result flag — never raw JSON, never a token.
  */
+const WEBHOOK_THROTTLE = { default: { limit: 240, ttl: 60_000, blockDuration: 60_000 } };
+
 @MarketingRoute()
 @Controller('marketing/integrations/outlook-calendar')
 @UseGuards(MarketingGuard)
 export class OutlookCalendarPublicController {
   private readonly logger = new Logger(OutlookCalendarPublicController.name);
 
-  constructor(private readonly svc: OutlookCalendarService) {}
+  constructor(
+    private readonly svc: OutlookCalendarService,
+    private readonly sync: OutlookCalendarSyncService,
+  ) {}
 
   @Get('callback')
   @MarketingPublic()
@@ -89,13 +111,51 @@ export class OutlookCalendarPublicController {
     @Res() res: Response,
   ): Promise<void> {
     try {
-      await this.svc.handleCallback(state, code);
+      const conn = await this.svc.handleCallback(state, code);
+      // Activate the real-time change-notification subscription on the
+      // just-connected calendar (best-effort; manual sync still works if the
+      // webhook isn't publicly reachable). Never block the redirect.
+      await this.sync.ensureSubscription(conn.workspaceId, conn.id).catch(() => undefined);
       res.redirect(302, this.svc.panelUrl('/settings/connections?outlook=connected'));
     } catch (e) {
       const message = e instanceof Error ? e.message : 'unknown';
       const reason = outlookCallbackReason(message);
       this.logger.warn(`Outlook Calendar callback failed (${reason}): ${message}`);
       res.redirect(302, this.svc.panelUrl(`/settings/connections?outlook=error&reason=${reason}`));
+    }
+  }
+
+  /**
+   * Graph change-notification receiver (public; no marketing token).
+   *  - Subscription-validation handshake: Graph POSTs `?validationToken=…` on
+   *    create and expects the raw token echoed back as text/plain 200 within 10s.
+   *  - Change notifications: `{ value: [{ subscriptionId, clientState, … }] }`.
+   *    We ACK 202 immediately, then run an idempotent delta pull per (validated)
+   *    subscription. clientState is verified inside pullBySubscription, so a
+   *    forged notification simply no-ops.
+   */
+  @Post('notifications')
+  @MarketingPublic()
+  @Throttle(WEBHOOK_THROTTLE)
+  async notifications(
+    @Query('validationToken') validationToken: string | undefined,
+    @Body() body: { value?: Array<{ subscriptionId?: string; clientState?: string }> },
+    @Res() res: Response,
+  ): Promise<void> {
+    if (validationToken) {
+      // Echo the token verbatim — this is how Graph confirms the endpoint.
+      res.status(200).type('text/plain').send(validationToken);
+      return;
+    }
+    res.status(202).send();
+    const notes = Array.isArray(body?.value) ? body.value : [];
+    // De-dupe so a burst about one calendar triggers a single delta pull.
+    const seen = new Set<string>();
+    for (const n of notes) {
+      const subId = n?.subscriptionId;
+      if (!subId || seen.has(subId)) continue;
+      seen.add(subId);
+      this.sync.pullBySubscription(subId, n?.clientState).catch(() => undefined);
     }
   }
 }
