@@ -150,19 +150,22 @@ export default function SocialPlannerPage() {
       if (editingPost) {
         await marketingApi.patch(`/social-planner/posts/${editingPost.id}`, {
           content: values.content,
-          mediaUrls: values.mediaUrls,
+          media: values.media,
+          formats: values.formats,
         });
         if (values.scheduledAt) {
           await marketingApi.post(`/social-planner/posts/${editingPost.id}/schedule`, {
             scheduledAt: values.scheduledAt,
             targetAccountIds: values.targetAccountIds,
+            formats: values.formats,
           });
         }
         return;
       }
       const created = await marketingApi.post('/social-planner/posts', {
         content: values.content,
-        mediaUrls: values.mediaUrls,
+        media: values.media,
+        formats: values.formats,
         targetAccountIds: values.targetAccountIds,
       });
       const postId: string = created.data?.id;
@@ -170,6 +173,7 @@ export default function SocialPlannerPage() {
         await marketingApi.post(`/social-planner/posts/${postId}/schedule`, {
           scheduledAt: values.scheduledAt,
           targetAccountIds: values.targetAccountIds,
+          formats: values.formats,
         });
       }
     },

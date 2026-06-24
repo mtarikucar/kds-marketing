@@ -83,8 +83,9 @@ describe('SocialPlannerService', () => {
     };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
     runner = { registerHandler: jest.fn() };
+    const r2 = { isConfigured: () => false, upload: jest.fn(), deleteKeys: jest.fn() };
 
-    svc = new SocialPlannerService(prisma as any, scheduledJobs as any, runner as any);
+    svc = new SocialPlannerService(prisma as any, scheduledJobs as any, runner as any, r2 as any);
   });
 
   // ── onModuleInit ──────────────────────────────────────────────────────────

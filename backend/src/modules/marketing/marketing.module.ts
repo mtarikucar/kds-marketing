@@ -222,6 +222,7 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
+import { R2StorageService } from './social-planner/r2-storage.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
@@ -693,6 +694,7 @@ import { WalletService } from './wallet/wallet.service';
     SnapshotService,
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
+    R2StorageService,
     SocialOAuthService,
     SocialTokenRefreshService,
     // Guards

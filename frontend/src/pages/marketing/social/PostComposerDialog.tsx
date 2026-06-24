@@ -1,11 +1,19 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
-import { Plus, Trash2, Image as ImageIcon, CalendarClock } from 'lucide-react';
-import { postSchema, type PostFormValues } from './socialSchemas';
+import { toast } from 'sonner';
+import { Plus, Trash2, Image as ImageIcon, Film, Upload, CalendarClock } from 'lucide-react';
+import {
+  postSchema,
+  POST_FORMATS,
+  type PostFormValues,
+  type PostFormat,
+  type MediaItemValue,
+} from './socialSchemas';
 import type { SocialAccount, SocialPost } from './types';
 import { NETWORK_META } from './networks';
+import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
   Dialog,
   DialogContent,
@@ -24,7 +32,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 
 export interface PostComposerSubmit {
   content: string;
-  mediaUrls: string[];
+  media: MediaItemValue[];
+  /** Per-account format map (FB/IG only): { [socialAccountId]: FEED|REEL|STORY }. */
+  formats: Record<string, PostFormat>;
   targetAccountIds: string[];
   /** ISO string when the user picked a schedule, else undefined (publish-later draft). */
   scheduledAt?: string;
@@ -41,6 +51,11 @@ interface PostComposerDialogProps {
 }
 
 const MAX_CONTENT = 5000;
+/** Networks that support Reels/Stories — the rest always publish as a feed post. */
+const FORMAT_NETWORKS = new Set(['FACEBOOK', 'INSTAGRAM']);
+
+const isVideoItem = (m: MediaItemValue) =>
+  (m.mime?.startsWith('video/') ?? false) || /\.(mp4|mov|m4v|webm)(?:[?#]|$)/i.test(m.url);
 
 export function PostComposerDialog({
   open,
@@ -52,30 +67,32 @@ export function PostComposerDialog({
 }: PostComposerDialogProps) {
   const { t } = useTranslation('marketing');
   const isEdit = !!post;
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const form = useForm<PostFormValues>({
     resolver: zodResolver(postSchema),
     mode: 'onBlur',
-    defaultValues: {
-      content: '',
-      mediaUrls: [],
-      targetAccountIds: [],
-      scheduledAt: '',
-    },
+    defaultValues: { content: '', media: [], formats: {}, targetAccountIds: [], scheduledAt: '' },
   });
 
   // Populate when (re)opening
   useEffect(() => {
     if (!open) return;
     if (post) {
+      const media: MediaItemValue[] =
+        post.options?.media && post.options.media.length
+          ? post.options.media.map((m) => ({ url: m.url, key: m.key, mime: m.mime }))
+          : (post.mediaUrls ?? []).map((url) => ({ url }));
       form.reset({
         content: post.content,
-        mediaUrls: post.mediaUrls ?? [],
+        media,
+        formats: (post.options?.formats as Record<string, PostFormat>) ?? {},
         targetAccountIds: post.targets.map((tg) => tg.socialAccountId),
         scheduledAt: post.scheduledAt ? toLocalInput(post.scheduledAt) : '',
       });
     } else {
-      form.reset({ content: '', mediaUrls: [], targetAccountIds: [], scheduledAt: '' });
+      form.reset({ content: '', media: [], formats: {}, targetAccountIds: [], scheduledAt: '' });
     }
   }, [open, post, form]);
 
@@ -83,10 +100,21 @@ export function PostComposerDialog({
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;
 
   const handleSubmit: SubmitHandler<PostFormValues> = (values) => {
-    const cleanMedia = (values.mediaUrls ?? []).map((u) => u.trim()).filter(Boolean);
+    const media = (values.media ?? [])
+      .map((m) => ({ ...m, url: m.url.trim() }))
+      .filter((m) => m.url);
+    // Keep only formats for currently-selected format-capable accounts.
+    const formats: Record<string, PostFormat> = {};
+    for (const accId of values.targetAccountIds) {
+      const acc = accounts.find((a) => a.id === accId);
+      if (acc && FORMAT_NETWORKS.has(acc.network)) {
+        formats[accId] = (values.formats?.[accId] as PostFormat) ?? 'FEED';
+      }
+    }
     onSubmit({
       content: values.content.trim(),
-      mediaUrls: cleanMedia,
+      media,
+      formats,
       targetAccountIds: values.targetAccountIds,
       scheduledAt: values.scheduledAt ? new Date(values.scheduledAt).toISOString() : undefined,
     });
@@ -95,6 +123,36 @@ export function PostComposerDialog({
   const errors = form.formState.errors;
   const content = form.watch('content') ?? '';
   const selected = form.watch('targetAccountIds') ?? [];
+  const formats = form.watch('formats') ?? {};
+
+  const uploadFiles = async (files: FileList | null, current: MediaItemValue[], onChange: (m: MediaItemValue[]) => void) => {
+    if (!files || files.length === 0) return;
+    const room = 10 - current.length;
+    const picked = Array.from(files).slice(0, Math.max(0, room));
+    if (picked.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded: MediaItemValue[] = [];
+      for (const f of picked) {
+        const fd = new FormData();
+        fd.append('file', f);
+        const res = await marketingApi.post('/social-planner/media', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        uploaded.push({ url: res.data.url, key: res.data.key, mime: res.data.mime });
+      }
+      onChange([...current, ...uploaded]);
+    } catch (e: any) {
+      toast.error(e.response?.data?.message ?? t('social.composer.uploadFailed', { defaultValue: 'Upload failed' }));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const formatAccounts = accounts.filter(
+    (a) => selected.includes(a.id) && FORMAT_NETWORKS.has(a.network),
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -135,75 +193,108 @@ export function PostComposerDialog({
             )}
           </Field>
 
-          {/* Media URLs — a small controlled string-array editor */}
+          {/* Media — upload to R2 or paste public URLs */}
           <Controller
             control={form.control}
-            name="mediaUrls"
+            name="media"
             render={({ field }) => {
-              const urls = field.value ?? [];
-              const setAt = (idx: number, val: string) =>
-                field.onChange(urls.map((u, i) => (i === idx ? val : u)));
-              const removeAt = (idx: number) =>
-                field.onChange(urls.filter((_, i) => i !== idx));
+              const items = field.value ?? [];
+              const setUrlAt = (idx: number, url: string) =>
+                field.onChange(items.map((m, i) => (i === idx ? { ...m, url } : m)));
+              const removeAt = (idx: number) => field.onChange(items.filter((_, i) => i !== idx));
               return (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-foreground">
-                      {t('social.composer.media', { defaultValue: 'Media URLs' })}
+                      {t('social.composer.media', { defaultValue: 'Media' })}
                     </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={urls.length >= 10}
-                      onClick={() => field.onChange([...urls, ''])}
-                    >
-                      <Plus className="h-4 w-4" aria-hidden="true" />
-                      {t('social.composer.addMedia', { defaultValue: 'Add URL' })}
-                    </Button>
+                    <div className="flex gap-2">
+                      <input
+                        ref={fileRef}
+                        type="file"
+                        accept="image/*,video/*"
+                        multiple
+                        hidden
+                        onChange={(e) => uploadFiles(e.target.files, items, field.onChange)}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        loading={uploading}
+                        disabled={items.length >= 10}
+                        onClick={() => fileRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4" aria-hidden="true" />
+                        {t('social.composer.uploadMedia', { defaultValue: 'Upload' })}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={items.length >= 10}
+                        onClick={() => field.onChange([...items, { url: '' }])}
+                      >
+                        <Plus className="h-4 w-4" aria-hidden="true" />
+                        {t('social.composer.addMedia', { defaultValue: 'Add URL' })}
+                      </Button>
+                    </div>
                   </div>
-                  {urls.length === 0 ? (
+                  {items.length === 0 ? (
                     <p className="text-caption text-muted-foreground">
                       {t('social.composer.noMedia', {
-                        defaultValue: 'No media attached. Add up to 10 image or video URLs.',
+                        defaultValue: 'No media. Upload up to 10 images/videos, or paste public URLs.',
                       })}
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      {urls.map((url, idx) => (
-                        <div key={idx} className="flex items-start gap-2">
-                          <div className="flex-1">
-                            <Field error={fieldErr(errors.mediaUrls?.[idx]?.message)}>
-                              {({ id, describedBy, invalid }) => (
-                                <div className="relative flex items-center">
-                                  <ImageIcon
-                                    className="absolute start-2.5 h-4 w-4 text-muted-foreground pointer-events-none"
-                                    aria-hidden="true"
-                                  />
-                                  <Input
-                                    id={id}
-                                    aria-describedby={describedBy}
-                                    aria-invalid={invalid}
-                                    className="ps-8"
-                                    placeholder="https://…"
-                                    value={url}
-                                    onChange={(e) => setAt(idx, e.target.value)}
-                                  />
+                      {items.map((m, idx) => {
+                        const Icon = isVideoItem(m) ? Film : ImageIcon;
+                        return (
+                          <div key={idx} className="flex items-start gap-2">
+                            <div className="flex-1">
+                              {m.key ? (
+                                // Uploaded asset — read-only display.
+                                <div className="flex items-center gap-2 rounded-md border border-border bg-surface-muted px-2.5 py-2">
+                                  <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                                  <span className="text-sm text-foreground truncate" title={m.url}>
+                                    {m.url.split('/').pop()}
+                                  </span>
                                 </div>
+                              ) : (
+                                <Field error={fieldErr((errors.media as any)?.[idx]?.url?.message)}>
+                                  {({ id, describedBy, invalid }) => (
+                                    <div className="relative flex items-center">
+                                      <Icon
+                                        className="absolute start-2.5 h-4 w-4 text-muted-foreground pointer-events-none"
+                                        aria-hidden="true"
+                                      />
+                                      <Input
+                                        id={id}
+                                        aria-describedby={describedBy}
+                                        aria-invalid={invalid}
+                                        className="ps-8"
+                                        placeholder="https://…"
+                                        value={m.url}
+                                        onChange={(e) => setUrlAt(idx, e.target.value)}
+                                      />
+                                    </div>
+                                  )}
+                                </Field>
                               )}
-                            </Field>
+                            </div>
+                            <IconButton
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              aria-label={t('common.delete', { defaultValue: 'Delete' })}
+                              onClick={() => removeAt(idx)}
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            </IconButton>
                           </div>
-                          <IconButton
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            aria-label={t('common.delete', { defaultValue: 'Delete' })}
-                            onClick={() => removeAt(idx)}
-                          >
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
-                          </IconButton>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -265,6 +356,54 @@ export function PostComposerDialog({
               />
             )}
           </Field>
+
+          {/* Per-account format (Facebook / Instagram) */}
+          {formatAccounts.length > 0 && (
+            <Controller
+              control={form.control}
+              name="formats"
+              render={({ field }) => (
+                <div className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">
+                    {t('social.composer.format', { defaultValue: 'Format' })}
+                  </span>
+                  <div className="space-y-1.5 rounded-lg border border-border p-2">
+                    {formatAccounts.map((acc) => {
+                      const meta = NETWORK_META[acc.network];
+                      const Icon = meta.icon;
+                      const value = (field.value?.[acc.id] as PostFormat) ?? 'FEED';
+                      return (
+                        <div key={acc.id} className="flex items-center gap-2">
+                          <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                          <span className="text-sm text-foreground truncate">{acc.displayName}</span>
+                          <select
+                            className="ms-auto rounded-md border border-border bg-surface px-2 py-1 text-sm text-foreground"
+                            value={value}
+                            onChange={(e) =>
+                              field.onChange({ ...(field.value ?? {}), [acc.id]: e.target.value })
+                            }
+                          >
+                            {POST_FORMATS.map((f) => (
+                              <option key={f} value={f}>
+                                {t(`social.composer.format_${f}`, {
+                                  defaultValue: f === 'FEED' ? 'Feed' : f === 'REEL' ? 'Reel' : 'Story',
+                                })}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-caption text-muted-foreground">
+                    {t('social.composer.formatHint', {
+                      defaultValue: 'Reels and Stories need a video (Stories also accept an image).',
+                    })}
+                  </p>
+                </div>
+              )}
+            />
+          )}
 
           {/* Schedule */}
           <Field

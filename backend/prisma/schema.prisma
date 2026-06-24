@@ -2824,6 +2824,9 @@ model SocialPost {
   workspaceId String
   content     String    @db.Text
   mediaUrls   String[]
+  /// Free-form publish options: per-target formats ({accountId: FEED|REEL|STORY}),
+  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), and mediaDeletedAt.
+  options     Json?
   status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
   scheduledAt DateTime?
   publishedAt DateTime?

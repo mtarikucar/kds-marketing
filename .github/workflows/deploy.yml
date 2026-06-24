@@ -149,6 +149,13 @@ jobs:
           # WhatsApp Embedded Signup configuration id (Facebook Login for Business
           # config) — enables the tenant one-click "Connect WhatsApp" button.
           META_WHATSAPP_CONFIG_ID: ${{ vars.META_WHATSAPP_CONFIG_ID }}
+          # Cloudflare R2 (S3-compatible) media storage for social-planner uploads.
+          # OPTIONAL — unset = upload endpoint inert, users paste public URLs instead.
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -206,6 +213,11 @@ jobs:
           META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
           GRAPH_API_VERSION=${GRAPH_API_VERSION}
           META_WHATSAPP_CONFIG_ID=${META_WHATSAPP_CONFIG_ID}
+          R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+          R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+          R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+          R2_BUCKET=${R2_BUCKET}
+          R2_PUBLIC_BASE_URL=${R2_PUBLIC_BASE_URL}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
