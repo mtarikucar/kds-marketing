@@ -23,6 +23,23 @@
 
 ---
 
+## ⚙️ Execution order & cross-cutting wiring (REQUIRED — from plan review)
+
+**Hard ordering:** Phase 0 (Tasks 0.1–0.3) creates `linkedin-api.util.ts`, which Phases 1–3 all import — **complete & commit Phase 0 before starting any other phase.** Within Phase 2, run 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 (the OAuth service/controller/wiring depend on the client + config). In **Task 1.2**, apply Step 4 (replace `publishLinkedIn` with the new `items: MediaItem[]` signature) and Step 5 (update the dispatch call site at line ~776) **together, before building/committing** — the in-between state does not compile.
+
+**Easy-to-miss edits (each is also in its task — verify all):**
+
+1. **Unions (Task 3.1)** — in `channel-adapter.interface.ts` add `'LINKEDIN'` to the `ChannelType` union (after `'TIKTOK'`) **and** to the `ContactKind` union; Phase-3 code typed against them won't compile otherwise. Also add `case 'LINKEDIN': return 'LinkedIn';` before the `default` in `conversation-ingress.service.ts` `label()` (else LinkedIn conversations get a generic label).
+2. **channels.service.ts validation (Task 3.2)** — add `import { assertLinkedinEngagementSecrets } from './linkedin-config.util';` by the other config-util imports; in `create()` add `else if (dto.type === 'LINKEDIN') assertLinkedinEngagementSecrets(dto.secrets);` after the Meta branch; in `update()` add the matching `else if (existing.type === 'LINKEDIN') assertLinkedinEngagementSecrets(merged);`.
+3. **Nest module registration (`marketing.module.ts`)** — a created provider/controller is inert until registered:
+   - Task 2.5: add `LinkedinAdsOAuthController` to `controllers` (after `SocialOAuthController`) and `LinkedinAdsOAuthService` to `providers` (after `SocialTokenRefreshService`) — **replace** the ads-reporting import block to add their imports, don't append a stray one.
+   - Task 3.3: import + register `LinkedinEngagementAdapter` in `providers` (after `TiktokDmAdapter`).
+   - Task 3.4: import + register `LinkedinEngagementPollService` in `providers` (after `NetgsmDlrPollService`) so its `@Cron` fires.
+   After each, run the targeted suite to confirm DI resolves.
+4. **`options` end-to-end (Task 1.6)** — the composer persists `submit.options.linkedin`, but `CreatePostDto` / `SocialPlannerService.createPost` / `publishDuePost` don't yet carry a generic `options`, so visibility never reaches `publishLinkedIn`. **Task 1.6 wires it** (mirror the existing `formats` flow).
+
+---
+
 # PHASE 0 — Shared versioned REST client + config truth-up (keystone, self-serve)
 
 File-disjoint from later phases. Build first; Phases 1–3 import from it.
@@ -352,7 +369,7 @@ git commit -m "fix(linkedin): correct OAuth scope r_organization_admin -> r_orga
 **Files:**
 - Modify: `backend/.env.example`
 
-- [ ] **Step 1: Append the LinkedIn block** (under the existing `LINKEDIN_CLIENT_ID`/`LINKEDIN_CLIENT_SECRET`, or add it if absent):
+- [ ] **Step 1: Replace the existing LinkedIn env lines.** `.env.example` already defines `LINKEDIN_CLIENT_ID`/`LINKEDIN_CLIENT_SECRET` (~lines 186–190). **Replace those existing lines** with this block (do NOT append a second copy):
 
 ```bash
 # ── LinkedIn ───────────────────────────────────────────────────────────────
@@ -960,7 +977,7 @@ async function linkedinUploadVideo(
 - Modify: `frontend/src/pages/marketing/social/PostComposerDialog.tsx` — add the `LinkedinControls` block + extend `PostComposerSubmit`
 - Create: `frontend/src/pages/marketing/social/PostComposerDialog.linkedin.test.tsx`
 
-> The current composer has no per-network options carrier beyond `formats`; this task introduces `submit.options.linkedin`. The value rides on `PostComposerSubmit` (the create mutation in `SocialPlannerPage.tsx` forwards a structured payload). Wiring `options.linkedin` end-to-end into the backend `CreatePostDto`/service → `publishToNetwork` `opts.linkedin` is a later phase; the adapter already honours it via the dispatch (task 1.4) once the service forwards it.
+> The current composer has no per-network options carrier beyond `formats`; this task introduces `submit.options.linkedin`. The value rides on `PostComposerSubmit` (the create mutation in `SocialPlannerPage.tsx` forwards a structured payload). Wiring `options.linkedin` end-to-end into the backend (`CreatePostDto` → `SocialPlannerService.createPost` → `publishDuePost` → `publishToNetwork` `opts.linkedin`) is **Task 1.6** (immediately after this task); the adapter already honours it via the dispatch (task 1.4) once the service forwards it.
 
 - [ ] **Step 1: Add the FE option type.** In `types.ts`, replace the `SocialPostOptions` interface:
 
@@ -1186,6 +1203,46 @@ type LinkedinVisibility = (typeof LINKEDIN_VISIBILITIES)[number];
 - [ ] **Step 9: Commit.**
   - `git add frontend/src/pages/marketing/social/types.ts frontend/src/pages/marketing/social/PostComposerDialog.tsx frontend/src/pages/marketing/social/PostComposerDialog.linkedin.test.tsx`
   - `git commit -m "feat(linkedin): composer LinkedIn visibility control persisted into submit.options.linkedin"`
+
+---
+
+### Task 1.6: Wire `options` end-to-end (DTO → service → `publishToNetwork`) — *Phase 1 final task*
+
+So the composer's `options.linkedin.visibility` actually reaches `publishLinkedIn`. The existing per-account `formats` already flows this way — **read `SocialPlannerService.createPost` + `publishDuePost` first and mirror it** (do not drop the existing `formats`/`media`/`mediaMime` handling).
+
+**Files:**
+- Modify: `backend/src/modules/marketing/social-planner/dto/*` (`CreatePostDto`)
+- Modify: `backend/src/modules/marketing/social-planner/social-planner.controller.ts` (the `createPost` call)
+- Modify: `backend/src/modules/marketing/social-planner/social-planner.service.ts` (`createPost` persist + `publishDuePost` dispatch)
+- Modify: `frontend/src/pages/marketing/social/SocialPlannerPage.tsx` (composer mutation payload)
+- Test: extend the `social-planner.service` spec (options persisted) + the Task 1.5 FE test
+
+- [ ] **Step 1: Add `options` to `CreatePostDto`.** Find `CreatePostDto` (it already has `formats` + `targetAccountIds`) and add:
+
+```ts
+  @IsOptional()
+  @IsObject()
+  options?: Record<string, unknown>;
+```
+
+Import `IsObject`/`IsOptional` from `class-validator` if not already imported.
+
+- [ ] **Step 2: Forward `options` from the controller.** In `social-planner.controller.ts`, the `createPost` handler calls the service (today with content/media/`targetAccountIds`/`formats`/schedule). Add `dto.options` to that call, matching the service signature changed in Step 3.
+
+- [ ] **Step 3: Persist + dispatch in the service.** In `SocialPlannerService.createPost`, accept the new `options` arg and **merge** it into the stored `SocialPost.options` JSON alongside the existing `{ formats, media }` (keep formats/media). In `publishDuePost`, where it builds the `opts` object passed to `publishToNetwork`, add `linkedin: (post.options as any)?.linkedin` (the `format`/`mediaMime` already derive from `post.options`).
+
+- [ ] **Step 4: Send `options` from the FE.** In `SocialPlannerPage.tsx`, the composer create-mutation posts the payload from `PostComposerSubmit` — add `options: submit.options` so `submit.options.linkedin` (Task 1.5) is transmitted.
+
+- [ ] **Step 5: Test + build.**
+  - Backend: a spec asserting `createPost` stores `options.linkedin.visibility` into `SocialPost.options` (and still stores `formats`). `cd backend && npx jest src/modules/marketing/social-planner && npm run build` → PASS.
+  - Frontend: `cd frontend && npx tsc --noEmit && npx vitest run src/pages/marketing/social && npm run build` → PASS.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add backend/src/modules/marketing/social-planner frontend/src/pages/marketing/social
+git commit -m "feat(linkedin): thread composer options.linkedin(visibility) end-to-end to publishLinkedIn"
+```
 
 ---
 
