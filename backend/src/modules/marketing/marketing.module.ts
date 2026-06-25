@@ -187,6 +187,17 @@ import { MarketingVoiceController } from './controllers/marketing-voice.controll
 import { TwilioVoiceController } from './controllers/twilio-voice.controller';
 import { VoiceAdapter } from './channels/adapters/voice.adapter';
 import { VoiceAiService } from './channels/voice-ai.service';
+// Voice AI (NetGSM) — STT, post-call analysis, custom-LLM bridge, NetGSM IVR, copilot.
+import { SttService } from './voice-ai/stt.service';
+import { CallAnalysisService } from './voice-ai/call-analysis.service';
+import { CallAnalysisCron } from './voice-ai/call-analysis.cron';
+import { VoiceAiBridgeService } from './voice-ai/voice-ai-bridge.service';
+import { VoiceAiBridgeController } from './voice-ai/voice-ai-bridge.controller';
+import { NetgsmIvrService } from './voice-ai/netgsm-ivr.service';
+import { NetgsmIvrController } from './voice-ai/netgsm-ivr.controller';
+import { CopilotService } from './voice-ai/copilot.service';
+import { CopilotController } from './voice-ai/copilot.controller';
+import { VoiceAiStatusController } from './voice-ai/voice-ai-status.controller';
 // Phase F P8 — configurable IVR / phone-tree menus over the Voice flow.
 import { IvrController } from './ivr/ivr.controller';
 import { IvrService } from './ivr/ivr.service';
@@ -485,6 +496,10 @@ import { WalletService } from './wallet/wallet.service';
     MarketingVoiceController,
     TwilioVoiceController,
     IvrController,
+    VoiceAiBridgeController,
+    NetgsmIvrController,
+    CopilotController,
+    VoiceAiStatusController,
     MarketingInvoicesController,
     PublicInvoiceController,
     MarketingBrandingController,
@@ -667,6 +682,14 @@ import { WalletService } from './wallet/wallet.service';
     VoiceAiService,
     // Phase F P8 — configurable IVR / phone-tree menus over the Voice flow.
     IvrService,
+    // Voice AI (NetGSM): STT + post-call analysis (+cron) + custom-LLM bridge +
+    // NetGSM Özel-API IVR + live copilot. All inert behind env/capability flags.
+    SttService,
+    CallAnalysisService,
+    CallAnalysisCron,
+    VoiceAiBridgeService,
+    NetgsmIvrService,
+    CopilotService,
     // Phase F P9 — end-customer invoicing (per-workspace PSP, public pay page).
     InvoicesService,
     InvoiceTextService,
