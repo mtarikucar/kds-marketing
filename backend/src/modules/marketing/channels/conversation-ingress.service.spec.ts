@@ -28,6 +28,7 @@ describe('ConversationIngressService', () => {
     prisma = {
       message: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
       },
       contactIdentity: {
@@ -75,8 +76,8 @@ describe('ConversationIngressService', () => {
     expect(stream.push).toHaveBeenCalled();
   });
 
-  it('redelivered provider message dedupes (no tx, no new rows)', async () => {
-    prisma.message.findUnique.mockResolvedValue({ id: 'msg-9', conversationId: 'conv-9' });
+  it('redelivered provider message dedupes (no tx, no new rows) — scoped to the workspace', async () => {
+    prisma.message.findFirst.mockResolvedValue({ id: 'msg-9', conversationId: 'conv-9' });
     prisma.conversation.findFirst.mockResolvedValue({ leadId: 'lead-9' });
 
     const res = await svc.ingest(channel, inbound);
@@ -84,6 +85,21 @@ describe('ConversationIngressService', () => {
     expect(res).toMatchObject({ conversationId: 'conv-9', messageId: 'msg-9', deduped: true });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.lead.create).not.toHaveBeenCalled();
+    // The dedup lookup MUST be workspace-scoped (provider message ids are not
+    // globally unique → a cross-tenant collision must never short-circuit here).
+    expect(prisma.message.findFirst.mock.calls[0][0].where).toMatchObject({
+      externalMessageId: 'wamid.AAA',
+      workspaceId: WS,
+    });
+  });
+
+  it('does NOT dedupe an externalMessageId that exists only in ANOTHER workspace (no cross-tenant leak)', async () => {
+    // The scoped lookup finds nothing in THIS workspace → must proceed to insert,
+    // never return the foreign conversation id as "deduped".
+    prisma.message.findFirst.mockResolvedValue(null);
+    const res = await svc.ingest(channel, inbound);
+    expect(res).toMatchObject({ isNewConversation: true, deduped: false });
+    expect(prisma.$transaction).toHaveBeenCalled();
   });
 
   it('caps oversize inbound text to 8000 chars before persist + emit', async () => {
