@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 
 /**
@@ -37,7 +38,7 @@ describe('ReviewsService', () => {
   });
 
   it('≥4 stars routes to the public source URL (PUBLIC_ROUTED)', async () => {
-    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', leadId: 'lead-1' });
+    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', leadId: 'lead-1', status: 'REQUESTED' });
     const res = await svc.submitRating('rv_abc', 5);
     expect(res.redirectUrl).toBe('https://g.page/r/biz');
     expect(prisma.review.update.mock.calls[0][0].data.status).toBe('PUBLIC_ROUTED');
@@ -45,12 +46,36 @@ describe('ReviewsService', () => {
   });
 
   it('<4 stars captures private feedback, no public redirect', async () => {
-    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', leadId: 'lead-1' });
+    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', leadId: 'lead-1', status: 'REQUESTED' });
     const res = await svc.submitRating('rv_abc', 2, 'slow service');
     expect(res.redirectUrl).toBeNull();
     const data = prisma.review.update.mock.calls[0][0].data;
     expect(data.status).toBe('PRIVATE_FEEDBACK');
     expect(data.text).toBe('slow service');
+  });
+
+  it('does NOT overwrite an already-submitted review (first submission wins)', async () => {
+    // Already routed public; the link is reopened/forwarded and re-posted as 1★.
+    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', leadId: 'lead-1', status: 'PUBLIC_ROUTED' });
+    const res = await svc.submitRating('rv_abc', 1, 'abusive overwrite attempt');
+    expect(prisma.review.update).not.toHaveBeenCalled(); // rating/text NOT clobbered
+    expect(outbox.append).not.toHaveBeenCalled(); // no duplicate event
+    expect(res.redirectUrl).toBe('https://g.page/r/biz'); // re-derived for the routed one
+  });
+
+  it('re-submitting a private-feedback review is a safe no-op', async () => {
+    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', leadId: 'lead-1', status: 'PRIVATE_FEEDBACK' });
+    const res = await svc.submitRating('rv_abc', 5);
+    expect(prisma.review.update).not.toHaveBeenCalled();
+    expect(res.redirectUrl).toBeNull();
+  });
+
+  it('rejects ratings outside 1–5 or non-integer (no clamping, no write)', async () => {
+    prisma.review.findUnique.mockResolvedValue({ id: 'rev1', workspaceId: WS, sourceId: 'src1', status: 'REQUESTED' });
+    for (const bad of [0, 6, -3, 999, 4.5, NaN]) {
+      await expect(svc.submitRating('rv_abc', bad as number)).rejects.toBeInstanceOf(BadRequestException);
+    }
+    expect(prisma.review.update).not.toHaveBeenCalled();
   });
 
   it('draftReply generates + stores an AI reply (metered)', async () => {

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
@@ -83,14 +84,35 @@ export class ReviewsService {
     return { reviewId: review.id, gateUrl: `${base}/api/public/r/${review.token}` };
   }
 
+  /** Re-derive the public redirect for an already-routed review (no write). */
+  private async routedUrl(review: { status: string; sourceId: string | null; workspaceId: string }): Promise<string | null> {
+    if (review.status !== 'PUBLIC_ROUTED' || !review.sourceId) return null;
+    const source = await this.prisma.reviewSource.findFirst({ where: { id: review.sourceId, workspaceId: review.workspaceId }, select: { placeUrl: true } });
+    return source?.placeUrl ?? null;
+  }
+
   /** Public gate: a submitted rating routes public (≥4) or captures private (<4). */
   async submitRating(token: string, rating: number, text?: string, authorName?: string): Promise<{ redirectUrl: string | null }> {
+    // The gate is public and the token is the only credential — validate the
+    // rating strictly (the old Math.round/clamp turned 0/-3/999/NaN into a valid
+    // star instead of rejecting them).
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new BadRequestException('Rating must be an integer from 1 to 5');
+    }
     const review = await this.prisma.review.findUnique({ where: { token } });
     if (!review) throw new NotFoundException('Review link not found');
-    const clamped = Math.max(1, Math.min(5, Math.round(rating)));
+
+    // First submission wins. A review link can be forwarded, re-opened, or
+    // shared via QR, so anyone with it could otherwise overwrite a submitted
+    // rating/text (e.g. flip a 5★ to 1★ + abuse). Only a REQUESTED review is
+    // writable; a re-submit is a safe no-op that re-derives the redirect.
+    if (review.status !== 'REQUESTED') {
+      return { redirectUrl: await this.routedUrl(review) };
+    }
+
     let redirectUrl: string | null = null;
     let status = 'PRIVATE_FEEDBACK';
-    if (clamped >= PUBLIC_THRESHOLD) {
+    if (rating >= PUBLIC_THRESHOLD) {
       status = 'PUBLIC_ROUTED';
       if (review.sourceId) {
         const source = await this.prisma.reviewSource.findFirst({ where: { id: review.sourceId, workspaceId: review.workspaceId }, select: { placeUrl: true } });
@@ -99,12 +121,12 @@ export class ReviewsService {
     }
     await this.prisma.review.update({
       where: { id: review.id },
-      data: { rating: clamped, text: text?.slice(0, 4000) ?? null, authorName: authorName?.slice(0, 200) ?? null, status },
+      data: { rating, text: text?.slice(0, 4000) ?? null, authorName: authorName?.slice(0, 200) ?? null, status },
     });
     await this.outbox.append({
       type: MarketingEventTypes.ReviewReceived,
       idempotencyKey: `review-received:${review.id}`,
-      payload: { workspaceId: review.workspaceId, reviewId: review.id, leadId: review.leadId, rating: clamped, public: clamped >= PUBLIC_THRESHOLD, occurredAt: new Date().toISOString() },
+      payload: { workspaceId: review.workspaceId, reviewId: review.id, leadId: review.leadId, rating, public: rating >= PUBLIC_THRESHOLD, occurredAt: new Date().toISOString() },
     });
     return { redirectUrl };
   }
