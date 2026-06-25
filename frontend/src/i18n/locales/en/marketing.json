@@ -777,6 +777,9 @@
     "title": "Custom Objects",
     "subtitle": "Define your own record types beyond Contacts — properties, vehicles, policies, anything.",
     "new": "New object",
+    "showArchived": "Show archived",
+    "hideArchived": "Hide archived",
+    "archivedBadge": "Archived",
     "searchPlaceholder": "Search records…",
     "empty": {
       "title": "No custom objects yet",
@@ -794,7 +797,8 @@
       "name": "Name"
     },
     "action": {
-      "archive": "Archive"
+      "archive": "Archive",
+      "restore": "Restore"
     },
     "form": {
       "newTitle": "New custom object",
@@ -841,6 +845,8 @@
       "createFailed": "Failed to create object",
       "archived": "Object archived",
       "archiveFailed": "Failed to archive",
+      "restored": "Object restored",
+      "restoreFailed": "Failed to restore",
       "recordSaved": "Record saved",
       "recordFailed": "Failed to save record",
       "recordDeleted": "Record deleted",

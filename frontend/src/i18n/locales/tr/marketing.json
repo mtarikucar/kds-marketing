@@ -788,6 +788,9 @@
     "title": "Özel Nesneler",
     "subtitle": "Kişilerin ötesinde kendi kayıt türlerinizi tanımlayın — mülk, araç, poliçe, her şey.",
     "new": "Yeni nesne",
+    "showArchived": "Arşivlenenleri göster",
+    "hideArchived": "Arşivlenenleri gizle",
+    "archivedBadge": "Arşivlendi",
     "searchPlaceholder": "Kayıtlarda ara…",
     "empty": {
       "title": "Henüz özel nesne yok",
@@ -805,7 +808,8 @@
       "name": "Ad"
     },
     "action": {
-      "archive": "Arşivle"
+      "archive": "Arşivle",
+      "restore": "Geri yükle"
     },
     "form": {
       "newTitle": "Yeni özel nesne",
@@ -852,6 +856,8 @@
       "createFailed": "Nesne oluşturulamadı",
       "archived": "Nesne arşivlendi",
       "archiveFailed": "Arşivlenemedi",
+      "restored": "Nesne geri yüklendi",
+      "restoreFailed": "Geri yüklenemedi",
       "recordSaved": "Kayıt kaydedildi",
       "recordFailed": "Kayıt kaydedilemedi",
       "recordDeleted": "Kayıt silindi",

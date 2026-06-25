@@ -3,11 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Database, Archive, ChevronRight } from 'lucide-react';
+import { Plus, Database, Archive, ChevronRight, RotateCcw } from 'lucide-react';
 import {
   listObjects,
   createObject,
   archiveObject,
+  restoreObject,
   type CustomObjectDef,
 } from '../../../features/marketing/api/custom-objects.service';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
@@ -37,10 +38,11 @@ export default function CustomObjectsPage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<CustomObjectDef | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['marketing', 'custom-objects'],
-    queryFn: listObjects,
+    queryKey: ['marketing', 'custom-objects', { showArchived }],
+    queryFn: () => listObjects(showArchived),
   });
   const objects: CustomObjectDef[] = Array.isArray(data) ? data : [];
 
@@ -74,6 +76,15 @@ export default function CustomObjectsPage() {
     onError: (e) => toast.error(apiError(e, t('customObjects.toast.archiveFailed', { defaultValue: 'Failed to archive' }))),
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: (key: string) => restoreObject(key),
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('customObjects.toast.restored', { defaultValue: 'Object restored' }));
+    },
+    onError: (e) => toast.error(apiError(e, t('customObjects.toast.restoreFailed', { defaultValue: 'Failed to restore' }))),
+  });
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -83,10 +94,22 @@ export default function CustomObjectsPage() {
         })}
         actions={
           isManager ? (
-            <Button onClick={() => setFormOpen(true)}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {t('customObjects.new', { defaultValue: 'New object' })}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowArchived((v) => !v)}
+                aria-pressed={showArchived}
+              >
+                <Archive className="h-4 w-4" aria-hidden="true" />
+                {showArchived
+                  ? t('customObjects.hideArchived', { defaultValue: 'Hide archived' })
+                  : t('customObjects.showArchived', { defaultValue: 'Show archived' })}
+              </Button>
+              <Button onClick={() => setFormOpen(true)}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {t('customObjects.new', { defaultValue: 'New object' })}
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -125,13 +148,33 @@ export default function CustomObjectsPage() {
                 <Database className="h-5 w-5" />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{obj.labelPlural}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-sm font-medium text-foreground">{obj.labelPlural}</p>
+                  {obj.archived && (
+                    <Badge tone="neutral" size="sm">
+                      {t('customObjects.archivedBadge', { defaultValue: 'Archived' })}
+                    </Badge>
+                  )}
+                </div>
                 <p className="truncate font-mono text-micro text-muted-foreground">{obj.key}</p>
                 {obj.description && (
                   <p className="mt-1 line-clamp-2 text-micro text-muted-foreground">{obj.description}</p>
                 )}
               </div>
-              {isManager && (
+              {isManager && (obj.archived ? (
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('customObjects.action.restore', { defaultValue: 'Restore' })}
+                  disabled={restoreMutation.isPending}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    restoreMutation.mutate(obj.key);
+                  }}
+                >
+                  <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                </IconButton>
+              ) : (
                 <IconButton
                   variant="ghost"
                   size="sm"
@@ -143,7 +186,7 @@ export default function CustomObjectsPage() {
                 >
                   <Archive className="h-4 w-4" aria-hidden="true" />
                 </IconButton>
-              )}
+              ))}
               <ChevronRight className="h-4 w-4 self-center text-muted-foreground" aria-hidden="true" />
             </Card>
           ))}
