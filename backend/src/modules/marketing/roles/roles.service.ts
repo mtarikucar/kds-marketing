@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,11 @@ interface RoleInput {
   name: string;
   permissions?: string[];
 }
+
+/** The acting user — used to cap what permissions a role mutation may grant.
+ *  Carries workspaceId so the actor's own permission set resolves correctly
+ *  (resolvePermissions reads the custom role workspace-scoped). */
+type Actor = { workspaceId: string; role: string; customRoleId?: string | null };
 
 /**
  * Epic F — custom roles with granular permissions. When a user has a
@@ -35,9 +41,24 @@ export class RolesService {
     if (invalid.length) throw new BadRequestException(`Unknown permission(s): ${invalid.join(', ')}`);
   }
 
-  async create(workspaceId: string, dto: RoleInput) {
+  /**
+   * Privilege-escalation guard: a user may only grant (or assign a role that
+   * grants) permissions they themselves hold. Without this a MANAGER — who has
+   * `settings.manage` but deliberately NOT `billing.manage`/`users.manage` —
+   * could mint a custom role carrying those and assign it to themselves.
+   */
+  private async assertWithinActorGrant(permissions: string[], actor: Actor) {
+    const held = new Set(await this.resolvePermissions(actor));
+    const exceeding = permissions.filter((p) => !held.has(p));
+    if (exceeding.length) {
+      throw new ForbiddenException(`You cannot grant permission(s) you do not hold: ${exceeding.join(', ')}`);
+    }
+  }
+
+  async create(workspaceId: string, dto: RoleInput, actor: Actor) {
     const permissions = dto.permissions ?? [];
     this.validate(permissions);
+    await this.assertWithinActorGrant(permissions, actor);
     const dupe = await this.prisma.customRole.findUnique({
       where: { workspaceId_name: { workspaceId, name: dto.name } },
     });
@@ -53,9 +74,12 @@ export class RolesService {
     return r;
   }
 
-  async update(workspaceId: string, id: string, dto: Partial<RoleInput>) {
+  async update(workspaceId: string, id: string, dto: Partial<RoleInput>, actor: Actor) {
     await this.owned(workspaceId, id);
-    if (dto.permissions) this.validate(dto.permissions);
+    if (dto.permissions) {
+      this.validate(dto.permissions);
+      await this.assertWithinActorGrant(dto.permissions, actor);
+    }
     return this.prisma.customRole.update({
       where: { id },
       data: {
@@ -76,13 +100,17 @@ export class RolesService {
     return { id };
   }
 
-  async assignToUser(workspaceId: string, userId: string, roleId: string | null) {
+  async assignToUser(workspaceId: string, userId: string, roleId: string | null, actor: Actor) {
     const user = await this.prisma.marketingUser.findFirst({
       where: { id: userId, workspaceId },
       select: { id: true },
     });
     if (!user) throw new NotFoundException('User not found');
-    if (roleId) await this.owned(workspaceId, roleId);
+    if (roleId) {
+      const role = await this.owned(workspaceId, roleId);
+      // Can't hand someone a role more powerful than what the actor holds.
+      await this.assertWithinActorGrant((role.permissions as string[]) ?? [], actor);
+    }
     await this.prisma.marketingUser.update({ where: { id: userId }, data: { customRoleId: roleId } });
     return { userId, customRoleId: roleId };
   }
