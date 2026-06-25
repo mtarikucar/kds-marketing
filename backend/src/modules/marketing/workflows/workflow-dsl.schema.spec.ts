@@ -93,6 +93,23 @@ describe('workflow DSL', () => {
     });
   });
 
+  describe('branch.elseGoto bounds', () => {
+    const branchAt = (elseGoto: number) => [
+      { type: 'branch', filters: [{ field: 'lead.status', op: 'eq', value: 'NEW' }], elseGoto },
+      { type: 'send_whatsapp', body: 'hi' },
+      { type: 'stop_workflow' },
+    ];
+
+    it('accepts an in-bounds elseGoto', () => {
+      expect(() => parseWorkflowParts(okTrigger, branchAt(2))).not.toThrow();
+    });
+
+    it('rejects an elseGoto that overruns steps.length (would silently end the run)', () => {
+      // 3 steps → valid indexes 0,1,2; 9 is out of bounds.
+      expect(() => parseWorkflowParts(okTrigger, branchAt(9))).toThrow();
+    });
+  });
+
   describe('goal (GHL parity)', () => {
     const goalFilters = [{ field: 'lead.status', op: 'eq', value: 'customer' }];
 

@@ -190,6 +190,16 @@ export const WorkflowDslSchema = z
   .refine(
     (dsl) => dsl.goal?.onMet !== 'goto' || (dsl.goal.gotoStep ?? -1) < dsl.steps.length,
     { message: 'goal.gotoStep must be a valid step index (< steps.length)', path: ['goal', 'gotoStep'] },
+  )
+  // A branch.elseGoto must point at a real step index too — an out-of-bounds
+  // value otherwise lands on the executor's stepIndex>=length guard and silently
+  // ENDS the run as DONE instead of branching (same bounds rule as ai_classify).
+  .refine(
+    (dsl) =>
+      dsl.steps.every(
+        (s) => s.type !== 'branch' || s.elseGoto == null || s.elseGoto < dsl.steps.length,
+      ),
+    { message: 'branch.elseGoto must be a valid step index (< steps.length)', path: ['steps'] },
   );
 export type WorkflowDsl = z.infer<typeof WorkflowDslSchema>;
 
