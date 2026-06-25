@@ -96,6 +96,7 @@ const ExperimentsPage          = lazy(() => import('./pages/marketing/experiment
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
 const TelephonySettingsPage    = lazy(() => import('./pages/marketing/TelephonySettingsPage'));
+const VoiceAiSettingsPage      = lazy(() => import('./pages/marketing/settings/voiceAi'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -238,6 +239,7 @@ export default function App() {
             <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
+            <Route path="/settings/voice-ai"    element={<S><VoiceAiSettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />

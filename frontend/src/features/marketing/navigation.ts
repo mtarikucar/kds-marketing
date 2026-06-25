@@ -258,6 +258,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },
       { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
       { path: '/settings/telephony', labelKey: 'nav.telephony', label: 'Phone (Netsantral)', icon: PhoneCall, feature: 'telephony', managerOnly: true },
+      { path: '/settings/voice-ai', labelKey: 'nav.voiceAiSettings', label: 'Voice AI', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
     ],
