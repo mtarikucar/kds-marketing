@@ -8,6 +8,7 @@ import {
   Param,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -159,6 +160,9 @@ export class MarketingAiController {
   // ---- Content AI (copy generation) ----
 
   @Post('compose')
+  // Each call is a multi-step Opus generation; the credit meter is the long-run
+  // budget but is unbounded on a -1 (unlimited) plan, so cap burst spend here.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @RequiresFeature('conversationAi')
   @RequirePermission('leads.write')
   compose(
@@ -171,6 +175,9 @@ export class MarketingAiController {
   // ---- Ask AI (read-only NL analyst over the workspace's data) ----
 
   @Post('ask')
+  // Each ask runs up to MAX_ITERS Opus tool-loop calls; cap burst spend (the
+  // credit meter is the long-run budget but is unbounded on a -1 plan).
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @RequiresFeature('askAi')
   @RequirePermission('leads.write')
   ask(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: AskAiDto) {
