@@ -136,6 +136,10 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           META_APP_ID: ${{ secrets.META_APP_ID }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          # Instagram API with Instagram Login (direct IG connect, no FB Page) —
+          # distinct app credentials; the connector stays inert unless BOTH are set.
+          INSTAGRAM_APP_ID: ${{ secrets.INSTAGRAM_APP_ID }}
+          INSTAGRAM_APP_SECRET: ${{ secrets.INSTAGRAM_APP_SECRET }}
           # Facebook Login for Business: the configuration id that bundles the
           # publish permissions (avoids "Invalid Scopes" on the raw scope flow).
           META_LOGIN_CONFIG_ID: ${{ secrets.META_LOGIN_CONFIG_ID }}
@@ -208,6 +212,8 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
           META_APP_ID=${META_APP_ID}
           META_APP_SECRET=${META_APP_SECRET}
+          INSTAGRAM_APP_ID=${INSTAGRAM_APP_ID}
+          INSTAGRAM_APP_SECRET=${INSTAGRAM_APP_SECRET}
           META_LOGIN_CONFIG_ID=${META_LOGIN_CONFIG_ID}
           META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
           GRAPH_API_VERSION=${GRAPH_API_VERSION}
