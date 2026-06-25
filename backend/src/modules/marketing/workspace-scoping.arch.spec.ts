@@ -299,6 +299,19 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // id-keyed salesCall.update of recordingUrl; idempotent (re-stamps the same URL).
   'telephony/recording-sync.service.ts:salesCall.findMany':
     'hourly call-recording sweep reads ended calls missing a recording across all workspaces (system cron)',
+  // Post-call AI-analysis sweep (Voice AI, inert): the 30-min cron reads CONNECTED
+  // calls that have a recording but no analysis across ALL workspaces — a system
+  // job, same shape as the recording/ads sweeps. Every write it triggers
+  // (call_analyses upsert) is keyed by the unique salesCallId and is idempotent.
+  'voice-ai/call-analysis.cron.ts:salesCall.findMany':
+    'half-hourly post-call analysis sweep reads ended recorded calls missing analysis across all workspaces (system cron)',
+  // Custom-LLM bridge (Voice AI, inert): a PUBLIC endpoint an AI voice partner
+  // (VAPI/Retell/ElevenLabs) calls, authenticated by a shared bearer secret — no
+  // workspace context exists on the request. It resolves the VOICE channel by its
+  // (id, type) handle the operator pasted into the partner config; all downstream
+  // metering/KB/agent reads are keyed off the resolved channel's OWN workspaceId.
+  'voice-ai/voice-ai-bridge.controller.ts:channel.findFirst':
+    'public partner-LLM bridge resolves the VOICE channel by id before any workspace context exists (bearer-secret authed)',
   // Review-sync sweep (Epic 13, inert): the hourly cron reads ACTIVE review
   // sources with a token across ALL workspaces — a system job, same shape as the
   // ads/recording sweeps. Every write it triggers (review upsert / source update)

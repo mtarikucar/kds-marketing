@@ -144,6 +144,7 @@
     "customDomains": "Custom Domains",
     "dialer": "Power Dialer",
     "telephony": "Phone (Netsantral)",
+    "voiceAiSettings": "Voice AI",
     "apiKeys": "API Keys",
     "webhooks": "Webhooks",
     "inboundWebhooks": "Inbound webhooks",
@@ -195,6 +196,8 @@
     "previous": "Previous",
     "next": "Next",
     "copied": "Copied",
+    "copy": "Copy",
+    "copyFailed": "Could not copy",
     "done": "Done",
     "saving": "Saving…"
   },
@@ -1347,6 +1350,57 @@
     "empty": "No AI calls yet.",
     "selectPrompt": "Select a call to see the transcript.",
     "noTranscript": "No transcript for this call."
+  },
+  "callAnalysis": {
+    "title": "Call analysis",
+    "summary": "Summary",
+    "score": "Score",
+    "actionItems": "Action items",
+    "topics": "Topics",
+    "analyse": "Analyse",
+    "recordingRequired": "A call recording is required to analyse",
+    "runOk": "Analysis complete",
+    "runSkipped": "Analysis already exists",
+    "runFailed": "Analysis failed",
+    "sentiment": {
+      "POSITIVE": "Positive",
+      "NEUTRAL": "Neutral",
+      "NEGATIVE": "Negative"
+    }
+  },
+  "copilot": {
+    "title": "Live Assistant",
+    "listen": "Listen",
+    "stop": "Stop",
+    "thinking": "Thinking…",
+    "summary": "Summary",
+    "getSuggestions": "Get suggestions",
+    "pastePlaceholder": "Paste the call transcript here…"
+  },
+  "voiceAiSettings": {
+    "title": "Voice AI",
+    "subtitle": "Voice-AI capabilities activate automatically once you buy the NetGSM add-ons and set the keys. Each capability's status and wiring URLs are shown below.",
+    "on": "On",
+    "off": "Off",
+    "unavailable": "Could not load status.",
+    "capability": {
+      "stt": {
+        "name": "Speech-to-Text (STT)",
+        "note": "Needed to analyse call recordings. To enable: NetGSM Call Recording + an STT key."
+      },
+      "bridge": {
+        "name": "AI Bridge",
+        "note": "Lets VAPI/Retell/ElevenLabs use our Claude brain for real-time voice AI. To enable: SIP Trunk + Yapay Zeka + a partner."
+      },
+      "netgsmIvr": {
+        "name": "NetGSM IVR",
+        "note": "Uses NetGSM's TTS robot for inbound calls. To enable: NetGSM Custom API (Özel API) add-on."
+      },
+      "copilot": {
+        "name": "Live Assistant (Copilot)",
+        "note": "Suggests lines to the rep during a call. To enable: STT/key only."
+      }
+    }
   },
   "invoices": {
     "title": "Invoices",
