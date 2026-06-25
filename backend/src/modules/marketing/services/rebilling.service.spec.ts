@@ -120,15 +120,19 @@ describe('RebillingService — plan CRUD (scoped to agency children)', () => {
     expect(prisma.rebillingPlan.upsert).not.toHaveBeenCalled();
   });
 
-  it('upsertPlan rejects negative money', async () => {
+  it('upsertPlan rejects a negative value in ANY money/percent field', async () => {
     const { svc } = makeSvc();
-    await expect(
-      svc.upsertPlan(AGENCY_A, LOCATION_A1, {
-        basePrice: '-5',
-        usageUnitPrice: '1',
-        markupPercent: '0',
-      }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    const base = { basePrice: '1', usageUnitPrice: '1', markupPercent: '0' };
+    // Each field is independently non-negative (the toMoney guard is unconditional).
+    for (const bad of [
+      { ...base, basePrice: '-5' },
+      { ...base, usageUnitPrice: '-0.01' },
+      { ...base, markupPercent: '-1' },
+    ]) {
+      await expect(svc.upsertPlan(AGENCY_A, LOCATION_A1, bad)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    }
   });
 
   it('listPlans is scoped to the calling agency', async () => {
