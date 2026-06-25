@@ -20,9 +20,10 @@ function course(dripMode: string | null, lessons: any[]) {
 }
 
 describe('EnrollmentService', () => {
-  it('enrolls a lead (idempotent upsert) after asserting the course', async () => {
+  it('enrolls a lead (idempotent upsert) after asserting the course AND the lead', async () => {
     const { prisma, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     (prisma.enrollment.upsert as jest.Mock).mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1' });
     const out: any = await svc.enroll(WS, 'c1', 'lead-1');
     expect(out).toMatchObject({ id: 'e1' });
@@ -33,6 +34,14 @@ describe('EnrollmentService', () => {
     const { prisma, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue(null as any);
     await expect(svc.enroll(WS, 'ghost', 'lead-1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('404s enrolling a lead that belongs to another workspace (no cross-tenant enroll)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any); // lead not in this workspace
+    await expect(svc.enroll(WS, 'c1', 'foreign-lead')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.enrollment.upsert).not.toHaveBeenCalled();
   });
 
   it('marks a lesson complete and recomputes progress to 50% (stays ACTIVE)', async () => {

@@ -57,6 +57,13 @@ export class CommunitiesService {
     return c;
   }
 
+  /** The leadId comes from the request body — verify it belongs to this
+   *  workspace so one tenant can't add another tenant's contact as a member. */
+  private async assertLead(workspaceId: string, leadId: string) {
+    const lead = await this.prisma.lead.findFirst({ where: { id: leadId, workspaceId }, select: { id: true } });
+    if (!lead) throw new NotFoundException('Contact not found');
+  }
+
   async get(workspaceId: string, id: string) {
     await this.assertCommunity(workspaceId, id);
     return this.prisma.community.findFirst({
@@ -87,6 +94,7 @@ export class CommunitiesService {
 
   async join(workspaceId: string, communityId: string, leadId: string, role = 'MEMBER') {
     await this.assertCommunity(workspaceId, communityId);
+    await this.assertLead(workspaceId, leadId);
     return this.prisma.communityMember.upsert({
       where: { communityId_leadId: { communityId, leadId } },
       create: { communityId, leadId, role },

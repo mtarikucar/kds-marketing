@@ -27,11 +27,20 @@ describe('CommunitiesService', () => {
   it('join is idempotent (upsert keyed on community+lead)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.community.findFirst.mockResolvedValue({ id: 'co1' } as any);
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     (prisma.communityMember.upsert as jest.Mock).mockResolvedValue({ id: 'mem1' });
     await svc.join(WS, 'co1', 'lead-1');
     expect((prisma.communityMember.upsert as jest.Mock).mock.calls[0][0].where).toEqual({
       communityId_leadId: { communityId: 'co1', leadId: 'lead-1' },
     });
+  });
+
+  it('404s joining a lead that belongs to another workspace (no cross-tenant join)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.community.findFirst.mockResolvedValue({ id: 'co1' } as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any);
+    await expect(svc.join(WS, 'co1', 'foreign-lead')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.communityMember.upsert).not.toHaveBeenCalled();
   });
 
   it('creates a post under a community', async () => {

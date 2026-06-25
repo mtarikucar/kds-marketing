@@ -33,8 +33,17 @@ export class EnrollmentService {
     if (!c) throw new NotFoundException('Course not found');
   }
 
+  /** The leadId comes from the request body — verify it belongs to this
+   *  workspace so one tenant can't enroll (and mint certificates for) another
+   *  tenant's contact. Mirrors wallet/compliance/tags services. */
+  private async assertLead(workspaceId: string, leadId: string) {
+    const lead = await this.prisma.lead.findFirst({ where: { id: leadId, workspaceId }, select: { id: true } });
+    if (!lead) throw new NotFoundException('Contact not found');
+  }
+
   async enroll(workspaceId: string, courseId: string, leadId: string) {
     await this.assertCourse(workspaceId, courseId);
+    await this.assertLead(workspaceId, leadId);
     return this.prisma.enrollment.upsert({
       where: { courseId_leadId: { courseId, leadId } },
       create: { workspaceId, courseId, leadId },
