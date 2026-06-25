@@ -366,13 +366,19 @@ export class MarketingLeadsService {
 
     // Mirror create()'s "one OPEN lead per email per workspace" rule on
     // email change: editing a lead's email to one already held by another
-    // open lead would otherwise sneak past the create-time dedup. Scoped to
-    // this workspace, ignoring WON/LOST and this same row.
-    if (dto.email !== undefined && dto.email && dto.email !== lead.email) {
+    // open lead would otherwise sneak past the create-time dedup. The
+    // comparison and the clash lookup BOTH use the NORMALIZED email (as create
+    // does) — a raw compare lets case/format variants (e.g. John@X.com vs
+    // john@x.com) slip through. Scoped to this workspace, ignoring WON/LOST and
+    // this same row.
+    const newEmailNormalized =
+      dto.email !== undefined && dto.email ? normalizeEmail(dto.email) : undefined;
+    const emailChanged = newEmailNormalized !== undefined && newEmailNormalized !== lead.emailNormalized;
+    if (emailChanged) {
       const clash = await this.prisma.lead.findFirst({
         where: {
           workspaceId,
-          email: dto.email,
+          emailNormalized: newEmailNormalized,
           status: { notIn: ['WON', 'LOST'] },
           mergedIntoId: null,
           deletedAt: null,
@@ -385,6 +391,13 @@ export class MarketingLeadsService {
         throw new ConflictException(`A lead with this email already exists (${clash.businessName}, owned by ${owner})`);
       }
     }
+
+    // When the email changes, re-classify list-hygiene (syntax + MX) just like
+    // create() does, and clear any stale bounce suppression — otherwise a lead
+    // corrected from a bad/bounced address stays permanently unmailable.
+    const rehygiene = emailChanged
+      ? { emailVerifiedStatus: await this.hygiene.verify(dto.email), emailBouncedAt: null }
+      : {};
 
     // Build update explicitly — the DTO now omits assignedToId and
     // status, but being explicit keeps us safe from future DTO drift.
@@ -409,6 +422,8 @@ export class MarketingLeadsService {
       }),
       ...(dto.phone !== undefined && { phoneNormalized: normalizePhone(dto.phone) }),
       ...(dto.email !== undefined && { emailNormalized: normalizeEmail(dto.email) }),
+      // Re-classified hygiene + cleared bounce on an email change (see above).
+      ...rehygiene,
       // Epic 6 — link/unlink the contact's B2B account ('' unlinks).
       ...(dto.companyId !== undefined && { companyId: dto.companyId || null }),
     };
