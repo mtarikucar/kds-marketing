@@ -340,7 +340,7 @@ export default function BookingSettingsPage() {
               {editId ? t('booking.editCalendar', 'Edit calendar') : t('booking.new', 'New calendar')}
             </DialogTitle>
             <DialogDescription>
-              {t('booking.dialogDesc', 'Configure name, slot duration, and weekly availability windows (UTC).')}
+              {t('booking.dialogDesc', "Configure name, slot duration, and weekly availability windows (in the calendar's timezone).")}
             </DialogDescription>
           </DialogHeader>
 
@@ -467,7 +467,7 @@ export default function BookingSettingsPage() {
             {/* Availability */}
             <Card>
               <CardContent className="pt-4 space-y-2">
-                <Label>{t('booking.availability', 'Weekly availability (UTC)')}</Label>
+                <Label>{t('booking.availability', 'Weekly availability (calendar timezone)')}</Label>
                 {DAYS.map((d, i) => (
                   <div key={i} className="flex flex-wrap items-center gap-3 text-sm">
                     <label className="flex w-28 items-center gap-2 cursor-pointer">
