@@ -32,6 +32,7 @@ describe('Enrollment (e2e)', () => {
 
   it('enrolls a lead into a course', async () => {
     ctx.prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as never);
+    ctx.prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as never); // workspace-scoped lead guard
     (ctx.prisma.enrollment.upsert as jest.Mock).mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1', progressPct: 0 });
 
     const res = await request(app.getHttpServer())
