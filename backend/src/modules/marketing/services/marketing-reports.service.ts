@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ReportFilterDto } from '../dto/report-filter.dto';
+import { rangeEndInclusive } from './report-date-range.util';
 
 @Injectable()
 export class MarketingReportsService {
@@ -9,7 +10,7 @@ export class MarketingReportsService {
   async getPerformanceReport(workspaceId: string, filter: ReportFilterDto) {
     const dateFilter: any = {};
     if (filter.dateFrom) dateFilter.gte = new Date(filter.dateFrom);
-    if (filter.dateTo) dateFilter.lte = new Date(filter.dateTo);
+    if (filter.dateTo) dateFilter.lte = rangeEndInclusive(filter.dateTo);
 
     const repWhere: any = {
       status: 'ACTIVE',
@@ -82,7 +83,7 @@ export class MarketingReportsService {
   async getLeadSourceReport(workspaceId: string, filter: ReportFilterDto) {
     const where: any = { mergedIntoId: null }; // exclude tombstoned (merged) leads
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
-    if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
+    if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: rangeEndInclusive(filter.dateTo) };
 
     // Use groupBy instead of N separate count queries
     const [totalsBySource, statusBySource] = await Promise.all([
@@ -125,7 +126,7 @@ export class MarketingReportsService {
   async getRegionalReport(workspaceId: string, filter: ReportFilterDto) {
     const where: any = { mergedIntoId: null }; // exclude tombstoned (merged) leads
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
-    if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
+    if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: rangeEndInclusive(filter.dateTo) };
 
     // Batch: total by city
     const totals = await this.prisma.lead.groupBy({
@@ -155,7 +156,7 @@ export class MarketingReportsService {
   async getConversionFunnel(workspaceId: string, filter: ReportFilterDto) {
     const where: any = { mergedIntoId: null }; // exclude tombstoned (merged) leads
     if (filter.dateFrom) where.createdAt = { ...where.createdAt, gte: new Date(filter.dateFrom) };
-    if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: new Date(filter.dateTo) };
+    if (filter.dateTo) where.createdAt = { ...where.createdAt, lte: rangeEndInclusive(filter.dateTo) };
 
     const statuses = [
       'NEW', 'CONTACTED', 'NOT_REACHABLE', 'MEETING_DONE', 'DEMO_SCHEDULED',

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { rangeEndInclusive } from '../services/report-date-range.util';
 
 interface DateRange {
   from?: string;
@@ -31,7 +32,9 @@ export class AnalyticsService {
     if (!r.from && !r.to) return {};
     const createdAt: Prisma.DateTimeFilter = {};
     if (r.from) createdAt.gte = new Date(r.from);
-    if (r.to) createdAt.lte = new Date(r.to);
+    // Make the end date inclusive — a bare YYYY-MM-DD parses to UTC midnight,
+    // so a plain `lte` would drop everything created during the final day.
+    if (r.to) createdAt.lte = rangeEndInclusive(r.to);
     return { createdAt };
   }
 
