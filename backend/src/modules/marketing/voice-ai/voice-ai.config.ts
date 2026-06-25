@@ -10,9 +10,13 @@ export function isVoiceBridgeConfigured(): boolean {
 export function isNetgsmIvrConfigured(): boolean {
   return !!process.env.NETGSM_IVR_TOKEN?.trim();
 }
-/** Copilot only needs STT (browser provides audio); no extra purchase. */
+/**
+ * Live-agent copilot: the browser does the speech-to-text (free) and the only
+ * server dependency is Claude — so it's available whenever AI is enabled, with
+ * NO purchase and NO backend STT key. (Mirrors AnthropicService.isEnabled().)
+ */
 export function isCopilotConfigured(): boolean {
-  return isSttConfigured();
+  return !!process.env.ANTHROPIC_API_KEY?.trim() && process.env.AI_DISABLED !== '1';
 }
 export interface VoiceAiPublicStatus { stt: boolean; bridge: boolean; netgsmIvr: boolean; copilot: boolean; }
 export function voiceAiPublicStatus(): VoiceAiPublicStatus {
