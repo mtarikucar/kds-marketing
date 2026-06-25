@@ -182,12 +182,19 @@ export default function InboxPage() {
     mutationFn: (paused: boolean) =>
       marketingApi.post(`/conversations/${selectedId}/ai-pause`, { paused }),
     onSuccess: invalidate,
+    // Without feedback an agent who clicked "pause AI" assumes it worked and
+    // starts replying while the AI keeps answering — double replies on a live
+    // customer channel. Surface the failure so they know the AI is still on.
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.aiToggleFailed', 'Could not change the AI status')),
   });
 
   const closeConvo = useMutation({
     mutationFn: () =>
       marketingApi.post(`/conversations/${selectedId}/close`),
     onSuccess: invalidate,
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.closeFailed', 'Could not close the conversation')),
   });
 
   // ── Derived ────────────────────────────────────────────────────────────────

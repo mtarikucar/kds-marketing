@@ -53,8 +53,17 @@ export function RecordFormDialog({
   const [values, setValues] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
-    if (open) setValues(record ? { ...record.values } : {});
-  }, [open, record]);
+    if (!open) return;
+    const base: Record<string, unknown> = record ? { ...record.values } : {};
+    // A required BOOL the user never toggles stays `undefined`, which the
+    // backend rejects as "required" — so a record whose only unset required
+    // field is a BOOL the user wants OFF can never be saved. Seed BOOLs to
+    // `false` so "off" is a real, submittable value.
+    for (const f of fields) {
+      if (f.type === 'BOOL' && base[f.key] === undefined) base[f.key] = false;
+    }
+    setValues(base);
+  }, [open, record, fields]);
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v }));
 
