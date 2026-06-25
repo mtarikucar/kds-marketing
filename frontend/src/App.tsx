@@ -70,6 +70,7 @@ const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLin
 const TaxRatesPage             = lazy(() => import('./pages/marketing/settings/taxRates'));
 const CouponsPage              = lazy(() => import('./pages/marketing/settings/coupons'));
 const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
+const AutomationBuilderPage    = lazy(() => import('./pages/marketing/automations/AutomationBuilderPage'));
 const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
 const BookingSettingsPage      = lazy(() => import('./pages/marketing/BookingSettingsPage'));
@@ -218,6 +219,8 @@ export default function App() {
             <Route path="/settings/tax-rates" element={<S><TaxRatesPage /></S>} />
             <Route path="/settings/coupons"   element={<S><CouponsPage /></S>} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
+            <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
+            <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/campaigns"   element={<S><CampaignsPage /></S>} />
             <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />

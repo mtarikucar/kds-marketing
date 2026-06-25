@@ -37,7 +37,7 @@ describe('moveStepAt', () => {
   it('swaps adjacent steps', () => {
     const steps = [{ type: 'send_sms', body: 'a' }, { type: 'send_sms', body: 'b' }];
     const out = moveStepAt(steps, 0, 1, undefined);
-    expect(out.steps.map((s) => (s as { body: string }).body)).toEqual(['b', 'a']);
+    expect(out.steps.map((s) => (s as { body?: string }).body)).toEqual(['b', 'a']);
   });
   it('is a no-op at the array edge', () => {
     const steps = [{ type: 'send_sms', body: 'a' }];

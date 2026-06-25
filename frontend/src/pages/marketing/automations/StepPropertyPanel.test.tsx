@@ -10,7 +10,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const noop = () => {};
+const noop = vi.fn();
 
 describe('StepPropertyPanel', () => {
   it('shows a hint when nothing is selected', () => {
