@@ -152,6 +152,7 @@
     "customDomains": "Özel Alan Adları",
     "dialer": "Güç Çevirici",
     "telephony": "Telefon (Netsantral)",
+    "voiceAiSettings": "Sesli AI",
     "apiKeys": "API Anahtarları",
     "webhooks": "Webhook'lar",
     "inboundWebhooks": "Gelen Webhook'lar",
@@ -206,6 +207,8 @@
     "previous": "Önceki",
     "next": "Sonraki",
     "copied": "Kopyalandı",
+    "copy": "Kopyala",
+    "copyFailed": "Kopyalanamadı",
     "done": "Tamam",
     "saving": "Kaydediliyor…"
   },
@@ -1343,6 +1346,57 @@
     "empty": "Henüz AI çağrısı yok.",
     "selectPrompt": "Transkripti görmek için bir çağrı seçin.",
     "noTranscript": "Bu çağrı için transkript yok."
+  },
+  "callAnalysis": {
+    "title": "Görüşme analizi",
+    "summary": "Özet",
+    "score": "Skor",
+    "actionItems": "Aksiyon maddeleri",
+    "topics": "Konular",
+    "analyse": "Analiz et",
+    "recordingRequired": "Analiz için görüşme kaydı gerekiyor",
+    "runOk": "Analiz tamamlandı",
+    "runSkipped": "Analiz zaten mevcut",
+    "runFailed": "Analiz başarısız",
+    "sentiment": {
+      "POSITIVE": "Olumlu",
+      "NEUTRAL": "Nötr",
+      "NEGATIVE": "Olumsuz"
+    }
+  },
+  "copilot": {
+    "title": "Canlı Asistan",
+    "listen": "Dinle",
+    "stop": "Durdur",
+    "thinking": "Düşünüyor…",
+    "summary": "Özet",
+    "getSuggestions": "Öneri al",
+    "pastePlaceholder": "Görüşme metnini buraya yapıştırın…"
+  },
+  "voiceAiSettings": {
+    "title": "Sesli AI",
+    "subtitle": "Sesli AI yetenekleri NetGSM eklentilerini satın alıp anahtarları girdiğinizde otomatik olarak aktifleşir. Aşağıda her yeteneğin durumu ve bağlantı adresleri yer alır.",
+    "on": "Açık",
+    "off": "Kapalı",
+    "unavailable": "Durum bilgisi alınamadı.",
+    "capability": {
+      "stt": {
+        "name": "Konuşma Metne (STT)",
+        "note": "Görüşme kayıtlarını analiz etmek için gerekir. Etkinleştirmek için: NetGSM Görüşme Kaydı + STT anahtarı."
+      },
+      "bridge": {
+        "name": "AI Köprüsü (Bridge)",
+        "note": "Gerçek zamanlı sesli yapay zeka için VAPI/Retell/ElevenLabs'i Claude beynimize bağlar. Etkinleştirmek için: SIP Trunk + Yapay Zeka + partner."
+      },
+      "netgsmIvr": {
+        "name": "NetGSM IVR (Sesli Yanıt)",
+        "note": "Gelen aramalar için NetGSM'in TTS robotunu kullanır. Etkinleştirmek için: NetGSM Özel API (Custom) eklentisi."
+      },
+      "copilot": {
+        "name": "Canlı Asistan (Copilot)",
+        "note": "Görüşme sırasında temsilciye öneri verir. Etkinleştirmek için: yalnızca STT/anahtar."
+      }
+    }
   },
   "invoices": {
     "title": "Faturalar",
