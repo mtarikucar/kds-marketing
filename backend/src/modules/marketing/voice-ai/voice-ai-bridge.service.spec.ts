@@ -6,6 +6,7 @@ function makeDeps() {
     voiceTranscript: { create: jest.fn().mockResolvedValue({}) },
   };
   const anthropic = {
+    isEnabled: jest.fn().mockReturnValue(true),
     complete: jest.fn().mockResolvedValue({
       text: 'Merhaba, size nasıl yardımcı olabilirim?',
       toolUses: [],

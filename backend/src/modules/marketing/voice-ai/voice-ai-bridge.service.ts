@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
@@ -67,6 +67,11 @@ export class VoiceAiBridgeService {
   ) {}
 
   async complete(channel: BridgeChannel, body: OpenAiChatBody): Promise<OpenAiChatCompletion> {
+    // Claude is the brain — fail clean (no credit churn) if it isn't configured,
+    // mirroring the netgsm-ivr / copilot services' inert guards.
+    if (!this.anthropic.isEnabled()) {
+      throw new ServiceUnavailableException('Voice AI brain (Claude) is not configured');
+    }
     const agent = channel.agentProfileId
       ? await this.prisma.agentProfile.findFirst({
           where: { id: channel.agentProfileId, workspaceId: channel.workspaceId },
