@@ -18,6 +18,7 @@ import {
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
 import { VariantsDialog } from './campaigns/VariantsDialog';
+import { plainTextBody } from './campaigns/plainText';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -70,15 +71,24 @@ const filterRowSchema = z.object({
   value: z.string(),
 });
 
-const campaignSchema = z.object({
-  name: z.string().min(1, 'Required').max(120),
-  channel: z.enum(CHANNELS),
-  subject: z.string().max(200).optional(),
-  body: z.string().min(1, 'Required').max(20000),
-  bodyHtml: z.string().optional(),
-  emailTemplateId: z.string().optional(),
-  filters: z.array(filterRowSchema),
-});
+const campaignSchema = z
+  .object({
+    name: z.string().min(1, 'Required').max(120),
+    channel: z.enum(CHANNELS),
+    subject: z.string().max(200).optional(),
+    body: z.string().max(20000),
+    bodyHtml: z.string().optional(),
+    emailTemplateId: z.string().optional(),
+    filters: z.array(filterRowSchema),
+  })
+  // The plain-text body is only mandatory when there's no HTML to fall back on.
+  // With an HTML template attached we auto-derive the plain-text version, so an
+  // empty field must not block the operator.
+  .superRefine((v, ctx) => {
+    if (!v.bodyHtml?.trim() && !v.body.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['body'], message: 'Required' });
+    }
+  });
 type CampaignFormValues = z.infer<typeof campaignSchema>;
 
 const DEFAULT_VALUES: CampaignFormValues = {
@@ -187,7 +197,10 @@ export default function CampaignsPage() {
     name: values.name,
     channel: values.channel,
     subject: values.subject || undefined,
-    body: values.body,
+    // The backend requires a non-empty body; when an HTML template is attached
+    // and the operator left the plain-text field blank, derive it from the HTML
+    // so attaching a template never blocks the save.
+    body: plainTextBody(values.body, values.channel === 'EMAIL' ? values.bodyHtml : ''),
     // Always send these (as '' when cleared) so the backend actually CLEARS a
     // previously-attached template — sending undefined would leave the stale
     // HTML in the DB and keep shipping it. The service maps '' → null.
@@ -490,25 +503,34 @@ export default function CampaignsPage() {
               </div>
             )}
 
-            {/* Body */}
-            <Field
-              label={selectedChannel === 'EMAIL' && form.watch('bodyHtml')
-                ? t('campaigns.bodyPlainFallback', 'Plain-text fallback')
-                : t('campaigns.body', 'Message')}
-              error={form.formState.errors.body?.message}
-              required
-            >
-              {({ id, invalid }) => (
-                <Textarea
-                  id={id}
-                  aria-invalid={invalid}
-                  className="min-h-40"
-                  maxLength={20000}
-                  placeholder="Hi {{lead.contactPerson}}, …"
-                  {...form.register('body')}
-                />
-              )}
-            </Field>
+            {/* Body — when an HTML template is attached this is an OPTIONAL
+                plain-text fallback (auto-derived from the HTML if left blank). */}
+            {(() => {
+              const htmlAttached = selectedChannel === 'EMAIL' && !!form.watch('bodyHtml');
+              return (
+                <Field
+                  label={htmlAttached
+                    ? t('campaigns.bodyPlainFallback', 'Plain-text fallback')
+                    : t('campaigns.body', 'Message')}
+                  hint={htmlAttached
+                    ? t('campaigns.bodyPlainFallbackHint', 'Optional — auto-generated from your template if left blank.')
+                    : undefined}
+                  error={form.formState.errors.body?.message}
+                  required={!htmlAttached}
+                >
+                  {({ id, invalid }) => (
+                    <Textarea
+                      id={id}
+                      aria-invalid={invalid}
+                      className="min-h-40"
+                      maxLength={20000}
+                      placeholder="Hi {{lead.contactPerson}}, …"
+                      {...form.register('body')}
+                    />
+                  )}
+                </Field>
+              );
+            })()}
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
