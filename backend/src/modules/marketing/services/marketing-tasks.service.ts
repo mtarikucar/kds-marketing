@@ -256,7 +256,7 @@ export class MarketingTasksService {
     if (status && status !== 'COMPLETED') data.status = status;
     if (dto.dueDate) data.dueDate = parseDueDate(dto.dueDate);
 
-    return this.prisma.marketingTask.update({
+    const updated = await this.prisma.marketingTask.update({
       where: { id: task.id },
       data,
       include: {
@@ -264,6 +264,22 @@ export class MarketingTasksService {
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
       },
     });
+
+    // Notify the new assignee on a reassignment (mirrors create()). create()
+    // already covers first assignment; here only fire when the assignee actually
+    // CHANGED to someone other than the actor — the most common assign path.
+    if (dto.assignedToId && dto.assignedToId !== task.assignedToId && dto.assignedToId !== userId) {
+      this.notificationsService.create({
+        workspaceId,
+        userId: dto.assignedToId,
+        type: 'TASK_ASSIGNED',
+        title: 'Task assigned to you',
+        message: `Task: "${updated.title}"`,
+        metadata: { taskId: updated.id },
+      }).catch(() => {});
+    }
+
+    return updated;
   }
 
   async complete(workspaceId: string, id: string, userId: string, userRole: string) {
