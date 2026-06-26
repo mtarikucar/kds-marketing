@@ -12,6 +12,8 @@ export interface EstimateItem {
   description: string;
   qty: number;
   unitPrice: number; // minor units
+  taxRateId?: string | null; // optional per-line tax rate (KDV/VAT)
+  taxRatePct?: number; // resolved snapshot returned on read (money-math source)
 }
 
 export interface Estimate {

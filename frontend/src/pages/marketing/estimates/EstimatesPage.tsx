@@ -38,6 +38,9 @@ import {
   SelectItem,
 } from '@/components/ui';
 import { listProducts } from '../../../features/marketing/api/products.service';
+import { listTaxRates } from '../../../features/marketing/api/tax-rates.service';
+
+const NO_TAX = '__none__';
 
 const STATUS_TONE: Record<EstimateStatus, 'neutral' | 'info' | 'success' | 'danger' | 'warning'> = {
   DRAFT: 'neutral',
@@ -51,6 +54,7 @@ interface ItemRow {
   description: string;
   qty: string;
   price: string; // major units in the form; converted to minor on save
+  taxRateId?: string; // optional per-line tax rate (mirrors the invoice form)
 }
 
 interface FormState {
@@ -121,6 +125,15 @@ export default function EstimatesPage() {
   });
   const products = productPage?.data ?? [];
 
+  // Per-line tax rates (KDV/VAT) — same source the invoice form uses, so a quote
+  // and the invoice it converts into apply identical tax.
+  const { data: taxRates = [] } = useQuery({
+    queryKey: ['marketing', 'tax-rates'],
+    queryFn: listTaxRates,
+    staleTime: 60_000,
+  });
+  const pctOf = (taxRateId?: string) => Number(taxRates.find((r) => r.id === taxRateId)?.rate ?? 0);
+
   const addProductLine = (productId: string) => {
     const p = products.find((x) => x.id === productId);
     if (!p) return;
@@ -151,6 +164,7 @@ export default function EstimatesPage() {
         description: it.description.trim(),
         qty: Math.max(0, Math.round(Number(it.qty) || 0)),
         unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
+        ...(it.taxRateId ? { taxRateId: it.taxRateId } : {}),
       })),
   });
 
@@ -222,19 +236,25 @@ export default function EstimatesPage() {
         description: it.description,
         qty: String(it.qty),
         price: String((it.unitPrice || 0) / 100),
+        taxRateId: it.taxRateId ?? undefined,
       })),
     });
     setDialogOpen(true);
   };
 
-  const formTotal = useMemo(
-    () =>
-      form.items.reduce(
-        (s, it) => s + Math.round(Number(it.qty) || 0) * Math.round(Number(it.price) * 100 || 0),
-        0,
-      ),
-    [form.items],
-  );
+  // Live money breakdown in MINOR units, mirroring the backend computeMoneyTotals
+  // (tax is exclusive, rounded per line then summed) so the editor preview matches
+  // the figure the server will persist.
+  const { formSubtotal, formTax, formTotal } = useMemo(() => {
+    let subtotal = 0;
+    let tax = 0;
+    for (const it of form.items) {
+      const line = Math.round(Number(it.qty) || 0) * Math.round(Number(it.price) * 100 || 0);
+      subtotal += line;
+      tax += Math.round((line * pctOf(it.taxRateId)) / 100);
+    }
+    return { formSubtotal: subtotal, formTax: tax, formTotal: subtotal + tax };
+  }, [form.items, taxRates]);
 
   const isDraft = !form.id || form.status === 'DRAFT';
   const rows = estimates ?? [];
@@ -406,6 +426,33 @@ export default function EstimatesPage() {
                       }
                     />
                   </Labeled>
+                  {taxRates.length > 0 && (
+                    <Labeled label={i === 0 ? t('estimates.tax', 'Tax') : ''} className="w-28">
+                      <Select
+                        value={it.taxRateId ?? NO_TAX}
+                        disabled={!isDraft}
+                        onValueChange={(v) =>
+                          setForm((f) => {
+                            const items = [...f.items];
+                            items[i] = { ...items[i], taxRateId: v === NO_TAX ? undefined : v };
+                            return { ...f, items };
+                          })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('estimates.tax', 'Tax')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_TAX}>{t('estimates.noTax', 'No tax')}</SelectItem>
+                          {taxRates.map((r) => (
+                            <SelectItem key={r.id} value={r.id}>
+                              {r.name} (%{Number(r.rate)})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Labeled>
+                  )}
                   {isDraft && (
                     <Button
                       variant="ghost"
@@ -436,9 +483,17 @@ export default function EstimatesPage() {
 
             <div className="flex items-center justify-between border-t border-border pt-2">
               <span className="text-sm text-muted-foreground">{t('estimates.total', 'Total')}</span>
-              <span className="text-lg font-semibold text-foreground">
-                {money(formTotal, form.currency)}
-              </span>
+              <div className="text-right">
+                {formTax > 0 && (
+                  <p className="text-caption tabular-nums text-muted-foreground">
+                    {t('estimates.subtotal', 'Subtotal')} {money(formSubtotal, form.currency)} ·{' '}
+                    {t('estimates.tax', 'Tax')} {money(formTax, form.currency)}
+                  </p>
+                )}
+                <span className="text-lg font-semibold text-foreground">
+                  {money(formTotal, form.currency)}
+                </span>
+              </div>
             </div>
 
             <div className="flex gap-2">
