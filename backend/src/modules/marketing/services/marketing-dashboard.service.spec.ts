@@ -52,4 +52,18 @@ describe('MarketingDashboardService — active-lead scoping', () => {
       expect(arg.where).toMatchObject({ deletedAt: null, mergedIntoId: null });
     }
   });
+
+  it('getTopPerformers counts only active leads (filtered relation count + groupBys)', async () => {
+    (prisma.marketingUser.findMany as jest.Mock).mockResolvedValue([
+      { id: 'r1', firstName: 'A', lastName: 'B', _count: { leads: 2, activities: 3 } },
+    ]);
+    await svc.getTopPerformers(WS);
+    // the rep's lead total is a FILTERED relation count (active leads only)
+    const sel = (prisma.marketingUser.findMany as jest.Mock).mock.calls[0][0].select;
+    expect(sel._count.select.leads.where).toMatchObject({ deletedAt: null, mergedIntoId: null });
+    // both won/open groupBys exclude deleted + merged
+    for (const [arg] of (prisma.lead.groupBy as jest.Mock).mock.calls) {
+      expect(arg.where).toMatchObject({ deletedAt: null, mergedIntoId: null });
+    }
+  });
 });

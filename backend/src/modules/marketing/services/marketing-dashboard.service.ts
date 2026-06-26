@@ -190,7 +190,9 @@ export class MarketingDashboardService {
         firstName: true,
         lastName: true,
         _count: {
-          select: { leads: true, activities: true },
+          // Count only ACTIVE leads toward the rep's total (a soft-deleted /
+          // merged lead is hidden from the list, so it must not pad the widget).
+          select: { leads: { where: { ...ACTIVE_LEAD } }, activities: true },
         },
       },
     });
@@ -206,6 +208,7 @@ export class MarketingDashboardService {
           assignedToId: { in: reps.map((r) => r.id) },
           status: 'WON',
           convertedAt: { gte: firstDay },
+          ...ACTIVE_LEAD,
         },
         _count: { id: true },
       }),
@@ -217,6 +220,7 @@ export class MarketingDashboardService {
           workspaceId,
           assignedToId: { in: reps.map((r) => r.id) },
           status: { notIn: ['WON', 'LOST'] },
+          ...ACTIVE_LEAD,
         },
         _count: { id: true },
       }),

@@ -34,8 +34,10 @@ describe('AskAiService', () => {
     const res = await svc.ask(WS, 'How many new leads?');
     expect(res.answer).toBe('You have 5 NEW leads.');
     expect(credits.reserve).toHaveBeenCalledTimes(1);
-    // the read tool ran, workspace-scoped
-    expect(prisma.lead.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { workspaceId: WS } }));
+    // the read tool ran, workspace-scoped + active leads only
+    expect(prisma.lead.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS, deletedAt: null, mergedIntoId: null }) }),
+    );
     expect(credits.refund).not.toHaveBeenCalled();
   });
 
@@ -53,5 +55,8 @@ describe('AskAiService', () => {
     const where = prisma.lead.findMany.mock.calls[0][0].where;
     expect(where.workspaceId).toBe(WS);
     expect(where.status).toBe('NEW');
+    // active leads only — the AI must not surface soft-deleted / merged contacts
+    expect(where.deletedAt).toBeNull();
+    expect(where.mergedIntoId).toBeNull();
   });
 });
