@@ -74,6 +74,15 @@ describe('SegmentsService', () => {
     expect(arg.take).toBe(25);
   });
 
+  it('clamps an oversized pageSize to the 200 cap (defence in the service, not just the controller)', async () => {
+    prisma.segment.findFirst.mockResolvedValue({ id: 's1', definition: {} } as any);
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.lead.count as jest.Mock).mockResolvedValue(0);
+    const out = await svc.members(WS, 's1', 1, 5000);
+    expect(out.pageSize).toBe(200);
+    expect((prisma.lead.findMany as jest.Mock).mock.calls[0][0].take).toBe(200);
+  });
+
   it('throws NotFound when updating a segment from another workspace', async () => {
     prisma.segment.findFirst.mockResolvedValue(null as any);
     await expect(svc.update(WS, 'ghost', { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);

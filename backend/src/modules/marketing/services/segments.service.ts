@@ -121,16 +121,21 @@ export class SegmentsService {
       workspaceId,
       seg.definition as unknown as SegmentNode,
     );
-    const skip = (Math.max(1, page) - 1) * pageSize;
+    // Clamp the page size in the service itself — the controllers cap it at 200,
+    // but the public API (public-api-v1.controller) forwards `page` only and
+    // relies on the default, so an unbounded caller must not be able to pull the
+    // whole table in one query. Defence in depth, not just at the edge.
+    const size = Math.min(Math.max(1, pageSize), 200);
+    const skip = (Math.max(1, page) - 1) * size;
     const [items, total] = await Promise.all([
       this.prisma.lead.findMany({
         where: { workspaceId, mergedIntoId: null, deletedAt: null, AND: [filter] },
         skip,
-        take: pageSize,
+        take: size,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.lead.count({ where: { workspaceId, mergedIntoId: null, deletedAt: null, AND: [filter] } }),
     ]);
-    return { items, total, page, pageSize };
+    return { items, total, page, pageSize: size };
   }
 }
