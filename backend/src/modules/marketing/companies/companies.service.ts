@@ -39,7 +39,15 @@ export class CompaniesService {
     // One grouped read for the contact counts (companyId is non-null here).
     const counts = await this.prisma.lead.groupBy({
       by: ['companyId'],
-      where: { workspaceId, companyId: { in: companies.map((c) => c.id) } },
+      // Only ACTIVE leads count toward a company: a soft-deleted (deletedAt) or
+      // merged-away (mergedIntoId) lead is hidden everywhere else, so it must not
+      // inflate the company's contact count either.
+      where: {
+        workspaceId,
+        companyId: { in: companies.map((c) => c.id) },
+        deletedAt: null,
+        mergedIntoId: null,
+      },
       _count: { _all: true },
     });
     const countMap = new Map(counts.map((c) => [c.companyId, c._count._all]));
@@ -55,7 +63,7 @@ export class CompaniesService {
   /** Aggregate the company's contacts' open opportunities + conversation count. */
   private async rollup(workspaceId: string, companyId: string) {
     const leads = await this.prisma.lead.findMany({
-      where: { workspaceId, companyId },
+      where: { workspaceId, companyId, deletedAt: null, mergedIntoId: null },
       select: { id: true },
     });
     const leadIds = leads.map((l) => l.id);
@@ -81,7 +89,7 @@ export class CompaniesService {
   /** The contacts linked to a company (lightweight rows for the detail view). */
   async listContacts(workspaceId: string, companyId: string) {
     return this.prisma.lead.findMany({
-      where: { workspaceId, companyId },
+      where: { workspaceId, companyId, deletedAt: null, mergedIntoId: null },
       orderBy: { createdAt: 'desc' },
       select: { id: true, businessName: true, contactPerson: true, email: true, phone: true, status: true, createdAt: true },
     });

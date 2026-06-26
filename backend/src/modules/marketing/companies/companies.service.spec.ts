@@ -28,6 +28,8 @@ describe('CompaniesService', () => {
     prisma.lead.groupBy.mockResolvedValue([{ companyId: 'c1', _count: { _all: 3 } }]);
     const res = await svc.list(WS);
     expect(prisma.company.findMany.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, archived: false });
+    // the contact count must exclude soft-deleted + merged-away leads.
+    expect(prisma.lead.groupBy.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, deletedAt: null, mergedIntoId: null });
     expect(res.find((c: any) => c.id === 'c1').contactCount).toBe(3);
     expect(res.find((c: any) => c.id === 'c2').contactCount).toBe(0);
   });
@@ -42,6 +44,20 @@ describe('CompaniesService', () => {
     expect(res).toMatchObject({ contactCount: 2, openOpportunities: 2, openValue: 1500.5, conversationCount: 4 });
     // rollup queries are workspace-scoped.
     expect(prisma.opportunity.aggregate.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, status: 'OPEN' });
+    // and the contacts feeding the rollup exclude soft-deleted + merged leads.
+    expect(prisma.lead.findMany.mock.calls[0][0].where).toMatchObject({ workspaceId: WS, companyId: 'c1', deletedAt: null, mergedIntoId: null });
+  });
+
+  it('listContacts excludes soft-deleted + merged leads', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([{ id: 'l1', businessName: 'Acme' }]);
+    await svc.listContacts(WS, 'c1');
+    expect(prisma.lead.findMany.mock.calls[0][0].where).toMatchObject({
+      workspaceId: WS,
+      companyId: 'c1',
+      deletedAt: null,
+      mergedIntoId: null,
+    });
   });
 
   it('get 404s an unknown company', async () => {
