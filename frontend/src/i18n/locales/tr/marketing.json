@@ -1307,6 +1307,7 @@
     "composeFailed": "Yazılamadı",
     "launched": "Gönderildi",
     "launchFailed": "Başlatılamadı",
+    "actionFailed": "İşlem başarısız",
     "sent": "gönderildi",
     "opened": "açıldı",
     "clicked": "tıklandı",

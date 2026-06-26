@@ -263,6 +263,8 @@ export default function CampaignsPage() {
     mutationFn: ({ id, action }: { id: string; action: string }) =>
       marketingApi.post(`/campaigns/${id}/${action}`),
     onSuccess: invalidate,
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('campaigns.actionFailed', 'Action failed')),
   });
 
   const remove = useMutation({
@@ -602,6 +604,7 @@ export default function CampaignsPage() {
                       size="sm"
                       aria-label={t('campaigns.pause', 'Pause')}
                       onClick={() => act.mutate({ id: c.id, action: 'pause' })}
+                      disabled={act.isPending}
                     >
                       <Pause className="h-5 w-5" />
                     </IconButton>
@@ -612,6 +615,7 @@ export default function CampaignsPage() {
                       size="sm"
                       aria-label={t('campaigns.resume', 'Resume')}
                       onClick={() => act.mutate({ id: c.id, action: 'resume' })}
+                      disabled={act.isPending}
                     >
                       <Play className="h-5 w-5" />
                     </IconButton>
