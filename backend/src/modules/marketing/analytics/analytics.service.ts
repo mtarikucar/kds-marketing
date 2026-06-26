@@ -97,9 +97,20 @@ export class AnalyticsService {
       if (g.status === 'WON') reps[id].won += g._count;
       if (g.status === 'LOST') reps[id].lost += g._count;
     }
+    // Resolve rep names so the UI shows a readable table instead of raw UUIDs
+    // (the sibling reports service already returns names). Workspace-scoped.
+    const repIds = Object.keys(reps).filter((id) => id !== 'unassigned');
+    const users = repIds.length
+      ? await this.prisma.marketingUser.findMany({
+          where: { id: { in: repIds }, workspaceId },
+          select: { id: true, firstName: true, lastName: true },
+        })
+      : [];
+    const nameById = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
     return Object.values(reps)
       .map((rep) => ({
         ...rep,
+        name: rep.repId === 'unassigned' ? 'Unassigned' : (nameById.get(rep.repId) ?? rep.repId),
         conversionRate: rep.total ? Math.round((rep.won / rep.total) * 1000) / 10 : 0,
       }))
       .sort((a, b) => b.won - a.won);

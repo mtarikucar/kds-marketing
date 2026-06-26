@@ -50,6 +50,7 @@ export enum LeadSource {
   PHONE = 'PHONE',
   OTHER = 'OTHER',
   AI_RESEARCH = 'AI_RESEARCH',
+  HARDWARE_QUOTE = 'HARDWARE_QUOTE',
 }
 
 export enum ActivityType {
@@ -251,6 +252,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   [LeadSource.PHONE]: 'Phone',
   [LeadSource.OTHER]: 'Other',
   [LeadSource.AI_RESEARCH]: 'AI Research',
+  [LeadSource.HARDWARE_QUOTE]: 'Hardware quote',
 };
 
 // ── Installation ops (Faz 3 backend; UI Faz 6) ────────────────────
