@@ -153,12 +153,18 @@ export class EnrollmentService {
       create: { enrollmentId: id, lessonId, completed: true, completedAt: new Date() },
       update: { completed: true, completedAt: new Date() },
     });
-    const total = await this.prisma.lesson.count({
-      where: { module: { courseId: enrollment.courseId } },
-    });
-    const done = await this.prisma.lessonProgress.count({
-      where: { enrollmentId: id, completed: true },
-    });
+    // Recompute progress over the LIVE lesson set only. LessonProgress.lessonId is
+    // a soft ref (no FK cascade to Lesson), so deleting a lesson orphans its
+    // completed rows; counting those would inflate `done` past `total` and could
+    // flip the enrollment to COMPLETED — minting a certificate — before the
+    // remaining lessons are finished. Intersect the completed set (the gating set
+    // plus the lesson just marked) with the ids of lessons that still exist.
+    const existingIds = new Set(ordered.map((l) => l.id));
+    const completedNow = new Set(completedSet);
+    completedNow.add(lessonId);
+    const total = existingIds.size;
+    let done = 0;
+    for (const lid of completedNow) if (existingIds.has(lid)) done++;
     const pct = total ? Math.round((done / total) * 100) : 0;
     const completed = pct >= 100;
     const updated = await this.prisma.enrollment.update({
