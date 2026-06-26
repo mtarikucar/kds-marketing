@@ -40,6 +40,16 @@ describe('FormsService', () => {
     expect(types).toContain('marketing.form.submitted.v1');
   });
 
+  it('emits FormSubmitted INSIDE the lead transaction (durable iff the lead commits)', async () => {
+    await svc.submit('f1', { name: 'Ada', email: 'ada@x.com' });
+    const formSubmitted = outbox.append.mock.calls.find((c) => c[0].type === 'marketing.form.submitted.v1');
+    expect(formSubmitted).toBeDefined();
+    // 2nd arg = the transaction client (same as LeadCreated), so the form.submitted
+    // workflow trigger is durable iff the lead row is — not a best-effort emit
+    // after commit that can 500 the visitor or silently drop the trigger.
+    expect(formSubmitted![1]).toBe(prisma);
+  });
+
   it('de-dupes onto an existing lead by email (no new lead)', async () => {
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-9' });
     await svc.submit('f1', { name: 'Ada', email: 'ada@x.com' });
