@@ -19,7 +19,7 @@ function makeSvc() {
 // merge() reads each collision-keyed child's canonical rows via findMany; default
 // them to empty so a happy-path merge doesn't choke on an unmocked delegate.
 function mockCollisionTablesEmpty(prisma: MockPrismaClient) {
-  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate'] as const) {
+  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate', 'pointsLedger'] as const) {
     (prisma as any)[t].findMany.mockResolvedValue([]);
   }
 }
@@ -173,5 +173,41 @@ describe('LeadDedupeService.merge', () => {
       expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] } }), data: { leadId: 'a' } }),
     );
     expect(prisma.communityMember.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('dedups pointsLedger on the composite source+refId key, then re-parents the rest', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    // canonical already earned points for lesson l1 → the dup's same award must be
+    // dropped (not moved → P2002), and any other awards re-parented.
+    prisma.pointsLedger.findMany.mockResolvedValue([{ source: 'LESSON_COMPLETE', refId: 'l1' }] as any);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    expect(prisma.pointsLedger.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          leadId: { in: ['b'] },
+          workspaceId: WS,
+          OR: [{ source: 'LESSON_COMPLETE', refId: 'l1' }],
+        }),
+      }),
+    );
+    expect(prisma.pointsLedger.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] }, workspaceId: WS }), data: { leadId: 'a' } }),
+    );
+  });
+
+  it('refuses to merge when a duplicate holds a non-zero wallet balance (no silent money loss)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.customerWallet.findFirst.mockResolvedValue({ id: 'w1' } as any);
+    await expect(svc.merge(WS, 'a', ['b'])).rejects.toBeInstanceOf(ConflictException);
+    // guard fires before any re-parenting work
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
