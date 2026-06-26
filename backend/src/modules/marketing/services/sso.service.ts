@@ -509,10 +509,12 @@ export class SsoService {
     const body = (await res.json()) as { keys?: Jwk[] };
     const keys = body.keys ?? [];
     const rsaKeys = keys.filter((k) => k.kty === 'RSA');
-    const match = kid
-      ? rsaKeys.find((k) => k.kid === kid)
-      : rsaKeys[0];
-    const chosen = match ?? rsaKeys[0];
+    // When the token names a `kid`, REQUIRE an exact match — never fall back to
+    // another key. Guessing the first key on a kid miss is an OIDC anti-pattern
+    // (RFC 7515 §4.1.4): the verifier must use the key the token claims, so a
+    // rotated/forged/unknown kid is rejected rather than verified against an
+    // unrelated key. Only a token that omits `kid` uses the sole/first RSA key.
+    const chosen = kid ? rsaKeys.find((k) => k.kid === kid) : rsaKeys[0];
     if (!chosen) {
       throw new UnauthorizedException('No matching JWKS key for the ID token');
     }
