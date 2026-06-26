@@ -110,11 +110,13 @@ export default function InvoicesPage() {
       navigator.clipboard.writeText(data.payUrl);
       toast.success(t('invoices.sent', 'Sent — pay link copied'));
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.sendFailed', { defaultValue: 'Could not send the invoice' })),
   });
 
   const markPaid = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/mark-paid`),
     onSuccess: invalidate,
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.markPaidFailed', { defaultValue: 'Could not mark the invoice as paid' })),
   });
 
   // Text-to-pay: send the public pay link to the contact via SMS.
@@ -137,6 +139,7 @@ export default function InvoicesPage() {
       invalidate();
       setVoidTarget(null);
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.voidFailed', { defaultValue: 'Could not void the invoice' })),
   });
 
   const savePsp = useMutation({
@@ -168,6 +171,7 @@ export default function InvoicesPage() {
       setPsp((p) => ({ ...p, secretKey: '', merchantKey: '', merchantSalt: '', apiKey: '' }));
       toast.success(t('invoices.pspSaved', 'Payment settings saved'));
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.pspSaveFailed', { defaultValue: 'Could not save payment settings' })),
   });
 
   return (
