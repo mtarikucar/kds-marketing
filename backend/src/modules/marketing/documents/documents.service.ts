@@ -116,7 +116,7 @@ export class DocumentsService {
     if (dto.body !== undefined) data.body = dto.body;
     if (dto.type !== undefined) data.type = dto.type;
     if (dto.leadId !== undefined) data.leadId = dto.leadId;
-    return this.prisma.document.update({ where: { id }, data });
+    return this.prisma.document.update({ where: { id, workspaceId }, data });
   }
 
   /** Freeze the body + consent snapshot, mint a public token, go SENT. */
@@ -158,7 +158,7 @@ export class DocumentsService {
       throw new ConflictException('A signed document cannot be voided');
     }
     return this.prisma.document.update({
-      where: { id },
+      where: { id, workspaceId },
       data: { status: 'VOIDED', voidedAt: new Date() },
     });
   }
@@ -168,7 +168,7 @@ export class DocumentsService {
     if (doc.status === 'SIGNED') {
       throw new ConflictException('A signed document cannot be deleted (legal record)');
     }
-    await this.prisma.document.delete({ where: { id } });
+    await this.prisma.document.delete({ where: { id, workspaceId } });
     return { message: 'Document deleted' };
   }
 
