@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useForm, type SubmitHandler, Controller } from 'react-hook-form';
@@ -9,6 +9,8 @@ import { ArrowLeft } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { BusinessType, LeadSource } from '../../features/marketing/types';
 import { leadSchema, type LeadFormValues } from '../../features/marketing/schemas';
+import { useCustomFields } from './crm/hooks';
+import { CustomFieldValueInput, seedCustomFieldValues } from './crm/CustomFieldValueInput';
 import {
   PageHeader,
   Card,
@@ -67,6 +69,22 @@ export default function CreateLeadPage() {
     queryFn: () => marketingApi.get(`/leads/${id}`).then((r) => r.data),
     enabled: isEdit,
   });
+
+  // Lead custom-field defs + their values. Without rendering these, a workspace
+  // with a REQUIRED custom field could never create a lead from this form (the
+  // backend 400s on the missing field with no input to fill).
+  const { data: customFieldDefs } = useCustomFields();
+  const activeCustomFields = (customFieldDefs ?? []).filter((f) => !f.archived);
+  const [cfValues, setCfValues] = useState<Record<string, unknown>>({});
+  const setCf = (key: string, v: unknown) => setCfValues((p) => ({ ...p, [key]: v }));
+
+  // Seed once the defs (and, on edit, the lead) load. BOOLs default to false so
+  // an untoggled required BOOL is still submittable.
+  useEffect(() => {
+    if (!activeCustomFields.length) return;
+    setCfValues(seedCustomFieldValues(activeCustomFields, existingLead?.customFields));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customFieldDefs, existingLead]);
 
   useEffect(() => {
     if (existingLead) {
@@ -134,6 +152,7 @@ export default function CreateLeadPage() {
     if (values.currentSystem) payload.currentSystem = values.currentSystem.trim();
     if (values.notes) payload.notes = values.notes.trim();
     if (values.nextFollowUp) payload.nextFollowUp = values.nextFollowUp;
+    if (activeCustomFields.length) payload.customFields = cfValues;
     mutation.mutate(payload);
   };
 
@@ -444,6 +463,31 @@ export default function CreateLeadPage() {
                 </Field>
               </div>
             </section>
+
+            {/* Custom fields (workspace-defined) */}
+            {activeCustomFields.length > 0 && (
+              <section>
+                <h3 className="text-sm font-semibold text-foreground mb-4">
+                  {t('createLead.sections.custom', { defaultValue: 'Additional details' })}
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {activeCustomFields.map((f) => (
+                    <Field key={f.id} label={f.label} required={f.required}>
+                      {({ id, describedBy, invalid }) => (
+                        <CustomFieldValueInput
+                          field={f}
+                          value={cfValues[f.key]}
+                          onChange={(v) => setCf(f.key, v)}
+                          id={id}
+                          describedBy={describedBy}
+                          invalid={invalid}
+                        />
+                      )}
+                    </Field>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Actions */}
             <div className="flex gap-3 pt-2 border-t border-border">

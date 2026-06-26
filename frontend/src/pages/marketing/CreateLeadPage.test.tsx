@@ -94,4 +94,31 @@ describe('CreateLeadPage', () => {
     renderCreate();
     expect(screen.getByRole('button', { name: /common.cancel/i })).toBeInTheDocument();
   });
+
+  it('renders workspace custom fields and includes them in the create payload', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    // Serve a required custom field def from /custom-fields; everything else {}.
+    vi.mocked(marketingApi.get).mockImplementation((url: string) =>
+      Promise.resolve({ data: url.includes('/custom-fields')
+        ? [{ id: 'cf1', key: 'priority_tier', label: 'Priority tier', type: 'TEXT', required: true, archived: false, options: [] }]
+        : {} }),
+    );
+    const user = userEvent.setup();
+    renderCreate();
+
+    await user.type(screen.getByLabelText(/createLead.fields.businessName/i), 'Acme');
+    await user.type(screen.getByLabelText(/createLead.fields.contactPerson/i), 'Jane');
+    // The custom field renders as an input labeled by its def — without it a
+    // required custom field would make the lead un-creatable.
+    await user.type(await screen.findByLabelText(/Priority tier/i), 'Gold');
+
+    await user.click(screen.getByRole('button', { name: /createLead.submitCreate/i }));
+
+    await waitFor(() => {
+      expect(marketingApi.post).toHaveBeenCalledWith(
+        '/leads',
+        expect.objectContaining({ customFields: { priority_tier: 'Gold' } }),
+      );
+    });
+  });
 });
