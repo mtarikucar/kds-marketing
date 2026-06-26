@@ -166,6 +166,7 @@ export default function OpportunitiesPage() {
       invalidateBoard();
       toast.success(t('opportunities.markedWon', 'Marked as won'));
     },
+    onError: () => toast.error(t('opportunities.winError', 'Could not mark the deal as won')),
   });
   const loseMutation = useMutation({
     mutationFn: (id: string) => loseOpportunity(id),
@@ -173,6 +174,7 @@ export default function OpportunitiesPage() {
       invalidateBoard();
       toast.success(t('opportunities.markedLost', 'Marked as lost'));
     },
+    onError: () => toast.error(t('opportunities.loseError', 'Could not mark the deal as lost')),
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteOpportunity(id),
@@ -181,6 +183,7 @@ export default function OpportunitiesPage() {
       setDialogOpen(false);
       toast.success(t('opportunities.deleted', 'Deal deleted'));
     },
+    onError: () => toast.error(t('opportunities.deleteError', 'Could not delete the deal')),
   });
 
   const boardTotal = useMemo(
