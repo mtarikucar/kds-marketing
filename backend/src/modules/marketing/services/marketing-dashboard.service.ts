@@ -1,12 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 
+/**
+ * Active leads only — exclude soft-deleted (deletedAt) and merged-away
+ * (mergedIntoId) rows, exactly as the lead list does, so the dashboard's
+ * totals/funnel match what the user can actually see (a deleted or merged
+ * lead must not inflate "total leads", WON/LOST, or the status breakdown).
+ */
+const ACTIVE_LEAD = { deletedAt: null, mergedIntoId: null } as const;
+
 @Injectable()
 export class MarketingDashboardService {
   constructor(private prisma: PrismaService) {}
 
   async getStats(workspaceId: string, userId: string, userRole: string) {
-    const where = userRole === 'REP' ? { assignedToId: userId } : {};
+    const where = userRole === 'REP' ? { ...ACTIVE_LEAD, assignedToId: userId } : { ...ACTIVE_LEAD };
     // Manager-wide widgets (e.g. the unassigned-leads dispatch queue) are for
     // everyone ABOVE rep — OWNER included, not an equality on MANAGER.
     const isManager = userRole !== 'REP';
@@ -44,7 +52,7 @@ export class MarketingDashboardService {
       // for a rep this is always 0 (their own bucket is all assigned).
       isManager
         ? this.prisma.lead.count({
-            where: { workspaceId, assignedToId: null, status: { notIn: ['WON', 'LOST'] } },
+            where: { workspaceId, assignedToId: null, status: { notIn: ['WON', 'LOST'] }, ...ACTIVE_LEAD },
           })
         : Promise.resolve(0),
     ]);
@@ -68,7 +76,7 @@ export class MarketingDashboardService {
   }
 
   async getLeadsByStatus(workspaceId: string, userId: string, userRole: string) {
-    const where = userRole === 'REP' ? { assignedToId: userId } : {};
+    const where = userRole === 'REP' ? { ...ACTIVE_LEAD, assignedToId: userId } : { ...ACTIVE_LEAD };
 
     // Use groupBy instead of N separate count queries
     const grouped = await this.prisma.lead.groupBy({
@@ -143,7 +151,7 @@ export class MarketingDashboardService {
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-    const where = userRole === 'REP' ? { assignedToId: userId } : {};
+    const where = userRole === 'REP' ? { ...ACTIVE_LEAD, assignedToId: userId } : { ...ACTIVE_LEAD };
 
     const [newLeads, wonLeads, activitiesCount] = await Promise.all([
       this.prisma.lead.count({
