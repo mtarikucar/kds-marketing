@@ -272,6 +272,44 @@ describe('SnapshotService — apply', () => {
     expect(res.summary.tags).toEqual({ created: 1, skipped: 0 });
   });
 
+  it('strips a poisoned reviewSource secret on apply (a snapshot captured before the guard cannot leak)', async () => {
+    const { prisma, agency, svc } = makeSvc();
+    (agency.assertAgencyOwns as jest.Mock).mockResolvedValue({ id: LOCATION_A1 });
+    (prisma.snapshot.findFirst as jest.Mock).mockResolvedValue(
+      snapshotRow({
+        reviewSources: [
+          {
+            type: 'GOOGLE',
+            name: 'Main',
+            placeUrl: 'https://g.page/x',
+            // a pre-guard payload still carries the sealed credential + binding
+            accessToken: 'sealed:leaked-token',
+            placeId: 'places/1',
+            externalRef: 'accounts/9/locations/1',
+            syncStatus: 'ACTIVE',
+            lastSyncedAt: '2026-01-01T00:00:00Z',
+            lastError: null,
+          },
+        ],
+      }) as never,
+    );
+    (prisma.reviewSource.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.reviewSource.create as jest.Mock).mockResolvedValue({ id: 'new-rs' });
+
+    await svc.apply('snap-1', LOCATION_A1, AGENCY_A);
+
+    const data = (prisma.reviewSource.create as jest.Mock).mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      type: 'GOOGLE',
+      name: 'Main',
+      placeUrl: 'https://g.page/x',
+      workspaceId: LOCATION_A1,
+    });
+    for (const secret of ['accessToken', 'placeId', 'externalRef', 'syncStatus', 'lastSyncedAt', 'lastError']) {
+      expect(data).not.toHaveProperty(secret);
+    }
+  });
+
   it('rejects a target that is not the agency’s child (assertAgencyOwns throws) — no write', async () => {
     const { prisma, agency, svc } = makeSvc();
     (agency.assertAgencyOwns as jest.Mock).mockRejectedValue(

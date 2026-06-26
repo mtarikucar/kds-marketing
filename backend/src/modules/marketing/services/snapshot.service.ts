@@ -48,6 +48,21 @@ export const SNAPSHOT_CONFIG_TYPES = [
 
 export type SnapshotConfigType = (typeof SNAPSHOT_CONFIG_TYPES)[number];
 
+/**
+ * reviewSource fields that must NEVER cross a workspace boundary: a sealed
+ * OAuth credential plus the source's provider/sync binding to the SOURCE's
+ * Google/FB account. Stripped on BOTH capture and apply — apply too, so a
+ * snapshot captured before the capture-side guard can't reintroduce the leak.
+ */
+const REVIEW_SOURCE_SECRET_FIELDS = [
+  'accessToken',
+  'placeId',
+  'externalRef',
+  'syncStatus',
+  'lastSyncedAt',
+  'lastError',
+] as const;
+
 export type SnapshotPayload = Record<SnapshotConfigType, Record<string, unknown>[]>;
 
 export interface ApplyTypeSummary {
@@ -153,15 +168,7 @@ export class SnapshotService {
       // the clone sync the SOURCE's reviews). Carry only the display config; the
       // clone starts DISCONNECTED, reconnected per-workspace like a fresh source.
       reviewSources: reviewSources.map((r) =>
-        this.portable(r, [
-          ...idOmit,
-          'accessToken',
-          'placeId',
-          'externalRef',
-          'syncStatus',
-          'lastSyncedAt',
-          'lastError',
-        ]),
+        this.portable(r, [...idOmit, ...REVIEW_SOURCE_SECRET_FIELDS]),
       ),
     };
   }
@@ -454,8 +461,13 @@ export class SnapshotService {
           summary.reviewSources.skipped++;
           continue;
         }
+        // Defence in depth: a snapshot captured before the capture-side guard
+        // still has the sealed accessToken + source binding in its stored
+        // payload, so strip them again here — applying an OLD snapshot must not
+        // reintroduce the cross-tenant credential leak.
+        const safe = this.portable(r, REVIEW_SOURCE_SECRET_FIELDS);
         await tx.reviewSource.create({
-          data: { ...r, workspaceId: targetWorkspaceId } as Prisma.ReviewSourceUncheckedCreateInput,
+          data: { ...safe, workspaceId: targetWorkspaceId } as Prisma.ReviewSourceUncheckedCreateInput,
         });
         summary.reviewSources.created++;
       }
