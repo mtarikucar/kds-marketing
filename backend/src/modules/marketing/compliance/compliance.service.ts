@@ -110,6 +110,35 @@ export class ComplianceService {
         })
       : [];
 
+    // Identity, membership, billing and behavioural personal data — the remaining
+    // lead-scoped categories, so the access request is genuinely complete.
+    const [
+      contactIdentities,
+      enrollments,
+      certificates,
+      communityMemberships,
+      earnedBadges,
+      subscriptions,
+      wallets,
+      pointsLedger,
+      customObjectLinks,
+      triggerLinkClicks,
+      couponRedemptions,
+    ] = await Promise.all([
+      this.prisma.contactIdentity.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.enrollment.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.certificate.findMany({ where: { workspaceId, leadId } }),
+      // CommunityMember has no workspaceId column — scope via its community.
+      this.prisma.communityMember.findMany({ where: { leadId, community: { workspaceId } } }),
+      this.prisma.earnedBadge.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.customerSubscription.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.customerWallet.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.pointsLedger.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.customObjectLink.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.triggerLinkClick.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.couponRedemption.findMany({ where: { workspaceId, leadId } }),
+    ]);
+
     const payload = {
       lead,
       consents,
@@ -124,6 +153,17 @@ export class ComplianceService {
       salesCalls,
       surveyResponses,
       opportunities,
+      contactIdentities,
+      enrollments,
+      certificates,
+      communityMemberships,
+      earnedBadges,
+      subscriptions,
+      wallets,
+      pointsLedger,
+      customObjectLinks,
+      triggerLinkClicks,
+      couponRedemptions,
     };
     await this.prisma.dataRequest.create({
       data: {

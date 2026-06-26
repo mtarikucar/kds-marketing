@@ -18,6 +18,9 @@ function mockExportTablesEmpty(prisma: MockPrismaClient) {
   for (const t of [
     'consentRecord', 'conversation', 'booking', 'document', 'estimate', 'invoice',
     'review', 'voiceCall', 'salesCall', 'surveyResponse', 'opportunity', 'message',
+    'contactIdentity', 'enrollment', 'certificate', 'communityMember', 'earnedBadge',
+    'customerSubscription', 'customerWallet', 'pointsLedger', 'customObjectLink',
+    'triggerLinkClick', 'couponRedemption',
   ] as const) {
     (prisma as any)[t].findMany.mockResolvedValue([]);
   }
@@ -92,6 +95,29 @@ describe('ComplianceService', () => {
     // messages have no leadId — scoped via the subject's conversation ids
     expect(prisma.message.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS, conversationId: { in: ['co-1'] } }) }),
+    );
+  });
+
+  it('exports the identity / membership / billing / behavioural categories too', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    prisma.contactIdentity.findMany.mockResolvedValue([{ id: 'ci-1', value: '+90555' }] as any);
+    prisma.enrollment.findMany.mockResolvedValue([{ id: 'en-1' }] as any);
+    prisma.customerWallet.findMany.mockResolvedValue([{ id: 'w-1', balance: 500 }] as any);
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    const out: any = await svc.requestExport(WS, 'lead-1', 'u1');
+
+    expect(out.contactIdentities).toEqual([{ id: 'ci-1', value: '+90555' }]);
+    expect(out.enrollments).toEqual([{ id: 'en-1' }]);
+    expect(out.wallets).toEqual([{ id: 'w-1', balance: 500 }]);
+    expect(prisma.contactIdentity.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, leadId: 'lead-1' } }),
+    );
+    // CommunityMember has no workspaceId column — it is scoped through its community.
+    expect(prisma.communityMember.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { leadId: 'lead-1', community: { workspaceId: WS } } }),
     );
   });
 
