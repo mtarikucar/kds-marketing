@@ -51,6 +51,8 @@ export enum LeadSource {
   OTHER = 'OTHER',
   AI_RESEARCH = 'AI_RESEARCH',
   HARDWARE_QUOTE = 'HARDWARE_QUOTE',
+  // System-set on CSV-import rows with no source column (backend import.service).
+  IMPORT = 'IMPORT',
 }
 
 export enum ActivityType {
@@ -253,6 +255,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   [LeadSource.OTHER]: 'Other',
   [LeadSource.AI_RESEARCH]: 'AI Research',
   [LeadSource.HARDWARE_QUOTE]: 'Hardware quote',
+  [LeadSource.IMPORT]: 'Imported',
 };
 
 // ── Installation ops (Faz 3 backend; UI Faz 6) ────────────────────

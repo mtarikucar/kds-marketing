@@ -36,9 +36,10 @@ export const leadSchema = z.object({
   // workspace-configured value round-trips through edits unchanged.
   businessType: z.string().regex(/^[A-Z0-9][A-Z0-9_]{0,59}$/, 'required'),
   // Mirror the backend LeadSource enum (incl. the system-set AI_RESEARCH /
-  // HARDWARE_QUOTE) so an AI-ingested lead stays EDITABLE — otherwise opening
-  // its edit form seeds a source the zod enum rejects and the save 400s.
-  source: z.enum(['INSTAGRAM', 'REFERRAL', 'FIELD_VISIT', 'ADS', 'WEBSITE', 'PHONE', 'OTHER', 'AI_RESEARCH', 'HARDWARE_QUOTE']),
+  // HARDWARE_QUOTE / IMPORT) so an AI-ingested or CSV-imported lead stays
+  // EDITABLE — otherwise opening its edit form seeds a source the zod enum
+  // rejects and the save 400s.
+  source: z.enum(['INSTAGRAM', 'REFERRAL', 'FIELD_VISIT', 'ADS', 'WEBSITE', 'PHONE', 'OTHER', 'AI_RESEARCH', 'HARDWARE_QUOTE', 'IMPORT']),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   phone: optionalPhone,
   whatsapp: optionalPhone,
