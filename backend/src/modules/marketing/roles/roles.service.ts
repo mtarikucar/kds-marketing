@@ -55,6 +55,24 @@ export class RolesService {
     }
   }
 
+  /**
+   * Privilege-floor guard: an actor may only manage a target (user or role) that
+   * holds permissions WITHIN their own set. assertWithinActorGrant caps what is
+   * granted; this caps WHO/WHAT may be touched — without it a MANAGER could
+   * assign a weak role to an OWNER (a custom role REPLACES legacy permissions, so
+   * that downgrades + locks the OWNER out of settings) or strip an OWNER-level
+   * custom role, neutering a superior. The actor must out-rank the target.
+   */
+  private async assertActorOutranks(targetPermissions: string[], actor: Actor, what: string) {
+    const held = new Set(await this.resolvePermissions(actor));
+    const exceeding = targetPermissions.filter((p) => !held.has(p));
+    if (exceeding.length) {
+      throw new ForbiddenException(
+        `You cannot ${what}: it holds permission(s) you do not have (${exceeding.join(', ')})`,
+      );
+    }
+  }
+
   async create(workspaceId: string, dto: RoleInput, actor: Actor) {
     const permissions = dto.permissions ?? [];
     this.validate(permissions);
@@ -75,7 +93,10 @@ export class RolesService {
   }
 
   async update(workspaceId: string, id: string, dto: Partial<RoleInput>, actor: Actor) {
-    await this.owned(workspaceId, id);
+    const existing = await this.owned(workspaceId, id);
+    // Can't modify a role that already grants more than the actor holds (else a
+    // MANAGER could strip an OWNER-level role, downgrading everyone who holds it).
+    await this.assertActorOutranks((existing.permissions as string[]) ?? [], actor, 'modify this role');
     if (dto.permissions) {
       this.validate(dto.permissions);
       await this.assertWithinActorGrant(dto.permissions, actor);
@@ -103,9 +124,17 @@ export class RolesService {
   async assignToUser(workspaceId: string, userId: string, roleId: string | null, actor: Actor) {
     const user = await this.prisma.marketingUser.findFirst({
       where: { id: userId, workspaceId },
-      select: { id: true },
+      select: { id: true, role: true, customRoleId: true },
     });
     if (!user) throw new NotFoundException('User not found');
+    // Can't touch a user who currently out-ranks the actor — assigning ANY role
+    // (a custom role REPLACES legacy permissions) would downgrade + lock them out.
+    const targetPerms = await this.resolvePermissions({
+      workspaceId,
+      role: user.role,
+      customRoleId: user.customRoleId,
+    });
+    await this.assertActorOutranks(targetPerms, actor, 'modify this user');
     if (roleId) {
       const role = await this.owned(workspaceId, roleId);
       // Can't hand someone a role more powerful than what the actor holds.

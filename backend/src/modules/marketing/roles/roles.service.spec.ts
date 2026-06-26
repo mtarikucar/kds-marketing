@@ -59,6 +59,17 @@ describe('RolesService', () => {
     expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 
+  it('assignToUser refuses to modify a user more powerful than the actor (no OWNER lock-out)', async () => {
+    const { prisma, svc } = makeSvc();
+    // Target is an OWNER (holds billing.manage / users.manage a MANAGER lacks).
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'owner-1', role: 'OWNER', customRoleId: null } as any);
+    // Even a harmless weak role must be refused — assigning it would REPLACE the
+    // OWNER's legacy permissions, downgrading + locking them out of settings.
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'weak', permissions: ['leads.read'] } as any);
+    await expect(svc.assignToUser(WS, 'owner-1', 'weak', MANAGER)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
   it('resolves a custom role permission set when assigned', async () => {
     const { prisma, svc } = makeSvc();
     prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read', 'reports.read'] } as any);
