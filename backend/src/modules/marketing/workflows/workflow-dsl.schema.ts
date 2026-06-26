@@ -93,14 +93,23 @@ const StepSchema = z.discriminatedUnion('type', [
     /** Step index to jump to when the filters DON'T match (default = end). */
     elseGoto: z.number().int().nonnegative().optional(),
   }),
-  z.object({
-    type: z.literal('wait'),
-    mode: z.enum(['duration', 'until_reply']),
-    /** Required for mode=duration. 60s..30d. */
-    seconds: z.number().int().min(60).max(2_592_000).optional(),
-    /** Cap for until_reply so a silent lead doesn't wait forever. */
-    timeoutSeconds: z.number().int().min(60).max(2_592_000).optional(),
-  }),
+  z
+    .object({
+      type: z.literal('wait'),
+      mode: z.enum(['duration', 'until_reply']),
+      /** Required for mode=duration. 60s..30d. */
+      seconds: z.number().int().min(60).max(2_592_000).optional(),
+      /** Cap for until_reply so a silent lead doesn't wait forever. */
+      timeoutSeconds: z.number().int().min(60).max(2_592_000).optional(),
+    })
+    // A duration wait MUST carry an explicit `seconds`. Otherwise the executor
+    // silently falls back to 1h (outcome.wait.seconds ?? 3600), running the
+    // automation on a delay the author never chose — so reject it at save time
+    // rather than mis-time the run. (until_reply legitimately omits seconds.)
+    .refine((s) => s.mode !== 'duration' || s.seconds != null, {
+      message: 'wait mode=duration requires seconds',
+      path: ['seconds'],
+    }),
   z.object({
     type: z.literal('create_task'),
     title: z.string().min(1).max(200),

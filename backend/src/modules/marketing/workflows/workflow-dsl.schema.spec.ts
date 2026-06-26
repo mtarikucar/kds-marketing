@@ -68,6 +68,26 @@ describe('workflow DSL', () => {
     expect(dsl.trigger.filters).toEqual([]);
   });
 
+  describe('wait step', () => {
+    it('rejects a duration wait with no seconds (executor would silently default to 1h)', () => {
+      expect(() =>
+        parseWorkflowParts(okTrigger, [
+          { type: 'wait', mode: 'duration' },
+          { type: 'stop_workflow' },
+        ]),
+      ).toThrow();
+    });
+
+    it('accepts an until_reply wait with no explicit seconds (its cap is optional)', () => {
+      expect(() =>
+        parseWorkflowParts(okTrigger, [
+          { type: 'wait', mode: 'until_reply' },
+          { type: 'stop_workflow' },
+        ]),
+      ).not.toThrow();
+    });
+  });
+
   describe('ai_classify routes', () => {
     const classifyAt = (routes: Record<string, number>) => [
       {
