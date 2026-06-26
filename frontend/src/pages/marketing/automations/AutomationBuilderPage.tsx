@@ -127,6 +127,7 @@ export default function AutomationBuilderPage() {
       setExistingStatus(next);
       queryClient.invalidateQueries({ queryKey: ['marketing', 'workflows'] });
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('automations.statusFailed', 'Could not update the automation')),
   });
 
   // ── Trigger-filters JSON bridge ─────────────────────────────────────────────

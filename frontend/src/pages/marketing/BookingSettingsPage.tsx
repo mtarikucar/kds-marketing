@@ -172,6 +172,7 @@ export default function BookingSettingsPage() {
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/calendars/${id}`),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('booking.deleteFailed', 'Could not delete the calendar')),
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
