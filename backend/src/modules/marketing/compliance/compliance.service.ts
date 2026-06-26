@@ -139,6 +139,23 @@ export class ComplianceService {
       this.prisma.couponRedemption.findMany({ where: { workspaceId, leadId } }),
     ]);
 
+    // Marketing-engagement, profiling, community-authored content and the wallet
+    // transaction ledger — the last lead-scoped personal-data categories (Art. 15
+    // requires ALL of it, not just the lead's identity + current balances). The
+    // wallet ledger has no leadId, so scope it via the subject's wallet ids.
+    const walletIds = wallets.map((w) => w.id);
+    const [campaignRecipients, tags, communityPosts, communityComments, walletLedgerEntries] =
+      await Promise.all([
+        this.prisma.campaignRecipient.findMany({ where: { workspaceId, leadId } }),
+        // LeadTag has no workspaceId column — keyed by the workspace-resolved lead.
+        this.prisma.leadTag.findMany({ where: { leadId }, include: { tag: true } }),
+        this.prisma.communityPost.findMany({ where: { workspaceId, authorLeadId: leadId } }),
+        this.prisma.communityComment.findMany({ where: { workspaceId, authorLeadId: leadId } }),
+        walletIds.length
+          ? this.prisma.walletLedgerEntry.findMany({ where: { workspaceId, walletId: { in: walletIds } } })
+          : Promise.resolve([] as unknown[]),
+      ]);
+
     const payload = {
       lead,
       consents,
@@ -164,6 +181,11 @@ export class ComplianceService {
       customObjectLinks,
       triggerLinkClicks,
       couponRedemptions,
+      campaignRecipients,
+      tags,
+      communityPosts,
+      communityComments,
+      walletLedgerEntries,
     };
     await this.prisma.dataRequest.create({
       data: {

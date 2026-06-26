@@ -21,6 +21,7 @@ function mockExportTablesEmpty(prisma: MockPrismaClient) {
     'contactIdentity', 'enrollment', 'certificate', 'communityMember', 'earnedBadge',
     'customerSubscription', 'customerWallet', 'pointsLedger', 'customObjectLink',
     'triggerLinkClick', 'couponRedemption',
+    'campaignRecipient', 'leadTag', 'communityPost', 'communityComment', 'walletLedgerEntry',
   ] as const) {
     (prisma as any)[t].findMany.mockResolvedValue([]);
   }
@@ -118,6 +119,38 @@ describe('ComplianceService', () => {
     // CommunityMember has no workspaceId column — it is scoped through its community.
     expect(prisma.communityMember.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { leadId: 'lead-1', community: { workspaceId: WS } } }),
+    );
+  });
+
+  it('exports marketing-send history, tags, community content and the wallet ledger', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as any);
+    mockExportTablesEmpty(prisma);
+    prisma.customerWallet.findMany.mockResolvedValue([{ id: 'w-1' }] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([{ id: 'cr-1' }] as any);
+    prisma.leadTag.findMany.mockResolvedValue([{ leadId: 'lead-1', tagId: 't-1' }] as any);
+    prisma.communityPost.findMany.mockResolvedValue([{ id: 'cp-1' }] as any);
+    prisma.communityComment.findMany.mockResolvedValue([{ id: 'cc-1' }] as any);
+    prisma.walletLedgerEntry.findMany.mockResolvedValue([{ id: 'wl-1' }] as any);
+    (prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
+
+    const out: any = await svc.requestExport(WS, 'lead-1', 'u1');
+
+    expect(out.campaignRecipients).toEqual([{ id: 'cr-1' }]);
+    expect(out.tags).toEqual([{ leadId: 'lead-1', tagId: 't-1' }]);
+    expect(out.communityPosts).toEqual([{ id: 'cp-1' }]);
+    expect(out.communityComments).toEqual([{ id: 'cc-1' }]);
+    expect(out.walletLedgerEntries).toEqual([{ id: 'wl-1' }]);
+    // marketing/community reads scope to BOTH the workspace and the subject
+    expect(prisma.campaignRecipient.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, leadId: 'lead-1' } }),
+    );
+    expect(prisma.communityPost.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, authorLeadId: 'lead-1' } }),
+    );
+    // the wallet ledger has no leadId — scoped via the subject's wallet ids
+    expect(prisma.walletLedgerEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS, walletId: { in: ['w-1'] } }) }),
     );
   });
 
