@@ -81,6 +81,30 @@ describe('CoursesService', () => {
     await expect(svc.addLesson(WS, 'ghost', { title: 'x' })).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('removeLesson clears the lesson progress so it cannot orphan (done/total inflation)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1' } as any); // assertLesson
+    (prisma.$transaction as any).mockResolvedValue([]);
+    (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+    (prisma.lesson.delete as jest.Mock).mockResolvedValue({ id: 'l1' });
+    await svc.removeLesson(WS, 'l1');
+    // LessonProgress has no FK to Lesson, so the progress rows must be deleted
+    // explicitly — otherwise they orphan and inflate done/total on enrollments.
+    expect(prisma.lessonProgress.deleteMany).toHaveBeenCalledWith({ where: { lessonId: 'l1' } });
+  });
+
+  it('removeModule clears progress for all of its lessons before deleting', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1' } as any); // assertModule
+    (prisma.lesson.findMany as jest.Mock).mockResolvedValue([{ id: 'l1' }, { id: 'l2' }]);
+    (prisma.$transaction as any).mockResolvedValue([]);
+    (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+    (prisma.courseModule.delete as jest.Mock).mockResolvedValue({ id: 'm1' });
+    await svc.removeModule(WS, 'm1');
+    expect(prisma.lesson.findMany).toHaveBeenCalledWith({ where: { moduleId: 'm1' }, select: { id: true } });
+    expect(prisma.lessonProgress.deleteMany).toHaveBeenCalledWith({ where: { lessonId: { in: ['l1', 'l2'] } } });
+  });
+
   it('get 404s a course from another workspace', async () => {
     const { prisma, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue(null as any);

@@ -179,7 +179,19 @@ export class CoursesService {
 
   async removeModule(workspaceId: string, moduleId: string) {
     await this.assertModule(workspaceId, moduleId);
-    await this.prisma.courseModule.delete({ where: { id: moduleId } });
+    // Deleting the module cascade-deletes its lessons (FK), but LessonProgress is
+    // keyed by lessonId with NO FK to Lesson, so those rows would orphan and keep
+    // counting toward done/total on every enrollment that completed them. Clear
+    // the progress for the module's lessons in the same transaction.
+    const lessons = await this.prisma.lesson.findMany({
+      where: { moduleId },
+      select: { id: true },
+    });
+    const lessonIds = lessons.map((l) => l.id);
+    await this.prisma.$transaction([
+      this.prisma.lessonProgress.deleteMany({ where: { lessonId: { in: lessonIds } } }),
+      this.prisma.courseModule.delete({ where: { id: moduleId } }),
+    ]);
     return { id: moduleId };
   }
 
@@ -242,7 +254,14 @@ export class CoursesService {
 
   async removeLesson(workspaceId: string, lessonId: string) {
     await this.assertLesson(workspaceId, lessonId);
-    await this.prisma.lesson.delete({ where: { id: lessonId } });
+    // LessonProgress has no FK to Lesson (only to Enrollment), so deleting the
+    // lesson would orphan its progress rows — they keep counting toward done/total,
+    // inflating completion (pct can exceed 100% and falsely flip an enrollment to
+    // COMPLETED / issue a certificate). Remove the progress in the same transaction.
+    await this.prisma.$transaction([
+      this.prisma.lessonProgress.deleteMany({ where: { lessonId } }),
+      this.prisma.lesson.delete({ where: { id: lessonId } }),
+    ]);
     return { id: lessonId };
   }
 }
