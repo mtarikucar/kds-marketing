@@ -151,6 +151,38 @@ describe('ImportService.processBatch', () => {
     );
   });
 
+  it('selects the normalized identifiers its single-key-match preservation relies on', async () => {
+    // The UPDATE path reads existing.emailNormalized / existing.phoneNormalized to
+    // decide whether a row that matched on ONE key may overwrite the OTHER. Those
+    // fields must be in the dedup lookup's `select` — at runtime Prisma returns
+    // ONLY selected columns, so omitting them makes both read `undefined`, the
+    // matched/keep flags collapse to false, and the conflicting identifier gets
+    // clobbered (the exact corruption the preservation logic exists to prevent).
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, dedupePolicy: 'UPDATE' } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', email: 'a@x.com' } },
+    ] as any);
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1',
+      customFields: {},
+      status: 'NEW',
+      convertedTenantId: null,
+      emailNormalized: 'a@x.com',
+      phoneNormalized: '+905001112233',
+    } as any);
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    const sel = (prisma.lead.findFirst as jest.Mock).mock.calls[0][0].select;
+    expect(sel.emailNormalized).toBe(true);
+    expect(sel.phoneNormalized).toBe(true);
+  });
+
   it('does nothing when the job is not RUNNING', async () => {
     const { prisma, svc } = makeSvc();
     prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, status: 'DONE' } as any);
