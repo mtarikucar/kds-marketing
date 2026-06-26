@@ -16,6 +16,14 @@ function makeSvc() {
   return { prisma, outbox, svc };
 }
 
+// merge() reads each collision-keyed child's canonical rows via findMany; default
+// them to empty so a happy-path merge doesn't choke on an unmocked delegate.
+function mockCollisionTablesEmpty(prisma: MockPrismaClient) {
+  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate'] as const) {
+    (prisma as any)[t].findMany.mockResolvedValue([]);
+  }
+}
+
 describe('LeadDedupeService.findDuplicates', () => {
   it('clusters leads sharing a normalized phone or email and suggests the oldest as canonical', async () => {
     const { prisma, svc } = makeSvc();
@@ -83,6 +91,7 @@ describe('LeadDedupeService.merge', () => {
     prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
     prisma.leadTag.findMany.mockResolvedValue([] as any);
     prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
     // The tombstone updateMany now claims convertedTenantId:null and asserts the
     // count matches the dup count (TOCTOU guard) — return the 1 dup it touched.
     (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
@@ -117,6 +126,7 @@ describe('LeadDedupeService.merge', () => {
     prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
     prisma.leadTag.findMany.mockResolvedValue([] as any);
     prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
     (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
 
     await svc.merge(WS, 'a', ['b']);
@@ -131,5 +141,37 @@ describe('LeadDedupeService.merge', () => {
         expect.objectContaining({ where: { leadId: { in: ['b'] } }, data: { leadId: 'a' } }),
       );
     }
+  });
+
+  it('re-parents collision-keyed children with the dedup dance (enrollment, badges, certs, ...)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    // Canonical already owns course c1 (enrollment + certificate), so the dup's
+    // rows on c1 must be DROPPED (not moved → P2002), and the rest re-parented.
+    prisma.enrollment.findMany.mockResolvedValue([{ courseId: 'c1' }] as any);
+    prisma.certificate.findMany.mockResolvedValue([{ courseId: 'c1' }] as any);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    // collision drop on the shared course, then re-parent the survivors
+    expect(prisma.enrollment.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { leadId: { in: ['b'] }, courseId: { in: ['c1'] } } }),
+    );
+    expect(prisma.enrollment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] } }), data: { leadId: 'a' } }),
+    );
+    // certificate's unique includes workspaceId — the dedup is workspace-scoped
+    expect(prisma.certificate.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] }, courseId: { in: ['c1'] }, workspaceId: WS }) }),
+    );
+    // a collision-keyed table with NO canonical overlap re-parents without a delete
+    expect(prisma.communityMember.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] } }), data: { leadId: 'a' } }),
+    );
+    expect(prisma.communityMember.deleteMany).not.toHaveBeenCalled();
   });
 });

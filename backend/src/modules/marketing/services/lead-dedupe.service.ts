@@ -45,12 +45,14 @@ const SIMPLE_CHILD_DELEGATES = [
   'consentRecord',
   'customerSubscription',
   'couponRedemption',
-  // NOTE: tables with a unique constraint on leadId still need the collision
-  // dedup dance (like leadTag / campaignRecipient) before they can be added —
-  // enrollment[courseId,leadId], customObjectLink[recordId,leadId],
-  // earnedBadge[…,badgeId], certificate[…,courseId], communityMember[…],
-  // pointsLedger[…,refId] — and customerWallet needs a semantic balance merge.
-  // Deferred deliberately; they require per-table handling, not a naive move.
+  // NOTE: collision-keyed [<field>, leadId] children (enrollment, customObjectLink,
+  // communityMember, earnedBadge, certificate) are re-parented via reparentDeduped()
+  // in merge(). Still deferred — they need bespoke handling, not a naive move:
+  //   • pointsLedger — unique [workspaceId, leadId, source, refId] (composite
+  //     collision key, not a single field reparentDeduped handles)
+  //   • customerWallet — unique [workspaceId, leadId] (one per lead) needs a
+  //     SEMANTIC balance merge (sum the dup's balance into the canonical's), not
+  //     a move/drop.
 ] as const;
 
 /** Scalar fields filled onto the canonical from a duplicate when blank. */
@@ -219,6 +221,16 @@ export class LeadDedupeService {
         data: { leadId: canonicalId },
       });
 
+      // Children with a [<field>, leadId] unique — same collision dance, so a
+      // duplicate enrolled in / certified for / a member/badge-holder of the SAME
+      // course/community/badge as the canonical doesn't abort the merge on P2002.
+      // (workspaceId is part of the unique for earnedBadge/certificate.)
+      await this.reparentDeduped(txc, 'enrollment', 'courseId', canonicalId, dupIds);
+      await this.reparentDeduped(txc, 'customObjectLink', 'recordId', canonicalId, dupIds);
+      await this.reparentDeduped(txc, 'communityMember', 'communityId', canonicalId, dupIds);
+      await this.reparentDeduped(txc, 'earnedBadge', 'badgeId', canonicalId, dupIds, { workspaceId });
+      await this.reparentDeduped(txc, 'certificate', 'courseId', canonicalId, dupIds, { workspaceId });
+
       // Union custom fields (canonical wins per key) + fill blank scalars.
       const customFields = this.mergeCustomFields(canonical, dups);
       const filled = this.fillBlanks(canonical, dups);
@@ -253,6 +265,38 @@ export class LeadDedupeService {
     });
 
     return { canonicalId, merged: dupIds.length };
+  }
+
+  /**
+   * Re-parent a child whose uniqueness is `[<collisionField>, leadId]` (optionally
+   * within `scope`, e.g. workspaceId). A naive wholesale move would hit that unique
+   * and throw P2002 — aborting the entire merge — whenever the canonical already
+   * owns a row for the same collisionField (e.g. both leads enrolled in the same
+   * course). So drop the colliding duplicate rows first, then move the rest.
+   * Mirrors the inline LeadTag / CampaignRecipient dance.
+   */
+  private async reparentDeduped(
+    txc: Record<string, any>,
+    delegate: string,
+    collisionField: string,
+    canonicalId: string,
+    dupIds: string[],
+    scope: Record<string, unknown> = {},
+  ): Promise<void> {
+    const canonRows: Record<string, any>[] = await txc[delegate].findMany({
+      where: { leadId: canonicalId, ...scope },
+      select: { [collisionField]: true },
+    });
+    const collisionVals = canonRows.map((r) => r[collisionField]);
+    if (collisionVals.length) {
+      await txc[delegate].deleteMany({
+        where: { leadId: { in: dupIds }, [collisionField]: { in: collisionVals }, ...scope },
+      });
+    }
+    await txc[delegate].updateMany({
+      where: { leadId: { in: dupIds }, ...scope },
+      data: { leadId: canonicalId },
+    });
   }
 
   private mergeCustomFields(
