@@ -105,7 +105,18 @@ export class CustomFieldsService {
     dto: UpdateCustomFieldDefDto,
     entity?: string,
   ) {
-    await this.getOwned(workspaceId, id, entity);
+    const def = await this.getOwned(workspaceId, id, entity);
+    // A SELECT/MULTISELECT must keep at least one option — create() guards this,
+    // and update must too: coerce() rejects every value against an empty option
+    // list, so stripping the options would silently brick the field (no record
+    // could set it again, with a confusing "value not in options" 400).
+    if (
+      dto.options !== undefined &&
+      (def.type === 'SELECT' || def.type === 'MULTISELECT') &&
+      !dto.options?.length
+    ) {
+      throw new BadRequestException('SELECT/MULTISELECT requires options');
+    }
     return this.prisma.customFieldDef.update({
       where: { id },
       data: {

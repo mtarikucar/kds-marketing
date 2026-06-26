@@ -85,6 +85,26 @@ describe('CustomFieldsService def CRUD', () => {
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('rejects clearing the options of a SELECT field on update (would brick it)', async () => {
+    // coerce() rejects every value against an empty option list, so a SELECT
+    // left optionless can never be set again — update must guard it like create.
+    prisma.customFieldDef.findFirst.mockResolvedValue({
+      id: 'd2', workspaceId: WS, entity: 'LEAD', key: 'tier', type: 'SELECT',
+      options: [{ value: 'gold' }], required: true, archived: false,
+    } as any);
+    await expect(svc.update(WS, 'd2', { options: [] } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('allows a non-SELECT field update that carries no options', async () => {
+    prisma.customFieldDef.findFirst.mockResolvedValue({
+      id: 'd1', workspaceId: WS, entity: 'LEAD', key: 'budget', type: 'NUMBER',
+      options: null, required: false, archived: false,
+    } as any);
+    (prisma.customFieldDef.update as jest.Mock).mockResolvedValue({ id: 'd1', label: 'Budget' });
+    await expect(svc.update(WS, 'd1', { label: 'Budget' } as any)).resolves.toBeDefined();
+  });
+
   it('archive throws NotFound when the def is not in the workspace', async () => {
     prisma.customFieldDef.findFirst.mockResolvedValue(null);
     await expect(svc.archive(WS, 'nope')).rejects.toBeInstanceOf(NotFoundException);
