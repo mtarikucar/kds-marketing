@@ -73,6 +73,7 @@ export default function SendingDomainsPage() {
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/sending-domains/${id}`).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sending-domains'] }),
+    onError: (e) => toast.error(apiErr(e, t('sendingDomains.deleteFailed', { defaultValue: 'Could not delete the domain' }))),
   });
 
   const copy = (value: string) => {

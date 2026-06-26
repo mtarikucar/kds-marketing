@@ -73,6 +73,7 @@ export default function CustomDomainsPage() {
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/custom-domains/${id}`).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-domains'] }),
+    onError: (e) => toast.error(apiErr(e, t('customDomains.deleteFailed', { defaultValue: 'Could not delete the domain' }))),
   });
 
   const copy = (value: string) =>
