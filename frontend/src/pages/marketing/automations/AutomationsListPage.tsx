@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import {
   Zap, Trash2, Play, Pause, Plus, Pencil, LayoutTemplate, UserPlus, Sparkles, Search,
 } from 'lucide-react';
@@ -63,11 +64,13 @@ export default function AutomationsListPage() {
     mutationFn: ({ id, status }: { id: string; status: string }) =>
       marketingApi.post(`/workflows/${id}/status`, { status }),
     onSuccess: invalidate,
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('automations.statusFailed', 'Could not update the automation')),
   });
 
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/workflows/${id}`),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('automations.deleteFailed', 'Could not delete the automation')),
   });
 
   const rows = useMemo(

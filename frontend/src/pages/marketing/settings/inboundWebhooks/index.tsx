@@ -86,6 +86,7 @@ export default function InboundWebhooksPage() {
   const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => updateInboundWebhook(id, { enabled }),
     onSuccess: invalidate,
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('inboundWebhooks.toggleFailed', 'Could not update the webhook')),
   });
 
   const rotate = useMutation({
@@ -95,6 +96,7 @@ export default function InboundWebhooksPage() {
       setRevealed(w);
       toast.success(t('inboundWebhooks.rotated', 'Secret rotated — the old one no longer works'));
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('inboundWebhooks.rotateFailed', 'Could not rotate the secret')),
     onSettled: () => setRotatingId(null),
   });
 
@@ -104,6 +106,7 @@ export default function InboundWebhooksPage() {
       invalidate();
       setDeleteTarget(null);
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('inboundWebhooks.deleteFailed', 'Could not delete the webhook')),
   });
 
   return (

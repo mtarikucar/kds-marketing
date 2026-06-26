@@ -168,6 +168,7 @@ export default function ChannelsSettingsPage() {
       invalidate();
       setDeleteTarget(null);
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.deleteFailed', 'Could not delete the channel')),
   });
 
   const verify = useMutation({
@@ -180,6 +181,7 @@ export default function ChannelsSettingsPage() {
           : t('channels.verifyFail', 'Verification failed — check credentials'),
       );
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFail', 'Verification failed — check credentials')),
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
