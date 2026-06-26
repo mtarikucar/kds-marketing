@@ -31,6 +31,26 @@ const SIMPLE_CHILD_DELEGATES = [
   'review',
   'voiceCall',
   'invoice',
+  // Lead-owned records added with later features. They are pure 1:N (no unique
+  // constraint involving leadId), so a wholesale re-parent can't collide. Before
+  // this, merging a duplicate ORPHANED these on the tombstoned (query-hidden) row
+  // — the canonical lost the dup's deals, documents, estimates, consent, etc.
+  'opportunity',
+  'document',
+  'estimate',
+  'triggerLinkClick',
+  'dialSessionItem',
+  'dataRequest',
+  'surveyResponse',
+  'consentRecord',
+  'customerSubscription',
+  'couponRedemption',
+  // NOTE: tables with a unique constraint on leadId still need the collision
+  // dedup dance (like leadTag / campaignRecipient) before they can be added —
+  // enrollment[courseId,leadId], customObjectLink[recordId,leadId],
+  // earnedBadge[…,badgeId], certificate[…,courseId], communityMember[…],
+  // pointsLedger[…,refId] — and customerWallet needs a semantic balance merge.
+  // Deferred deliberately; they require per-table handling, not a naive move.
 ] as const;
 
 /** Scalar fields filled onto the canonical from a duplicate when blank. */

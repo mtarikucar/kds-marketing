@@ -111,4 +111,25 @@ describe('LeadDedupeService.merge', () => {
       payload: { canonicalId: 'a', mergedIds: ['b'], workspaceId: WS },
     });
   });
+
+  it('re-parents the lead-owned business records too (deals, documents, estimates, consent, ...)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    // These 1:N children were previously NOT re-parented, so a merge orphaned the
+    // dup's deals/documents/estimates/etc. on the tombstoned (query-hidden) row.
+    for (const delegate of [
+      'opportunity', 'document', 'estimate', 'triggerLinkClick', 'dialSessionItem',
+      'dataRequest', 'surveyResponse', 'consentRecord', 'customerSubscription', 'couponRedemption',
+    ]) {
+      expect((prisma as any)[delegate].updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { leadId: { in: ['b'] } }, data: { leadId: 'a' } }),
+      );
+    }
+  });
 });
