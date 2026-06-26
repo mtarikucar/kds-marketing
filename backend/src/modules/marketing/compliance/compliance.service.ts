@@ -69,10 +69,62 @@ export class ComplianceService {
       include: { activities: true, offers: true, tasks: true },
     });
     if (!lead) throw new NotFoundException('Lead not found');
-    const consents = await this.prisma.consentRecord.findMany({
-      where: { workspaceId, leadId },
-    });
-    const payload = { lead, consents };
+
+    // A DSAR (GDPR Art. 15 / KVKK right of access) must return ALL personal data
+    // held about the subject — not just lead+activities+offers+tasks. Pull every
+    // lead-scoped personal-data category (each explicitly workspace+lead scoped).
+    // Communications, appointments, documents, financials and call records were
+    // previously omitted, making the export incomplete.
+    const [
+      consents,
+      conversations,
+      bookings,
+      documents,
+      estimates,
+      invoices,
+      reviews,
+      voiceCalls,
+      salesCalls,
+      surveyResponses,
+      opportunities,
+    ] = await Promise.all([
+      this.prisma.consentRecord.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.conversation.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.booking.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.document.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.estimate.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.invoice.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.review.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.voiceCall.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.salesCall.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.surveyResponse.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.opportunity.findMany({ where: { workspaceId, leadId } }),
+    ]);
+
+    // Messages carry no leadId of their own — they belong to the subject's
+    // conversations, so scope them by those conversation ids (within the ws).
+    const messages = conversations.length
+      ? await this.prisma.message.findMany({
+          where: { workspaceId, conversationId: { in: conversations.map((c) => c.id) } },
+          orderBy: { createdAt: 'asc' },
+        })
+      : [];
+
+    const payload = {
+      lead,
+      consents,
+      conversations,
+      messages,
+      bookings,
+      documents,
+      estimates,
+      invoices,
+      reviews,
+      voiceCalls,
+      salesCalls,
+      surveyResponses,
+      opportunities,
+    };
     await this.prisma.dataRequest.create({
       data: {
         workspaceId,
