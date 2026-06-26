@@ -147,7 +147,22 @@ export class SnapshotService {
       // knowledgeDoc.searchVector is an Unsupported tsvector — never selected by
       // Prisma's default findMany, so it can't enter the payload.
       knowledgeDocs: knowledgeDocs.map((r) => this.portable(r, idOmit)),
-      reviewSources: reviewSources.map((r) => this.portable(r, idOmit)),
+      // reviewSource.accessToken is a SEALED OAuth credential and placeId/
+      // externalRef/sync-state bind the row to the SOURCE's Google/FB account —
+      // copying them would hand one workspace's credential to another (and make
+      // the clone sync the SOURCE's reviews). Carry only the display config; the
+      // clone starts DISCONNECTED, reconnected per-workspace like a fresh source.
+      reviewSources: reviewSources.map((r) =>
+        this.portable(r, [
+          ...idOmit,
+          'accessToken',
+          'placeId',
+          'externalRef',
+          'syncStatus',
+          'lastSyncedAt',
+          'lastError',
+        ]),
+      ),
     };
   }
 

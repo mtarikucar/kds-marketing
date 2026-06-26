@@ -128,6 +128,48 @@ describe('SnapshotService — capture', () => {
     );
   });
 
+  it('strips the sealed accessToken + source-local sync binding from a captured reviewSource (no cross-tenant credential leak)', async () => {
+    const { prisma, svc } = makeSvc();
+    stubConfigReads(prisma, {
+      reviewSource: [
+        {
+          id: 'rs-1',
+          workspaceId: AGENCY_A,
+          type: 'GOOGLE',
+          name: 'Main Branch',
+          placeUrl: 'https://g.page/x',
+          placeId: 'places/123',
+          accessToken: 'sealed:super-secret-oauth-token',
+          externalRef: 'accounts/9/locations/1',
+          syncStatus: 'ACTIVE',
+          lastSyncedAt: new Date(),
+          lastError: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    (prisma.snapshot.create as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve({ id: 'snap-1', ...args.data }),
+    );
+
+    const snap = await svc.capture(AGENCY_A, { name: 'Base' });
+    const payload = snap.payload as unknown as SnapshotPayload;
+
+    expect(payload.reviewSources).toHaveLength(1);
+    const rs = payload.reviewSources[0];
+    // The display config is portable...
+    expect(rs).toMatchObject({ type: 'GOOGLE', name: 'Main Branch', placeUrl: 'https://g.page/x' });
+    // ...but the SEALED credential and the source's provider binding / sync state
+    // must NEVER cross into another workspace's clone.
+    expect(rs).not.toHaveProperty('accessToken');
+    expect(rs).not.toHaveProperty('placeId');
+    expect(rs).not.toHaveProperty('externalRef');
+    expect(rs).not.toHaveProperty('syncStatus');
+    expect(rs).not.toHaveProperty('lastSyncedAt');
+    expect(rs).not.toHaveProperty('lastError');
+  });
+
   it('EXCLUDES customer data — never reads leads and no lead lands in the payload', async () => {
     const { prisma, svc } = makeSvc();
     stubConfigReads(prisma, {
