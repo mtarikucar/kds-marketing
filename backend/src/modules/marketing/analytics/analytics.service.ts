@@ -41,7 +41,7 @@ export class AnalyticsService {
   async funnel(workspaceId: string, r: DateRange) {
     const grouped = await this.prisma.lead.groupBy({
       by: ['status'],
-      where: { workspaceId, mergedIntoId: null, ...this.range(r) },
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, ...this.range(r) },
       _count: true,
     });
     const byStatus: Record<string, number> = {};
@@ -67,7 +67,7 @@ export class AnalyticsService {
   private async breakdown(workspaceId: string, field: 'source' | 'businessType', r: DateRange) {
     const grouped = await this.prisma.lead.groupBy({
       by: [field],
-      where: { workspaceId, mergedIntoId: null, ...this.range(r) },
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, ...this.range(r) },
       _count: true,
     });
     return grouped
@@ -86,7 +86,7 @@ export class AnalyticsService {
   async repPerformance(workspaceId: string, r: DateRange) {
     const grouped = await this.prisma.lead.groupBy({
       by: ['assignedToId', 'status'],
-      where: { workspaceId, mergedIntoId: null, ...this.range(r) },
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, ...this.range(r) },
       _count: true,
     });
     const reps: Record<string, { repId: string; total: number; won: number; lost: number }> = {};

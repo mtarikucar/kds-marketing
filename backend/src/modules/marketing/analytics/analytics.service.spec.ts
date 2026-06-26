@@ -33,6 +33,18 @@ describe('AnalyticsService.funnel', () => {
     expect(arg.where.workspaceId).toBe(WS);
     expect(arg.where.createdAt.gte).toEqual(new Date('2026-01-01'));
   });
+
+  it('excludes soft-deleted + merged leads from every aggregation', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.lead.groupBy as unknown as jest.Mock).mockResolvedValue([]);
+    (prisma.marketingUser.findMany as unknown as jest.Mock).mockResolvedValue([]);
+    await svc.funnel(WS, {});
+    await svc.bySource(WS, {});
+    await svc.repPerformance(WS, {});
+    for (const [arg] of (prisma.lead.groupBy as unknown as jest.Mock).mock.calls) {
+      expect(arg.where).toMatchObject({ workspaceId: WS, mergedIntoId: null, deletedAt: null });
+    }
+  });
 });
 
 describe('AnalyticsService.bySource', () => {
