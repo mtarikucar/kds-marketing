@@ -44,6 +44,37 @@ describe('WorkflowActionHandler.interpolate', () => {
   });
 });
 
+describe('WorkflowActionHandler send (contactIdentity race)', () => {
+  it('send_sms survives a concurrent contactIdentity create (P2002) and still sends', async () => {
+    const identity = { id: 'ci-1', leadId: 'lead-1' };
+    const prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) },
+      contactIdentity: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce(null) // first: not found → attempt create
+          .mockResolvedValueOnce(identity), // re-query after the P2002 → the winner
+        create: jest.fn().mockRejectedValue({ code: 'P2002' }), // concurrent create won
+      },
+      conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'co-1' }) },
+    };
+    const sender = { send: jest.fn().mockResolvedValue(undefined) };
+    const handler = new WorkflowActionHandler(
+      prisma as any, null as any, null as any, null as any,
+      null as any, null as any, sender as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', phone: '5551112233' },
+      trigger: {},
+      context: {},
+    };
+    const res = await handler.execute({ type: 'send_sms', body: 'hi' } as any, ctx);
+    expect(res.output?.result).toBe('SMS sent');
+    expect(sender.send).toHaveBeenCalled();
+  });
+});
+
 describe('WorkflowActionHandler tag actions', () => {
   const mkHandler = (tags: any) =>
     new WorkflowActionHandler(
