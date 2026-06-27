@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { paginated } from '../../../common/pagination';
 import {
@@ -122,6 +122,18 @@ export class ProductsService {
 
   async remove(workspaceId: string, id: string) {
     await this.get(workspaceId, id);
+    // OrderForm.productId is a soft ref the PUBLIC checkout resolves live at
+    // submit. Hard-deleting a referenced product leaves a dangling ref that 404s
+    // the buyer-facing order form — irreversibly. Refuse and steer to archive
+    // (active=false keeps the row, so the ref still resolves and is reversible).
+    const usedByForms = await this.prisma.orderForm.count({
+      where: { workspaceId, productId: id },
+    });
+    if (usedByForms > 0) {
+      throw new ConflictException(
+        'Product is used by an order form — archive it, or remove it from the order form first',
+      );
+    }
     await this.prisma.product.delete({ where: { id } });
     return { message: 'Product deleted' };
   }

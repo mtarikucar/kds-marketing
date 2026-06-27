@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
 
@@ -87,6 +87,28 @@ describe('ProductsService', () => {
         data: { active: false },
       });
       expect(prisma.product.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('remove', () => {
+    it('refuses to hard-delete a product an order form still references', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'p1' } as any); // get()
+      (prisma.orderForm.count as jest.Mock).mockResolvedValue(2);
+      // OrderForm.productId is a soft ref the public checkout resolves live, so a
+      // hard delete leaves a dangling ref that 404s the buyer-facing form forever.
+      await expect(svc.remove(WS, 'p1')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.orderForm.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, productId: 'p1' } }),
+      );
+      expect(prisma.product.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes a product no order form references', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'p1' } as any);
+      (prisma.orderForm.count as jest.Mock).mockResolvedValue(0);
+      prisma.product.delete.mockResolvedValue({ id: 'p1' } as any);
+      await svc.remove(WS, 'p1');
+      expect(prisma.product.delete).toHaveBeenCalledWith({ where: { id: 'p1' } });
     });
   });
 });
