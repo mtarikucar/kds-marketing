@@ -125,7 +125,10 @@ export default function OffersTab({
                   <span className="text-xs text-muted-foreground">{fmtDate(offer.createdAt)}</span>
                 </div>
                 <div className="mb-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-                  {offer.customPrice && (
+                  {/* `!!` so a numeric 0 (e.g. trialDays) coerces to false and
+                      hides the cell — a bare `{value && …}` would render a
+                      stray literal "0" into the card. */}
+                  {!!offer.customPrice && (
                     <div>
                       <span className="text-muted-foreground">Price:</span>{' '}
                       <span className="font-medium text-foreground">
@@ -133,13 +136,13 @@ export default function OffersTab({
                       </span>
                     </div>
                   )}
-                  {offer.discount && (
+                  {!!offer.discount && (
                     <div>
                       <span className="text-muted-foreground">Discount:</span>{' '}
                       <span className="font-medium text-foreground">{offer.discount}%</span>
                     </div>
                   )}
-                  {offer.trialDays && (
+                  {!!offer.trialDays && (
                     <div>
                       <span className="text-muted-foreground">Trial:</span>{' '}
                       <span className="font-medium text-foreground">{offer.trialDays} days</span>
@@ -154,7 +157,17 @@ export default function OffersTab({
                 {offer.notes && <p className="mb-3 text-sm text-muted-foreground">{offer.notes}</p>}
                 {offer.status === 'DRAFT' && (
                   <div className="flex gap-2">
-                    <Button type="button" size="sm" onClick={() => onSend(offer.id)}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        // Sending transmits the price quote to the customer and
+                        // can't be unsent — confirm first, like the delete below.
+                        if (window.confirm('Send this offer to the customer?')) {
+                          onSend(offer.id);
+                        }
+                      }}
+                    >
                       <Send className="h-3.5 w-3.5" /> Send
                     </Button>
                     <Button
