@@ -689,6 +689,7 @@
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
+    "deleteDesc": "This task will be permanently deleted. This cannot be undone.",
     "emptyHint": "Create a follow-up so leads don't go cold.",
     "presets": {
       "today6pm": "Today 6:00 PM",

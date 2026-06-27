@@ -467,7 +467,7 @@ export default function TasksPage() {
         open={!!deleteTarget}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
         title={t('common.delete') + ' ' + t('nav.tasks')}
-        description={t('tasks.empty')}
+        description={t('tasks.deleteDesc', 'This task will be permanently deleted. This cannot be undone.')}
         confirmLabel={t('common.delete')}
         cancelLabel={t('common.cancel')}
         tone="danger"

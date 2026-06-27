@@ -700,6 +700,7 @@
     "completeSuccess": "Görev tamamlandı",
     "createSuccess": "Görev oluşturuldu",
     "deleteSuccess": "Görev silindi",
+    "deleteDesc": "Bu görev kalıcı olarak silinecek. Bu işlem geri alınamaz.",
     "emptyHint": "Lead'ler soğumasın diye bir takip görevi oluştur.",
     "presets": {
       "today6pm": "Bugün 18:00",
