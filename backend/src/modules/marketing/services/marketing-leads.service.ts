@@ -16,6 +16,7 @@ import { CustomFieldsService } from './custom-fields.service';
 import { EmailHygieneService } from '../leads/email-hygiene.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
+import { rangeEndInclusive } from './report-date-range.util';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
 import { LeadFilterDto } from '../dto/lead-filter.dto';
@@ -244,7 +245,9 @@ export class MarketingLeadsService {
     if (filter.dateFrom || filter.dateTo) {
       where.createdAt = {};
       if (filter.dateFrom) where.createdAt.gte = new Date(filter.dateFrom);
-      if (filter.dateTo) where.createdAt.lte = new Date(filter.dateTo);
+      // Inclusive end-of-day for a bare YYYY-MM-DD so the final day's leads
+      // aren't dropped (mirrors reports/analytics).
+      if (filter.dateTo) where.createdAt.lte = rangeEndInclusive(filter.dateTo);
     }
 
     const allowedSortFields = [

@@ -13,6 +13,7 @@ import { MarketingNotificationsService } from './marketing-notifications.service
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { parseDueDate } from './marketing-task-date.util';
+import { rangeEndInclusive } from './report-date-range.util';
 
 const MAX_CALENDAR_RANGE_DAYS = 62;
 
@@ -106,7 +107,9 @@ export class MarketingTasksService {
     if (filter.dateFrom || filter.dateTo) {
       filters.dueDate = {};
       if (filter.dateFrom) filters.dueDate.gte = new Date(filter.dateFrom);
-      if (filter.dateTo) filters.dueDate.lte = new Date(filter.dateTo);
+      // Inclusive end-of-day for a bare YYYY-MM-DD so tasks due later on the
+      // final day aren't dropped (mirrors reports/analytics).
+      if (filter.dateTo) filters.dueDate.lte = rangeEndInclusive(filter.dateTo);
     }
 
     const allowedSortFields = ['createdAt', 'updatedAt', 'dueDate', 'title', 'type', 'status', 'priority'];
