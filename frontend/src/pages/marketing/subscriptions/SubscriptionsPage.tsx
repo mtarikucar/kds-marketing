@@ -6,12 +6,14 @@ import { Plus, Trash2, Pause, Play, Ban, Pencil, Repeat } from 'lucide-react';
 
 import {
   listSubscriptions,
+  getSubscription,
   createSubscription,
   updateSubscription,
   pauseSubscription,
   resumeSubscription,
   cancelSubscription,
   type Subscription,
+  type SubscriptionDetail,
   type SubscriptionStatus,
 } from '../../../features/marketing/api/subscriptions.service';
 import { listProducts } from '../../../features/marketing/api/products.service';
@@ -78,6 +80,31 @@ const EMPTY_FORM: FormState = {
   dueDays: '14',
   items: [{ ...EMPTY_ITEM }],
 };
+
+/**
+ * Map a full subscription record (the GET /:id detail, which includes line
+ * items + dueDays) back into the editor's form state. The list endpoint omits
+ * items, so the edit dialog MUST build the form from the detail — otherwise an
+ * edit would seed a single blank row, and saving would replace the plan's real
+ * items and recompute its `amount` to 0. Prices are minor→major for the form.
+ */
+export function formFromSubscription(s: SubscriptionDetail): FormState {
+  const items: ItemRow[] = (s.items ?? []).map((it) => ({
+    description: it.description,
+    qty: String(it.qty),
+    price: String((it.unitPrice || 0) / 100),
+  }));
+  return {
+    id: s.id,
+    status: s.status,
+    name: s.name,
+    currency: s.currency,
+    interval: s.interval,
+    intervalCount: String(s.intervalCount),
+    dueDays: String(s.dueDays ?? 14),
+    items: items.length > 0 ? items : [{ ...EMPTY_ITEM }],
+  };
+}
 
 function Labeled({
   label,
@@ -161,18 +188,27 @@ export default function SubscriptionsPage() {
     setForm({ ...EMPTY_FORM, items: [{ ...EMPTY_ITEM }] });
     setDialogOpen(true);
   };
-  const openEdit = (s: Subscription) => {
-    setForm({
-      id: s.id,
-      status: s.status,
-      name: s.name,
-      currency: s.currency,
-      interval: s.interval,
-      intervalCount: String(s.intervalCount),
-      dueDays: '14',
-      // List endpoint omits items; editing replaces them (a draft of one row to start).
-      items: [{ ...EMPTY_ITEM }],
-    });
+  const openEdit = async (s: Subscription) => {
+    // The list row omits line items / dueDays, so fetch the full record and
+    // seed the form from it — otherwise saving an edit (even just a rename)
+    // would replace the plan's items with a blank draft and zero its amount.
+    try {
+      const full = await getSubscription(s.id);
+      setForm(formFromSubscription(full));
+    } catch {
+      // Detail fetch failed — fall back to the summary fields so the dialog
+      // still opens; the operator re-enters items (the old behaviour).
+      setForm({
+        id: s.id,
+        status: s.status,
+        name: s.name,
+        currency: s.currency,
+        interval: s.interval,
+        intervalCount: String(s.intervalCount),
+        dueDays: '14',
+        items: [{ ...EMPTY_ITEM }],
+      });
+    }
     setDialogOpen(true);
   };
 
@@ -282,7 +318,27 @@ export default function SubscriptionsPage() {
                     </Button>
                   )}
                   {s.status !== 'CANCELLED' && (
-                    <Button variant="ghost" size="sm" onClick={() => cancelMut.mutate(s.id)} title={t('subscriptions.cancel', 'Cancel')}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        // Cancelling is irreversible (no un-cancel path; the
+                        // backend refuses to edit a CANCELLED plan), so confirm
+                        // before stopping a customer's recurring billing.
+                        if (
+                          window.confirm(
+                            t('subscriptions.cancelConfirm', {
+                              defaultValue:
+                                'Cancel "{{name}}"? This stops its recurring billing and cannot be undone.',
+                              name: s.name,
+                            }),
+                          )
+                        ) {
+                          cancelMut.mutate(s.id);
+                        }
+                      }}
+                      title={t('subscriptions.cancel', 'Cancel')}
+                    >
                       <Ban className="w-4 h-4 text-danger" aria-hidden="true" />
                     </Button>
                   )}
