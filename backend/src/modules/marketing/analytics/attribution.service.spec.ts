@@ -78,6 +78,18 @@ describe('AttributionService', () => {
     expect(arg.where.workspaceId).toBe(WS);
   });
 
+  it('makes the `to` end date inclusive (whole final day, not midnight)', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([]);
+    await svc.attribution(WS, { model: 'first', from: '2026-06-01', to: '2026-06-27' });
+    const where = (prisma.lead.findMany as jest.Mock).mock.calls[0][0].where;
+    // A bare YYYY-MM-DD end date must cover the ENTIRE day — a plain lte of
+    // new Date('2026-06-27') is midnight, silently dropping every lead created
+    // during the selected end day (the same fix analytics/reports already have).
+    expect(where.createdAt.gte.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+    expect(where.createdAt.lte.toISOString()).toBe('2026-06-27T23:59:59.999Z');
+  });
+
   it('first-touch credits each lead\'s first touch (lead.source)', async () => {
     const { prisma, svc } = makeSvc();
     seed(prisma);
