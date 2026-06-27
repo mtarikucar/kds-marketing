@@ -16,6 +16,17 @@ export interface OrderForm {
   createdAt: string;
 }
 
+/**
+ * Full record from GET /order-forms/:id — the list endpoint selects a summary
+ * that omits `collectPhone`/`phoneRequired`/`notes`, so the edit dialog must
+ * fetch this to avoid resetting those settings to defaults on save.
+ */
+export interface OrderFormDetail extends OrderForm {
+  collectPhone: boolean;
+  phoneRequired: boolean;
+  notes: string | null;
+}
+
 export interface OrderFormPayload {
   name: string;
   productId?: string;
@@ -28,6 +39,9 @@ export interface OrderFormPayload {
 
 export const listOrderForms = (): Promise<OrderForm[]> =>
   marketingApi.get('/order-forms').then((r) => r.data);
+
+export const getOrderForm = (id: string): Promise<OrderFormDetail> =>
+  marketingApi.get(`/order-forms/${id}`).then((r) => r.data);
 
 export const createOrderForm = (payload: OrderFormPayload): Promise<OrderForm> =>
   marketingApi.post('/order-forms', payload).then((r) => r.data);

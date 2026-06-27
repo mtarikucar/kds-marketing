@@ -6,10 +6,12 @@ import { Plus, Trash2, Pencil, Link2, ShoppingCart } from 'lucide-react';
 
 import {
   listOrderForms,
+  getOrderForm,
   createOrderForm,
   updateOrderForm,
   deleteOrderForm,
   type OrderForm,
+  type OrderFormDetail,
 } from '../../../features/marketing/api/order-forms.service';
 import { listProducts } from '../../../features/marketing/api/products.service';
 import {
@@ -49,6 +51,24 @@ const EMPTY_FORM: FormState = {
   phoneRequired: false,
   active: true,
 };
+
+/**
+ * Map a full order-form record (the GET /:id detail) into the editor's form
+ * state. The list endpoint omits `collectPhone`/`phoneRequired`, so the edit
+ * dialog MUST build the form from the detail — the old code hardcoded those two
+ * to their defaults, so editing a form (e.g. to rename it) silently reset its
+ * phone settings on save.
+ */
+export function formFromOrderForm(f: OrderFormDetail): FormState {
+  return {
+    id: f.id,
+    name: f.name,
+    productId: f.productId ?? '',
+    collectPhone: f.collectPhone ?? true,
+    phoneRequired: f.phoneRequired ?? false,
+    active: f.active,
+  };
+}
 
 function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -128,15 +148,23 @@ export default function OrderFormsPage() {
     setForm({ ...EMPTY_FORM, productId: products[0]?.id ?? '' });
     setDialogOpen(true);
   };
-  const openEdit = (f: OrderForm) => {
-    setForm({
-      id: f.id,
-      name: f.name,
-      productId: f.productId ?? '',
-      collectPhone: true,
-      phoneRequired: false,
-      active: f.active,
-    });
+  const openEdit = async (f: OrderForm) => {
+    // The list row omits collectPhone/phoneRequired, so fetch the full record
+    // and seed the form from it — otherwise the toggles open at their defaults
+    // and saving would overwrite the form's real phone settings.
+    try {
+      const full = await getOrderForm(f.id);
+      setForm(formFromOrderForm(full));
+    } catch {
+      setForm({
+        id: f.id,
+        name: f.name,
+        productId: f.productId ?? '',
+        collectPhone: true,
+        phoneRequired: false,
+        active: f.active,
+      });
+    }
     setDialogOpen(true);
   };
 
