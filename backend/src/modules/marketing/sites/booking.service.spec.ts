@@ -96,7 +96,7 @@ describe('BookingService', () => {
     expect(prisma.booking.create).toHaveBeenCalled();
   });
 
-  it('takes a per-calendar advisory lock inside the tx (serializes concurrent reserves)', async () => {
+  it('takes a WORKSPACE-scoped advisory lock inside the tx (serializes concurrent reserves)', async () => {
     prisma.booking.findFirst.mockResolvedValue(null);
     prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk_x', email: null });
     await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
@@ -105,6 +105,14 @@ describe('BookingService', () => {
     expect(prisma.$executeRaw).toHaveBeenCalled();
     const sqlParts = (prisma.$executeRaw as jest.Mock).mock.calls[0][0];
     expect(String(sqlParts.join?.('') ?? sqlParts)).toContain('pg_advisory_xact_lock');
+    // The lock KEY must be WORKSPACE-scoped, not per-calendar: a calendar owner /
+    // ROUND_ROBIN member can serve several calendars, so the assignee
+    // (don't-double-book-a-person) invariant spans the whole workspace. A
+    // per-calendar key lets two concurrent reserves on different calendars assign
+    // the same person to overlapping slots.
+    const lockKey = String((prisma.$executeRaw as jest.Mock).mock.calls[0][1]);
+    expect(lockKey).toContain(WS);
+    expect(lockKey).not.toContain('c1');
   });
 
   it('refuses a past slot', async () => {

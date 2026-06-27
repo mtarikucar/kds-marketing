@@ -255,14 +255,21 @@ export class BookingService implements OnModuleInit {
     const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
 
     const booking = await this.prisma.$transaction(async (tx) => {
-      // Serialize concurrent reservations for THIS calendar so the overlap
-      // check below is race-free. Without it, two simultaneous public reserve
-      // calls for the same slot both pass the (non-locking) conflict SELECT and
-      // both insert — double-booking one slot. There is no DB-level
-      // unique/exclusion constraint to catch it (Prisma can't model a partial/
-      // range-exclude index without breaking migrate-parity), so a transaction-
-      // scoped advisory lock is the clean fix; it auto-releases at commit.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${calId}`}))`;
+      // Serialize concurrent reservations across the WHOLE WORKSPACE so the
+      // overlap + assignee checks below are race-free. Without it, two
+      // simultaneous public reserve calls both pass the (non-locking) conflict
+      // SELECT and both insert — double-booking one slot. The lock is keyed on
+      // the WORKSPACE, not the calendar: capacity is per-calendar, but the
+      // assignee invariant (don't book one person — a calendar owner or a
+      // ROUND_ROBIN member who can serve several calendars — into two
+      // overlapping slots) is workspace-wide, and the EXTERNAL_BUSY block is too.
+      // A per-calendar key would let two reserves on DIFFERENT calendars assign
+      // the same person concurrently. There is no DB-level unique/exclusion
+      // constraint to catch it (Prisma can't model a partial/range-exclude index
+      // without breaking migrate-parity), so this transaction-scoped advisory
+      // lock is the clean fix; it auto-releases at commit. Booking volume per
+      // workspace is low, so workspace-wide serialization is negligible.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${workspaceId}`}))`;
       // Any EXTERNAL_BUSY (Google-pulled, workspace-wide) overlap is a HARD block
       // regardless of capacity — a visitor must not book over a Google-busy time
       // the slot picker had already hidden.
