@@ -162,10 +162,25 @@ export default function BulkActionToolbar({
             disabled={pending}
             defaultValue=""
             onChange={(e) => {
-              if (e.target.value) {
-                onEnroll(e.target.value);
-                e.target.value = '';
-              }
+              const workflowId = e.target.value;
+              // Always snap back to the placeholder so a cancelled (or
+              // completed) pick never lingers as the visible selection.
+              e.target.value = '';
+              if (!workflowId) return;
+              // Enrolling fans out automated outbound messages to every
+              // selected lead — confirm first (the same guard the delete
+              // action gets) so a stray dropdown change can't mass-message
+              // real customers.
+              const wf = workflows.find((w) => w.id === workflowId);
+              const ok = window.confirm(
+                t('leads.bulkEnroll.confirm', {
+                  defaultValue:
+                    'Enroll {{count}} lead(s) into "{{name}}"? This may start sending automated messages.',
+                  count: selectedCount,
+                  name: wf?.name ?? '',
+                }),
+              );
+              if (ok) onEnroll(workflowId);
             }}
             className="px-2 py-1.5 border border-border-strong rounded-lg text-sm bg-surface text-foreground disabled:opacity-50"
             aria-label={t('leads.bulkEnroll.label', 'Enroll in workflow')}
