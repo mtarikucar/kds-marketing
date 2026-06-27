@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Param, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Response } from 'express';
 import { EstimatesService } from '../estimates/estimates.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(
@@ -69,11 +71,13 @@ export class PublicEstimateController {
   }
 
   @Post('e/:token/accept')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   accept(@Param('token') token: string) {
     return this.estimates.publicAccept(token);
   }
 
   @Post('e/:token/decline')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   decline(@Param('token') token: string) {
     return this.estimates.publicDecline(token);
   }

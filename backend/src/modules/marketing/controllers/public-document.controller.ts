@@ -1,7 +1,9 @@
 import { Controller, Get, Post, Param, Body, Req, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { DocumentsService } from '../documents/documents.service';
 import { PublicSignDto } from '../dto/document.dto';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
 function esc(v: unknown): string {
@@ -76,6 +78,7 @@ export class PublicDocumentController {
   }
 
   @Post('d/:token/sign')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   sign(@Param('token') token: string, @Body() body: PublicSignDto, @Req() req: Request) {
     return this.documents.publicSign(
       token,
@@ -85,6 +88,7 @@ export class PublicDocumentController {
   }
 
   @Post('d/:token/decline')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   decline(@Param('token') token: string) {
     return this.documents.publicDecline(token);
   }
