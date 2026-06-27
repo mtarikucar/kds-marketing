@@ -160,7 +160,35 @@ export class AgencyService {
 
     const passwordHash = await bcrypt.hash(input.ownerPassword, this.bcryptCost());
 
-    const location = await this.prisma.$transaction(async (tx) => {
+    let location;
+    try {
+      location = await this.provisionLocation(agencyWorkspaceId, input, passwordHash);
+    } catch (e) {
+      // The pre-check closes the SEQUENTIAL duplicate; two concurrent
+      // createLocation calls with the same owner email both pass it and race on
+      // INSERT (the unique index is the real arbiter). Map the loser's P2002 to a
+      // clean 409 instead of a raw 500 — mirrors registerWorkspace.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const target = String((e.meta as { target?: unknown } | undefined)?.target ?? '');
+        if (target.includes('email')) {
+          throw new ConflictException('Owner email is already registered');
+        }
+        if (target.includes('slug')) {
+          throw new ConflictException('Could not allocate a workspace slug');
+        }
+        throw new ConflictException('That location was just created — refresh the list');
+      }
+      throw e;
+    }
+    return location;
+  }
+
+  private async provisionLocation(
+    agencyWorkspaceId: string,
+    input: CreateLocationInput,
+    passwordHash: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
       const base = slugify(input.name);
       let slug = base;
       for (let i = 2; ; i++) {
@@ -223,8 +251,6 @@ export class AgencyService {
 
       return child;
     });
-
-    return location;
   }
 
   /** All LOCATION sub-accounts owned by this agency (scoped to its children). */

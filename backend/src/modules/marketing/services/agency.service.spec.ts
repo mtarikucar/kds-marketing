@@ -1,4 +1,5 @@
 import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { mockDeep } from 'jest-mock-extended';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -137,6 +138,35 @@ describe('AgencyService — createLocation', () => {
         name: 'X',
         productName: 'Y',
         ownerEmail: 'taken@x.com',
+        ownerPassword: 'password123',
+        ownerFirstName: 'O',
+        ownerLastName: 'O',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('maps a racing duplicate owner-email P2002 to a 409, not a raw 500', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve(args?.where?.id === AGENCY_A ? agencyRow() : null),
+    );
+    prisma.marketingUser.findUnique.mockResolvedValue(null as never); // pre-check passes
+    (prisma.workspace.create as jest.Mock).mockResolvedValue(locationRow());
+    // The owner INSERT loses the email-unique race inside the tx (a concurrent
+    // createLocation with the same owner email passed the pre-check too).
+    (prisma.marketingUser.create as jest.Mock).mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['email'] },
+      }),
+    );
+
+    await expect(
+      svc.createLocation(AGENCY_A, {
+        name: 'X',
+        productName: 'Y',
+        ownerEmail: 'race@x.com',
         ownerPassword: 'password123',
         ownerFirstName: 'O',
         ownerLastName: 'O',
