@@ -6,6 +6,7 @@ import { Plus, Trash2, Send, Check, X, FileOutput, Pencil } from 'lucide-react';
 
 import {
   listEstimates,
+  getEstimate,
   createEstimate,
   updateEstimate,
   sendEstimate,
@@ -73,6 +74,30 @@ const EMPTY_FORM: FormState = {
   validUntil: '',
   items: [{ ...EMPTY_ITEM }],
 };
+
+/**
+ * Map a full estimate record (the GET /:id detail) into the editor's form
+ * state. The list endpoint omits `items` and `notes`, so the edit dialog MUST
+ * build the form from the detail — seeding from a list row would open the
+ * editor with no line items, and saving a DRAFT would then replace the
+ * estimate's items with an empty set (and wipe its notes). Prices are
+ * minor→major for the form.
+ */
+export function formFromEstimate(e: Estimate): FormState {
+  return {
+    id: e.id,
+    status: e.status,
+    currency: e.currency,
+    notes: e.notes ?? '',
+    validUntil: e.validUntil ? e.validUntil.slice(0, 10) : '',
+    items: (e.items ?? []).map((it) => ({
+      description: it.description,
+      qty: String(it.qty),
+      price: String((it.unitPrice || 0) / 100),
+      taxRateId: it.taxRateId ?? undefined,
+    })),
+  };
+}
 
 function money(minor: number, currency: string): string {
   try {
@@ -225,20 +250,17 @@ export default function EstimatesPage() {
     setForm({ ...EMPTY_FORM, items: [{ ...EMPTY_ITEM }] });
     setDialogOpen(true);
   };
-  const openEdit = (e: Estimate) => {
-    setForm({
-      id: e.id,
-      status: e.status,
-      currency: e.currency,
-      notes: e.notes ?? '',
-      validUntil: e.validUntil ? e.validUntil.slice(0, 10) : '',
-      items: (e.items ?? []).map((it) => ({
-        description: it.description,
-        qty: String(it.qty),
-        price: String((it.unitPrice || 0) / 100),
-        taxRateId: it.taxRateId ?? undefined,
-      })),
-    });
+  const openEdit = async (e: Estimate) => {
+    // The list row omits items + notes, so fetch the full estimate and seed the
+    // form from it — otherwise the editor opens with no line items and saving a
+    // DRAFT would replace the estimate's items with an empty set (and wipe its
+    // notes). Fall back to the list row only if the detail fetch fails.
+    try {
+      const full = await getEstimate(e.id);
+      setForm(formFromEstimate(full));
+    } catch {
+      setForm(formFromEstimate(e));
+    }
     setDialogOpen(true);
   };
 

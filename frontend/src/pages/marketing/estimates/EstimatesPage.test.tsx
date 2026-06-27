@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import EstimatesPage from './EstimatesPage';
+import EstimatesPage, { formFromEstimate } from './EstimatesPage';
+import type { Estimate } from '../../../features/marketing/api/estimates.service';
 
 const get = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
@@ -23,23 +24,25 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const ESTIMATES = [
-  {
-    id: 'e1',
-    leadId: null,
-    number: 'EST-ABCD',
-    items: [{ description: 'Plan', qty: 1, unitPrice: 9900, taxRateId: 'tr1', taxRatePct: 20 }],
-    currency: 'USD',
-    // Stored total intentionally left at the pre-tax subtotal so the editor's
-    // tax-inclusive total ($118.80) is distinct from the list total ($99.00).
-    total: 9900,
-    notes: null,
-    validUntil: null,
-    status: 'SENT',
-    convertedInvoiceId: null,
-    createdAt: '2026-06-21T00:00:00Z',
-  },
-];
+// The REAL list endpoint omits `items` and `notes` (it selects a summary) — so
+// the list fixture must NOT carry them; the full record comes from GET /:id.
+const LIST_ROW = {
+  id: 'e1',
+  leadId: null,
+  number: 'EST-ABCD',
+  currency: 'USD',
+  total: 9900,
+  validUntil: null,
+  status: 'DRAFT',
+  convertedInvoiceId: null,
+  createdAt: '2026-06-21T00:00:00Z',
+};
+
+const DETAIL = {
+  ...LIST_ROW,
+  items: [{ description: 'Plan', qty: 1, unitPrice: 9900, taxRateId: 'tr1', taxRatePct: 20 }],
+  notes: 'internal note',
+};
 
 const TAX_RATES = [{ id: 'tr1', name: 'KDV', rate: 20, isDefault: true, archived: false }];
 
@@ -56,7 +59,8 @@ describe('EstimatesPage', () => {
   beforeEach(() => {
     get.mockReset();
     get.mockImplementation((url: string) => {
-      if (url === '/estimates') return Promise.resolve({ data: ESTIMATES });
+      if (url === '/estimates') return Promise.resolve({ data: [LIST_ROW] });
+      if (url === '/estimates/e1') return Promise.resolve({ data: DETAIL });
       if (url === '/tax-rates') return Promise.resolve({ data: TAX_RATES });
       return Promise.resolve({ data: {} });
     });
@@ -68,13 +72,43 @@ describe('EstimatesPage', () => {
     expect(get).toHaveBeenCalledWith('/estimates');
   });
 
-  it('shows a tax-inclusive total in the editor when a line carries a tax rate', async () => {
+  // Regression: the list omits items, so opening edit must fetch the full
+  // estimate (GET /:id). Otherwise the editor opens empty and a save wipes the
+  // line items. Proven via the tax-inclusive total, which only appears if the
+  // real line item (with its 20% rate) was loaded.
+  it('loads the full estimate on edit and shows its tax-inclusive total', async () => {
     const user = userEvent.setup();
     render(<EstimatesPage />, { wrapper });
     await screen.findByText('EST-ABCD');
+
     await user.click(screen.getByTitle('Edit'));
+
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/estimates/e1'));
     const dialog = await screen.findByRole('dialog');
-    // 99.00 subtotal + 20% KDV = 118.80 — the editor total must reflect tax.
+    // 99.00 subtotal + 20% KDV = 118.80 — only reachable if items were loaded.
     expect(await within(dialog).findByText(/118[.,]80/)).toBeInTheDocument();
+  });
+});
+
+describe('formFromEstimate', () => {
+  const detail = (over: Partial<Estimate> = {}): Estimate =>
+    ({ ...DETAIL, ...over }) as unknown as Estimate;
+
+  it('preserves items (minor→major price), notes and validUntil', () => {
+    const form = formFromEstimate(
+      detail({ validUntil: '2026-07-15T00:00:00Z', notes: 'hi' }),
+    );
+    expect(form.id).toBe('e1');
+    expect(form.notes).toBe('hi');
+    expect(form.validUntil).toBe('2026-07-15');
+    expect(form.items).toEqual([
+      { description: 'Plan', qty: '1', price: '99', taxRateId: 'tr1' },
+    ]);
+  });
+
+  it('yields an empty item list (not a crash) when the estimate has none', () => {
+    const form = formFromEstimate(detail({ items: [], notes: null }));
+    expect(form.items).toEqual([]);
+    expect(form.notes).toBe('');
   });
 });
