@@ -177,9 +177,13 @@ describe('SalesTargetService', () => {
         actual: 4,
         attainmentPct: 80,
       });
-      // workspace + active filter is applied
+      // workspace + active filter is applied, and the internal SYSTEM research
+      // sentinel is excluded so it never shows as a phantom zero-row in the
+      // manager's team-performance table (it can never carry targets/deals).
       expect(prisma.marketingUser.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { workspaceId: WS, status: 'ACTIVE' } }),
+        expect.objectContaining({
+          where: { workspaceId: WS, status: 'ACTIVE', role: { not: 'SYSTEM' } },
+        }),
       );
       // batched aggregates are workspace-scoped too
       expect(prisma.lead.groupBy).toHaveBeenCalledWith(

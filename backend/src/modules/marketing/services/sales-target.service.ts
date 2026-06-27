@@ -127,7 +127,10 @@ export class SalesTargetService {
    */
   async teamPerformance(workspaceId: string, period: string) {
     const reps = await this.prisma.marketingUser.findMany({
-      where: { workspaceId, status: 'ACTIVE' },
+      // Exclude the per-workspace SYSTEM research sentinel: it's an internal
+      // user, never a salesperson, so it must not appear as a phantom zero-row
+      // in the team-performance table (mirrors getTopPerformers' role filter).
+      where: { workspaceId, status: 'ACTIVE', role: { not: 'SYSTEM' } },
       select: { id: true, firstName: true, lastName: true, role: true },
       orderBy: { firstName: 'asc' },
     });
