@@ -110,4 +110,28 @@ describe('CoursesService', () => {
     prisma.course.findFirst.mockResolvedValue(null as any);
     await expect(svc.get(WS, 'ghost')).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  // Course → Enrollment / Certificate are onDelete:Cascade. A hard delete would
+  // erase every student's enrollment + lesson progress AND any issued
+  // Certificate (a serial-numbered, publicly-verifiable credential). The course
+  // must be ARCHIVED instead once anyone has enrolled.
+  it('refuses to delete a course that has enrollments (cascade would erase progress + certificates)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any); // assertCourse
+    (prisma.enrollment.count as jest.Mock).mockResolvedValue(4);
+    await expect(svc.remove(WS, 'c1')).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.enrollment.count).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, courseId: 'c1' } }),
+    );
+    expect(prisma.course.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes a course that has no enrollments', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    (prisma.enrollment.count as jest.Mock).mockResolvedValue(0);
+    (prisma.course.delete as jest.Mock).mockResolvedValue({ id: 'c1' });
+    await svc.remove(WS, 'c1');
+    expect(prisma.course.delete).toHaveBeenCalledWith({ where: { id: 'c1' } });
+  });
 });

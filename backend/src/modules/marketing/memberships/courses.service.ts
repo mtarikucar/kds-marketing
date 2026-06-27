@@ -140,6 +140,20 @@ export class CoursesService {
 
   async remove(workspaceId: string, id: string) {
     await this.assertCourse(workspaceId, id);
+    // Course → Enrollment / Certificate are onDelete:Cascade, so a hard delete
+    // erases every student's enrollment + lesson progress AND any issued
+    // Certificate (a serial-numbered, publicly-verifiable credential). Refuse
+    // once anyone has enrolled and point the operator at ARCHIVED status — the
+    // soft-delete that hides the course while preserving those records.
+    const enrolled = await this.prisma.enrollment.count({
+      where: { workspaceId, courseId: id },
+    });
+    if (enrolled > 0) {
+      throw new ConflictException(
+        'Course has enrollments — set it to ARCHIVED instead of deleting ' +
+          '(deleting would erase student progress and issued certificates)',
+      );
+    }
     await this.prisma.course.delete({ where: { id } });
     return { id };
   }
