@@ -117,13 +117,21 @@ export class CouponsService {
     return this.prisma.$transaction(async (tx) => {
       // Per-order idempotency: a redemption already logged for this invoice/order
       // means the coupon was already applied (double-submit / retry) — return it
-      // WITHOUT consuming a second slot.
+      // WITHOUT consuming a second slot. An invoice is a single order, so its id
+      // is the right key. An ORDER FORM, by contrast, is a reusable public page
+      // many buyers submit — keying on orderFormId ALONE would let the first
+      // buyer's redemption short-circuit every later buyer, who would then get
+      // the discount without consuming a slot (maxRedemptions bypassed). So the
+      // order-form key is scoped to the BUYER (leadId): same buyer retrying is
+      // deduped; a different buyer still consumes their own slot.
       if (ctx.invoiceId || ctx.orderFormId) {
         const existing = await tx.couponRedemption.findFirst({
           where: {
             workspaceId,
             couponId: coupon!.id,
-            ...(ctx.invoiceId ? { invoiceId: ctx.invoiceId } : { orderFormId: ctx.orderFormId }),
+            ...(ctx.invoiceId
+              ? { invoiceId: ctx.invoiceId }
+              : { orderFormId: ctx.orderFormId, leadId: ctx.leadId ?? null }),
           },
         });
         if (existing) return { ...app, amountOff: existing.amountOff };
