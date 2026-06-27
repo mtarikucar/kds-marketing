@@ -342,7 +342,21 @@ export default function OffersPage() {
                 {offer.status === 'DRAFT' && (
                   <>
                     <DropdownMenuItem
-                      onClick={() => sendMutation.mutate(offer.id)}
+                      onClick={() => {
+                        // Sending transmits the price quote to the customer and
+                        // can't be unsent — confirm first (matches the lead-detail
+                        // Offers tab, so the same action is guarded everywhere).
+                        if (
+                          window.confirm(
+                            t('offers.confirmSend', {
+                              defaultValue:
+                                'Send this offer to the customer? This cannot be undone.',
+                            }),
+                          )
+                        ) {
+                          sendMutation.mutate(offer.id);
+                        }
+                      }}
                       disabled={sendMutation.isPending}
                     >
                       {t('offers.actions.send')}
