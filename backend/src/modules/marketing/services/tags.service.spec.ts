@@ -27,6 +27,26 @@ describe('TagsService.create', () => {
     prisma.tag.findUnique.mockResolvedValue({ id: 't1' } as any);
     await expect(svc.create(WS, { name: 'vip' })).rejects.toBeInstanceOf(ConflictException);
   });
+
+  it('maps a raced unique violation (P2002) to a clean Conflict, not a 500', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.tag.findUnique.mockResolvedValue(null as any); // passes the pre-check
+    (prisma.tag.create as jest.Mock).mockRejectedValue({ code: 'P2002' }); // concurrent create wins
+    await expect(svc.create(WS, { name: 'vip' })).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('TagsService.resolveOrCreate (concurrency)', () => {
+  it('returns the winner when a concurrent create loses the unique race (P2002)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.tag.findUnique
+      .mockResolvedValueOnce(null as any) // initial: not found → attempt create
+      .mockResolvedValueOnce({ id: 't9', name: 'VIP' } as any); // re-query finds the winner
+    (prisma.tag.create as jest.Mock).mockRejectedValue({ code: 'P2002' });
+
+    const out = await svc.resolveOrCreate(WS, ['VIP']);
+    expect(out).toEqual([{ id: 't9', name: 'VIP' }]);
+  });
 });
 
 describe('TagsService.assignToLead', () => {
