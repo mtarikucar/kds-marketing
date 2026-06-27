@@ -1,0 +1,54 @@
+import { GoogleCalendarSyncService } from './google-calendar-sync.service';
+
+/**
+ * applyExternalEvent must not re-import OUR OWN pushed events as EXTERNAL_BUSY
+ * "phantom" blocks. The DB googleEventId check misses the race window between
+ * Google-create and the booking.googleEventId write, so we also honour the
+ * extendedProperties tag the push stamps (defence in depth).
+ */
+function makeSvc() {
+  const prisma: any = {
+    booking: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'bk-new' }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+  };
+  const bus = { on: jest.fn(), off: jest.fn() };
+  const svc = new GoogleCalendarSyncService(prisma as any, bus as any, {} as any);
+  return { svc, prisma };
+}
+
+const CONN = { id: 'conn-1', workspaceId: 'ws-1' } as any;
+
+describe('GoogleCalendarSyncService.applyExternalEvent — echo skip', () => {
+  it('skips an event carrying our own extendedProperties tag (no phantom busy block)', async () => {
+    const { svc, prisma } = makeSvc();
+    const ev = {
+      id: 'bkabc123',
+      status: 'confirmed',
+      summary: 'Our booking',
+      start: { dateTime: '2026-07-01T10:00:00Z' },
+      end: { dateTime: '2026-07-01T10:30:00Z' },
+      extendedProperties: { private: { kdsBookingId: 'b-1', kdsWorkspaceId: 'ws-1' } },
+    };
+    const res = await (svc as any).applyExternalEvent(CONN, ev);
+    expect(res).toEqual({ upserted: 0, deleted: 0 });
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+  });
+
+  it('still imports a genuine external event (no tag) as EXTERNAL_BUSY', async () => {
+    const { svc, prisma } = makeSvc();
+    const ev = {
+      id: 'ext-xyz',
+      status: 'confirmed',
+      summary: 'External meeting',
+      start: { dateTime: '2026-07-01T10:00:00Z' },
+      end: { dateTime: '2026-07-01T10:30:00Z' },
+    };
+    const res = await (svc as any).applyExternalEvent(CONN, ev);
+    expect(res.upserted).toBe(1);
+    expect(prisma.booking.create).toHaveBeenCalled();
+  });
+});
