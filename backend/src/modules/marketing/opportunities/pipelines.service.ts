@@ -153,13 +153,18 @@ export class PipelinesService {
 
   async remove(workspaceId: string, id: string) {
     await this.get(workspaceId, id);
-    // Don't orphan live work: refuse while open deals remain on this pipeline.
-    const open = await this.prisma.opportunity.count({
-      where: { workspaceId, pipelineId: id, status: 'OPEN' },
+    // Opportunity→Pipeline is onDelete:Cascade, so deleting a pipeline destroys
+    // EVERY opportunity on it — including resolved WON/LOST deals that are sales
+    // history (reporting, commissions). Guarding only OPEN deals would silently
+    // cascade those records away. Refuse while ANY opportunity references the
+    // pipeline and point the user at archiving (the soft-delete that hides it
+    // from the board while preserving the deals).
+    const used = await this.prisma.opportunity.count({
+      where: { workspaceId, pipelineId: id },
     });
-    if (open > 0) {
+    if (used > 0) {
       throw new ConflictException(
-        'Pipeline has open opportunities — move or close them first',
+        'Pipeline has opportunities — archive it instead, or move/delete its deals first',
       );
     }
     await this.prisma.pipeline.delete({ where: { id } });
