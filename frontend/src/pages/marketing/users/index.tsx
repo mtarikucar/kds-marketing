@@ -45,7 +45,7 @@ import {
 } from '@/components/ui/DropdownMenu';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { InviteUserDialog } from './InviteUserDialog';
-import { EditUserDialog, type EditUserFormValues } from './EditUserDialog';
+import { EditUserDialog, type EditUserSubmit } from './EditUserDialog';
 import { ResetPasswordDialog } from './ResetPasswordDialog';
 import type { MarketingUserFormValues } from '@/features/marketing/schemas';
 
@@ -175,7 +175,7 @@ export default function MarketingUsersPage() {
     });
   };
 
-  const handleEdit = (values: EditUserFormValues) => {
+  const handleEdit = (values: EditUserSubmit) => {
     if (!editUser) return;
     editMutation.mutate({ id: editUser.id, data: values });
   };
