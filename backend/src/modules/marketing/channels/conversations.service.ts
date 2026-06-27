@@ -90,7 +90,18 @@ export class ConversationsService {
   }
 
   async assign(workspaceId: string, conversationId: string, assignedToId: string | null) {
-    await this.scopedUpdate(workspaceId, conversationId, { assignedToId });
+    const target = assignedToId && assignedToId.length > 0 ? assignedToId : null;
+    if (target) {
+      // The assignee must belong to this workspace (no cross-tenant assign) —
+      // the same guard the bulk() path enforces; the single path was missing it,
+      // letting a foreign/unknown id be written as the conversation's owner.
+      const user = await this.prisma.marketingUser.findFirst({
+        where: { id: target, workspaceId },
+        select: { id: true },
+      });
+      if (!user) throw new NotFoundException('Assignee not found');
+    }
+    await this.scopedUpdate(workspaceId, conversationId, { assignedToId: target });
     return this.touch(workspaceId, conversationId);
   }
 
