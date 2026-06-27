@@ -151,6 +151,14 @@ export default function InboxPage() {
 
   // ── Side-effects ───────────────────────────────────────────────────────────
 
+  // Reset the composer whenever the open conversation changes — `draft` is a
+  // single shared state (cleared only on a successful send), so without this a
+  // half-typed reply would carry from one customer's thread into the next and
+  // could be sent to the wrong person.
+  useEffect(() => {
+    setDraft('');
+  }, [selectedId]);
+
   // Mark read on open.
   useEffect(() => {
     if (selectedId)
