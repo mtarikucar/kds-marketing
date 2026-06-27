@@ -119,6 +119,7 @@ export default function CampaignsPage() {
   const [editId, setEditId] = useState<string>('');
   const [aiGoal, setAiGoal] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<CampaignRow | null>(null);
+  const [launchTarget, setLaunchTarget] = useState<CampaignRow | null>(null);
 
   // ── Query ─────────────────────────────────────────────────────────────────
   const { data: campaigns } = useQuery<CampaignRow[]>({
@@ -253,6 +254,7 @@ export default function CampaignsPage() {
     mutationFn: (id: string) => marketingApi.post(`/campaigns/${id}/launch`),
     onSuccess: ({ data }) => {
       invalidate();
+      setLaunchTarget(null);
       toast.success(t('campaigns.launched', `Launched to ${data.recipients} recipients`));
     },
     onError: (e: any) =>
@@ -561,6 +563,23 @@ export default function CampaignsPage() {
         onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
       />
 
+      {/* ── Launch confirm ─────────────────────────────────────────────────── */}
+      {/* Launching sends the campaign to its whole audience right away (and can't
+          be undone / costs message quota), so guard it behind a confirm — the
+          Launch button used to fire on a single click. */}
+      <ConfirmDialog
+        open={!!launchTarget}
+        onOpenChange={(o) => { if (!o) setLaunchTarget(null); }}
+        title={t('campaigns.launchTitle', 'Launch this campaign?')}
+        description={t(
+          'campaigns.launchDesc',
+          'It will be sent to everyone in the audience now. This cannot be undone.',
+        )}
+        confirmLabel={t('campaigns.launch', 'Launch')}
+        loading={launch.isPending}
+        onConfirm={() => launchTarget && launch.mutate(launchTarget.id)}
+      />
+
       {/* ── Campaign list ─────────────────────────────────────────────────── */}
       <div className="space-y-3">
         {(campaigns ?? []).map((c) => (
@@ -593,7 +612,7 @@ export default function CampaignsPage() {
 
                 <div className="flex items-center gap-1 shrink-0">
                   {c.status === 'DRAFT' && (
-                    <Button size="sm" onClick={() => launch.mutate(c.id)} loading={launch.isPending}>
+                    <Button size="sm" onClick={() => setLaunchTarget(c)} loading={launch.isPending}>
                       <Send className="h-3.5 w-3.5" />
                       {t('campaigns.launch', 'Launch')}
                     </Button>
