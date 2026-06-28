@@ -116,8 +116,10 @@ export class AttributionService {
 
   async attribution(workspaceId: string, q: AttributionQuery): Promise<AttributionResult> {
     const leads = await this.prisma.lead.findMany({
-      // Exclude tombstoned (merged-away) leads from analytics.
-      where: { workspaceId, mergedIntoId: null, ...this.range(q.from, q.to) },
+      // Exclude tombstoned (merged-away) AND soft-deleted (bulk-deleted) leads
+      // from analytics — matching analytics/reports, so a hidden lead never
+      // keeps contributing channel revenue/conversions.
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, ...this.range(q.from, q.to) },
       select: {
         id: true,
         source: true,

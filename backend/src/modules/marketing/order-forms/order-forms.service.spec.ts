@@ -119,6 +119,19 @@ describe('OrderFormsService', () => {
       );
     });
 
+    it('dedup excludes merged AND soft-deleted leads (a deleted buyer stays visible)', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue(null);
+      prisma.lead.create.mockResolvedValue({ id: 'lead-1' } as any);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {});
+
+      const where = prisma.lead.findFirst.mock.calls[0][0].where;
+      expect(where.mergedIntoId).toBeNull();
+      expect(where.deletedAt).toBeNull();
+    });
+
     it('reuses a recent open invoice on a double-submit (no duplicate invoice)', async () => {
       prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
       products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });

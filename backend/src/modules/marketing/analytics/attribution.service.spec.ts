@@ -76,6 +76,11 @@ describe('AttributionService', () => {
     await svc.attribution(WS, { model: 'first' });
     const arg = (prisma.lead.findMany as jest.Mock).mock.calls[0][0];
     expect(arg.where.workspaceId).toBe(WS);
+    // Attribution analytics must exclude hidden leads (merged-away + soft-
+    // deleted), matching analytics/reports — else a bulk-deleted lead keeps
+    // contributing channel revenue/conversions.
+    expect(arg.where.mergedIntoId).toBeNull();
+    expect(arg.where.deletedAt).toBeNull();
   });
 
   it('makes the `to` end date inclusive (whole final day, not midnight)', async () => {
