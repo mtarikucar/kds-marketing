@@ -26,6 +26,25 @@ export class MarketingUsersService {
     return Number.isFinite(parsed) && parsed >= 10 && parsed <= 15 ? parsed : 12;
   }
 
+  /**
+   * Enforce the package's active-seat limit (maxUsers; -1 = unlimited). SYSTEM
+   * sentinels don't occupy seats. Shared by create() AND update()'s reactivation
+   * path — both consume a seat, so both must pass through here or a workspace at
+   * its cap could bypass the limit (deactivate → create → reactivate).
+   */
+  private async assertSeatAvailable(workspaceId: string) {
+    const effective = await this.entitlements.getEffective(workspaceId);
+    if (effective.maxUsers === -1) return;
+    const seats = await this.prisma.marketingUser.count({
+      where: { workspaceId, role: { not: 'SYSTEM' }, status: 'ACTIVE' },
+    });
+    if (seats >= effective.maxUsers) {
+      throw new BadRequestException(
+        `Seat limit reached (${effective.maxUsers}) — upgrade your package to add users`,
+      );
+    }
+  }
+
   async create(workspaceId: string, dto: CreateMarketingUserDto) {
     // Email is the global login identity (unique across workspaces), so the
     // existence check is intentionally unscoped — but the row is born scoped.
@@ -37,19 +56,7 @@ export class MarketingUsersService {
       throw new ConflictException('Email already exists');
     }
 
-    // Seat limit from the package (-1 = unlimited). SYSTEM sentinels don't
-    // occupy seats.
-    const effective = await this.entitlements.getEffective(workspaceId);
-    if (effective.maxUsers !== -1) {
-      const seats = await this.prisma.marketingUser.count({
-        where: { workspaceId, role: { not: 'SYSTEM' }, status: 'ACTIVE' },
-      });
-      if (seats >= effective.maxUsers) {
-        throw new BadRequestException(
-          `Seat limit reached (${effective.maxUsers}) — upgrade your package to add users`,
-        );
-      }
-    }
+    await this.assertSeatAvailable(workspaceId);
 
     if (!['MANAGER', 'REP'].includes(dto.role)) {
       // OWNER exists once per workspace (created at signup); SYSTEM is the
@@ -144,6 +151,13 @@ export class MarketingUsersService {
     }
     if (dto.role && user.role === 'OWNER') {
       throw new BadRequestException('The owner role cannot be changed here');
+    }
+
+    // Reactivating an INACTIVE user consumes a seat, exactly like create() — so
+    // re-check the package limit. Without this, a workspace at its cap could
+    // exceed it via deactivate → create new → reactivate the old one.
+    if (dto.status === 'ACTIVE' && user.status !== 'ACTIVE') {
+      await this.assertSeatAvailable(workspaceId);
     }
 
     const data: any = { ...dto };
