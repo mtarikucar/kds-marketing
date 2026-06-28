@@ -70,6 +70,34 @@ describe('TasksPage', () => {
     expect(container.querySelector('table')).toBeTruthy();
   });
 
+  // The "all" tab is paginated server-side (20/page), so client-only column
+  // sorting just reordered the visible 20. A sortable header must drive a
+  // server sort so the top rows reflect the whole dataset's order.
+  it('forwards sortBy/sortOrder to /tasks when a sortable header is clicked', async () => {
+    render(<TasksPage />, { wrapper });
+    expect(await screen.findByText('Call the lead')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'tasks.table.dueDate' }));
+
+    await waitFor(() => {
+      const tasksCalls = getMock.mock.calls.filter((c) => c[0] === '/tasks');
+      const last = tasksCalls[tasksCalls.length - 1] as [string, { params?: Record<string, unknown> }];
+      expect(last?.[1]?.params?.sortBy).toBe('dueDate');
+      expect(last?.[1]?.params?.sortOrder).toBe('asc');
+    });
+  });
+
+  // assignedTo is not in the backend sort allow-list (and sorting by the rep
+  // object is meaningless), so its header must not be an interactive sort
+  // button — otherwise a click would silently no-op server-side.
+  it('does not offer sorting on the assignedTo column', async () => {
+    render(<TasksPage />, { wrapper });
+    expect(await screen.findByText('Call the lead')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'tasks.table.assignedTo' }),
+    ).not.toBeInTheDocument();
+  });
+
   // Regression: the delete confirmation used t('tasks.empty') ("No tasks here.")
   // as its body — a copy-paste from the empty state. It must warn about the
   // deletion instead.

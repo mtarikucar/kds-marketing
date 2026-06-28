@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useSearchParams, Link } from 'react-router-dom';
 import { Plus, AlertTriangle, CheckCircle2, Play, Pencil, Trash2, ClipboardList } from 'lucide-react';
-import type { ColumnDef } from '@tanstack/react-table';
+import type { ColumnDef, SortingState } from '@tanstack/react-table';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import type { MarketingTask, MarketingUserInfo } from '../../../features/marketing/types';
 import type { TaskFormValues } from '../../../features/marketing/schemas';
@@ -92,6 +92,20 @@ export default function TasksPage() {
   // Status filter for "all" tab (preserves query param `status`)
   const [status, setStatus] = useState('');
 
+  // Server-side sort for the "all" tab. The DataTable headers were sortable but
+  // uncontrolled, so a click only reordered the visible 20 rows of the paginated
+  // /tasks response. Drive the sort through the query so the top rows reflect the
+  // whole dataset. The today/overdue tabs return the FULL set (no pagination), so
+  // the same controlled state just client-sorts them in memory — also correct.
+  // Column ids match the backend allow-list (title/type/status/priority/dueDate).
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const sortBy = sorting[0]?.id;
+  const sortOrder: 'asc' | 'desc' | undefined = sorting[0]
+    ? sorting[0].desc
+      ? 'desc'
+      : 'asc'
+    : undefined;
+
   // Dialog state
   const [formOpen, setFormOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<MarketingTask | null>(null);
@@ -104,7 +118,7 @@ export default function TasksPage() {
       ? ['marketing', 'tasks', 'today']
       : tab === 'overdue'
         ? ['marketing', 'tasks', 'overdue']
-        : ['marketing', 'tasks', { status }];
+        : ['marketing', 'tasks', { status, sortBy, sortOrder }];
 
   const { data, isLoading } = useQuery({
     queryKey,
@@ -112,7 +126,7 @@ export default function TasksPage() {
       if (tab === 'today') return marketingApi.get('/tasks/today').then((r) => r.data);
       if (tab === 'overdue') return marketingApi.get('/tasks/overdue').then((r) => r.data);
       return marketingApi
-        .get('/tasks', { params: { status: status || undefined } })
+        .get('/tasks', { params: { status: status || undefined, sortBy, sortOrder } })
         .then((r) => r.data?.data || r.data);
     },
   });
@@ -315,6 +329,9 @@ export default function TasksPage() {
     {
       accessorKey: 'assignedTo',
       header: t('tasks.table.assignedTo'),
+      // Not in the backend sort allow-list (and ordering by the rep object is
+      // meaningless) — keep it a plain header so a click can't silently no-op.
+      enableSorting: false,
       cell: ({ row }) => {
         const u = row.original.assignedTo;
         if (!u) return <span className="text-muted-foreground text-sm">—</span>;
@@ -437,6 +454,8 @@ export default function TasksPage() {
         data={tasks}
         isLoading={isLoading}
         loadingRowCount={6}
+        sorting={sorting}
+        onSortingChange={setSorting}
         emptyState={
           <EmptyState
             icon={<ClipboardList className="h-10 w-10" />}
