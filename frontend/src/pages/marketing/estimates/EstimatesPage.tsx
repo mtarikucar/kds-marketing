@@ -99,6 +99,43 @@ export function formFromEstimate(e: Estimate): FormState {
   };
 }
 
+/**
+ * The exact line items an estimate will PERSIST: blank-description rows are
+ * dropped and qty/price are normalized to non-negative minor-unit integers.
+ * Both the save payload and the live total preview derive from this, so the
+ * editor can never show a figure different from what the server stores.
+ */
+export function normalizeEstimateItems(
+  items: ItemRow[],
+): { description: string; qty: number; unitPrice: number; taxRateId?: string }[] {
+  return items
+    .filter((it) => it.description.trim())
+    .map((it) => ({
+      description: it.description.trim(),
+      qty: Math.max(0, Math.round(Number(it.qty) || 0)),
+      unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
+      ...(it.taxRateId ? { taxRateId: it.taxRateId } : {}),
+    }));
+}
+
+/**
+ * Minor-unit subtotal / tax / total over the PERSISTED items — exclusive tax,
+ * rounded per line then summed, mirroring the backend computeMoneyTotals.
+ */
+export function computeFormTotals(
+  items: ItemRow[],
+  pctOf: (taxRateId?: string) => number,
+): { subtotal: number; tax: number; total: number } {
+  let subtotal = 0;
+  let tax = 0;
+  for (const it of normalizeEstimateItems(items)) {
+    const line = it.qty * it.unitPrice;
+    subtotal += line;
+    tax += Math.round((line * pctOf(it.taxRateId)) / 100);
+  }
+  return { subtotal, tax, total: subtotal + tax };
+}
+
 function money(minor: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(
@@ -183,14 +220,7 @@ export default function EstimatesPage() {
     currency: f.currency,
     notes: f.notes || undefined,
     validUntil: f.validUntil || undefined,
-    items: f.items
-      .filter((it) => it.description.trim())
-      .map((it) => ({
-        description: it.description.trim(),
-        qty: Math.max(0, Math.round(Number(it.qty) || 0)),
-        unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
-        ...(it.taxRateId ? { taxRateId: it.taxRateId } : {}),
-      })),
+    items: normalizeEstimateItems(f.items),
   });
 
   const saveMutation = useMutation({
@@ -264,18 +294,14 @@ export default function EstimatesPage() {
     setDialogOpen(true);
   };
 
-  // Live money breakdown in MINOR units, mirroring the backend computeMoneyTotals
-  // (tax is exclusive, rounded per line then summed) so the editor preview matches
-  // the figure the server will persist.
+  // Live money breakdown in MINOR units. Derives from the SAME normalized items
+  // the save payload sends (computeFormTotals → normalizeEstimateItems), so the
+  // preview can never disagree with the figure the server persists — in
+  // particular, blank-description lines (dropped on save) no longer inflate it.
   const { formSubtotal, formTax, formTotal } = useMemo(() => {
-    let subtotal = 0;
-    let tax = 0;
-    for (const it of form.items) {
-      const line = Math.round(Number(it.qty) || 0) * Math.round(Number(it.price) * 100 || 0);
-      subtotal += line;
-      tax += Math.round((line * pctOf(it.taxRateId)) / 100);
-    }
-    return { formSubtotal: subtotal, formTax: tax, formTotal: subtotal + tax };
+    const { subtotal, tax, total } = computeFormTotals(form.items, pctOf);
+    return { formSubtotal: subtotal, formTax: tax, formTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.items, taxRates]);
 
   const isDraft = !form.id || form.status === 'DRAFT';

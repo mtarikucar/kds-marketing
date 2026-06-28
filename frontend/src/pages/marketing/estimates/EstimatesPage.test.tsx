@@ -3,7 +3,7 @@ import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import EstimatesPage, { formFromEstimate } from './EstimatesPage';
+import EstimatesPage, { formFromEstimate, computeFormTotals } from './EstimatesPage';
 import type { Estimate } from '../../../features/marketing/api/estimates.service';
 
 const get = vi.fn();
@@ -110,5 +110,39 @@ describe('formFromEstimate', () => {
     const form = formFromEstimate(detail({ items: [], notes: null }));
     expect(form.items).toEqual([]);
     expect(form.notes).toBe('');
+  });
+});
+
+// The live total preview and the save payload must agree. The payload drops
+// line items with a blank description, so the preview must too — otherwise an
+// in-progress, description-less line inflates the previewed total and then
+// silently vanishes on save (persisted total < shown total).
+describe('computeFormTotals', () => {
+  const pctOf = (id?: string) => (id === 'tr1' ? 20 : 0);
+
+  it('excludes blank-description lines so the preview matches what is saved', () => {
+    const totals = computeFormTotals(
+      [
+        { description: 'Plan', qty: '1', price: '99', taxRateId: 'tr1' }, // 9900 + 20% = 11880
+        { description: '   ', qty: '5', price: '50' }, // blank desc → dropped on save → must NOT count
+      ],
+      pctOf,
+    );
+    expect(totals.subtotal).toBe(9900);
+    expect(totals.tax).toBe(1980);
+    expect(totals.total).toBe(11880);
+  });
+
+  it('sums described lines with per-line exclusive tax in minor units', () => {
+    const totals = computeFormTotals(
+      [
+        { description: 'A', qty: '2', price: '10', taxRateId: 'tr1' }, // 2000 + 20% = 2400
+        { description: 'B', qty: '1', price: '5' }, // 500, no tax
+      ],
+      pctOf,
+    );
+    expect(totals.subtotal).toBe(2500);
+    expect(totals.tax).toBe(400);
+    expect(totals.total).toBe(2900);
   });
 });
