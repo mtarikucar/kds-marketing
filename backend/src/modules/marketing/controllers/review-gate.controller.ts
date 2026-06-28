@@ -30,12 +30,18 @@ export class ReviewGateController {
       [1, 2, 3, 4, 5].map((i) => `<span data-v="${i}">★</span>`).join('') + `</div>` +
       `<div id="fb" style="display:none"><textarea id="t" placeholder="Tell us what went wrong — we want to make it right."></textarea><button id="send">Send feedback</button></div>` +
       `<div id="done" style="display:none"><h3>Thank you! 🙏</h3></div>` +
-      `<script>const API=${JSON.stringify(api)};let r=0;const s=document.getElementById('s');` +
+      `<div id="err" style="color:#b91c1c;margin-top:12px"></div>` +
+      `<script>const API=${JSON.stringify(api)};let r=0;const s=document.getElementById('s');const err=document.getElementById('err');` +
       `s.querySelectorAll('span').forEach(el=>{el.onclick=()=>{r=+el.dataset.v;s.querySelectorAll('span').forEach(x=>x.classList.toggle('on',+x.dataset.v<=r));` +
       `if(r>=4){post('');}else{document.getElementById('fb').style.display='block';}};});` +
       `document.getElementById('send').onclick=()=>post(document.getElementById('t').value);` +
-      `function post(text){fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:r,text})})` +
-      `.then(x=>x.json()).then(d=>{if(d.redirectUrl&&/^https?:\\/\\//i.test(d.redirectUrl)){location.href=d.redirectUrl;}else{s.style.display='none';document.getElementById('fb').style.display='none';document.getElementById('done').style.display='block';}});}</script></body></html>`,
+      // Without the .catch a transient failure (offline / gateway 5xx / non-JSON)
+      // silently dropped the submission — a 5★ customer was never routed to leave
+      // the review, and a <4★ customer's private feedback vanished with no notice.
+      // Now a failure shows a retry message instead of losing the response.
+      `function post(text){err.textContent='';fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:r,text})})` +
+      `.then(x=>x.json()).then(d=>{if(d.redirectUrl&&/^https?:\\/\\//i.test(d.redirectUrl)){location.href=d.redirectUrl;}else{s.style.display='none';document.getElementById('fb').style.display='none';document.getElementById('done').style.display='block';}})` +
+      `.catch(function(){err.textContent='Could not submit — please check your connection and try again.';});}</script></body></html>`,
     );
   }
 
