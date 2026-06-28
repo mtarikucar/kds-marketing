@@ -106,6 +106,25 @@ describe('SalesTargetService', () => {
       );
       expect(prisma.salesTarget.findMany).not.toHaveBeenCalled();
     });
+
+    it('excludes soft-deleted / merged leads from WON_LEADS (parity with the Performance Report)', async () => {
+      // A WON lead that is later bulk-deleted (deletedAt set) must NOT keep
+      // inflating attainment here while the Performance Report drops it.
+      prisma.salesTarget.findMany.mockResolvedValue([] as any);
+      prisma.lead.count.mockResolvedValue(0);
+      (prisma.commission.aggregate as any).mockResolvedValue({ _sum: { amount: null } });
+      prisma.salesCall.count.mockResolvedValue(0);
+      await svc.performanceFor(WS, 'rep-1', '2026-06');
+      expect(prisma.lead.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: 'WON',
+            mergedIntoId: null,
+            deletedAt: null,
+          }),
+        }),
+      );
+    });
   });
 
   describe('list', () => {
@@ -188,6 +207,26 @@ describe('SalesTargetService', () => {
       // batched aggregates are workspace-scoped too
       expect(prisma.lead.groupBy).toHaveBeenCalledWith(
         expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS }) }),
+      );
+    });
+
+    it('excludes soft-deleted / merged leads from the team WON_LEADS aggregate', async () => {
+      prisma.marketingUser.findMany.mockResolvedValue([
+        { id: 'rep-1', firstName: 'Ada', lastName: 'Lovelace', role: 'REP' },
+      ] as any);
+      prisma.salesTarget.findMany.mockResolvedValue([] as any);
+      (prisma.lead.groupBy as any).mockResolvedValue([]);
+      (prisma.commission.groupBy as any).mockResolvedValue([]);
+      (prisma.salesCall.groupBy as any).mockResolvedValue([]);
+      await svc.teamPerformance(WS, '2026-06');
+      expect(prisma.lead.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: 'WON',
+            mergedIntoId: null,
+            deletedAt: null,
+          }),
+        }),
       );
     });
 

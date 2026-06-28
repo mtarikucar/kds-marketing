@@ -151,6 +151,10 @@ export class SalesTargetService {
           workspaceId,
           assignedToId: { in: repIds },
           status: 'WON',
+          // Exclude tombstoned (merged) + soft-deleted (bulk-deleted) leads, so
+          // attainment matches the Performance Report's WON count for the rep.
+          mergedIntoId: null,
+          deletedAt: null,
           convertedAt: { gte: start, lt: end },
         },
         _count: { _all: true },
@@ -226,6 +230,10 @@ export class SalesTargetService {
           workspaceId,
           assignedToId: marketingUserId,
           status: 'WON',
+          // Exclude tombstoned (merged) + soft-deleted (bulk-deleted) leads, so
+          // attainment matches the Performance Report's WON count for the rep.
+          mergedIntoId: null,
+          deletedAt: null,
           convertedAt: { gte: start, lt: end },
         },
       }),
