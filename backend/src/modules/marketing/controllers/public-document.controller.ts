@@ -62,17 +62,28 @@ export class PublicDocumentController {
             `<button type="button" class="decline" id="no">Decline</button></div>` +
             `<div id="msg" style="text-align:center;margin-top:12px;color:#334155"></div></form>` +
             `<script>var b=${JSON.stringify(`/api/public/d/${token}`)};` +
+            `var ok=document.getElementById('ok'),no=document.getElementById('no'),msg=document.getElementById('msg');` +
             `function done(t){document.getElementById('f').innerHTML='<div class="ok">'+t+'</div>';}` +
-            `document.getElementById('ok').onclick=function(){` +
+            // Single re-enable path: a server error (e.g. the doc was already
+            // resolved → {message}, no `status`) OR a network/non-JSON failure
+            // must restore BOTH buttons. Previously sign told the user to
+            // "refresh" without re-enabling, decline blindly showed "declined" on
+            // ANY response, and neither had a .catch — a transient blip left the
+            // signer stuck unable to sign or decline.
+            `function fail(m){msg.textContent=m;ok.disabled=false;no.disabled=false;}` +
+            `ok.onclick=function(){` +
             `var n=document.getElementById('name').value.trim();var c=document.getElementById('consent').checked;` +
-            `if(!n){document.getElementById('msg').textContent='Please type your full name.';return;}` +
-            `if(!c){document.getElementById('msg').textContent='Please check the consent box.';return;}` +
-            `this.disabled=true;fetch(b+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},` +
+            `if(!n){msg.textContent='Please type your full name.';return;}` +
+            `if(!c){msg.textContent='Please check the consent box.';return;}` +
+            `ok.disabled=true;no.disabled=true;fetch(b+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},` +
             `body:JSON.stringify({signerName:n,signerEmail:document.getElementById('email').value.trim()||undefined,consent:c})})` +
-            `.then(function(r){return r.json();}).then(function(d){d.status==='SIGNED'?done('✓ Thank you — signed.'):` +
-            `(document.getElementById('msg').textContent='Could not sign. Please refresh.');});};` +
-            `document.getElementById('no').onclick=function(){this.disabled=true;` +
-            `fetch(b+'/decline',{method:'POST'}).then(function(r){return r.json();}).then(function(){done('Document declined.');});};</script>`) +
+            `.then(function(r){return r.json();}).then(function(d){` +
+            `if(d.status==='SIGNED'){done('✓ Thank you — signed.');}else{fail(d.message||'Could not sign. Please try again.');}})` +
+            `.catch(function(){fail('Could not sign. Please check your connection and try again.');});};` +
+            `no.onclick=function(){ok.disabled=true;no.disabled=true;` +
+            `fetch(b+'/decline',{method:'POST'}).then(function(r){return r.json();}).then(function(d){` +
+            `if(d.status==='DECLINED'){done('Document declined.');}else{fail(d.message||'Could not submit. Please try again.');}})` +
+            `.catch(function(){fail('Could not submit. Please check your connection and try again.');});};</script>`) +
         `</body></html>`,
     );
   }
