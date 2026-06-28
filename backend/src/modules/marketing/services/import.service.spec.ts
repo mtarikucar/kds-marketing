@@ -183,6 +183,28 @@ describe('ImportService.processBatch', () => {
     expect(sel.phoneNormalized).toBe(true);
   });
 
+  it('excludes merged AND soft-deleted leads from the dedup lookup', async () => {
+    // An import row must never match a hidden lead — matching a soft-deleted
+    // (bulk-deleted) lead would update or skip the row against an invisible
+    // record. A deleted contact in the CSV should become a fresh visible lead.
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, dedupePolicy: 'UPDATE' } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', email: 'a@x.com' } },
+    ] as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any);
+    (prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-1' });
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    const where = (prisma.lead.findFirst as jest.Mock).mock.calls[0][0].where;
+    expect(where.mergedIntoId).toBeNull();
+    expect(where.deletedAt).toBeNull();
+  });
+
   it('does nothing when the job is not RUNNING', async () => {
     const { prisma, svc } = makeSvc();
     prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, status: 'DONE' } as any);

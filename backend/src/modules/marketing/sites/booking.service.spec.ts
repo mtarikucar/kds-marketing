@@ -119,6 +119,18 @@ describe('BookingService', () => {
     await expect(svc.book(WS, 'c1', { start: '2000-01-01T09:00:00.000Z', name: 'Ada' })).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('lead dedup excludes merged AND soft-deleted leads', async () => {
+    // A booking from a previously-deleted contact must surface as a fresh,
+    // visible lead — not attach to the still-hidden soft-deleted record.
+    prisma.booking.findFirst.mockResolvedValue(null); // no external block
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: 'ada@x.com' });
+    prisma.lead.create.mockResolvedValue({ id: 'lead-1' });
+    await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada', email: 'ada@x.com' });
+    const where = prisma.lead.findFirst.mock.calls[0][0].where;
+    expect(where.mergedIntoId).toBeNull();
+    expect(where.deletedAt).toBeNull();
+  });
+
   // ── Calendar types (GHL parity) ──────────────────────────────────────────────
   describe('calendar types', () => {
     const RANGE_END = '2027-06-14T23:59:59.000Z';

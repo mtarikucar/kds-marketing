@@ -345,11 +345,14 @@ export class BookingService implements OnModuleInit {
       let leadId: string | null = null;
       if (emailNormalized || phoneNormalized) {
         // Dedup on the NORMALIZED keys (cross-path with manual/form leads) and
-        // skip tombstoned (merged-away) leads.
+        // skip tombstoned (merged-away) AND soft-deleted (bulk-deleted) leads —
+        // otherwise a booking from a previously-deleted contact attaches to that
+        // still-hidden record instead of surfacing as a fresh, visible lead.
         const existing = await tx.lead.findFirst({
           where: {
             workspaceId,
             mergedIntoId: null,
+            deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
               ...(phoneNormalized ? [{ phoneNormalized }] : []),
