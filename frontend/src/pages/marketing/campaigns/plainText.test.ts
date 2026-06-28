@@ -15,6 +15,20 @@ describe('htmlToText', () => {
     expect(htmlToText('')).toBe('');
     expect(htmlToText(undefined)).toBe('');
   });
+  it('decodes decimal numeric entities (smart quotes etc.)', () => {
+    // &#8217; = right single quote (’) — pervasive in real email templates.
+    expect(htmlToText('<p>Don&#8217;t miss out</p>')).toBe('Don’t miss out');
+  });
+  it('decodes hex numeric entities (em dash etc.)', () => {
+    // &#x2014; = em dash (—)
+    expect(htmlToText('<p>A&#x2014;B</p>')).toBe('A—B');
+  });
+  it('leaves an unknown entity intact rather than mangling it', () => {
+    expect(htmlToText('<p>a &notareal; b</p>')).toBe('a &notareal; b');
+  });
+  it('does not double-decode an encoded entity (&amp;lt; stays &lt;)', () => {
+    expect(htmlToText('<p>a &amp;lt; b</p>')).toBe('a &lt; b');
+  });
 });
 
 describe('plainTextBody', () => {
