@@ -245,7 +245,12 @@ export class SegmentCompilerService {
     if (needsValue) {
       const bad = (v: unknown) =>
         (type === 'number' && Number.isNaN(Number(v))) ||
-        (type === 'date' && Number.isNaN(new Date(v as string).getTime()));
+        (type === 'date' && Number.isNaN(new Date(v as string).getTime())) ||
+        // String columns aren't coerced (coerce() returns them as-is), so a
+        // non-string value here compiles straight into a Prisma filter (e.g.
+        // `{ businessName: { contains: {…} } }`) that throws on EVERY later
+        // evaluation. Reject it at save time, like the number/date checks.
+        (type === 'string' && typeof v !== 'string');
       if (cmp === 'between') {
         if (!Array.isArray(leaf.value) || leaf.value.length !== 2 || leaf.value.some(bad)) {
           throw new BadRequestException(`"${field}" between needs two valid ${type} values at ${path}`);

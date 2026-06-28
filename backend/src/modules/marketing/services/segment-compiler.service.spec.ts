@@ -126,4 +126,24 @@ describe('SegmentCompilerService.validate', () => {
     for (let i = 0; i < 8; i++) node = { op: 'and', children: [node] };
     await expect(svc.validate(WS, node)).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  // A non-string value on a string column compiles into a Prisma filter that
+  // throws on every evaluation — reject it at save time (like number/date).
+  it('rejects a non-string value on a string field', async () => {
+    await expect(
+      svc.validate(WS, { field: 'businessName', cmp: 'contains', value: { evil: true } }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a non-string element in an in[] on a string field', async () => {
+    await expect(
+      svc.validate(WS, { field: 'status', cmp: 'in', value: ['NEW', 123] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('still accepts proper string values', async () => {
+    await expect(
+      svc.validate(WS, { field: 'businessName', cmp: 'contains', value: 'acme' }),
+    ).resolves.toBeUndefined();
+  });
 });
