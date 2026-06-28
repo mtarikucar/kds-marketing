@@ -247,6 +247,12 @@ interface MapStepProps {
 function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext }: MapStepProps) {
   const { t } = useTranslation('marketing');
 
+  // businessName is the one hard-required native field — the backend rejects
+  // EVERY row without it. The auto-mapping synonyms are English-only, so a
+  // Turkish header (e.g. "Firma Adı") arrives unmapped; without this guard the
+  // user could run a silently 100%-failed import. Block Next until it's mapped.
+  const hasBusinessName = Object.values(mapping).includes('businessName');
+
   const setField = (header: string, field: string) => {
     onMappingChange({ ...mapping, [header]: field });
   };
@@ -311,12 +317,21 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
         </table>
       </div>
 
+      {!hasBusinessName && (
+        <Callout tone="warning" icon={<AlertCircle className="h-4 w-4" />}>
+          {t('import.businessNameRequired', {
+            defaultValue:
+              'Map a CSV column to “businessName” — it is required for every lead.',
+          })}
+        </Callout>
+      )}
+
       <div className="flex gap-3 pt-2">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           {t('common.back', { defaultValue: 'Back' })}
         </Button>
-        <Button onClick={onNext}>
+        <Button onClick={onNext} disabled={!hasBusinessName}>
           {t('common.next', { defaultValue: 'Next' })}
           <ArrowRight className="h-4 w-4" aria-hidden="true" />
         </Button>
