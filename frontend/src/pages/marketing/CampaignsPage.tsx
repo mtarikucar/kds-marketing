@@ -612,7 +612,7 @@ export default function CampaignsPage() {
 
                 <div className="flex items-center gap-1 shrink-0">
                   {c.status === 'DRAFT' && (
-                    <Button size="sm" onClick={() => setLaunchTarget(c)} loading={launch.isPending}>
+                    <Button size="sm" onClick={() => setLaunchTarget(c)} loading={launch.isPending && launch.variables === c.id}>
                       <Send className="h-3.5 w-3.5" />
                       {t('campaigns.launch', 'Launch')}
                     </Button>
@@ -623,7 +623,7 @@ export default function CampaignsPage() {
                       size="sm"
                       aria-label={t('campaigns.pause', 'Pause')}
                       onClick={() => act.mutate({ id: c.id, action: 'pause' })}
-                      disabled={act.isPending}
+                      disabled={act.isPending && act.variables?.id === c.id}
                     >
                       <Pause className="h-5 w-5" />
                     </IconButton>
@@ -634,7 +634,7 @@ export default function CampaignsPage() {
                       size="sm"
                       aria-label={t('campaigns.resume', 'Resume')}
                       onClick={() => act.mutate({ id: c.id, action: 'resume' })}
-                      disabled={act.isPending}
+                      disabled={act.isPending && act.variables?.id === c.id}
                     >
                       <Play className="h-5 w-5" />
                     </IconButton>

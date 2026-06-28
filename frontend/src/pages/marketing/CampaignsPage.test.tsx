@@ -61,3 +61,40 @@ describe('CampaignsPage launch', () => {
     expect(post).toHaveBeenCalledWith('/campaigns/c1/launch');
   });
 });
+
+// Regression: pause/resume on each SENDING campaign row was driven off a single
+// shared `act` mutation's isPending, so pausing ONE campaign disabled the Pause
+// button on EVERY other SENDING campaign too. Multiple campaigns send at once,
+// so the per-row guard (act.variables?.id === c.id) must scope it to one row.
+describe('CampaignsPage — per-row pause/resume loading (no cross-row bleed)', () => {
+  const SENDING = [
+    { id: 'c1', name: 'Alpha', channel: 'EMAIL', status: 'SENDING', stats: null },
+    { id: 'c2', name: 'Beta', channel: 'EMAIL', status: 'SENDING', stats: null },
+  ];
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    get.mockImplementation((url: string) =>
+      url === '/campaigns' ? Promise.resolve({ data: SENDING }) : Promise.resolve({ data: [] }),
+    );
+    // The pause call never resolves so the `act` mutation stays pending.
+    post.mockImplementation((url: string) =>
+      url.includes('/pause') ? new Promise(() => {}) : Promise.resolve({ data: {} }),
+    );
+  });
+
+  it('pausing one campaign leaves the other campaign\'s Pause button clickable', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+
+    const pauseButtons = await screen.findAllByRole('button', { name: /pause/i });
+    expect(pauseButtons).toHaveLength(2);
+
+    await user.click(pauseButtons[0]);
+
+    const after = screen.getAllByRole('button', { name: /pause/i });
+    expect(after[0]).toBeDisabled();
+    expect(after[1]).not.toBeDisabled();
+  });
+});
