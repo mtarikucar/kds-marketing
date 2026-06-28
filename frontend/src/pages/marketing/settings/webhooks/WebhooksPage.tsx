@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Plus, Webhook, Clipboard, Trash2, Pencil, Send, ListChecks } from 'lucide-react';
 import marketingApi from '../../../../features/marketing/api/marketingApi';
 import { fmtDateTime } from '../../../../features/marketing/utils/format';
+import { copyToClipboard } from '../../../../lib/clipboard';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -153,9 +154,18 @@ export default function WebhooksPage() {
     else createMutation.mutate(values);
   };
 
-  const copy = (value: string) => {
-    navigator.clipboard.writeText(value);
-    toast.success(t('common.copied', { defaultValue: 'Copied' }));
+  // Report the REAL copy outcome — a false "Copied" on the show-once signing
+  // secret would lose it (the dialog never shows it again).
+  const copy = async (value: string) => {
+    if (await copyToClipboard(value)) {
+      toast.success(t('common.copied', { defaultValue: 'Copied' }));
+    } else {
+      toast.error(
+        t('common.copyFailed', {
+          defaultValue: 'Could not copy — select the secret and copy it manually.',
+        }),
+      );
+    }
   };
 
   return (

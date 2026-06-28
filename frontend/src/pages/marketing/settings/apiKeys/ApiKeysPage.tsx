@@ -6,6 +6,7 @@ import { Plus, KeyRound, Clipboard, Trash2 } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import marketingApi from '../../../../features/marketing/api/marketingApi';
 import { fmtDateTime } from '../../../../features/marketing/utils/format';
+import { copyToClipboard } from '../../../../lib/clipboard';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -92,9 +93,18 @@ export default function ApiKeysPage() {
       ),
   });
 
-  const copy = (value: string) => {
-    navigator.clipboard.writeText(value);
-    toast.success(t('common.copied', { defaultValue: 'Copied' }));
+  // Report the REAL copy outcome — a false "Copied" on the show-once API key
+  // would lose it (it is never shown again).
+  const copy = async (value: string) => {
+    if (await copyToClipboard(value)) {
+      toast.success(t('common.copied', { defaultValue: 'Copied' }));
+    } else {
+      toast.error(
+        t('common.copyFailed', {
+          defaultValue: 'Could not copy — select the key and copy it manually.',
+        }),
+      );
+    }
   };
 
   // ── Columns ────────────────────────────────────────────────────────────────
