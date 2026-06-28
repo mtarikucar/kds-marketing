@@ -57,4 +57,14 @@ describe('FormsService', () => {
     // still emits FormSubmitted for the existing lead
     expect(outbox.append.mock.calls.map((c) => c[0].type)).toContain('marketing.form.submitted.v1');
   });
+
+  it('does NOT de-dupe onto a soft-deleted lead (a new inquiry must stay visible)', async () => {
+    // A bulk-deleted (deletedAt) lead is hidden from the list; matching a new
+    // form submission onto it would attach the inquiry to an invisible record.
+    // The dedup read must exclude soft-deleted leads, just like merged ones.
+    await svc.submit('f1', { name: 'Ada', email: 'ada@x.com', phone: '5551112233' });
+    const where = prisma.lead.findFirst.mock.calls[0][0].where;
+    expect(where.mergedIntoId).toBeNull();
+    expect(where.deletedAt).toBeNull();
+  });
 });

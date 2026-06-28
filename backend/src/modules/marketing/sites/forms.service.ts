@@ -56,6 +56,10 @@ export class FormsService {
           where: {
             workspaceId,
             mergedIntoId: null,
+            // Exclude soft-deleted (bulk-deleted) leads too — otherwise a new
+            // website inquiry from a previously-deleted contact attaches to that
+            // still-hidden record and never surfaces in the sales team's list.
+            deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
               ...(phoneNormalized ? [{ phoneNormalized }] : []),
