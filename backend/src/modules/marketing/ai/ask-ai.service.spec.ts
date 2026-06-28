@@ -47,6 +47,27 @@ describe('AskAiService', () => {
     expect(credits.refund).toHaveBeenCalledTimes(1);
   });
 
+  it('recovers from a tool failure (bad enum guess) instead of aborting + refunding', async () => {
+    // The model guesses a status the DB rejects → the tool query throws. The
+    // loop must hand the error back as a tool_result and let the model answer,
+    // not 500 the whole request.
+    prisma.lead.findMany.mockRejectedValueOnce(new Error('invalid enum value "OPEN"'));
+    anthropic.complete
+      .mockResolvedValueOnce({ text: '', toolUses: [{ type: 'tool_use', id: 't1', name: 'search_leads', input: { status: 'OPEN' } }], stopReason: 'tool_use', usage: {} })
+      .mockResolvedValueOnce({ text: 'There is no "OPEN" lead status.', toolUses: [], stopReason: 'end_turn', usage: {} });
+
+    const res = await svc.ask(WS, 'show open leads');
+    expect(res.answer).toBe('There is no "OPEN" lead status.');
+    // A recovered tool error is NOT a request failure — the user got an answer.
+    expect(credits.refund).not.toHaveBeenCalled();
+    // The follow-up model call received a tool_result carrying the error.
+    const secondMessages = anthropic.complete.mock.calls[1][0].messages;
+    const toolResult = secondMessages.find(
+      (m: any) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result',
+    );
+    expect(JSON.stringify(toolResult.content)).toContain('error');
+  });
+
   it('search_leads binds the workspaceId (no cross-tenant read)', async () => {
     anthropic.complete
       .mockResolvedValueOnce({ text: '', toolUses: [{ type: 'tool_use', id: 't1', name: 'search_leads', input: { query: 'cafe', status: 'new' } }], stopReason: 'tool_use', usage: {} })
