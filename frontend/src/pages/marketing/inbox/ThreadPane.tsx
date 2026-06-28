@@ -195,7 +195,11 @@ export function ThreadPane({
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && draft.trim()) {
+            // Mirror the Send button's disabled guard (incl. !isSending): without
+            // it, pressing Enter again while a reply is still in flight fires a
+            // second send of the (not-yet-cleared) draft — a duplicate message to
+            // the live customer.
+            if (e.key === 'Enter' && !e.shiftKey && draft.trim() && !isSending) {
               e.preventDefault();
               onSend();
             }
