@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateOfferDto } from '../dto/create-offer.dto';
 import { UpdateOfferDto } from '../dto/update-offer.dto';
+import { rangeEndInclusive } from './report-date-range.util';
 import {
   CORE_PROVISIONING_PORT,
   CoreProvisioningPort,
@@ -80,15 +81,30 @@ export class MarketingOffersService {
     userRole: string,
     page = 1,
     limit = 20,
+    filter: { status?: string; dateFrom?: string; dateTo?: string } = {},
   ) {
     const skip = (page - 1) * limit;
     // REPs only see their own offers. The workspace clause is inlined at
     // each call site so the scoping fitness test can verify it statically.
     const repFilter = userRole === 'REP' ? { createdById: userId } : {};
 
+    // Honour the list filters the Offers page sends — a status <Select> and a
+    // from/to date range. These were previously dropped (the controller only
+    // forwarded page/limit), so picking "SENT" or a date range silently
+    // returned every offer. Date semantics mirror the leads list: filter on
+    // createdAt, end date inclusive to end-of-day.
+    const where: Prisma.LeadOfferWhereInput = { workspaceId, ...repFilter };
+    if (filter.status) where.status = filter.status;
+    if (filter.dateFrom || filter.dateTo) {
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (filter.dateFrom) createdAt.gte = new Date(filter.dateFrom);
+      if (filter.dateTo) createdAt.lte = rangeEndInclusive(filter.dateTo);
+      where.createdAt = createdAt;
+    }
+
     const [offers, total] = await Promise.all([
       this.prisma.leadOffer.findMany({
-        where: { workspaceId, ...repFilter },
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -97,7 +113,7 @@ export class MarketingOffersService {
           createdBy: { select: { id: true, firstName: true, lastName: true } },
         },
       }),
-      this.prisma.leadOffer.count({ where: { workspaceId, ...repFilter } }),
+      this.prisma.leadOffer.count({ where }),
     ]);
 
     return {

@@ -41,8 +41,15 @@ export class MarketingOffersController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.offersService.findAll(actor.workspaceId, actor.id, actor.role, page, limit);
+    return this.offersService.findAll(actor.workspaceId, actor.id, actor.role, page, limit, {
+      status,
+      dateFrom,
+      dateTo,
+    });
   }
 
   @Get(':id')
