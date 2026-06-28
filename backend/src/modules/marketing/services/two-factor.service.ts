@@ -34,6 +34,17 @@ export class TwoFactorService {
 
   async beginEnroll(userId: string) {
     const u = await this.getUser(userId);
+    // Refuse to re-enroll an already-protected account. Otherwise beginEnroll —
+    // which takes NO verification code — would set twoFactorEnabled=false,
+    // silently disabling a user's working 2FA (and desyncing their authenticator
+    // if they abandon setup) AND handing a hijacked session a code-free way to
+    // strip 2FA, bypassing the deliberate code requirement on disable(). To
+    // rotate, the user must disable() with a valid code first, then re-enroll.
+    if (u.twoFactorEnabled) {
+      throw new BadRequestException(
+        'Two-factor authentication is already enabled. Disable it first to re-enroll.',
+      );
+    }
     const secret = generateTotpSecret();
     await this.prisma.marketingUser.update({
       where: { id: userId },
