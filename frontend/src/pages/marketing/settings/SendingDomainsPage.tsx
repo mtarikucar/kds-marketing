@@ -126,7 +126,7 @@ export default function SendingDomainsPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge tone={STATUS_TONE[d.status]} size="sm">{d.status}</Badge>
-                    <Button variant="outline" size="sm" loading={verify.isPending} onClick={() => verify.mutate(d.id)}>
+                    <Button variant="outline" size="sm" loading={verify.isPending && verify.variables === d.id} onClick={() => verify.mutate(d.id)}>
                       <RefreshCw className="h-4 w-4" />{t('sendingDomains.verify', { defaultValue: 'Verify' })}
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => remove.mutate(d.id)}>
