@@ -44,9 +44,17 @@ export function RecordFormDialog({
   const active = fields.filter((f) => !f.archived);
   const [values, setValues] = useState<Record<string, unknown>>({});
 
+  // A stable signature of the field SET. Re-seed only when the dialog opens, the
+  // edited record changes, or the fields genuinely change — NOT on every
+  // `fields` array identity. The parent derives `fields` with an inline
+  // `.filter()`, so it's a fresh reference on every render; depending on it
+  // directly re-ran this effect and wiped the user's in-progress input whenever
+  // a background refetch (e.g. window refocus) re-rendered the parent.
+  const fieldsSig = fields.map((f) => f.id).join('|');
   useEffect(() => {
     if (open) setValues(seedCustomFieldValues(fields, record?.values));
-  }, [open, record, fields]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, record, fieldsSig]);
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v }));
 

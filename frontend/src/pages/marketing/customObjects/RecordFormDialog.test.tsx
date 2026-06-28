@@ -22,6 +22,54 @@ const boolField: CustomFieldDef = {
   options: [],
 } as unknown as CustomFieldDef;
 
+const textField: CustomFieldDef = {
+  id: 'f2',
+  key: 'title',
+  label: 'Title',
+  type: 'TEXT',
+  required: false,
+  archived: false,
+  options: [],
+} as unknown as CustomFieldDef;
+
+describe('RecordFormDialog — input is not wiped by a fields-prop re-render', () => {
+  it('keeps the in-progress value when fields arrives as a new array reference', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <RecordFormDialog
+        open
+        onOpenChange={vi.fn()}
+        fields={[textField]}
+        record={null}
+        objectLabel="Property"
+        onSubmit={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    const input = screen.getByRole('textbox');
+    await user.type(input, 'My draft');
+    expect(input).toHaveValue('My draft');
+
+    // The parent re-renders (e.g. a background refetch on window refocus) and
+    // passes a FRESH `fields` array of the same field set. The in-progress input
+    // must survive — re-seeding here would silently discard the user's typing.
+    rerender(
+      <RecordFormDialog
+        open
+        onOpenChange={vi.fn()}
+        fields={[{ ...textField }]}
+        record={null}
+        objectLabel="Property"
+        onSubmit={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    expect(screen.getByRole('textbox')).toHaveValue('My draft');
+  });
+});
+
 describe('RecordFormDialog — required BOOL', () => {
   it('submits a required BOOL the user never toggled as false (not undefined)', async () => {
     const onSubmit = vi.fn();
