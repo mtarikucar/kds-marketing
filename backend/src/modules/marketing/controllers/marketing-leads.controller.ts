@@ -58,12 +58,23 @@ export class MarketingLeadsController {
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header('Content-Disposition', 'attachment; filename="leads.csv"')
   exportCsv(@CurrentMarketingUser() actor: MarketingUserPayload, @Query() q: LeadFilterDto) {
-    const assignedToId = actor.role === 'REP' ? actor.id : q.assignedToId;
-    return this.leadBulk.exportCsv(actor.workspaceId, {
-      status: q.status,
-      assignedToId,
-      search: q.search,
-    });
+    // Forward the SAME filter surface the list uses (source/businessType/
+    // assignmentStatus were silently dropped before, so the CSV didn't match
+    // the on-screen list). REP-scoping + assignmentStatus resolution live in
+    // the service now, mirroring findAll.
+    return this.leadBulk.exportCsv(
+      actor.workspaceId,
+      {
+        status: q.status,
+        source: q.source,
+        businessType: q.businessType,
+        assignedToId: q.assignedToId,
+        assignmentStatus: q.assignmentStatus,
+        search: q.search,
+      },
+      actor.id,
+      actor.role,
+    );
   }
 
   @Post('merge')
