@@ -582,7 +582,7 @@ function PastImportsList() {
         if (j.status !== 'DONE' && j.status !== 'RUNNING') return <span className="text-muted-foreground">—</span>;
         return (
           <span className="text-xs text-muted-foreground">
-            +{j.created} / ~{j.updated} / /{j.skipped}
+            +{j.created} / ~{j.updated} / ={j.skipped}
             {j.failed > 0 && <span className="ml-1 text-danger">{j.failed} err</span>}
           </span>
         );
