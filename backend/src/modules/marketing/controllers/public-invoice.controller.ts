@@ -37,10 +37,14 @@ export class PublicInvoiceController {
       `<div class="total">${esc(money(inv.total, inv.currency))}</div>` +
       (inv.notes ? `<p style="color:#64748b">${esc(inv.notes)}</p>` : '') +
       (paid ? `<div class="paid">✓ Paid</div>` : `<div style="text-align:center;margin-top:20px"><button id="pay">Pay ${esc(money(inv.total, inv.currency))}</button></div><div id="manual"></div>`) +
-      (paid ? '' : `<script>document.getElementById('pay').onclick=function(){this.disabled=true;this.textContent='…';` +
-        `fetch(${JSON.stringify(`/api/public/i/${token}/pay`)},{method:'POST'}).then(r=>r.json()).then(d=>{` +
+      (paid ? '' : `<script>document.getElementById('pay').onclick=function(){var btn=this,lbl=btn.textContent;btn.disabled=true;btn.textContent='…';` +
+        `fetch(${JSON.stringify(`/api/public/i/${token}/pay`)},{method:'POST'}).then(function(r){return r.json();}).then(function(d){` +
         `if(d.redirectUrl){location.href=d.redirectUrl;}else{var m=document.getElementById('manual');m.style.display='block';` +
-        `m.textContent=typeof d.manual==='object'?Object.entries(d.manual).map(function(e){return e[0]+': '+e[1];}).join('\\n'):String(d.manual||'Contact us to pay.');document.getElementById('pay').style.display='none';}});};</script>`) +
+        `m.textContent=typeof d.manual==='object'?Object.entries(d.manual).map(function(e){return e[0]+': '+e[1];}).join('\\n'):String(d.manual||'Contact us to pay.');btn.style.display='none';}})` +
+        // Without this .catch a network / non-JSON failure (gateway 502, offline,
+        // timeout) left the Pay button stuck on '…' disabled forever — the buyer
+        // could neither pay nor retry. Re-enable it so they can try again.
+        `.catch(function(){btn.disabled=false;btn.textContent=lbl;var m=document.getElementById('manual');m.style.display='block';m.textContent='Could not start payment. Please check your connection and try again.';});};</script>`) +
       `</body></html>`,
     );
   }
