@@ -236,6 +236,71 @@ export class MarketingOffersService {
     return updatedOffer;
   }
 
+  /**
+   * Customer accepted the quote: SENT → ACCEPTED, and advance the lead
+   * OFFER_SENT → WAITING (the "accepted, awaiting provisioning" state that
+   * convert() consumes — convert allows OFFER_SENT/WAITING). The heavyweight
+   * WON + tenant provisioning stays in convert(); this only records the
+   * customer's decision. Same ownership/closed-lead guards as markSent.
+   */
+  async markAccepted(workspaceId: string, id: string, userId: string, userRole: string) {
+    const offer = await this.prisma.leadOffer.findFirst({
+      where: { id, workspaceId },
+      include: { lead: { select: { status: true, convertedTenantId: true } } },
+    });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (userRole === 'REP' && offer.createdById !== userId) {
+      throw new ForbiddenException('You can only accept your own offers');
+    }
+    if (offer.status !== 'SENT') {
+      throw new BadRequestException('Only sent offers can be accepted');
+    }
+    if (offer.lead.convertedTenantId || ['WON', 'LOST'].includes(offer.lead.status)) {
+      throw new BadRequestException('Lead is already closed');
+    }
+
+    const [updatedOffer] = await this.prisma.$transaction([
+      this.prisma.leadOffer.update({
+        where: { id },
+        data: { status: 'ACCEPTED' },
+      }),
+      // Guarded compound WHERE mirrors markSent: advance ONLY from OFFER_SENT on
+      // an unconverted lead, so a convert() racing to WON can't be reverted to
+      // WAITING. updateMany matches 0 rows (no-op) when the lead already moved.
+      this.prisma.lead.updateMany({
+        where: {
+          id: offer.leadId,
+          workspaceId,
+          convertedTenantId: null,
+          status: 'OFFER_SENT',
+        },
+        data: { status: 'WAITING' },
+      }),
+    ]);
+
+    return updatedOffer;
+  }
+
+  /**
+   * Customer declined the quote: SENT → REJECTED. Offer-only — the lead's
+   * pipeline status is the manager's call (re-quote, or mark LOST separately),
+   * so rejection never moves the lead. Same ownership/status guards as accept.
+   */
+  async markRejected(workspaceId: string, id: string, userId: string, userRole: string) {
+    const offer = await this.prisma.leadOffer.findFirst({ where: { id, workspaceId } });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (userRole === 'REP' && offer.createdById !== userId) {
+      throw new ForbiddenException('You can only reject your own offers');
+    }
+    if (offer.status !== 'SENT') {
+      throw new BadRequestException('Only sent offers can be rejected');
+    }
+    return this.prisma.leadOffer.update({
+      where: { id },
+      data: { status: 'REJECTED' },
+    });
+  }
+
   async delete(workspaceId: string, id: string) {
     const offer = await this.prisma.leadOffer.findFirst({
       where: { id, workspaceId },

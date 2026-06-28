@@ -79,6 +79,24 @@ export class MarketingOffersController {
     return this.offersService.markSent(actor.workspaceId, id, actor.id, actor.role);
   }
 
+  @Post(':id/accept')
+  @RequirePermission('leads.write')
+  accept(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.markAccepted(actor.workspaceId, id, actor.id, actor.role);
+  }
+
+  @Post(':id/reject')
+  @RequirePermission('leads.write')
+  reject(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.markRejected(actor.workspaceId, id, actor.id, actor.role);
+  }
+
   @Delete(':id')
   @MarketingRoles('MANAGER')
   @RequirePermission('leads.manage')
