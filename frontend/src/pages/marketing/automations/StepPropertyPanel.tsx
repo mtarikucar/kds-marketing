@@ -56,7 +56,10 @@ export function StepPropertyPanel({
 
       <StepFields step={step} onPatch={onPatch} count={count} />
 
-      <AdvancedJsonField step={step} onReplace={onReplace} />
+      {/* Key by index so switching steps REMOUNTS the JSON editor: its `draft`
+          is local state seeded once, so without this it would keep showing (and,
+          if edited, write back) the PREVIOUS step's JSON onto the new step. */}
+      <AdvancedJsonField key={index} step={step} onReplace={onReplace} />
 
       <div className="flex items-center gap-1 pt-2 border-t border-border">
         <IconButton variant="ghost" size="sm" aria-label={t('automations.moveUp', 'Move up')} disabled={index === 0} onClick={() => onMove(-1)}>
