@@ -251,3 +251,30 @@ describe('AgencyService — listLocations / suspendLocation scoping', () => {
     expect(updateArgs.data).toEqual({ status: 'SUSPENDED' });
   });
 });
+
+describe('AgencyService — dashboard rollup', () => {
+  it('counts only ACTIVE leads per location (excludes merged / soft-deleted)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue(agencyRow() as never);
+    prisma.workspace.findMany.mockResolvedValue([
+      { id: 'loc-1', slug: 'l1', name: 'L1', status: 'ACTIVE', createdAt: new Date(0) },
+    ] as never);
+    (prisma.lead.count as jest.Mock).mockResolvedValue(5);
+    (prisma.marketingUser.count as jest.Mock).mockResolvedValue(2);
+
+    await svc.dashboard(AGENCY_A);
+
+    // The per-location rollup must mirror each location's own list/dashboard,
+    // which exclude consolidated duplicates (mergedIntoId) and bulk-deleted
+    // (deletedAt) leads — otherwise the agency overcounts.
+    expect(prisma.lead.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          workspaceId: 'loc-1',
+          mergedIntoId: null,
+          deletedAt: null,
+        }),
+      }),
+    );
+  });
+});

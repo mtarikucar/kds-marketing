@@ -324,7 +324,12 @@ export class AgencyService {
     const perLocation = await Promise.all(
       locations.map(async (loc) => {
         const [leadCount, userCount] = await Promise.all([
-          this.prisma.lead.count({ where: { workspaceId: loc.id } }),
+          // Active leads only — exclude merged-away + soft-deleted rows, so the
+          // agency rollup matches what each location's own list/dashboard shows
+          // (a consolidated duplicate or a deleted lead must not inflate it).
+          this.prisma.lead.count({
+            where: { workspaceId: loc.id, mergedIntoId: null, deletedAt: null },
+          }),
           this.prisma.marketingUser.count({
             where: { workspaceId: loc.id, role: { not: 'SYSTEM' } },
           }),
