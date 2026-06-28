@@ -159,11 +159,17 @@ export default function InboxPage() {
     setDraft('');
   }, [selectedId]);
 
-  // Mark read on open.
+  // Mark read on open — and refresh the list so the unread badge on the thread
+  // you just opened clears immediately, instead of lingering until the next 30s
+  // poll / SSE event (the POST zeroes unreadCount server-side, but nothing was
+  // re-reading the list).
   useEffect(() => {
     if (selectedId)
-      marketingApi.post(`/conversations/${selectedId}/read`).catch(() => undefined);
-  }, [selectedId]);
+      marketingApi
+        .post(`/conversations/${selectedId}/read`)
+        .then(() => queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] }))
+        .catch(() => undefined);
+  }, [selectedId, queryClient]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 

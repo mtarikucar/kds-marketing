@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -84,5 +84,19 @@ describe('InboxPage — composer draft isolation', () => {
     // Switching to another customer's thread must NOT carry the half-typed reply.
     await userEvent.click(screen.getByRole('button', { name: 'cB' }));
     expect((screen.getByLabelText('composer') as HTMLInputElement).value).toBe('');
+  });
+
+  it('marks a thread read AND refreshes the list so the unread badge clears now', async () => {
+    render(<InboxPage />, { wrapper });
+    await screen.findByRole('button', { name: 'cA' });
+    const listCalls = () => get.mock.calls.filter((c) => c[0] === '/conversations').length;
+    const before = listCalls();
+
+    await userEvent.click(screen.getByRole('button', { name: 'cA' }));
+
+    // Opening a thread marks it read server-side…
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/conversations/cA/read'));
+    // …and re-fetches the list, so the badge updates without waiting for the poll.
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
   });
 });
