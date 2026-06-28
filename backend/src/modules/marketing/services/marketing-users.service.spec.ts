@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { MarketingUsersService } from './marketing-users.service';
 import {
   mockPrismaClient,
@@ -96,6 +96,61 @@ describe('MarketingUsersService — seat limit', () => {
       await expect(
         svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('update() email change', () => {
+    it('rejects changing the email to one already used by another user (clean 409, not a 500)', async () => {
+      const { prisma, svc } = makeSvc(-1);
+      prisma.marketingUser.findFirst.mockResolvedValue({
+        id: 'u1',
+        workspaceId: WS,
+        role: 'REP',
+        status: 'ACTIVE',
+        email: 'old@b.com',
+      } as any);
+      // Another user already owns the target email.
+      prisma.marketingUser.findUnique.mockResolvedValue({ id: 'u2' } as any);
+
+      await expect(
+        svc.update(WS, 'u1', { email: 'taken@b.com' } as any, 'MANAGER'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+    });
+
+    it('allows changing the email to an unused address', async () => {
+      const { prisma, svc } = makeSvc(-1);
+      prisma.marketingUser.findFirst.mockResolvedValue({
+        id: 'u1',
+        workspaceId: WS,
+        role: 'REP',
+        status: 'ACTIVE',
+        email: 'old@b.com',
+      } as any);
+      prisma.marketingUser.findUnique.mockResolvedValue(null); // free
+      (prisma.marketingUser.update as jest.Mock).mockResolvedValue({ id: 'u1', email: 'new@b.com' });
+
+      await expect(
+        svc.update(WS, 'u1', { email: 'new@b.com' } as any, 'MANAGER'),
+      ).resolves.toMatchObject({ id: 'u1' });
+    });
+
+    it('does not treat re-saving the SAME email as a conflict', async () => {
+      const { prisma, svc } = makeSvc(-1);
+      prisma.marketingUser.findFirst.mockResolvedValue({
+        id: 'u1',
+        workspaceId: WS,
+        role: 'REP',
+        status: 'ACTIVE',
+        email: 'same@b.com',
+      } as any);
+      (prisma.marketingUser.update as jest.Mock).mockResolvedValue({ id: 'u1' });
+
+      await expect(
+        svc.update(WS, 'u1', { email: 'same@b.com', firstName: 'X' } as any, 'MANAGER'),
+      ).resolves.toBeDefined();
+      // No uniqueness lookup needed when the email is unchanged.
+      expect(prisma.marketingUser.findUnique).not.toHaveBeenCalled();
     });
   });
 });

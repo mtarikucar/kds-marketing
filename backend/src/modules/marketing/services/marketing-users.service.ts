@@ -6,6 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
@@ -160,6 +161,20 @@ export class MarketingUsersService {
       await this.assertSeatAvailable(workspaceId);
     }
 
+    // Email is the global unique login identity. When it's being changed, reject
+    // a collision with a clean 409 (mirrors create()) instead of letting the DB
+    // unique constraint surface a raw 500. The P2002 catch below covers the
+    // concurrent same-email race the pre-check can't.
+    if (dto.email && dto.email !== user.email) {
+      const clash = await this.prisma.marketingUser.findUnique({
+        where: { email: dto.email },
+        select: { id: true },
+      });
+      if (clash && clash.id !== user.id) {
+        throw new ConflictException('Email already exists');
+      }
+    }
+
     const data: any = { ...dto };
     if (dto.password) {
       // Use the same configurable cost create() uses. Hard-coding 10
@@ -169,19 +184,27 @@ export class MarketingUsersService {
       data.password = await bcrypt.hash(dto.password, this.bcryptCost());
     }
 
-    return this.prisma.marketingUser.update({
-      where: { id: user.id },
-      data,
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        role: true,
-        status: true,
-      },
-    });
+    try {
+      return await this.prisma.marketingUser.update({
+        where: { id: user.id },
+        data,
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          role: true,
+          status: true,
+        },
+      });
+    } catch (e) {
+      // Lost the concurrent race on the email unique index — clean 409, not 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('Email already exists');
+      }
+      throw e;
+    }
   }
 
   async delete(workspaceId: string, id: string, actorRole: string) {
