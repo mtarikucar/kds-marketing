@@ -106,6 +106,29 @@ export function formFromSubscription(s: SubscriptionDetail): FormState {
   };
 }
 
+/**
+ * The exact line items a subscription will PERSIST: blank-description rows are
+ * dropped and qty/price are normalized to non-negative minor-unit integers.
+ * Both the save payload and the live amount preview derive from this, so the
+ * editor can never show a recurring amount different from what gets billed.
+ */
+export function normalizeSubscriptionItems(
+  items: ItemRow[],
+): { description: string; qty: number; unitPrice: number }[] {
+  return items
+    .filter((it) => it.description.trim())
+    .map((it) => ({
+      description: it.description.trim(),
+      qty: Math.max(0, Math.round(Number(it.qty) || 0)),
+      unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
+    }));
+}
+
+/** Minor-unit recurring amount over the PERSISTED items (no per-line tax). */
+export function computeSubscriptionTotal(items: ItemRow[]): number {
+  return normalizeSubscriptionItems(items).reduce((s, it) => s + it.qty * it.unitPrice, 0);
+}
+
 function Labeled({
   label,
   className,
@@ -160,13 +183,7 @@ export default function SubscriptionsPage() {
     interval: f.interval,
     intervalCount: Math.max(1, Math.round(Number(f.intervalCount) || 1)),
     dueDays: Math.max(0, Math.round(Number(f.dueDays) || 0)),
-    items: f.items
-      .filter((it) => it.description.trim())
-      .map((it) => ({
-        description: it.description.trim(),
-        qty: Math.max(0, Math.round(Number(it.qty) || 0)),
-        unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
-      })),
+    items: normalizeSubscriptionItems(f.items),
   });
 
   const saveMutation = useMutation({
@@ -225,14 +242,10 @@ export default function SubscriptionsPage() {
     }));
   };
 
-  const formTotal = useMemo(
-    () =>
-      form.items.reduce(
-        (s, it) => s + Math.round(Number(it.qty) || 0) * Math.round(Number(it.price) * 100 || 0),
-        0,
-      ),
-    [form.items],
-  );
+  // Derives from the SAME normalized rows the payload sends, so the previewed
+  // recurring amount matches the persisted `amount` — blank-description lines
+  // (dropped on save) no longer inflate it.
+  const formTotal = useMemo(() => computeSubscriptionTotal(form.items), [form.items]);
 
   const cadence = (s: Subscription) =>
     s.intervalCount > 1

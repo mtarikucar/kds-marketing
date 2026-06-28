@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import SubscriptionsPage, { formFromSubscription } from './SubscriptionsPage';
+import SubscriptionsPage, {
+  formFromSubscription,
+  normalizeSubscriptionItems,
+  computeSubscriptionTotal,
+} from './SubscriptionsPage';
 
 const get = vi.fn();
 const post = vi.fn();
@@ -148,5 +152,27 @@ describe('formFromSubscription', () => {
   it('defaults dueDays to 14 when the record omits it', () => {
     const form = formFromSubscription(detail({ dueDays: undefined }) as never);
     expect(form.dueDays).toBe('14');
+  });
+});
+
+// The live recurring-amount preview and the save payload must agree. The
+// payload drops blank-description lines, so the preview must too — otherwise an
+// in-progress, description-less line inflates the shown amount and then
+// vanishes on save (persisted amount < shown amount).
+describe('subscription totals', () => {
+  it('normalizeSubscriptionItems drops blank-description rows and converts to minor units', () => {
+    const rows = normalizeSubscriptionItems([
+      { description: 'Seat', qty: '2', price: '100' },
+      { description: '   ', qty: '5', price: '50' }, // blank desc → dropped on save
+    ]);
+    expect(rows).toEqual([{ description: 'Seat', qty: 2, unitPrice: 10000 }]);
+  });
+
+  it('computeSubscriptionTotal excludes blank-description lines so preview matches the saved amount', () => {
+    const total = computeSubscriptionTotal([
+      { description: 'Seat', qty: '2', price: '100' }, // 2 × 10000 = 20000
+      { description: '', qty: '5', price: '50' }, // blank → must NOT inflate the amount
+    ]);
+    expect(total).toBe(20000);
   });
 });
