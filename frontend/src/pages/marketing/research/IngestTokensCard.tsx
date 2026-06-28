@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Key, Clipboard } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { copyToClipboard } from '../../../lib/clipboard';
 import { Card, CardHeader, CardContent } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -87,9 +88,16 @@ export function IngestTokensCard() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(mintedToken);
-                  toast.success(t('common.copied', 'Copied'));
+                onClick={async () => {
+                  // Honest copy outcome — a false "Copied" would lose this
+                  // show-once token (it is never shown again).
+                  if (await copyToClipboard(mintedToken)) {
+                    toast.success(t('common.copied', 'Copied'));
+                  } else {
+                    toast.error(
+                      t('common.copyFailed', 'Could not copy — select the token and copy it manually.'),
+                    );
+                  }
                 }}
               >
                 <Clipboard className="h-4 w-4" />
