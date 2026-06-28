@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -21,6 +21,15 @@ export function WalletPanel({ leadId, isManager }: { leadId: string; isManager: 
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState('');
+
+  // Clear the credit/debit amount when the panel switches to a different lead.
+  // The lead-detail route reuses this component across /leads/:id navigations
+  // (no remount), so without this an amount typed for one contact would carry
+  // onto the next — and a Credit/Debit there would move money on the wrong
+  // wallet.
+  useEffect(() => {
+    setAmount('');
+  }, [leadId]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['marketing', 'wallet', leadId],
