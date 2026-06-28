@@ -187,6 +187,26 @@ describe('BookingService', () => {
       expect(prisma.booking.create.mock.calls[0][0].data.assigneeUserId).toBe('u2');
     });
 
+    it('ROUND_ROBIN rejects when EVERY member is booked elsewhere (no unassigned booking)', async () => {
+      // Per-calendar capacity isn't reached (0 bookings on THIS calendar), but
+      // both members are busy in this slot on OTHER calendars workspace-wide —
+      // so there is nobody to serve it. It must reject, not create an
+      // assigneeUserId=null booking.
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'ROUND_ROBIN', ownerUserId: null }));
+      prisma.booking.findFirst.mockResolvedValue(null); // no external block
+      prisma.booking.findMany
+        .mockResolvedValueOnce([]) // overlapping on THIS calendar: none → under capacity
+        .mockResolvedValueOnce([{ assigneeUserId: 'u1' }, { assigneeUserId: 'u2' }]); // both busy elsewhere
+      prisma.bookingCalendarMember.findMany.mockResolvedValue([
+        { marketingUserId: 'u1' },
+        { marketingUserId: 'u2' },
+      ]);
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+
     it('CLASS rejects a reserve once the slot is at capacity', async () => {
       prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'CLASS', capacity: 1 }));
       prisma.booking.findFirst.mockResolvedValue(null);

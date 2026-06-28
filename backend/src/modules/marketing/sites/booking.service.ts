@@ -328,6 +328,15 @@ export class BookingService implements OnModuleInit {
         assigneeUserId = null;
       }
 
+      // ROUND_ROBIN with no free member: every member is already booked in this
+      // slot SOMEWHERE in the workspace (or the calendar has no members at all).
+      // The per-calendar capacity check above can't catch this — a member may be
+      // busy on ANOTHER calendar — so it would otherwise create an UNASSIGNED
+      // booking nobody can serve. Reject it, exactly like capacity exhaustion.
+      if (cal.type === 'ROUND_ROBIN' && !assigneeUserId) {
+        throw new BadRequestException('That slot was just taken');
+      }
+
       // Link or create a lead.
       const email = dto.email?.trim() || null;
       const phone = dto.phone?.trim() || null;
