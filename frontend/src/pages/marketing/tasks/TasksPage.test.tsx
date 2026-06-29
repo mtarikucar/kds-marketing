@@ -7,11 +7,12 @@ import TasksPage from './TasksPage';
 
 const getMock = vi.fn();
 const postMock = vi.fn().mockResolvedValue({ data: {} });
+const patchMock = vi.fn().mockResolvedValue({ data: {} });
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...args: unknown[]) => getMock(...args),
     post: (...args: unknown[]) => postMock(...args),
-    patch: vi.fn().mockResolvedValue({ data: {} }),
+    patch: (...args: unknown[]) => patchMock(...args),
     delete: vi.fn().mockResolvedValue({ data: {} }),
   },
 }));
@@ -53,6 +54,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 describe('TasksPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    patchMock.mockResolvedValue({ data: {} });
     getMock.mockImplementation((url: string) => {
       if (url === '/tasks') return Promise.resolve({ data: { data: [TASK], meta: { total: 1 } } });
       if (url === '/users')
@@ -96,6 +98,47 @@ describe('TasksPage', () => {
     expect(
       screen.queryByRole('button', { name: 'tasks.table.assignedTo' }),
     ).not.toBeInTheDocument();
+  });
+
+  // Regression (per-row mutation loading bug class): the per-row "complete"
+  // button drove its disabled state off the SHARED completeMutation.isPending,
+  // so completing one task disabled EVERY task's complete button until the
+  // request resolved — you couldn't tick off tasks in quick succession. The
+  // in-flight row's own button must disable (no double-fire), but the others
+  // must stay enabled.
+  it('keeps other rows\' complete buttons enabled while one task is completing', async () => {
+    getMock.mockImplementation((url: string) => {
+      if (url === '/tasks')
+        return Promise.resolve({
+          data: {
+            data: [TASK, { ...TASK, id: 't2', title: 'Email the client' }],
+            meta: { total: 2 },
+          },
+        });
+      if (url === '/users')
+        return Promise.resolve({
+          data: [{ id: 'u-1', firstName: 'Tarik', lastName: 'U', role: 'MANAGER' }],
+        });
+      return Promise.resolve({ data: {} });
+    });
+    // Stall the complete request so the mutation stays in flight for the assertion.
+    patchMock.mockImplementation(() => new Promise(() => {}));
+
+    render(<TasksPage />, { wrapper });
+    await screen.findByText('Call the lead');
+    await screen.findByText('Email the client');
+
+    const before = screen.getAllByRole('button', { name: 'tasks.completeSuccess' });
+    expect(before).toHaveLength(2);
+
+    // Complete the first task → its mutation is now in flight.
+    await userEvent.click(before[0]);
+
+    const after = screen.getAllByRole('button', { name: 'tasks.completeSuccess' });
+    // The in-flight row's own button is disabled (prevents a double-fire)…
+    expect(after[0]).toBeDisabled();
+    // …but the OTHER row's complete button must stay clickable.
+    expect(after[1]).not.toBeDisabled();
   });
 
   // Regression: the delete confirmation used t('tasks.empty') ("No tasks here.")

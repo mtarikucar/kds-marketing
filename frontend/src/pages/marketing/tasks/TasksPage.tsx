@@ -236,7 +236,7 @@ export default function TasksPage() {
             aria-label={done ? t('taskStatus.COMPLETED') : t('tasks.completeSuccess')}
             size="sm"
             variant={done ? 'secondary' : 'ghost'}
-            disabled={done || completeMutation.isPending}
+            disabled={done || (completeMutation.isPending && completeMutation.variables === task.id)}
             onClick={() => !done && completeMutation.mutate(task.id)}
             className={cn('rounded-full', done && 'text-success')}
           >
