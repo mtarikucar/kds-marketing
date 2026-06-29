@@ -249,4 +249,35 @@ describe('ConversationAiEngineService.reply', () => {
       expect.objectContaining({ text: 'Great, I have saved your details!' }),
     );
   });
+
+  // Regression: a captured email/phone must also write the NORMALIZED keys —
+  // every dedup path matches on emailNormalized/phoneNormalized, so a raw-only
+  // capture leaves the lead invisible to dedup and spawns duplicates.
+  it('capture_lead_fields writes the normalized email/phone keys, not just the raw values', async () => {
+    const captureResponse = {
+      text: '',
+      toolUses: [{
+        type: 'tool_use', id: 't1', name: 'capture_lead_fields',
+        input: { email: 'Test@X.com', phone: '+90 555 111 22 33' },
+      }],
+      stopReason: 'tool_use',
+      usage: { input: 1, output: 1 },
+    };
+    const finalText = { text: 'Saved!', toolUses: [], stopReason: 'end_turn', usage: { input: 1, output: 1 } };
+    const h = build();
+    h.prisma.lead = {
+      findFirst: jest.fn().mockResolvedValue({ contactPerson: null, email: null, phone: null, city: null, notes: null }),
+      updateMany: jest.fn().mockResolvedValue({}),
+    };
+    let n = 0;
+    h.anthropic.complete.mockImplementation(() => Promise.resolve(++n === 1 ? captureResponse : finalText));
+
+    await run(h);
+
+    const data = h.prisma.lead.updateMany.mock.calls[0][0].data;
+    expect(data.email).toBe('Test@X.com');
+    expect(data.emailNormalized).toBe('test@x.com');
+    expect(data.phone).toBe('+90 555 111 22 33');
+    expect(data.phoneNormalized).toBe('905551112233');
+  });
 });
