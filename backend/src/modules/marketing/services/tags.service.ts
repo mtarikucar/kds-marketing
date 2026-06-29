@@ -111,7 +111,17 @@ export class TagsService {
       data.nameLower = nameLower;
     }
     if (dto.color !== undefined) data.color = dto.color;
-    return this.prisma.tag.update({ where: { id }, data });
+    try {
+      return await this.prisma.tag.update({ where: { id }, data });
+    } catch (e) {
+      // The clash pre-check above is racy; a concurrent rename to the same name
+      // trips the (workspaceId, nameLower) unique after the check passes. Map it
+      // to a clean 409 like create() does, not a raw P2002 → 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('A tag with this name already exists');
+      }
+      throw e;
+    }
   }
 
   async remove(workspaceId: string, id: string) {
