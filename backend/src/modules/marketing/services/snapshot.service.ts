@@ -372,7 +372,14 @@ export class SnapshotService {
           continue;
         }
         await tx.agentProfile.create({
-          data: { ...r, workspaceId: targetWorkspaceId } as Prisma.AgentProfileUncheckedCreateInput,
+          // `channels` holds workspace-LOCAL Channel ids that are NOT part of a
+          // snapshot — copying the source's would leave the clone "attached" to
+          // channels that don't exist in the target (findActiveForChannel never
+          // matches them) and surface dangling ids in the editor. Clear it so the
+          // cloned agent starts unattached; the operator wires it to the target's
+          // own channels. (kbDocIds / bookingCalendarId reference SNAPSHOTTED
+          // entities and still need id-remapping — see snapshot-cross-ref-remap-gap.)
+          data: { ...r, channels: [] as Prisma.InputJsonValue, workspaceId: targetWorkspaceId } as Prisma.AgentProfileUncheckedCreateInput,
         });
         summary.agentProfiles.created++;
       }

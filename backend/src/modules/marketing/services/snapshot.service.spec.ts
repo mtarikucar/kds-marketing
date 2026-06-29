@@ -310,6 +310,31 @@ describe('SnapshotService — apply', () => {
     }
   });
 
+  // `channels` holds workspace-LOCAL Channel ids that are never snapshotted, so a
+  // cloned agent must start UNATTACHED — copying the source's ids would leave it
+  // "attached" to channels that don't exist in the target (findActiveForChannel
+  // never matches them) and show dangling ids in the editor.
+  it('clears channels on a cloned agent profile (channel ids are workspace-local, not snapshotted)', async () => {
+    const { prisma, agency, svc } = makeSvc();
+    (agency.assertAgencyOwns as jest.Mock).mockResolvedValue({ id: LOCATION_A1 });
+    (prisma.snapshot.findFirst as jest.Mock).mockResolvedValue(
+      snapshotRow({
+        agentProfiles: [
+          { name: 'Sales bot', persona: 'helpful', channels: ['src-ch-1', 'src-ch-2'] },
+        ],
+      }) as never,
+    );
+    (prisma.agentProfile.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.agentProfile.create as jest.Mock).mockResolvedValue({ id: 'new-ag' });
+
+    await svc.apply('snap-1', LOCATION_A1, AGENCY_A);
+
+    const data = (prisma.agentProfile.create as jest.Mock).mock.calls[0][0].data;
+    expect(data.workspaceId).toBe(LOCATION_A1);
+    expect(data.name).toBe('Sales bot');
+    expect(data.channels).toEqual([]);
+  });
+
   it('rejects a target that is not the agency’s child (assertAgencyOwns throws) — no write', async () => {
     const { prisma, agency, svc } = makeSvc();
     (agency.assertAgencyOwns as jest.Mock).mockRejectedValue(
