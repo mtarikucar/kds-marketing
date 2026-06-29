@@ -441,6 +441,10 @@ export class MarketingLeadsService {
         'LEAD',
         dto.customFields,
         'update',
+        // The edit form sends the full custom-field map → an emptied field is an
+        // explicit clear (null), so the merge below removes it (and it counts as
+        // a changed key) instead of silently keeping the old value.
+        { clearEmpty: true },
       );
       const existing =
         (lead.customFields as Record<string, unknown> | null) ?? {};

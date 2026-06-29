@@ -212,6 +212,7 @@ export class CustomFieldsService {
     entity: string,
     input: Record<string, unknown> | undefined | null,
     mode: 'create' | 'update',
+    opts: { clearEmpty?: boolean } = {},
   ): Promise<Record<string, unknown>> {
     const defs = await this.prisma.customFieldDef.findMany({
       where: { workspaceId, entity, archived: false },
@@ -221,12 +222,20 @@ export class CustomFieldsService {
     for (const [k, v] of Object.entries(input ?? {})) {
       const def = byKey.get(k);
       if (!def) continue; // drop unknown
-      if (v === null || v === undefined || v === '') continue;
+      if (v === null || v === undefined || v === '') {
+        // SKIP empties by default so a blank import cell / omitted field can't
+        // clobber the stored value (import calls this with mode='update'). Edit
+        // forms send the FULL field map and pass clearEmpty: an explicitly
+        // emptied field becomes null, so the caller's {...existing, ...partial}
+        // merge actually CLEARS it instead of keeping the old value.
+        if (opts.clearEmpty) out[k] = null;
+        continue;
+      }
       out[k] = this.coerce(def as DefRow, v);
     }
     if (mode === 'create') {
       for (const d of defs) {
-        if (d.required && out[d.key] === undefined) {
+        if (d.required && (out[d.key] === undefined || out[d.key] === null)) {
           throw new BadRequestException(`Custom field "${d.key}" is required`);
         }
       }

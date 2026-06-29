@@ -252,6 +252,9 @@ export class CustomObjectsService {
       this.entityOf(rec.objectDef.key),
       dto.values,
       'update',
+      // Edit form sends the full field map → an emptied field is an explicit
+      // clear (null), so the merge below removes it instead of keeping the old.
+      { clearEmpty: true },
     );
     // Merge onto the existing values (a partial update patches, not replaces).
     const merged = { ...((rec.values as Record<string, unknown>) ?? {}), ...partial };

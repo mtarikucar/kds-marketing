@@ -57,6 +57,22 @@ describe('CustomFieldsService.validateAndNormalize', () => {
     expect(await svc.validateAndNormalize(WS, 'LEAD', undefined, 'update')).toEqual({});
     expect(await svc.validateAndNormalize(WS, 'LEAD', {}, 'update')).toEqual({});
   });
+
+  // Default: an empty value is SKIPPED so a blank import cell / omitted field
+  // can't clobber the stored value (import even calls with mode='update').
+  it('skips empty values by default (blank does not clobber)', async () => {
+    expect(await svc.validateAndNormalize(WS, 'LEAD', { budget: '', signed: '' }, 'update')).toEqual({});
+  });
+
+  // Edit forms send the FULL field map and opt into clearEmpty: an explicitly
+  // emptied field becomes null so the caller's {...existing, ...partial} merge
+  // actually CLEARS it (previously the old value silently persisted).
+  it('with clearEmpty, maps an explicitly-emptied field to null', async () => {
+    const out = await svc.validateAndNormalize(
+      WS, 'LEAD', { budget: '', tier: 'gold' }, 'update', { clearEmpty: true },
+    );
+    expect(out).toEqual({ budget: null, tier: 'gold' });
+  });
 });
 
 describe('CustomFieldsService def CRUD', () => {

@@ -71,7 +71,9 @@ describe('MarketingLeadsService — customFields validation', () => {
 
     await svc.update('ws-1', 'lead-1', { customFields: { budget: '2000' } } as any, 'u1', 'OWNER');
 
-    expect(cf.validateAndNormalize).toHaveBeenCalledWith('ws-1', 'LEAD', { budget: '2000' }, 'update');
+    // The edit form opts into clearEmpty so an emptied field clears (null) rather
+    // than silently keeping the old value.
+    expect(cf.validateAndNormalize).toHaveBeenCalledWith('ws-1', 'LEAD', { budget: '2000' }, 'update', { clearEmpty: true });
     expect(prisma.lead.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ customFields: { tier: 'gold', budget: 2000 } }),
