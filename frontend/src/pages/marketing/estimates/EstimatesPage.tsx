@@ -364,27 +364,32 @@ export default function EstimatesPage() {
                   <Button variant="ghost" size="sm" onClick={() => openEdit(e)} title={t('common.edit', 'Edit')}>
                     <Pencil className="w-4 h-4" aria-hidden="true" />
                   </Button>
+                  {/* Each action's in-flight guard is scoped to THIS estimate
+                      (mutation.variables === e.id) so a click can't double-fire
+                      — important for Convert, which mints an invoice and whose
+                      second request would otherwise surface a spurious error
+                      toast after the first already succeeded. */}
                   {(e.status === 'DRAFT' || e.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
+                    <Button variant="ghost" size="sm" disabled={sendMut.isPending && sendMut.variables === e.id} onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
                       <Send className="w-4 h-4" aria-hidden="true" />
                     </Button>
                   )}
                   {e.status !== 'ACCEPTED' && e.status !== 'DECLINED' && (
                     <>
-                      <Button variant="ghost" size="sm" onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
+                      <Button variant="ghost" size="sm" disabled={acceptMut.isPending && acceptMut.variables === e.id} onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
                         <Check className="w-4 h-4 text-success" aria-hidden="true" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
+                      <Button variant="ghost" size="sm" disabled={declineMut.isPending && declineMut.variables === e.id} onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
                         <X className="w-4 h-4 text-danger" aria-hidden="true" />
                       </Button>
                     </>
                   )}
                   {!e.convertedInvoiceId && (e.status === 'ACCEPTED' || e.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
+                    <Button variant="ghost" size="sm" disabled={convertMut.isPending && convertMut.variables === e.id} onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
                       <FileOutput className="w-4 h-4 text-primary" aria-hidden="true" />
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => deleteMut.mutate(e.id)}>
+                  <Button variant="ghost" size="sm" disabled={deleteMut.isPending && deleteMut.variables === e.id} onClick={() => deleteMut.mutate(e.id)}>
                     <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
                   </Button>
                 </div>

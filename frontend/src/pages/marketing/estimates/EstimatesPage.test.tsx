@@ -7,10 +7,11 @@ import EstimatesPage, { formFromEstimate, computeFormTotals } from './EstimatesP
 import type { Estimate } from '../../../features/marketing/api/estimates.service';
 
 const get = vi.fn();
+const post = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...args: unknown[]) => get(...args),
-    post: vi.fn().mockResolvedValue({ data: {} }),
+    post: (...args: unknown[]) => post(...args),
     patch: vi.fn().mockResolvedValue({ data: {} }),
     delete: vi.fn().mockResolvedValue({ data: {} }),
   },
@@ -58,6 +59,8 @@ function wrapper({ children }: { children: React.ReactNode }) {
 describe('EstimatesPage', () => {
   beforeEach(() => {
     get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: {} });
     get.mockImplementation((url: string) => {
       if (url === '/estimates') return Promise.resolve({ data: [LIST_ROW] });
       if (url === '/estimates/e1') return Promise.resolve({ data: DETAIL });
@@ -87,6 +90,33 @@ describe('EstimatesPage', () => {
     const dialog = await screen.findByRole('dialog');
     // 99.00 subtotal + 20% KDV = 118.80 — only reachable if items were loaded.
     expect(await within(dialog).findByText(/118[.,]80/)).toBeInTheDocument();
+  });
+
+  // Convert mints an invoice; a double-click fires it twice and the second hits
+  // the backend's already-converted guard, surfacing a spurious error toast
+  // after the first succeeded. The in-flight guard must be scoped to the acting
+  // estimate so its Convert locks while running — without disabling the others.
+  it('disables only the acting estimate\'s Convert button while it is in flight', async () => {
+    const user = userEvent.setup();
+    const sent = (id: string, number: string) => ({ ...LIST_ROW, id, number, status: 'SENT' });
+    get.mockImplementation((url: string) => {
+      if (url === '/estimates') return Promise.resolve({ data: [sent('e1', 'EST-1'), sent('e2', 'EST-2')] });
+      if (url === '/tax-rates') return Promise.resolve({ data: TAX_RATES });
+      return Promise.resolve({ data: {} });
+    });
+    post.mockImplementation(() => new Promise(() => {})); // convert never resolves → stays pending
+
+    render(<EstimatesPage />, { wrapper });
+    await screen.findByText('EST-1');
+
+    const convertBtns = screen.getAllByTitle('Convert to invoice');
+    expect(convertBtns).toHaveLength(2);
+    await user.click(convertBtns[0]);
+    expect(post).toHaveBeenCalledWith('/estimates/e1/convert');
+
+    const after = screen.getAllByTitle('Convert to invoice');
+    expect(after[0]).toBeDisabled();
+    expect(after[1]).not.toBeDisabled();
   });
 });
 
