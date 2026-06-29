@@ -64,6 +64,22 @@ export const UPDATE_LEAD_FIELD_LABELS: Record<(typeof UPDATE_LEAD_FIELDS)[number
   region: 'Region',
 };
 
+/**
+ * Keep only the `ai_classify` routes whose category still exists. Routes are
+ * keyed by category; when the author renames/removes a category the orphaned
+ * route lingers hidden in the step (the editor only renders routes for current
+ * categories) yet fails the backend refine ("routes keys must all be declared
+ * categories"), making the whole workflow unsaveable. Call this whenever the
+ * category list changes.
+ */
+export function pruneRoutes(
+  routes: Record<string, number> | undefined,
+  categories: string[],
+): Record<string, number> {
+  const set = new Set(categories);
+  return Object.fromEntries(Object.entries(routes ?? {}).filter(([cat]) => set.has(cat)));
+}
+
 export interface SetRow {
   key: string;
   value: string;

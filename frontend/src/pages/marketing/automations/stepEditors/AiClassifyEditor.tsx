@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
+import { pruneRoutes } from '../builderHelpers';
 import type { StepEditorProps } from './types';
 
 /** Visual editor for `ai_classify`: a prompt, a comma-separated category list,
@@ -27,7 +28,15 @@ export function AiClassifyEditor({ step, onPatch, count }: StepEditorProps) {
         <Input
           value={categories.join(', ')}
           placeholder="hot, warm, cold"
-          onChange={(e) => onPatch({ categories: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+          onChange={(e) => {
+            const cats = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+            // Drop routes for any category that was just renamed/removed —
+            // an orphan route key fails the backend refine and blocks save.
+            const pruned = pruneRoutes(routes, cats);
+            const patch: Record<string, unknown> = { categories: cats };
+            if (Object.keys(pruned).length !== Object.keys(routes).length) patch.routes = pruned;
+            onPatch(patch);
+          }}
         />
       </div>
       {categories.length > 0 && (

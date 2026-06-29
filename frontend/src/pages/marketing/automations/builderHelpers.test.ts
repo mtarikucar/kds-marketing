@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   addCondition, removeCondition, patchCondition,
-  setObjectToRows, rowsToSetObject, CONDITION_OPS, UPDATE_LEAD_FIELDS,
+  setObjectToRows, rowsToSetObject, CONDITION_OPS, UPDATE_LEAD_FIELDS, pruneRoutes,
 } from './builderHelpers';
 
 // The backend evaluator + Zod enum is the contract:
@@ -38,6 +38,22 @@ const BACKEND_LEAD_WRITABLE = [
 describe('update_lead writable-field contract', () => {
   it('offers exactly the backend-writable lead fields (no silently-dropped keys)', () => {
     expect([...UPDATE_LEAD_FIELDS].sort()).toEqual([...BACKEND_LEAD_WRITABLE].sort());
+  });
+});
+
+// ai_classify routes are keyed by category. The backend refine rejects a route
+// keyed on a non-category, so when the author renames/removes a category the
+// editor MUST drop the now-orphan route — else it lingers hidden in the step and
+// makes the WHOLE workflow unsaveable (400) with no visible offender to remove.
+describe('ai_classify route pruning', () => {
+  it('drops routes whose category was removed or renamed', () => {
+    expect(pruneRoutes({ hot: 1, cold: 2 }, ['hot', 'warm'])).toEqual({ hot: 1 });
+  });
+  it('keeps every route whose category still exists', () => {
+    expect(pruneRoutes({ hot: 1, warm: 0 }, ['hot', 'warm', 'cold'])).toEqual({ hot: 1, warm: 0 });
+  });
+  it('is a no-op on empty routes', () => {
+    expect(pruneRoutes({}, ['a'])).toEqual({});
   });
 });
 
