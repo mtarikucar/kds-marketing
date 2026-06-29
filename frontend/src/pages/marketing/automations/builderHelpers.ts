@@ -40,6 +40,30 @@ export function patchCondition(rows: Condition[], i: number, patch: Partial<Cond
   return rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
 }
 
+/**
+ * Lead fields `update_lead` can actually write. Mirrors the backend LEAD_WRITABLE
+ * allow-list in workflow-action.handler.ts: the DSL schema accepts ANY key
+ * (z.record), but the runtime SILENTLY DROPS keys outside this set — so a
+ * free-text key like "email"/"phone" would save yet never apply. The editor
+ * offers only these. Keep in lock-step with the backend.
+ */
+export const UPDATE_LEAD_FIELDS = [
+  'status', 'priority', 'notes', 'nextFollowUp',
+  'businessName', 'contactPerson', 'city', 'region',
+] as const;
+
+/** Human-readable labels for the writable lead fields (the Select stores the key). */
+export const UPDATE_LEAD_FIELD_LABELS: Record<(typeof UPDATE_LEAD_FIELDS)[number], string> = {
+  status: 'Status',
+  priority: 'Priority',
+  notes: 'Notes',
+  nextFollowUp: 'Next follow-up',
+  businessName: 'Business name',
+  contactPerson: 'Contact person',
+  city: 'City',
+  region: 'Region',
+};
+
 export interface SetRow {
   key: string;
   value: string;

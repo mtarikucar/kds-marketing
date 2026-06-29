@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   addCondition, removeCondition, patchCondition,
-  setObjectToRows, rowsToSetObject, CONDITION_OPS,
+  setObjectToRows, rowsToSetObject, CONDITION_OPS, UPDATE_LEAD_FIELDS,
 } from './builderHelpers';
 
 // The backend evaluator + Zod enum is the contract:
@@ -23,6 +23,21 @@ describe('branch CONDITION_OPS ↔ backend contract', () => {
   });
   it('offers neq so the "is not" condition works end-to-end', () => {
     expect(CONDITION_OPS).toContain('neq');
+  });
+});
+
+// The update_lead runtime (workflow-action.handler.ts) only APPLIES keys in its
+// LEAD_WRITABLE allow-list; the DSL schema (z.record) accepts any key, so a
+// field outside this set saves fine but is SILENTLY DROPPED at runtime. The
+// editor must therefore offer only these fields. Keep in lock-step with backend.
+const BACKEND_LEAD_WRITABLE = [
+  'status', 'priority', 'notes', 'nextFollowUp',
+  'businessName', 'contactPerson', 'city', 'region',
+];
+
+describe('update_lead writable-field contract', () => {
+  it('offers exactly the backend-writable lead fields (no silently-dropped keys)', () => {
+    expect([...UPDATE_LEAD_FIELDS].sort()).toEqual([...BACKEND_LEAD_WRITABLE].sort());
   });
 });
 
