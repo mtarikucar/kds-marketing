@@ -368,31 +368,40 @@ export default function InvoicesPage() {
                     <TD>
                       {inv.status !== 'PAID' && inv.status !== 'VOID' && (
                         <div className="flex items-center justify-end gap-1">
+                          {/* Each financial action's in-flight guard is scoped
+                              to THIS invoice (mutation.variables === inv.id) so a
+                              double-click can't double-fire a pay/mark-paid, and
+                              acting on one invoice doesn't disable the same button
+                              on the others. */}
                           <button
                             onClick={() => send.mutate(inv.id)}
+                            disabled={send.isPending && send.variables === inv.id}
                             title={t('invoices.send', 'Send / copy pay link')}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                           >
                             <Clipboard className="h-4 w-4" aria-hidden />
                           </button>
                           <button
                             onClick={() => textToPay.mutate(inv.id)}
+                            disabled={textToPay.isPending && textToPay.variables === inv.id}
                             title={t('invoices.textToPay', 'Text pay link (SMS)')}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                           >
                             <MessageSquare className="h-4 w-4" aria-hidden />
                           </button>
                           <button
                             onClick={() => payWallet.mutate(inv.id)}
+                            disabled={payWallet.isPending && payWallet.variables === inv.id}
                             title={t('invoices.payWithWallet', 'Pay from store credit')}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                           >
                             <Wallet className="h-4 w-4" aria-hidden />
                           </button>
                           <button
                             onClick={() => markPaid.mutate(inv.id)}
+                            disabled={markPaid.isPending && markPaid.variables === inv.id}
                             title={t('invoices.markPaid', 'Mark paid')}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-success hover:bg-success-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-success hover:bg-success-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                           >
                             <CheckCircle className="h-4 w-4" aria-hidden />
                           </button>
