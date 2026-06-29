@@ -60,6 +60,27 @@ describe('CommunitiesService', () => {
     expect(arg.orderBy).toEqual([{ pinned: 'desc' }, { createdAt: 'desc' }]);
   });
 
+  // The controller passes parseInt(page) — a non-numeric ?page=abc yields NaN.
+  // Math.max(1, NaN) is NaN, so `skip` became NaN and Prisma threw a 500. A bad
+  // page param must degrade to the first page, not crash.
+  it('defaults a NaN page to the first page (skip 0, no 500)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.community.findFirst.mockResolvedValue({ id: 'co1' } as any);
+    (prisma.communityPost.findMany as jest.Mock).mockResolvedValue([]);
+    await svc.listPosts(WS, 'co1', Number.NaN);
+    const arg = (prisma.communityPost.findMany as jest.Mock).mock.calls[0][0];
+    expect(arg.skip).toBe(0);
+  });
+
+  it('paginates a valid page (skip = (page-1)*pageSize)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.community.findFirst.mockResolvedValue({ id: 'co1' } as any);
+    (prisma.communityPost.findMany as jest.Mock).mockResolvedValue([]);
+    await svc.listPosts(WS, 'co1', 3);
+    const arg = (prisma.communityPost.findMany as jest.Mock).mock.calls[0][0];
+    expect(arg.skip).toBe(40);
+  });
+
   it('adds a comment after asserting the post is in the workspace', async () => {
     const { prisma, svc } = makeSvc();
     prisma.communityPost.findFirst.mockResolvedValue({ id: 'p1' } as any);

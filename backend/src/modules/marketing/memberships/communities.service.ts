@@ -129,11 +129,17 @@ export class CommunitiesService {
 
   async listPosts(workspaceId: string, communityId: string, page = 1, pageSize = 20) {
     await this.assertCommunity(workspaceId, communityId);
+    // The controller passes parseInt(page), so a non-numeric ?page=abc arrives as
+    // NaN. Math.max(1, NaN) is NaN → skip:NaN, which Prisma rejected with a 500.
+    // Coerce to a safe positive integer (and bound pageSize) so bad input degrades
+    // to the first page instead of crashing.
+    const p = Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1;
+    const size = Number.isFinite(pageSize) && pageSize >= 1 ? Math.min(Math.floor(pageSize), 100) : 20;
     return this.prisma.communityPost.findMany({
       where: { communityId, workspaceId },
       orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
-      skip: (Math.max(1, page) - 1) * pageSize,
-      take: pageSize,
+      skip: (p - 1) * size,
+      take: size,
       include: { _count: { select: { comments: true } } },
     });
   }
