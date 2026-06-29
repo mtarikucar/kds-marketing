@@ -283,7 +283,10 @@ export default function CommissionsPage() {
                               variant="outline"
                               size="sm"
                               onClick={() => approveMutation.mutate(c.id)}
-                              loading={approveMutation.isPending}
+                              // Scope the in-flight guard to THIS commission — a
+                              // bare approveMutation.isPending spins Approve on
+                              // every other pending row while one runs.
+                              loading={approveMutation.isPending && approveMutation.variables === c.id}
                             >
                               <CheckCircle2 className="h-3.5 w-3.5" />
                               Approve
@@ -294,7 +297,7 @@ export default function CommissionsPage() {
                               variant="outline"
                               size="sm"
                               onClick={() => payMutation.mutate(c.id)}
-                              loading={payMutation.isPending}
+                              loading={payMutation.isPending && payMutation.variables === c.id}
                             >
                               <DollarSign className="h-3.5 w-3.5" />
                               Mark Paid
