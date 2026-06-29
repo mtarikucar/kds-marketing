@@ -123,4 +123,51 @@ describe('OffersPage', () => {
       expect(post).toHaveBeenCalledWith('/offers/o1/send');
     });
   });
+
+  // Regression (per-row mutation loading): the per-offer Send/Accept/Reject
+  // actions drove `disabled` off a SHARED mutation's isPending, so acting on one
+  // offer disabled that action on EVERY other offer's menu until the request
+  // finished. The guard must be scoped to the acting row (variables === id).
+  describe('per-offer action loading', () => {
+    const DRAFT_O2 = {
+      ...DRAFT_OFFER,
+      id: 'o2',
+      lead: { id: 'l2', businessName: 'Globex', contactPerson: 'Joe' },
+    };
+    beforeEach(() => {
+      get.mockImplementation((url: string) =>
+        url === '/offers'
+          ? Promise.resolve({
+              data: { data: [DRAFT_OFFER, DRAFT_O2], meta: { total: 2, page: 1, limit: 20, totalPages: 1 } },
+            })
+          : Promise.resolve(EMPTY),
+      );
+      // Send never resolves → the mutation stays pending after the click.
+      post.mockImplementation(() => new Promise(() => {}));
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it("sending one offer does not disable another offer's Send action", async () => {
+      const user = userEvent.setup();
+      render(<OffersPage />, { wrapper });
+
+      await screen.findByText('Acme');
+      const triggers = screen.getAllByRole('button', { name: 'common.actions' });
+      expect(triggers).toHaveLength(2);
+
+      // Send the first offer → leaves sendMutation pending (post never resolves).
+      await user.click(triggers[0]);
+      await user.click(await screen.findByText('offers.actions.send'));
+      expect(post).toHaveBeenCalledWith('/offers/o1/send');
+
+      // Open the SECOND offer's menu while o1's send is still in flight.
+      await user.click(screen.getAllByRole('button', { name: 'common.actions' })[1]);
+      const send2 = await screen.findByText('offers.actions.send');
+
+      // Radix flags a disabled item with data-disabled; the second offer's Send
+      // must stay actionable — the in-flight guard is scoped to o1, not shared.
+      expect(send2.closest('[role="menuitem"]')).not.toHaveAttribute('data-disabled');
+    });
+  });
 });
