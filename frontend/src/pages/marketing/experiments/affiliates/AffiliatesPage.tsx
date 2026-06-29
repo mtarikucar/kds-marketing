@@ -417,7 +417,10 @@ export default function AffiliatesPage() {
             <DropdownMenuContent align="end">
               {c.status === 'OWED' && (
                 <DropdownMenuItem
-                  disabled={approveMutation.isPending}
+                  // Scope the in-flight guard to THIS commission — a bare
+                  // approveMutation.isPending disables Approve on every other
+                  // OWED commission's menu while one approval runs.
+                  disabled={approveMutation.isPending && approveMutation.variables === c.id}
                   onClick={() => approveMutation.mutate(c.id)}
                 >
                   <CheckCircle2 className="mr-2 h-4 w-4" aria-hidden="true" />
@@ -425,7 +428,7 @@ export default function AffiliatesPage() {
                 </DropdownMenuItem>
               )}
               {c.status === 'APPROVED' && (
-                <DropdownMenuItem disabled={payMutation.isPending} onClick={() => payMutation.mutate(c.id)}>
+                <DropdownMenuItem disabled={payMutation.isPending && payMutation.variables === c.id} onClick={() => payMutation.mutate(c.id)}>
                   <Banknote className="mr-2 h-4 w-4" aria-hidden="true" />
                   {t('affiliates.markPaid', { defaultValue: 'Mark as paid' })}
                 </DropdownMenuItem>
