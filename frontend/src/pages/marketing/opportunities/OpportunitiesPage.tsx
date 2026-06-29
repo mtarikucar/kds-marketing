@@ -190,7 +190,17 @@ export default function OpportunitiesPage() {
     () => (board?.stages ?? []).reduce((sum, s) => sum + s.totalValue, 0),
     [board],
   );
-  const boardCurrency = board?.stages.find((s) => s.opportunities[0])?.opportunities[0]?.currency ?? 'TRY';
+  // Only render a currency symbol on aggregate totals when the WHOLE board is a
+  // single currency — summing across currencies under one symbol implies a false
+  // conversion (€2,000 + $1,000 ≠ "$3,000"). Mirrors the forecast's guard; the
+  // individual deal cards still show each deal's own currency.
+  const boardCurrencies = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of board?.stages ?? []) for (const o of s.opportunities) if (o.currency) set.add(o.currency);
+    return set;
+  }, [board]);
+  const fmtBoard = (n: number) =>
+    boardCurrencies.size === 1 ? money(n, [...boardCurrencies][0]) : n.toLocaleString();
 
   const [showForecast, setShowForecast] = useState(false);
   const { data: forecast } = useQuery<Forecast>({
@@ -275,7 +285,7 @@ export default function OpportunitiesPage() {
         <div className="flex items-center gap-3">
           {board && (
             <p className="text-sm text-muted-foreground">
-              {t('opportunities.openTotal', 'Open total')}: {money(boardTotal, boardCurrency)}
+              {t('opportunities.openTotal', 'Open total')}: {fmtBoard(boardTotal)}
             </p>
           )}
           <Button variant="outline" size="sm" onClick={() => setShowForecast((v) => !v)}>
@@ -387,7 +397,7 @@ export default function OpportunitiesPage() {
                   </Badge>
                 </div>
                 <span className="text-micro text-muted-foreground">
-                  {money(stage.totalValue, boardCurrency)}
+                  {fmtBoard(stage.totalValue)}
                 </span>
               </div>
 
