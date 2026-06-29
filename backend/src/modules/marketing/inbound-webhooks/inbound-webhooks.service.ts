@@ -193,7 +193,12 @@ export class InboundWebhooksService {
       or.push({ whatsapp: phone });
     }
     const lead = await this.prisma.lead.findFirst({
-      where: { workspaceId, OR: or },
+      // Resolve to an ACTIVE lead only — never a merged-away tombstone or a
+      // soft-deleted (bulk-deleted) lead. Otherwise the WebhookReceived event
+      // (and the workflow triggers it drives) would run against a hidden lead
+      // instead of the canonical one or a clean no-lead. Matches the form/
+      // booking/import/order-form dedup reads.
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, OR: or },
       select: { id: true },
       orderBy: { createdAt: 'desc' },
     });

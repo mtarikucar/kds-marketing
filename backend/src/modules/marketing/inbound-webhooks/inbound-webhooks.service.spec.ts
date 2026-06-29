@@ -101,6 +101,10 @@ describe('InboundWebhooksService', () => {
     expect(where.OR).toEqual(
       expect.arrayContaining([{ emailNormalized: 'a@acme.com' }, { phoneNormalized: '905551112233' }]),
     );
+    // ...and only ACTIVE leads — never a merged tombstone or a soft-deleted one
+    // (else the trigger event runs against a hidden lead).
+    expect(where.mergedIntoId).toBeNull();
+    expect(where.deletedAt).toBeNull();
   });
 
   it('receive emits with leadId null when nobody matches', async () => {
