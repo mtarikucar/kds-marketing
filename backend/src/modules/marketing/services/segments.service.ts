@@ -5,6 +5,7 @@ import {
   SegmentCompilerService,
   SegmentNode,
 } from './segment-compiler.service';
+import { safePage, safeLimit } from '../common/paging';
 
 interface CreateSegmentInput {
   name: string;
@@ -123,10 +124,13 @@ export class SegmentsService {
     );
     // Clamp the page size in the service itself — the controllers cap it at 200,
     // but the public API (public-api-v1.controller) forwards `page` only and
-    // relies on the default, so an unbounded caller must not be able to pull the
-    // whole table in one query. Defence in depth, not just at the edge.
-    const size = Math.min(Math.max(1, pageSize), 200);
-    const skip = (Math.max(1, page) - 1) * size;
+    // relies on the default AND parseInt()s the query, so a non-numeric
+    // `?page=abc` arrives as NaN. safePage/safeLimit coerce both to safe bounds
+    // (NaN/negative → first page / default size) so a bad param degrades instead
+    // of throwing a 500. Defence in depth, not just at the edge.
+    const p = safePage(page);
+    const size = safeLimit(pageSize, 50, 200);
+    const skip = (p - 1) * size;
     const [items, total] = await Promise.all([
       this.prisma.lead.findMany({
         where: { workspaceId, mergedIntoId: null, deletedAt: null, AND: [filter] },
@@ -136,6 +140,6 @@ export class SegmentsService {
       }),
       this.prisma.lead.count({ where: { workspaceId, mergedIntoId: null, deletedAt: null, AND: [filter] } }),
     ]);
-    return { items, total, page, pageSize: size };
+    return { items, total, page: p, pageSize: size };
   }
 }

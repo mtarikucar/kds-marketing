@@ -10,6 +10,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateOfferDto } from '../dto/create-offer.dto';
 import { UpdateOfferDto } from '../dto/update-offer.dto';
 import { rangeEndInclusive } from './report-date-range.util';
+import { safePage, safeLimit } from '../common/paging';
 import {
   CORE_PROVISIONING_PORT,
   CoreProvisioningPort,
@@ -83,7 +84,12 @@ export class MarketingOffersService {
     limit = 20,
     filter: { status?: string; dateFrom?: string; dateTo?: string } = {},
   ) {
-    const skip = (page - 1) * limit;
+    // The controller forwards the raw `?page`/`?limit` query (no transform), so
+    // a non-numeric `?page=abc` would make `(page - 1) * limit` NaN and Prisma
+    // throw a 500. Coerce to safe bounds so a bad param degrades to page 1.
+    const p = safePage(page);
+    const lim = safeLimit(limit, 20, 100);
+    const skip = (p - 1) * lim;
     // REPs only see their own offers. The workspace clause is inlined at
     // each call site so the scoping fitness test can verify it statically.
     const repFilter = userRole === 'REP' ? { createdById: userId } : {};
@@ -107,7 +113,7 @@ export class MarketingOffersService {
         where,
         orderBy: { createdAt: 'desc' },
         skip,
-        take: limit,
+        take: lim,
         include: {
           lead: { select: { id: true, businessName: true, contactPerson: true } },
           createdBy: { select: { id: true, firstName: true, lastName: true } },
@@ -118,7 +124,7 @@ export class MarketingOffersService {
 
     return {
       data: offers,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: { total, page: p, limit: lim, totalPages: Math.ceil(total / lim) },
     };
   }
 

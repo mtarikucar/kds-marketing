@@ -61,4 +61,15 @@ describe('MarketingOffersService.findAll — filtering', () => {
     expect(where).not.toHaveProperty('createdAt');
     expect(where).not.toHaveProperty('status');
   });
+
+  // The controller forwards the raw `?page` query (no numeric transform), so a
+  // non-numeric ?page=abc reached the service as a string/NaN — `(page - 1) *
+  // limit` then became NaN and Prisma threw a 500. A bad page must degrade to
+  // the first page (skip 0).
+  it('coerces a non-numeric page to the first page (skip 0, no 500)', async () => {
+    await svc.findAll('ws-1', 'mgr-1', 'MANAGER', 'abc' as unknown as number, 20, {});
+    const arg = (prisma.leadOffer.findMany as jest.Mock).mock.calls[0][0];
+    expect(arg.skip).toBe(0);
+    expect(arg.take).toBe(20);
+  });
 });
