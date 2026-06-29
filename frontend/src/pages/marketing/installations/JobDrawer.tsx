@@ -266,7 +266,10 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
                   value={newTask}
                   onChange={(e) => setNewTask(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newTask.trim()) addTask.mutate(newTask.trim());
+                    // Mirror the Add button's disabled guard (incl. !isPending):
+                    // without it, Enter-spam adds the same task twice while the
+                    // first POST is still in flight.
+                    if (e.key === 'Enter' && newTask.trim() && !addTask.isPending) addTask.mutate(newTask.trim());
                   }}
                   placeholder="Add task…"
                 />

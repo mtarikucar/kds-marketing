@@ -66,3 +66,34 @@ describe('JobDrawer — per-job state reset', () => {
     expect(screen.getByPlaceholderText('Add task…')).toHaveValue('');
   });
 });
+
+describe('JobDrawer — add-task double-submit guard', () => {
+  beforeEach(() => {
+    get.mockReset();
+    get.mockImplementation((url: string) =>
+      url === '/installations/jobs/jA'
+        ? Promise.resolve({ data: job('jA', 'Alpha Co') })
+        : Promise.resolve({ data: {} }),
+    );
+  });
+
+  // Regression: the Add button is disabled while the POST is pending, but the
+  // Enter handler bypassed that guard — Enter-spam added the same task twice.
+  it('does not add the same task twice on Enter while the first POST is in flight', async () => {
+    const { default: api } = await import('../../../features/marketing/api/marketingApi');
+    (api.post as unknown as ReturnType<typeof vi.fn>).mockReset();
+    (api.post as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
+
+    const user = userEvent.setup();
+    render(<JobDrawer jobId="jA" crews={[]} onClose={() => undefined} onChanged={() => undefined} />, { wrapper });
+    await screen.findByText('Alpha Co');
+
+    const input = screen.getByPlaceholderText('Add task…');
+    await user.type(input, 'wire the panel');
+    await user.keyboard('{Enter}'); // first add → pending
+    await user.keyboard('{Enter}'); // second Enter while pending → must be ignored
+
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post).toHaveBeenCalledWith('/installations/jobs/jA/tasks', { title: 'wire the panel' });
+  });
+});
