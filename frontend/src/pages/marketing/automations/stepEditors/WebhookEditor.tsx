@@ -1,16 +1,42 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/Select';
 import type { StepEditorProps } from './types';
 
-const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
-
-/** Visual editor for `http_webhook_out`: URL, method, and a JSON body. */
+/**
+ * Visual editor for `http_webhook_out`. The runtime (workflow-action.handler.ts)
+ * always POSTs `JSON.stringify({ payload, lead, trigger })` to the URL — the
+ * method is fixed and the lead+trigger context is attached automatically — and it
+ * reads `step.payload` (NOT `step.body`). So this edits the URL and the `payload`
+ * JSON only. (The old editor wrote `method`/`body`, neither of which the runtime
+ * reads, so the configured body was silently never sent.)
+ */
 export function WebhookEditor({ step, onPatch }: StepEditorProps) {
   const { t } = useTranslation('marketing');
+  const [draft, setDraft] = useState(() =>
+    step.payload === undefined || step.payload === null ? '' : JSON.stringify(step.payload, null, 2),
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const onPayloadChange = (text: string) => {
+    setDraft(text);
+    if (text.trim() === '') {
+      setError(null);
+      onPatch({ payload: null });
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      setError(null);
+      onPatch({ payload: parsed });
+    } catch {
+      // Invalid JSON: surface it and do NOT apply, so a half-typed payload can't
+      // be saved as a broken value.
+      setError(t('automations.invalidJson', 'Invalid JSON.'));
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div>
@@ -22,21 +48,24 @@ export function WebhookEditor({ step, onPatch }: StepEditorProps) {
         />
       </div>
       <div>
-        <div className="text-caption text-muted-foreground mb-1">{t('automations.webhookMethod', 'Method')}</div>
-        <Select value={(step.method as string) ?? 'POST'} onValueChange={(v) => onPatch({ method: v })}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {METHODS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <div>
-        <div className="text-caption text-muted-foreground mb-1">{t('automations.webhookBody', 'Body (JSON)')}</div>
+        <div className="text-caption text-muted-foreground mb-1">
+          {t('automations.webhookPayload', 'Payload (JSON)')}
+        </div>
         <Textarea
           className="font-mono min-h-20"
-          value={(step.body as string) ?? ''}
-          onChange={(e) => onPatch({ body: e.target.value })}
+          aria-label={t('automations.webhookPayload', 'Payload (JSON)')}
+          aria-invalid={!!error}
+          value={draft}
+          placeholder='{ "event": "lead_qualified" }'
+          onChange={(e) => onPayloadChange(e.target.value)}
         />
+        {error && <p className="text-[11px] text-danger mt-1">{error}</p>}
+        <p className="text-[11px] text-muted-foreground mt-1">
+          {t(
+            'automations.webhookHint',
+            'POSTed as { payload, lead, trigger } — the lead & trigger are attached automatically.',
+          )}
+        </p>
       </div>
     </div>
   );
