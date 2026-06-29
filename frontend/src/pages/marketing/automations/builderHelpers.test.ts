@@ -1,8 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import {
   addCondition, removeCondition, patchCondition,
-  setObjectToRows, rowsToSetObject,
+  setObjectToRows, rowsToSetObject, CONDITION_OPS,
 } from './builderHelpers';
+
+// The backend evaluator + Zod enum is the contract:
+//   backend/src/modules/marketing/workflows/workflow-dsl.schema.ts
+//   FILTER_OPS = ['eq','neq','in','contains','gte','lte','exists']
+// Every write re-validates the DSL (workflows.service.ts), so an op NOT in this
+// set makes the WHOLE workflow save throw 400. The branch builder also feeds a
+// single TEXT value, so it must not offer ops whose value is non-scalar:
+//   'in' needs an array, 'exists' needs a bool — a string never matches those.
+const BACKEND_FILTER_OPS = ['eq', 'neq', 'in', 'contains', 'gte', 'lte', 'exists'];
+const NON_SCALAR_OPS = ['in', 'exists'];
+
+describe('branch CONDITION_OPS ↔ backend contract', () => {
+  it('only offers operators the backend Zod enum accepts (no ne/gt/lt)', () => {
+    for (const op of CONDITION_OPS) expect(BACKEND_FILTER_OPS).toContain(op);
+  });
+  it('does not offer ops whose value cannot be a scalar string (in/exists)', () => {
+    for (const op of CONDITION_OPS) expect(NON_SCALAR_OPS).not.toContain(op);
+  });
+  it('offers neq so the "is not" condition works end-to-end', () => {
+    expect(CONDITION_OPS).toContain('neq');
+  });
+});
 
 describe('branch conditions', () => {
   it('adds a blank condition row', () => {

@@ -7,7 +7,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/Select';
 import {
-  addCondition, removeCondition, patchCondition, CONDITION_OPS, type Condition,
+  addCondition, removeCondition, patchCondition, CONDITION_OPS, CONDITION_OP_LABELS, type Condition,
 } from '../builderHelpers';
 import type { StepEditorProps } from './types';
 
@@ -41,7 +41,7 @@ export function BranchConditionBuilder({ step, onPatch, count }: StepEditorProps
             </SelectTrigger>
             <SelectContent>
               {CONDITION_OPS.map((op) => (
-                <SelectItem key={op} value={op}>{op}</SelectItem>
+                <SelectItem key={op} value={op}>{CONDITION_OP_LABELS[op] ?? op}</SelectItem>
               ))}
             </SelectContent>
           </Select>
