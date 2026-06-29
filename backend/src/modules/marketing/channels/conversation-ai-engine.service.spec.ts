@@ -82,6 +82,19 @@ describe('ConversationAiEngineService.reply', () => {
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
 
+  // A proactive follow-up fires hours after the last reply. If the lead was
+  // bulk-deleted/merged in the meantime, the conversation may still be OPEN but
+  // we must NOT re-engage them (bulk-delete means "stop contacting"). The lead
+  // load applies the active predicate; a vanished lead skips the nudge before a
+  // credit is even reserved.
+  it('proactive follow-up: skips (no send, no credit) when the lead was deleted/merged', async () => {
+    const h = build({ agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } } });
+    h.prisma.lead.findFirst.mockResolvedValue(null); // active predicate excludes the deleted lead
+    await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+    expect(h.sender.send).not.toHaveBeenCalled();
+    expect(h.credits.reserve).not.toHaveBeenCalled();
+  });
+
   it('happy path: claims a daily slot atomically, sends one AI reply, meters a credit', async () => {
     const h = build();
     await run(h);

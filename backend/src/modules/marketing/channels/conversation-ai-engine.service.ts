@@ -428,14 +428,23 @@ export class ConversationAiEngineService implements OnModuleInit {
     const policy = this.followupPolicy(agent);
     if (!policy || convo.followupCount >= policy.maxFollowups) return;
 
+    // Don't re-engage a contact whose lead was bulk-deleted (deletedAt) or
+    // merged-away (mergedIntoId) since the last reply — the conversation may
+    // still be OPEN, but bulk-delete means "stop contacting". A lead-less
+    // conversation (leadId null) is unaffected. Gate BEFORE reserving a credit
+    // so a skipped nudge costs nothing.
+    const lead = convo.leadId
+      ? await this.prisma.lead.findFirst({
+          where: { id: convo.leadId, workspaceId, deletedAt: null, mergedIntoId: null },
+          select: { contactPerson: true, businessName: true },
+        })
+      : null;
+    if (convo.leadId && !lead) return;
+
     const cost = creditCost('conversation.followup');
     await this.credits.reserve(workspaceId, cost);
     let sent = false;
     try {
-      const lead = await this.prisma.lead.findFirst({
-        where: { id: convo.leadId, workspaceId },
-        select: { contactPerson: true, businessName: true },
-      });
       const history = await this.prisma.message.findMany({
         where: { workspaceId, conversationId },
         orderBy: { createdAt: 'desc' },
