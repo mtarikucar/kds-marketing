@@ -115,8 +115,14 @@ export class WorkflowActionHandler {
 
     let conversationId: string | null = null;
     if (channelType === 'WEBCHAT') {
+      // Require a lead before scoping the open-conversation lookup. A bare
+      // `leadId: lead?.id` with no lead resolves to `leadId: undefined`, which
+      // Prisma DROPS from the where — matching ANY open web-chat session in the
+      // workspace and leaking the message to an unrelated customer. Skip instead
+      // (mirrors the no-email / no-phone guards on the other channels).
+      if (!lead?.id) return 'skipped (no lead for web-chat)';
       const convo = await this.prisma.conversation.findFirst({
-        where: { workspaceId: ctx.workspaceId, channelId: channel.id, leadId: lead?.id, status: 'OPEN' },
+        where: { workspaceId: ctx.workspaceId, channelId: channel.id, leadId: lead.id, status: 'OPEN' },
         orderBy: { createdAt: 'desc' },
       });
       conversationId = convo?.id ?? null;
