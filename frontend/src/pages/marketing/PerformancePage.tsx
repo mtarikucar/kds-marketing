@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { TrendingUp, Users } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
+import { formatMoney } from '../../lib/money';
 import { TARGET_METRICS, TARGET_METRIC_LABELS } from '../../features/marketing/types';
 import type {
   MetricPerformance,
@@ -43,9 +44,13 @@ const currentPeriod = () => new Date().toISOString().slice(0, 7);
 const metricLabel = (m: string) =>
   TARGET_METRIC_LABELS[m as keyof typeof TARGET_METRIC_LABELS] || m;
 
-function fmtValue(metric: string, v: number | null | undefined): string {
+// Exported for unit testing. COMMISSION_AMOUNT is a money target denominated in
+// the workspace's currency (TRY by default for this Turkish business — the
+// commission ledger is in TL), so it must use the locale-aware money formatter,
+// not a hard-coded `$` that mislabels TL as dollars.
+export function fmtValue(metric: string, v: number | null | undefined): string {
   if (v == null) return '—';
-  if (metric === 'COMMISSION_AMOUNT') return `$${Number(v).toFixed(2)}`;
+  if (metric === 'COMMISSION_AMOUNT') return formatMoney(Number(v));
   return String(v);
 }
 
