@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   Megaphone,
@@ -14,10 +15,13 @@ import {
   Pause,
   Play,
   Pencil,
+  BarChart3,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
+import { provisionSocialFromCampaign } from '../../features/marketing/api/social-link.service';
 import { VariantsDialog } from './campaigns/VariantsDialog';
+import { CampaignDetailDialog } from './campaigns/CampaignDetailDialog';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -100,6 +104,32 @@ function campaignStatusTone(status: string) {
   return 'neutral' as const;
 }
 
+// ── Cross-link: provision a Social Campaign from this blast ─────────────────────
+
+/**
+ * Per-row "Create social content" action. Calls the dedicated provision endpoint
+ * (POST /campaigns/:id/social) which prefills a Social Campaign from the blast,
+ * then jumps to the new campaign's detail page.
+ */
+export function CampaignSocialLinkButton({ campaignId }: { campaignId: string }) {
+  const { t } = useTranslation('marketing');
+  const navigate = useNavigate();
+  const provision = useMutation({
+    mutationFn: () => provisionSocialFromCampaign(campaignId),
+    onSuccess: (r) => {
+      toast.success(t('campaigns.socialCreated', 'Social content campaign created'));
+      navigate(`/social-campaigns/${r.socialCampaignId}`);
+    },
+    onError: () => toast.error(t('campaigns.socialCreateFailed', 'Could not create social content')),
+  });
+  return (
+    <Button variant="outline" size="sm" disabled={provision.isPending} onClick={() => provision.mutate()}>
+      <Sparkles className="h-3.5 w-3.5" />
+      {t('campaigns.createSocial', 'Create social content')}
+    </Button>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
@@ -109,6 +139,7 @@ export default function CampaignsPage() {
   const [editId, setEditId] = useState<string>('');
   const [aiGoal, setAiGoal] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<CampaignRow | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   // ── Query ─────────────────────────────────────────────────────────────────
   const { data: campaigns } = useQuery<CampaignRow[]>({
@@ -537,6 +568,9 @@ export default function CampaignsPage() {
         onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
       />
 
+      {/* ── Campaign detail (recipients + delivery stats) ──────────────────── */}
+      <CampaignDetailDialog campaignId={detailId} onClose={() => setDetailId(null)} />
+
       {/* ── Campaign list ─────────────────────────────────────────────────── */}
       <div className="space-y-3">
         {(campaigns ?? []).map((c) => (
@@ -600,6 +634,11 @@ export default function CampaignsPage() {
                       {t('common.edit', 'Edit')}
                     </Button>
                   )}
+                  <Button variant="ghost" size="sm" onClick={() => setDetailId(c.id)}>
+                    <BarChart3 className="h-3.5 w-3.5" />
+                    {t('campaigns.details', 'Details')}
+                  </Button>
+                  <CampaignSocialLinkButton campaignId={c.id} />
                   <IconButton
                     variant="ghost"
                     size="sm"

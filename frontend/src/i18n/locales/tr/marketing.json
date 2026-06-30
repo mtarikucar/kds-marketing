@@ -160,6 +160,7 @@
     "roles": "Roller ve İzinler",
     "segments": "Segmentler",
     "social": "Sosyal Medya",
+    "socialCampaigns": "Sosyal Kampanyalar",
     "aiStudio": "AI Stüdyo",
     "brandKit": "Marka Kiti",
     "surveys": "Anketler",
@@ -1206,6 +1207,15 @@
     "filterSearch": "Ad/e-posta ara (isteğe bağlı)"
   },
   "campaigns": {
+    "details": "Ayrıntılar",
+    "detail": "Kampanya",
+    "detailSubtitle": "Alıcılar ve teslimat istatistikleri",
+    "recLead": "Lead",
+    "recStatus": "Durum",
+    "recError": "Hata",
+    "createSocial": "Sosyal içerik oluştur",
+    "socialCreated": "Sosyal içerik kampanyası oluşturuldu",
+    "socialCreateFailed": "Sosyal içerik oluşturulamadı",
     "title": "Kampanyalar",
     "subtitle": "Lead'lerinizin filtrelenmiş bir dilimine e-posta, SMS veya WhatsApp gönderin. Opt-out'lar ve abonelikten çıkma bağlantısı sizin için halledilir.",
     "new": "Yeni kampanya",
@@ -1703,5 +1713,53 @@
       "aiPromptPlaceholder": "Medyayı tanımlayın…",
       "aiRun": "Üret"
     }
+  },
+  "socialCampaign": {
+    "title": "Sosyal Kampanyalar",
+    "subtitle": "AI ile planlanan sosyal içerik takvimleri",
+    "new": "Yeni kampanya",
+    "newTitle": "Yeni sosyal kampanya",
+    "newSubtitle": "AI içeriğinizi planlar ve ilerletir.",
+    "emptyTitle": "Henüz sosyal kampanya yok",
+    "emptyBody": "AI'ın sosyal içeriğinizi planlaması ve yayınlaması için bir kampanya oluşturun.",
+    "stepsLabel": "Kampanya oluşturucu adımları",
+    "step": {
+      "goal": "Hedef ve tema",
+      "brief": "Brief ve Marka Kiti",
+      "channels": "Kanallar ve sıklık",
+      "automation": "Otomasyon modu",
+      "planning": "Planlama modu",
+      "review": "İnceleme"
+    },
+    "f": {
+      "name": "Ad",
+      "goal": "Hedef",
+      "theme": "Tema",
+      "audience": "Hedef kitle",
+      "perWeek": "Haftalık gönderi",
+      "automation": "Otomasyon",
+      "planning": "Planlama"
+    },
+    "create": "Kampanya oluştur",
+    "created": "Kampanya oluşturuldu",
+    "createFailed": "Kampanya oluşturulamadı",
+    "untitled": "Başlıksız gönderi",
+    "approve": "Onayla",
+    "reject": "Reddet",
+    "regenerate": "Yeniden üret",
+    "queueEmpty": "Onay bekleyen bir şey yok",
+    "calendarEmpty": "Henüz içerik planlanmadı",
+    "tabCalendar": "Takvim",
+    "tabQueue": "Onay kuyruğu",
+    "activate": "Etkinleştir",
+    "pause": "Duraklat",
+    "resume": "Devam ettir",
+    "itemUpdated": "Öğe güncellendi",
+    "itemUpdateFailed": "İşlem başarısız",
+    "lifecycleOk": "Güncellendi",
+    "lifecycleFailed": "İşlem başarısız",
+    "crossLink": "Sosyal içerik oluştur",
+    "provisioned": "Sosyal kampanya oluşturuldu",
+    "provisionFailed": "Sosyal içerik oluşturulamadı"
   }
 }

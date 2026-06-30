@@ -88,6 +88,9 @@ const CompliancePage           = lazy(() => import('./pages/marketing/settings/c
 const SocialPlannerPage        = lazy(() => import('./pages/marketing/social'));
 const AiStudioPage             = lazy(() => import('./pages/marketing/social/AiStudioPage'));
 const BrandKitPage             = lazy(() => import('./pages/marketing/BrandKitPage'));
+const SocialCampaignsPage      = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignsPage'));
+const SocialCampaignBuilder    = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignBuilder'));
+const SocialCampaignDetailPage = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignDetailPage'));
 const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
 const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
@@ -222,6 +225,9 @@ export default function App() {
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/social-campaigns"      element={<S><SocialCampaignsPage /></S>} />
+            <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
+            <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/ai/studio"   element={<S><AiStudioPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />

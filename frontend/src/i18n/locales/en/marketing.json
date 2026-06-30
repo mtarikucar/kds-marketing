@@ -161,6 +161,7 @@
     "leaderboard": "Leaderboard",
     "roles": "Roles & permissions",
     "social": "Social",
+    "socialCampaigns": "Social Campaigns",
     "aiStudio": "AI Studio",
     "brandKit": "Brand Kit",
     "surveys": "Surveys",
@@ -1206,6 +1207,15 @@
     "filterSearch": "Search name/email (optional)"
   },
   "campaigns": {
+    "details": "Details",
+    "detail": "Campaign",
+    "detailSubtitle": "Recipients and delivery stats",
+    "recLead": "Lead",
+    "recStatus": "Status",
+    "recError": "Error",
+    "createSocial": "Create social content",
+    "socialCreated": "Social content campaign created",
+    "socialCreateFailed": "Could not create social content",
     "title": "Campaigns",
     "subtitle": "Blast email, SMS or WhatsApp to a filtered slice of your leads. Opt-outs and an unsubscribe link are handled for you.",
     "new": "New campaign",
@@ -1650,5 +1660,53 @@
       "aiPromptPlaceholder": "Describe the media…",
       "aiRun": "Generate"
     }
+  },
+  "socialCampaign": {
+    "title": "Social Campaigns",
+    "subtitle": "AI-planned social content calendars",
+    "new": "New campaign",
+    "newTitle": "New social campaign",
+    "newSubtitle": "AI plans and progresses your content.",
+    "emptyTitle": "No social campaigns yet",
+    "emptyBody": "Create a campaign to let AI plan and publish your social content.",
+    "stepsLabel": "Campaign builder steps",
+    "step": {
+      "goal": "Goal & theme",
+      "brief": "Brief & Brand Kit",
+      "channels": "Channels & cadence",
+      "automation": "Automation mode",
+      "planning": "Planning mode",
+      "review": "Review"
+    },
+    "f": {
+      "name": "Name",
+      "goal": "Goal",
+      "theme": "Theme",
+      "audience": "Audience",
+      "perWeek": "Posts per week",
+      "automation": "Automation",
+      "planning": "Planning"
+    },
+    "create": "Create campaign",
+    "created": "Campaign created",
+    "createFailed": "Could not create campaign",
+    "untitled": "Untitled post",
+    "approve": "Approve",
+    "reject": "Reject",
+    "regenerate": "Regenerate",
+    "queueEmpty": "Nothing waiting for approval",
+    "calendarEmpty": "No content scheduled yet",
+    "tabCalendar": "Calendar",
+    "tabQueue": "Approval queue",
+    "activate": "Activate",
+    "pause": "Pause",
+    "resume": "Resume",
+    "itemUpdated": "Item updated",
+    "itemUpdateFailed": "Action failed",
+    "lifecycleOk": "Updated",
+    "lifecycleFailed": "Action failed",
+    "crossLink": "Create social content",
+    "provisioned": "Social campaign created",
+    "provisionFailed": "Could not create social content"
   }
 }
