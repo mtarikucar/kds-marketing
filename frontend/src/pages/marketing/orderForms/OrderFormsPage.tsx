@@ -27,6 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  ConfirmDialog,
   Input,
   Switch,
   Select,
@@ -90,6 +91,7 @@ export default function OrderFormsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [deleteTarget, setDeleteTarget] = useState<OrderForm | null>(null);
 
   const { data: forms, isLoading } = useQuery({
     queryKey: ['marketing', 'order-forms'],
@@ -130,7 +132,7 @@ export default function OrderFormsPage() {
   });
   const deleteMut = useMutation({
     mutationFn: deleteOrderForm,
-    onSuccess: () => { invalidate(); toast.success(t('orderForms.deleted', 'Order form deleted')); },
+    onSuccess: () => { invalidate(); setDeleteTarget(null); toast.success(t('orderForms.deleted', 'Order form deleted')); },
     onError,
   });
 
@@ -236,7 +238,7 @@ export default function OrderFormsPage() {
                     <Button variant="ghost" size="sm" onClick={() => openEdit(f)} title={t('common.edit', 'Edit')}>
                       <Pencil className="w-4 h-4" aria-hidden="true" />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => deleteMut.mutate(f.id)}>
+                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(f)} title={t('common.delete', 'Delete')}>
                       <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
                     </Button>
                   </div>
@@ -305,6 +307,21 @@ export default function OrderFormsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
+        title={t('orderForms.deleteTitle', { defaultValue: 'Delete order form?' })}
+        description={t('orderForms.deleteDesc', {
+          defaultValue:
+            'Its public link stops working immediately — anyone with the link can no longer order. This cannot be undone.',
+        })}
+        confirmLabel={t('common.delete', { defaultValue: 'Delete' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        tone="danger"
+        loading={deleteMut.isPending}
+        onConfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }

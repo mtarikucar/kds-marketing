@@ -7,12 +7,13 @@ import OrderFormsPage, { formFromOrderForm } from './OrderFormsPage';
 import type { OrderFormDetail } from '../../../features/marketing/api/order-forms.service';
 
 const get = vi.fn();
+const del = vi.fn().mockResolvedValue({ data: {} });
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...args: unknown[]) => get(...args),
     post: vi.fn().mockResolvedValue({ data: {} }),
     patch: vi.fn().mockResolvedValue({ data: {} }),
-    delete: vi.fn().mockResolvedValue({ data: {} }),
+    delete: (...args: unknown[]) => del(...args),
   },
 }));
 
@@ -42,6 +43,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 describe('OrderFormsPage', () => {
   beforeEach(() => {
     get.mockReset();
+    del.mockClear();
     get.mockImplementation((url: string) => {
       if (url === '/order-forms') return Promise.resolve({ data: [LIST_ROW] });
       if (url === '/order-forms/of1') return Promise.resolve({ data: DETAIL });
@@ -71,6 +73,22 @@ describe('OrderFormsPage', () => {
     // Switch has no accessible name, so find it via its labelled row).
     const requiredRow = (await within(dialog).findByText('Phone required')).closest('div')!;
     expect(within(requiredRow).getByRole('switch')).toBeChecked();
+  });
+
+  // An order form is a live payment link — deleting it breaks any shared link.
+  // The trash button must ask for confirmation, not delete on a single click.
+  it('confirms before deleting an order form (no immediate delete)', async () => {
+    const user = userEvent.setup();
+    render(<OrderFormsPage />, { wrapper });
+    await screen.findByText('Pro signup');
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    // The single click opens a confirm step; it must NOT have deleted anything.
+    expect(del).not.toHaveBeenCalled();
+
+    const confirm = await screen.findByRole('dialog');
+    await user.click(within(confirm).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith('/order-forms/of1'));
   });
 });
 
