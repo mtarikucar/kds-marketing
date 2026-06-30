@@ -280,7 +280,7 @@ export default function SitesPage() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-muted-foreground">{t('sites.startFromTemplate', 'Start from a template:')}</span>
           {templates!.map((tpl) => (
-            <Button key={tpl.id} size="sm" variant="outline" title={tpl.description} loading={fromTemplate.isPending} onClick={() => fromTemplate.mutate(tpl.id)}>
+            <Button key={tpl.id} size="sm" variant="outline" title={tpl.description} loading={fromTemplate.isPending && fromTemplate.variables === tpl.id} onClick={() => fromTemplate.mutate(tpl.id)}>
               {tpl.name}
             </Button>
           ))}
