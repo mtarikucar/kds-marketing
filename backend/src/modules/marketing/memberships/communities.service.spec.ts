@@ -24,6 +24,18 @@ describe('CommunitiesService', () => {
     await expect(svc.create(WS, { name: 'Coffee Club' })).rejects.toBeInstanceOf(ConflictException);
   });
 
+  // The dup pre-check is a TOCTOU window — two concurrent same-slug creates both
+  // pass findUnique, the 2nd insert trips the (workspaceId, slug) unique → P2002.
+  // Map it to a clean 409, not a raw 500 (no global Prisma→HTTP mapping).
+  it('maps a P2002 race on create to a 409', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.community.findUnique.mockResolvedValue(null as any); // pre-check passes
+    (prisma.community.create as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    await expect(svc.create(WS, { name: 'Coffee Club' })).rejects.toBeInstanceOf(ConflictException);
+  });
+
   it('join is idempotent (upsert keyed on community+lead)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.community.findFirst.mockResolvedValue({ id: 'co1' } as any);

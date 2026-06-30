@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 
@@ -173,16 +173,26 @@ export class GamificationService {
   }
 
   async createBadge(workspaceId: string, dto: { key: string; name: string; ruleType: string; threshold: number; iconUrl?: string }) {
-    const badge = await this.prisma.badge.create({
-      data: {
-        workspaceId,
-        key: dto.key,
-        name: dto.name,
-        ruleType: dto.ruleType,
-        threshold: dto.threshold,
-        iconUrl: dto.iconUrl ?? null,
-      },
-    });
+    let badge;
+    try {
+      badge = await this.prisma.badge.create({
+        data: {
+          workspaceId,
+          key: dto.key,
+          name: dto.name,
+          ruleType: dto.ruleType,
+          threshold: dto.threshold,
+          iconUrl: dto.iconUrl ?? null,
+        },
+      });
+    } catch (e) {
+      // Badge.key is unique per (workspaceId, key). There's no pre-check, so even
+      // a SEQUENTIAL duplicate key would 500 without this — map it to a clean 409.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(`Badge key "${dto.key}" already exists`);
+      }
+      throw e;
+    }
     // Retroactively grant to members who already qualify.
     await this.backfillBadge(workspaceId, badge);
     return badge;

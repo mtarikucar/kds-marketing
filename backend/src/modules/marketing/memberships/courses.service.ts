@@ -73,17 +73,26 @@ export class CoursesService {
       where: { workspaceId_slug: { workspaceId, slug } },
     });
     if (dupe) throw new ConflictException(`Course slug "${slug}" already exists`);
-    return this.prisma.course.create({
-      data: {
-        workspaceId,
-        title: dto.title,
-        slug,
-        description: dto.description,
-        priceCents: dto.priceCents,
-        currency: dto.currency,
-        coverImageUrl: dto.coverImageUrl,
-      },
-    });
+    try {
+      return await this.prisma.course.create({
+        data: {
+          workspaceId,
+          title: dto.title,
+          slug,
+          description: dto.description,
+          priceCents: dto.priceCents,
+          currency: dto.currency,
+          coverImageUrl: dto.coverImageUrl,
+        },
+      });
+    } catch (e) {
+      // The dup pre-check above is racy; the (workspaceId, slug) unique is the
+      // real guard. Map a concurrent same-slug insert to a clean 409, not a 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(`Course slug "${slug}" already exists`);
+      }
+      throw e;
+    }
   }
 
   async get(workspaceId: string, id: string) {

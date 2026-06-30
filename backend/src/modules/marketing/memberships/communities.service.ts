@@ -43,9 +43,18 @@ export class CommunitiesService {
       where: { workspaceId_slug: { workspaceId, slug } },
     });
     if (dupe) throw new ConflictException(`Community slug "${slug}" already exists`);
-    return this.prisma.community.create({
-      data: { workspaceId, name: dto.name, slug, description: dto.description },
-    });
+    try {
+      return await this.prisma.community.create({
+        data: { workspaceId, name: dto.name, slug, description: dto.description },
+      });
+    } catch (e) {
+      // The dup pre-check above is racy; the (workspaceId, slug) unique is the
+      // real guard. Map a concurrent same-slug insert to a clean 409, not a 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(`Community slug "${slug}" already exists`);
+      }
+      throw e;
+    }
   }
 
   private async assertCommunity(workspaceId: string, id: string) {

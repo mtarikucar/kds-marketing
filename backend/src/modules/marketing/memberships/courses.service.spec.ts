@@ -28,6 +28,17 @@ describe('CoursesService', () => {
     await expect(svc.create(WS, { title: 'Intro to Coffee' })).rejects.toBeInstanceOf(ConflictException);
   });
 
+  // TOCTOU: two concurrent same-slug creates both pass the findUnique pre-check;
+  // the 2nd insert trips the (workspaceId, slug) unique → P2002. Map to a 409.
+  it('maps a P2002 race on create to a 409', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findUnique.mockResolvedValue(null as any);
+    (prisma.course.create as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    await expect(svc.create(WS, { title: 'Intro to Coffee' })).rejects.toBeInstanceOf(ConflictException);
+  });
+
   it('refuses to publish a course with no lessons', async () => {
     const { prisma, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
