@@ -80,6 +80,19 @@ describe('InstallationJobService', () => {
       );
       expect(prisma.installationJob.create).not.toHaveBeenCalled();
     });
+
+    // A converted lead already carries an auto-created job (createForConversion),
+    // so a manual create for the same tenant must not silently mint a DUPLICATE.
+    // Mirror createForConversion's "one active job per tenant" pre-check (the
+    // manual path had none).
+    it('refuses to create a second active job for a tenant that already has one', async () => {
+      prisma.installationJob.findFirst.mockResolvedValue({ id: 'job-existing' } as any);
+      await expect(svc.create(WS, { tenantId: 't1' } as any)).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.installationJob.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, tenantId: 't1', status: { not: 'CANCELLED' } } }),
+      );
+      expect(prisma.installationJob.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('schedule', () => {

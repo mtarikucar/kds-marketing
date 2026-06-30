@@ -113,6 +113,19 @@ export class InstallationJobService {
       });
       if (!lead) throw new NotFoundException('Lead not found');
     }
+    // A tenant has at most one ACTIVE installation job — the same invariant
+    // createForConversion's pre-check relies on. A converted lead already carries
+    // an auto-created job, so a manual create for it would silently mint a
+    // DUPLICATE; refuse it with a clean 409. (NOTE: there is no DB partial-unique
+    // backing this despite createForConversion's comment, so a concurrent race is
+    // still possible — that index is a separate attended migration.)
+    const existingJob = await this.prisma.installationJob.findFirst({
+      where: { workspaceId, tenantId: dto.tenantId, status: { not: 'CANCELLED' } },
+      select: { id: true },
+    });
+    if (existingJob) {
+      throw new ConflictException('This tenant already has an active installation job');
+    }
     return this.prisma.installationJob.create({
       data: {
         workspaceId,
