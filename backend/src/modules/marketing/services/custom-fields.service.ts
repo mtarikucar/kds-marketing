@@ -72,18 +72,28 @@ export class CustomFieldsService {
     ) {
       throw new BadRequestException('SELECT/MULTISELECT requires options');
     }
-    return this.prisma.customFieldDef.create({
-      data: {
-        workspaceId,
-        entity,
-        key,
-        label: dto.label,
-        type: dto.type,
-        options: (dto.options ?? undefined) as any,
-        required: dto.required ?? false,
-        position: dto.position ?? 0,
-      },
-    });
+    try {
+      return await this.prisma.customFieldDef.create({
+        data: {
+          workspaceId,
+          entity,
+          key,
+          label: dto.label,
+          type: dto.type,
+          options: (dto.options ?? undefined) as any,
+          required: dto.required ?? false,
+          position: dto.position ?? 0,
+        },
+      });
+    } catch (e) {
+      // The dup pre-check above is racy; the (workspaceId, entity, key) unique is
+      // the real guard. Map a concurrent same-key insert to a clean 409 (like
+      // tags.create / snippets.create) instead of a raw P2002 → 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(`Custom field key "${key}" already exists`);
+      }
+      throw e;
+    }
   }
 
   // `entity`, when supplied, is enforced in the lookup so a field id from a

@@ -101,6 +101,19 @@ describe('CustomFieldsService def CRUD', () => {
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
+  // The dup pre-check is a TOCTOU window: two concurrent creates of the same key
+  // both pass findUnique, the 2nd insert trips the (workspaceId, entity, key)
+  // unique → P2002. Without a catch that bubbles as a raw 500; map it to a clean
+  // 409 like tags.create / snippets.create do (no global P2002→409 mapping).
+  it('maps a P2002 race on create to a 409 (concurrent same-key insert)', async () => {
+    prisma.customFieldDef.findUnique.mockResolvedValue(null); // pre-check passes
+    (prisma.customFieldDef.create as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    await expect(svc.create(WS, { label: 'Annual Budget', type: 'NUMBER' } as any))
+      .rejects.toBeInstanceOf(ConflictException);
+  });
+
   it('rejects clearing the options of a SELECT field on update (would brick it)', async () => {
     // coerce() rejects every value against an empty option list, so a SELECT
     // left optionless can never be set again — update must guard it like create.
