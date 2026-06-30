@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
@@ -67,6 +67,24 @@ export default function OffersTab({
       notes: '',
     },
   });
+
+  // The lead-detail route REUSES this tab across /leads/:id navigations (no
+  // remount, like WalletPanel), so without this a half-typed offer (custom
+  // price/discount/notes) for one contact would stay in the open form and be
+  // submitted against the NEXT contact. Clear + close the draft when the lead
+  // changes so a draft can never carry to the wrong lead.
+  useEffect(() => {
+    form.reset({
+      leadId,
+      customPrice: '' as unknown as undefined,
+      discount: '' as unknown as undefined,
+      trialDays: '' as unknown as undefined,
+      validUntil: '',
+      notes: '',
+    });
+    setOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId]);
 
   const fieldErr = (msg?: string) =>
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;

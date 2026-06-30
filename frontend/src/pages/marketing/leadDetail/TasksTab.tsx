@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
@@ -75,6 +75,23 @@ export default function TasksTab({
       leadId,
     },
   });
+
+  // The lead-detail route REUSES this tab across /leads/:id navigations (no
+  // remount, like WalletPanel) — clear + close a half-typed task draft when the
+  // lead changes so it can't be submitted against the next contact.
+  useEffect(() => {
+    form.reset({
+      title: '',
+      description: '',
+      type: 'FOLLOW_UP',
+      priority: 'MEDIUM',
+      dueDate: toLocalYmd(new Date()),
+      dueTime: '09:00',
+      leadId,
+    });
+    setOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId]);
 
   const fieldErr = (msg?: string) =>
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;

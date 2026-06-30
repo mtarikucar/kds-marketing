@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import OffersTab from './OffersTab';
@@ -78,5 +78,34 @@ describe('OffersTab — send confirmation', () => {
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
 
     expect(onSend).toHaveBeenCalledWith('o1');
+  });
+});
+
+describe('OffersTab — draft resets per lead', () => {
+  // The lead-detail route reuses this tab across /leads/:id navigations (no
+  // remount). A half-typed offer left open for one contact must not carry to the
+  // next, or it could be submitted (with the wrong price/discount) against the
+  // wrong lead. Changing the leadId must close + clear the draft.
+  it('closes the new-offer draft when the leadId changes', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderTab([], { leadId: 'leadA' });
+
+    await user.click(screen.getByRole('button', { name: /new offer/i }));
+    expect(await screen.findByText('Custom Price')).toBeInTheDocument();
+
+    rerender(
+      <OffersTab
+        leadId="leadB"
+        offers={[]}
+        converted={false}
+        fmtDate={() => 'Jun one'}
+        onCreate={() => undefined}
+        createPending={false}
+        onSend={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByText('Custom Price')).toBeNull());
   });
 });
