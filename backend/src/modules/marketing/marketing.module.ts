@@ -130,6 +130,8 @@ import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
 import { MessengerAdapter, InstagramAdapter } from './channels/adapters/meta-messaging.adapter';
 import { TiktokDmAdapter } from './channels/adapters/tiktok-dm.adapter';
+import { LinkedinEngagementAdapter } from './channels/adapters/linkedin-engagement.adapter';
+import { LinkedinEngagementPollService } from './channels/linkedin-engagement-poll.service';
 import { TiktokWebhookController } from './controllers/tiktok-webhook.controller';
 import { EmailChannelAdapter } from './channels/adapters/email.adapter';
 import { EmailWebhookController } from './controllers/email-webhook.controller';
@@ -323,11 +325,13 @@ import { MarketingOrderFormsController } from './controllers/marketing-order-for
 import { PublicOrderFormController } from './controllers/public-order-form.controller';
 import { OrderFormsService } from './order-forms/order-forms.service';
 
-// Ad reporting — Meta Ads + TikTok Ads (GoHighLevel parity).
+// Ad reporting — Meta Ads + TikTok Ads + LinkedIn Ads (GoHighLevel parity).
 import { MarketingAdsController } from './controllers/marketing-ads.controller';
 import { MarketingAdRulesController } from './controllers/marketing-ad-rules.controller';
 import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
+import { LinkedinAdsOAuthController } from './ads/linkedin-ads-oauth.controller';
+import { LinkedinAdsOAuthService } from './ads/linkedin-ads-oauth.service';
 // TikTok-for-Business OAuth (ads module — NOT social-planner)
 import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
 import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
@@ -529,6 +533,7 @@ import { WalletService } from './wallet/wallet.service';
     RebillingController,
     SocialPlannerController,
     SocialOAuthController,
+    LinkedinAdsOAuthController,
   ],
   providers: [
     // Services
@@ -609,6 +614,7 @@ import { WalletService } from './wallet/wallet.service';
     MessengerAdapter,
     InstagramAdapter,
     TiktokDmAdapter,
+    LinkedinEngagementAdapter,
     EmailChannelAdapter,
     MessageQuotaService,
     ChannelsService,
@@ -623,6 +629,7 @@ import { WalletService } from './wallet/wallet.service';
     // locked sweeper that resolves still-pending outbound SMS via the report API.
     NetgsmReportClient,
     NetgsmDlrPollService,
+    LinkedinEngagementPollService,
     SseTokenGuard,
     // Phase F P3 — workflow automation: the trigger listener + executor (each
     // registers its bus/ScheduledJob hooks on init) + action handler + CRUD.
@@ -735,6 +742,8 @@ import { WalletService } from './wallet/wallet.service';
     R2StorageService,
     SocialOAuthService,
     SocialTokenRefreshService,
+    // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
+    LinkedinAdsOAuthService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

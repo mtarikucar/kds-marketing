@@ -35,6 +35,8 @@ interface PostOptions {
   formats?: Record<string, PostFormat>;
   media?: MediaDescriptor[];
   mediaDeletedAt?: string;
+  /** Per-network publish options (e.g. LinkedIn visibility). Forwarded to publishToNetwork. */
+  linkedin?: { visibility?: 'PUBLIC' | 'CONNECTIONS' };
   /** TikTok per-post privacy/interaction/photo controls. */
   tiktok?: Record<string, unknown>;
 }
@@ -114,7 +116,7 @@ export class SocialPlannerService implements OnModuleInit {
     if (patch.options !== undefined) {
       // Fold caller-supplied network-specific options into the same JSON. Known
       // keys (formats/media/mediaDeletedAt) are managed above; pass the rest
-      // (notably `tiktok`) through so publish-time can read them.
+      // (notably `tiktok` and `linkedin` visibility) through so publish-time can read them.
       const { formats: _f, media: _m, ...rest } = patch.options as Record<string, unknown>;
       Object.assign(base, rest);
     }
@@ -400,6 +402,7 @@ export class SocialPlannerService implements OnModuleInit {
       const result = await publishToNetwork(target.account, post.content, mediaUrls, {
         format: formats[target.socialAccountId] ?? 'FEED',
         mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
+        linkedin: options.linkedin,
         tiktok: options.tiktok as any,
       });
 

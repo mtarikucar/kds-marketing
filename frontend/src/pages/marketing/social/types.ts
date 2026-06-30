@@ -37,6 +37,11 @@ export interface SocialPostTarget {
   error: string | null;
 }
 
+/** LinkedIn organic post options surfaced in the composer. */
+export interface LinkedinPostOptions {
+  visibility?: 'PUBLIC' | 'CONNECTIONS';
+}
+
 /** TikTok per-post privacy/interaction/photo controls. */
 export interface TikTokPostOptions {
   privacyLevel?: string;
@@ -52,6 +57,7 @@ export interface SocialPostOptions {
   formats?: Record<string, 'FEED' | 'REEL' | 'STORY'>;
   media?: { url: string; key?: string; mime?: string }[];
   mediaDeletedAt?: string;
+  linkedin?: LinkedinPostOptions;
   /** TikTok-specific publish controls. */
   tiktok?: TikTokPostOptions;
 }

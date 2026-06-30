@@ -84,6 +84,7 @@ class CreatePostDto {
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
 
+  /** Per-network publish options (e.g. { linkedin: { visibility } }, { tiktok: {...} }). */
   @IsOptional() @IsObject()
   options?: Record<string, unknown>;
 }
@@ -101,6 +102,7 @@ class UpdatePostDto {
   @IsOptional() @IsObject()
   formats?: Record<string, string>;
 
+  /** Per-network publish options (e.g. { linkedin: { visibility } }, { tiktok: {...} }). */
   @IsOptional() @IsObject()
   options?: Record<string, unknown>;
 }

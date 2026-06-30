@@ -8,12 +8,13 @@
 
 import marketingApi from './marketingApi';
 
-export type AdProvider = 'META' | 'TIKTOK';
+export type AdProvider = 'META' | 'TIKTOK' | 'LINKEDIN';
 export type AdAccountStatus = 'ACTIVE' | 'TOKEN_EXPIRED' | 'DISCONNECTED';
 
 export interface AdProviderStatus {
   META: boolean;
   TIKTOK: boolean;
+  LINKEDIN: boolean;
   secretBoxConfigured: boolean;
 }
 
@@ -74,6 +75,37 @@ export const removeAdAccount = (id: string): Promise<{ message: string }> =>
 
 export const pullAdAccount = (id: string, days?: number): Promise<{ written: number }> =>
   marketingApi.post(`/ads/accounts/${id}/pull`, days ? { days } : {}).then((r) => r.data);
+
+// ── LinkedIn for Business (ads) OAuth ───────────────────────────────────────
+
+export interface LinkedinAdsPendingAccount {
+  externalAdId: string;
+  displayName: string;
+  currency: string | null;
+}
+
+export interface LinkedinAdsPending {
+  accounts: LinkedinAdsPendingAccount[];
+}
+
+export interface LinkedinAdsConfirmResult {
+  connected: number;
+}
+
+/** POST /ads/oauth/linkedin/start → { authorizeUrl } */
+export const startLinkedinAdsOAuth = (): Promise<{ authorizeUrl: string }> =>
+  marketingApi.post('/ads/oauth/linkedin/start').then((r) => r.data);
+
+/** GET /ads/oauth/linkedin/pending/:id */
+export const getLinkedinAdsPending = (id: string): Promise<LinkedinAdsPending> =>
+  marketingApi.get(`/ads/oauth/linkedin/pending/${id}`).then((r) => r.data);
+
+/** POST /ads/oauth/linkedin/pending/:id/confirm */
+export const confirmLinkedinAdsPending = (
+  id: string,
+  selected: string[],
+): Promise<LinkedinAdsConfirmResult> =>
+  marketingApi.post(`/ads/oauth/linkedin/pending/${id}/confirm`, { selected }).then((r) => r.data);
 
 // ── TikTok for Business OAuth ───────────────────────────────────────────────
 

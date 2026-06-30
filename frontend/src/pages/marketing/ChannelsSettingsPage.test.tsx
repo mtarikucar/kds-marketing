@@ -51,4 +51,26 @@ describe('ChannelsSettingsPage', () => {
     await userEvent.click(btns[0]);
     expect(await screen.findByRole('heading', { level: 2 })).toBeInTheDocument();
   });
+
+  it('renders the LinkedIn dormant status when engagement is not granted', async () => {
+    const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+    marketingApi.get.mockImplementation((url: string) =>
+      url === '/channels'
+        ? Promise.resolve({
+            data: [
+              {
+                id: 'li1',
+                type: 'LINKEDIN',
+                name: 'Company page',
+                status: 'ACTIVE',
+                configuredSecrets: ['accessToken'],
+                configPublic: {},
+              },
+            ],
+          })
+        : Promise.resolve({ data: [] }),
+    );
+    render(<ChannelsSettingsPage />, { wrapper });
+    expect(await screen.findByText(/Community Management access is approved/i)).toBeInTheDocument();
+  });
 });

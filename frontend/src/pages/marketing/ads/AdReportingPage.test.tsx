@@ -130,7 +130,9 @@ describe('AdReportingPage', () => {
       const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       return (
         <QueryClientProvider client={qc}>
-          <MemoryRouter initialEntries={['/ads?connect=pending123']}>{children}</MemoryRouter>
+          <MemoryRouter initialEntries={['/ads?connect=pending123&connect_provider=tiktok']}>
+            {children}
+          </MemoryRouter>
         </QueryClientProvider>
       );
     }

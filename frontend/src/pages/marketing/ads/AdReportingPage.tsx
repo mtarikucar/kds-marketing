@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
@@ -20,6 +20,7 @@ import {
   connectAdAccount,
   removeAdAccount,
   pullAdAccount,
+  startLinkedinAdsOAuth,
   startTiktokAdsOAuth,
   type AdAccount,
   type AdProvider,
@@ -27,6 +28,7 @@ import {
 import type { ConnectAdAccountFormValues } from './adsSchemas';
 import { AD_PROVIDER_LABEL } from './adsSchemas';
 import { ConnectAdAccountDialog } from './ConnectAdAccountDialog';
+import { LinkedinAdsSelectDialog } from './LinkedinAdsSelectDialog';
 import { TiktokAdsSelectDialog } from './TiktokAdsSelectDialog';
 import { AdManagementSection } from './AdManagementSection';
 import { AdRulesSection } from './AdRulesSection';
@@ -88,24 +90,29 @@ export default function AdReportingPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<AdAccount | null>(null);
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
+  const [connectProvider, setConnectProvider] = useState<'linkedin' | 'tiktok' | null>(null);
   const [manageAccountId, setManageAccountId] = useState<string | null>(null);
 
   // ── OAuth return handling ────────────────────────────────────────────────────
-  // The TikTok Business OAuth callback redirects back to /ads?connect=<pendingId>
-  // (success) or ?connect_error=1 (failure). Pick up the param once, open the
-  // advertiser selector, and strip it from the URL.
+  // The LinkedIn and TikTok ads OAuth callbacks redirect back to
+  // /ads?connect=<pendingId>&connect_provider=<provider> (success) or
+  // ?connect_error=1 (failure). Pick up the params once, open the matching
+  // provider's account selector, and strip them from the URL.
   useEffect(() => {
     const connectId = searchParams.get('connect');
     const connectErr = searchParams.get('connect_error');
     if (connectId) {
+      const cp = searchParams.get('connect_provider');
       setPendingConnectId(connectId);
+      setConnectProvider(cp === 'linkedin' ? 'linkedin' : cp === 'tiktok' ? 'tiktok' : null);
       setView('accounts');
       searchParams.delete('connect');
+      searchParams.delete('connect_provider');
       setSearchParams(searchParams, { replace: true });
     } else if (connectErr) {
       toast.error(
         t('ads.oauth.callbackError', {
-          defaultValue: 'TikTok connection failed or was cancelled. Please try again.',
+          defaultValue: 'The ad account connection failed or was cancelled. Please try again.',
         }),
       );
       searchParams.delete('connect_error');
@@ -113,6 +120,17 @@ export default function AdReportingPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const startLinkedinConnect = async () => {
+    try {
+      const { authorizeUrl } = await startLinkedinAdsOAuth();
+      window.location.href = authorizeUrl;
+    } catch {
+      toast.error(
+        t('ads.oauth.startFailed', { defaultValue: 'Could not start the LinkedIn connection' }),
+      );
+    }
+  };
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -170,7 +188,9 @@ export default function AdReportingPage() {
   };
 
   const handleReconnect = (account: AdAccount) => {
-    if (account.provider === 'TIKTOK') {
+    if (account.provider === 'LINKEDIN') {
+      void startLinkedinConnect();
+    } else if (account.provider === 'TIKTOK') {
       void startTikTokConnect();
     }
     // META reconnect not yet implemented — button is hidden for META accounts
@@ -238,14 +258,27 @@ export default function AdReportingPage() {
           isManager ? (
             <div className="flex flex-wrap gap-2">
               <Button
+                onClick={() => void startLinkedinConnect()}
+                disabled={!status?.LINKEDIN}
+                title={
+                  status?.LINKEDIN
+                    ? undefined
+                    : t('ads.oauth.linkedinNotConfigured', {
+                        defaultValue: 'An admin must add LinkedIn ads app credentials first',
+                      })
+                }
+                variant="outline"
+              >
+                {t('ads.oauth.linkedinConnect', { defaultValue: 'Connect LinkedIn' })}
+              </Button>
+              <Button
                 onClick={() => void startTikTokConnect()}
                 disabled={!status?.TIKTOK}
                 title={
                   status?.TIKTOK
                     ? undefined
                     : t('ads.oauth.tiktokNotConfigured', {
-                        defaultValue:
-                          'An admin must add TikTok Business app credentials first',
+                        defaultValue: 'An admin must add TikTok Business app credentials first',
                       })
                 }
                 variant="outline"
@@ -285,6 +318,7 @@ export default function AdReportingPage() {
                 <SelectItem value="ALL">{t('ads.filter.allProviders', { defaultValue: 'All providers' })}</SelectItem>
                 <SelectItem value="META">{AD_PROVIDER_LABEL.META}</SelectItem>
                 <SelectItem value="TIKTOK">{AD_PROVIDER_LABEL.TIKTOK}</SelectItem>
+                <SelectItem value="LINKEDIN">{AD_PROVIDER_LABEL.LINKEDIN}</SelectItem>
               </SelectContent>
             </Select>
             <SegmentedControl<RangeKey>
@@ -321,10 +355,10 @@ export default function AdReportingPage() {
           isManager={isManager}
           canConnect={canConnect}
           onConnect={() => setConnectOpen(true)}
+          onReconnect={handleReconnect}
           onDisconnect={setDisconnectTarget}
           onPull={(id) => pullMutation.mutate(id)}
           pullingId={pullMutation.isPending ? (pullMutation.variables as string) : null}
-          onReconnect={handleReconnect}
         />
       ) : (
         <ManageView
@@ -338,8 +372,8 @@ export default function AdReportingPage() {
       )}
 
       <TiktokAdsSelectDialog
-        pendingId={pendingConnectId}
-        onOpenChange={(open) => { if (!open) setPendingConnectId(null); }}
+        pendingId={connectProvider === 'tiktok' ? pendingConnectId : null}
+        onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
         onSuccess={invalidateAccounts}
       />
 
@@ -349,6 +383,12 @@ export default function AdReportingPage() {
         onSubmit={(values) => connectMutation.mutate(values)}
         isPending={connectMutation.isPending}
         status={status}
+      />
+
+      <LinkedinAdsSelectDialog
+        pendingId={connectProvider === 'linkedin' ? pendingConnectId : null}
+        onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
+        onSuccess={invalidateAccounts}
       />
 
       <ConfirmDialog
@@ -547,10 +587,10 @@ interface AccountsViewProps {
   isManager: boolean;
   canConnect: boolean;
   onConnect: () => void;
+  onReconnect: (account: AdAccount) => void;
   onDisconnect: (account: AdAccount) => void;
   onPull: (id: string) => void;
   pullingId: string | null;
-  onReconnect: (account: AdAccount) => void;
 }
 
 function AccountsView({
@@ -559,10 +599,10 @@ function AccountsView({
   isManager,
   canConnect,
   onConnect,
+  onReconnect,
   onDisconnect,
   onPull,
   pullingId,
-  onReconnect,
 }: AccountsViewProps) {
   const { t } = useTranslation('marketing');
 
@@ -658,7 +698,7 @@ function AccountsView({
           {isManager && (
             <div className="mt-auto flex items-center justify-end gap-1 pt-1">
               {needsReauth && (
-                <Button variant="outline" size="sm" onClick={onConnect}>
+                <Button variant="outline" size="sm" onClick={() => onReconnect(acc)}>
                   <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('ads.action.reconnect', { defaultValue: 'Reconnect' })}
                 </Button>

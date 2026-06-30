@@ -4,6 +4,7 @@ import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
+import { linkedinRest, linkedinUpload, isLinkedinAuthError } from '../../../common/util/linkedin-api.util';
 import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
 import { R2StorageService } from './r2-storage.service';
 
@@ -81,10 +82,18 @@ export interface MediaItem {
   mime?: string;
 }
 
+/** LinkedIn-specific publish options (organic feed posts). */
+export interface LinkedinPostOptions {
+  /** Feed visibility for /rest/posts. Defaults to PUBLIC when unset. */
+  visibility?: 'PUBLIC' | 'CONNECTIONS';
+}
+
 export interface PublishOptions {
   format?: PostFormat;
   /** Per-item MIME, parallel to mediaUrls — lets adapters pick image vs video. */
   mediaMime?: (string | undefined)[];
+  /** LinkedIn organic post options (visibility). Honoured only by the LINKEDIN adapter. */
+  linkedin?: LinkedinPostOptions;
   /** TikTok-specific privacy/interaction/photo controls. */
   tiktok?: TikTokPostOptions;
 }
@@ -503,11 +512,97 @@ async function publishFacebook(
   }
 }
 
-/** Publish to LinkedIn (UGC Posts API). */
+/**
+ * Upload one image to LinkedIn for an organic post: initializeUpload (owner =
+ * author urn) → download the bytes (SSRF-guarded safeFetch) → PUT them to the
+ * returned dms-uploads URL. Returns the `urn:li:image:...` to reference in the
+ * post content, or an error.
+ */
+async function linkedinUploadImage(
+  token: string,
+  author: string,
+  item: MediaItem,
+): Promise<{ urn?: string; error?: string; isAuthError?: boolean }> {
+  const init = await linkedinRest('/rest/images?action=initializeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { initializeUploadRequest: { owner: author } },
+  });
+  if (!init.ok) {
+    return { error: `LinkedIn image init: ${init.error.message}`.slice(0, 500), isAuthError: init.error.isAuthError };
+  }
+  const value = (init.data as any)?.value;
+  const uploadUrl: string = value?.uploadUrl;
+  const imageUrn: string = value?.image;
+  if (!uploadUrl || !imageUrn) return { error: 'LinkedIn image init: missing uploadUrl/image' };
+
+  const dl = await safeFetch(item.url, { method: 'GET', timeoutMs: 20_000 });
+  if (!dl.ok) return { error: `LinkedIn image download failed: ${dl.status}` };
+  const bytes = Buffer.from(await dl.arrayBuffer());
+  if (bytes.length === 0) return { error: 'LinkedIn image download: empty body' };
+  const mime = item.mime || dl.headers.get('content-type') || 'image/jpeg';
+
+  const up = await linkedinUpload(uploadUrl, bytes, mime);
+  if (!up.ok) return { error: `LinkedIn image upload failed: ${up.status}` };
+  return { urn: imageUrn };
+}
+
+/**
+ * Register-upload a single video for an organic post: initializeUpload (owner =
+ * author urn, fileSizeBytes) → PUT each part to its uploadInstructions URL,
+ * collecting the per-part ETag → finalizeUpload with the ordered ETags. Returns
+ * the `urn:li:video:...` to reference, or an error.
+ */
+async function linkedinUploadVideo(
+  token: string,
+  author: string,
+  item: MediaItem,
+): Promise<{ urn?: string; error?: string; isAuthError?: boolean }> {
+  const dl = await safeFetch(item.url, { method: 'GET', timeoutMs: 30_000 });
+  if (!dl.ok) return { error: `LinkedIn video download failed: ${dl.status}` };
+  const bytes = Buffer.from(await dl.arrayBuffer());
+  if (bytes.length === 0) return { error: 'LinkedIn video download: empty body' };
+  const mime = item.mime || dl.headers.get('content-type') || 'video/mp4';
+
+  const init = await linkedinRest('/rest/videos?action=initializeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { initializeUploadRequest: { owner: author, fileSizeBytes: bytes.length, uploadCaptions: false, uploadThumbnail: false } },
+  });
+  if (!init.ok) {
+    return { error: `LinkedIn video init: ${init.error.message}`.slice(0, 500), isAuthError: init.error.isAuthError };
+  }
+  const value = (init.data as any)?.value;
+  const videoUrn: string = value?.video;
+  const instructions: { uploadUrl: string; firstByte: number; lastByte: number }[] = value?.uploadInstructions ?? [];
+  if (!videoUrn || instructions.length === 0) return { error: 'LinkedIn video init: missing video/uploadInstructions' };
+
+  const uploadedPartIds: string[] = [];
+  for (const part of instructions) {
+    const slice = bytes.subarray(part.firstByte, part.lastByte + 1);
+    const up = await linkedinUpload(part.uploadUrl, slice, mime);
+    if (!up.ok) return { error: `LinkedIn video part upload failed: ${up.status}` };
+    if (!up.etag) return { error: 'LinkedIn video part upload: missing ETag' };
+    uploadedPartIds.push(up.etag);
+  }
+
+  const fin = await linkedinRest('/rest/videos?action=finalizeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { finalizeUploadRequest: { video: videoUrn, uploadToken: '', uploadedPartIds } },
+  });
+  if (!fin.ok) {
+    return { error: `LinkedIn video finalize: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
+  }
+  return { urn: videoUrn };
+}
+
+/** Publish to LinkedIn via the versioned Posts API (POST /rest/posts). */
 async function publishLinkedIn(
   account: AccountRow,
   content: string,
-  mediaUrls: string[],
+  items: MediaItem[],
+  options?: LinkedinPostOptions,
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('LINKEDIN')) {
     return { ok: false, error: 'LinkedIn not configured: set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET' };
@@ -519,47 +614,47 @@ async function publishLinkedIn(
     account.accountType === 'LI_ORG'
       ? `urn:li:organization:${account.externalId}`
       : `urn:li:person:${account.externalId}`;
+  const visibility = options?.visibility ?? 'PUBLIC';
+
+  // Build content from media. A single video takes precedence; otherwise images.
+  let postContent: Record<string, unknown> | undefined;
+  const videoItem = (items || []).find(isVideoItem);
+  const imageItems = (items || []).filter((m) => !isVideoItem(m));
+  if (videoItem) {
+    const up = await linkedinUploadVideo(token, author, videoItem);
+    if (up.error) return { ok: false, error: up.error, isAuthError: up.isAuthError };
+    postContent = { media: { id: up.urn } };
+  } else if (imageItems.length > 0) {
+    const urns: string[] = [];
+    for (const item of imageItems) {
+      const up = await linkedinUploadImage(token, author, item);
+      if (up.error) return { ok: false, error: up.error, isAuthError: up.isAuthError };
+      urns.push(up.urn);
+    }
+    postContent =
+      urns.length === 1
+        ? { media: { id: urns[0] } }
+        : { multiImage: { images: urns.map((id) => ({ id })) } };
+  }
+
   const body: Record<string, unknown> = {
     author,
+    commentary: content,
+    visibility,
+    distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
     lifecycleState: 'PUBLISHED',
-    specificContent: {
-      'com.linkedin.ugc.ShareContent': {
-        shareCommentary: { text: content },
-        shareMediaCategory: mediaUrls.length > 0 ? 'ARTICLE' : 'NONE',
-        ...(mediaUrls.length > 0 ? {
-          media: mediaUrls.map((url) => ({
-            status: 'READY',
-            originalUrl: url,
-          })),
-        } : {}),
-      },
-    },
-    visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' },
+    isReshareDisabledByAuthor: false,
+    ...(postContent ? { content: postContent } : {}),
   };
 
-  try {
-    const res = await safeFetch('https://api.linkedin.com/v2/ugcPosts', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'X-Restli-Protocol-Version': '2.0.0',
-      },
-      body: JSON.stringify(body),
-      timeoutMs: 15_000,
-    });
-    const json = (await res.json()) as Record<string, unknown>;
-    if (res.ok && json.id) {
-      return { ok: true, externalPostId: String(json.id) };
-    }
-    const err = String((json as any)?.message ?? res.status);
-    logger.warn(`LinkedIn publish failed (${account.externalId}): ${err}`);
-    return { ok: false, error: err.slice(0, 500) };
-  } catch (e: any) {
-    const msg = e?.message ?? String(e);
-    logger.warn(`LinkedIn publish error (${account.externalId}): ${msg}`);
-    return { ok: false, error: msg.slice(0, 500) };
+  const result = await linkedinRest('/rest/posts', { accessToken: token, method: 'POST', body });
+  if (!result.ok) {
+    logger.warn(`LinkedIn publish failed (${account.externalId}): ${result.error.message}`);
+    return { ok: false, error: result.error.message.slice(0, 500), isAuthError: isLinkedinAuthError(result) };
   }
+  const id = result.restliId;
+  if (!id) return { ok: false, error: 'LinkedIn /rest/posts returned no x-restli-id' };
+  return { ok: true, externalPostId: String(id) };
 }
 
 /**
@@ -972,7 +1067,7 @@ export async function publishToNetwork(
     case 'INSTAGRAM_LOGIN':
       return publishInstagramDirect(account, content, items);
     case 'LINKEDIN':
-      return publishLinkedIn(account, content, mediaUrls);
+      return publishLinkedIn(account, content, items, opts.linkedin);
     case 'TIKTOK':
       return publishTikTok(account, content, mediaUrls, opts.tiktok);
     case 'TWITTER':

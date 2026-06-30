@@ -49,8 +49,9 @@ export interface PostComposerSubmit {
   targetAccountIds: string[];
   /** ISO string when the user picked a schedule, else undefined (publish-later draft). */
   scheduledAt?: string;
-  /** Per-post publish options (populated when a TikTok account is selected). */
-  options?: { tiktok?: TikTokPostOptions };
+  /** Per-network publish options — LinkedIn visibility and/or TikTok controls,
+   *  populated when a LINKEDIN/TikTok target is selected. */
+  options?: { linkedin?: { visibility: 'PUBLIC' | 'CONNECTIONS' }; tiktok?: TikTokPostOptions };
 }
 
 interface PostComposerDialogProps {
@@ -66,6 +67,9 @@ interface PostComposerDialogProps {
 const MAX_CONTENT = 5000;
 /** Networks that support Reels/Stories — the rest always publish as a feed post. */
 const FORMAT_NETWORKS = new Set(['FACEBOOK', 'INSTAGRAM']);
+
+const LINKEDIN_VISIBILITIES = ['PUBLIC', 'CONNECTIONS'] as const;
+type LinkedinVisibility = (typeof LINKEDIN_VISIBILITIES)[number];
 
 const isVideoItem = (m: MediaItemValue) =>
   (m.mime?.startsWith('video/') ?? false) || /\.(mp4|mov|m4v|webm)(?:[?#]|$)/i.test(m.url);
@@ -90,6 +94,7 @@ export function PostComposerDialog({
   const isEdit = !!post;
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [linkedinVisibility, setLinkedinVisibility] = useState<LinkedinVisibility>('PUBLIC');
 
   const form = useForm<PostFormValues>({
     resolver: zodResolver(postSchema),
@@ -115,10 +120,14 @@ export function PostComposerDialog({
         targetAccountIds: post.targets.map((tg) => tg.socialAccountId),
         scheduledAt: post.scheduledAt ? toLocalInput(post.scheduledAt) : '',
       });
+      setLinkedinVisibility(
+        (post.options?.linkedin?.visibility as LinkedinVisibility) ?? 'PUBLIC',
+      );
       // Restore saved TikTok options when editing
       setTiktokOpts(post.options?.tiktok ?? {});
     } else {
       form.reset({ content: '', media: [], formats: {}, targetAccountIds: [], scheduledAt: '' });
+      setLinkedinVisibility('PUBLIC');
       setTiktokOpts({});
     }
   }, [open, post, form]);
@@ -169,8 +178,10 @@ export function PostComposerDialog({
         formats[accId] = (values.formats?.[accId] as PostFormat) ?? 'FEED';
       }
     }
-    // Only include TikTok options when a TikTok target is selected.
-    const options = tiktokAccount ? { tiktok: tiktokOpts } : undefined;
+    // Include per-network options only when a relevant target is selected.
+    const options: { linkedin?: { visibility: LinkedinVisibility }; tiktok?: TikTokPostOptions } = {};
+    if (linkedinAccounts.length > 0) options.linkedin = { visibility: linkedinVisibility };
+    if (tiktokAccount) options.tiktok = tiktokOpts;
     onSubmit({
       content: values.content.trim(),
       media,
@@ -210,6 +221,10 @@ export function PostComposerDialog({
 
   const formatAccounts = accounts.filter(
     (a) => selected.includes(a.id) && FORMAT_NETWORKS.has(a.network),
+  );
+
+  const linkedinAccounts = accounts.filter(
+    (a) => selected.includes(a.id) && a.network === 'LINKEDIN',
   );
 
   return (
@@ -461,6 +476,40 @@ export function PostComposerDialog({
                 </div>
               )}
             />
+          )}
+
+          {/* LinkedIn visibility (organic feed posts) */}
+          {linkedinAccounts.length > 0 && (
+            <div className="space-y-2">
+              <label
+                htmlFor="linkedin-visibility"
+                className="text-sm font-medium text-foreground"
+              >
+                {t('social.composer.linkedinVisibility', { defaultValue: 'LinkedIn visibility' })}
+              </label>
+              <select
+                id="linkedin-visibility"
+                aria-label={t('social.composer.linkedinVisibility', {
+                  defaultValue: 'LinkedIn visibility',
+                })}
+                className="block w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground"
+                value={linkedinVisibility}
+                onChange={(e) => setLinkedinVisibility(e.target.value as LinkedinVisibility)}
+              >
+                {LINKEDIN_VISIBILITIES.map((v) => (
+                  <option key={v} value={v}>
+                    {t(`social.composer.linkedinVisibility_${v}`, {
+                      defaultValue: v === 'PUBLIC' ? 'Anyone (public)' : 'Connections only',
+                    })}
+                  </option>
+                ))}
+              </select>
+              <p className="text-caption text-muted-foreground">
+                {t('social.composer.linkedinVisibilityHint', {
+                  defaultValue: 'Controls who can see this post on LinkedIn.',
+                })}
+              </p>
+            </div>
           )}
 
           {/* TikTok-specific controls — shown only when a TikTok account is selected */}
