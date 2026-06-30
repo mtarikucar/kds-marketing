@@ -166,7 +166,7 @@ export default function CustomObjectsPage() {
                   variant="ghost"
                   size="sm"
                   aria-label={t('customObjects.action.restore', { defaultValue: 'Restore' })}
-                  disabled={restoreMutation.isPending}
+                  disabled={restoreMutation.isPending && restoreMutation.variables === obj.key}
                   onClick={(e) => {
                     e.stopPropagation();
                     restoreMutation.mutate(obj.key);
