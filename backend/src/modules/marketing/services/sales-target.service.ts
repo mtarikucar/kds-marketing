@@ -127,7 +127,10 @@ export class SalesTargetService {
    */
   async teamPerformance(workspaceId: string, period: string) {
     const reps = await this.prisma.marketingUser.findMany({
-      where: { workspaceId, status: 'ACTIVE' },
+      // Exclude the per-workspace SYSTEM research sentinel: it's an internal
+      // user, never a salesperson, so it must not appear as a phantom zero-row
+      // in the team-performance table (mirrors getTopPerformers' role filter).
+      where: { workspaceId, status: 'ACTIVE', role: { not: 'SYSTEM' } },
       select: { id: true, firstName: true, lastName: true, role: true },
       orderBy: { firstName: 'asc' },
     });
@@ -148,6 +151,10 @@ export class SalesTargetService {
           workspaceId,
           assignedToId: { in: repIds },
           status: 'WON',
+          // Exclude tombstoned (merged) + soft-deleted (bulk-deleted) leads, so
+          // attainment matches the Performance Report's WON count for the rep.
+          mergedIntoId: null,
+          deletedAt: null,
           convertedAt: { gte: start, lt: end },
         },
         _count: { _all: true },
@@ -223,6 +230,10 @@ export class SalesTargetService {
           workspaceId,
           assignedToId: marketingUserId,
           status: 'WON',
+          // Exclude tombstoned (merged) + soft-deleted (bulk-deleted) leads, so
+          // attainment matches the Performance Report's WON count for the rep.
+          mergedIntoId: null,
+          deletedAt: null,
           convertedAt: { gte: start, lt: end },
         },
       }),

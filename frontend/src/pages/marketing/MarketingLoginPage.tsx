@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { LogIn } from 'lucide-react';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { loginErrorMessage } from '../../features/marketing/api/authError';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Field } from '../../components/ui/Field';
 import { Input } from '../../components/ui/Input';
@@ -45,9 +46,7 @@ export default function MarketingLoginPage() {
       login(data.user, data.accessToken, data.refreshToken);
       navigate('/dashboard');
     } catch (err: any) {
-      setError('root', {
-        message: err.response?.data?.message || err.message || t('login.wrongCreds'),
-      });
+      setError('root', { message: loginErrorMessage(err, t) });
     }
   };
 

@@ -64,11 +64,13 @@ export default function DialerPage() {
   const skip = useMutation({
     mutationFn: () => marketingApi.post(`/dialer/sessions/${session!.id}/skip`).then((r) => r.data as DialSession),
     onSuccess: refresh,
+    onError: (e) => toast.error(apiErr(e, 'Could not skip to the next lead')),
   });
 
   const cancel = useMutation({
     mutationFn: () => marketingApi.post(`/dialer/sessions/${session!.id}/cancel`).then((r) => r.data),
     onSuccess: () => setSession(null),
+    onError: (e) => toast.error(apiErr(e, 'Could not end the session')),
   });
 
   // ── Queue setup screen ──────────────────────────────────────────────────────

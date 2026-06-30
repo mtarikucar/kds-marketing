@@ -179,14 +179,20 @@ export class AdAccountService {
           ? await pullMetaInsights(token, account.externalAdId, from, to)
           : await pullTiktokInsights(token, account.externalAdId, from, to);
     } catch (e) {
-      // A token problem (Graph code 190 / HTTP 401 / auth subcode) → mark
-      // needs-reauth so the hourly sweep (which only pulls ACTIVE accounts) stops
-      // hammering Meta until the operator reconnects. Other errors keep the
-      // retry-friendly markError path (status stays ACTIVE).
-      if (isMetaAuthError(e)) {
+      // A token problem → mark needs-reauth so the ACTIVE-only hourly sweep stops
+      // hammering the provider until the operator reconnects. Meta: Graph code
+      // 190 / HTTP 401 / auth subcode (isMetaAuthError). TikTok: business-API
+      // auth code or token message. Other errors keep the retry-friendly
+      // markError path (status stays ACTIVE).
+      const msg = (e as Error).message ?? 'pull failed';
+      const needsReauth =
+        (account.provider === 'META' && isMetaAuthError(e)) ||
+        (account.provider === 'TIKTOK' &&
+          /access[_ ]?token|auth|not authorized|invalid token|\b(4000[12]|4010\d|40110)\b/i.test(msg));
+      if (needsReauth) {
         await this.markReauth(account.id);
       } else {
-        await this.markError(account.id, (e as Error).message?.slice(0, 1000) ?? 'pull failed');
+        await this.markError(account.id, msg.slice(0, 1000));
       }
       return 0;
     }

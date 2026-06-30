@@ -6,6 +6,7 @@ import {
   twitterProvider,
   pinterestProvider,
   gmbProvider,
+  instagramLoginProvider,
   buildAuthorizeUrl,
 } from './social-oauth.providers';
 
@@ -85,6 +86,23 @@ describe('buildAuthorizeUrl', () => {
     expect(url).toContain('access_type=offline');
     expect(url).toContain('prompt=consent');
     expect(decodeURIComponent(url)).toContain('business.manage');
+  });
+
+  it('Instagram-Login: instagram.com authorize, client_id, comma scopes, response_type=code, state', () => {
+    process.env.INSTAGRAM_APP_ID = 'IGAPP';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    const url = buildAuthorizeUrl('INSTAGRAM_LOGIN', 'STATE9');
+    expect(url).toContain('https://www.instagram.com/oauth/authorize');
+    expect(url).toContain('client_id=IGAPP');
+    expect(url).not.toContain('client_key=');
+    expect(url).toContain('response_type=code');
+    expect(url).toContain('state=STATE9');
+    const decoded = decodeURIComponent(url);
+    // comma-delimited scopes incl. the publish scope
+    expect(decoded).toContain('instagram_business_basic,instagram_business_content_publish');
+    expect(decoded).toContain('/marketing/social/oauth/instagram_login/callback');
+    // not the FB config_id flow
+    expect(url).not.toContain('config_id=');
   });
 });
 
@@ -229,6 +247,70 @@ describe('tiktokProvider', () => {
     const assets = await tiktokProvider.listAssets('TOKEN');
     expect(assets).toHaveLength(1);
     expect(assets[0]).toMatchObject({ externalId: 'oid', accountType: 'TIKTOK' });
+  });
+});
+
+describe('instagramLoginProvider (direct Instagram Login)', () => {
+  beforeEach(() => {
+    process.env.INSTAGRAM_APP_ID = 'igapp';
+    process.env.INSTAGRAM_APP_SECRET = 'igsecret';
+    process.env.PUBLIC_BASE_URL = 'https://api.x';
+    mockFetch.mockReset();
+  });
+
+  it('exchangeCode does the 2-step exchange, strips a trailing #_, returns the long token as access+refresh', async () => {
+    mockFetch
+      .mockResolvedValueOnce(res({ access_token: 'short', user_id: 'u9', permissions: 'x' })) // short-lived
+      .mockResolvedValueOnce(res({ access_token: 'LONGTOK', token_type: 'bearer', expires_in: 5184000 })); // long-lived
+    const r = await instagramLoginProvider.exchangeCode('INSTAGRAM_LOGIN', 'CODE123#_');
+    expect(r.accessToken).toBe('LONGTOK');
+    expect(r.refreshToken).toBe('LONGTOK');
+    expect(r.expiresAt).toBeInstanceOf(Date);
+
+    // 1st call: POST short-lived token, code with the trailing #_ stripped.
+    const [url0, init0] = mockFetch.mock.calls[0];
+    expect(url0).toBe('https://api.instagram.com/oauth/access_token');
+    expect(init0.method).toBe('POST');
+    expect(init0.body).toContain('grant_type=authorization_code');
+    expect(init0.body).toContain('code=CODE123');
+    expect(init0.body).not.toContain('%23_'); // no encoded #_
+    // 2nd call: GET long-lived exchange on graph.instagram.com.
+    const [url1] = mockFetch.mock.calls[1];
+    expect(url1).toContain('https://graph.instagram.com/access_token');
+    expect(url1).toContain('grant_type=ig_exchange_token');
+    expect(url1).toContain('access_token=short');
+  });
+
+  it('exchangeCode throws when the short-lived exchange fails', async () => {
+    mockFetch.mockResolvedValueOnce(res({ error_message: 'bad code' }, false));
+    await expect(instagramLoginProvider.exchangeCode('INSTAGRAM_LOGIN', 'CODE')).rejects.toThrow('bad code');
+  });
+
+  it('refresh re-issues the access token via refresh_access_token', async () => {
+    mockFetch.mockResolvedValueOnce(res({ access_token: 'NEWTOK', token_type: 'bearer', expires_in: 5184000 }));
+    const r = await instagramLoginProvider.refresh!('OLDTOK');
+    expect(r.accessToken).toBe('NEWTOK');
+    expect(r.refreshToken).toBe('NEWTOK');
+    expect(r.expiresAt).toBeInstanceOf(Date);
+    const [url0] = mockFetch.mock.calls[0];
+    expect(url0).toContain('https://graph.instagram.com/refresh_access_token');
+    expect(url0).toContain('grant_type=ig_refresh_token');
+    expect(url0).toContain('access_token=OLDTOK');
+  });
+
+  it('listAssets parses /me into one IG_DIRECT asset', async () => {
+    mockFetch.mockResolvedValueOnce(res({ user_id: '17841400000', username: 'acme' }));
+    const assets = await instagramLoginProvider.listAssets('TOKEN');
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({
+      externalId: '17841400000',
+      accountType: 'IG_DIRECT',
+      displayName: 'acme (Instagram)',
+      token: 'TOKEN',
+    });
+    const [url0] = mockFetch.mock.calls[0];
+    expect(url0).toContain('https://graph.instagram.com/me');
+    expect(url0).toContain('fields=user_id');
   });
 });
 

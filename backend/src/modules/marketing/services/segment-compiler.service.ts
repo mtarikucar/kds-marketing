@@ -245,15 +245,30 @@ export class SegmentCompilerService {
     if (needsValue) {
       const bad = (v: unknown) =>
         (type === 'number' && Number.isNaN(Number(v))) ||
-        (type === 'date' && Number.isNaN(new Date(v as string).getTime()));
+        (type === 'date' && Number.isNaN(new Date(v as string).getTime())) ||
+        // String columns aren't coerced (coerce() returns them as-is), so a
+        // non-string value here compiles straight into a Prisma filter (e.g.
+        // `{ businessName: { contains: {…} } }`) that throws on EVERY later
+        // evaluation. Reject it at save time, like the number/date checks.
+        (type === 'string' && typeof v !== 'string');
+      // The value SHAPE must match the comparator, or compile() builds an invalid
+      // Prisma filter that 500s on EVERY later evaluation:
+      //   between → a [min, max] pair
+      //   in/nin  → a list (array)
+      //   else (eq/ne/gt/gte/lt/lte/contains/startsWith) → a single scalar; an
+      //     ARRAY here compiles to `{ field: [..] }`, which Prisma rejects (the
+      //     builder can leave a stale array when the operator is switched from
+      //     in/nin → eq, and the raw-JSON editor can send one).
       if (cmp === 'between') {
         if (!Array.isArray(leaf.value) || leaf.value.length !== 2 || leaf.value.some(bad)) {
           throw new BadRequestException(`"${field}" between needs two valid ${type} values at ${path}`);
         }
-      } else if (Array.isArray(leaf.value)) {
-        if (leaf.value.some(bad)) throw new BadRequestException(`"${field}" has an invalid ${type} value at ${path}`);
-      } else if (bad(leaf.value)) {
-        throw new BadRequestException(`"${field}" needs a valid ${type} value at ${path}`);
+      } else if (cmp === 'in' || cmp === 'nin') {
+        if (!Array.isArray(leaf.value) || leaf.value.some(bad)) {
+          throw new BadRequestException(`"${field}" ${cmp} needs a list of valid ${type} values at ${path}`);
+        }
+      } else if (Array.isArray(leaf.value) || bad(leaf.value)) {
+        throw new BadRequestException(`"${field}" needs a single valid ${type} value at ${path}`);
       }
     }
   }

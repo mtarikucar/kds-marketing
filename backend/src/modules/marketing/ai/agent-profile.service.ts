@@ -93,20 +93,26 @@ export class AgentProfileService {
   private toData(workspaceId: string, dto: Partial<AgentProfileDto>, partial = false) {
     const json = (v: unknown) =>
       v === undefined ? undefined : ((v as Prisma.InputJsonValue) ?? Prisma.JsonNull);
+    // On a PARTIAL (PATCH) update an OMITTED scalar must be left untouched —
+    // return undefined so it's dropped below, NOT defaulted to null/'tr' which
+    // would overwrite the stored value (e.g. a status-only pause toggle was
+    // wiping tone/goals/guardrails, resetting language to 'tr', and unlinking
+    // bookingCalendarId). Defaults apply only on CREATE.
+    const onMissing = partial ? undefined : null;
     const data: Prisma.AgentProfileUncheckedCreateInput = {
       workspaceId,
       name: dto.name as string,
       persona: dto.persona as string,
-      tone: dto.tone ?? null,
-      goals: dto.goals ?? null,
-      guardrails: dto.guardrails ?? null,
-      language: dto.language ?? 'tr',
+      tone: dto.tone === undefined ? onMissing : dto.tone,
+      goals: dto.goals === undefined ? onMissing : dto.goals,
+      guardrails: dto.guardrails === undefined ? onMissing : dto.guardrails,
+      language: dto.language === undefined ? (partial ? undefined : 'tr') : dto.language,
       channels: json(dto.channels),
       kbDocIds: json(dto.kbDocIds),
       captureFields: json(dto.captureFields),
       handoffRules: json(dto.handoffRules),
       followup: json(dto.followup),
-      bookingCalendarId: dto.bookingCalendarId ?? null,
+      bookingCalendarId: dto.bookingCalendarId === undefined ? onMissing : dto.bookingCalendarId,
       ...(dto.maxRepliesPerConvoDaily !== undefined
         ? { maxRepliesPerConvoDaily: dto.maxRepliesPerConvoDaily }
         : {}),

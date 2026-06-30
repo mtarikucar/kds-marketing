@@ -247,7 +247,10 @@ function ModulesEditor({ course, mutations }: { course: CourseWithModules; mutat
 
   const addModule = () => {
     const title = newModuleTitle.trim();
-    if (!title) return;
+    // Guard isPending here too: the Enter handler calls addModule() directly and
+    // bypasses the button's disabled state, so Enter-spam would add the same
+    // module twice before the first POST resolves.
+    if (!title || mutations.addModule.isPending) return;
     mutations.addModule.mutate(
       { id: course.id, title },
       {
@@ -261,7 +264,7 @@ function ModulesEditor({ course, mutations }: { course: CourseWithModules; mutat
   };
 
   const saveModuleTitle = () => {
-    if (!editingModule || !editTitle.trim()) return;
+    if (!editingModule || !editTitle.trim() || mutations.updateModule.isPending) return;
     mutations.updateModule.mutate(
       { moduleId: editingModule.id, title: editTitle.trim() },
       {

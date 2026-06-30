@@ -280,6 +280,7 @@ export default function LeadDetailPage() {
 
             <TabsContent value="activities">
               <ActivityTimelineTab
+                leadId={lead.id}
                 activities={lead.activities || []}
                 onSubmit={(data) => activityMutation.mutate(data)}
                 isPending={activityMutation.isPending}

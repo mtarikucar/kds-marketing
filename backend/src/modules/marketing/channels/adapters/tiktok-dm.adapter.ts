@@ -8,6 +8,7 @@ import {
   ResolvedChannelConfig,
   SendResult,
 } from '../channel-adapter.interface';
+import { tiktokBusinessFetch } from '../tiktok-business.util';
 
 const CAPS: readonly ChannelCapability[] = ['send', 'receive'];
 
@@ -23,6 +24,10 @@ const CAPS: readonly ChannelCapability[] = ['send', 'receive'];
  * need to adjust the exact path/fields per their app's granted scopes. Fully
  * INERT without an access token (send → FAILED) — nothing runs until a workspace
  * connects a TikTok messaging account.
+ *
+ * Capability gate: `config.public.messaging` must equal 'granted' (set by the
+ * TikTok OAuth flow once the app has been approved for messaging scope). Without
+ * this flag the send path short-circuits with FAILED and never contacts the API.
  */
 @Injectable()
 export class TiktokDmAdapter implements ChannelAdapter, OnModuleInit {
@@ -36,33 +41,43 @@ export class TiktokDmAdapter implements ChannelAdapter, OnModuleInit {
   }
 
   async send({ config, to, text }: OutboundSend): Promise<SendResult> {
+    // Capability gate: TikTok messaging is access-gated; the OAuth flow sets this
+    // flag only after the app has been approved for the messaging scope.
+    if (config.public?.messaging !== 'granted') {
+      return {
+        externalMessageId: null,
+        status: 'FAILED',
+        error: 'TikTok messaging access not granted for this channel',
+      };
+    }
+
     const token = config.secrets.accessToken;
     if (!token) {
       return { externalMessageId: null, status: 'FAILED', error: 'TikTok access token missing' };
     }
+
     try {
-      // TikTok Business Messaging send. Bounded like metaSend so a black-holed
-      // endpoint can't wedge the sequential auto-reply batch.
-      const res = await fetch('https://business-api.tiktok.com/open_api/v1.3/business/message/send/', {
+      const result = await tiktokBusinessFetch('/business/message/send/', {
+        accessToken: token,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Access-Token': token },
-        body: JSON.stringify({
+        body: {
           business_id: config.externalId,
           to_user_id: to,
           message: { type: 'text', text },
-        }),
-        signal: AbortSignal.timeout(10_000),
+        },
       });
-      const data: any = await res.json().catch(() => ({}));
-      // TikTok wraps results as { code, message, data }; code 0 = ok.
-      if (!res.ok || (data?.code !== undefined && data.code !== 0)) {
+
+      if (!result.ok) {
+        const errResult = result as { ok: false; error: { message: string } };
         return {
           externalMessageId: null,
           status: 'FAILED',
-          error: `TikTok ${res.status}: ${String(data?.message ?? JSON.stringify(data)).slice(0, 300)}`,
+          error: errResult.error.message.slice(0, 300),
         };
       }
-      return { externalMessageId: data?.data?.message_id ?? null, status: 'SENT' };
+
+      const okResult = result as { ok: true; data: any };
+      return { externalMessageId: okResult.data?.message_id ?? null, status: 'SENT' };
     } catch (e: any) {
       return { externalMessageId: null, status: 'FAILED', error: e?.message ?? String(e) };
     }

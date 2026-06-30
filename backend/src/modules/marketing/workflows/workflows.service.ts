@@ -179,6 +179,13 @@ export class WorkflowsService {
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start === -1 || end === -1) throw new BadRequestException('AI returned no JSON');
-    return JSON.parse(text.slice(start, end + 1));
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      // The model emitted prose-wrapped or truncated JSON (braces present but
+      // not parseable). Surface a clean 400 — the draft() catch refunds the
+      // reserved credits — instead of letting a raw SyntaxError escape as a 500.
+      throw new BadRequestException('AI returned malformed JSON');
+    }
   }
 }

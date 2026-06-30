@@ -6,6 +6,7 @@ import { Plus, Trash2, Send, Check, X, FileOutput, Pencil } from 'lucide-react';
 
 import {
   listEstimates,
+  getEstimate,
   createEstimate,
   updateEstimate,
   sendEstimate,
@@ -38,6 +39,9 @@ import {
   SelectItem,
 } from '@/components/ui';
 import { listProducts } from '../../../features/marketing/api/products.service';
+import { listTaxRates } from '../../../features/marketing/api/tax-rates.service';
+
+const NO_TAX = '__none__';
 
 const STATUS_TONE: Record<EstimateStatus, 'neutral' | 'info' | 'success' | 'danger' | 'warning'> = {
   DRAFT: 'neutral',
@@ -51,6 +55,7 @@ interface ItemRow {
   description: string;
   qty: string;
   price: string; // major units in the form; converted to minor on save
+  taxRateId?: string; // optional per-line tax rate (mirrors the invoice form)
 }
 
 interface FormState {
@@ -69,6 +74,67 @@ const EMPTY_FORM: FormState = {
   validUntil: '',
   items: [{ ...EMPTY_ITEM }],
 };
+
+/**
+ * Map a full estimate record (the GET /:id detail) into the editor's form
+ * state. The list endpoint omits `items` and `notes`, so the edit dialog MUST
+ * build the form from the detail — seeding from a list row would open the
+ * editor with no line items, and saving a DRAFT would then replace the
+ * estimate's items with an empty set (and wipe its notes). Prices are
+ * minor→major for the form.
+ */
+export function formFromEstimate(e: Estimate): FormState {
+  return {
+    id: e.id,
+    status: e.status,
+    currency: e.currency,
+    notes: e.notes ?? '',
+    validUntil: e.validUntil ? e.validUntil.slice(0, 10) : '',
+    items: (e.items ?? []).map((it) => ({
+      description: it.description,
+      qty: String(it.qty),
+      price: String((it.unitPrice || 0) / 100),
+      taxRateId: it.taxRateId ?? undefined,
+    })),
+  };
+}
+
+/**
+ * The exact line items an estimate will PERSIST: blank-description rows are
+ * dropped and qty/price are normalized to non-negative minor-unit integers.
+ * Both the save payload and the live total preview derive from this, so the
+ * editor can never show a figure different from what the server stores.
+ */
+export function normalizeEstimateItems(
+  items: ItemRow[],
+): { description: string; qty: number; unitPrice: number; taxRateId?: string }[] {
+  return items
+    .filter((it) => it.description.trim())
+    .map((it) => ({
+      description: it.description.trim(),
+      qty: Math.max(0, Math.round(Number(it.qty) || 0)),
+      unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
+      ...(it.taxRateId ? { taxRateId: it.taxRateId } : {}),
+    }));
+}
+
+/**
+ * Minor-unit subtotal / tax / total over the PERSISTED items — exclusive tax,
+ * rounded per line then summed, mirroring the backend computeMoneyTotals.
+ */
+export function computeFormTotals(
+  items: ItemRow[],
+  pctOf: (taxRateId?: string) => number,
+): { subtotal: number; tax: number; total: number } {
+  let subtotal = 0;
+  let tax = 0;
+  for (const it of normalizeEstimateItems(items)) {
+    const line = it.qty * it.unitPrice;
+    subtotal += line;
+    tax += Math.round((line * pctOf(it.taxRateId)) / 100);
+  }
+  return { subtotal, tax, total: subtotal + tax };
+}
 
 function money(minor: number, currency: string): string {
   try {
@@ -121,6 +187,15 @@ export default function EstimatesPage() {
   });
   const products = productPage?.data ?? [];
 
+  // Per-line tax rates (KDV/VAT) — same source the invoice form uses, so a quote
+  // and the invoice it converts into apply identical tax.
+  const { data: taxRates = [] } = useQuery({
+    queryKey: ['marketing', 'tax-rates'],
+    queryFn: listTaxRates,
+    staleTime: 60_000,
+  });
+  const pctOf = (taxRateId?: string) => Number(taxRates.find((r) => r.id === taxRateId)?.rate ?? 0);
+
   const addProductLine = (productId: string) => {
     const p = products.find((x) => x.id === productId);
     if (!p) return;
@@ -145,13 +220,7 @@ export default function EstimatesPage() {
     currency: f.currency,
     notes: f.notes || undefined,
     validUntil: f.validUntil || undefined,
-    items: f.items
-      .filter((it) => it.description.trim())
-      .map((it) => ({
-        description: it.description.trim(),
-        qty: Math.max(0, Math.round(Number(it.qty) || 0)),
-        unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
-      })),
+    items: normalizeEstimateItems(f.items),
   });
 
   const saveMutation = useMutation({
@@ -211,30 +280,29 @@ export default function EstimatesPage() {
     setForm({ ...EMPTY_FORM, items: [{ ...EMPTY_ITEM }] });
     setDialogOpen(true);
   };
-  const openEdit = (e: Estimate) => {
-    setForm({
-      id: e.id,
-      status: e.status,
-      currency: e.currency,
-      notes: e.notes ?? '',
-      validUntil: e.validUntil ? e.validUntil.slice(0, 10) : '',
-      items: (e.items ?? []).map((it) => ({
-        description: it.description,
-        qty: String(it.qty),
-        price: String((it.unitPrice || 0) / 100),
-      })),
-    });
+  const openEdit = async (e: Estimate) => {
+    // The list row omits items + notes, so fetch the full estimate and seed the
+    // form from it — otherwise the editor opens with no line items and saving a
+    // DRAFT would replace the estimate's items with an empty set (and wipe its
+    // notes). Fall back to the list row only if the detail fetch fails.
+    try {
+      const full = await getEstimate(e.id);
+      setForm(formFromEstimate(full));
+    } catch {
+      setForm(formFromEstimate(e));
+    }
     setDialogOpen(true);
   };
 
-  const formTotal = useMemo(
-    () =>
-      form.items.reduce(
-        (s, it) => s + Math.round(Number(it.qty) || 0) * Math.round(Number(it.price) * 100 || 0),
-        0,
-      ),
-    [form.items],
-  );
+  // Live money breakdown in MINOR units. Derives from the SAME normalized items
+  // the save payload sends (computeFormTotals → normalizeEstimateItems), so the
+  // preview can never disagree with the figure the server persists — in
+  // particular, blank-description lines (dropped on save) no longer inflate it.
+  const { formSubtotal, formTax, formTotal } = useMemo(() => {
+    const { subtotal, tax, total } = computeFormTotals(form.items, pctOf);
+    return { formSubtotal: subtotal, formTax: tax, formTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.items, taxRates]);
 
   const isDraft = !form.id || form.status === 'DRAFT';
   const rows = estimates ?? [];
@@ -296,27 +364,32 @@ export default function EstimatesPage() {
                   <Button variant="ghost" size="sm" onClick={() => openEdit(e)} title={t('common.edit', 'Edit')}>
                     <Pencil className="w-4 h-4" aria-hidden="true" />
                   </Button>
+                  {/* Each action's in-flight guard is scoped to THIS estimate
+                      (mutation.variables === e.id) so a click can't double-fire
+                      — important for Convert, which mints an invoice and whose
+                      second request would otherwise surface a spurious error
+                      toast after the first already succeeded. */}
                   {(e.status === 'DRAFT' || e.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
+                    <Button variant="ghost" size="sm" disabled={sendMut.isPending && sendMut.variables === e.id} onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
                       <Send className="w-4 h-4" aria-hidden="true" />
                     </Button>
                   )}
                   {e.status !== 'ACCEPTED' && e.status !== 'DECLINED' && (
                     <>
-                      <Button variant="ghost" size="sm" onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
+                      <Button variant="ghost" size="sm" disabled={acceptMut.isPending && acceptMut.variables === e.id} onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
                         <Check className="w-4 h-4 text-success" aria-hidden="true" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
+                      <Button variant="ghost" size="sm" disabled={declineMut.isPending && declineMut.variables === e.id} onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
                         <X className="w-4 h-4 text-danger" aria-hidden="true" />
                       </Button>
                     </>
                   )}
                   {!e.convertedInvoiceId && (e.status === 'ACCEPTED' || e.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
+                    <Button variant="ghost" size="sm" disabled={convertMut.isPending && convertMut.variables === e.id} onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
                       <FileOutput className="w-4 h-4 text-primary" aria-hidden="true" />
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => deleteMut.mutate(e.id)}>
+                  <Button variant="ghost" size="sm" disabled={deleteMut.isPending && deleteMut.variables === e.id} onClick={() => deleteMut.mutate(e.id)}>
                     <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
                   </Button>
                 </div>
@@ -406,6 +479,33 @@ export default function EstimatesPage() {
                       }
                     />
                   </Labeled>
+                  {taxRates.length > 0 && (
+                    <Labeled label={i === 0 ? t('estimates.tax', 'Tax') : ''} className="w-28">
+                      <Select
+                        value={it.taxRateId ?? NO_TAX}
+                        disabled={!isDraft}
+                        onValueChange={(v) =>
+                          setForm((f) => {
+                            const items = [...f.items];
+                            items[i] = { ...items[i], taxRateId: v === NO_TAX ? undefined : v };
+                            return { ...f, items };
+                          })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('estimates.tax', 'Tax')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_TAX}>{t('estimates.noTax', 'No tax')}</SelectItem>
+                          {taxRates.map((r) => (
+                            <SelectItem key={r.id} value={r.id}>
+                              {r.name} (%{Number(r.rate)})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Labeled>
+                  )}
                   {isDraft && (
                     <Button
                       variant="ghost"
@@ -436,9 +536,17 @@ export default function EstimatesPage() {
 
             <div className="flex items-center justify-between border-t border-border pt-2">
               <span className="text-sm text-muted-foreground">{t('estimates.total', 'Total')}</span>
-              <span className="text-lg font-semibold text-foreground">
-                {money(formTotal, form.currency)}
-              </span>
+              <div className="text-right">
+                {formTax > 0 && (
+                  <p className="text-caption tabular-nums text-muted-foreground">
+                    {t('estimates.subtotal', 'Subtotal')} {money(formSubtotal, form.currency)} ·{' '}
+                    {t('estimates.tax', 'Tax')} {money(formTax, form.currency)}
+                  </p>
+                )}
+                <span className="text-lg font-semibold text-foreground">
+                  {money(formTotal, form.currency)}
+                </span>
+              </div>
             </div>
 
             <div className="flex gap-2">

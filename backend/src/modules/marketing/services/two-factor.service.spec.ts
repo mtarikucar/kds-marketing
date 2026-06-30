@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { TwoFactorService } from './two-factor.service';
 import { generateTotpSecret, generateTotpCode } from '../util/totp';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
@@ -19,6 +20,34 @@ describe('TwoFactorService', () => {
     const out: any = await svc.beginEnroll('u1');
     expect(out.otpauthUri).toMatch(/^otpauth:\/\/totp\//);
     expect((prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data.twoFactorSecret).toBe(out.secret);
+  });
+
+  it('beginEnroll renders the QR server-side as a data URI (no third-party QR service)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.marketingUser.findUnique.mockResolvedValue({ id: 'u1', email: 'a@b.com' } as any);
+    (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
+    const out: any = await svc.beginEnroll('u1');
+    // The secret-bearing otpauth URI must never be handed to an external QR
+    // renderer — the QR is generated here and returned as a self-contained PNG.
+    expect(out.qrDataUri).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('beginEnroll refuses when 2FA is already enabled (no code-free disable / re-enroll)', async () => {
+    // `disable` deliberately requires a valid code so a hijacked session can't
+    // turn 2FA off. beginEnroll must not become a code-free backdoor for that:
+    // it used to unconditionally set twoFactorEnabled=false (silently disabling
+    // an enrolled user and desyncing their authenticator). Refuse instead.
+    const { prisma, svc } = makeSvc();
+    prisma.marketingUser.findUnique.mockResolvedValue({
+      id: 'u1',
+      email: 'a@b.com',
+      twoFactorEnabled: true,
+      twoFactorSecret: 'sealed',
+    } as any);
+    (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
+    await expect(svc.beginEnroll('u1')).rejects.toBeInstanceOf(BadRequestException);
+    // It must NOT have written anything (no flip of twoFactorEnabled to false).
+    expect(prisma.marketingUser.update as jest.Mock).not.toHaveBeenCalled();
   });
 
   it('enable verifies a TOTP code, flips the flag, and issues backup codes', async () => {

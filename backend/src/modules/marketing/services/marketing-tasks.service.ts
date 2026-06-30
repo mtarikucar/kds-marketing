@@ -13,6 +13,7 @@ import { MarketingNotificationsService } from './marketing-notifications.service
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { parseDueDate } from './marketing-task-date.util';
+import { rangeEndInclusive } from './report-date-range.util';
 
 const MAX_CALENDAR_RANGE_DAYS = 62;
 
@@ -106,7 +107,9 @@ export class MarketingTasksService {
     if (filter.dateFrom || filter.dateTo) {
       filters.dueDate = {};
       if (filter.dateFrom) filters.dueDate.gte = new Date(filter.dateFrom);
-      if (filter.dateTo) filters.dueDate.lte = new Date(filter.dateTo);
+      // Inclusive end-of-day for a bare YYYY-MM-DD so tasks due later on the
+      // final day aren't dropped (mirrors reports/analytics).
+      if (filter.dateTo) filters.dueDate.lte = rangeEndInclusive(filter.dateTo);
     }
 
     const allowedSortFields = ['createdAt', 'updatedAt', 'dueDate', 'title', 'type', 'status', 'priority'];
@@ -256,7 +259,7 @@ export class MarketingTasksService {
     if (status && status !== 'COMPLETED') data.status = status;
     if (dto.dueDate) data.dueDate = parseDueDate(dto.dueDate);
 
-    return this.prisma.marketingTask.update({
+    const updated = await this.prisma.marketingTask.update({
       where: { id: task.id },
       data,
       include: {
@@ -264,6 +267,22 @@ export class MarketingTasksService {
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
       },
     });
+
+    // Notify the new assignee on a reassignment (mirrors create()). create()
+    // already covers first assignment; here only fire when the assignee actually
+    // CHANGED to someone other than the actor — the most common assign path.
+    if (dto.assignedToId && dto.assignedToId !== task.assignedToId && dto.assignedToId !== userId) {
+      this.notificationsService.create({
+        workspaceId,
+        userId: dto.assignedToId,
+        type: 'TASK_ASSIGNED',
+        title: 'Task assigned to you',
+        message: `Task: "${updated.title}"`,
+        metadata: { taskId: updated.id },
+      }).catch(() => {});
+    }
+
+    return updated;
   }
 
   async complete(workspaceId: string, id: string, userId: string, userRole: string) {

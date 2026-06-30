@@ -111,9 +111,21 @@ export class WorkflowExecutorService implements OnModuleInit {
     }
 
     const ctxObj = (run.context ?? {}) as Record<string, any>;
+    // Exclude a lead bulk-deleted (deletedAt) or merged-away (mergedIntoId) since
+    // the run started: a workflow waits between steps, so a lead can vanish mid-
+    // flight, and bulk-delete means "stop contacting".
     const lead = run.leadId
-      ? await this.prisma.lead.findFirst({ where: { id: run.leadId, workspaceId: run.workspaceId } })
+      ? await this.prisma.lead.findFirst({
+          where: { id: run.leadId, workspaceId: run.workspaceId, deletedAt: null, mergedIntoId: null },
+        })
       : null;
+    // A lead-scoped run whose lead is gone has no live subject to act on — stop
+    // it (parallel to the 'workflow deleted mid-run' guard) so it can't keep
+    // sending / tasking against a hidden contact across resumes.
+    if (run.leadId && !lead) {
+      await this.finish(runId, 'STOPPED', 'lead deleted or merged mid-run');
+      return;
+    }
     const ctx: WorkflowContext = {
       workspaceId: run.workspaceId,
       lead,

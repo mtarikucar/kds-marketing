@@ -57,6 +57,19 @@ describe('PublicInvoiceController (public token-gated)', () => {
       expect(html).toContain('id="pay"'); // pay button present
     });
 
+    it('re-enables the Pay button when the payment request fails (fetch has a .catch)', async () => {
+      invoices.publicInvoice.mockResolvedValue({
+        number: 'INV-9', currency: 'USD', total: 1000, status: 'SENT', notes: null,
+        items: [{ description: 'Item', qty: 1, unitPrice: 1000 }],
+      });
+      const r = res();
+      await ctrl.page('tok', r);
+      const html = r.send.mock.calls[0][0] as string;
+      // A transient failure must not leave the button stuck on '…' disabled.
+      expect(html).toMatch(/\.catch\(/);
+      expect(html).toMatch(/btn\.disabled\s*=\s*false/);
+    });
+
     it('shows the Paid badge and NO pay button when already paid', async () => {
       invoices.publicInvoice.mockResolvedValue({
         number: 'INV-2', currency: 'USD', total: 5000, status: 'PAID', notes: null, items: [],

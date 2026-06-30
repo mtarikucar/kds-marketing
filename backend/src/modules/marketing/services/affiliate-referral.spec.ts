@@ -15,6 +15,7 @@ describe('Affiliate referral loop (A8)', () => {
         create: jest.fn().mockImplementation(async ({ data }: any) => ({ id: 'aff-new', ...data })),
       },
       affiliateReferral: { create: jest.fn().mockResolvedValue({ id: 'ref-1' }) },
+      lead: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     svc = new AffiliateService(prisma as any);
   });
@@ -49,6 +50,13 @@ describe('Affiliate referral loop (A8)', () => {
       prisma.affiliate.findUnique.mockResolvedValue({ id: 'aff-1', workspaceId: WS, status: 'PENDING' });
       expect(await svc.attributeReferral(WS, 'rXYZ', 'lead-9')).toBe(false);
       expect(await svc.attributeReferral(WS, null, 'lead-9')).toBe(false);
+    });
+
+    it('does NOT credit a self-referral (lead email == affiliate email)', async () => {
+      prisma.affiliate.findUnique.mockResolvedValue({ id: 'aff-1', workspaceId: WS, status: 'ACTIVE', email: 'partner@x.com' });
+      prisma.lead.findFirst.mockResolvedValue({ email: 'Partner@X.com' }); // same email, different case
+      expect(await svc.attributeReferral(WS, 'rXYZ', 'lead-self')).toBe(false);
+      expect(prisma.affiliateReferral.create).not.toHaveBeenCalled();
     });
   });
 

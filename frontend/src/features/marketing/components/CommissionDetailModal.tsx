@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { CheckCircle2, DollarSign, Pencil } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDate, fmtDateTime } from '../utils/format';
@@ -123,6 +123,15 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
 
   const [editingAmount, setEditingAmount] = useState(false);
   const [draftAmount, setDraftAmount] = useState('');
+
+  // Reset the inline amount editor whenever the opened commission changes. The
+  // parent mounts this modal persistently (commissionId is a prop, not a mount
+  // gate), so without this a draft amount typed for one commission would carry
+  // into the next — and a Save could write it onto the wrong row.
+  useEffect(() => {
+    setEditingAmount(false);
+    setDraftAmount('');
+  }, [commissionId]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'commissions'] });

@@ -75,7 +75,9 @@ describe('TelephonyConfigService', () => {
     prisma.telephonyConfig.findUnique.mockResolvedValue({ workspaceId: 'ws', status: 'ACTIVE', wssUrl: 'wss://x/ws', sipDomain: 'sip5.netsantral.com', trunk: '850', configSealed: 'sealed:{"username":"850","password":"pw"}' });
     prisma.marketingUser.findFirst.mockResolvedValue({ dahili: '101', dahiliSecret: 'sealed:sip-pw', firstName: 'A', lastName: 'B' });
     const r = await new TelephonyConfigService(prisma).webphoneConfigFor('ws', 'u');
-    expect(r).toEqual({ wssUrl: 'wss://x/ws', sipDomain: 'sip5.netsantral.com', dahili: '101', sipPassword: 'sip-pw', displayName: 'A B' });
+    // SIP auth username is the FULL "<ext>-<trunk>" (NetGSM requirement) — derived
+    // from the rep's bare extension (101) + the config trunk (850).
+    expect(r).toEqual({ wssUrl: 'wss://x/ws', sipDomain: 'sip5.netsantral.com', dahili: '101-850', sipPassword: 'sip-pw', displayName: 'A B' });
     // the rep lookup MUST be scoped to {id, workspaceId} — no cross-tenant/user read
     expect(prisma.marketingUser.findFirst).toHaveBeenCalledWith({
       where: { id: 'u', workspaceId: 'ws' },

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Plus, Trash2, Image as ImageIcon, Film, Upload, CalendarClock } from 'lucide-react';
 import {
@@ -11,9 +12,11 @@ import {
   type PostFormat,
   type MediaItemValue,
 } from './socialSchemas';
-import type { SocialAccount, SocialPost } from './types';
+import type { SocialAccount, SocialPost, TikTokPostOptions } from './types';
 import { NETWORK_META } from './networks';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { getTiktokCreatorInfo, type TiktokCreatorInfo } from '../../../features/marketing/api/social-planner.service';
+
 import {
   Dialog,
   DialogContent,
@@ -28,7 +31,15 @@ import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Checkbox } from '@/components/ui/Checkbox';
+import { Switch } from '@/components/ui/Switch';
 import { EmptyState } from '@/components/ui/EmptyState';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/Select';
 
 export interface PostComposerSubmit {
   content: string;
@@ -38,6 +49,8 @@ export interface PostComposerSubmit {
   targetAccountIds: string[];
   /** ISO string when the user picked a schedule, else undefined (publish-later draft). */
   scheduledAt?: string;
+  /** Per-post publish options (populated when a TikTok account is selected). */
+  options?: { tiktok?: TikTokPostOptions };
 }
 
 interface PostComposerDialogProps {
@@ -56,6 +69,14 @@ const FORMAT_NETWORKS = new Set(['FACEBOOK', 'INSTAGRAM']);
 
 const isVideoItem = (m: MediaItemValue) =>
   (m.mime?.startsWith('video/') ?? false) || /\.(mp4|mov|m4v|webm)(?:[?#]|$)/i.test(m.url);
+
+/** Privacy-level label map (shown in the select dropdown). */
+const PRIVACY_LABELS: Record<string, string> = {
+  PUBLIC_TO_EVERYONE: 'Public to everyone',
+  MUTUAL_FOLLOW_FRIENDS: 'Mutual follow friends',
+  FOLLOWER_OF_CREATOR: 'Followers of creator',
+  SELF_ONLY: 'Only me',
+};
 
 export function PostComposerDialog({
   open,
@@ -76,6 +97,9 @@ export function PostComposerDialog({
     defaultValues: { content: '', media: [], formats: {}, targetAccountIds: [], scheduledAt: '' },
   });
 
+  // ── TikTok-specific local state ──────────────────────────────────────────────
+  const [tiktokOpts, setTiktokOpts] = useState<TikTokPostOptions>({});
+
   // Populate when (re)opening
   useEffect(() => {
     if (!open) return;
@@ -91,13 +115,47 @@ export function PostComposerDialog({
         targetAccountIds: post.targets.map((tg) => tg.socialAccountId),
         scheduledAt: post.scheduledAt ? toLocalInput(post.scheduledAt) : '',
       });
+      // Restore saved TikTok options when editing
+      setTiktokOpts(post.options?.tiktok ?? {});
     } else {
       form.reset({ content: '', media: [], formats: {}, targetAccountIds: [], scheduledAt: '' });
+      setTiktokOpts({});
     }
   }, [open, post, form]);
 
   const fieldErr = (msg?: string) =>
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;
+
+  const errors = form.formState.errors;
+  const content = form.watch('content') ?? '';
+  const selected = form.watch('targetAccountIds') ?? [];
+
+  // ── TikTok target detection ────────────────────────────────────────────────
+  // If any selected account is TikTok, pick the first one to fetch creator-info.
+  const selectedAccounts = accounts.filter((a) => selected.includes(a.id));
+  const tiktokAccount = selectedAccounts.find((a) => a.network === 'TIKTOK') ?? null;
+
+  const { data: creatorInfo, isLoading: creatorInfoLoading } = useQuery({
+    queryKey: ['marketing', 'social', 'tiktok-creator-info', tiktokAccount?.id],
+    queryFn: () => getTiktokCreatorInfo(tiktokAccount!.id),
+    enabled: !!tiktokAccount,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // When creator-info first loads, initialise the privacy level to the first
+  // allowed option if not already set (or if the previously set level is no
+  // longer available for this account).
+  useEffect(() => {
+    if (!creatorInfo) return;
+    const options = creatorInfo.privacyLevelOptions;
+    if (!options.length) return;
+    setTiktokOpts((prev) => {
+      const current = prev.privacyLevel;
+      const valid = current && options.includes(current) ? current : options[0];
+      if (valid === current) return prev;
+      return { ...prev, privacyLevel: valid };
+    });
+  }, [creatorInfo]);
 
   const handleSubmit: SubmitHandler<PostFormValues> = (values) => {
     const media = (values.media ?? [])
@@ -111,18 +169,18 @@ export function PostComposerDialog({
         formats[accId] = (values.formats?.[accId] as PostFormat) ?? 'FEED';
       }
     }
+    // Only include TikTok options when a TikTok target is selected.
+    const options = tiktokAccount ? { tiktok: tiktokOpts } : undefined;
     onSubmit({
       content: values.content.trim(),
       media,
       formats,
       targetAccountIds: values.targetAccountIds,
       scheduledAt: values.scheduledAt ? new Date(values.scheduledAt).toISOString() : undefined,
+      options,
     });
   };
 
-  const errors = form.formState.errors;
-  const content = form.watch('content') ?? '';
-  const selected = form.watch('targetAccountIds') ?? [];
   const formats = form.watch('formats') ?? {};
 
   const uploadFiles = async (files: FileList | null, current: MediaItemValue[], onChange: (m: MediaItemValue[]) => void) => {
@@ -405,6 +463,17 @@ export function PostComposerDialog({
             />
           )}
 
+          {/* TikTok-specific controls — shown only when a TikTok account is selected */}
+          {tiktokAccount && (
+            <TiktokControls
+              creatorInfo={creatorInfo ?? null}
+              isLoading={creatorInfoLoading}
+              value={tiktokOpts}
+              onChange={setTiktokOpts}
+              mediaUrls={(form.watch('media') ?? []).map((m) => m.url)}
+            />
+          )}
+
           {/* Schedule */}
           <Field
             label={t('social.composer.schedule', { defaultValue: 'Schedule (optional)' })}
@@ -446,6 +515,162 @@ export function PostComposerDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── TikTok controls panel ─────────────────────────────────────────────────────
+
+interface TiktokControlsProps {
+  creatorInfo: TiktokCreatorInfo | null;
+  isLoading: boolean;
+  value: TikTokPostOptions;
+  onChange: (next: TikTokPostOptions) => void;
+  mediaUrls: string[];
+}
+
+function TiktokControls({ creatorInfo, isLoading, value, onChange, mediaUrls }: TiktokControlsProps) {
+  const { t } = useTranslation('marketing');
+
+  const set = <K extends keyof TikTokPostOptions>(key: K, val: TikTokPostOptions[K]) =>
+    onChange({ ...value, [key]: val });
+
+  const privacyOptions = creatorInfo?.privacyLevelOptions ?? [];
+  const isPhoto = value.mediaType === 'PHOTO';
+
+  return (
+    <div
+      className="rounded-lg border border-border bg-surface-muted p-4 space-y-4"
+      data-testid="tiktok-controls"
+    >
+      <p className="text-sm font-semibold text-foreground">
+        {t('social.composer.tiktok.title', { defaultValue: 'TikTok settings' })}
+      </p>
+
+      {isLoading && (
+        <p className="text-sm text-muted-foreground animate-pulse">
+          {t('social.composer.tiktok.loading', { defaultValue: 'Loading TikTok options…' })}
+        </p>
+      )}
+
+      {/* Privacy level */}
+      {!isLoading && privacyOptions.length > 0 && (
+        <Field label={t('social.composer.tiktok.privacy', { defaultValue: 'Privacy' })}>
+          {({ id }) => (
+            <Select
+              value={value.privacyLevel ?? privacyOptions[0]}
+              onValueChange={(v) => set('privacyLevel', v)}
+            >
+              <SelectTrigger id={id} aria-label={t('social.composer.tiktok.privacy', { defaultValue: 'Privacy' })}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {privacyOptions.map((opt) => (
+                  <SelectItem key={opt} value={opt}>
+                    {PRIVACY_LABELS[opt] ?? opt}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+      )}
+
+      {/* Media type switch — video / photo */}
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-sm text-foreground">
+          {t('social.composer.tiktok.mediaType', { defaultValue: 'Post type' })}
+        </span>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>{t('social.composer.tiktok.video', { defaultValue: 'Video' })}</span>
+          <Switch
+            aria-label={t('social.composer.tiktok.photoMode', { defaultValue: 'Switch to photo / carousel' })}
+            checked={isPhoto}
+            onCheckedChange={(v) => set('mediaType', v ? 'PHOTO' : 'VIDEO')}
+          />
+          <span>{t('social.composer.tiktok.photo', { defaultValue: 'Photo' })}</span>
+        </div>
+      </div>
+
+      {/* Cover index (only relevant for photo/carousel) */}
+      {isPhoto && mediaUrls.length > 1 && (
+        <Field
+          label={t('social.composer.tiktok.coverIndex', { defaultValue: 'Cover image index (0-based)' })}
+          hint={t('social.composer.tiktok.coverIndexHint', {
+            defaultValue: `0 – ${mediaUrls.length - 1}`,
+          })}
+        >
+          {({ id }) => (
+            <Input
+              id={id}
+              type="number"
+              min={0}
+              max={mediaUrls.length - 1}
+              value={value.coverIndex ?? 0}
+              onChange={(e) => {
+                const n = Math.max(0, Math.min(mediaUrls.length - 1, Number(e.target.value)));
+                set('coverIndex', n);
+              }}
+            />
+          )}
+        </Field>
+      )}
+
+      {/* Max video duration — informational, only when the cap is known */}
+      {!isLoading && (creatorInfo?.maxVideoPostDurationSec ?? 0) > 0 && (
+        <p className="text-sm text-muted-foreground" data-testid="tiktok-max-duration">
+          {t('social.composer.tiktok.maxDuration', { defaultValue: 'Max video length:' })}{' '}
+          <span data-testid="tiktok-max-duration-value">{creatorInfo!.maxVideoPostDurationSec}s</span>{' '}
+          {t('social.composer.tiktok.maxDurationContext', { defaultValue: 'for this account' })}
+        </p>
+      )}
+
+      {/* Interaction toggles */}
+      <div className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {t('social.composer.tiktok.interactions', { defaultValue: 'Interactions' })}
+        </p>
+
+        <ToggleRow
+          label={t('social.composer.tiktok.disableComment', { defaultValue: 'Disable comments' })}
+          checked={value.disableComment ?? (creatorInfo?.commentDisabled ?? false)}
+          disabled={creatorInfo?.commentDisabled ?? false}
+          onChange={(v) => set('disableComment', v)}
+        />
+        <ToggleRow
+          label={t('social.composer.tiktok.disableDuet', { defaultValue: 'Disable duet' })}
+          checked={value.disableDuet ?? (creatorInfo?.duetDisabled ?? false)}
+          disabled={creatorInfo?.duetDisabled ?? false}
+          onChange={(v) => set('disableDuet', v)}
+        />
+        <ToggleRow
+          label={t('social.composer.tiktok.disableStitch', { defaultValue: 'Disable stitch' })}
+          checked={value.disableStitch ?? (creatorInfo?.stitchDisabled ?? false)}
+          disabled={creatorInfo?.stitchDisabled ?? false}
+          onChange={(v) => set('disableStitch', v)}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface ToggleRowProps {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}
+
+function ToggleRow({ label, checked, disabled, onChange }: ToggleRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <label className="text-sm text-foreground select-none">{label}</label>
+      <Switch
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+        aria-label={label}
+      />
+    </div>
   );
 }
 

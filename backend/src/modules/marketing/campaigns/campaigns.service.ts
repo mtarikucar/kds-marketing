@@ -297,13 +297,19 @@ export class CampaignsService {
     for (const f of filters) {
       const field = f.field?.replace(/^lead\./, '');
       if (!field || !LEAD_FILTER_FIELDS.has(field)) continue;
+      // A scalar op needs a scalar value: an ARRAY would compile to e.g.
+      // `{ status: ['a','b'] }`, an invalid Prisma filter that 500s when the
+      // audience is materialized. Guard the scalar ops the same way `in` already
+      // guards against a non-array — drop the malformed leaf rather than poison
+      // the whole where.
+      const scalar = !Array.isArray(f.value);
       switch (f.op) {
-        case 'eq': where[field] = f.value; break;
-        case 'neq': where[field] = { not: f.value }; break;
+        case 'eq': if (scalar) where[field] = f.value; break;
+        case 'neq': if (scalar) where[field] = { not: f.value }; break;
         case 'in': if (Array.isArray(f.value)) where[field] = { in: f.value }; break;
         case 'contains': where[field] = { contains: String(f.value), mode: 'insensitive' }; break;
-        case 'gte': where[field] = { gte: f.value }; break;
-        case 'lte': where[field] = { lte: f.value }; break;
+        case 'gte': if (scalar) where[field] = { gte: f.value }; break;
+        case 'lte': if (scalar) where[field] = { lte: f.value }; break;
         case 'exists': where[field] = f.value ? { not: null } : null; break;
       }
     }

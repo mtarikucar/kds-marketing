@@ -298,6 +298,34 @@ describe('AdAccountService', () => {
       // rows.length is still returned (1), but nothing was written
       expect(written).toBe(1);
     });
+
+    it('sets status=TOKEN_EXPIRED (not just lastError) when TikTok throws an auth-signal error', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockRejectedValue(
+        new Error('access_token is invalid or expired (code: 40105)'),
+      );
+      const tiktokAccount = { ...account, provider: 'TIKTOK', externalAdId: 'adv_9' };
+      const written = await svc.pullAccount(tiktokAccount, '2026-06-01', '2026-06-03');
+      expect(written).toBe(0);
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      expect(upd.data.status).toBe('TOKEN_EXPIRED');
+      expect(upd.data.lastError).toBe('reauth_required');
+      expect(upd.data.lastPulledAt).toBeInstanceOf(Date);
+    });
+
+    it('does NOT set TOKEN_EXPIRED for a non-auth TikTok error (keeps regular lastError)', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockRejectedValue(
+        new Error('Rate limit exceeded'),
+      );
+      const tiktokAccount = { ...account, provider: 'TIKTOK', externalAdId: 'adv_9' };
+      const written = await svc.pullAccount(tiktokAccount, '2026-06-01', '2026-06-03');
+      expect(written).toBe(0);
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      // status must NOT be TOKEN_EXPIRED for a non-auth error
+      expect(upd.data.status).toBeUndefined();
+      expect(upd.data.lastError).toContain('Rate limit');
+    });
   });
 
   describe('pullNow', () => {

@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 
 export const WEBHOOK_SECRET_PREFIX = 'whsec_';
 
@@ -178,13 +179,26 @@ export class InboundWebhooksService {
   private async resolveLeadId(workspaceId: string, email?: string, phone?: string): Promise<string | null> {
     if (!email && !phone) return null;
     const or: any[] = [];
+    // Match on the NORMALIZED keys first (indexed; the same canonical form the
+    // form/order-form/manual dedup paths write), so an existing contact is found
+    // even when the posted phone/email format differs — then keep the raw matches
+    // as a fallback for any legacy lead missing a normalized key.
+    const emailNormalized = normalizeEmail(email);
+    const phoneNormalized = normalizePhone(phone);
+    if (emailNormalized) or.push({ emailNormalized });
     if (email) or.push({ email: { equals: email, mode: 'insensitive' } });
+    if (phoneNormalized) or.push({ phoneNormalized });
     if (phone) {
       or.push({ phone });
       or.push({ whatsapp: phone });
     }
     const lead = await this.prisma.lead.findFirst({
-      where: { workspaceId, OR: or },
+      // Resolve to an ACTIVE lead only — never a merged-away tombstone or a
+      // soft-deleted (bulk-deleted) lead. Otherwise the WebhookReceived event
+      // (and the workflow triggers it drives) would run against a hidden lead
+      // instead of the canonical one or a clean no-lead. Matches the form/
+      // booking/import/order-form dedup reads.
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, OR: or },
       select: { id: true },
       orderBy: { createdAt: 'desc' },
     });

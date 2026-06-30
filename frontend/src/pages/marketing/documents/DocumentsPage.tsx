@@ -201,13 +201,17 @@ export default function DocumentsPage() {
                       {d.status === 'DRAFT' ? <Send className="w-4 h-4" aria-hidden="true" /> : <Link2 className="w-4 h-4" aria-hidden="true" />}
                     </Button>
                   )}
+                  {/* Per-row in-flight guard (mutation.variables === d.id): a
+                      double-click can't re-fire — Delete's second click would 404
+                      after the row is gone — and acting on one document doesn't
+                      disable the same action on the others. */}
                   {d.status !== 'SIGNED' && (
-                    <Button variant="ghost" size="sm" onClick={() => voidMut.mutate(d.id)} title={t('documents.void', 'Void')}>
+                    <Button variant="ghost" size="sm" disabled={voidMut.isPending && voidMut.variables === d.id} onClick={() => voidMut.mutate(d.id)} title={t('documents.void', 'Void')}>
                       <Ban className="w-4 h-4 text-danger" aria-hidden="true" />
                     </Button>
                   )}
                   {d.status !== 'SIGNED' && (
-                    <Button variant="ghost" size="sm" onClick={() => deleteMut.mutate(d.id)}>
+                    <Button variant="ghost" size="sm" disabled={deleteMut.isPending && deleteMut.variables === d.id} onClick={() => deleteMut.mutate(d.id)} title={t('common.delete', 'Delete')}>
                       <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
                     </Button>
                   )}

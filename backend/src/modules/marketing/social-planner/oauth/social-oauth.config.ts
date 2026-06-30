@@ -6,6 +6,7 @@ import {
 export type Network =
   | 'FACEBOOK'
   | 'INSTAGRAM'
+  | 'INSTAGRAM_LOGIN'
   | 'LINKEDIN'
   | 'TIKTOK'
   | 'TWITTER'
@@ -15,6 +16,7 @@ export type Network =
 export const OAUTH_NETWORKS: Network[] = [
   'FACEBOOK',
   'INSTAGRAM',
+  'INSTAGRAM_LOGIN',
   'LINKEDIN',
   'TIKTOK',
   'TWITTER',
@@ -66,6 +68,17 @@ export const NETWORK_OAUTH: Record<Network, OAuthDef> = {
     scopes: ['pages_show_list', 'instagram_basic', 'instagram_content_publish', 'business_management'],
     clientIdEnv: 'META_APP_ID',
     clientSecretEnv: 'META_APP_SECRET',
+    scopeSep: ',',
+  },
+  // "Instagram API with Instagram Login" — the DIRECT flow where the user logs
+  // in at instagram.com (NOT via a Facebook Page). Distinct app credentials
+  // (INSTAGRAM_APP_ID/SECRET) and host (graph.instagram.com). Comma-delimited
+  // scopes; publishing needs instagram_business_content_publish.
+  INSTAGRAM_LOGIN: {
+    authorizeUrl: 'https://www.instagram.com/oauth/authorize',
+    scopes: ['instagram_business_basic', 'instagram_business_content_publish'],
+    clientIdEnv: 'INSTAGRAM_APP_ID',
+    clientSecretEnv: 'INSTAGRAM_APP_SECRET',
     scopeSep: ',',
   },
   LINKEDIN: {

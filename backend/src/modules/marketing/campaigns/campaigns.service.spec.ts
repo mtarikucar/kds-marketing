@@ -48,6 +48,24 @@ describe('CampaignsService', () => {
       expect(w.status).toBe('NEW');
       expect(w.secretColumn).toBeUndefined();
     });
+
+    // A scalar op (eq/neq/gte/lte) with an ARRAY value would compile to
+    // `{ status: ['NEW','CONTACTED'] }` — an invalid Prisma filter that 500s when
+    // the audience is materialized (recipient count / send). The `in` case
+    // already guards Array.isArray; the scalar ops must too. Drop the malformed
+    // leaf rather than emit a poisoned where.
+    it('skips a scalar op whose value is an array (avoids a Prisma 500)', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [
+        { field: 'lead.status', op: 'eq', value: ['NEW', 'CONTACTED'] },
+        { field: 'lead.city', op: 'gte', value: ['a', 'b'] },
+        { field: 'lead.region', op: 'neq', value: ['X', 'Y'] },
+        { field: 'lead.businessType', op: 'eq', value: 'CAFE' }, // a valid scalar still applies
+      ]);
+      expect(w.status).toBeUndefined();
+      expect(w.city).toBeUndefined();
+      expect(w.region).toBeUndefined();
+      expect(w.businessType).toBe('CAFE');
+    });
   });
 
   describe('launch', () => {

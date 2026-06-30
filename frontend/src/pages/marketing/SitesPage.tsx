@@ -166,6 +166,7 @@ export default function SitesPage() {
   const publish = useMutation({
     mutationFn: ({ id, p }: { id: string; p: boolean }) => marketingApi.post(`/sites/${id}/publish`, { published: p }),
     onSuccess: invalidate,
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.publishFailed', 'Could not update publish state')),
   });
 
   const { data: templates } = useQuery<Array<{ id: string; name: string; description: string }>>({
@@ -182,6 +183,7 @@ export default function SitesPage() {
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/sites/${id}`),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.deleteFailed', 'Could not delete the page')),
   });
 
   const createForm = useMutation({
@@ -198,6 +200,7 @@ export default function SitesPage() {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'sites', 'forms'] });
       toast.success(t('sites.formCreated', 'Form created'));
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.formCreateFailed', 'Could not create form')),
   });
 
   const removeForm = useMutation({
@@ -206,6 +209,7 @@ export default function SitesPage() {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'sites', 'forms'] });
       setDeleteFormTarget(null);
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.formDeleteFailed', 'Could not delete form')),
   });
 
   const saveFormFields = useMutation({
@@ -276,7 +280,7 @@ export default function SitesPage() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-muted-foreground">{t('sites.startFromTemplate', 'Start from a template:')}</span>
           {templates!.map((tpl) => (
-            <Button key={tpl.id} size="sm" variant="outline" title={tpl.description} loading={fromTemplate.isPending} onClick={() => fromTemplate.mutate(tpl.id)}>
+            <Button key={tpl.id} size="sm" variant="outline" title={tpl.description} loading={fromTemplate.isPending && fromTemplate.variables === tpl.id} onClick={() => fromTemplate.mutate(tpl.id)}>
               {tpl.name}
             </Button>
           ))}

@@ -164,6 +164,13 @@ export class MarketingSchedulerService {
     const dueLeads = await this.prisma.lead.findMany({
       where: {
         workspaceId,
+        // A bulk-deleted (deletedAt) or merged-away (mergedIntoId) lead keeps its
+        // nextFollowUp/status/assignedToId, so without this it would fire a
+        // FOLLOW_UP_REMINDER for a lead that's gone from the rep's list (a phantom
+        // reminder linking to a deleted/merged tombstone). Match the dedup/count/
+        // deferred-action reads that already exclude hidden leads.
+        mergedIntoId: null,
+        deletedAt: null,
         nextFollowUp: { gte: now, lte: tomorrow },
         status: { notIn: ['WON', 'LOST'] },
         assignedToId: { not: null },

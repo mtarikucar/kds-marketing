@@ -4,11 +4,13 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Key, Clipboard } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { copyToClipboard } from '../../../lib/clipboard';
 import { Card, CardHeader, CardContent } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Callout } from '@/components/ui/Callout';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -29,6 +31,7 @@ export function IngestTokensCard() {
 
   const [tokenLabel, setTokenLabel] = useState('');
   const [mintedToken, setMintedToken] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<IngestTokenRow | null>(null);
 
   const { data: tokens } = useQuery<IngestTokenRow[]>({
     queryKey: ['marketing', 'research', 'tokens'],
@@ -50,7 +53,12 @@ export function IngestTokensCard() {
 
   const revokeToken = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/research/tokens/${id}`),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      setRevokeTarget(null);
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('research.revokeFailed', 'Could not revoke the token')),
   });
 
   return (
@@ -80,9 +88,16 @@ export function IngestTokensCard() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(mintedToken);
-                  toast.success(t('common.copied', 'Copied'));
+                onClick={async () => {
+                  // Honest copy outcome — a false "Copied" would lose this
+                  // show-once token (it is never shown again).
+                  if (await copyToClipboard(mintedToken)) {
+                    toast.success(t('common.copied', 'Copied'));
+                  } else {
+                    toast.error(
+                      t('common.copyFailed', 'Could not copy — select the token and copy it manually.'),
+                    );
+                  }
                 }}
               >
                 <Clipboard className="h-4 w-4" />
@@ -137,7 +152,7 @@ export function IngestTokensCard() {
                 </span>
                 {tok.status === 'ACTIVE' && (
                   <button
-                    onClick={() => revokeToken.mutate(tok.id)}
+                    onClick={() => setRevokeTarget(tok)}
                     className="text-danger hover:underline"
                   >
                     {t('research.revoke', 'Revoke')}
@@ -148,6 +163,21 @@ export function IngestTokensCard() {
           ))}
         </div>
       </CardContent>
+
+      <ConfirmDialog
+        open={!!revokeTarget}
+        onOpenChange={(open) => { if (!open) setRevokeTarget(null); }}
+        title={t('research.revokeTitle', { defaultValue: 'Revoke ingest token?' })}
+        description={t('research.revokeDesc', {
+          defaultValue:
+            'Any integration pushing leads with this token will immediately lose access. This cannot be undone — you would need to mint a new token and reconfigure the integration.',
+        })}
+        confirmLabel={t('research.revoke', { defaultValue: 'Revoke' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        tone="danger"
+        loading={revokeToken.isPending}
+        onConfirm={() => revokeTarget && revokeToken.mutate(revokeTarget.id)}
+      />
     </Card>
   );
 }

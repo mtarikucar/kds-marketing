@@ -1,0 +1,24 @@
+/** Voice-AI feature gates. Everything inert until the operator sets the env. */
+export function isSttConfigured(): boolean {
+  return !!process.env.STT_PROVIDER?.trim() && !!process.env.STT_API_KEY?.trim();
+}
+/** Custom-LLM bridge (VAPI/Retell/ElevenLabs → our Claude). */
+export function isVoiceBridgeConfigured(): boolean {
+  return !!process.env.VOICE_AI_BRIDGE_SECRET?.trim();
+}
+/** NetGSM Özel-API inbound IVR webhook. */
+export function isNetgsmIvrConfigured(): boolean {
+  return !!process.env.NETGSM_IVR_TOKEN?.trim();
+}
+/**
+ * Live-agent copilot: the browser does the speech-to-text (free) and the only
+ * server dependency is Claude — so it's available whenever AI is enabled, with
+ * NO purchase and NO backend STT key. (Mirrors AnthropicService.isEnabled().)
+ */
+export function isCopilotConfigured(): boolean {
+  return !!process.env.ANTHROPIC_API_KEY?.trim() && process.env.AI_DISABLED !== '1';
+}
+export interface VoiceAiPublicStatus { stt: boolean; bridge: boolean; netgsmIvr: boolean; copilot: boolean; }
+export function voiceAiPublicStatus(): VoiceAiPublicStatus {
+  return { stt: isSttConfigured(), bridge: isVoiceBridgeConfigured(), netgsmIvr: isNetgsmIvrConfigured(), copilot: isCopilotConfigured() };
+}

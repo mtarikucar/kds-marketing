@@ -219,8 +219,23 @@ export class ImportService implements OnModuleInit {
     if (phoneNormalized) or.push({ phoneNormalized });
     if (!or.length) return Promise.resolve(null);
     return this.prisma.lead.findFirst({
-      where: { workspaceId, mergedIntoId: null, OR: or },
-      select: { id: true, customFields: true, status: true, convertedTenantId: true },
+      // Skip tombstoned (merged) AND soft-deleted (bulk-deleted) leads: an
+      // import row must not match — and thus update or be skipped against — a
+      // hidden lead. A deleted contact in the CSV becomes a fresh visible lead.
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, OR: or },
+      // emailNormalized + phoneNormalized are REQUIRED by the single-key-match
+      // preservation in processBatch: it compares them to decide whether a row
+      // matched on one identifier may overwrite the other. Omitting them here
+      // makes both read `undefined` at runtime, collapsing the keep-flags to
+      // false and silently clobbering the conflicting identifier.
+      select: {
+        id: true,
+        customFields: true,
+        status: true,
+        convertedTenantId: true,
+        emailNormalized: true,
+        phoneNormalized: true,
+      },
     });
   }
 

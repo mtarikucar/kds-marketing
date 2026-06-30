@@ -342,8 +342,25 @@ export default function OffersPage() {
                 {offer.status === 'DRAFT' && (
                   <>
                     <DropdownMenuItem
-                      onClick={() => sendMutation.mutate(offer.id)}
-                      disabled={sendMutation.isPending}
+                      onClick={() => {
+                        // Sending transmits the price quote to the customer and
+                        // can't be unsent — confirm first (matches the lead-detail
+                        // Offers tab, so the same action is guarded everywhere).
+                        if (
+                          window.confirm(
+                            t('offers.confirmSend', {
+                              defaultValue:
+                                'Send this offer to the customer? This cannot be undone.',
+                            }),
+                          )
+                        ) {
+                          sendMutation.mutate(offer.id);
+                        }
+                      }}
+                      // Scope the in-flight guard to THIS offer — a bare
+                      // sendMutation.isPending disables Send on every other
+                      // offer's menu while one send is running.
+                      disabled={sendMutation.isPending && sendMutation.variables === offer.id}
                     >
                       {t('offers.actions.send')}
                     </DropdownMenuItem>
@@ -363,14 +380,14 @@ export default function OffersPage() {
                   <>
                     <DropdownMenuItem
                       onClick={() => acceptMutation.mutate(offer.id)}
-                      disabled={acceptMutation.isPending}
+                      disabled={acceptMutation.isPending && acceptMutation.variables === offer.id}
                     >
                       {t('offers.actions.accept')}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="text-danger focus:text-danger"
                       onClick={() => rejectMutation.mutate(offer.id)}
-                      disabled={rejectMutation.isPending}
+                      disabled={rejectMutation.isPending && rejectMutation.variables === offer.id}
                     >
                       {t('offers.actions.reject')}
                     </DropdownMenuItem>

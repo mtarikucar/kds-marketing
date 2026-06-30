@@ -26,7 +26,9 @@ import {
   SelectItem,
 } from '@/components/ui/Select';
 
-// Subset schema for editing — password not required on edit
+// Subset schema for editing — password not required on edit. OWNER is allowed
+// in the form ONLY so an owner's current role displays without a validation
+// error; it is never submitted (see the submit handler).
 const editUserSchema = z.object({
   firstName: z.string().trim().min(1, 'required').max(80),
   lastName: z.string().trim().min(1, 'required').max(80),
@@ -34,7 +36,20 @@ const editUserSchema = z.object({
   role: z.enum(['MANAGER', 'REP', 'OWNER']),
 });
 
-export type EditUserFormValues = z.infer<typeof editUserSchema>;
+type EditUserFormValues = z.infer<typeof editUserSchema>;
+
+/**
+ * The submit payload. An OWNER's role is OMITTED — the backend role enum is
+ * MANAGER/REP only, so sending 'OWNER' 400s the whole update (an owner couldn't
+ * even edit their name/phone), and a rep/manager must never be silently promoted
+ * to owner here. So `role` is only ever an assignable MANAGER/REP.
+ */
+export type EditUserSubmit = {
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  role?: 'MANAGER' | 'REP';
+};
 
 interface User {
   id: string;
@@ -48,7 +63,7 @@ interface EditUserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   user: User | null;
-  onSubmit: (values: EditUserFormValues) => void;
+  onSubmit: (values: EditUserSubmit) => void;
   isPending: boolean;
 }
 
@@ -90,6 +105,14 @@ export function EditUserDialog({
   }, [user, reset]);
 
   const role = watch('role');
+  const isOwner = role === 'OWNER';
+
+  // Drop OWNER from the payload — it's display-only here (the backend role enum
+  // is MANAGER/REP), so editing an owner's name/phone never 400s.
+  const submit = handleSubmit((vals) => {
+    const { role: r, ...rest } = vals;
+    onSubmit(r === 'OWNER' ? rest : { ...rest, role: r });
+  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -100,7 +123,7 @@ export function EditUserDialog({
 
         <form
           id="edit-user-form"
-          onSubmit={handleSubmit(onSubmit)}
+          onSubmit={submit}
           className="grid grid-cols-1 gap-4 sm:grid-cols-2"
         >
           <Field
@@ -156,6 +179,10 @@ export function EditUserDialog({
             {({ id }) => (
               <Select
                 value={role}
+                // An owner's role can't be reassigned here — show it read-only
+                // (the backend doesn't accept OWNER and demoting the owner would
+                // lock them out of owner-only settings).
+                disabled={isOwner}
                 onValueChange={(v) => setValue('role', v as 'MANAGER' | 'REP' | 'OWNER')}
               >
                 <SelectTrigger id={id}>
@@ -164,6 +191,11 @@ export function EditUserDialog({
                 <SelectContent>
                   <SelectItem value="REP">Sales Rep</SelectItem>
                   <SelectItem value="MANAGER">Sales Manager</SelectItem>
+                  {isOwner && (
+                    <SelectItem value="OWNER" disabled>
+                      Owner
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             )}

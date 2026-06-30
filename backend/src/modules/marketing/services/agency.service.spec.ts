@@ -1,4 +1,5 @@
 import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { mockDeep } from 'jest-mock-extended';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -143,6 +144,35 @@ describe('AgencyService — createLocation', () => {
       }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
+
+  it('maps a racing duplicate owner-email P2002 to a 409, not a raw 500', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve(args?.where?.id === AGENCY_A ? agencyRow() : null),
+    );
+    prisma.marketingUser.findUnique.mockResolvedValue(null as never); // pre-check passes
+    (prisma.workspace.create as jest.Mock).mockResolvedValue(locationRow());
+    // The owner INSERT loses the email-unique race inside the tx (a concurrent
+    // createLocation with the same owner email passed the pre-check too).
+    (prisma.marketingUser.create as jest.Mock).mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['email'] },
+      }),
+    );
+
+    await expect(
+      svc.createLocation(AGENCY_A, {
+        name: 'X',
+        productName: 'Y',
+        ownerEmail: 'race@x.com',
+        ownerPassword: 'password123',
+        ownerFirstName: 'O',
+        ownerLastName: 'O',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
 });
 
 describe('AgencyService — assertAgencyOwns (cross-into-child guard)', () => {
@@ -219,5 +249,32 @@ describe('AgencyService — listLocations / suspendLocation scoping', () => {
       parentWorkspaceId: AGENCY_A,
     });
     expect(updateArgs.data).toEqual({ status: 'SUSPENDED' });
+  });
+});
+
+describe('AgencyService — dashboard rollup', () => {
+  it('counts only ACTIVE leads per location (excludes merged / soft-deleted)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue(agencyRow() as never);
+    prisma.workspace.findMany.mockResolvedValue([
+      { id: 'loc-1', slug: 'l1', name: 'L1', status: 'ACTIVE', createdAt: new Date(0) },
+    ] as never);
+    (prisma.lead.count as jest.Mock).mockResolvedValue(5);
+    (prisma.marketingUser.count as jest.Mock).mockResolvedValue(2);
+
+    await svc.dashboard(AGENCY_A);
+
+    // The per-location rollup must mirror each location's own list/dashboard,
+    // which exclude consolidated duplicates (mergedIntoId) and bulk-deleted
+    // (deletedAt) leads — otherwise the agency overcounts.
+    expect(prisma.lead.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          workspaceId: 'loc-1',
+          mergedIntoId: null,
+          deletedAt: null,
+        }),
+      }),
+    );
   });
 });

@@ -59,6 +59,22 @@ describe('WorkflowExecutorService', () => {
     expect(h.handler.execute).toHaveBeenCalledTimes(2);
   });
 
+  // A workflow runs over days (waits between steps). If the lead is bulk-deleted
+  // or merged DURING a wait, the run must not keep acting on it (send_email/SMS,
+  // create_task) across the resume — bulk-delete means "stop contacting". The
+  // lead load applies the active predicate, so a vanished lead resolves to null
+  // and the lead-scoped run is STOPPED (parallel to the workflow-deleted guard).
+  it('stops a lead-scoped run whose lead was deleted/merged mid-flight (runs no steps)', async () => {
+    const h = build(
+      [{ type: 'send_email', subject: 's', body: 'b' }],
+      [{}],
+    );
+    h.prisma.lead.findFirst.mockResolvedValue(null); // lead deleted/merged → resolves null
+    await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
+    expect(h.status()).toBe('STOPPED');
+    expect(h.handler.execute).not.toHaveBeenCalled();
+  });
+
   it('parks on wait and schedules a workflow.resume job', async () => {
     const h = build(
       [{ type: 'wait', mode: 'duration', seconds: 3600 }],

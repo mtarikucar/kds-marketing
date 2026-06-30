@@ -52,6 +52,19 @@ type Avail = Record<string, { start: string; end: string }[]>;
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 
+/**
+ * True when any availability window has end ≤ start. HH:mm strings compare
+ * chronologically (zero-padded), so a plain `>=` is enough. The backend slices
+ * windows with `for (s = start; s + slot <= end; …)`, so an inverted/equal
+ * window yields ZERO bookable slots for that day — silently. Block the save and
+ * surface it instead of letting the operator publish a calendar nobody can book.
+ */
+export function availabilityHasInvalidWindow(avail: Avail): boolean {
+  return Object.values(avail ?? {}).some((windows) =>
+    (windows ?? []).some((w) => !!w && !!w.start && !!w.end && w.start >= w.end),
+  );
+}
+
 // ── Schema ────────────────────────────────────────────────────────────────────
 
 const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'] as const;
@@ -172,6 +185,7 @@ export default function BookingSettingsPage() {
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/calendars/${id}`),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('booking.deleteFailed', 'Could not delete the calendar')),
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -340,7 +354,7 @@ export default function BookingSettingsPage() {
               {editId ? t('booking.editCalendar', 'Edit calendar') : t('booking.new', 'New calendar')}
             </DialogTitle>
             <DialogDescription>
-              {t('booking.dialogDesc', 'Configure name, slot duration, and weekly availability windows (UTC).')}
+              {t('booking.dialogDesc', "Configure name, slot duration, and weekly availability windows (in the calendar's timezone).")}
             </DialogDescription>
           </DialogHeader>
 
@@ -467,7 +481,7 @@ export default function BookingSettingsPage() {
             {/* Availability */}
             <Card>
               <CardContent className="pt-4 space-y-2">
-                <Label>{t('booking.availability', 'Weekly availability (UTC)')}</Label>
+                <Label>{t('booking.availability', 'Weekly availability (calendar timezone)')}</Label>
                 {DAYS.map((d, i) => (
                   <div key={i} className="flex flex-wrap items-center gap-3 text-sm">
                     <label className="flex w-28 items-center gap-2 cursor-pointer">
@@ -496,6 +510,11 @@ export default function BookingSettingsPage() {
                     )}
                   </div>
                 ))}
+                {availabilityHasInvalidWindow(availability) && (
+                  <p className="text-xs text-danger">
+                    {t('booking.invalidWindow', "Each day's end time must be after its start time.")}
+                  </p>
+                )}
               </CardContent>
             </Card>
           </form>
@@ -512,6 +531,7 @@ export default function BookingSettingsPage() {
               type="submit"
               form="booking-form"
               loading={save.isPending || isSubmitting}
+              disabled={availabilityHasInvalidWindow(availability)}
             >
               {t('common.save', 'Save')}
             </Button>

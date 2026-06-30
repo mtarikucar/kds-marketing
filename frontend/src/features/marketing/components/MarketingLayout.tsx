@@ -6,6 +6,7 @@ import MarketingHeader from './MarketingHeader';
 import HubSubNav from './HubSubNav';
 import SettingsLayout from './SettingsLayout';
 import AskAiPanel from './AskAiPanel';
+import WebphoneHost from '../webphone/WebphoneHost';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { IconButton } from '@/components/ui/IconButton';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
@@ -65,6 +66,9 @@ export default function MarketingLayout() {
       </div>
       {/* Global Ask-AI slide-over (gated on the askAi feature server-side). */}
       <AskAiPanel />
+      {/* App-wide webphone: keeps the rep's dahili registered on every page so
+          click-to-dial actually rings. Inert when telephony isn't configured. */}
+      <WebphoneHost />
     </div>
   );
 }

@@ -44,6 +44,9 @@ export enum LeadSource {
   // Hardware storefront "Teklif Al" on a QUOTE_ONLY device (yazarkasa / YN ÖKC).
   // Lands an existing tenant's fiscal-device quote request in the lead board.
   HARDWARE_QUOTE = 'HARDWARE_QUOTE',
+  // System-set on CSV-import rows with no source column (import.service.ts).
+  // Must be a first-class member so editing an imported lead validates.
+  IMPORT = 'IMPORT',
 }
 
 export enum LeadPriority {

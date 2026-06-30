@@ -126,7 +126,10 @@ export default function ProspectingPage() {
                   <Button
                     variant={a.convertedLeadId ? 'ghost' : 'primary'}
                     size="sm"
-                    disabled={!!a.convertedLeadId || convert.isPending}
+                    // Scope the in-flight guard to THIS audit (convert.variables ===
+                    // a.id) — a bare convert.isPending disables every other audit's
+                    // convert button while one conversion is running.
+                    disabled={!!a.convertedLeadId || (convert.isPending && convert.variables === a.id)}
                     onClick={() => convert.mutate(a.id)}
                   >
                     <UserPlus className="h-4 w-4" />

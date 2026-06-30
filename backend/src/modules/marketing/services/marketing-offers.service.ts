@@ -9,6 +9,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateOfferDto } from '../dto/create-offer.dto';
 import { UpdateOfferDto } from '../dto/update-offer.dto';
+import { rangeEndInclusive } from './report-date-range.util';
+import { safePage, safeLimit } from '../common/paging';
 import {
   CORE_PROVISIONING_PORT,
   CoreProvisioningPort,
@@ -80,29 +82,49 @@ export class MarketingOffersService {
     userRole: string,
     page = 1,
     limit = 20,
+    filter: { status?: string; dateFrom?: string; dateTo?: string } = {},
   ) {
-    const skip = (page - 1) * limit;
+    // The controller forwards the raw `?page`/`?limit` query (no transform), so
+    // a non-numeric `?page=abc` would make `(page - 1) * limit` NaN and Prisma
+    // throw a 500. Coerce to safe bounds so a bad param degrades to page 1.
+    const p = safePage(page);
+    const lim = safeLimit(limit, 20, 100);
+    const skip = (p - 1) * lim;
     // REPs only see their own offers. The workspace clause is inlined at
     // each call site so the scoping fitness test can verify it statically.
     const repFilter = userRole === 'REP' ? { createdById: userId } : {};
 
+    // Honour the list filters the Offers page sends — a status <Select> and a
+    // from/to date range. These were previously dropped (the controller only
+    // forwarded page/limit), so picking "SENT" or a date range silently
+    // returned every offer. Date semantics mirror the leads list: filter on
+    // createdAt, end date inclusive to end-of-day.
+    const where: Prisma.LeadOfferWhereInput = { workspaceId, ...repFilter };
+    if (filter.status) where.status = filter.status;
+    if (filter.dateFrom || filter.dateTo) {
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (filter.dateFrom) createdAt.gte = new Date(filter.dateFrom);
+      if (filter.dateTo) createdAt.lte = rangeEndInclusive(filter.dateTo);
+      where.createdAt = createdAt;
+    }
+
     const [offers, total] = await Promise.all([
       this.prisma.leadOffer.findMany({
-        where: { workspaceId, ...repFilter },
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
-        take: limit,
+        take: lim,
         include: {
           lead: { select: { id: true, businessName: true, contactPerson: true } },
           createdBy: { select: { id: true, firstName: true, lastName: true } },
         },
       }),
-      this.prisma.leadOffer.count({ where: { workspaceId, ...repFilter } }),
+      this.prisma.leadOffer.count({ where }),
     ]);
 
     return {
       data: offers,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: { total, page: p, limit: lim, totalPages: Math.ceil(total / lim) },
     };
   }
 
@@ -150,7 +172,6 @@ export class MarketingOffersService {
     // convert(), so a client-supplied status here must never leak into the
     // write and skip those guarded flows.
     const data: Prisma.LeadOfferUpdateInput = {
-      ...(dto.planId !== undefined && { planId: dto.planId }),
       ...(dto.customPrice !== undefined && { customPrice: dto.customPrice }),
       ...(dto.discount !== undefined && { discount: dto.discount }),
       ...(dto.trialDays !== undefined && { trialDays: dto.trialDays }),
@@ -159,6 +180,21 @@ export class MarketingOffersService {
         validUntil: dto.validUntil ? new Date(dto.validUntil) : null,
       }),
     };
+
+    // When the plan changes, RE-SNAPSHOT its display facts (mirroring create) so
+    // the offer never shows a STALE plan name/price/currency for a different
+    // planId — the customer would otherwise be presented terms for the old plan.
+    // A cleared/unknown plan snapshots nulls, exactly like create's no-plan path.
+    if (dto.planId !== undefined) {
+      data.planId = dto.planId;
+      const planSnapshot = dto.planId
+        ? await this.provisioning.describePlan(dto.planId)
+        : null;
+      data.planCode = planSnapshot?.planCode ?? null;
+      data.planName = planSnapshot?.planName ?? null;
+      data.planMonthlyPrice = planSnapshot?.monthlyPrice ?? null;
+      data.planCurrency = planSnapshot?.currency ?? null;
+    }
 
     return this.prisma.leadOffer.update({
       where: { id },
@@ -218,6 +254,71 @@ export class MarketingOffersService {
     ]);
 
     return updatedOffer;
+  }
+
+  /**
+   * Customer accepted the quote: SENT → ACCEPTED, and advance the lead
+   * OFFER_SENT → WAITING (the "accepted, awaiting provisioning" state that
+   * convert() consumes — convert allows OFFER_SENT/WAITING). The heavyweight
+   * WON + tenant provisioning stays in convert(); this only records the
+   * customer's decision. Same ownership/closed-lead guards as markSent.
+   */
+  async markAccepted(workspaceId: string, id: string, userId: string, userRole: string) {
+    const offer = await this.prisma.leadOffer.findFirst({
+      where: { id, workspaceId },
+      include: { lead: { select: { status: true, convertedTenantId: true } } },
+    });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (userRole === 'REP' && offer.createdById !== userId) {
+      throw new ForbiddenException('You can only accept your own offers');
+    }
+    if (offer.status !== 'SENT') {
+      throw new BadRequestException('Only sent offers can be accepted');
+    }
+    if (offer.lead.convertedTenantId || ['WON', 'LOST'].includes(offer.lead.status)) {
+      throw new BadRequestException('Lead is already closed');
+    }
+
+    const [updatedOffer] = await this.prisma.$transaction([
+      this.prisma.leadOffer.update({
+        where: { id },
+        data: { status: 'ACCEPTED' },
+      }),
+      // Guarded compound WHERE mirrors markSent: advance ONLY from OFFER_SENT on
+      // an unconverted lead, so a convert() racing to WON can't be reverted to
+      // WAITING. updateMany matches 0 rows (no-op) when the lead already moved.
+      this.prisma.lead.updateMany({
+        where: {
+          id: offer.leadId,
+          workspaceId,
+          convertedTenantId: null,
+          status: 'OFFER_SENT',
+        },
+        data: { status: 'WAITING' },
+      }),
+    ]);
+
+    return updatedOffer;
+  }
+
+  /**
+   * Customer declined the quote: SENT → REJECTED. Offer-only — the lead's
+   * pipeline status is the manager's call (re-quote, or mark LOST separately),
+   * so rejection never moves the lead. Same ownership/status guards as accept.
+   */
+  async markRejected(workspaceId: string, id: string, userId: string, userRole: string) {
+    const offer = await this.prisma.leadOffer.findFirst({ where: { id, workspaceId } });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (userRole === 'REP' && offer.createdById !== userId) {
+      throw new ForbiddenException('You can only reject your own offers');
+    }
+    if (offer.status !== 'SENT') {
+      throw new BadRequestException('Only sent offers can be rejected');
+    }
+    return this.prisma.leadOffer.update({
+      where: { id },
+      data: { status: 'REJECTED' },
+    });
   }
 
   async delete(workspaceId: string, id: string) {

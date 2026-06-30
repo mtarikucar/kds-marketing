@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 import { Target, Trash2 } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
 import { TARGET_METRICS, TARGET_METRIC_LABELS } from '@/features/marketing/types';
+import { formatMoney } from '@/lib/money';
 import type { SalesTarget, MarketingUserInfo } from '@/features/marketing/types';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -55,6 +56,14 @@ interface RepRow extends MarketingUserInfo {
 const currentPeriod = () => new Date().toISOString().slice(0, 7);
 const metricLabel = (m: string) =>
   TARGET_METRIC_LABELS[m as keyof typeof TARGET_METRIC_LABELS] || m;
+
+// COMMISSION_AMOUNT is money denominated in the workspace currency (TRY by default
+// for this Turkish business — the commission ledger is in lira). Render it with the
+// locale-aware formatter, not a hard-coded `$` that mislabels TL as dollars (mirrors
+// PerformancePage.fmtValue). Other metrics are plain counts. Exported for testing.
+export function fmtTargetValue(metric: string, value: number | string): string {
+  return metric === 'COMMISSION_AMOUNT' ? formatMoney(Number(value)) : String(Number(value));
+}
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 const targetSchema = z.object({
@@ -367,9 +376,7 @@ export default function TargetsPage() {
                       </Badge>
                     </TD>
                     <TD numeric className="font-medium">
-                      {t.metric === 'COMMISSION_AMOUNT'
-                        ? `$${Number(t.targetValue).toFixed(2)}`
-                        : Number(t.targetValue)}
+                      {fmtTargetValue(t.metric, t.targetValue)}
                     </TD>
                     <TD className="hidden md:table-cell text-muted-foreground text-xs">
                       {t.notes || '—'}

@@ -775,6 +775,29 @@ model SalesCall {
   @@map("sales_calls")
 }
 
+/// Voice-AI Phase 1 — post-call analysis: a SalesCall recording is transcribed
+/// (STT) then run through Claude for a structured summary/sentiment/score. One
+/// row per SalesCall (relation-free, keyed by salesCallId @unique); produced by
+/// the analysis cron sweep or the manual-run endpoint. Inert until STT + Claude
+/// are configured (NetGSM Görüşme Kaydı recordings + STT key).
+model CallAnalysis {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  salesCallId  String   @unique
+  transcript   String   @db.Text
+  language     String?
+  summary      String   @db.Text
+  sentiment    String? // POSITIVE | NEUTRAL | NEGATIVE
+  score        Int? // 0-100 call-quality/intent score
+  actionItems  Json? // string[]
+  topics       Json? // string[]
+  sttProvider  String?
+  createdAt    DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@map("call_analyses")
+}
+
 /// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
 /// one at a time (click-to-dial reusing SalesCallService, single-line). The rep
 /// previews each lead, dials, logs the outcome, and the queue auto-advances.
@@ -2825,7 +2848,11 @@ model SocialPost {
   content     String    @db.Text
   mediaUrls   String[]
   /// Free-form publish options: per-target formats ({accountId: FEED|REEL|STORY}),
-  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), and mediaDeletedAt.
+  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), mediaDeletedAt,
+  /// and per-post network-specific controls. For TikTok:
+  /// { tiktok?: { privacyLevel?: string, disableComment?: boolean,
+  ///   disableDuet?: boolean, disableStitch?: boolean, mediaType?: 'VIDEO'|'PHOTO',
+  ///   coverIndex?: number } }
   options     Json?
   status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
   scheduledAt DateTime?

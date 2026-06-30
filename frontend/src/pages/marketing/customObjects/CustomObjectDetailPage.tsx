@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -63,6 +63,21 @@ export default function CustomObjectDetailPage() {
   const [fieldOpen, setFieldOpen] = useState(false);
   const [editingField, setEditingField] = useState<CustomFieldDef | null>(null);
   const [archiveFieldTarget, setArchiveFieldTarget] = useState<CustomFieldDef | null>(null);
+
+  // Navigating /custom-objects/:key → another key REUSES this page (no remount,
+  // like the lead-detail route). Without resetting, an open dialog or a pending
+  // delete/archive CONFIRM for object A's record/field stays open while you view
+  // object B — so confirming would act on A's row while the page shows B. Clear
+  // all transient state when the object key changes.
+  useEffect(() => {
+    setSearch('');
+    setRecordOpen(false);
+    setEditingRecord(null);
+    setDeleteTarget(null);
+    setFieldOpen(false);
+    setEditingField(null);
+    setArchiveFieldTarget(null);
+  }, [key]);
 
   const { data: object, isLoading: objectLoading } = useQuery({
     queryKey: ['marketing', 'custom-objects', key],

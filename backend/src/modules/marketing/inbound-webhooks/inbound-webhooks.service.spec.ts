@@ -87,6 +87,26 @@ describe('InboundWebhooksService', () => {
     expect(appended.idempotencyKey).toContain('webhook-received:wh1:');
   });
 
+  it('resolves the lead by NORMALIZED email/phone (matches the form/manual path, not just raw)', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-7' });
+    await svc.receive(
+      { id: 'wh1', workspaceId: WS, slug: 'slug' },
+      { email: 'A@Acme.com', phone: '+90 555 111 22 33' },
+    );
+    const where = prisma.lead.findFirst.mock.calls[0][0].where;
+    // The normalized keys (indexed) are how every other lead-resolution path
+    // matches, so an inbound webhook for an existing contact still attaches the
+    // leadId even when the posted phone/email format differs.
+    expect(where.OR).toEqual(
+      expect.arrayContaining([{ emailNormalized: 'a@acme.com' }, { phoneNormalized: '905551112233' }]),
+    );
+    // ...and only ACTIVE leads — never a merged tombstone or a soft-deleted one
+    // (else the trigger event runs against a hidden lead).
+    expect(where.mergedIntoId).toBeNull();
+    expect(where.deletedAt).toBeNull();
+  });
+
   it('receive emits with leadId null when nobody matches', async () => {
     const { svc, prisma, outbox } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue(null);

@@ -112,6 +112,20 @@ describe('EntitlementsService — fold semantics', () => {
     expect((await svc.getEffective('ws-1')).dailyLeadQuota).toBe(-1);
   });
 
+  it('an add-on GRANTING -1 sets the limit unlimited, not base-minus-quantity', async () => {
+    // -1 is the universal "unlimited" sentinel, so an "unlimited X" add-on grants
+    // it. Treating that grant as an additive delta would SUBTRACT from the base
+    // (maxUsers 10 → 9; maxWorkflows 5 → 4) instead of unlocking it.
+    prisma.package.findUnique.mockResolvedValue({ ...PKG, limits: { maxWorkflows: 5 } });
+    prisma.workspaceSubscription.findUnique.mockResolvedValue(sub());
+    prisma.workspaceAddOn.findMany.mockResolvedValue([
+      { grants: { 'limit.maxUsers': -1, 'limit.maxWorkflows': -1 }, quantity: 1 },
+    ]);
+    const e = await svc.getEffective('ws-1');
+    expect(e.maxUsers).toBe(-1);
+    expect(e.limits.maxWorkflows).toBe(-1);
+  });
+
   it('caches for the TTL and recomputes after invalidate()', async () => {
     prisma.workspaceSubscription.findUnique.mockResolvedValue(sub());
     await svc.getEffective('ws-1');

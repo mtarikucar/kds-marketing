@@ -81,11 +81,23 @@ export class SurveysService {
     if (!survey || survey.status !== 'PUBLISHED') {
       throw new NotFoundException('Survey not available');
     }
+    // leadId is a PUBLIC, unauthenticated body param — only attribute the response
+    // to it when it actually resolves to a lead IN this survey's workspace
+    // (mirrors trigger-links / booking). Otherwise an attacker could pin
+    // responses to arbitrary or other tenants' lead ids.
+    let resolvedLeadId: string | null = null;
+    if (leadId) {
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: leadId, workspaceId: survey.workspaceId },
+        select: { id: true },
+      });
+      resolvedLeadId = lead?.id ?? null;
+    }
     await this.prisma.surveyResponse.create({
       data: {
         surveyId,
         workspaceId: survey.workspaceId,
-        leadId: leadId ?? null,
+        leadId: resolvedLeadId,
         answers: answers as Prisma.InputJsonValue,
       },
     });

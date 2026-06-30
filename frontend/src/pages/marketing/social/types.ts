@@ -37,16 +37,30 @@ export interface SocialPostTarget {
   error: string | null;
 }
 
+/** TikTok per-post privacy/interaction/photo controls. */
+export interface TikTokPostOptions {
+  privacyLevel?: string;
+  disableComment?: boolean;
+  disableDuet?: boolean;
+  disableStitch?: boolean;
+  mediaType?: 'VIDEO' | 'PHOTO';
+  coverIndex?: number;
+}
+
+/** Per-post publish options stored as JSON on the backend. */
 export interface SocialPostOptions {
   formats?: Record<string, 'FEED' | 'REEL' | 'STORY'>;
   media?: { url: string; key?: string; mime?: string }[];
   mediaDeletedAt?: string;
+  /** TikTok-specific publish controls. */
+  tiktok?: TikTokPostOptions;
 }
 
 export interface SocialPost {
   id: string;
   content: string;
   mediaUrls: string[];
+  /** Per-post publish options (formats/media + TikTok privacy controls). */
   options?: SocialPostOptions | null;
   status: PostStatus;
   scheduledAt: string | null;
@@ -59,6 +73,7 @@ export interface SocialPost {
 export interface NetworkStatus {
   FACEBOOK: boolean;
   INSTAGRAM: boolean;
+  INSTAGRAM_LOGIN: boolean;
   LINKEDIN: boolean;
   TIKTOK: boolean;
   // Epic 12 (needs-external, inert until creds).

@@ -40,9 +40,21 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
   };
   const add = () => onChange([...fields, { name: '', label: '', type: 'text', required: false }]);
 
+  // Two fields sharing a `name` POST the same key, so the server's field→value
+  // map keeps only one — the other field's value is silently lost. Auto-slugging
+  // the name from the label makes this easy to hit (two "Phone" fields → both
+  // `phone`). Flag the collision so the builder can make the name unique.
+  const nameCounts = fields.reduce<Record<string, number>>((acc, f) => {
+    const n = (f.name || '').trim();
+    if (n) acc[n] = (acc[n] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <div className="space-y-2">
-      {fields.map((f, i) => (
+      {fields.map((f, i) => {
+        const dupName = !!f.name && nameCounts[f.name] > 1;
+        return (
         <div key={i} className="rounded-lg border border-border p-2.5 space-y-2">
           <div className="flex items-center gap-2">
             <Input
@@ -74,6 +86,7 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
               className="w-48 font-mono text-xs"
               placeholder={t('sites.fieldName', 'name (POST key)')}
               value={f.name}
+              aria-invalid={dupName || undefined}
               onChange={(e) => patch(i, { name: slugify(e.target.value) })}
             />
             {HAS_OPTIONS.has(f.type ?? '') && (
@@ -86,8 +99,17 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
               />
             )}
           </div>
+          {dupName && (
+            <p className="text-caption text-warning">
+              {t('sites.duplicateFieldName', {
+                defaultValue:
+                  'Another field uses this name — both post the same key, so one value is lost on submit. Make it unique.',
+              })}
+            </p>
+          )}
         </div>
-      ))}
+        );
+      })}
       {fields.length === 0 && (
         <p className="text-caption text-muted-foreground text-center py-3">{t('sites.noFields', 'No fields yet — add one.')}</p>
       )}

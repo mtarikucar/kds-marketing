@@ -255,14 +255,21 @@ export class BookingService implements OnModuleInit {
     const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
 
     const booking = await this.prisma.$transaction(async (tx) => {
-      // Serialize concurrent reservations for THIS calendar so the overlap
-      // check below is race-free. Without it, two simultaneous public reserve
-      // calls for the same slot both pass the (non-locking) conflict SELECT and
-      // both insert — double-booking one slot. There is no DB-level
-      // unique/exclusion constraint to catch it (Prisma can't model a partial/
-      // range-exclude index without breaking migrate-parity), so a transaction-
-      // scoped advisory lock is the clean fix; it auto-releases at commit.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${calId}`}))`;
+      // Serialize concurrent reservations across the WHOLE WORKSPACE so the
+      // overlap + assignee checks below are race-free. Without it, two
+      // simultaneous public reserve calls both pass the (non-locking) conflict
+      // SELECT and both insert — double-booking one slot. The lock is keyed on
+      // the WORKSPACE, not the calendar: capacity is per-calendar, but the
+      // assignee invariant (don't book one person — a calendar owner or a
+      // ROUND_ROBIN member who can serve several calendars — into two
+      // overlapping slots) is workspace-wide, and the EXTERNAL_BUSY block is too.
+      // A per-calendar key would let two reserves on DIFFERENT calendars assign
+      // the same person concurrently. There is no DB-level unique/exclusion
+      // constraint to catch it (Prisma can't model a partial/range-exclude index
+      // without breaking migrate-parity), so this transaction-scoped advisory
+      // lock is the clean fix; it auto-releases at commit. Booking volume per
+      // workspace is low, so workspace-wide serialization is negligible.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${workspaceId}`}))`;
       // Any EXTERNAL_BUSY (Google-pulled, workspace-wide) overlap is a HARD block
       // regardless of capacity — a visitor must not book over a Google-busy time
       // the slot picker had already hidden.
@@ -319,6 +326,34 @@ export class BookingService implements OnModuleInit {
         assigneeUserId = members.find((m) => !taken.has(m.marketingUserId))?.marketingUserId ?? null;
       } else if (cal.type === 'CLASS') {
         assigneeUserId = null;
+      } else if (assigneeUserId) {
+        // SINGLE / COLLECTIVE: the calendar OWNER serves this slot. Enforce the
+        // same workspace-wide "one human can't be in two overlapping slots"
+        // invariant ROUND_ROBIN enforces above (and the lock comment promises).
+        // The per-calendar capacity check can't see a booking the owner has on
+        // ANOTHER calendar they serve, so without this an owner of (or assignee
+        // on) multiple calendars is silently double-booked. Mirrors the
+        // ROUND_ROBIN cross-calendar busy check — reject, like capacity exhaustion.
+        const ownerBusy = await tx.booking.findFirst({
+          where: {
+            workspaceId,
+            status: 'CONFIRMED',
+            assigneeUserId,
+            startAt: { lt: end },
+            endAt: { gt: start },
+          },
+          select: { id: true },
+        });
+        if (ownerBusy) throw new BadRequestException('That slot was just taken');
+      }
+
+      // ROUND_ROBIN with no free member: every member is already booked in this
+      // slot SOMEWHERE in the workspace (or the calendar has no members at all).
+      // The per-calendar capacity check above can't catch this — a member may be
+      // busy on ANOTHER calendar — so it would otherwise create an UNASSIGNED
+      // booking nobody can serve. Reject it, exactly like capacity exhaustion.
+      if (cal.type === 'ROUND_ROBIN' && !assigneeUserId) {
+        throw new BadRequestException('That slot was just taken');
       }
 
       // Link or create a lead.
@@ -329,11 +364,14 @@ export class BookingService implements OnModuleInit {
       let leadId: string | null = null;
       if (emailNormalized || phoneNormalized) {
         // Dedup on the NORMALIZED keys (cross-path with manual/form leads) and
-        // skip tombstoned (merged-away) leads.
+        // skip tombstoned (merged-away) AND soft-deleted (bulk-deleted) leads —
+        // otherwise a booking from a previously-deleted contact attaches to that
+        // still-hidden record instead of surfacing as a fresh, visible lead.
         const existing = await tx.lead.findFirst({
           where: {
             workspaceId,
             mergedIntoId: null,
+            deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
               ...(phoneNormalized ? [{ phoneNormalized }] : []),

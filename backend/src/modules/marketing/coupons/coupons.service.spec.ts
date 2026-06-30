@@ -127,6 +127,46 @@ describe('CouponsService', () => {
     });
   });
 
+  // An ORDER FORM is a reusable public page that MANY buyers submit, so the
+  // per-order idempotency pre-check must key on the buyer (leadId), not the form
+  // alone — otherwise the first buyer's redemption short-circuits every later
+  // buyer, who then gets the discount WITHOUT consuming a slot (maxRedemptions
+  // is silently bypassed).
+  describe('redeem — order-form idempotency is per-buyer, not per-form', () => {
+    // Emulate the real couponRedemption row already logged for buyer A on form
+    // of1: findFirst returns it only when ALL where conditions match the row.
+    const ROW_A: Record<string, unknown> = {
+      id: 'rA',
+      workspaceId: WS,
+      couponId: 'c1',
+      orderFormId: 'of1',
+      leadId: 'buyerA',
+      amountOff: 1000,
+    };
+    beforeEach(() => {
+      prisma.coupon.findFirst.mockResolvedValue(coupon({ maxRedemptions: 10, timesRedeemed: 1 }));
+      prisma.couponRedemption.findFirst.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          Object.entries(where).every(([k, v]) => ROW_A[k] === v) ? ROW_A : null,
+        ),
+      );
+    });
+
+    it('lets a DIFFERENT buyer on the same form still consume a redemption slot', async () => {
+      await svc.redeem(WS, 'save10', 10000, 'TRY', { orderFormId: 'of1', leadId: 'buyerB' });
+      // B is not A → no prior redemption matches → a real slot is consumed.
+      expect(prisma.coupon.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.couponRedemption.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('still dedupes the SAME buyer retrying on the same form (no double consume)', async () => {
+      const app = await svc.redeem(WS, 'save10', 10000, 'TRY', { orderFormId: 'of1', leadId: 'buyerA' });
+      expect(app.amountOff).toBe(1000); // reuses the logged amount
+      expect(prisma.coupon.updateMany).not.toHaveBeenCalled();
+      expect(prisma.couponRedemption.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('remove', () => {
     it('404s a coupon in another workspace', async () => {
       prisma.coupon.findFirst.mockResolvedValue(null);
