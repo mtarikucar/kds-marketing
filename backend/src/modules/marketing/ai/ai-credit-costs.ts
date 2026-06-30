@@ -16,6 +16,10 @@ export const AI_CREDIT_COSTS = {
   'funnel.draft': { credits: 3, tier: 'default' as AiModelTier },
   'review.reply_draft': { credits: 1, tier: 'default' as AiModelTier },
   'voice.turn': { credits: 2, tier: 'default' as AiModelTier },
+  // AI Social Content Studio — per-model estimate (media-models.config) governs
+  // the reserve; these are the registered floor + tripwire-pinned cost decision.
+  'media.image.generate': { credits: 3, tier: 'default' as AiModelTier },
+  'media.video.generate': { credits: 15, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;
