@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Plus, RefreshCw, Trash2, Copy, Globe } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
-  PageHeader, Card, CardContent, Button, Input, Field, Badge, EmptyState,
+  PageHeader, Card, CardContent, Button, Input, Field, Badge, EmptyState, ConfirmDialog,
 } from '@/components/ui';
 
 interface DnsInstruction { label: string; host: string; type: string; value: string }
@@ -38,6 +38,7 @@ export default function CustomDomainsPage() {
   const qc = useQueryClient();
   const [hostname, setHostname] = useState('');
   const [homeSlug, setHomeSlug] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<CustomDomain | null>(null);
 
   const { data: domains = [] } = useQuery({
     queryKey: ['custom-domains'],
@@ -72,7 +73,7 @@ export default function CustomDomainsPage() {
 
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/custom-domains/${id}`).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-domains'] }),
+    onSuccess: () => { setDeleteTarget(null); qc.invalidateQueries({ queryKey: ['custom-domains'] }); },
     onError: (e) => toast.error(apiErr(e, t('customDomains.deleteFailed', { defaultValue: 'Could not delete the domain' }))),
   });
 
@@ -122,7 +123,7 @@ export default function CustomDomainsPage() {
                     <Button variant="outline" size="sm" loading={verify.isPending && verify.variables === d.id} onClick={() => verify.mutate(d.id)}>
                       <RefreshCw className="h-4 w-4" />{t('customDomains.verify', { defaultValue: 'Verify' })}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => remove.mutate(d.id)}>
+                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(d)} title={t('common.delete', { defaultValue: 'Delete' })}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -154,6 +155,21 @@ export default function CustomDomainsPage() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
+        title={t('customDomains.deleteTitle', { defaultValue: 'Delete custom domain?' })}
+        description={t('customDomains.deleteDesc', {
+          defaultValue:
+            'Your site stops serving on this hostname immediately. Re-adding it means publishing and verifying the DNS records again.',
+        })}
+        confirmLabel={t('common.delete', { defaultValue: 'Delete' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        tone="danger"
+        loading={remove.isPending}
+        onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }

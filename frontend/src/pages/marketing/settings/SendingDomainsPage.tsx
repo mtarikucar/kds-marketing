@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Plus, RefreshCw, Trash2, Copy, ShieldCheck } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
-  PageHeader, Card, CardContent, Button, Input, Field, Badge, EmptyState,
+  PageHeader, Card, CardContent, Button, Input, Field, Badge, EmptyState, ConfirmDialog,
 } from '@/components/ui';
 
 interface DnsRecord { label: string; host: string; type: string; value: string }
@@ -38,6 +38,7 @@ export default function SendingDomainsPage() {
   const qc = useQueryClient();
   const [domain, setDomain] = useState('');
   const [fromName, setFromName] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<SendingDomain | null>(null);
 
   const { data: domains = [] } = useQuery({
     queryKey: ['sending-domains'],
@@ -72,7 +73,7 @@ export default function SendingDomainsPage() {
 
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/sending-domains/${id}`).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sending-domains'] }),
+    onSuccess: () => { setDeleteTarget(null); qc.invalidateQueries({ queryKey: ['sending-domains'] }); },
     onError: (e) => toast.error(apiErr(e, t('sendingDomains.deleteFailed', { defaultValue: 'Could not delete the domain' }))),
   });
 
@@ -129,7 +130,7 @@ export default function SendingDomainsPage() {
                     <Button variant="outline" size="sm" loading={verify.isPending && verify.variables === d.id} onClick={() => verify.mutate(d.id)}>
                       <RefreshCw className="h-4 w-4" />{t('sendingDomains.verify', { defaultValue: 'Verify' })}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => remove.mutate(d.id)}>
+                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(d)} title={t('common.delete', { defaultValue: 'Delete' })}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -161,6 +162,21 @@ export default function SendingDomainsPage() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
+        title={t('sendingDomains.deleteTitle', { defaultValue: 'Delete sending domain?' })}
+        description={t('sendingDomains.deleteDesc', {
+          defaultValue:
+            'Email can no longer be sent from this domain. Re-adding it means publishing and verifying the DKIM/SPF/DMARC records again.',
+        })}
+        confirmLabel={t('common.delete', { defaultValue: 'Delete' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        tone="danger"
+        loading={remove.isPending}
+        onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }
