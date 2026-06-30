@@ -223,6 +223,12 @@ import { RebillingService } from './services/rebilling.service';
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
 import { R2StorageService } from './social-planner/r2-storage.service';
+import { MarketingMediaController } from './controllers/marketing-media.controller';
+import { MarketingMediaWebhookController } from './controllers/marketing-media-webhook.controller';
+import { MediaGenService } from './ai/media/media-gen.service';
+import { BrandKitService } from './ai/media/brand-kit.service';
+import { FalProvider } from './ai/providers/fal.provider';
+import { MEDIA_PROVIDER } from './ai/providers/media-provider.interface';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
@@ -504,6 +510,8 @@ import { WalletService } from './wallet/wallet.service';
     RebillingController,
     SocialPlannerController,
     SocialOAuthController,
+    MarketingMediaController,
+    MarketingMediaWebhookController,
   ],
   providers: [
     // Services
@@ -695,6 +703,11 @@ import { WalletService } from './wallet/wallet.service';
     // P11 (GoHighLevel parity): env-gated social media planner.
     SocialPlannerService,
     R2StorageService,
+    // AI Social Content Studio — fal.ai media generation behind MediaProvider.
+    FalProvider,
+    { provide: MEDIA_PROVIDER, useExisting: FalProvider },
+    MediaGenService,
+    BrandKitService,
     SocialOAuthService,
     SocialTokenRefreshService,
     // Guards

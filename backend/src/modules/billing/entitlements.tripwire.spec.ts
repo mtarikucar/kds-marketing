@@ -26,6 +26,7 @@ describe('entitlements — feature-key drift tripwire', () => {
       'funnels',
       'installations',
       'invoicing',
+      'mediaGen',
       'reviews',
       'telephony',
       'voiceAi',

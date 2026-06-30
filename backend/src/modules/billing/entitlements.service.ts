@@ -25,6 +25,8 @@ export const FEATURE_KEYS = [
   'agentStudio',
   'voiceAi',
   'invoicing',
+  // AI Social Content Studio — gates media generation endpoints.
+  'mediaGen',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
