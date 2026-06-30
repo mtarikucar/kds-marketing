@@ -30,10 +30,12 @@ class GenerateDto {
 }
 class BrandKitDto {
   @IsOptional() @IsString() @MaxLength(1000) logoUrl?: string;
+  @IsOptional() @IsString() @MaxLength(500) logoR2Key?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(12) palette?: string[];
   @IsOptional() @IsString() @MaxLength(2000) tone?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20) defaultHashtags?: string[];
   @IsOptional() @IsString() @MaxLength(300) defaultCta?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(5) referenceImages?: Array<{ url: string; r2Key?: string; mime?: string }>;
 }
 
 @MarketingRoute()

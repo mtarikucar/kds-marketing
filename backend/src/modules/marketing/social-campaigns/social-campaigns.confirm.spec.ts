@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { SocialCampaignsService, SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, generateDedup } from './social-campaigns.service';
+import { SocialCampaignsService, SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, generateDedup } from './social-campaigns.service';
 
 const WS = 'ws-1';
 const SLOT = new Date('2026-07-08T09:00:00Z');
@@ -18,7 +18,8 @@ function build() {
   const prisma: any = {
     socialCampaign: { findUnique: jest.fn().mockResolvedValue({ stats: null }), update: jest.fn() },
     socialCampaignItem: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0), update: jest.fn() },
-    socialPost: { findFirst: jest.fn().mockResolvedValue({ id: 'post-1', content: 'Nice copy' }) },
+    socialPost: { findFirst: jest.fn().mockResolvedValue({ id: 'post-1', content: 'Nice copy' }), update: jest.fn() },
+    generatedAsset: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const scheduledJobs = { schedule: jest.fn(), cancel: jest.fn() };
   const runner = { registerHandler: jest.fn() };
@@ -96,12 +97,15 @@ describe('confirmItem — gate, cap rollover, brand-safety', () => {
 });
 
 describe('item approve / reject / regenerate', () => {
-  it('approveItem: NEEDS_APPROVAL → APPROVED', async () => {
-    const { svc, prisma } = build();
+  it('approveItem: NEEDS_APPROVAL → SCHEDULED and arms the confirm gate', async () => {
+    const { svc, prisma, scheduledJobs } = build();
     prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(makeItem({ status: 'NEEDS_APPROVAL' }));
     await svc.approveItem(WS, 'i-1');
     expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { status: 'APPROVED' } }),
+      expect.objectContaining({ data: { status: 'SCHEDULED' } }),
+    );
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, payload: { itemId: 'i-1', workspaceId: WS } }),
     );
   });
 

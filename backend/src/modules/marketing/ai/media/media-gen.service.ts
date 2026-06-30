@@ -14,7 +14,7 @@ import {
   MediaProvider, MEDIA_PROVIDER, MediaGenResult,
 } from '../providers/media-provider.interface';
 import {
-  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, estimateMediaCredits, estimateMediaUsd,
+  DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, estimateMediaCredits, estimateMediaUsd, getMediaModel,
 } from './media-models.config';
 import { TERMINAL_ASSET_STATUSES, isTerminalAssetStatus } from './media-asset.constants';
 
@@ -75,6 +75,13 @@ export class MediaGenService implements OnModuleInit {
   async requestGeneration(workspaceId: string, dto: RequestGenerationDto): Promise<{ assetId: string }> {
     if (!this.provider.isConfigured()) {
       throw new ServiceUnavailableException({ code: 'MEDIA_GEN_NOT_CONFIGURED', message: 'Media generation is not configured' });
+    }
+
+    // Only catalogued models (known pricing) may be requested — an arbitrary
+    // model id would be billed at the cheap fallback estimate while the provider
+    // charges the real (possibly far higher) rate.
+    if (dto.model && !getMediaModel(dto.model)) {
+      throw new BadRequestException({ code: 'MEDIA_GEN_UNKNOWN_MODEL', message: `Unknown media model: ${dto.model}` });
     }
 
     const inflight = await this.prisma.generatedAsset.count({
@@ -291,6 +298,8 @@ export class MediaGenService implements OnModuleInit {
     const base = process.env.PUBLIC_BASE_URL;
     const secret = process.env.FAL_WEBHOOK_SECRET;
     if (!base || !secret) return undefined;
-    return `${base.replace(/\/+$/, '')}/marketing/ai/media/webhook?token=${encodeURIComponent(secret)}`;
+    // PUBLIC_BASE_URL is the bare origin; the API is served under the global
+    // '/api' prefix (app.config setGlobalPrefix('api')).
+    return `${base.replace(/\/+$/, '')}/api/marketing/ai/media/webhook?token=${encodeURIComponent(secret)}`;
   }
 }

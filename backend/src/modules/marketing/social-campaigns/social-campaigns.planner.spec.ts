@@ -20,7 +20,7 @@ function makeCampaign(over: Partial<any> = {}) {
 function build() {
   const prisma: any = {
     socialCampaign: { findFirst: jest.fn(), findUnique: jest.fn().mockResolvedValue({ stats: null }), update: jest.fn() },
-    socialCampaignItem: { findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(0), create: jest.fn(), update: jest.fn() },
+    socialCampaignItem: { findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(0), create: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     socialPost: { create: jest.fn().mockResolvedValue({ id: 'post-1' }) },
     brandKit: { findUnique: jest.fn().mockResolvedValue(null) },
   };

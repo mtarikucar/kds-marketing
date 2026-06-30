@@ -28,14 +28,16 @@ export class BrandKitService {
   }
 
   upsert(workspaceId: string, dto: BrandKitPayload) {
+    // Only touch fields the caller actually sent — a partial save (e.g. just
+    // tone/palette) must not null out a previously-uploaded logo or images.
     const data = {
-      logoUrl: dto.logoUrl ?? null,
-      logoR2Key: dto.logoR2Key ?? null,
-      palette: (dto.palette ?? null) as Prisma.InputJsonValue,
-      tone: dto.tone ?? null,
-      ...(dto.referenceImages ? { referenceImages: dto.referenceImages as unknown as Prisma.InputJsonValue } : {}),
-      ...(dto.defaultHashtags ? { defaultHashtags: dto.defaultHashtags } : {}),
-      defaultCta: dto.defaultCta ?? null,
+      ...(dto.logoUrl !== undefined ? { logoUrl: dto.logoUrl } : {}),
+      ...(dto.logoR2Key !== undefined ? { logoR2Key: dto.logoR2Key } : {}),
+      ...(dto.palette !== undefined ? { palette: (dto.palette ?? null) as Prisma.InputJsonValue } : {}),
+      ...(dto.tone !== undefined ? { tone: dto.tone } : {}),
+      ...(dto.referenceImages !== undefined ? { referenceImages: dto.referenceImages as unknown as Prisma.InputJsonValue } : {}),
+      ...(dto.defaultHashtags !== undefined ? { defaultHashtags: dto.defaultHashtags } : {}),
+      ...(dto.defaultCta !== undefined ? { defaultCta: dto.defaultCta } : {}),
     };
     return this.prisma.brandKit.upsert({
       where: { workspaceId },

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams, useLocation } from 'react-router-dom';
+import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -92,13 +92,17 @@ export default function SocialPlannerPage() {
   // Open a fresh composer pre-loaded with that asset, then clear the state so a
   // refresh/back doesn't re-seed.
   const location = useLocation();
+  const navigate = useNavigate();
   const seedMedia = (location.state as { seedMedia?: MediaItemValue[] } | null)?.seedMedia;
   useEffect(() => {
     if (seedMedia?.length) {
       setEditingPost(null);
       setComposerOpen(true);
-      window.history.replaceState({}, '');
+      // Clear router state via the router (a raw window.history.replaceState does
+      // NOT update useLocation().state), so a later "New post" won't re-seed it.
+      navigate(location.pathname + location.search, { replace: true, state: null });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedMedia]);
 
   // ── Queries ────────────────────────────────────────────────────────────────

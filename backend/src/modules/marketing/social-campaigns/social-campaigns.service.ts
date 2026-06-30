@@ -199,7 +199,17 @@ export class SocialCampaignsService implements OnModuleInit {
     if (item.status !== 'NEEDS_APPROVAL') {
       throw new BadRequestException(`Cannot approve an item in status ${item.status}`);
     }
-    return this.prisma.socialCampaignItem.update({ where: { id: itemId }, data: { status: 'APPROVED' } });
+    // Approval makes the item publishable: move it to SCHEDULED and arm the same
+    // confirm gate the auto modes use (which attaches media, runs brand-safety,
+    // honors dailyPublishCap, then publishes via the social-planner path).
+    const updated = await this.prisma.socialCampaignItem.update({
+      where: { id: itemId }, data: { status: 'SCHEDULED' },
+    });
+    await this.scheduledJobs.schedule({
+      workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
+      payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
+    });
+    return updated;
   }
 
   async rejectItem(workspaceId: string, itemId: string) {
@@ -209,6 +219,10 @@ export class SocialCampaignsService implements OnModuleInit {
 
   async regenerateItem(workspaceId: string, itemId: string) {
     const item = await this.getOwnedItem(workspaceId, itemId);
+    // Reset to PLANNED so generateItem's atomic PLANNED→GENERATING claim matches.
+    await this.prisma.socialCampaignItem.update({
+      where: { id: itemId }, data: { status: 'PLANNED', error: null },
+    });
     await this.scheduledJobs.schedule({
       workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_GENERATE_KIND, runAt: new Date(),
       payload: { itemId, workspaceId }, dedupKey: generateDedup(itemId),
@@ -309,69 +323,76 @@ export class SocialCampaignsService implements OnModuleInit {
     });
     if (!item || !item.campaign || item.campaign.status !== 'ACTIVE') return;
     const c = item.campaign;
-    await this.prisma.socialCampaignItem.update({ where: { id: itemId }, data: { status: 'GENERATING' } });
 
-    const brandKit = await this.prisma.brandKit.findUnique({ where: { workspaceId } });
-    const brief = (c.brief ?? {}) as Record<string, any>;
+    // Atomically claim the slot (PLANNED → GENERATING). A duplicate/retry job
+    // finds it no longer PLANNED and no-ops, so copy/media/post are created once
+    // and credits are never re-charged on retry.
+    const claim = await this.prisma.socialCampaignItem.updateMany({
+      where: { id: itemId, status: 'PLANNED' }, data: { status: 'GENERATING' },
+    });
+    if (claim.count !== 1) return;
 
-    let copy: { body: string };
     try {
-      copy = await this.contentAi.compose(workspaceId, {
+      const brandKit = await this.prisma.brandKit.findUnique({ where: { workspaceId } });
+      const brief = (c.brief ?? {}) as Record<string, any>;
+
+      const copy = await this.contentAi.compose(workspaceId, {
         kind: 'social',
         goal: item.topic ?? c.goal ?? c.name,
         tone: (brandKit as any)?.tone ?? undefined,
         audience: brief.audience,
         context: [c.theme, brief.keyMessages, (brandKit as any)?.defaultCta].filter(Boolean).join('\n') || undefined,
       });
+
+      const refImages: string[] = Array.isArray((brandKit as any)?.referenceImages)
+        ? ((brandKit as any).referenceImages as any[]).map((r) => r?.url).filter(Boolean) : [];
+      const kinds = c.mediaKinds.length ? c.mediaKinds : ['IMAGE'];
+      const assetIds: string[] = [];
+      for (const kind of kinds) {
+        const isVideo = kind === 'VIDEO';
+        const { assetId } = await this.mediaGen.requestGeneration(workspaceId, {
+          type: isVideo ? 'VIDEO' : 'IMAGE',
+          prompt: `${item.topic ?? c.theme ?? c.name}. ${copy.body}`.slice(0, 1500),
+          model: (isVideo ? c.defaultVideoModel : c.defaultImageModel) ?? undefined,
+          referenceImageUrls: refImages,
+          socialCampaignId: c.id,
+          campaignItemId: item.id,
+          createdById: c.createdById,
+        });
+        assetIds.push(assetId);
+      }
+
+      const hashtags = Array.isArray((brandKit as any)?.defaultHashtags)
+        ? ((brandKit as any).defaultHashtags as string[]).join(' ') : '';
+      const post = await this.prisma.socialPost.create({
+        data: {
+          workspaceId, content: [copy.body, hashtags].filter(Boolean).join('\n\n'),
+          mediaUrls: [], status: 'DRAFT', socialCampaignId: c.id, campaignItemId: item.id,
+        },
+      });
+
+      if (c.automationMode === 'APPROVAL') {
+        await this.prisma.socialCampaignItem.update({
+          where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
+        });
+      } else {
+        // SEMI_AUTO + FULL_AUTO: schedule the slot and gate it at scheduledFor.
+        await this.prisma.socialCampaignItem.update({
+          where: { id: itemId }, data: { status: 'SCHEDULED', socialPostId: post.id, generatedAssetIds: assetIds },
+        });
+        await this.scheduledJobs.schedule({
+          workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
+          payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
+        });
+      }
+      await this.bumpStats(c.id, { generated: 1 });
     } catch (e) {
+      // Mark FAILED and DO NOT rethrow — rethrowing would make the runner retry
+      // the whole method and re-charge credits / duplicate assets+posts.
       await this.prisma.socialCampaignItem.update({
-        where: { id: itemId }, data: { status: 'FAILED', error: String((e as Error).message).slice(0, 500) },
-      });
-      return;
+        where: { id: itemId }, data: { status: 'FAILED', error: String((e as Error)?.message ?? e).slice(0, 500) },
+      }).catch(() => undefined);
     }
-
-    const refImages: string[] = Array.isArray((brandKit as any)?.referenceImages)
-      ? ((brandKit as any).referenceImages as any[]).map((r) => r?.url).filter(Boolean) : [];
-    const kinds = c.mediaKinds.length ? c.mediaKinds : ['IMAGE'];
-    const assetIds: string[] = [];
-    for (const kind of kinds) {
-      const isVideo = kind === 'VIDEO';
-      const { assetId } = await this.mediaGen.requestGeneration(workspaceId, {
-        type: isVideo ? 'VIDEO' : 'IMAGE',
-        prompt: `${item.topic ?? c.theme ?? c.name}. ${copy.body}`.slice(0, 1500),
-        model: (isVideo ? c.defaultVideoModel : c.defaultImageModel) ?? undefined,
-        referenceImageUrls: refImages,
-        socialCampaignId: c.id,
-        campaignItemId: item.id,
-        createdById: c.createdById,
-      });
-      assetIds.push(assetId);
-    }
-
-    const hashtags = Array.isArray((brandKit as any)?.defaultHashtags)
-      ? ((brandKit as any).defaultHashtags as string[]).join(' ') : '';
-    const post = await this.prisma.socialPost.create({
-      data: {
-        workspaceId, content: [copy.body, hashtags].filter(Boolean).join('\n\n'),
-        mediaUrls: [], status: 'DRAFT', socialCampaignId: c.id, campaignItemId: item.id,
-      },
-    });
-
-    if (c.automationMode === 'APPROVAL') {
-      await this.prisma.socialCampaignItem.update({
-        where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
-      });
-    } else {
-      // SEMI_AUTO + FULL_AUTO: schedule the slot and gate it at scheduledFor.
-      await this.prisma.socialCampaignItem.update({
-        where: { id: itemId }, data: { status: 'SCHEDULED', socialPostId: post.id, generatedAssetIds: assetIds },
-      });
-      await this.scheduledJobs.schedule({
-        workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
-        payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
-      });
-    }
-    await this.bumpStats(c.id, { generated: 1 });
   }
 
   // ──────────────────────────────────── social.campaign.item.confirm
@@ -382,7 +403,14 @@ export class SocialCampaignsService implements OnModuleInit {
     });
     if (!item || !item.campaign || !item.socialPostId) return;
     const c = item.campaign;
-    if (c.status !== 'ACTIVE') return; // stop-on-pause / cancel
+    if (c.status !== 'ACTIVE') {
+      // Paused mid-window: keep the gate pending so resume re-fires it instead of
+      // silently dropping the (already-generated) item. Cancelled/completed: drop.
+      if (c.status === 'PAUSED') {
+        return { reschedule: { runAt: new Date(Date.now() + 60 * 60 * 1000), payload: { itemId, workspaceId } } };
+      }
+      return;
+    }
 
     // User veto (reject set the item SKIPPED before the gate fired).
     if (item.status !== 'SCHEDULED') return;
@@ -412,10 +440,31 @@ export class SocialCampaignsService implements OnModuleInit {
       return;
     }
 
-    // Hand off to the existing social.publish path (per-network adapters unchanged).
+    // Attach the generated media to the post before it goes out, then hand off
+    // to the existing social.publish path (per-network adapters unchanged).
+    await this.attachAssetsToPost(workspaceId, item.generatedAssetIds ?? [], post.id);
     await this.planner.schedulePost(workspaceId, post.id, new Date(), c.targetAccountIds);
     await this.prisma.socialCampaignItem.update({ where: { id: itemId }, data: { status: 'PUBLISHED' } });
     await this.bumpStats(c.id, { published: 1 });
+  }
+
+  /** Copy the READY generated assets' URLs onto the post so it publishes with
+   *  media (assets generate async, so this runs at publish time, not at create). */
+  private async attachAssetsToPost(workspaceId: string, assetIds: string[], postId: string): Promise<void> {
+    if (!assetIds.length) return;
+    const assets = await this.prisma.generatedAsset.findMany({
+      where: { id: { in: assetIds }, workspaceId, status: 'READY' },
+      select: { url: true, r2Key: true, mime: true },
+    });
+    const ready = assets.filter((a) => !!a.url);
+    if (!ready.length) return;
+    await this.prisma.socialPost.update({
+      where: { id: postId },
+      data: {
+        mediaUrls: ready.map((a) => a.url as string),
+        options: { media: ready.map((a) => ({ url: a.url, key: a.r2Key, mime: a.mime })) } as unknown as Prisma.InputJsonValue,
+      },
+    });
   }
 
   /** SAFE/BLOCK copy screen via Claude; inert (allow) when AI is disabled. */
