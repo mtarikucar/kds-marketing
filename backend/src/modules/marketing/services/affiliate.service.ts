@@ -60,19 +60,30 @@ export class AffiliateService {
       );
     }
 
-    return this.prisma.affiliate.create({
-      data: {
-        workspaceId,
-        name: dto.name,
-        email: dto.email,
-        code: dto.code,
-        commissionType: dto.commissionType,
-        commissionValue: new Prisma.Decimal(dto.commissionValue).toDecimalPlaces(
-          2,
-          Prisma.Decimal.ROUND_HALF_UP,
-        ),
-      },
-    });
+    try {
+      return await this.prisma.affiliate.create({
+        data: {
+          workspaceId,
+          name: dto.name,
+          email: dto.email,
+          code: dto.code,
+          commissionType: dto.commissionType,
+          commissionValue: new Prisma.Decimal(dto.commissionValue).toDecimalPlaces(
+            2,
+            Prisma.Decimal.ROUND_HALF_UP,
+          ),
+        },
+      });
+    } catch (e) {
+      // The code-collision pre-check above is racy; the (workspaceId, code) unique
+      // is the real guard. Map a concurrent same-code insert to a clean 409.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(
+          `Affiliate code "${dto.code}" already exists in this workspace`,
+        );
+      }
+      throw e;
+    }
   }
 
   async listAffiliates(

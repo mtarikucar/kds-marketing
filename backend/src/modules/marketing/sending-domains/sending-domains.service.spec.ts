@@ -73,6 +73,18 @@ describe('SendingDomainsService', () => {
       prisma.sendingDomain.findFirst.mockResolvedValue({ id: 'sd1' });
       await expect(svc.request(WS, { domain: 'acme.com' })).rejects.toBeInstanceOf(ConflictException);
     });
+
+    // TOCTOU: two concurrent same-domain registrations both pass the findFirst
+    // pre-check; the 2nd insert trips the (workspaceId, domain) unique → P2002.
+    // Map to a clean 409, not a raw 500.
+    it('maps a P2002 race to a 409', async () => {
+      process.env.SENDING_DOMAIN_ESP = 'postmark';
+      prisma.sendingDomain.findFirst.mockResolvedValue(null); // pre-check passes
+      prisma.sendingDomain.create.mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+      );
+      await expect(svc.request(WS, { domain: 'mail.acme.com' })).rejects.toBeInstanceOf(ConflictException);
+    });
   });
 
   describe('verifyNow', () => {

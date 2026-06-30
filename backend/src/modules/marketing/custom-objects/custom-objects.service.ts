@@ -63,17 +63,26 @@ export class CustomObjectsService {
       where: { workspaceId_key: { workspaceId, key: dto.key } },
     });
     if (dupe) throw new ConflictException(`Custom object "${dto.key}" already exists`);
-    return this.prisma.customObjectDef.create({
-      data: {
-        workspaceId,
-        key: dto.key,
-        labelSingular: dto.labelSingular,
-        labelPlural: dto.labelPlural,
-        primaryField: dto.primaryField ?? 'name',
-        description: dto.description ?? null,
-        icon: dto.icon ?? null,
-      },
-    });
+    try {
+      return await this.prisma.customObjectDef.create({
+        data: {
+          workspaceId,
+          key: dto.key,
+          labelSingular: dto.labelSingular,
+          labelPlural: dto.labelPlural,
+          primaryField: dto.primaryField ?? 'name',
+          description: dto.description ?? null,
+          icon: dto.icon ?? null,
+        },
+      });
+    } catch (e) {
+      // The dup pre-check above is racy; the (workspaceId, key) unique is the real
+      // guard. Map a concurrent same-key insert to a clean 409, not a raw 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(`Custom object "${dto.key}" already exists`);
+      }
+      throw e;
+    }
   }
 
   /** Resolve an object def by key, scoped to the workspace (or 404). */

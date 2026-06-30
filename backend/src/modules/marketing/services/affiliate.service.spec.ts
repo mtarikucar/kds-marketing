@@ -1,4 +1,4 @@
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { mockDeep } from 'jest-mock-extended';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -101,6 +101,19 @@ describe('AffiliateService — commission math', () => {
     await expect(
       svc.createAffiliate(WS_A, { name: 'X', email: 'x@x.com', code: 'X1', commissionType: 'PERCENT', commissionValue: 150 } as never),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // TOCTOU: two concurrent same-code creates both pass the findFirst pre-check;
+  // the 2nd insert trips the (workspaceId, code) unique → P2002. Map to a 409.
+  it('createAffiliate maps a P2002 race on code to a 409', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.affiliate.findFirst.mockResolvedValue(null as never); // pre-check passes
+    prisma.affiliate.create.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }) as never,
+    );
+    await expect(
+      svc.createAffiliate(WS_A, { name: 'X', email: 'x@x.com', code: 'X1', commissionType: 'PERCENT', commissionValue: 10 } as never),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('FLAT: flat 50 regardless of conversion value', async () => {

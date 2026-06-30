@@ -86,18 +86,29 @@ export class SendingDomainsService implements OnModuleInit {
     const dkimPublicKey = (publicKey as Buffer).toString('base64');
     const dkimSelector = `mkt${randomBytes(3).toString('hex')}`;
 
-    const created = await this.prisma.sendingDomain.create({
-      data: {
-        workspaceId,
-        domain,
-        status: 'PENDING',
-        fromEmail: `noreply@${domain}`,
-        fromName: dto.fromName?.trim() || null,
-        dkimSelector,
-        dkimPublicKey,
-        dkimPrivateSealed: sealSecret(privateKey as string),
-      },
-    });
+    let created;
+    try {
+      created = await this.prisma.sendingDomain.create({
+        data: {
+          workspaceId,
+          domain,
+          status: 'PENDING',
+          fromEmail: `noreply@${domain}`,
+          fromName: dto.fromName?.trim() || null,
+          dkimSelector,
+          dkimPublicKey,
+          dkimPrivateSealed: sealSecret(privateKey as string),
+        },
+      });
+    } catch (e) {
+      // The existing-domain pre-check above is racy; the (workspaceId, domain)
+      // unique is the real guard. Map a concurrent same-domain insert to a clean
+      // 409, not a raw 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('That domain is already registered');
+      }
+      throw e;
+    }
     await this.scheduledJob.schedule({
       workspaceId,
       kind: SENDING_DOMAIN_VERIFY_KIND,

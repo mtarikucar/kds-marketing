@@ -69,6 +69,18 @@ describe('CustomObjectsService', () => {
       expect(arg.data.primaryField).toBe('name');
     });
 
+    // TOCTOU: two concurrent same-key creates both pass findUnique; the 2nd
+    // insert trips the (workspaceId, key) unique → P2002. Map to a 409, not 500.
+    it('maps a P2002 race to a 409', async () => {
+      prisma.customObjectDef.findUnique.mockResolvedValue(null);
+      prisma.customObjectDef.create.mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+      );
+      await expect(
+        svc.createObject(WS, { key: 'property', labelSingular: 'P', labelPlural: 'Ps' } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
     it.each(['records', 'contacts'])('rejects the reserved key "%s" (route collision)', async (key) => {
       await expect(
         svc.createObject(WS, { key, labelSingular: 'X', labelPlural: 'Xs' } as any),
