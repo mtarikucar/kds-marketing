@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -27,7 +27,7 @@ import { ConnectAccountDialog } from './ConnectAccountDialog';
 import { OAuthConnectButtons } from './OAuthConnectButtons';
 import { AccountSelectDialog } from './AccountSelectDialog';
 import { useSocialConnect } from './useSocialConnect';
-import type { ConnectAccountFormValues } from './socialSchemas';
+import type { ConnectAccountFormValues, MediaItemValue } from './socialSchemas';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -86,6 +86,20 @@ export default function SocialPlannerPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── AI Studio hand-off ───────────────────────────────────────────────────────
+  // The Studio's "Add to post" navigates here with { seedMedia } in router state.
+  // Open a fresh composer pre-loaded with that asset, then clear the state so a
+  // refresh/back doesn't re-seed.
+  const location = useLocation();
+  const seedMedia = (location.state as { seedMedia?: MediaItemValue[] } | null)?.seedMedia;
+  useEffect(() => {
+    if (seedMedia?.length) {
+      setEditingPost(null);
+      setComposerOpen(true);
+      window.history.replaceState({}, '');
+    }
+  }, [seedMedia]);
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -432,6 +446,7 @@ export default function SocialPlannerPage() {
         onOpenChange={handleComposerClose}
         accounts={accounts}
         post={editingPost}
+        seedMedia={editingPost ? undefined : seedMedia}
         onSubmit={(values) => composerMutation.mutate(values)}
         isPending={composerMutation.isPending}
       />

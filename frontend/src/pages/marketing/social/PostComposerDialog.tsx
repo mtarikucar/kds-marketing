@@ -3,7 +3,7 @@ import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Trash2, Image as ImageIcon, Film, Upload, CalendarClock } from 'lucide-react';
+import { Plus, Trash2, Image as ImageIcon, Film, Upload, CalendarClock, Sparkles } from 'lucide-react';
 import {
   postSchema,
   POST_FORMATS,
@@ -29,6 +29,13 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
+import {
+  generateMedia,
+  getGeneration,
+  isTerminal,
+  type GeneratedAssetType,
+} from '../../../features/marketing/api/media.service';
 
 export interface PostComposerSubmit {
   content: string;
@@ -48,6 +55,8 @@ interface PostComposerDialogProps {
   post?: SocialPost | null;
   onSubmit: (values: PostComposerSubmit) => void;
   isPending: boolean;
+  /** Media to pre-load into a NEW post (e.g. an asset handed off from AI Studio). */
+  seedMedia?: MediaItemValue[];
 }
 
 const MAX_CONTENT = 5000;
@@ -64,10 +73,12 @@ export function PostComposerDialog({
   post,
   onSubmit,
   isPending,
+  seedMedia,
 }: PostComposerDialogProps) {
   const { t } = useTranslation('marketing');
   const isEdit = !!post;
   const [uploading, setUploading] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const form = useForm<PostFormValues>({
@@ -92,9 +103,9 @@ export function PostComposerDialog({
         scheduledAt: post.scheduledAt ? toLocalInput(post.scheduledAt) : '',
       });
     } else {
-      form.reset({ content: '', media: [], formats: {}, targetAccountIds: [], scheduledAt: '' });
+      form.reset({ content: '', media: seedMedia ?? [], formats: {}, targetAccountIds: [], scheduledAt: '' });
     }
-  }, [open, post, form]);
+  }, [open, post, form, seedMedia]);
 
   const fieldErr = (msg?: string) =>
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;
@@ -238,8 +249,23 @@ export function PostComposerDialog({
                         <Plus className="h-4 w-4" aria-hidden="true" />
                         {t('social.composer.addMedia', { defaultValue: 'Add URL' })}
                       </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={items.length >= 10}
+                        onClick={() => setAiOpen(true)}
+                      >
+                        <Sparkles className="h-4 w-4" aria-hidden="true" />
+                        {t('social.composer.aiGenerate', { defaultValue: 'AI ile Üret' })}
+                      </Button>
                     </div>
                   </div>
+                  <AiGeneratePanel
+                    open={aiOpen}
+                    onOpenChange={setAiOpen}
+                    onAdd={(media) => field.onChange([...(field.value ?? []), media])}
+                  />
                   {items.length === 0 ? (
                     <p className="text-caption text-muted-foreground">
                       {t('social.composer.noMedia', {
@@ -454,4 +480,85 @@ function toLocalInput(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+interface AiGeneratePanelProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAdd: (media: MediaItemValue) => void;
+}
+
+/**
+ * Inline "Generate with AI" drawer for the composer: kicks off a generation,
+ * polls until terminal (the composer is short-lived, so the wait is capped),
+ * then drops the READY asset straight into the post's media list.
+ */
+function AiGeneratePanel({ open, onOpenChange, onAdd }: AiGeneratePanelProps) {
+  const { t } = useTranslation('marketing');
+  const [type, setType] = useState<GeneratedAssetType>('IMAGE');
+  const [prompt, setPrompt] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    const text = prompt.trim();
+    if (!text) return;
+    setBusy(true);
+    try {
+      const { assetId } = await generateMedia({ type, prompt: text });
+      // Poll until terminal (composer is short-lived; cap the wait).
+      for (let i = 0; i < 60; i += 1) {
+        const a = await getGeneration(assetId);
+        if (isTerminal(a.status)) {
+          if (a.status === 'READY' && a.url) {
+            onAdd({ url: a.url, key: a.r2Key ?? undefined, mime: a.mime ?? undefined });
+            toast.success(t('social.composer.aiAdded', { defaultValue: 'Added to post' }));
+            onOpenChange(false);
+          } else {
+            toast.error(t('social.composer.aiFailed', { defaultValue: 'Generation failed' }));
+          }
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      toast.error(t('social.composer.aiTimeout', { defaultValue: 'Still generating — check the Studio' }));
+    } catch {
+      toast.error(t('social.composer.aiFailed', { defaultValue: 'Generation failed' }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-96 max-w-[90vw] space-y-4 p-6">
+        <SheetTitle>{t('social.composer.aiTitle', { defaultValue: 'Generate with AI' })}</SheetTitle>
+        <SheetDescription className="sr-only">
+          {t('social.composer.aiTitle', { defaultValue: 'Generate with AI' })}
+        </SheetDescription>
+        <div className="flex gap-2">
+          <Button type="button" variant={type === 'IMAGE' ? 'primary' : 'outline'} size="sm" onClick={() => setType('IMAGE')}>
+            {t('social.composer.aiImage', { defaultValue: 'Image' })}
+          </Button>
+          <Button type="button" variant={type === 'VIDEO' ? 'primary' : 'outline'} size="sm" onClick={() => setType('VIDEO')}>
+            {t('social.composer.aiVideo', { defaultValue: 'Video' })}
+          </Button>
+        </div>
+        <Field label={t('social.composer.aiPrompt', { defaultValue: 'Prompt' })}>
+          {({ id }) => (
+            <Textarea
+              id={id}
+              rows={4}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={t('social.composer.aiPromptPlaceholder', { defaultValue: 'Describe the media…' })}
+            />
+          )}
+        </Field>
+        <Button type="button" onClick={run} loading={busy} disabled={!prompt.trim()}>
+          <Sparkles className="h-4 w-4" aria-hidden="true" />
+          {t('social.composer.aiRun', { defaultValue: 'Generate' })}
+        </Button>
+      </SheetContent>
+    </Sheet>
+  );
 }

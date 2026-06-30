@@ -1,0 +1,62 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import BrandKitPage from './BrandKitPage';
+import * as brandKitService from '../../features/marketing/api/brandKit.service';
+
+vi.mock('../../features/marketing/api/brandKit.service', () => ({
+  getBrandKit: vi.fn(),
+  updateBrandKit: vi.fn(),
+  uploadReferenceImage: vi.fn(),
+}));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, def?: string) => def ?? key,
+    i18n: { language: 'en' },
+  }),
+}));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+const KIT = {
+  id: 'bk-1', logoUrl: null, logoR2Key: null, palette: ['#1e40af'], tone: 'friendly',
+  referenceImages: [], defaultHashtags: ['#jeeta'], defaultCta: 'Book now',
+  createdAt: '', updatedAt: '',
+};
+
+function wrapper({ children }: { children: React.ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
+describe('BrandKitPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(brandKitService.getBrandKit).mockResolvedValue(KIT as never);
+    vi.mocked(brandKitService.updateBrandKit).mockResolvedValue(KIT as never);
+  });
+
+  it('renders the heading and populates fields from getBrandKit', async () => {
+    render(<BrandKitPage />, { wrapper });
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(await screen.findByDisplayValue('friendly')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Book now')).toBeInTheDocument();
+  });
+
+  it('saving sends the edited tone/cta/hashtags to updateBrandKit', async () => {
+    render(<BrandKitPage />, { wrapper });
+    const tone = await screen.findByDisplayValue('friendly');
+    await userEvent.clear(tone);
+    await userEvent.type(tone, 'bold and playful');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() =>
+      expect(brandKitService.updateBrandKit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tone: 'bold and playful',
+          defaultCta: 'Book now',
+          defaultHashtags: ['#jeeta'],
+        }),
+      ),
+    );
+  });
+});

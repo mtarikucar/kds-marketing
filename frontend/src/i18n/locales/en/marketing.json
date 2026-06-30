@@ -161,6 +161,8 @@
     "leaderboard": "Leaderboard",
     "roles": "Roles & permissions",
     "social": "Social",
+    "aiStudio": "AI Studio",
+    "brandKit": "Brand Kit",
     "surveys": "Surveys",
     "agencyLocations": "Agency Locations",
     "agencyRebilling": "Agency Rebilling",
@@ -1542,6 +1544,111 @@
         "has": "has tag",
         "hasNot": "doesn't have tag"
       }
+    }
+  },
+  "aiStudio": {
+    "title": "AI Content Studio",
+    "subtitle": "Generate images and video for your social posts.",
+    "mediaType": "Media type",
+    "type": {
+      "image": "Image",
+      "video": "Video"
+    },
+    "prompt": "Prompt",
+    "promptPlaceholder": "Describe the image or video to generate…",
+    "model": "Model",
+    "modelLabel": {
+      "draftImage": "Draft image",
+      "finalImage": "Final image",
+      "cheapVideo": "Standard video",
+      "premiumVideo": "Premium video",
+      "videoAudio": "Video + audio"
+    },
+    "aspectRatio": "Aspect ratio",
+    "duration": "Duration (sec)",
+    "count": "How many",
+    "generate": "Generate",
+    "generating": "Generating",
+    "library": "Library",
+    "filterType": "Filter by type",
+    "filter": {
+      "all": "All"
+    },
+    "addToPost": "Add to post",
+    "download": "Download",
+    "regenerate": "Regenerate",
+    "delete": "Delete",
+    "status": {
+      "queued": "QUEUED"
+    },
+    "empty": {
+      "title": "No assets yet",
+      "desc": "Generate your first image or video above."
+    },
+    "toast": {
+      "started": "Generation started",
+      "failed": "Generation failed",
+      "deleted": "Asset deleted",
+      "deleteFailed": "Delete failed",
+      "blocked": "Blocked by moderation"
+    }
+  },
+  "brandKit": {
+    "title": "Brand Kit",
+    "subtitle": "Logo, palette, tone and references reused across AI generations.",
+    "identity": "Brand identity",
+    "identityDesc": "Used to keep generated content on-brand.",
+    "logo": "Logo",
+    "uploadLogo": "Upload logo",
+    "palette": "Palette (comma-separated hex)",
+    "tone": "Brand tone / voice",
+    "hashtags": "Default hashtags",
+    "cta": "Default call-to-action",
+    "references": "Reference images",
+    "addReference": "Add reference",
+    "removeReference": "Remove",
+    "save": "Save",
+    "saved": "Brand kit saved",
+    "saveFailed": "Save failed",
+    "logoUploaded": "Logo uploaded",
+    "logoFailed": "Upload failed",
+    "refUploaded": "Reference image added",
+    "refFailed": "Upload failed",
+    "refRemoved": "Reference image removed"
+  },
+  "social": {
+    "composer": {
+      "editTitle": "Edit post",
+      "createTitle": "New post",
+      "subtitle": "Compose once and publish across your connected networks.",
+      "content": "Content",
+      "contentPlaceholder": "What do you want to share?",
+      "media": "Media",
+      "uploadMedia": "Upload",
+      "addMedia": "Add URL",
+      "noMedia": "No media. Upload up to 10 images/videos, or paste public URLs.",
+      "accounts": "Publish to",
+      "noAccounts": "No connected accounts",
+      "noAccountsHint": "Connect a social account first to choose where to publish.",
+      "format": "Format",
+      "format_FEED": "Feed",
+      "format_REEL": "Reel",
+      "format_STORY": "Story",
+      "formatHint": "Reels and Stories need a video (Stories also accept an image).",
+      "uploadFailed": "Upload failed",
+      "create": "Create post",
+      "schedule": "Schedule (optional)",
+      "scheduleHint": "Leave empty to keep as draft; the post publishes at this time when set.",
+      "aiGenerate": "AI ile Üret",
+      "aiAdded": "Added to post",
+      "aiFailed": "Generation failed",
+      "aiTimeout": "Still generating — check the Studio",
+      "aiTitle": "Generate with AI",
+      "aiImage": "Image",
+      "aiVideo": "Video",
+      "aiPrompt": "Prompt",
+      "aiPromptPlaceholder": "Describe the media…",
+      "aiRun": "Generate"
     }
   }
 }

@@ -86,6 +86,8 @@ const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/t
 const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
 const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
 const SocialPlannerPage        = lazy(() => import('./pages/marketing/social'));
+const AiStudioPage             = lazy(() => import('./pages/marketing/social/AiStudioPage'));
+const BrandKitPage             = lazy(() => import('./pages/marketing/BrandKitPage'));
 const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
 const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
@@ -208,6 +210,7 @@ export default function App() {
             <Route path="/subscriptions" element={<S><SubscriptionsPage /></S>} />
             <Route path="/order-forms"   element={<S><OrderFormsPage /></S>} />
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
+            <Route path="/brand-kit"   element={<S><BrandKitPage /></S>} />
             {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
             <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
@@ -219,6 +222,7 @@ export default function App() {
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/ai/studio"   element={<S><AiStudioPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />
             <Route path="/custom-objects/:key" element={<S><CustomObjectDetailPage /></S>} />

@@ -35,7 +35,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
 
   it('a manager with NO entitlements still sees the core-but-managerOnly modules', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
-    expect(childPaths(hubs, 'marketing')).toEqual(['/social', '/trigger-links']);
+    expect(childPaths(hubs, 'marketing')).toEqual(['/social', '/ai/studio', '/trigger-links']);
     expect(childPaths(hubs, 'sites').sort()).toEqual(['/experiments', '/surveys']);
     expect(childPaths(hubs, 'memberships').sort()).toEqual([
       '/memberships/communities',
