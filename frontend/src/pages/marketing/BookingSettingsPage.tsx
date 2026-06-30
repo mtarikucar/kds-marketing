@@ -52,16 +52,33 @@ type Avail = Record<string, { start: string; end: string }[]>;
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 
+/** Minutes since midnight for a zero-padded HH:mm, or null if malformed. */
+function hhmmToMinutes(t: string): number | null {
+  const m = /^(\d{2}):(\d{2})$/.exec(t);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
 /**
- * True when any availability window has end ≤ start. HH:mm strings compare
- * chronologically (zero-padded), so a plain `>=` is enough. The backend slices
- * windows with `for (s = start; s + slot <= end; …)`, so an inverted/equal
- * window yields ZERO bookable slots for that day — silently. Block the save and
- * surface it instead of letting the operator publish a calendar nobody can book.
+ * True when any availability window would yield ZERO bookable slots — which the
+ * backend slices silently (`for (s = start; s + slot <= end; …)`). Two causes:
+ *   1. end ≤ start (inverted/equal — HH:mm strings compare chronologically).
+ *   2. the window is SHORTER than one slot (end − start < slotMinutes), so even
+ *      the first slice overflows it. Only checked when slotMinutes is provided.
+ * Block the save and surface it instead of letting the operator publish a
+ * calendar nobody can book.
  */
-export function availabilityHasInvalidWindow(avail: Avail): boolean {
+export function availabilityHasInvalidWindow(avail: Avail, slotMinutes?: number): boolean {
   return Object.values(avail ?? {}).some((windows) =>
-    (windows ?? []).some((w) => !!w && !!w.start && !!w.end && w.start >= w.end),
+    (windows ?? []).some((w) => {
+      if (!w || !w.start || !w.end) return false;
+      if (w.start >= w.end) return true; // inverted / equal
+      if (slotMinutes && slotMinutes > 0) {
+        const s = hhmmToMinutes(w.start);
+        const e = hhmmToMinutes(w.end);
+        if (s != null && e != null && e - s < slotMinutes) return true; // too short for a slot
+      }
+      return false;
+    }),
   );
 }
 
@@ -126,6 +143,10 @@ export default function BookingSettingsPage() {
   });
 
   const availability = watch('availability');
+  // Slot length gates the "window shorter than a slot" check below — a window
+  // under one slot long yields zero bookable slots, same as an inverted one.
+  const watchedSlotMinutes = Number(watch('slotMinutes')) || 0;
+  const availabilityInvalid = availabilityHasInvalidWindow(availability, watchedSlotMinutes);
 
   // ── Queries ──────────────────────────────────────────────────────────────────
 
@@ -510,9 +531,9 @@ export default function BookingSettingsPage() {
                     )}
                   </div>
                 ))}
-                {availabilityHasInvalidWindow(availability) && (
+                {availabilityInvalid && (
                   <p className="text-xs text-danger">
-                    {t('booking.invalidWindow', "Each day's end time must be after its start time.")}
+                    {t('booking.invalidWindow', "Each window must end after it starts and be at least one slot long.")}
                   </p>
                 )}
               </CardContent>
@@ -531,7 +552,7 @@ export default function BookingSettingsPage() {
               type="submit"
               form="booking-form"
               loading={save.isPending || isSubmitting}
-              disabled={availabilityHasInvalidWindow(availability)}
+              disabled={availabilityInvalid}
             >
               {t('common.save', 'Save')}
             </Button>

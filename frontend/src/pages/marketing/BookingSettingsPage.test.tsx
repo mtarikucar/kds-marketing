@@ -86,4 +86,15 @@ describe('availabilityHasInvalidWindow', () => {
       }),
     ).toBe(true);
   });
+
+  // A window SHORTER than one slot also yields ZERO bookable slots (the backend's
+  // first slice needs start + slotMinutes <= end), defeating the guard's own
+  // stated purpose just like an inverted window. Flag it when slotMinutes is known.
+  it('flags a window shorter than one slot', () => {
+    expect(availabilityHasInvalidWindow({ '1': [{ start: '09:00', end: '09:20' }] }, 30)).toBe(true);
+    // Exactly one slot fits → valid.
+    expect(availabilityHasInvalidWindow({ '1': [{ start: '09:00', end: '09:30' }] }, 30)).toBe(false);
+    // Backward-compatible: without slotMinutes the short-window check is skipped.
+    expect(availabilityHasInvalidWindow({ '1': [{ start: '09:00', end: '09:20' }] })).toBe(false);
+  });
 });
