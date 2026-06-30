@@ -20,6 +20,8 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { CampaignsService } from '../campaigns/campaigns.service';
 import { CreateCampaignDto, UpdateCampaignDto, SetVariantsDto } from '../dto/campaign.dto';
+import { Audit } from '../../audit/audit.decorator';
+import { SocialCampaignLinkService } from '../social-campaigns/social-campaign-link.service';
 
 /**
  * Email/SMS/WhatsApp campaigns. MANAGER+ behind the `campaigns` feature.
@@ -32,11 +34,23 @@ import { CreateCampaignDto, UpdateCampaignDto, SetVariantsDto } from '../dto/cam
 @MarketingRoles('MANAGER')
 @RequiresFeature('campaigns')
 export class MarketingCampaignsController {
-  constructor(private readonly campaigns: CampaignsService) {}
+  constructor(
+    private readonly campaigns: CampaignsService,
+    private readonly socialLink: SocialCampaignLinkService,
+  ) {}
 
   @Get()
   list(@CurrentMarketingUser() a: MarketingUserPayload) {
     return this.campaigns.list(a.workspaceId);
+  }
+
+  /** Cross-link (§6.3): provision a companion Social Campaign prefilled from this
+   *  blast (subject/body/audience). Sets Campaign.socialCampaignId. */
+  @Post(':id/social')
+  @RequirePermission('campaigns.send')
+  @Audit({ action: 'campaign.social.provision', resourceType: 'campaign', resourceIdParam: 'id' })
+  createSocial(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.socialLink.provisionFromBlast(a.workspaceId, id, a.id);
   }
 
   @Post()

@@ -57,6 +57,7 @@ import {
   Link2,
   Percent,
   Ticket,
+  CalendarRange,
 } from 'lucide-react';
 
 /**
@@ -176,6 +177,8 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
       { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
       { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
+      { path: '/social-campaigns', labelKey: 'nav.socialCampaigns', label: 'Social Campaigns', icon: CalendarRange, managerOnly: true },
+      { path: '/ai/studio', labelKey: 'nav.aiStudio', label: 'AI Studio', icon: Sparkles, managerOnly: true },
       { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
       { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
       { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, feature: 'commissions', managerOnly: true },
@@ -246,6 +249,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'settings', labelKey: 'nav.group.settings', label: 'Settings', icon: Settings, area: 'settings',
     children: [
       { path: '/branding', labelKey: 'nav.branding', label: 'Business & Branding', icon: Palette, managerOnly: true },
+      { path: '/brand-kit', labelKey: 'nav.brandKit', label: 'Brand Kit', icon: Palette, managerOnly: true },
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
       { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: Lock, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },

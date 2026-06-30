@@ -14,12 +14,21 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'conversation.followup',
       'conversation.reply',
       'funnel.draft',
+      'media.image.generate',
+      'media.video.generate',
       'review.reply_draft',
       'voice.turn',
       'workflow.ai_classify',
       'workflow.ai_generate',
       'workflow.draft',
     ]);
+  });
+
+  it('prices media generation as a positive default-tier floor', () => {
+    expect(creditCost('media.image.generate')).toBeGreaterThan(0);
+    expect(creditCost('media.video.generate')).toBeGreaterThan(0);
+    expect(tierFor('media.image.generate')).toBe('default');
+    expect(tierFor('media.video.generate')).toBe('default');
   });
 
   it('every action has a positive integer credit cost and a known tier', () => {

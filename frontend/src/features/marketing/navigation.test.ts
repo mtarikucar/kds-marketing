@@ -35,7 +35,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
 
   it('a manager with NO entitlements still sees the core-but-managerOnly modules', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
-    expect(childPaths(hubs, 'marketing')).toEqual(['/social', '/trigger-links']);
+    expect(childPaths(hubs, 'marketing')).toEqual(['/social', '/social-campaigns', '/ai/studio', '/trigger-links']);
     expect(childPaths(hubs, 'sites').sort()).toEqual(['/experiments', '/surveys']);
     expect(childPaths(hubs, 'memberships').sort()).toEqual([
       '/memberships/communities',
@@ -67,6 +67,16 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
       '/agency/rebilling',
       '/agency/snapshots',
     ]);
+  });
+});
+
+describe('navigation — social campaigns', () => {
+  it('exposes a Social Campaigns child under the marketing hub', () => {
+    const marketing = NAV_HUBS.find((h) => h.id === 'marketing');
+    const child = marketing?.children?.find((c) => c.path === '/social-campaigns');
+    expect(child).toBeDefined();
+    expect(child?.labelKey).toBe('nav.socialCampaigns');
+    expect(child?.managerOnly).toBe(true);
   });
 });
 

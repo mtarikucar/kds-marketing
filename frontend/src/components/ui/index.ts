@@ -34,6 +34,7 @@ export {
   type SegmentedControlProps,
   type SegmentedControlOption,
 } from './SegmentedControl';
+export { Stepper, type StepperProps, type StepperStep } from './Stepper';
 export { ThemeToggle } from './ThemeToggle';
 export { Skeleton } from './Skeleton';
 export { Spinner } from './Spinner';

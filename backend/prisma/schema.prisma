@@ -1596,6 +1596,9 @@ model Campaign {
   completedAt    DateTime?
   /// { recipients, sent, failed, skipped, opened, clicked, unsubscribed }.
   stats          Json?
+  /// Cross-linkage (AI Social Content Studio §6.3): the companion SocialCampaign
+  /// provisioned from this blast. Nullable — manual/legacy campaigns have none.
+  socialCampaignId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2859,10 +2862,14 @@ model SocialPost {
   publishedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  /// AI Social Content Studio — set when a post originates from a SocialCampaign.
+  socialCampaignId String?
+  campaignItemId   String?
 
   targets SocialPostTarget[]
 
   @@index([workspaceId, status])
+  @@index([socialCampaignId])
   @@map("social_posts")
 }
 
@@ -2882,6 +2889,153 @@ model SocialPostTarget {
   @@index([workspaceId, postId])
   @@index([workspaceId, status])
   @@map("social_post_targets")
+}
+
+/// One Brand Kit per workspace — logo, palette, tone, 3–5 reference images,
+/// reused as conditioning across AI media generations (AI Content Studio).
+model BrandKit {
+  id              String   @id @default(uuid())
+  workspaceId     String   @unique
+  logoUrl         String?
+  logoR2Key       String?
+  /// Array of hex color strings.
+  palette         Json?
+  tone            String?  @db.Text
+  /// [{ url, r2Key, mime }] — 3–5 reference images (R2).
+  referenceImages Json     @default("[]")
+  defaultHashtags String[]
+  defaultCta      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("brand_kits")
+}
+
+/// A single AI-generated media asset (image or video) and its generation
+/// lifecycle. status: QUEUED|GENERATING|READY|FAILED|BLOCKED. fal result URLs
+/// are re-hosted to R2 on READY; `r2Key` is the canonical store.
+model GeneratedAsset {
+  id                  String   @id @default(uuid())
+  workspaceId         String
+  type                String   // IMAGE | VIDEO
+  status              String   @default("QUEUED") // QUEUED|GENERATING|READY|FAILED|BLOCKED
+  provider            String   // e.g. "fal"
+  model               String   // provider model id
+  providerRequestId   String?  // idempotency key for webhook/poll convergence
+  prompt              String   @db.Text
+  negativePrompt      String?
+  /// aspectRatio, durationSec, seed, referenceImageUrls, count, etc.
+  params              Json     @default("{}")
+  url                 String?
+  r2Key               String?
+  mime                String?
+  width               Int?
+  height              Int?
+  durationSec         Float?
+  thumbnailUrl        String?
+  thumbnailR2Key      String?
+  costCredits         Int?     // reconciled actual
+  costCreditsReserved Int?     // estimate reserved at submit (for refund/reconcile)
+  costUsd             Decimal? @db.Decimal(10, 4)
+  error               String?
+  socialCampaignId    String?
+  socialCampaign      SocialCampaign? @relation(fields: [socialCampaignId], references: [id], onDelete: SetNull)
+  createdById         String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([providerRequestId])
+  @@map("generated_assets")
+}
+
+enum SocialCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum SocialCampaignAutomationMode {
+  APPROVAL
+  SEMI_AUTO
+  FULL_AUTO
+}
+
+enum SocialCampaignPlanningMode {
+  AI_PROPOSE
+  AI_FULL
+  USER_TOPICS
+}
+
+enum SocialCampaignItemStatus {
+  PLANNED
+  GENERATING
+  NEEDS_APPROVAL
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  SKIPPED
+}
+
+/// AI Social Content Studio — a goal/theme/cadence-driven content calendar that
+/// auto-progresses generated posts. One per workspace per campaign.
+model SocialCampaign {
+  id                 String   @id @default(uuid())
+  workspaceId        String
+  name               String
+  goal               String?
+  theme              String?
+  /// { audience?, keyMessages?, languages?, productRefs?, topics?[] }
+  brief              Json
+  status             SocialCampaignStatus @default(DRAFT)
+  automationMode     SocialCampaignAutomationMode
+  planningMode       SocialCampaignPlanningMode
+  /// { perWeek?, daysOfWeek:number[], timeOfDay:'HH:MM', timezone? }
+  cadence            Json
+  startDate          DateTime
+  endDate            DateTime?
+  targetAccountIds   String[]
+  mediaKinds         String[]
+  defaultImageModel  String?
+  defaultVideoModel  String?
+  dailyPublishCap    Int      @default(2)
+  linkedCampaignId   String?
+  linkedAdCampaignId String?
+  /// { planned, generated, approved, published }
+  stats              Json?
+  createdById        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  items  SocialCampaignItem[]
+  assets GeneratedAsset[]
+
+  @@index([workspaceId, status])
+  @@map("social_campaigns")
+}
+
+/// One planned slot in a SocialCampaign's calendar.
+model SocialCampaignItem {
+  id                String   @id @default(uuid())
+  socialCampaignId  String
+  campaign          SocialCampaign @relation(fields: [socialCampaignId], references: [id], onDelete: Cascade)
+  workspaceId       String
+  sequenceIndex     Int
+  scheduledFor      DateTime
+  status            SocialCampaignItemStatus @default(PLANNED)
+  topic             String?
+  socialPostId      String?
+  generatedAssetIds String[]
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([socialCampaignId, status])
+  @@index([workspaceId, status])
+  @@map("social_campaign_items")
 }
 
 /// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).

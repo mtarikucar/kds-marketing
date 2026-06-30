@@ -92,6 +92,11 @@ const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/t
 const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
 const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
 const SocialPlannerPage        = lazy(() => import('./pages/marketing/social'));
+const AiStudioPage             = lazy(() => import('./pages/marketing/social/AiStudioPage'));
+const BrandKitPage             = lazy(() => import('./pages/marketing/BrandKitPage'));
+const SocialCampaignsPage      = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignsPage'));
+const SocialCampaignBuilder    = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignBuilder'));
+const SocialCampaignDetailPage = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignDetailPage'));
 const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
 const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
@@ -232,6 +237,7 @@ export default function App() {
             <Route path="/subscriptions" element={<S><SubscriptionsPage /></S>} />
             <Route path="/order-forms"   element={<S><OrderFormsPage /></S>} />
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
+            <Route path="/brand-kit"   element={<S><BrandKitPage /></S>} />
             {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
             <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
@@ -244,6 +250,10 @@ export default function App() {
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
             <Route path="/settings/voice-ai"    element={<S><VoiceAiSettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
+            <Route path="/social-campaigns"      element={<S><SocialCampaignsPage /></S>} />
+            <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
+            <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
+            <Route path="/ai/studio"   element={<S><AiStudioPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />
             <Route path="/custom-objects/:key" element={<S><CustomObjectDetailPage /></S>} />
