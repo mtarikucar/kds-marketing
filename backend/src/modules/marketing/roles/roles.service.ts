@@ -160,6 +160,13 @@ export class RolesService {
       const role = await this.owned(workspaceId, roleId);
       // Can't hand someone a role more powerful than what the actor holds.
       await this.assertWithinActorGrant((role.permissions as string[]) ?? [], actor);
+    } else {
+      // Unassigning REVERTS the user to their legacy-role permission set — itself
+      // a grant. Cap it by the actor's own grant (parity with the assign-a-role
+      // path), or a MANAGER could strip an OWNER-role user's restrictive custom
+      // role and hand them back full OWNER power (billing.manage/users.manage the
+      // manager lacks). Reverting a low-legacy-role (e.g. REP) user is unaffected.
+      await this.assertWithinActorGrant(LEGACY_ROLE_PERMISSIONS[user.role] ?? [], actor);
     }
     await this.prisma.marketingUser.update({ where: { id: userId }, data: { customRoleId: roleId } });
     return { userId, customRoleId: roleId };

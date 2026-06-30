@@ -70,6 +70,31 @@ describe('RolesService', () => {
     expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 
+  // Privilege-floor parity on the UNASSIGN path: clearing a custom role reverts
+  // the user to their LEGACY-role perms — itself a grant. A MANAGER must not be
+  // able to strip an OWNER-role user's restrictive custom role and hand them back
+  // full OWNER power (billing.manage/users.manage the manager lacks).
+  it('assignToUser refuses to UNASSIGN a role when the restored legacy perms exceed the actor', async () => {
+    const { prisma, svc } = makeSvc();
+    // Legacy role OWNER (full perms), currently MASKED by a weak custom role.
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'owner-1', role: 'OWNER', customRoleId: 'weak' } as any);
+    // Current perms resolve to the weak role → the MANAGER out-ranks them, so the
+    // actor-outranks check passes and only the new within-grant guard can catch it.
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'weak', permissions: ['leads.read'] } as any);
+    await expect(svc.assignToUser(WS, 'owner-1', null, MANAGER)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
+  it('assignToUser allows UNASSIGN when the restored legacy perms are within the actor grant', async () => {
+    const { prisma, svc } = makeSvc();
+    // Legacy role REP (a subset of MANAGER's grant) → reverting is safe.
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'rep-1', role: 'REP', customRoleId: 'r1' } as any);
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read'] } as any);
+    (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
+    const out = await svc.assignToUser(WS, 'rep-1', null, MANAGER);
+    expect(out).toEqual({ userId: 'rep-1', customRoleId: null });
+  });
+
   it('resolves a custom role permission set when assigned', async () => {
     const { prisma, svc } = makeSvc();
     prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read', 'reports.read'] } as any);
