@@ -101,6 +101,51 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
   });
 });
 
+describe('WorkflowActionHandler assign_lead', () => {
+  const mkHandler = (prisma: any, autoAssigner: any) =>
+    new WorkflowActionHandler(
+      prisma, null as any, null as any, null as any,
+      autoAssigner, null as any, null as any, null as any, null as any,
+    );
+  const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
+
+  // A workflow assign_lead must enforce the SAME "assignee is an ACTIVE REP"
+  // guard the manual assign()/bulkAssign() paths do — otherwise a workflow could
+  // dump leads on a MANAGER or a DEACTIVATED user (orphaning them on a dead
+  // account). A non-active-REP target must NOT resolve, so it falls back to
+  // auto-assign (the existing unresolved-user behavior).
+  it('only resolves an ACTIVE REP (guards the user lookup) and falls back to auto-assign otherwise', async () => {
+    const prisma = {
+      marketingUser: { findFirst: jest.fn().mockResolvedValue(null) }, // target is not an active REP
+      lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue('rep-fallback') };
+    const handler = mkHandler(prisma, autoAssigner);
+
+    await handler.execute({ type: 'assign_lead', strategy: 'user', userId: 'mgr-1' } as any, ctx);
+
+    expect(prisma.marketingUser.findFirst.mock.calls[0][0].where).toMatchObject({
+      id: 'mgr-1', workspaceId: 'ws-1', role: 'REP', status: 'ACTIVE',
+    });
+    expect(autoAssigner.pickAssignee).toHaveBeenCalledWith('ws-1');
+    expect(prisma.lead.updateMany.mock.calls[0][0].data.assignedToId).toBe('rep-fallback');
+  });
+
+  it('assigns directly when the target IS an active REP (no auto-assign fallback)', async () => {
+    const prisma = {
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'rep-1' }) },
+      lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const autoAssigner = { pickAssignee: jest.fn() };
+    const handler = mkHandler(prisma, autoAssigner);
+
+    await handler.execute({ type: 'assign_lead', strategy: 'user', userId: 'rep-1' } as any, ctx);
+
+    expect(autoAssigner.pickAssignee).not.toHaveBeenCalled();
+    expect(prisma.lead.updateMany.mock.calls[0][0].data.assignedToId).toBe('rep-1');
+  });
+});
+
 describe('WorkflowActionHandler tag actions', () => {
   const mkHandler = (tags: any) =>
     new WorkflowActionHandler(

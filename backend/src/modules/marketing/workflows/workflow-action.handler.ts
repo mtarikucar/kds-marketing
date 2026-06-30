@@ -240,12 +240,15 @@ export class WorkflowActionHandler {
     if (!ctx.lead?.id) return 'skipped (no lead)';
     let to: string | null = null;
     if (step.strategy === 'user' && step.userId) {
-      // step.userId is unvalidated DSL input — resolve it to a real user IN THIS
-      // workspace (same guard the manual lead-assign path uses). A foreign/unknown
-      // id must not become a dangling assignedToId (which a later notify_user
-      // would then address). Fall back to auto-assign if it doesn't resolve.
+      // step.userId is unvalidated DSL input — resolve it to a real ACTIVE REP IN
+      // THIS workspace (the SAME guard the manual assign()/bulkAssign() paths use:
+      // leads go to active reps, never a manager or a deactivated user). A
+      // foreign/unknown/ineligible id must not become a dangling assignedToId
+      // (which a later notify_user would then address, and a deactivated owner
+      // would silently orphan the lead). Falls back to auto-assign if it doesn't
+      // resolve.
       const u = await this.prisma.marketingUser.findFirst({
-        where: { id: step.userId, workspaceId: ctx.workspaceId },
+        where: { id: step.userId, workspaceId: ctx.workspaceId, role: 'REP', status: 'ACTIVE' },
         select: { id: true },
       });
       to = u?.id ?? null;
