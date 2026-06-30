@@ -85,7 +85,12 @@ export class LeadDedupeService {
     const leads = await this.prisma.lead.findMany({
       where: {
         workspaceId,
+        // "Active" = NOT merged AND NOT soft-deleted. Without the deletedAt guard
+        // a bulk-deleted/archived lead would cluster with live leads and get
+        // suggested for merge — re-surfacing (or merging a live lead INTO) a
+        // hidden, deleted record.
         mergedIntoId: null,
+        deletedAt: null,
         OR: [
           { phoneNormalized: { not: null } },
           { emailNormalized: { not: null } },

@@ -39,6 +39,18 @@ describe('LeadDedupeService.findDuplicates', () => {
     expect(clusters[0].leads.map((l: any) => l.id).sort()).toEqual(['a', 'b']);
   });
 
+  // "Active" must mean NOT merged AND NOT soft-deleted. A bulk-deleted/archived
+  // lead sharing a phone/email would otherwise cluster with live leads and get
+  // suggested for merge — re-surfacing (or merging a live lead INTO) a hidden,
+  // deleted record. Same dedup-soft-deleted class as forms/booking/import.
+  it('excludes soft-deleted leads from dedup clustering', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([] as any);
+    await svc.findDuplicates(WS);
+    const where = (prisma.lead.findMany as jest.Mock).mock.calls[0][0].where;
+    expect(where).toMatchObject({ workspaceId: WS, mergedIntoId: null, deletedAt: null });
+  });
+
   it('prefers a converted lead as the suggested canonical', async () => {
     const { prisma, svc } = makeSvc();
     prisma.lead.findMany.mockResolvedValue([
