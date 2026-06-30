@@ -40,6 +40,7 @@ export interface RequestGenerationDto {
   seed?: number;
   createdById: string;
   socialCampaignId?: string;
+  campaignItemId?: string;
 }
 
 @Injectable()
@@ -94,6 +95,7 @@ export class MediaGenService implements OnModuleInit {
       durationSec: durationSec ?? null,
       seed: dto.seed ?? null,
       referenceImageUrls: dto.referenceImageUrls ?? [],
+      campaignItemId: dto.campaignItemId ?? null,
     };
     const asset = await this.prisma.generatedAsset.create({
       data: {

@@ -229,6 +229,8 @@ import { MediaGenService } from './ai/media/media-gen.service';
 import { BrandKitService } from './ai/media/brand-kit.service';
 import { FalProvider } from './ai/providers/fal.provider';
 import { MEDIA_PROVIDER } from './ai/providers/media-provider.interface';
+import { SocialCampaignsController } from './social-campaigns/social-campaigns.controller';
+import { SocialCampaignsService } from './social-campaigns/social-campaigns.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
@@ -512,6 +514,7 @@ import { WalletService } from './wallet/wallet.service';
     SocialOAuthController,
     MarketingMediaController,
     MarketingMediaWebhookController,
+    SocialCampaignsController,
   ],
   providers: [
     // Services
@@ -708,6 +711,7 @@ import { WalletService } from './wallet/wallet.service';
     { provide: MEDIA_PROVIDER, useExisting: FalProvider },
     MediaGenService,
     BrandKitService,
+    SocialCampaignsService,
     SocialOAuthService,
     SocialTokenRefreshService,
     // Guards
