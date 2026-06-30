@@ -196,7 +196,7 @@ export default function PipelineSettingsPage() {
                   variant="ghost"
                   size="sm"
                   onClick={() => archiveMut.mutate(p.id)}
-                  disabled={archiveMut.isPending}
+                  disabled={archiveMut.isPending && archiveMut.variables === p.id}
                 >
                   <Archive className="w-4 h-4" aria-hidden="true" />
                   {t('opportunities.archive', 'Archive')}

@@ -70,4 +70,26 @@ describe('PipelineSettingsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /archive/i }));
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith('p2', { archived: true }));
   });
+
+  // Each pipeline's Archive button is a per-row action — the shared archive
+  // mutation's isPending must be scoped by `variables === p.id`, or archiving one
+  // pipeline freezes EVERY pipeline's archive button (per-row loading bleed).
+  it('archiving one pipeline does not disable the other pipelines’ archive buttons', async () => {
+    mockList.mockResolvedValue([
+      { id: 'p2', name: 'Enterprise', isDefault: false, position: 1, archived: false, stages: [] },
+      { id: 'p3', name: 'SMB', isDefault: false, position: 2, archived: false, stages: [] },
+    ]);
+    mockUpdate.mockImplementation(() => new Promise(() => {})); // archive stays in-flight
+    const user = userEvent.setup();
+    render(<PipelineSettingsPage />, { wrapper });
+    await screen.findByText('SMB');
+
+    await user.click(screen.getAllByRole('button', { name: /archive/i })[0]); // archive Enterprise
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /archive/i })[0]).toBeDisabled(),
+    );
+    // The OTHER pipeline's archive button must stay enabled.
+    expect(screen.getAllByRole('button', { name: /archive/i })[1]).not.toBeDisabled();
+  });
 });
