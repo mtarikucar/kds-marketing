@@ -24,35 +24,52 @@ export function interpretNetsantralOriginate(rawBody: string): NetsantralOrigina
   const body = (rawBody ?? '').trim();
   if (!body) return { ok: false, message: 'Netsantral returned an empty response.' };
 
-  // JSON shape. The REAL success (with wait_response=0) carries NO id, e.g.
-  // {"response":"linkup","status":"Originate successfully queued","message":"Success"}
-  // so acceptance is by status/message, NOT the presence of a call id (the SIP id
-  // arrives later on the CDR, keyed by crm_id). An explicit numeric error code
-  // (e.g. {"code":"30",...}) is the only failure.
+  // JSON shape (real Netsantral linkup/originate, captured live from
+  // crmsntrl.netgsm.com.tr:9111):
+  //   ACCEPTED: { response:"linkup", caller_num, called_num, crm_id,
+  //              status:"Originate successfully queued", message:"Success" }
+  //   FAILED:   { code:"30", status:"Error", message:"Eksik yada yanlis parametre" }
+  //             { status:"Error", message:"Kullanici dogrulanamadi" }
+  // CRUCIAL: with wait_response=0 the ACCEPTED response carries NO unique_id —
+  // the SIP id arrives later on the CDR webhook (correlated by `crm_id`). So the
+  // acceptance signal is the status/message ("...queued" / "Success"), NOT a call
+  // id. (We previously required a unique_id and wrongly marked every placed call
+  // CANCELLED with the misleading "did not return a call id".)
   if (body.startsWith('{') || body.startsWith('[')) {
     try {
       const j = JSON.parse(body);
       const obj = Array.isArray(j) ? j[0] : j;
-      const id = obj?.unique_id ?? obj?.uniqueid ?? obj?.callid ?? obj?.id;
-      const code = obj?.code != null ? String(obj.code) : undefined;
-      const status = String(obj?.status ?? '').toLowerCase();
-      const message = String(obj?.message ?? '').toLowerCase();
+      const idRaw = obj?.unique_id ?? obj?.uniqueid ?? obj?.uniqueId ?? obj?.callid ?? obj?.callId ?? obj?.id;
+      const id = idRaw != null ? String(idRaw).trim() : '';
+      const status = String(obj?.status ?? '');
+      const message = typeof obj?.message === 'string' ? obj.message.trim() : '';
+      const response = String(obj?.response ?? '').toLowerCase();
 
-      // An explicit numeric error code (other than the accept codes) → failure.
-      if (code && /^\d+$/.test(code) && !['00', '01', '02'].includes(code)) {
-        return { ok: false, code, message: ERROR_MESSAGES[code] ?? `Netsantral rejected the call (code ${code}).` };
-      }
-      // Accepted when the PBX queued it: an id, an accept status/code, or a
-      // success-y status/message ("Originate successfully queued" / "Success").
+      // Explicit failure: status "Error", a Turkish "hata", or a numeric code.
+      const failed = obj?.code != null || /error|fail|hata/i.test(status);
+      // Acceptance: NetGSM queued the call. Signalled by a SIP id, a queued/
+      // success status, a "success" message, or the echoed response verb.
       const accepted =
-        !!id ||
-        ['00', '01', '02', 'success', 'ok'].includes(status) ||
-        status.includes('success') ||
-        status.includes('queued') ||
-        message.includes('success');
-      if (accepted) return id ? { ok: true, callId: String(id) } : { ok: true };
+        !failed &&
+        (!!id ||
+          /success|queued|originate|accepted|ok|01|02|00/i.test(status) ||
+          /^success$/i.test(message) ||
+          response === 'linkup' ||
+          response === 'originate');
 
-      return { ok: false, code, message: 'Netsantral did not return a call id.' };
+      if (accepted) {
+        return id ? { ok: true, callId: id } : { ok: true };
+      }
+
+      // Failure: surface NetGSM's OWN reason verbatim (`message`/`status`), then
+      // the legacy numeric `code` map, then a generic line — so the operator sees
+      // auth ("Kullanici dogrulanamadi") / param ("Eksik...") errors as-is.
+      const code = obj?.code != null ? String(obj.code) : undefined;
+      const reason =
+        message ||
+        (code && ERROR_MESSAGES[code]) ||
+        (status ? `Netsantral rejected the call (${status}).` : 'Netsantral did not return a call id.');
+      return { ok: false, code, message: reason };
     } catch {
       return { ok: false, message: 'Netsantral returned an unreadable JSON body.' };
     }
