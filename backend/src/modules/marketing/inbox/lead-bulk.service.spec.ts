@@ -42,11 +42,36 @@ describe('LeadBulkService', () => {
 
     it('soft-deletes scoped, only rows not already deleted', async () => {
       prisma.lead.updateMany.mockResolvedValue({ count: 2 });
+      prisma.lead.count.mockResolvedValue(0); // no protected leads in the batch
       const res = await svc.bulkDelete(WS, ['a', 'b', 'a']);
-      expect(res).toEqual({ deleted: 2 });
+      expect(res).toEqual({ deleted: 2, skippedProtected: 0 });
       const arg = prisma.lead.updateMany.mock.calls[0][0];
-      expect(arg.where).toEqual({ id: { in: ['a', 'b'] }, workspaceId: WS, deletedAt: null });
+      // Converted/WON leads are excluded from the tombstone (closed deals final).
+      expect(arg.where).toEqual({
+        id: { in: ['a', 'b'] },
+        workspaceId: WS,
+        deletedAt: null,
+        convertedTenantId: null,
+        status: { not: 'WON' },
+      });
       expect(arg.data.deletedAt).toBeInstanceOf(Date);
+    });
+
+    // A converted/WON lead is FINAL — bulk-deleting one would hide it from won/lost
+    // reporting while its provisioned tenant + earned commission dangle (the single
+    // delete() refuses them). The bulk path must skip them and report the count.
+    it('does not delete converted/WON leads and reports them as skippedProtected', async () => {
+      prisma.lead.count.mockResolvedValue(1); // 1 of the batch is converted/WON
+      prisma.lead.updateMany.mockResolvedValue({ count: 2 }); // the other 2 deleted
+      const res = await svc.bulkDelete(WS, ['a', 'b', 'won']);
+      expect(res).toEqual({ deleted: 2, skippedProtected: 1 });
+      // The protected-count query targets the converted-OR-WON subset of the ids.
+      const countWhere = prisma.lead.count.mock.calls[0][0].where;
+      expect(countWhere).toMatchObject({
+        workspaceId: WS,
+        deletedAt: null,
+        OR: [{ convertedTenantId: { not: null } }, { status: 'WON' }],
+      });
     });
   });
 

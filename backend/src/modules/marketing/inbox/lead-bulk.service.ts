@@ -82,11 +82,24 @@ export class LeadBulkService implements OnModuleInit {
   async bulkDelete(workspaceId: string, leadIds: string[]) {
     const ids = this.cleanIds(leadIds);
     if (ids.length === 0) throw new BadRequestException('leadIds must contain at least one id');
+    // Converted/WON leads are FINAL — soft-deleting one hides it from won/lost
+    // reporting while its provisioned tenant + earned commission dangle (the
+    // single delete() refuses them for exactly this reason). Protect them in the
+    // bulk path too: exclude them from the tombstone and report how many were
+    // skipped so the operator understands why fewer than selected were removed.
+    const skippedProtected = await this.prisma.lead.count({
+      where: {
+        id: { in: ids },
+        workspaceId,
+        deletedAt: null,
+        OR: [{ convertedTenantId: { not: null } }, { status: 'WON' }],
+      },
+    });
     const res = await this.prisma.lead.updateMany({
-      where: { id: { in: ids }, workspaceId, deletedAt: null },
+      where: { id: { in: ids }, workspaceId, deletedAt: null, convertedTenantId: null, status: { not: 'WON' } },
       data: { deletedAt: new Date() },
     });
-    return { deleted: res.count };
+    return { deleted: res.count, skippedProtected };
   }
 
   /**
