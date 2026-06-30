@@ -93,7 +93,15 @@ export class SitesService {
     const data: any = {};
     for (const k of ['title', 'blocks', 'seo', 'theme', 'published'] as const) if (dto[k] !== undefined) data[k] = dto[k];
     if (dto.slug !== undefined) data.slug = this.slugify(dto.slug);
-    return this.prisma.sitePage.update({ where: { id: existing.id }, data });
+    // Renaming the slug can collide with another page (@@unique[workspaceId,slug]).
+    // Translate the unique violation into a clean 400 like create() does, instead
+    // of letting the raw P2002 surface as a 500.
+    return this.prisma.sitePage.update({ where: { id: existing.id }, data }).catch((e) => {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new BadRequestException('A page with that slug already exists');
+      }
+      throw e;
+    });
   }
 
   async setPublished(workspaceId: string, id: string, published: boolean) {

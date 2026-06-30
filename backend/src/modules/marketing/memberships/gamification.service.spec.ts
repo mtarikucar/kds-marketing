@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { GamificationService } from './gamification.service';
 import { mockPrismaClient } from '../../../common/test/prisma-mock.service';
@@ -114,6 +115,18 @@ describe('GamificationService', () => {
       await svc.createBadge(WS, { key: 'k', name: 'n', ruleType: 'POINTS', threshold: 50 });
       const granted = (prisma.earnedBadge.create as jest.Mock).mock.calls.map((c) => c[0].data.leadId);
       expect(granted).toEqual(['l1']);
+    });
+
+    // Badge.key is unique per (workspaceId, key) but createBadge has NO pre-check,
+    // so even a SEQUENTIAL duplicate key would 500. Map P2002 to a clean 409.
+    it('createBadge maps a duplicate key (P2002) to a 409', async () => {
+      const { prisma, svc } = makeSvc();
+      (prisma.badge.create as jest.Mock).mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+      );
+      await expect(
+        svc.createBadge(WS, { key: 'dup', name: 'n', ruleType: 'POINTS', threshold: 50 }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('backfillBadge for a LESSONS badge uses the lesson-count metric', async () => {

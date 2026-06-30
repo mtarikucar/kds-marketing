@@ -48,6 +48,21 @@ export const SNAPSHOT_CONFIG_TYPES = [
 
 export type SnapshotConfigType = (typeof SNAPSHOT_CONFIG_TYPES)[number];
 
+/**
+ * reviewSource fields that must NEVER cross a workspace boundary: a sealed
+ * OAuth credential plus the source's provider/sync binding to the SOURCE's
+ * Google/FB account. Stripped on BOTH capture and apply — apply too, so a
+ * snapshot captured before the capture-side guard can't reintroduce the leak.
+ */
+const REVIEW_SOURCE_SECRET_FIELDS = [
+  'accessToken',
+  'placeId',
+  'externalRef',
+  'syncStatus',
+  'lastSyncedAt',
+  'lastError',
+] as const;
+
 export type SnapshotPayload = Record<SnapshotConfigType, Record<string, unknown>[]>;
 
 export interface ApplyTypeSummary {
@@ -147,7 +162,14 @@ export class SnapshotService {
       // knowledgeDoc.searchVector is an Unsupported tsvector — never selected by
       // Prisma's default findMany, so it can't enter the payload.
       knowledgeDocs: knowledgeDocs.map((r) => this.portable(r, idOmit)),
-      reviewSources: reviewSources.map((r) => this.portable(r, idOmit)),
+      // reviewSource.accessToken is a SEALED OAuth credential and placeId/
+      // externalRef/sync-state bind the row to the SOURCE's Google/FB account —
+      // copying them would hand one workspace's credential to another (and make
+      // the clone sync the SOURCE's reviews). Carry only the display config; the
+      // clone starts DISCONNECTED, reconnected per-workspace like a fresh source.
+      reviewSources: reviewSources.map((r) =>
+        this.portable(r, [...idOmit, ...REVIEW_SOURCE_SECRET_FIELDS]),
+      ),
     };
   }
 
@@ -350,7 +372,14 @@ export class SnapshotService {
           continue;
         }
         await tx.agentProfile.create({
-          data: { ...r, workspaceId: targetWorkspaceId } as Prisma.AgentProfileUncheckedCreateInput,
+          // `channels` holds workspace-LOCAL Channel ids that are NOT part of a
+          // snapshot — copying the source's would leave the clone "attached" to
+          // channels that don't exist in the target (findActiveForChannel never
+          // matches them) and surface dangling ids in the editor. Clear it so the
+          // cloned agent starts unattached; the operator wires it to the target's
+          // own channels. (kbDocIds / bookingCalendarId reference SNAPSHOTTED
+          // entities and still need id-remapping — see snapshot-cross-ref-remap-gap.)
+          data: { ...r, channels: [] as Prisma.InputJsonValue, workspaceId: targetWorkspaceId } as Prisma.AgentProfileUncheckedCreateInput,
         });
         summary.agentProfiles.created++;
       }
@@ -439,8 +468,13 @@ export class SnapshotService {
           summary.reviewSources.skipped++;
           continue;
         }
+        // Defence in depth: a snapshot captured before the capture-side guard
+        // still has the sealed accessToken + source binding in its stored
+        // payload, so strip them again here — applying an OLD snapshot must not
+        // reintroduce the cross-tenant credential leak.
+        const safe = this.portable(r, REVIEW_SOURCE_SECRET_FIELDS);
         await tx.reviewSource.create({
-          data: { ...r, workspaceId: targetWorkspaceId } as Prisma.ReviewSourceUncheckedCreateInput,
+          data: { ...safe, workspaceId: targetWorkspaceId } as Prisma.ReviewSourceUncheckedCreateInput,
         });
         summary.reviewSources.created++;
       }

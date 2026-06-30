@@ -68,7 +68,18 @@ export class AskAiService {
         if (!res.toolUses.length) break;
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const tu of res.toolUses) {
-          const out = await this.runTool(workspaceId, tu.name, tu.input as any);
+          let out: unknown;
+          try {
+            out = await this.runTool(workspaceId, tu.name, tu.input as any);
+          } catch (err) {
+            // A single tool failure (e.g. the model guessed an invalid status
+            // enum, which Prisma rejects) must NOT abort the whole conversation
+            // and refund. Feed the error back as a tool_result so the model can
+            // recover — retry without the bad filter — the standard agentic
+            // tool-loop contract. Genuine infra failures (the model call itself
+            // throwing) still bubble to the outer catch + refund.
+            out = { error: (err as Error)?.message ?? 'tool failed' };
+          }
           results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(out).slice(0, 6000) });
         }
         const assistantContent: Anthropic.ContentBlockParam[] = [];
@@ -87,7 +98,9 @@ export class AskAiService {
   private async runTool(workspaceId: string, name: string, input: any): Promise<unknown> {
     switch (name) {
       case 'search_leads': {
-        const where: any = { workspaceId };
+        // Active leads only — the AI must not surface soft-deleted or merged-away
+        // contacts (hidden from the lead list everywhere else).
+        const where: any = { workspaceId, deletedAt: null, mergedIntoId: null };
         if (input?.status) where.status = String(input.status).toUpperCase();
         if (input?.city) where.city = { contains: String(input.city), mode: 'insensitive' };
         if (input?.query) where.OR = [
@@ -101,7 +114,7 @@ export class AskAiService {
         return { count: leads.length, leads };
       }
       case 'lead_stats': {
-        const grouped = await this.prisma.lead.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } });
+        const grouped = await this.prisma.lead.groupBy({ by: ['status'], where: { workspaceId, deletedAt: null, mergedIntoId: null }, _count: { _all: true } });
         return grouped.map((g) => ({ status: g.status, count: g._count._all }));
       }
       case 'list_tasks': {

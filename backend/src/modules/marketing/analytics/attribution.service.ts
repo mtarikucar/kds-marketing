@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { rangeEndInclusive } from '../services/report-date-range.util';
 
 export type AttributionModel = 'first' | 'last' | 'linear';
 
@@ -71,7 +72,9 @@ export class AttributionService {
     if (!from && !to) return {};
     const createdAt: Prisma.DateTimeFilter = {};
     if (from) createdAt.gte = new Date(from);
-    if (to) createdAt.lte = new Date(to);
+    // Inclusive end-of-day for a bare YYYY-MM-DD, so leads created during the
+    // selected end day aren't dropped (mirrors analytics/reports).
+    if (to) createdAt.lte = rangeEndInclusive(to);
     return { createdAt };
   }
 
@@ -113,8 +116,10 @@ export class AttributionService {
 
   async attribution(workspaceId: string, q: AttributionQuery): Promise<AttributionResult> {
     const leads = await this.prisma.lead.findMany({
-      // Exclude tombstoned (merged-away) leads from analytics.
-      where: { workspaceId, mergedIntoId: null, ...this.range(q.from, q.to) },
+      // Exclude tombstoned (merged-away) AND soft-deleted (bulk-deleted) leads
+      // from analytics — matching analytics/reports, so a hidden lead never
+      // keeps contributing channel revenue/conversions.
+      where: { workspaceId, mergedIntoId: null, deletedAt: null, ...this.range(q.from, q.to) },
       select: {
         id: true,
         source: true,

@@ -120,9 +120,7 @@ export class RebillingService {
 
     const basePrice = this.toMoney(input.basePrice, 'basePrice');
     const usageUnitPrice = this.toMoney(input.usageUnitPrice, 'usageUnitPrice');
-    const markupPercent = this.toMoney(input.markupPercent, 'markupPercent', {
-      allowNonNegativeOnly: true,
-    });
+    const markupPercent = this.toMoney(input.markupPercent, 'markupPercent');
 
     return this.prisma.rebillingPlan.upsert({
       where: {
@@ -451,12 +449,12 @@ export class RebillingService {
 
   // ── helpers ───────────────────────────────────────────────────────────────────
 
-  /** Coerce + validate a money input to a non-negative Decimal(10,2). */
-  private toMoney(
-    raw: number | string,
-    field: string,
-    _opts: { allowNonNegativeOnly?: boolean } = {},
-  ): Prisma.Decimal {
+  /**
+   * Coerce + validate a money/percent input to a non-negative Decimal(10,2).
+   * basePrice, usageUnitPrice and markupPercent are all semantically
+   * non-negative, so the guard is unconditional (no per-field opt-out).
+   */
+  private toMoney(raw: number | string, field: string): Prisma.Decimal {
     let dec: Prisma.Decimal;
     try {
       dec = new Prisma.Decimal(raw);

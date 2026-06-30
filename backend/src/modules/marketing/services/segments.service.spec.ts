@@ -25,6 +25,20 @@ describe('SegmentsService', () => {
     ({ prisma, compiler, svc } = makeSvc());
   });
 
+  // The segments members endpoint is reached by the public API, which
+  // parseInt()s `?page` — a non-numeric value arrives as NaN. Math.max(1, NaN)
+  // was NaN, so `skip` became NaN and Prisma threw a 500. A bad page must
+  // degrade to the first page (skip 0).
+  it('members() coerces a NaN page to the first page (skip 0, no 500)', async () => {
+    (prisma.segment.findFirst as jest.Mock).mockResolvedValue({ id: 's1', definition: {} });
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.lead.count as jest.Mock).mockResolvedValue(0);
+    await svc.members(WS, 's1', Number.NaN as unknown as number);
+    const arg = (prisma.lead.findMany as jest.Mock).mock.calls[0][0];
+    expect(arg.skip).toBe(0);
+    expect(arg.take).toBe(50); // default pageSize
+  });
+
   it('validates the definition before creating', async () => {
     (prisma.segment.create as jest.Mock).mockResolvedValue({ id: 's1' });
     const def = { field: 'status', cmp: 'eq', value: 'NEW' };
@@ -72,6 +86,15 @@ describe('SegmentsService', () => {
     const arg = (prisma.lead.findMany as jest.Mock).mock.calls[0][0];
     expect(arg.skip).toBe(25);
     expect(arg.take).toBe(25);
+  });
+
+  it('clamps an oversized pageSize to the 200 cap (defence in the service, not just the controller)', async () => {
+    prisma.segment.findFirst.mockResolvedValue({ id: 's1', definition: {} } as any);
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.lead.count as jest.Mock).mockResolvedValue(0);
+    const out = await svc.members(WS, 's1', 1, 5000);
+    expect(out.pageSize).toBe(200);
+    expect((prisma.lead.findMany as jest.Mock).mock.calls[0][0].take).toBe(200);
   });
 
   it('throws NotFound when updating a segment from another workspace', async () => {

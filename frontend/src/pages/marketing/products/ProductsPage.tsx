@@ -32,7 +32,15 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  ConfirmDialog,
 } from '@/components/ui';
+
+/** Surface the API's own message (e.g. the product-delete 409) when present. */
+function errMessage(e: unknown, fallback: string): string {
+  const m = (e as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+  if (Array.isArray(m)) return String(m[0]);
+  return typeof m === 'string' ? m : fallback;
+}
 
 const CURRENCIES = ['TRY', 'USD', 'EUR'] as const;
 
@@ -97,6 +105,7 @@ export default function ProductsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['marketing', 'products'],
@@ -141,9 +150,13 @@ export default function ProductsPage() {
     mutationFn: (id: string) => deleteProduct(id),
     onSuccess: () => {
       invalidate();
+      setDeleteTarget(null);
       toast.success(t('products.deleted', 'Product deleted'));
     },
-    onError,
+    // Surface the API's reason verbatim — a referenced product can't be deleted
+    // (it would break a public order form) and the 409 says to archive instead.
+    onError: (e) =>
+      toast.error(errMessage(e, t('products.deleteError', 'Could not delete this product'))),
   });
 
   const openNew = () => {
@@ -227,15 +240,30 @@ export default function ProductsPage() {
                   <p className="text-caption text-muted-foreground line-clamp-2">{p.description}</p>
                 )}
                 <div className="flex items-center gap-1 pt-1">
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t('products.edit', 'Edit product')}
+                    onClick={() => openEdit(p)}
+                  >
                     <Pencil className="w-4 h-4" aria-hidden="true" />
                   </Button>
                   {p.active && (
-                    <Button variant="ghost" size="sm" onClick={() => archiveMutation.mutate(p.id)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('products.archive', 'Archive product')}
+                      onClick={() => archiveMutation.mutate(p.id)}
+                    >
                       <Archive className="w-4 h-4" aria-hidden="true" />
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => deleteMutation.mutate(p.id)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t('products.delete', 'Delete product')}
+                    onClick={() => setDeleteTarget(p)}
+                  >
                     <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
                   </Button>
                 </div>
@@ -350,6 +378,23 @@ export default function ProductsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+        title={t('products.deleteTitle', 'Delete product')}
+        description={t(
+          'products.deleteDesc',
+          'This permanently deletes the product. A product used by an order form cannot be deleted — archive it instead to keep that checkout working.',
+        )}
+        confirmLabel={t('common.delete', 'Delete')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        tone="danger"
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }

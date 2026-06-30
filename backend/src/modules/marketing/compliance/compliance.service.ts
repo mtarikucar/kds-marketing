@@ -69,10 +69,124 @@ export class ComplianceService {
       include: { activities: true, offers: true, tasks: true },
     });
     if (!lead) throw new NotFoundException('Lead not found');
-    const consents = await this.prisma.consentRecord.findMany({
-      where: { workspaceId, leadId },
-    });
-    const payload = { lead, consents };
+
+    // A DSAR (GDPR Art. 15 / KVKK right of access) must return ALL personal data
+    // held about the subject — not just lead+activities+offers+tasks. Pull every
+    // lead-scoped personal-data category (each explicitly workspace+lead scoped).
+    // Communications, appointments, documents, financials and call records were
+    // previously omitted, making the export incomplete.
+    const [
+      consents,
+      conversations,
+      bookings,
+      documents,
+      estimates,
+      invoices,
+      reviews,
+      voiceCalls,
+      salesCalls,
+      surveyResponses,
+      opportunities,
+    ] = await Promise.all([
+      this.prisma.consentRecord.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.conversation.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.booking.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.document.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.estimate.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.invoice.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.review.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.voiceCall.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.salesCall.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.surveyResponse.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.opportunity.findMany({ where: { workspaceId, leadId } }),
+    ]);
+
+    // Messages carry no leadId of their own — they belong to the subject's
+    // conversations, so scope them by those conversation ids (within the ws).
+    const messages = conversations.length
+      ? await this.prisma.message.findMany({
+          where: { workspaceId, conversationId: { in: conversations.map((c) => c.id) } },
+          orderBy: { createdAt: 'asc' },
+        })
+      : [];
+
+    // Identity, membership, billing and behavioural personal data — the remaining
+    // lead-scoped categories, so the access request is genuinely complete.
+    const [
+      contactIdentities,
+      enrollments,
+      certificates,
+      communityMemberships,
+      earnedBadges,
+      subscriptions,
+      wallets,
+      pointsLedger,
+      customObjectLinks,
+      triggerLinkClicks,
+      couponRedemptions,
+    ] = await Promise.all([
+      this.prisma.contactIdentity.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.enrollment.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.certificate.findMany({ where: { workspaceId, leadId } }),
+      // CommunityMember has no workspaceId column — scope via its community.
+      this.prisma.communityMember.findMany({ where: { leadId, community: { workspaceId } } }),
+      this.prisma.earnedBadge.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.customerSubscription.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.customerWallet.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.pointsLedger.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.customObjectLink.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.triggerLinkClick.findMany({ where: { workspaceId, leadId } }),
+      this.prisma.couponRedemption.findMany({ where: { workspaceId, leadId } }),
+    ]);
+
+    // Marketing-engagement, profiling, community-authored content and the wallet
+    // transaction ledger — the last lead-scoped personal-data categories (Art. 15
+    // requires ALL of it, not just the lead's identity + current balances). The
+    // wallet ledger has no leadId, so scope it via the subject's wallet ids.
+    const walletIds = wallets.map((w) => w.id);
+    const [campaignRecipients, tags, communityPosts, communityComments, walletLedgerEntries] =
+      await Promise.all([
+        this.prisma.campaignRecipient.findMany({ where: { workspaceId, leadId } }),
+        // LeadTag has no workspaceId column — keyed by the workspace-resolved lead.
+        this.prisma.leadTag.findMany({ where: { leadId }, include: { tag: true } }),
+        this.prisma.communityPost.findMany({ where: { workspaceId, authorLeadId: leadId } }),
+        this.prisma.communityComment.findMany({ where: { workspaceId, authorLeadId: leadId } }),
+        walletIds.length
+          ? this.prisma.walletLedgerEntry.findMany({ where: { workspaceId, walletId: { in: walletIds } } })
+          : Promise.resolve([] as unknown[]),
+      ]);
+
+    const payload = {
+      lead,
+      consents,
+      conversations,
+      messages,
+      bookings,
+      documents,
+      estimates,
+      invoices,
+      reviews,
+      voiceCalls,
+      salesCalls,
+      surveyResponses,
+      opportunities,
+      contactIdentities,
+      enrollments,
+      certificates,
+      communityMemberships,
+      earnedBadges,
+      subscriptions,
+      wallets,
+      pointsLedger,
+      customObjectLinks,
+      triggerLinkClicks,
+      couponRedemptions,
+      campaignRecipients,
+      tags,
+      communityPosts,
+      communityComments,
+      walletLedgerEntries,
+    };
     await this.prisma.dataRequest.create({
       data: {
         workspaceId,

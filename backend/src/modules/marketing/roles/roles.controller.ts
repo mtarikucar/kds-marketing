@@ -75,27 +75,27 @@ export class RolesController {
   @RequirePermission('settings.manage')
   @Audit({ action: 'role.create', resourceType: 'role' })
   create(@Body() dto: RoleDto, @CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.svc.create(u.workspaceId, dto);
+    return this.svc.create(u.workspaceId, dto, u);
   }
 
   @Post('assign')
   @RequirePermission('settings.manage')
   @Audit({ action: 'role.assign', resourceType: 'user', captureBody: ['userId', 'roleId'] })
   assign(@Body() dto: AssignRoleDto, @CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.svc.assignToUser(u.workspaceId, dto.userId, dto.roleId ?? null);
+    return this.svc.assignToUser(u.workspaceId, dto.userId, dto.roleId ?? null, u);
   }
 
   @Patch(':id')
   @RequirePermission('settings.manage')
   @Audit({ action: 'role.update', resourceType: 'role', resourceIdParam: 'id' })
   update(@Param('id') id: string, @Body() dto: UpdateRoleDto, @CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.svc.update(u.workspaceId, id, dto);
+    return this.svc.update(u.workspaceId, id, dto, u);
   }
 
   @Delete(':id')
   @RequirePermission('settings.manage')
   @Audit({ action: 'role.delete', resourceType: 'role', resourceIdParam: 'id' })
   remove(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.svc.remove(u.workspaceId, id);
+    return this.svc.remove(u.workspaceId, id, u);
   }
 }

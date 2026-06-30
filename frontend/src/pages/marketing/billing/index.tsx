@@ -245,6 +245,7 @@ export default function BillingPage() {
         onCycleChange={setCycle}
         isOwner={isOwner}
         isPending={checkout.isPending}
+        pendingCode={checkout.variables?.packageCode}
         onBuy={buy}
       />
 

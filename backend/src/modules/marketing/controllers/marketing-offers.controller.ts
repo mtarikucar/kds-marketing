@@ -41,8 +41,15 @@ export class MarketingOffersController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.offersService.findAll(actor.workspaceId, actor.id, actor.role, page, limit);
+    return this.offersService.findAll(actor.workspaceId, actor.id, actor.role, page, limit, {
+      status,
+      dateFrom,
+      dateTo,
+    });
   }
 
   @Get(':id')
@@ -70,6 +77,24 @@ export class MarketingOffersController {
     @Param('id') id: string,
   ) {
     return this.offersService.markSent(actor.workspaceId, id, actor.id, actor.role);
+  }
+
+  @Post(':id/accept')
+  @RequirePermission('leads.write')
+  accept(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.markAccepted(actor.workspaceId, id, actor.id, actor.role);
+  }
+
+  @Post(':id/reject')
+  @RequirePermission('leads.write')
+  reject(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.offersService.markRejected(actor.workspaceId, id, actor.id, actor.role);
   }
 
   @Delete(':id')

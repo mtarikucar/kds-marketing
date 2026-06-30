@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Param, Query, Req, Res } from '@nestjs/com
 import { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
 function esc(v: unknown): string {
@@ -37,10 +38,14 @@ export class PublicInvoiceController {
       `<div class="total">${esc(money(inv.total, inv.currency))}</div>` +
       (inv.notes ? `<p style="color:#64748b">${esc(inv.notes)}</p>` : '') +
       (paid ? `<div class="paid">✓ Paid</div>` : `<div style="text-align:center;margin-top:20px"><button id="pay">Pay ${esc(money(inv.total, inv.currency))}</button></div><div id="manual"></div>`) +
-      (paid ? '' : `<script>document.getElementById('pay').onclick=function(){this.disabled=true;this.textContent='…';` +
-        `fetch(${JSON.stringify(`/api/public/i/${token}/pay`)},{method:'POST'}).then(r=>r.json()).then(d=>{` +
+      (paid ? '' : `<script>document.getElementById('pay').onclick=function(){var btn=this,lbl=btn.textContent;btn.disabled=true;btn.textContent='…';` +
+        `fetch(${JSON.stringify(`/api/public/i/${token}/pay`)},{method:'POST'}).then(function(r){return r.json();}).then(function(d){` +
         `if(d.redirectUrl){location.href=d.redirectUrl;}else{var m=document.getElementById('manual');m.style.display='block';` +
-        `m.textContent=typeof d.manual==='object'?Object.entries(d.manual).map(function(e){return e[0]+': '+e[1];}).join('\\n'):String(d.manual||'Contact us to pay.');document.getElementById('pay').style.display='none';}});};</script>`) +
+        `m.textContent=typeof d.manual==='object'?Object.entries(d.manual).map(function(e){return e[0]+': '+e[1];}).join('\\n'):String(d.manual||'Contact us to pay.');btn.style.display='none';}})` +
+        // Without this .catch a network / non-JSON failure (gateway 502, offline,
+        // timeout) left the Pay button stuck on '…' disabled forever — the buyer
+        // could neither pay nor retry. Re-enable it so they can try again.
+        `.catch(function(){btn.disabled=false;btn.textContent=lbl;var m=document.getElementById('manual');m.style.display='block';m.textContent='Could not start payment. Please check your connection and try again.';});};</script>`) +
       `</body></html>`,
     );
   }
@@ -56,7 +61,12 @@ export class PublicInvoiceController {
     res.status(200).type('text/plain').send(ok ? 'OK' : 'FAIL');
   }
 
+  // Mints a fresh PSP (Stripe/PayTR/Iyzico) session per call — a public write
+  // doing an external API round-trip, so it carries the same per-route throttle
+  // as every other public write (form/booking/sign). Without it a holder of a
+  // valid unpaid invoice token could loop it to flood the workspace's PSP.
   @Post('i/:token/pay')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   pay(@Param('token') token: string, @Req() req: Request) {
     return this.invoices.pay(token, getClientIp(req));
   }

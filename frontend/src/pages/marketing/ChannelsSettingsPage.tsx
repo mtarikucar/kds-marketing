@@ -13,6 +13,7 @@ import {
   Plus,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { startTiktokAdsOAuth } from '../../features/marketing/api/ads.service';
 import { WhatsappSignupButton } from './WhatsappSignupButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -58,6 +59,11 @@ interface ChannelRow {
   // paste into the Meta App dashboard, + whether the verify-token env is set.
   webhookUrl?: string | null;
   verifyTokenConfigured?: boolean;
+  // LinkedIn engagement only: mask() echoes configPublic so the card can show
+  // whether Community Management access has been granted (the capability flag).
+  configPublic?: Record<string, unknown> | null;
+  // TIKTOK only: whether messaging scope was granted via OAuth.
+  messaging?: boolean | null;
 }
 interface AgentRow {
   id: string;
@@ -66,7 +72,7 @@ interface AgentRow {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'EMAIL', 'VOICE'] as const;
+const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'LINKEDIN', 'EMAIL', 'VOICE'] as const;
 type ChannelType = (typeof CHANNEL_TYPES)[number];
 
 const SECRET_FIELDS: Record<ChannelType, string[]> = {
@@ -76,6 +82,7 @@ const SECRET_FIELDS: Record<ChannelType, string[]> = {
   INSTAGRAM: ['pageAccessToken'],
   MESSENGER: ['pageAccessToken'],
   TIKTOK: ['accessToken'],
+  LINKEDIN: ['accessToken'],
   EMAIL: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'fromEmail'],
   VOICE: ['accountSid', 'authToken'],
 };
@@ -84,6 +91,7 @@ const NEEDS_EXTERNAL_ID: Record<string, string> = {
   INSTAGRAM: 'Page ID',
   MESSENGER: 'Page ID',
   TIKTOK: 'TikTok business/creator ID',
+  LINKEDIN: 'Actor URN (urn:li:organization:… or urn:li:person:…)',
   EMAIL: 'Inbound email address',
   VOICE: 'Twilio phone number (E.164)',
 };
@@ -165,6 +173,7 @@ export default function ChannelsSettingsPage() {
       invalidate();
       setDeleteTarget(null);
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.deleteFailed', 'Could not delete the channel')),
   });
 
   const verify = useMutation({
@@ -177,6 +186,7 @@ export default function ChannelsSettingsPage() {
           : t('channels.verifyFail', 'Verification failed — check credentials'),
       );
     },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFail', 'Verification failed — check credentials')),
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -538,6 +548,112 @@ export default function ChannelsSettingsPage() {
                           'Set META_WEBHOOK_VERIFY_TOKEN on the server, then use that value as the Verify Token in Meta.',
                         )}
                   </p>
+                </div>
+              )}
+
+              {/* LinkedIn engagement (comments on OWNED org posts) is the DM
+                  substitute — there is no LinkedIn DM API. It is polling-based and
+                  stays DORMANT until LinkedIn Community Management access is granted
+                  (capability flag in configPublic.linkedinEngagement). */}
+              {c.type === 'LINKEDIN' && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  {(c.configPublic as any)?.linkedinEngagement === 'granted' ? (
+                    <p className="text-caption text-success">
+                      {t(
+                        'channels.linkedinGranted',
+                        'Engagement active — replies to comments on your organization posts are AI-answered. (LinkedIn has no DM API; this is sanctioned engagement on owned posts.)',
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-caption text-muted-foreground">
+                      {t(
+                        'channels.linkedinPending',
+                        'Dormant — comment engagement turns on once LinkedIn Community Management access is approved. LinkedIn exposes no DM API, so this answers comments on your OWN organization posts (polling-based, no webhook).',
+                      )}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* TikTok DM: webhook URL to paste into the TikTok for Business app
+                  dashboard + OAuth shortcut to provision/refresh the DM channel
+                  (and ad accounts) in one step. Manual token field remains the
+                  fallback for operators who manage tokens directly. */}
+              {c.type === 'TIKTOK' && (
+                <div className="mt-3 pt-3 border-t border-border space-y-3">
+                  {/* Inbound webhook URL */}
+                  <div>
+                    <p className="text-caption text-muted-foreground mb-1">
+                      {t(
+                        'channels.tiktokWebhook',
+                        'TikTok webhook URL — paste into TikTok for Business App → Webhooks',
+                      )}
+                    </p>
+                    {c.webhookUrl ? (
+                      <div className="flex items-center gap-2">
+                        <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
+                          {c.webhookUrl}
+                        </code>
+                        <IconButton
+                          variant="outline"
+                          size="sm"
+                          aria-label={t('common.copy', 'Copy')}
+                          onClick={() => {
+                            navigator.clipboard.writeText(c.webhookUrl!);
+                            toast.success(t('common.copied', 'Copied'));
+                          }}
+                        >
+                          <Clipboard className="h-4 w-4" />
+                        </IconButton>
+                      </div>
+                    ) : (
+                      <p className="text-caption text-muted-foreground">
+                        {t(
+                          'channels.tiktokWebhookPending',
+                          'Set PUBLIC_BASE_URL on the server to reveal the webhook URL.',
+                        )}
+                      </p>
+                    )}
+                    {c.messaging != null && (
+                      <p className="text-caption text-muted-foreground mt-1">
+                        {c.messaging
+                          ? t('channels.tiktokMessagingOk', 'Messaging scope granted via OAuth.')
+                          : t(
+                              'channels.tiktokMessagingMissing',
+                              'Messaging scope not yet granted — reconnect via "Connect TikTok for Business" below.',
+                            )}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Connect for Business CTA */}
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-caption text-muted-foreground">
+                        {t(
+                          'channels.tiktokOAuthHint',
+                          'Use OAuth to provision this DM channel and ad accounts in one step. The manual token field above remains the fallback.',
+                        )}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={async () => {
+                        try {
+                          const { authorizeUrl } = await startTiktokAdsOAuth();
+                          window.location.href = authorizeUrl;
+                        } catch {
+                          toast.error(
+                            t('channels.tiktokOAuthFailed', 'Could not start TikTok OAuth — check server config.'),
+                          );
+                        }
+                      }}
+                    >
+                      {t('channels.tiktokConnect', 'Connect TikTok for Business')}
+                    </Button>
+                  </div>
                 </div>
               )}
             </CardContent>

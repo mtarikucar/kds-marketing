@@ -136,6 +136,7 @@ export default function ReviewsPage() {
   const removeSource = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/reviews/sources/${id}`),
     onSuccess: () => { invalidateSrc(); setDeleteSource(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('reviews.deleteSourceFailed', 'Could not delete the source')),
   });
 
   // OAuth connect (A9/E4) — redirect the browser into the provider's consent flow.
@@ -161,6 +162,7 @@ export default function ReviewsPage() {
       invalidate();
       toast.success(t('reviews.replied', 'Reply saved'));
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('reviews.replyFailed', 'Could not save the reply')),
   });
 
   // ── Render ────────────────────────────────────────────────────────────────────

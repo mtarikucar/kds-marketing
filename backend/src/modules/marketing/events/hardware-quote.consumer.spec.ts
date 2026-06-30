@@ -67,6 +67,19 @@ describe('HardwareQuoteConsumer', () => {
     expect(arg.update.assignedToId).toBeUndefined();
   });
 
+  it('does NOT advance the round-robin cursor on a resubmit (existing lead → update only)', async () => {
+    // A resubmitted quote (lead already exists for the dedup ref) must refresh
+    // the lead WITHOUT calling pickAssignee — which, under ROUND_ROBIN, would
+    // advance the distribution cursor and skew assignment without a new lead.
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    await handle(payload());
+    expect(autoAssigner.pickAssignee).not.toHaveBeenCalled();
+    expect(prisma.lead.upsert).not.toHaveBeenCalled();
+    expect(prisma.lead.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'lead-1' }, data: expect.objectContaining({ contactPerson: 'Ali', phone: '5551112233' }) }),
+    );
+  });
+
   it('skips (warn) when no core-integrated workspace exists', async () => {
     prisma.workspace.findFirst.mockResolvedValue(null);
     await expect(handle(payload())).resolves.toBeUndefined();

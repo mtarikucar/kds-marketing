@@ -150,6 +150,23 @@ export function buildFieldChoices(defs: CustomFieldDef[]): FieldChoice[] {
   return [...native, tag, ...custom];
 }
 
+/**
+ * Reshape a leaf value when its comparator changes, so the serialized value
+ * matches what the new comparator expects. `in`/`nin`/`between` take a list
+ * (array); every other (scalar) comparator takes a single value. Switching
+ * across that boundary must DROP the stale value — otherwise the builder would
+ * serialize e.g. an array under a scalar `eq` (the compiler rejects it / it 500s
+ * on evaluation) or a string under `in` (compiles to an empty match). Keep the
+ * value only when the list-vs-scalar shape is unchanged. (VALUELESS comparators
+ * — isSet/isNotSet — are handled by the caller, which strips the value.)
+ */
+export function reshapeValueForCmp(cmp: string, current: unknown): unknown {
+  const wantsList = LIST_CMP.has(cmp) || RANGE_CMP.has(cmp);
+  const hasList = Array.isArray(current);
+  if (wantsList === hasList) return current ?? '';
+  return wantsList ? [] : '';
+}
+
 /** Comparators valid for a given field choice. */
 export function comparatorsFor(choice: FieldChoice | undefined): string[] {
   if (!choice) return [];

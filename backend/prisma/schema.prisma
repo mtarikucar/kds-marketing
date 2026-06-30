@@ -775,6 +775,29 @@ model SalesCall {
   @@map("sales_calls")
 }
 
+/// Voice-AI Phase 1 — post-call analysis: a SalesCall recording is transcribed
+/// (STT) then run through Claude for a structured summary/sentiment/score. One
+/// row per SalesCall (relation-free, keyed by salesCallId @unique); produced by
+/// the analysis cron sweep or the manual-run endpoint. Inert until STT + Claude
+/// are configured (NetGSM Görüşme Kaydı recordings + STT key).
+model CallAnalysis {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  salesCallId  String   @unique
+  transcript   String   @db.Text
+  language     String?
+  summary      String   @db.Text
+  sentiment    String? // POSITIVE | NEUTRAL | NEGATIVE
+  score        Int? // 0-100 call-quality/intent score
+  actionItems  Json? // string[]
+  topics       Json? // string[]
+  sttProvider  String?
+  createdAt    DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@map("call_analyses")
+}
+
 /// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
 /// one at a time (click-to-dial reusing SalesCallService, single-line). The rep
 /// previews each lead, dials, logs the outcome, and the queue auto-advances.
@@ -2828,7 +2851,11 @@ model SocialPost {
   content     String    @db.Text
   mediaUrls   String[]
   /// Free-form publish options: per-target formats ({accountId: FEED|REEL|STORY}),
-  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), and mediaDeletedAt.
+  /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), mediaDeletedAt,
+  /// and per-post network-specific controls. For TikTok:
+  /// { tiktok?: { privacyLevel?: string, disableComment?: boolean,
+  ///   disableDuet?: boolean, disableStitch?: boolean, mediaType?: 'VIDEO'|'PHOTO',
+  ///   coverIndex?: number } }
   options     Json?
   status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
   scheduledAt DateTime?
@@ -3328,6 +3355,7 @@ model AdAccount {
   updatedAt      DateTime  @updatedAt
 
   metrics AdMetric[]
+  rules   AdRule[]
 
   @@unique([workspaceId, provider, externalAdId])
   @@index([workspaceId, provider])
@@ -3355,6 +3383,58 @@ model AdMetric {
   @@unique([adAccountId, date, campaignId])
   @@index([workspaceId, date])
   @@map("ad_metrics")
+}
+
+/// An automated ad-scaling rule (Meta only). The hourly evaluator computes
+/// `metric` over the trailing `windowDays` per campaign and, when the condition
+/// holds (respecting per-campaign `cooldownHours`), applies `action`:
+/// INCREASE_BUDGET / DECREASE_BUDGET (by `actionValue` %, clamped to min/max),
+/// PAUSE or RESUME. Every firing is recorded in AdRuleLog.
+model AdRule {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  adAccountId   String
+  account       AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  name          String
+  enabled       Boolean   @default(true)
+  level         String    @default("CAMPAIGN") // CAMPAIGN (adset = follow-up)
+  metric        String // SPEND | CPL | CTR | LEADS | CLICKS | IMPRESSIONS
+  operator      String // GT | LT | GTE | LTE
+  threshold     Decimal   @db.Decimal(14, 2)
+  windowDays    Int       @default(3)
+  action        String // INCREASE_BUDGET | DECREASE_BUDGET | PAUSE | RESUME
+  actionValue   Decimal?  @db.Decimal(10, 2) // percent for budget actions
+  maxBudget     Decimal?  @db.Decimal(14, 2) // major units (budget ceiling)
+  minBudget     Decimal?  @db.Decimal(14, 2) // major units (budget floor)
+  cooldownHours Int       @default(24)
+  lastRunAt     DateTime?
+  lastTriggeredAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  logs AdRuleLog[]
+
+  @@index([workspaceId, adAccountId])
+  @@index([enabled])
+  @@map("ad_rules")
+}
+
+/// Audit of each ad-rule firing (what entity, what action, before→after, ok?).
+model AdRuleLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  ruleId      String
+  rule        AdRule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  entityId    String // campaign/adset id acted on
+  entityName  String?
+  action      String
+  detail      String?  @db.Text // e.g. "daily_budget 100.00 → 120.00"
+  ok          Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, ruleId])
+  @@index([ruleId, entityId, action, createdAt])
+  @@map("ad_rule_logs")
 }
 
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).

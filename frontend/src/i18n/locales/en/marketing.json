@@ -104,7 +104,7 @@
     "calendar": "Calendar",
     "commissions": "Commissions",
     "reports": "Reports",
-    "adReporting": "Ad Reporting",
+    "adReporting": "Ads",
     "customObjects": "Custom Objects",
     "triggerLinks": "Trigger Links",
     "installations": "Installations",
@@ -144,6 +144,7 @@
     "customDomains": "Custom Domains",
     "dialer": "Power Dialer",
     "telephony": "Phone (Netsantral)",
+    "voiceAiSettings": "Voice AI",
     "apiKeys": "API Keys",
     "webhooks": "Webhooks",
     "inboundWebhooks": "Inbound webhooks",
@@ -168,7 +169,8 @@
     "agencyLocations": "Agency Locations",
     "agencyRebilling": "Agency Rebilling",
     "agencySnapshots": "Agency Snapshots",
-    "ivr": "IVR Menus"
+    "ivr": "IVR Menus",
+    "help": "Help"
   },
   "common": {
     "save": "Save",
@@ -197,6 +199,8 @@
     "previous": "Previous",
     "next": "Next",
     "copied": "Copied",
+    "copy": "Copy",
+    "copyFailed": "Could not copy",
     "done": "Done",
     "saving": "Saving…"
   },
@@ -222,7 +226,11 @@
     "submit": "Sign in",
     "loading": "Signing in…",
     "wrongCreds": "Invalid email or password",
-    "locked": "Account locked. Try again in {{minutes}} minutes."
+    "locked": "Account locked. Try again in {{minutes}} minutes.",
+    "lockedTryLater": "Your account is temporarily locked. Please try again shortly.",
+    "inactive": "Your account is not active. Please contact your administrator.",
+    "failed": "Could not sign in. Please try again.",
+    "networkError": "Connection error. Please try again."
   },
   "dashboard": {
     "title": "Dashboard",
@@ -607,6 +615,9 @@
     "markedWon": "Marked as won",
     "markedLost": "Marked as lost",
     "deleted": "Deal deleted",
+    "winError": "Could not mark the deal as won",
+    "loseError": "Could not mark the deal as lost",
+    "deleteError": "Could not delete the deal",
     "name": "Name",
     "namePlaceholder": "Acme Corp — annual plan",
     "value": "Value",
@@ -681,6 +692,7 @@
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
+    "deleteDesc": "This task will be permanently deleted. This cannot be undone.",
     "emptyHint": "Create a follow-up so leads don't go cold.",
     "presets": {
       "today6pm": "Today 6:00 PM",
@@ -772,6 +784,9 @@
     "title": "Custom Objects",
     "subtitle": "Define your own record types beyond Contacts — properties, vehicles, policies, anything.",
     "new": "New object",
+    "showArchived": "Show archived",
+    "hideArchived": "Hide archived",
+    "archivedBadge": "Archived",
     "searchPlaceholder": "Search records…",
     "empty": {
       "title": "No custom objects yet",
@@ -789,7 +804,8 @@
       "name": "Name"
     },
     "action": {
-      "archive": "Archive"
+      "archive": "Archive",
+      "restore": "Restore"
     },
     "form": {
       "newTitle": "New custom object",
@@ -836,6 +852,8 @@
       "createFailed": "Failed to create object",
       "archived": "Object archived",
       "archiveFailed": "Failed to archive",
+      "restored": "Object restored",
+      "restoreFailed": "Failed to restore",
       "recordSaved": "Record saved",
       "recordFailed": "Failed to save record",
       "recordDeleted": "Record deleted",
@@ -846,8 +864,8 @@
     }
   },
   "ads": {
-    "title": "Ad Reporting",
-    "subtitle": "Track Meta and TikTok ad spend, clicks and conversions across your accounts.",
+    "title": "Ads",
+    "subtitle": "Track Meta and TikTok ad performance, manage campaigns and auto-scale.",
     "connectAccount": "Connect account",
     "viewToggle": "Ad reporting view",
     "rangeToggle": "Date range",
@@ -899,7 +917,8 @@
     },
     "action": {
       "refresh": "Refresh",
-      "disconnect": "Disconnect"
+      "disconnect": "Disconnect",
+      "reconnect": "Reconnect"
     },
     "confirm": {
       "disconnectTitle": "Disconnect ad account",
@@ -929,7 +948,21 @@
       "disconnected": "Ad account disconnected",
       "disconnectFailed": "Failed to disconnect account",
       "pulled": "Refreshed — {{count}} day(s) updated",
-      "pullFailed": "Failed to refresh metrics"
+      "pullFailed": "Failed to refresh metrics",
+      "tiktokConnected": "TikTok advertiser(s) connected",
+      "tiktokConnectFailed": "Failed to connect TikTok account"
+    },
+    "oauth": {
+      "tiktokConnect": "Connect TikTok for Business",
+      "tiktokNotConfigured": "An admin must add TikTok Business app credentials first",
+      "selectTitle": "Choose TikTok advertiser accounts",
+      "selectBody": "Select the advertiser accounts to connect to this workspace.",
+      "noAdvertisers": "No advertiser accounts found",
+      "noAdvertisersHint": "Make sure you granted access to at least one TikTok advertiser account.",
+      "enableDm": "Also enable TikTok DM inbox",
+      "connectSelected": "Connect selected",
+      "callbackError": "TikTok connection failed or was cancelled. Please try again.",
+      "startFailed": "Could not start the TikTok connection"
     }
   },
   "reports": {
@@ -1131,6 +1164,8 @@
     "saved": "Document saved",
     "saveFailed": "Save failed",
     "loadFailed": "Could not load document",
+    "archiveFailed": "Could not update the document",
+    "deleteFailed": "Could not delete the document",
     "archived": "archived",
     "updated": "updated",
     "toggleArchive": "Archive / restore",
@@ -1204,7 +1239,66 @@
     "enrollAll": "Enroll ALL contacts — this starts sending messages and cannot be undone",
     "filterStatus": "Status (optional)",
     "filterBusinessType": "Business type (optional)",
-    "filterSearch": "Search name/email (optional)"
+    "filterSearch": "Search name/email (optional)",
+    "namePlaceholder": "Automation name",
+    "activate": "Activate",
+    "pause": "Pause",
+    "searchPlaceholder": "Search by name or trigger…",
+    "statusFilter": "Status filter",
+    "status": { "all": "All" },
+    "newBlank": "Blank automation",
+    "newFromTemplate": "From a template",
+    "newWithAi": "Describe with AI",
+    "fromTemplate": "Start from template",
+    "templatesTitle": "Start from a template",
+    "templatesHint": "Pick a recipe to pre-fill the builder — you can tweak everything before saving.",
+    "aiTitle": "Describe your automation",
+    "aiDialogHint": "AI drafts the trigger and steps — you review and save them in the builder.",
+    "statsLine": "{{started}} started → {{completed}} completed",
+    "deleteTitle": "Delete automation?",
+    "deleteDesc": "Running instances will be cancelled.",
+    "emptyTitle": "No automations yet",
+    "addStep": "Add step",
+    "canvasHint": "Click a step to edit it, or use the palette to add one.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "deleteStep": "Delete step",
+    "noConfig": "This step has no settings.",
+    "advancedJson": "Advanced (JSON)",
+    "invalidJson": "Invalid JSON.",
+    "jsonNeedsType": "Must be a JSON object with a \"type\" field.",
+    "invalidFiltersJson": "Filters must be a JSON array.",
+    "unsavedConfirm": "Discard unsaved changes?",
+    "subject": "Subject",
+    "body": "Message",
+    "prompt": "Prompt",
+    "message": "Message",
+    "tag": "Tag",
+    "strategy": "Strategy",
+    "waitMode": "Mode",
+    "duration": "For a duration",
+    "untilReply": "Until reply",
+    "waitSeconds": "Seconds (60–2592000)",
+    "taskTitle": "Task title",
+    "branchHint": "Continue when ALL conditions match; otherwise fall through (or jump).",
+    "addCondition": "Add condition",
+    "removeCondition": "Remove condition",
+    "condField": "Field",
+    "condOp": "Operator",
+    "condValue": "Value",
+    "elseGoto": "If no match — go to step # (optional)",
+    "elseFallThrough": "fall through",
+    "updateLeadHint": "Set these fields on the lead.",
+    "fieldKey": "Field",
+    "fieldValue": "Value",
+    "addField": "Add field",
+    "removeField": "Remove field",
+    "categories": "Categories (comma-separated)",
+    "routes": "Route each category to a step # (optional)",
+    "routeFor": "Route for {{cat}}",
+    "webhookUrl": "URL",
+    "webhookMethod": "Method",
+    "webhookBody": "Body (JSON)"
   },
   "campaigns": {
     "details": "Details",
@@ -1235,6 +1329,7 @@
     "composeFailed": "Compose failed",
     "launched": "Launched",
     "launchFailed": "Launch failed",
+    "actionFailed": "Action failed",
     "sent": "sent",
     "opened": "opened",
     "clicked": "clicked",
@@ -1256,6 +1351,8 @@
     "saveFailed": "Save failed",
     "drafted": "Draft ready",
     "draftFailed": "Could not draft",
+    "publishFailed": "Could not update publish state",
+    "deleteFailed": "Could not delete the page",
     "publish": "Publish",
     "unpublish": "Unpublish",
     "copyUrl": "public URL",
@@ -1264,6 +1361,8 @@
     "formName": "Form name (name/email/phone fields)",
     "addForm": "Add",
     "formCreated": "Form created",
+    "formCreateFailed": "Could not create form",
+    "formDeleteFailed": "Could not delete form",
     "noForms": "No forms yet. Add one, then reference it in a page form block: {\"type\":\"form\",\"formId\":\"…\"}.",
     "delete": "Delete"
   },
@@ -1339,6 +1438,57 @@
     "empty": "No AI calls yet.",
     "selectPrompt": "Select a call to see the transcript.",
     "noTranscript": "No transcript for this call."
+  },
+  "callAnalysis": {
+    "title": "Call analysis",
+    "summary": "Summary",
+    "score": "Score",
+    "actionItems": "Action items",
+    "topics": "Topics",
+    "analyse": "Analyse",
+    "recordingRequired": "A call recording is required to analyse",
+    "runOk": "Analysis complete",
+    "runSkipped": "Analysis already exists",
+    "runFailed": "Analysis failed",
+    "sentiment": {
+      "POSITIVE": "Positive",
+      "NEUTRAL": "Neutral",
+      "NEGATIVE": "Negative"
+    }
+  },
+  "copilot": {
+    "title": "Live Assistant",
+    "listen": "Listen",
+    "stop": "Stop",
+    "thinking": "Thinking…",
+    "summary": "Summary",
+    "getSuggestions": "Get suggestions",
+    "pastePlaceholder": "Paste the call transcript here…"
+  },
+  "voiceAiSettings": {
+    "title": "Voice AI",
+    "subtitle": "Voice-AI capabilities activate automatically once you buy the NetGSM add-ons and set the keys. Each capability's status and wiring URLs are shown below.",
+    "on": "On",
+    "off": "Off",
+    "unavailable": "Could not load status.",
+    "capability": {
+      "stt": {
+        "name": "Speech-to-Text (STT)",
+        "note": "Needed to analyse call recordings. To enable: NetGSM Call Recording + an STT key."
+      },
+      "bridge": {
+        "name": "AI Bridge",
+        "note": "Lets VAPI/Retell/ElevenLabs use our Claude brain for real-time voice AI. To enable: SIP Trunk + Yapay Zeka + a partner."
+      },
+      "netgsmIvr": {
+        "name": "NetGSM IVR",
+        "note": "Uses NetGSM's TTS robot for inbound calls. To enable: NetGSM Custom API (Özel API) add-on."
+      },
+      "copilot": {
+        "name": "Live Assistant (Copilot)",
+        "note": "Suggests lines to the rep during a call. To enable: STT/key only."
+      }
+    }
   },
   "invoices": {
     "title": "Invoices",
@@ -1708,5 +1858,163 @@
     "crossLink": "Create social content",
     "provisioned": "Social campaign created",
     "provisionFailed": "Could not create social content"
+  },
+  "landing": {
+    "a11y": {
+      "skipToContent": "Skip to content"
+    },
+    "mock": {
+      "panel": "Dashboard",
+      "last7": "Last 7 days",
+      "leadLabel": "Leads",
+      "leadValue": "1,248",
+      "revenueLabel": "Revenue",
+      "revenueValue": "$92K",
+      "convLabel": "Conversion",
+      "convValue": "24%",
+      "chartTitle": "Pipeline revenue",
+      "chartBadge": "Monthly",
+      "row1Name": "Ayşe Yılmaz",
+      "row1Msg": "Can I get your price list?",
+      "row2Name": "Mert Kaya",
+      "row2Msg": "Are you available for a meeting?",
+      "row3Name": "Selin Demir",
+      "row3Msg": "Thank you, great!",
+      "chip1Title": "New message",
+      "chip1Sub": "WhatsApp · now",
+      "chip2Title": "Automation ran",
+      "chip2Sub": "3 leads assigned",
+      "inboxStatus": "WhatsApp · online",
+      "inboxAssigned": "Assigned to Mert",
+      "bubble1": "Hi, can I get your price list?",
+      "bubble2": "Of course! Sending it right now 📄",
+      "bubble3": "Thank you so much 🙏",
+      "replyPlaceholder": "Write a reply…",
+      "flowTitle": "Welcome flow",
+      "flowActive": "Active",
+      "trigger": "Trigger",
+      "triggerSub": "New lead arrived",
+      "condition": "Condition",
+      "conditionSub": "Source = Instagram",
+      "action": "Action",
+      "actionSub": "Send WhatsApp message"
+    },
+    "nav": {
+      "features": "Features",
+      "how": "How it works",
+      "faq": "FAQ",
+      "login": "Log in",
+      "getStarted": "Get started",
+      "openApp": "Open app",
+      "menu": "Menu"
+    },
+    "hero": {
+      "badge": "All-in-one marketing & CRM platform",
+      "titleLead": "All your marketing,",
+      "titleAccent": "one panel.",
+      "subtitle": "From lead to sale, campaign to automation, inbox to analytics — Jeeta runs your whole growth engine in one place.",
+      "ctaPrimary": "Get started free",
+      "ctaSecondary": "Explore features",
+      "trust": "No credit card · Set up in minutes · GDPR/KVKK compliant"
+    },
+    "stats": {
+      "modules": "13+",
+      "modulesLabel": "Integrated modules",
+      "channels": "5",
+      "channelsLabel": "Messaging channels",
+      "languages": "5 langs",
+      "languagesLabel": "Multi-language",
+      "workspace": "One",
+      "workspaceLabel": "Unified workspace"
+    },
+    "features": {
+      "title": "Everything you need to grow",
+      "subtitle": "One platform that talks to itself — instead of a dozen disconnected tools.",
+      "crmTitle": "CRM & Lead Management",
+      "crmDesc": "Leads, contacts, companies and pipelines; model your own data with custom fields and objects.",
+      "inboxTitle": "Omnichannel Inbox",
+      "inboxDesc": "WhatsApp, Instagram, web-chat and email in one inbox — reply as a team from a single place.",
+      "campaignsTitle": "Campaigns",
+      "campaignsDesc": "Email, SMS and WhatsApp campaigns — segment, send, and track opens and clicks.",
+      "automationTitle": "Automation & Workflows",
+      "automationDesc": "Automate follow-ups, assignments and messages with a drag-and-drop flow builder.",
+      "funnelsTitle": "Funnels & Pages",
+      "funnelsDesc": "Funnels, landing pages, forms and online booking — live without writing code.",
+      "socialTitle": "Social Media Planner",
+      "socialDesc": "Schedule, publish and measure posts across Facebook, Instagram, LinkedIn and TikTok.",
+      "voiceTitle": "Voice AI & Telephony",
+      "voiceDesc": "Calls, power dialer, IVR and an AI receptionist — over a real business line.",
+      "billingTitle": "Billing & Payments",
+      "billingDesc": "Estimates, invoices, subscriptions and products — collect payments online."
+    },
+    "more": {
+      "title": "And more",
+      "analytics": "Analytics & Reporting",
+      "ai": "AI Assistant",
+      "memberships": "Memberships & Community",
+      "reviews": "Reviews & Reputation",
+      "affiliate": "Affiliate Program",
+      "agency": "Agency & White-label",
+      "security": "2FA & Roles",
+      "api": "Open API & Webhooks"
+    },
+    "how": {
+      "title": "Get started in three steps",
+      "subtitle": "Setup takes minutes — no technical team required.",
+      "step1Title": "Sign up",
+      "step1Desc": "Create your workspace in seconds and invite your team.",
+      "step2Title": "Connect your channels",
+      "step2Desc": "WhatsApp, social accounts, phone and payments — connect in a few clicks.",
+      "step3Title": "Grow",
+      "step3Desc": "Scale your sales with automation, campaigns and analytics."
+    },
+    "highlights": {
+      "inboxTag": "Omnichannel Inbox",
+      "inboxTitle": "Every conversation on one screen",
+      "inboxDesc": "Whether a customer messages on WhatsApp, comments on Instagram or starts a chat on your site — it all lands in the same inbox. Your team replies from one place without losing context.",
+      "inboxB1": "WhatsApp, Instagram, Messenger & web-chat",
+      "inboxB2": "Team assignments and internal notes",
+      "inboxB3": "Saved replies and AI suggestions",
+      "autoTag": "Automation",
+      "autoTitle": "Put your business on autopilot",
+      "autoDesc": "When a new lead arrives, send a welcome message, create a task, tag it and route it to the right rep — automatically. The drag-and-drop builder takes minutes to set up.",
+      "autoB1": "Trigger → condition → action flows",
+      "autoB2": "Automatic follow-ups and reminders",
+      "autoB3": "Integrated with campaigns and pipelines"
+    },
+    "faq": {
+      "title": "Frequently asked questions",
+      "q1": "Who is Jeeta for?",
+      "a1": "Any business that captures leads and talks to customers across channels: SMBs, sales teams, agencies and service providers.",
+      "q2": "How long does setup take?",
+      "a2": "Minutes. Create your workspace, connect your channels and start right away — no setup fee or technical team needed.",
+      "q3": "Is my data safe?",
+      "a3": "Yes. Every workspace is isolated, GDPR/KVKK compliant, with two-factor authentication (2FA) and role-based access.",
+      "q4": "Can I connect WhatsApp and my social accounts?",
+      "a4": "Yes. Connect WhatsApp, Instagram, Facebook, LinkedIn and TikTok with one-click secure OAuth.",
+      "q5": "Can I start for free?",
+      "a5": "Yes. Create your workspace for free and explore the platform; upgrade your plan from the dashboard whenever you want."
+    },
+    "finalCta": {
+      "title": "Start with Jeeta today",
+      "subtitle": "Bring all your marketing into one panel. No credit card required.",
+      "cta": "Create your free workspace"
+    },
+    "footer": {
+      "navLabel": "Footer",
+      "madeIn": "Made in İstanbul, Türkiye",
+      "tagline": "The all-in-one marketing and CRM platform.",
+      "productCol": "Product",
+      "companyCol": "Company",
+      "legalCol": "Legal",
+      "linkFeatures": "Features",
+      "linkHow": "How it works",
+      "linkFaq": "FAQ",
+      "linkLogin": "Log in",
+      "linkRegister": "Sign up",
+      "linkPrivacy": "Privacy (KVKK)",
+      "linkTerms": "Terms of use",
+      "rights": "All rights reserved."
+    }
   }
 }

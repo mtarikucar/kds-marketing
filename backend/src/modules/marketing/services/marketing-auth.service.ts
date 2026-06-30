@@ -7,6 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
@@ -326,7 +327,35 @@ export class MarketingAuthService {
 
     const passwordHash = await bcrypt.hash(dto.password, this.bcryptCost());
 
-    const owner = await this.prisma.$transaction(async (tx) => {
+    let owner;
+    try {
+      owner = await this.provisionWorkspace(dto, passwordHash);
+    } catch (e) {
+      // The email pre-check above closes the SEQUENTIAL duplicate case, but two
+      // simultaneous signups both pass it and race on INSERT — the unique index
+      // is the real arbiter. Surface the loser's P2002 as a clean 409 (matching
+      // the pre-check's message) instead of leaking a raw 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const target = String((e.meta as { target?: unknown } | undefined)?.target ?? '');
+        if (target.includes('email')) throw new ConflictException('Email is already registered');
+        if (target.includes('slug')) {
+          throw new ConflictException('That workspace name was just taken — try another');
+        }
+        throw new ConflictException('That account was just created — please sign in');
+      }
+      throw e;
+    }
+
+    await this.prisma.marketingUser.update({
+      where: { id: owner.id },
+      data: { lastLogin: new Date(), lastLoginIp: ip },
+    });
+
+    return this.generateTokens(owner);
+  }
+
+  private async provisionWorkspace(dto: RegisterWorkspaceDto, passwordHash: string) {
+    return this.prisma.$transaction(async (tx) => {
       // Deterministic-but-collision-safe slug: try the plain slug, then
       // suffix -2, -3... (bounded; the unique index is the final arbiter).
       const base = slugify(dto.workspaceName);
@@ -414,13 +443,6 @@ export class MarketingAuthService {
 
       return ownerUser;
     });
-
-    await this.prisma.marketingUser.update({
-      where: { id: owner.id },
-      data: { lastLogin: new Date(), lastLoginIp: ip },
-    });
-
-    return this.generateTokens(owner);
   }
 
   async getProfile(userId: string) {

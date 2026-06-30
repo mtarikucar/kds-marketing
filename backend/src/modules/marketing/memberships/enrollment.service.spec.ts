@@ -20,9 +20,10 @@ function course(dripMode: string | null, lessons: any[]) {
 }
 
 describe('EnrollmentService', () => {
-  it('enrolls a lead (idempotent upsert) after asserting the course', async () => {
+  it('enrolls a lead (idempotent upsert) after asserting the course AND the lead', async () => {
     const { prisma, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     (prisma.enrollment.upsert as jest.Mock).mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1' });
     const out: any = await svc.enroll(WS, 'c1', 'lead-1');
     expect(out).toMatchObject({ id: 'e1' });
@@ -35,16 +36,25 @@ describe('EnrollmentService', () => {
     await expect(svc.enroll(WS, 'ghost', 'lead-1')).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('404s enrolling a lead that belongs to another workspace (no cross-tenant enroll)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any); // lead not in this workspace
+    await expect(svc.enroll(WS, 'c1', 'foreign-lead')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.enrollment.upsert).not.toHaveBeenCalled();
+  });
+
   it('marks a lesson complete and recomputes progress to 50% (stays ACTIVE)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
     prisma.lesson.findFirst.mockResolvedValue({ id: 'l1' } as any);
-    // ungated course → no lock check blocks the write
-    prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
+    // ungated 2-lesson course → completing l1 of {l1,l2} = 50%
+    prisma.course.findUnique.mockResolvedValue(course(null, [
+      { id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null },
+      { id: 'l2', position: 1, isPreview: false, gating: 'FREE', dripDays: null },
+    ]) as any);
     (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
-    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
-    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
 
     const out: any = await svc.markLessonComplete(WS, 'e1', 'l1');
@@ -76,13 +86,44 @@ describe('EnrollmentService', () => {
     const { prisma, certificates, svc } = makeSvc();
     prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
     prisma.lesson.findFirst.mockResolvedValue({ id: 'l1' } as any);
-    prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
+    prisma.course.findUnique.mockResolvedValue(course(null, [
+      { id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null },
+      { id: 'l2', position: 1, isPreview: false, gating: 'FREE', dripDays: null },
+    ]) as any);
     (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
-    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
-    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
     await svc.markLessonComplete(WS, 'e1', 'l1');
+    expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('ignores orphaned progress (deleted lessons) — no premature COMPLETED/certificate', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1', enrolledAt: new Date('2026-06-01') } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l4' } as any);
+    // The course now has only l4 + l5; l1..l3 were DELETED but their completed
+    // LessonProgress rows linger (soft ref, no FK cascade).
+    prisma.course.findUnique.mockResolvedValue(
+      course(null, [
+        { id: 'l4', position: 0, isPreview: false, gating: 'FREE', dripDays: null },
+        { id: 'l5', position: 1, isPreview: false, gating: 'FREE', dripDays: null },
+      ]) as any,
+    );
+    // Completed set carries 3 orphans (l1..l3) for lessons no longer in the course.
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([
+      { lessonId: 'l1' }, { lessonId: 'l2' }, { lessonId: 'l3' },
+    ]);
+    (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    // The naive counts (which include orphans) would compute 4/2 = 200% → COMPLETED.
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(4);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
+
+    const out: any = await svc.markLessonComplete(WS, 'e1', 'l4');
+    // Only l4 (of the live l4/l5) is done → 50%, still ACTIVE, no certificate.
+    expect(out.progressPct).toBe(50);
+    expect(out.status).toBe('ACTIVE');
+    expect(out.completedAt).toBeNull();
     expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
   });
 

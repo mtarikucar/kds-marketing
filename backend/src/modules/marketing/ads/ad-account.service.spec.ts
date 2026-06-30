@@ -2,6 +2,7 @@ import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { AdAccountService } from './ad-account.service';
 import * as metaClient from './meta-ads.client';
 import * as tiktokClient from './tiktok-ads.client';
+import * as linkedinClient from './linkedin-ads.client';
 import * as adsTypes from './ads.types';
 import * as secretBox from '../../../common/crypto/secret-box.helper';
 
@@ -34,6 +35,7 @@ describe('AdAccountService', () => {
     // Both providers enabled by default; individual tests override to test the gate.
     jest.spyOn(adsTypes, 'isMetaAdsConfigured').mockReturnValue(true);
     jest.spyOn(adsTypes, 'isTiktokAdsConfigured').mockReturnValue(true);
+    jest.spyOn(adsTypes, 'isLinkedinAdsConfigured').mockReturnValue(true);
     // Safe defaults so awaited writes (and markError's `.catch`) resolve.
     prisma.adAccount.update.mockResolvedValue({});
     prisma.adAccount.upsert.mockResolvedValue({});
@@ -89,6 +91,22 @@ describe('AdAccountService', () => {
       expect(arg.update.accessToken).toBe('v1:sealed');
       // The select must NOT leak the sealed token.
       expect(arg.select.accessToken).toBeUndefined();
+    });
+
+    it('seals + upserts a LINKEDIN ad account', async () => {
+      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
+      jest.spyOn(secretBox, 'sealSecret').mockReturnValue('v1:sealed');
+      prisma.adAccount.upsert.mockResolvedValue({ id: 'a1', provider: 'LINKEDIN' });
+      await svc.connect(WS, {
+        provider: 'LINKEDIN',
+        externalAdId: '512345',
+        displayName: 'Acme Ads',
+        accessToken: 'li-tok',
+        currency: 'USD',
+      } as any);
+      const arg = prisma.adAccount.upsert.mock.calls[0][0] as any;
+      expect(arg.where.workspaceId_provider_externalAdId.provider).toBe('LINKEDIN');
+      expect(arg.create.accessToken).toBe('v1:sealed');
     });
   });
 
@@ -287,6 +305,34 @@ describe('AdAccountService', () => {
       expect(ttSpy).toHaveBeenCalledWith('plain', 'adv_9', '2026-06-01', '2026-06-03');
     });
 
+    it('dispatches to the LinkedIn client for a LinkedIn account', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      const liSpy = jest.spyOn(linkedinClient, 'pullLinkedinInsights').mockResolvedValue([]);
+      prisma.adAccount.update.mockResolvedValue({});
+      await svc.pullAccount(
+        { ...account, provider: 'LINKEDIN', externalAdId: '512345' },
+        '2026-06-01',
+        '2026-06-03',
+      );
+      expect(liSpy).toHaveBeenCalledWith('plain', '512345', '2026-06-01', '2026-06-03');
+    });
+
+    it('marks TOKEN_EXPIRED on a LinkedIn auth error', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      const err: any = new Error('LinkedIn ads 401: invalid token');
+      err.isAuthError = true;
+      jest.spyOn(linkedinClient, 'pullLinkedinInsights').mockRejectedValue(err);
+      const written = await svc.pullAccount(
+        { ...account, provider: 'LINKEDIN', externalAdId: '512345' },
+        '2026-06-01',
+        '2026-06-03',
+      );
+      expect(written).toBe(0);
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      expect(upd.data.status).toBe('TOKEN_EXPIRED');
+      expect(upd.data.lastError).toBe('reauth_required');
+    });
+
     it('skips rows with an unparseable date', async () => {
       jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
       jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
@@ -297,6 +343,34 @@ describe('AdAccountService', () => {
       expect(prisma.adMetric.upsert).not.toHaveBeenCalled();
       // rows.length is still returned (1), but nothing was written
       expect(written).toBe(1);
+    });
+
+    it('sets status=TOKEN_EXPIRED (not just lastError) when TikTok throws an auth-signal error', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockRejectedValue(
+        new Error('access_token is invalid or expired (code: 40105)'),
+      );
+      const tiktokAccount = { ...account, provider: 'TIKTOK', externalAdId: 'adv_9' };
+      const written = await svc.pullAccount(tiktokAccount, '2026-06-01', '2026-06-03');
+      expect(written).toBe(0);
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      expect(upd.data.status).toBe('TOKEN_EXPIRED');
+      expect(upd.data.lastError).toBe('reauth_required');
+      expect(upd.data.lastPulledAt).toBeInstanceOf(Date);
+    });
+
+    it('does NOT set TOKEN_EXPIRED for a non-auth TikTok error (keeps regular lastError)', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockRejectedValue(
+        new Error('Rate limit exceeded'),
+      );
+      const tiktokAccount = { ...account, provider: 'TIKTOK', externalAdId: 'adv_9' };
+      const written = await svc.pullAccount(tiktokAccount, '2026-06-01', '2026-06-03');
+      expect(written).toBe(0);
+      const upd = prisma.adAccount.update.mock.calls[0][0] as any;
+      // status must NOT be TOKEN_EXPIRED for a non-auth error
+      expect(upd.data.status).toBeUndefined();
+      expect(upd.data.lastError).toContain('Rate limit');
     });
   });
 
@@ -314,6 +388,11 @@ describe('AdAccountService', () => {
       expect(s).toHaveProperty('META');
       expect(s).toHaveProperty('TIKTOK');
       expect(s.secretBoxConfigured).toBe(true);
+    });
+
+    it('reports LINKEDIN configuration in status', () => {
+      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
+      expect(svc.status()).toHaveProperty('LINKEDIN');
     });
   });
 });

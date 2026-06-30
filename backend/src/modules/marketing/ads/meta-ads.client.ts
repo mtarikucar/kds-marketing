@@ -4,10 +4,35 @@ import { AdMetricRow } from './ads.types';
 /** Bound the pagination loop so a pathological provider response can't run forever. */
 const MAX_PAGES = 50;
 
+/**
+ * Source-specific lead action types that do NOT overlap with each other:
+ * on-Meta instant-form leads (deduplicated/grouped) and website-pixel "Lead"
+ * events. Meta ALSO emits a generic `lead` aggregate that double-counts the
+ * grouped/pixel values, so we never sum the generic together with these.
+ */
+const SPECIFIC_LEAD_TYPES = new Set([
+  'onsite_conversion.lead_grouped',
+  'offsite_conversion.fb_pixel_lead',
+]);
+
+/**
+ * Deduplicated lead count from the `actions` breakdown. Prefer the distinct,
+ * non-overlapping source-specific types (instant-form + pixel); only when none
+ * are present fall back to the generic `lead` total. The old behaviour summed
+ * EVERY action type containing 'lead', double-counting instant-form leads
+ * (reported as both `lead` and `onsite_conversion.lead_grouped`).
+ */
+function leadCount(actions: any[]): number {
+  const sum = (pred: (t: string) => boolean) =>
+    actions
+      .filter((a) => pred(String(a?.action_type ?? '')))
+      .reduce((s: number, a: any) => s + Number(a?.value || 0), 0);
+  const specific = sum((t) => SPECIFIC_LEAD_TYPES.has(t));
+  return specific > 0 ? specific : sum((t) => t === 'lead');
+}
+
 function parseMetaRow(d: any, fallbackDate: string): AdMetricRow {
-  const leads = (d?.actions ?? [])
-    .filter((a: any) => String(a?.action_type ?? '').includes('lead'))
-    .reduce((s: number, a: any) => s + Number(a?.value || 0), 0);
+  const leads = leadCount(Array.isArray(d?.actions) ? d.actions : []);
   return {
     date: String(d?.date_start ?? fallbackDate).slice(0, 10),
     campaignId: String(d?.campaign_id ?? ''),

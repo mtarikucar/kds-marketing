@@ -44,6 +44,63 @@ describe('WorkflowActionHandler.interpolate', () => {
   });
 });
 
+describe('WorkflowActionHandler send (contactIdentity race)', () => {
+  it('send_sms survives a concurrent contactIdentity create (P2002) and still sends', async () => {
+    const identity = { id: 'ci-1', leadId: 'lead-1' };
+    const prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) },
+      contactIdentity: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce(null) // first: not found → attempt create
+          .mockResolvedValueOnce(identity), // re-query after the P2002 → the winner
+        create: jest.fn().mockRejectedValue({ code: 'P2002' }), // concurrent create won
+      },
+      conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'co-1' }) },
+    };
+    const sender = { send: jest.fn().mockResolvedValue(undefined) };
+    const handler = new WorkflowActionHandler(
+      prisma as any, null as any, null as any, null as any,
+      null as any, null as any, sender as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', phone: '5551112233' },
+      trigger: {},
+      context: {},
+    };
+    const res = await handler.execute({ type: 'send_sms', body: 'hi' } as any, ctx);
+    expect(res.output?.result).toBe('SMS sent');
+    expect(sender.send).toHaveBeenCalled();
+  });
+
+  // Regression: send_webchat scoped the open-conversation lookup with
+  // `leadId: lead?.id`. With no lead (a lead-less subject, or a lead deleted
+  // mid-run), Prisma DROPS an `undefined` where-field, so the query matched ANY
+  // open web-chat conversation in the workspace — leaking the message to an
+  // unrelated customer. It must skip when there is no lead (like send_email /
+  // send_sms / send_whatsapp do), never fall back to an arbitrary conversation.
+  it('send_webchat does NOT send to an arbitrary conversation when the run has no lead', async () => {
+    const prisma = {
+      channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) },
+      // If the (buggy) code reached this, it would hand back an unrelated convo.
+      conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'co-other-customer' }) },
+    };
+    const sender = { send: jest.fn().mockResolvedValue(undefined) };
+    const handler = new WorkflowActionHandler(
+      prisma as any, null as any, null as any, null as any,
+      null as any, null as any, sender as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: null, trigger: {}, context: {} };
+
+    const res = await handler.execute({ type: 'send_webchat', body: 'hi' } as any, ctx);
+
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(prisma.conversation.findFirst).not.toHaveBeenCalled();
+    expect(String(res.output?.result)).toContain('skipped');
+  });
+});
+
 describe('WorkflowActionHandler tag actions', () => {
   const mkHandler = (tags: any) =>
     new WorkflowActionHandler(

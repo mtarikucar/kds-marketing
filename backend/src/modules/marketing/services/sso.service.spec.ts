@@ -329,6 +329,17 @@ describe('SsoService', () => {
       );
     });
 
+    it('rejects an ID token whose kid is not in the JWKS (no key-guessing fallback)', async () => {
+      const { state, nonce } = await startFlow();
+      // Validly signed by the REAL key, but labelled with a kid the JWKS does
+      // not contain. OIDC requires rejecting an unrecognised kid — the verifier
+      // must NOT fall back to the first JWKS key and accept it anyway.
+      mockIdp(signIdToken(baseClaims({ nonce }), { kid: 'rotated-unknown-kid' }));
+      await expect(service.handleCallback(state, 'code')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    });
+
     it('rejects the "none" alg (no algorithm confusion)', async () => {
       const { state, nonce } = await startFlow();
       const header = b64url(JSON.stringify({ alg: 'none', typ: 'JWT' }));

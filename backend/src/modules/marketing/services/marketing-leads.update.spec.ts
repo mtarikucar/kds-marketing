@@ -19,6 +19,8 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
     id: 'lead-1',
     workspaceId: WS,
     email: 'old@biz.com',
+    emailNormalized: 'old@biz.com',
+    emailBouncedAt: new Date('2026-01-01'),
     assignedToId: 'rep-1',
   } as any;
 
@@ -52,12 +54,12 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
     ).rejects.toBeInstanceOf(ConflictException);
 
     // The clash lookup is scoped: same workspace, open statuses only, excluding
-    // this same row.
+    // this same row — and keyed on the NORMALIZED email (mirrors create()).
     expect(prisma.lead.findFirst).toHaveBeenLastCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           workspaceId: WS,
-          email: 'taken@biz.com',
+          emailNormalized: 'taken@biz.com',
           status: { notIn: ['WON', 'LOST'] },
           id: { not: 'lead-1' },
         }),
@@ -65,6 +67,43 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
     );
     // No write when the dedup guard trips.
     expect(prisma.lead.update).not.toHaveBeenCalled();
+  });
+
+  it('dedups case-insensitively — a case/format variant of an existing email still clashes', async () => {
+    prisma.lead.findFirst
+      .mockResolvedValueOnce(EXISTING_LEAD)
+      .mockResolvedValueOnce({ id: 'lead-2', businessName: 'Rival', assignedTo: null } as any);
+
+    // Editing to a mixed-case variant must normalize before the clash lookup,
+    // otherwise the raw-string compare lets the duplicate through.
+    await expect(
+      svc.update(WS, 'lead-1', { email: 'Taken@Biz.com' } as any, 'rep-1', 'REP'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.lead.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ emailNormalized: 'taken@biz.com' }),
+      }),
+    );
+  });
+
+  it('re-classifies hygiene and clears the bounce flag when the email changes', async () => {
+    prisma.lead.findFirst
+      .mockResolvedValueOnce(EXISTING_LEAD)
+      .mockResolvedValueOnce(null); // no clash
+    const hygiene = { verify: jest.fn().mockResolvedValue('VALID') };
+    svc = new MarketingLeadsService(
+      prisma as any, {} as any, {} as any, {} as any, {} as any,
+      { validateAndNormalize: jest.fn().mockResolvedValue({}) } as any,
+      hygiene as any,
+    );
+
+    await svc.update(WS, 'lead-1', { email: 'fixed@biz.com' } as any, 'rep-1', 'REP');
+
+    expect(hygiene.verify).toHaveBeenCalledWith('fixed@biz.com');
+    const data = prisma.lead.update.mock.calls[0][0].data;
+    expect(data.emailVerifiedStatus).toBe('VALID');
+    expect(data.emailBouncedAt).toBeNull();
   });
 
   it('does NOT issue the dedup query for a non-email update (single findFirst, then update)', async () => {

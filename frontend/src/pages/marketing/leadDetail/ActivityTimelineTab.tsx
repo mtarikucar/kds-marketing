@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -36,12 +36,15 @@ const activitySchema = z.object({
 type ActivityFormValues = z.infer<typeof activitySchema>;
 
 interface ActivityTimelineTabProps {
+  /** The lead this tab is showing — used to reset the draft on lead change. */
+  leadId: string;
   activities: LeadActivity[];
   onSubmit: (data: { type: string; title: string; description?: string }) => void;
   isPending: boolean;
 }
 
 export default function ActivityTimelineTab({
+  leadId,
   activities,
   onSubmit,
   isPending,
@@ -53,6 +56,15 @@ export default function ActivityTimelineTab({
     mode: 'onBlur',
     defaultValues: { type: 'NOTE', title: '', description: '' },
   });
+
+  // The lead-detail route reuses this tab across /leads/:id navigations (no
+  // remount, like WalletPanel) — clear + close a half-typed activity draft when
+  // the lead changes so it can't be logged against the next contact.
+  useEffect(() => {
+    form.reset({ type: 'NOTE', title: '', description: '' });
+    setOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId]);
 
   const submit: SubmitHandler<ActivityFormValues> = (values) => {
     onSubmit({

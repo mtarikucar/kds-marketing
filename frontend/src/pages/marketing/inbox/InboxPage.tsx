@@ -151,11 +151,25 @@ export default function InboxPage() {
 
   // ── Side-effects ───────────────────────────────────────────────────────────
 
-  // Mark read on open.
+  // Reset the composer whenever the open conversation changes — `draft` is a
+  // single shared state (cleared only on a successful send), so without this a
+  // half-typed reply would carry from one customer's thread into the next and
+  // could be sent to the wrong person.
+  useEffect(() => {
+    setDraft('');
+  }, [selectedId]);
+
+  // Mark read on open — and refresh the list so the unread badge on the thread
+  // you just opened clears immediately, instead of lingering until the next 30s
+  // poll / SSE event (the POST zeroes unreadCount server-side, but nothing was
+  // re-reading the list).
   useEffect(() => {
     if (selectedId)
-      marketingApi.post(`/conversations/${selectedId}/read`).catch(() => undefined);
-  }, [selectedId]);
+      marketingApi
+        .post(`/conversations/${selectedId}/read`)
+        .then(() => queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] }))
+        .catch(() => undefined);
+  }, [selectedId, queryClient]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
@@ -182,12 +196,19 @@ export default function InboxPage() {
     mutationFn: (paused: boolean) =>
       marketingApi.post(`/conversations/${selectedId}/ai-pause`, { paused }),
     onSuccess: invalidate,
+    // Without feedback an agent who clicked "pause AI" assumes it worked and
+    // starts replying while the AI keeps answering — double replies on a live
+    // customer channel. Surface the failure so they know the AI is still on.
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.aiToggleFailed', 'Could not change the AI status')),
   });
 
   const closeConvo = useMutation({
     mutationFn: () =>
       marketingApi.post(`/conversations/${selectedId}/close`),
     onSuccess: invalidate,
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('inbox.closeFailed', 'Could not close the conversation')),
   });
 
   // ── Derived ────────────────────────────────────────────────────────────────

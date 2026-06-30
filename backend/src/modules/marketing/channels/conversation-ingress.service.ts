@@ -29,6 +29,7 @@ const SOURCE_BY_CHANNEL: Record<string, string> = {
   SMS: 'PHONE',
   INSTAGRAM: 'INSTAGRAM',
   MESSENGER: 'OTHER',
+  LINKEDIN: 'OTHER',
 };
 
 /**
@@ -76,9 +77,13 @@ export class ConversationIngressService {
     }
 
     // Fast-path dedup: a redelivered message resolves to the existing row.
+    // MUST be workspace-scoped — `externalMessageId` is globally unique in the
+    // schema, but provider message ids are only unique per business/page/account,
+    // so a cross-tenant id collision would otherwise drop another tenant's message
+    // and hand back a foreign conversation id. A foreign hit → fall through.
     if (inbound.externalMessageId) {
-      const existing = await this.prisma.message.findUnique({
-        where: { externalMessageId: inbound.externalMessageId },
+      const existing = await this.prisma.message.findFirst({
+        where: { externalMessageId: inbound.externalMessageId, workspaceId },
         select: { id: true, conversationId: true },
       });
       if (existing) {
@@ -107,8 +112,13 @@ export class ConversationIngressService {
       // Concurrent double-delivery lost the race on the externalMessageId unique
       // index — re-resolve and report deduped rather than erroring the webhook.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002' && inbound.externalMessageId) {
-        const existing = await this.prisma.message.findUnique({
-          where: { externalMessageId: inbound.externalMessageId },
+        // Re-resolve workspace-scoped: only a SAME-workspace concurrent
+        // double-delivery is a real dedup. A cross-tenant id collision finds
+        // nothing here and re-throws (fail-closed) rather than leaking a foreign
+        // conversation id. (A composite (workspaceId, externalMessageId) unique
+        // would let the insert itself succeed — tracked as a follow-up.)
+        const existing = await this.prisma.message.findFirst({
+          where: { externalMessageId: inbound.externalMessageId, workspaceId },
           select: { id: true, conversationId: true },
         });
         if (existing) {
@@ -318,6 +328,8 @@ export class ConversationIngressService {
         return 'Instagram';
       case 'MESSENGER':
         return 'Messenger';
+      case 'LINKEDIN':
+        return 'LinkedIn';
       default:
         return 'Channel';
     }

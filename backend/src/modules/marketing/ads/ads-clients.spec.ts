@@ -15,7 +15,7 @@ function res(ok: boolean, status: number, body: unknown) {
 beforeEach(() => mockSafeFetch.mockReset());
 
 describe('pullMetaInsights', () => {
-  it('normalizes rows and sums lead conversions from the actions breakdown', async () => {
+  it('normalizes rows and counts deduplicated leads (source-specific over the generic aggregate)', async () => {
     mockSafeFetch.mockResolvedValue(
       res(true, 200, {
         data: [
@@ -25,10 +25,13 @@ describe('pullMetaInsights', () => {
             spend: '12.34',
             impressions: '1000',
             clicks: '40',
+            // Meta reports BOTH the generic `lead` total AND the grouped
+            // instant-form type for the same 5 leads — summing both (the old
+            // includes('lead') behaviour) double-counts to 10.
             actions: [
               { action_type: 'link_click', value: '40' },
-              { action_type: 'lead', value: '3' },
-              { action_type: 'offsite_conversion.fb_pixel_lead', value: '2' },
+              { action_type: 'lead', value: '5' },
+              { action_type: 'onsite_conversion.lead_grouped', value: '5' },
             ],
           },
         ],
@@ -42,8 +45,40 @@ describe('pullMetaInsights', () => {
       spend: 12.34,
       impressions: 1000,
       clicks: 40,
-      leads: 5, // 3 + 2 — both action types contain 'lead'
+      leads: 5, // deduplicated — NOT 5 + 5
     });
+  });
+
+  it('sums distinct lead sources (instant-form grouped + website pixel)', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(true, 200, {
+        data: [{
+          date_start: '2026-06-01', campaign_id: 'c1', spend: '1', impressions: '1', clicks: '1',
+          actions: [
+            { action_type: 'onsite_conversion.lead_grouped', value: '3' },
+            { action_type: 'offsite_conversion.fb_pixel_lead', value: '2' },
+          ],
+        }],
+      }),
+    );
+    const rows = await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    expect(rows[0].leads).toBe(5); // 3 + 2 — genuinely distinct sources
+  });
+
+  it('falls back to the generic lead total when no source-specific type is present', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(true, 200, {
+        data: [{
+          date_start: '2026-06-01', campaign_id: 'c1', spend: '1', impressions: '1', clicks: '1',
+          actions: [
+            { action_type: 'link_click', value: '40' },
+            { action_type: 'lead', value: '4' },
+          ],
+        }],
+      }),
+    );
+    const rows = await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    expect(rows[0].leads).toBe(4);
   });
 
   it('prefixes a bare account id with act_', async () => {

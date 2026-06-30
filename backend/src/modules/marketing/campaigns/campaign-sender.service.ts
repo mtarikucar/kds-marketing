@@ -144,7 +144,13 @@ export class CampaignSenderService implements OnModuleInit {
       });
       if (claim.count === 0) continue;
 
-      const lead = await this.prisma.lead.findFirst({ where: { id: r.leadId, workspaceId } });
+      // Exclude a lead bulk-deleted (deletedAt) or merged-away (mergedIntoId)
+      // AFTER the audience froze: bulk-delete means "stop contacting", and a
+      // merged tombstone would double-send to the merge target's same address.
+      // Such a lead resolves to null here → SKIPPED (mirrors opt-out).
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: r.leadId, workspaceId, deletedAt: null, mergedIntoId: null },
+      });
       const to = this.recipientAddress(campaign.channel, lead);
       if (!lead || this.isOptedOut(campaign.channel, lead) || !to) {
         await this.mark(r.id, 'SKIPPED');

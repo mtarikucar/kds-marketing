@@ -61,6 +61,7 @@ export default function CompaniesPage() {
   const remove = useMutation({
     mutationFn: (id: string) => deleteCompany(id),
     onSuccess: () => { invalidate(); setDeleteTarget(null); setSelectedId(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('companies.deleteFailed', 'Could not delete company')),
   });
 
   return (

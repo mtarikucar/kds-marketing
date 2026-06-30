@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { PublicInvoiceController } from './public-invoice.controller';
 
 /**
@@ -57,6 +58,19 @@ describe('PublicInvoiceController (public token-gated)', () => {
       expect(html).toContain('id="pay"'); // pay button present
     });
 
+    it('re-enables the Pay button when the payment request fails (fetch has a .catch)', async () => {
+      invoices.publicInvoice.mockResolvedValue({
+        number: 'INV-9', currency: 'USD', total: 1000, status: 'SENT', notes: null,
+        items: [{ description: 'Item', qty: 1, unitPrice: 1000 }],
+      });
+      const r = res();
+      await ctrl.page('tok', r);
+      const html = r.send.mock.calls[0][0] as string;
+      // A transient failure must not leave the button stuck on '…' disabled.
+      expect(html).toMatch(/\.catch\(/);
+      expect(html).toMatch(/btn\.disabled\s*=\s*false/);
+    });
+
     it('shows the Paid badge and NO pay button when already paid', async () => {
       invoices.publicInvoice.mockResolvedValue({
         number: 'INV-2', currency: 'USD', total: 5000, status: 'PAID', notes: null, items: [],
@@ -80,6 +94,35 @@ describe('PublicInvoiceController (public token-gated)', () => {
       expect(html).not.toContain('<script>alert(1)</script>');
       expect(html).not.toContain('<img onerror=');
       expect(html).toContain('&lt;');
+    });
+  });
+
+  // The pay endpoint mints a FRESH PSP (Stripe/PayTR/Iyzico) session per call —
+  // an external API round-trip. Like every other public write (and its own PSP
+  // callbacks) it must carry a per-route @Throttle, not rely only on the coarse
+  // global limiter; otherwise a holder of a valid unpaid invoice token can loop
+  // it to flood the workspace's PSP with session-creation requests.
+  describe('rate limiting', () => {
+    const proto: any = PublicInvoiceController.prototype;
+    // Count @nestjs/throttler metadata keys on a route handler, checking both
+    // possible targets (the method fn and the prototype+propertyKey) so the
+    // assertion doesn't depend on the throttler's internal key string.
+    const throttlerKeyCount = (name: string): number => {
+      const fn = proto[name];
+      const keys = [
+        ...(Reflect.getMetadataKeys(fn) ?? []),
+        ...(Reflect.getMetadataKeys(proto, name) ?? []),
+      ];
+      return keys.filter((k) => String(k).toUpperCase().includes('THROTTLER')).length;
+    };
+
+    it('the PSP callbacks are per-route throttled (validates the metadata probe)', () => {
+      expect(throttlerKeyCount('paytrCallback')).toBeGreaterThan(0);
+      expect(throttlerKeyCount('iyzicoCallback')).toBeGreaterThan(0);
+    });
+
+    it('throttles the public pay endpoint (PSP-session minting)', () => {
+      expect(throttlerKeyCount('pay')).toBeGreaterThan(0);
     });
   });
 

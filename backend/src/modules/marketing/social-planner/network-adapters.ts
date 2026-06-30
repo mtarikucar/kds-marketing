@@ -1,8 +1,21 @@
 import { Logger } from '@nestjs/common';
+import Jimp from 'jimp';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
+import { linkedinRest, linkedinUpload, isLinkedinAuthError } from '../../../common/util/linkedin-api.util';
+import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
+import { R2StorageService } from './r2-storage.service';
+
+export interface TikTokPostOptions {
+  privacyLevel?: string;
+  disableComment?: boolean;
+  disableDuet?: boolean;
+  disableStitch?: boolean;
+  mediaType?: 'VIDEO' | 'PHOTO';
+  coverIndex?: number;
+}
 
 const logger = new Logger('NetworkAdapters');
 
@@ -42,6 +55,8 @@ export function isNetworkConfigured(network: string): boolean {
       return !!(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
     case 'TIKTOK':
       return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
+    case 'INSTAGRAM_LOGIN':
+      return !!(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET);
     // Epic 12 (needs-external, inert until creds): X/Twitter, Pinterest, Google
     // Business Profile. Each gates on its own platform app credentials.
     case 'TWITTER':
@@ -67,10 +82,20 @@ export interface MediaItem {
   mime?: string;
 }
 
+/** LinkedIn-specific publish options (organic feed posts). */
+export interface LinkedinPostOptions {
+  /** Feed visibility for /rest/posts. Defaults to PUBLIC when unset. */
+  visibility?: 'PUBLIC' | 'CONNECTIONS';
+}
+
 export interface PublishOptions {
   format?: PostFormat;
   /** Per-item MIME, parallel to mediaUrls — lets adapters pick image vs video. */
   mediaMime?: (string | undefined)[];
+  /** LinkedIn organic post options (visibility). Honoured only by the LINKEDIN adapter. */
+  linkedin?: LinkedinPostOptions;
+  /** TikTok-specific privacy/interaction/photo controls. */
+  tiktok?: TikTokPostOptions;
 }
 
 const VIDEO_EXT = /\.(mp4|mov|m4v|webm|qt)(?:[?#]|$)/i;
@@ -136,6 +161,56 @@ async function igPublish(igId: string, token: string, creationId: string): Promi
   return id ? { ok: true, externalPostId: String(id) } : { ok: false, error: 'IG publish: no id returned' };
 }
 
+/** Bytes cap for fetching a source image before transcoding (generous; the
+ *  re-encoded JPEG is far smaller and Instagram caps the final at 8MB). */
+const IG_IMAGE_FETCH_MAX_BYTES = 20 * 1024 * 1024;
+/** Instagram downscales feed images to 1080px wide regardless — do it ourselves
+ *  (controlled, sharper) so the only quality change is one clean resize. */
+const IG_JPEG_MAX_WIDTH = 1080;
+
+/**
+ * True when an item is an IMAGE that Instagram's API would reject. The Content
+ * Publishing API accepts ONLY JPEG — PNG/WebP/GIF image_urls create a container
+ * but fail media_publish with "Media ID is not available". Videos are exempt.
+ */
+export function igImageNeedsJpeg(item: MediaItem): boolean {
+  if (isVideoItem(item)) return false;
+  const mime = (item.mime ?? '').toLowerCase();
+  if (mime) return mime !== 'image/jpeg' && mime !== 'image/jpg';
+  // No/unknown mime → trust the URL extension; anything not .jpg/.jpeg is suspect.
+  return !/\.jpe?g(?:[?#]|$)/i.test(item.url);
+}
+
+/**
+ * Ensure an Instagram image item is JPEG. Transcodes a non-JPEG image to
+ * high-quality JPEG (≤1080px wide — Instagram's display width) and re-hosts it on
+ * R2 so Meta can pull it. This mirrors what the Instagram mobile app does silently
+ * (it re-encodes everything to JPEG); the Graph API does not, so we must. Videos
+ * and already-JPEG images pass through. Any failure — or R2 not configured —
+ * returns the original item, so behaviour is never worse than before.
+ */
+async function ensureIgJpegImage(item: MediaItem, igId: string): Promise<MediaItem> {
+  if (!igImageNeedsJpeg(item)) return item;
+  const r2 = new R2StorageService();
+  if (!r2.isConfigured()) return item;
+  try {
+    const res = await safeFetch(item.url, { method: 'GET', timeoutMs: 20_000 });
+    if (!res.ok) return item;
+    const src = await readCappedBytes(res, IG_IMAGE_FETCH_MAX_BYTES);
+    if (!src || src.length === 0) return item;
+    const img = await Jimp.read(src);
+    if (img.bitmap.width > IG_JPEG_MAX_WIDTH) img.resize(IG_JPEG_MAX_WIDTH, Jimp.AUTO);
+    img.quality(90);
+    const jpeg = await img.getBufferAsync(Jimp.MIME_JPEG);
+    const up = await r2.upload(igId, { mimetype: 'image/jpeg', buffer: jpeg, size: jpeg.length });
+    logger.log(`IG image transcoded to JPEG (${item.mime ?? 'unknown'} → image/jpeg) for ${igId}`);
+    return { url: up.url, mime: 'image/jpeg' };
+  } catch (e: any) {
+    logger.warn(`IG image JPEG transcode failed (${igId}); using original: ${e?.message ?? e}`);
+    return item;
+  }
+}
+
 /**
  * Publish to Instagram (Graph API container flow) — FEED (single image, single
  * video→Reel, or 2–10 carousel), REEL, or STORY (image/video). Videos are
@@ -156,6 +231,10 @@ async function publishInstagram(
   if (items.length === 0) return { ok: false, error: 'Instagram requires at least one media item' };
 
   try {
+    // Instagram accepts ONLY JPEG images; transcode any non-JPEG image up front so
+    // every container path below (story/feed/carousel) builds with a JPEG image_url.
+    items = await Promise.all(items.map((m) => ensureIgJpegImage(m, igId)));
+
     if (format === 'STORY') {
       const m = items[0];
       const body = isVideoItem(m)
@@ -163,10 +242,9 @@ async function publishInstagram(
         : { media_type: 'STORIES', image_url: m.url };
       const c = await igCreateContainer(igId, token, body);
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
-      if (isVideoItem(m)) {
-        const w = await igWaitContainerReady(c.id, token);
-        if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
-      }
+      // Poll to FINISHED for images too (not just video) — same race as FEED.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
       return igPublish(igId, token, c.id);
     }
 
@@ -203,6 +281,12 @@ async function publishInstagram(
       }
       const c = await igCreateContainer(igId, token, { image_url: m.url, caption: content });
       if (!c.id) return { ok: false, error: c.error, isAuthError: c.isAuthError };
+      // Poll to FINISHED before publishing: Meta needs a moment to fetch/validate
+      // the (possibly just-transcoded) image, and publishing too early returns the
+      // opaque "Media ID is not available". On a genuinely bad image this surfaces
+      // the real status (ERROR/EXPIRED) instead of that generic message.
+      const w = await igWaitContainerReady(c.id, token);
+      if (!w.ok) return { ok: false, error: w.error, isAuthError: w.isAuthError };
       return igPublish(igId, token, c.id);
     }
 
@@ -428,11 +512,97 @@ async function publishFacebook(
   }
 }
 
-/** Publish to LinkedIn (UGC Posts API). */
+/**
+ * Upload one image to LinkedIn for an organic post: initializeUpload (owner =
+ * author urn) → download the bytes (SSRF-guarded safeFetch) → PUT them to the
+ * returned dms-uploads URL. Returns the `urn:li:image:...` to reference in the
+ * post content, or an error.
+ */
+async function linkedinUploadImage(
+  token: string,
+  author: string,
+  item: MediaItem,
+): Promise<{ urn?: string; error?: string; isAuthError?: boolean }> {
+  const init = await linkedinRest('/rest/images?action=initializeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { initializeUploadRequest: { owner: author } },
+  });
+  if (!init.ok) {
+    return { error: `LinkedIn image init: ${init.error.message}`.slice(0, 500), isAuthError: init.error.isAuthError };
+  }
+  const value = (init.data as any)?.value;
+  const uploadUrl: string = value?.uploadUrl;
+  const imageUrn: string = value?.image;
+  if (!uploadUrl || !imageUrn) return { error: 'LinkedIn image init: missing uploadUrl/image' };
+
+  const dl = await safeFetch(item.url, { method: 'GET', timeoutMs: 20_000 });
+  if (!dl.ok) return { error: `LinkedIn image download failed: ${dl.status}` };
+  const bytes = Buffer.from(await dl.arrayBuffer());
+  if (bytes.length === 0) return { error: 'LinkedIn image download: empty body' };
+  const mime = item.mime || dl.headers.get('content-type') || 'image/jpeg';
+
+  const up = await linkedinUpload(uploadUrl, bytes, mime);
+  if (!up.ok) return { error: `LinkedIn image upload failed: ${up.status}` };
+  return { urn: imageUrn };
+}
+
+/**
+ * Register-upload a single video for an organic post: initializeUpload (owner =
+ * author urn, fileSizeBytes) → PUT each part to its uploadInstructions URL,
+ * collecting the per-part ETag → finalizeUpload with the ordered ETags. Returns
+ * the `urn:li:video:...` to reference, or an error.
+ */
+async function linkedinUploadVideo(
+  token: string,
+  author: string,
+  item: MediaItem,
+): Promise<{ urn?: string; error?: string; isAuthError?: boolean }> {
+  const dl = await safeFetch(item.url, { method: 'GET', timeoutMs: 30_000 });
+  if (!dl.ok) return { error: `LinkedIn video download failed: ${dl.status}` };
+  const bytes = Buffer.from(await dl.arrayBuffer());
+  if (bytes.length === 0) return { error: 'LinkedIn video download: empty body' };
+  const mime = item.mime || dl.headers.get('content-type') || 'video/mp4';
+
+  const init = await linkedinRest('/rest/videos?action=initializeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { initializeUploadRequest: { owner: author, fileSizeBytes: bytes.length, uploadCaptions: false, uploadThumbnail: false } },
+  });
+  if (!init.ok) {
+    return { error: `LinkedIn video init: ${init.error.message}`.slice(0, 500), isAuthError: init.error.isAuthError };
+  }
+  const value = (init.data as any)?.value;
+  const videoUrn: string = value?.video;
+  const instructions: { uploadUrl: string; firstByte: number; lastByte: number }[] = value?.uploadInstructions ?? [];
+  if (!videoUrn || instructions.length === 0) return { error: 'LinkedIn video init: missing video/uploadInstructions' };
+
+  const uploadedPartIds: string[] = [];
+  for (const part of instructions) {
+    const slice = bytes.subarray(part.firstByte, part.lastByte + 1);
+    const up = await linkedinUpload(part.uploadUrl, slice, mime);
+    if (!up.ok) return { error: `LinkedIn video part upload failed: ${up.status}` };
+    if (!up.etag) return { error: 'LinkedIn video part upload: missing ETag' };
+    uploadedPartIds.push(up.etag);
+  }
+
+  const fin = await linkedinRest('/rest/videos?action=finalizeUpload', {
+    accessToken: token,
+    method: 'POST',
+    body: { finalizeUploadRequest: { video: videoUrn, uploadToken: '', uploadedPartIds } },
+  });
+  if (!fin.ok) {
+    return { error: `LinkedIn video finalize: ${fin.error.message}`.slice(0, 500), isAuthError: fin.error.isAuthError };
+  }
+  return { urn: videoUrn };
+}
+
+/** Publish to LinkedIn via the versioned Posts API (POST /rest/posts). */
 async function publishLinkedIn(
   account: AccountRow,
   content: string,
-  mediaUrls: string[],
+  items: MediaItem[],
+  options?: LinkedinPostOptions,
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('LINKEDIN')) {
     return { ok: false, error: 'LinkedIn not configured: set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET' };
@@ -444,47 +614,47 @@ async function publishLinkedIn(
     account.accountType === 'LI_ORG'
       ? `urn:li:organization:${account.externalId}`
       : `urn:li:person:${account.externalId}`;
+  const visibility = options?.visibility ?? 'PUBLIC';
+
+  // Build content from media. A single video takes precedence; otherwise images.
+  let postContent: Record<string, unknown> | undefined;
+  const videoItem = (items || []).find(isVideoItem);
+  const imageItems = (items || []).filter((m) => !isVideoItem(m));
+  if (videoItem) {
+    const up = await linkedinUploadVideo(token, author, videoItem);
+    if (up.error) return { ok: false, error: up.error, isAuthError: up.isAuthError };
+    postContent = { media: { id: up.urn } };
+  } else if (imageItems.length > 0) {
+    const urns: string[] = [];
+    for (const item of imageItems) {
+      const up = await linkedinUploadImage(token, author, item);
+      if (up.error) return { ok: false, error: up.error, isAuthError: up.isAuthError };
+      urns.push(up.urn);
+    }
+    postContent =
+      urns.length === 1
+        ? { media: { id: urns[0] } }
+        : { multiImage: { images: urns.map((id) => ({ id })) } };
+  }
+
   const body: Record<string, unknown> = {
     author,
+    commentary: content,
+    visibility,
+    distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
     lifecycleState: 'PUBLISHED',
-    specificContent: {
-      'com.linkedin.ugc.ShareContent': {
-        shareCommentary: { text: content },
-        shareMediaCategory: mediaUrls.length > 0 ? 'ARTICLE' : 'NONE',
-        ...(mediaUrls.length > 0 ? {
-          media: mediaUrls.map((url) => ({
-            status: 'READY',
-            originalUrl: url,
-          })),
-        } : {}),
-      },
-    },
-    visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' },
+    isReshareDisabledByAuthor: false,
+    ...(postContent ? { content: postContent } : {}),
   };
 
-  try {
-    const res = await safeFetch('https://api.linkedin.com/v2/ugcPosts', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'X-Restli-Protocol-Version': '2.0.0',
-      },
-      body: JSON.stringify(body),
-      timeoutMs: 15_000,
-    });
-    const json = (await res.json()) as Record<string, unknown>;
-    if (res.ok && json.id) {
-      return { ok: true, externalPostId: String(json.id) };
-    }
-    const err = String((json as any)?.message ?? res.status);
-    logger.warn(`LinkedIn publish failed (${account.externalId}): ${err}`);
-    return { ok: false, error: err.slice(0, 500) };
-  } catch (e: any) {
-    const msg = e?.message ?? String(e);
-    logger.warn(`LinkedIn publish error (${account.externalId}): ${msg}`);
-    return { ok: false, error: msg.slice(0, 500) };
+  const result = await linkedinRest('/rest/posts', { accessToken: token, method: 'POST', body });
+  if (!result.ok) {
+    logger.warn(`LinkedIn publish failed (${account.externalId}): ${result.error.message}`);
+    return { ok: false, error: result.error.message.slice(0, 500), isAuthError: isLinkedinAuthError(result) };
   }
+  const id = result.restliId;
+  if (!id) return { ok: false, error: 'LinkedIn /rest/posts returned no x-restli-id' };
+  return { ok: true, externalPostId: String(id) };
 }
 
 /**
@@ -493,11 +663,16 @@ async function publishLinkedIn(
  * We init the post and briefly poll the publish status to surface immediate
  * failures; if it's still processing after the bounded wait we report success
  * with the publish_id (TikTok finishes the encode on its side).
+ *
+ * Supports per-post privacy/interaction controls and photo/carousel posts via
+ * the optional `options` arg. Creator-info is queried first to clip the
+ * requested privacy level to what the account actually allows.
  */
 async function publishTikTok(
   account: AccountRow,
   content: string,
   mediaUrls: string[],
+  options?: TikTokPostOptions,
 ): Promise<PublishResult> {
   if (!isNetworkConfigured('TIKTOK')) {
     return { ok: false, error: 'TikTok not configured: set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET' };
@@ -505,25 +680,54 @@ async function publishTikTok(
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
   if (mediaUrls.length === 0) {
-    return { ok: false, error: 'TikTok requires a video media URL' };
+    return { ok: false, error: 'TikTok requires at least one media URL' };
   }
 
   try {
-    // Step 1 — init the post; TikTok pulls the video from the URL.
-    const initRes = await safeFetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'content-type': 'application/json; charset=UTF-8',
-      },
-      body: JSON.stringify({
+    // Step 0 — creator info governs the allowed privacy options + interaction caps.
+    const info = await queryCreatorInfo(token);
+    const privacy = validatePrivacyLevel(options?.privacyLevel, info);
+    const isPhoto = options?.mediaType === 'PHOTO';
+
+    let initUrl: string;
+    let initBody: Record<string, any>;
+    if (isPhoto) {
+      initUrl = 'https://open.tiktokapis.com/v2/post/publish/content/init/';
+      initBody = {
+        media_type: 'PHOTO',
+        post_mode: 'DIRECT_POST',
+        post_info: {
+          title: content.slice(0, 90),
+          description: content.slice(0, 4000),
+          privacy_level: privacy,
+          disable_comment: options?.disableComment ?? info.commentDisabled,
+        },
+        // TikTok's content/init contract puts the image URLs + cover index in
+        // source_info (NOT post_info) alongside the PULL_FROM_URL source.
+        source_info: {
+          source: 'PULL_FROM_URL',
+          photo_cover_index: Math.min(options?.coverIndex ?? 0, mediaUrls.length - 1),
+          photo_images: mediaUrls.slice(0, 35),
+        },
+      };
+    } else {
+      initUrl = 'https://open.tiktokapis.com/v2/post/publish/video/init/';
+      initBody = {
         post_info: {
           title: content.slice(0, 2200),
-          privacy_level: 'PUBLIC_TO_EVERYONE',
-          disable_comment: false,
+          privacy_level: privacy,
+          disable_comment: options?.disableComment ?? info.commentDisabled,
+          disable_duet: options?.disableDuet ?? info.duetDisabled,
+          disable_stitch: options?.disableStitch ?? info.stitchDisabled,
         },
         source_info: { source: 'PULL_FROM_URL', video_url: mediaUrls[0] },
-      }),
+      };
+    }
+
+    const initRes = await safeFetch(initUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify(initBody),
       timeoutMs: 15_000,
     });
     const initJson = (await initRes.json()) as Record<string, any>;
@@ -539,20 +743,15 @@ async function publishTikTok(
       await sleep(2_000);
       const statusRes = await safeFetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'content-type': 'application/json; charset=UTF-8',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8' },
         body: JSON.stringify({ publish_id: publishId }),
         timeoutMs: 10_000,
       });
       const statusJson = (await statusRes.json()) as Record<string, any>;
       const status = statusJson?.data?.status;
-      if (status === 'PUBLISH_COMPLETE') {
-        return { ok: true, externalPostId: String(publishId) };
-      }
+      if (status === 'PUBLISH_COMPLETE') return { ok: true, externalPostId: String(publishId) };
       if (status === 'FAILED') {
-        const reason = String(statusJson?.data?.fail_reason ?? 'TikTok rejected the video');
+        const reason = String(statusJson?.data?.fail_reason ?? 'TikTok rejected the media');
         return { ok: false, error: reason.slice(0, 500) };
       }
     }
@@ -561,6 +760,99 @@ async function publishTikTok(
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     logger.warn(`TikTok publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
+}
+
+// ─────────────────────────────────────── Instagram (direct Instagram Login)
+
+/** Host for the direct "Instagram API with Instagram Login" flow — distinct
+ *  from graph.facebook.com (the Page-linked IG_BUSINESS path). */
+const IG_DIRECT_GRAPH = 'https://graph.instagram.com';
+
+/**
+ * Publish to a direct-login Instagram account (graph.instagram.com): create a
+ * media container, poll to FINISHED for video, then media_publish. Mirrors the
+ * Page-based IG flow but uses the Instagram-hosted Graph and the per-account
+ * token directly (no Page token). image_url/video_url must be public HTTPS.
+ * Decides image vs video by URL extension / MIME.
+ */
+async function publishInstagramDirect(
+  account: AccountRow,
+  content: string,
+  items: MediaItem[],
+): Promise<PublishResult> {
+  if (!isNetworkConfigured('INSTAGRAM_LOGIN')) {
+    return { ok: false, error: 'Instagram (Login) not configured: set INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET' };
+  }
+  const token = revealToken(account);
+  if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
+  const igId = account.externalId;
+  if (items.length === 0) return { ok: false, error: 'Instagram requires at least one media item' };
+
+  const m = items[0];
+  const isVideo = isVideoItem(m);
+
+  try {
+    // Step 1 — create the media container.
+    const createBody = isVideo
+      ? { media_type: 'REELS', video_url: m.url, caption: content }
+      : { image_url: m.url, caption: content };
+    const createRes = await safeFetch(`${IG_DIRECT_GRAPH}/${igId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(createBody),
+      timeoutMs: 20_000,
+    });
+    const createJson = (await createRes.json()) as Record<string, any>;
+    const creationId = createJson?.id;
+    if (!createRes.ok || !creationId) {
+      const err = String(createJson?.error?.message ?? createRes.status);
+      logger.warn(`Instagram (Login) container failed (${igId}): ${err}`);
+      return { ok: false, error: `IG container: ${err}`.slice(0, 500) };
+    }
+
+    // Step 2 — videos process asynchronously; poll to FINISHED (bounded ≤10s).
+    if (isVideo) {
+      let finished = false;
+      for (let i = 0; i < 5; i++) {
+        await sleep(2_000);
+        const statusRes = await safeFetch(
+          `${IG_DIRECT_GRAPH}/${creationId}?` +
+            new URLSearchParams({ fields: 'status_code', access_token: token }).toString(),
+          { method: 'GET', timeoutMs: 15_000 },
+        );
+        const statusJson = (await statusRes.json()) as Record<string, any>;
+        const code = statusJson?.status_code;
+        if (code === 'FINISHED') {
+          finished = true;
+          break;
+        }
+        if (code === 'ERROR' || code === 'EXPIRED') {
+          return { ok: false, error: `IG processing ${code}`.slice(0, 300) };
+        }
+      }
+      if (!finished) return { ok: false, error: 'IG media processing timed out' };
+    }
+
+    // Step 3 — publish the finished container.
+    const pubRes = await safeFetch(`${IG_DIRECT_GRAPH}/${igId}/media_publish`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ creation_id: String(creationId) }),
+      timeoutMs: 20_000,
+    });
+    const pubJson = (await pubRes.json()) as Record<string, any>;
+    const postId = pubJson?.id;
+    if (!pubRes.ok || !postId) {
+      const err = String(pubJson?.error?.message ?? pubRes.status);
+      logger.warn(`Instagram (Login) publish failed (${igId}): ${err}`);
+      return { ok: false, error: `IG publish: ${err}`.slice(0, 500) };
+    }
+    return { ok: true, externalPostId: String(postId) };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    logger.warn(`Instagram (Login) publish error (${igId}): ${msg}`);
     return { ok: false, error: msg.slice(0, 500) };
   }
 }
@@ -772,10 +1064,12 @@ export async function publishToNetwork(
       return publishFacebook(account, content, items, format);
     case 'INSTAGRAM':
       return publishInstagram(account, content, items, format);
+    case 'INSTAGRAM_LOGIN':
+      return publishInstagramDirect(account, content, items);
     case 'LINKEDIN':
-      return publishLinkedIn(account, content, mediaUrls);
+      return publishLinkedIn(account, content, items, opts.linkedin);
     case 'TIKTOK':
-      return publishTikTok(account, content, mediaUrls);
+      return publishTikTok(account, content, mediaUrls, opts.tiktok);
     case 'TWITTER':
       return publishTwitter(account, content, mediaUrls);
     case 'PINTEREST':

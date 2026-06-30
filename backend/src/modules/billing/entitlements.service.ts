@@ -178,18 +178,25 @@ export class EntitlementsService {
       const grants = (addon.grants ?? {}) as Record<string, unknown>;
       for (const [key, rawValue] of Object.entries(grants)) {
         if (key.startsWith('limit.')) {
-          const delta = Number(rawValue) * addon.quantity;
-          if (!Number.isFinite(delta)) continue;
+          const raw = Number(rawValue);
+          if (!Number.isFinite(raw)) continue;
+          // -1 is the universal "unlimited" sentinel, so a grant of -1 (an
+          // "unlimited X" add-on) UNLOCKS the limit — it must NOT be folded in as
+          // an additive delta (which would subtract `quantity` from the base).
+          // `apply(base)` either keeps an already-unlimited base, sets unlimited
+          // on a -1 grant, or otherwise adds `raw × quantity`.
+          const unlimitedGrant = raw === -1;
+          const delta = raw * addon.quantity;
+          const apply = (base: number): number =>
+            base === -1 ? -1 : unlimitedGrant ? -1 : base + delta;
           const limitKey = key.slice('limit.'.length);
-          // -1 (unlimited) absorbs additions.
-          if (limitKey === 'dailyLeadQuota' && dailyLeadQuota !== -1)
-            dailyLeadQuota += delta;
-          else if (limitKey === 'maxUsers' && maxUsers !== -1) maxUsers += delta;
-          else if (limitKey === 'maxResearchProfiles' && maxResearchProfiles !== -1)
-            maxResearchProfiles += delta;
+          if (limitKey === 'dailyLeadQuota') dailyLeadQuota = apply(dailyLeadQuota);
+          else if (limitKey === 'maxUsers') maxUsers = apply(maxUsers);
+          else if (limitKey === 'maxResearchProfiles')
+            maxResearchProfiles = apply(maxResearchProfiles);
           else if ((LIMIT_KEYS as readonly string[]).includes(limitKey)) {
             const lk = limitKey as LimitKey;
-            if (limits[lk] !== -1) limits[lk] += delta;
+            limits[lk] = apply(limits[lk]);
           }
         } else if (key.startsWith('feature.')) {
           const featureKey = key.slice('feature.'.length) as FeatureKey;

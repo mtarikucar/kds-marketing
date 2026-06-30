@@ -208,11 +208,17 @@ export default function BrandingSettingsPage() {
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  // Match the backend's accepted types (png/jpeg/webp). SVG was
+                  // advertised here but the server rejects it (it can carry
+                  // embedded scripts), so picking an SVG just failed the upload.
+                  accept="image/png,image/jpeg,image/webp"
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) upload.mutate(f);
+                    // Reset so re-selecting the SAME file fires onChange again
+                    // (browsers suppress change for an identical selection).
+                    e.target.value = '';
                   }}
                 />
                 <Button

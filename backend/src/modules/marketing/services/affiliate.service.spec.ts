@@ -77,6 +77,32 @@ describe('AffiliateService — commission math', () => {
     expect(capturedAmount!.toFixed(2)).toBe('100.00');
   });
 
+  it('PERCENT: clamps a >100% commission to 100% (no over-payout)', async () => {
+    const { prisma, svc } = makeSvc();
+    const affiliate = mockAffiliate({ commissionType: 'PERCENT', commissionValue: new Prisma.Decimal('5000') });
+    const referral = mockReferral({ affiliate });
+    prisma.affiliateReferral.findFirst.mockResolvedValue(referral as never);
+    prisma.affiliateReferral.updateMany.mockResolvedValue({ count: 1 } as never);
+    prisma.affiliateReferral.findUniqueOrThrow.mockResolvedValue({ ...referral, status: 'CONVERTED' } as never);
+    let captured: Prisma.Decimal | undefined;
+    prisma.affiliateCommission.create.mockImplementation((args: any) => {
+      captured = args.data.amount;
+      return Promise.resolve({ id: 'com-1', amount: args.data.amount }) as never;
+    });
+
+    await svc.convertReferral(WS_A, 'ref-1', 1000);
+
+    // 5000% would be 50000; clamped to 100% → 1000.00
+    expect(captured!.toFixed(2)).toBe('1000.00');
+  });
+
+  it('createAffiliate rejects a PERCENT commission above 100%', async () => {
+    const { svc } = makeSvc();
+    await expect(
+      svc.createAffiliate(WS_A, { name: 'X', email: 'x@x.com', code: 'X1', commissionType: 'PERCENT', commissionValue: 150 } as never),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('FLAT: flat 50 regardless of conversion value', async () => {
     const { prisma, svc } = makeSvc();
 

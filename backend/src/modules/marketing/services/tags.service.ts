@@ -75,9 +75,18 @@ export class TagsService {
       where: { workspaceId_nameLower: { workspaceId, nameLower } },
     });
     if (dupe) throw new ConflictException('A tag with this name already exists');
-    return this.prisma.tag.create({
-      data: { workspaceId, name: dto.name.trim(), nameLower, color: dto.color },
-    });
+    try {
+      return await this.prisma.tag.create({
+        data: { workspaceId, name: dto.name.trim(), nameLower, color: dto.color },
+      });
+    } catch (e) {
+      // Lost the race on the (workspaceId, nameLower) unique to a concurrent
+      // create — surface a clean 409, not an unhandled 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('A tag with this name already exists');
+      }
+      throw e;
+    }
   }
 
   private async getOwned(workspaceId: string, id: string) {
@@ -102,7 +111,17 @@ export class TagsService {
       data.nameLower = nameLower;
     }
     if (dto.color !== undefined) data.color = dto.color;
-    return this.prisma.tag.update({ where: { id }, data });
+    try {
+      return await this.prisma.tag.update({ where: { id }, data });
+    } catch (e) {
+      // The clash pre-check above is racy; a concurrent rename to the same name
+      // trips the (workspaceId, nameLower) unique after the check passes. Map it
+      // to a clean 409 like create() does, not a raw P2002 → 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('A tag with this name already exists');
+      }
+      throw e;
+    }
   }
 
   async remove(workspaceId: string, id: string) {
@@ -126,9 +145,21 @@ export class TagsService {
         where: { workspaceId_nameLower: { workspaceId, nameLower } },
       });
       if (!tag) {
-        tag = await this.prisma.tag.create({
-          data: { workspaceId, name: raw.trim(), nameLower },
-        });
+        try {
+          tag = await this.prisma.tag.create({
+            data: { workspaceId, name: raw.trim(), nameLower },
+          });
+        } catch (e) {
+          // Concurrent first-use of the same tag name (workflows / bulkAssign add
+          // the same new tag in parallel) loses the unique race — re-resolve the
+          // winner instead of failing the whole tag/lead operation with a 500.
+          if ((e as { code?: string })?.code === 'P2002') {
+            tag = await this.prisma.tag.findUnique({
+              where: { workspaceId_nameLower: { workspaceId, nameLower } },
+            });
+          }
+          if (!tag) throw e;
+        }
       }
       out.push({ id: tag.id, name: tag.name });
     }

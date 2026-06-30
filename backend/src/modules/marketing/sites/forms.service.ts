@@ -56,6 +56,10 @@ export class FormsService {
           where: {
             workspaceId,
             mergedIntoId: null,
+            // Exclude soft-deleted (bulk-deleted) leads too — otherwise a new
+            // website inquiry from a previously-deleted contact attaches to that
+            // still-hidden record and never surfaces in the sales team's list.
+            deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
               ...(phoneNormalized ? [{ phoneNormalized }] : []),
@@ -64,45 +68,64 @@ export class FormsService {
           select: { id: true, status: true },
         });
       }
+      let leadId: string;
+      let created: boolean;
       if (existing) {
         // A re-engagement signal for an OPEN lead — but never overwrite a closed
         // (WON/LOST) lead's original source.
         if (existing.status !== 'WON' && existing.status !== 'LOST') {
           await tx.lead.updateMany({ where: { id: existing.id, workspaceId }, data: { source: 'WEBSITE' } });
         }
-        return { leadId: existing.id, created: false };
-      }
-      const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
-      const lead = await tx.lead.create({
-        data: {
-          workspaceId,
-          businessName,
-          contactPerson: name || businessName,
-          businessType: 'OTHER',
-          source: 'WEBSITE',
-          status: 'NEW',
-          ...(email ? { email } : {}),
-          ...(phone ? { phone } : {}),
-          ...(emailNormalized ? { emailNormalized } : {}),
-          ...(phoneNormalized ? { phoneNormalized } : {}),
-          ...(autoOwner ? { assignedToId: autoOwner } : {}),
-        },
-      });
-      const sentinel = await this.resolveSentinel(workspaceId);
-      if (sentinel) {
-        await tx.leadActivity.create({
-          data: { leadId: lead.id, type: 'NOTE', title: `Form submission: ${form.name}`, description: this.summarize(data), createdById: sentinel },
+        leadId = existing.id;
+        created = false;
+      } else {
+        const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
+        const lead = await tx.lead.create({
+          data: {
+            workspaceId,
+            businessName,
+            contactPerson: name || businessName,
+            businessType: 'OTHER',
+            source: 'WEBSITE',
+            status: 'NEW',
+            ...(email ? { email } : {}),
+            ...(phone ? { phone } : {}),
+            ...(emailNormalized ? { emailNormalized } : {}),
+            ...(phoneNormalized ? { phoneNormalized } : {}),
+            ...(autoOwner ? { assignedToId: autoOwner } : {}),
+          },
         });
+        const sentinel = await this.resolveSentinel(workspaceId);
+        if (sentinel) {
+          await tx.leadActivity.create({
+            data: { leadId: lead.id, type: 'NOTE', title: `Form submission: ${form.name}`, description: this.summarize(data), createdById: sentinel },
+          });
+        }
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.LeadCreated,
+            idempotencyKey: `lead-created:${lead.id}`,
+            payload: { workspaceId, leadId: lead.id, source: 'WEBSITE', occurredAt: new Date().toISOString() },
+          },
+          tx as any,
+        );
+        leadId = lead.id;
+        created = true;
       }
+      // FormSubmitted in the SAME tx as the lead write → the form.submitted
+      // workflow trigger is durable iff the lead row is (matches LeadCreated).
+      // The old after-commit emit had no try/catch, so an outbox blip 500'd the
+      // visitor AFTER their lead was saved, and the trigger was lost forever (the
+      // next dedup'd submit returns the existing lead without re-emitting).
       await this.outbox.append(
         {
-          type: MarketingEventTypes.LeadCreated,
-          idempotencyKey: `lead-created:${lead.id}`,
-          payload: { workspaceId, leadId: lead.id, source: 'WEBSITE', occurredAt: new Date().toISOString() },
+          type: MarketingEventTypes.FormSubmitted,
+          idempotencyKey: `form-submitted:${formId}:${leadId}:${Date.now()}`,
+          payload: { workspaceId, leadId, formId, fields: data, occurredAt: new Date().toISOString() },
         },
         tx as any,
       );
-      return { leadId: lead.id, created: true };
+      return { leadId, created };
     });
 
     // Affiliate attribution: a NEW lead carrying an aff_ref referral cookie is
@@ -111,12 +134,6 @@ export class FormsService {
     if (created && affRef) {
       await this.affiliates.attributeReferral(workspaceId, affRef, leadId);
     }
-
-    await this.outbox.append({
-      type: MarketingEventTypes.FormSubmitted,
-      idempotencyKey: `form-submitted:${formId}:${leadId}:${Date.now()}`,
-      payload: { workspaceId, leadId, formId, fields: data, occurredAt: new Date().toISOString() },
-    });
 
     return { redirectUrl: form.redirectUrl ?? null };
   }

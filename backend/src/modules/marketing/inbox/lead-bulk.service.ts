@@ -7,7 +7,10 @@ import { ScheduledJobRunnerService, ClaimedJob, JobHandlerResult } from '../sche
 
 export interface ExportLeadsFilter {
   status?: string;
+  source?: string;
+  businessType?: string;
   assignedToId?: string;
+  assignmentStatus?: 'unassigned' | 'assigned' | 'mine';
   search?: string;
 }
 
@@ -266,12 +269,36 @@ export class LeadBulkService implements OnModuleInit {
   }
 
   /** RFC-4180 CSV of the workspace's (non-deleted) leads, honoring basic filters. */
-  async exportCsv(workspaceId: string, filter: ExportLeadsFilter): Promise<string> {
+  async exportCsv(
+    workspaceId: string,
+    filter: ExportLeadsFilter,
+    userId?: string,
+    userRole?: string,
+  ): Promise<string> {
+    // Mirror MarketingLeadsService.findAll's assignment scoping so the exported
+    // CSV reflects EXACTLY the on-screen, filtered list. A REP is always pinned
+    // to their own leads; a manager's unassigned/assigned/mine selection (or an
+    // explicit rep id) maps to the same assignedToId predicate the list uses.
+    let assignment: Prisma.LeadWhereInput = {};
+    if (userRole === 'REP') {
+      assignment = { assignedToId: userId };
+    } else if (filter.assignedToId) {
+      assignment = { assignedToId: filter.assignedToId };
+    } else if (filter.assignmentStatus === 'unassigned') {
+      assignment = { assignedToId: null };
+    } else if (filter.assignmentStatus === 'assigned') {
+      assignment = { assignedToId: { not: null } };
+    } else if (filter.assignmentStatus === 'mine') {
+      assignment = { assignedToId: userId };
+    }
+
     // Only the optional predicate is hoisted; workspaceId is inlined in the
     // findMany call below (the fitness test requires a literal workspaceId).
     const match: Prisma.LeadWhereInput = {
       ...(filter.status ? { status: filter.status } : {}),
-      ...(filter.assignedToId ? { assignedToId: filter.assignedToId } : {}),
+      ...(filter.source ? { source: filter.source } : {}),
+      ...(filter.businessType ? { businessType: filter.businessType } : {}),
+      ...assignment,
       ...(filter.search
         ? {
             OR: [

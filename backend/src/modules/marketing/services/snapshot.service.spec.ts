@@ -128,6 +128,48 @@ describe('SnapshotService — capture', () => {
     );
   });
 
+  it('strips the sealed accessToken + source-local sync binding from a captured reviewSource (no cross-tenant credential leak)', async () => {
+    const { prisma, svc } = makeSvc();
+    stubConfigReads(prisma, {
+      reviewSource: [
+        {
+          id: 'rs-1',
+          workspaceId: AGENCY_A,
+          type: 'GOOGLE',
+          name: 'Main Branch',
+          placeUrl: 'https://g.page/x',
+          placeId: 'places/123',
+          accessToken: 'sealed:super-secret-oauth-token',
+          externalRef: 'accounts/9/locations/1',
+          syncStatus: 'ACTIVE',
+          lastSyncedAt: new Date(),
+          lastError: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    (prisma.snapshot.create as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve({ id: 'snap-1', ...args.data }),
+    );
+
+    const snap = await svc.capture(AGENCY_A, { name: 'Base' });
+    const payload = snap.payload as unknown as SnapshotPayload;
+
+    expect(payload.reviewSources).toHaveLength(1);
+    const rs = payload.reviewSources[0];
+    // The display config is portable...
+    expect(rs).toMatchObject({ type: 'GOOGLE', name: 'Main Branch', placeUrl: 'https://g.page/x' });
+    // ...but the SEALED credential and the source's provider binding / sync state
+    // must NEVER cross into another workspace's clone.
+    expect(rs).not.toHaveProperty('accessToken');
+    expect(rs).not.toHaveProperty('placeId');
+    expect(rs).not.toHaveProperty('externalRef');
+    expect(rs).not.toHaveProperty('syncStatus');
+    expect(rs).not.toHaveProperty('lastSyncedAt');
+    expect(rs).not.toHaveProperty('lastError');
+  });
+
   it('EXCLUDES customer data — never reads leads and no lead lands in the payload', async () => {
     const { prisma, svc } = makeSvc();
     stubConfigReads(prisma, {
@@ -228,6 +270,69 @@ describe('SnapshotService — apply', () => {
 
     expect(res.summary.customFieldDefs).toEqual({ created: 1, skipped: 0 });
     expect(res.summary.tags).toEqual({ created: 1, skipped: 0 });
+  });
+
+  it('strips a poisoned reviewSource secret on apply (a snapshot captured before the guard cannot leak)', async () => {
+    const { prisma, agency, svc } = makeSvc();
+    (agency.assertAgencyOwns as jest.Mock).mockResolvedValue({ id: LOCATION_A1 });
+    (prisma.snapshot.findFirst as jest.Mock).mockResolvedValue(
+      snapshotRow({
+        reviewSources: [
+          {
+            type: 'GOOGLE',
+            name: 'Main',
+            placeUrl: 'https://g.page/x',
+            // a pre-guard payload still carries the sealed credential + binding
+            accessToken: 'sealed:leaked-token',
+            placeId: 'places/1',
+            externalRef: 'accounts/9/locations/1',
+            syncStatus: 'ACTIVE',
+            lastSyncedAt: '2026-01-01T00:00:00Z',
+            lastError: null,
+          },
+        ],
+      }) as never,
+    );
+    (prisma.reviewSource.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.reviewSource.create as jest.Mock).mockResolvedValue({ id: 'new-rs' });
+
+    await svc.apply('snap-1', LOCATION_A1, AGENCY_A);
+
+    const data = (prisma.reviewSource.create as jest.Mock).mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      type: 'GOOGLE',
+      name: 'Main',
+      placeUrl: 'https://g.page/x',
+      workspaceId: LOCATION_A1,
+    });
+    for (const secret of ['accessToken', 'placeId', 'externalRef', 'syncStatus', 'lastSyncedAt', 'lastError']) {
+      expect(data).not.toHaveProperty(secret);
+    }
+  });
+
+  // `channels` holds workspace-LOCAL Channel ids that are never snapshotted, so a
+  // cloned agent must start UNATTACHED — copying the source's ids would leave it
+  // "attached" to channels that don't exist in the target (findActiveForChannel
+  // never matches them) and show dangling ids in the editor.
+  it('clears channels on a cloned agent profile (channel ids are workspace-local, not snapshotted)', async () => {
+    const { prisma, agency, svc } = makeSvc();
+    (agency.assertAgencyOwns as jest.Mock).mockResolvedValue({ id: LOCATION_A1 });
+    (prisma.snapshot.findFirst as jest.Mock).mockResolvedValue(
+      snapshotRow({
+        agentProfiles: [
+          { name: 'Sales bot', persona: 'helpful', channels: ['src-ch-1', 'src-ch-2'] },
+        ],
+      }) as never,
+    );
+    (prisma.agentProfile.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.agentProfile.create as jest.Mock).mockResolvedValue({ id: 'new-ag' });
+
+    await svc.apply('snap-1', LOCATION_A1, AGENCY_A);
+
+    const data = (prisma.agentProfile.create as jest.Mock).mock.calls[0][0].data;
+    expect(data.workspaceId).toBe(LOCATION_A1);
+    expect(data.name).toBe('Sales bot');
+    expect(data.channels).toEqual([]);
   });
 
   it('rejects a target that is not the agency’s child (assertAgencyOwns throws) — no write', async () => {

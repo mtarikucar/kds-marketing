@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
@@ -19,12 +20,18 @@ import {
   connectAdAccount,
   removeAdAccount,
   pullAdAccount,
+  startLinkedinAdsOAuth,
+  startTiktokAdsOAuth,
   type AdAccount,
   type AdProvider,
 } from '../../../features/marketing/api/ads.service';
 import type { ConnectAdAccountFormValues } from './adsSchemas';
 import { AD_PROVIDER_LABEL } from './adsSchemas';
 import { ConnectAdAccountDialog } from './ConnectAdAccountDialog';
+import { LinkedinAdsSelectDialog } from './LinkedinAdsSelectDialog';
+import { TiktokAdsSelectDialog } from './TiktokAdsSelectDialog';
+import { AdManagementSection } from './AdManagementSection';
+import { AdRulesSection } from './AdRulesSection';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
@@ -47,7 +54,7 @@ import {
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Skeleton } from '@/components/ui/Skeleton';
 
-type View = 'overview' | 'accounts';
+type View = 'overview' | 'accounts' | 'manage';
 type RangeKey = '7' | '30' | '90';
 type ProviderFilter = 'ALL' | AdProvider;
 
@@ -76,11 +83,54 @@ export default function AdReportingPage() {
   const user = useMarketingAuthStore((s) => s.user);
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [view, setView] = useState<View>('overview');
   const [range, setRange] = useState<RangeKey>('30');
   const [provider, setProvider] = useState<ProviderFilter>('ALL');
   const [connectOpen, setConnectOpen] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<AdAccount | null>(null);
+  const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
+  const [connectProvider, setConnectProvider] = useState<'linkedin' | 'tiktok' | null>(null);
+  const [manageAccountId, setManageAccountId] = useState<string | null>(null);
+
+  // ── OAuth return handling ────────────────────────────────────────────────────
+  // The LinkedIn and TikTok ads OAuth callbacks redirect back to
+  // /ads?connect=<pendingId>&connect_provider=<provider> (success) or
+  // ?connect_error=1 (failure). Pick up the params once, open the matching
+  // provider's account selector, and strip them from the URL.
+  useEffect(() => {
+    const connectId = searchParams.get('connect');
+    const connectErr = searchParams.get('connect_error');
+    if (connectId) {
+      const cp = searchParams.get('connect_provider');
+      setPendingConnectId(connectId);
+      setConnectProvider(cp === 'linkedin' ? 'linkedin' : cp === 'tiktok' ? 'tiktok' : null);
+      setView('accounts');
+      searchParams.delete('connect');
+      searchParams.delete('connect_provider');
+      setSearchParams(searchParams, { replace: true });
+    } else if (connectErr) {
+      toast.error(
+        t('ads.oauth.callbackError', {
+          defaultValue: 'The ad account connection failed or was cancelled. Please try again.',
+        }),
+      );
+      searchParams.delete('connect_error');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startLinkedinConnect = async () => {
+    try {
+      const { authorizeUrl } = await startLinkedinAdsOAuth();
+      window.location.href = authorizeUrl;
+    } catch {
+      toast.error(
+        t('ads.oauth.startFailed', { defaultValue: 'Could not start the LinkedIn connection' }),
+      );
+    }
+  };
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -114,12 +164,37 @@ export default function AdReportingPage() {
     [accounts],
   );
 
+  // Only Meta accounts support campaign / rule management.
+  const metaAccounts = useMemo(() => accounts.filter((a) => a.provider === 'META'), [accounts]);
+  const selectedManageAccount =
+    metaAccounts.find((a) => a.id === manageAccountId) ?? metaAccounts[0] ?? null;
+
   // ── Mutations ────────────────────────────────────────────────────────────────
 
   const invalidateAccounts = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'ads', 'accounts'] });
   const invalidateMetrics = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'ads', 'metrics'] });
+
+  const startTikTokConnect = async () => {
+    try {
+      const { authorizeUrl } = await startTiktokAdsOAuth();
+      window.location.href = authorizeUrl;
+    } catch {
+      toast.error(
+        t('ads.oauth.startFailed', { defaultValue: 'Could not start the TikTok connection' }),
+      );
+    }
+  };
+
+  const handleReconnect = (account: AdAccount) => {
+    if (account.provider === 'LINKEDIN') {
+      void startLinkedinConnect();
+    } else if (account.provider === 'TIKTOK') {
+      void startTikTokConnect();
+    }
+    // META reconnect not yet implemented — button is hidden for META accounts
+  };
 
   const connectMutation = useMutation({
     mutationFn: (values: ConnectAdAccountFormValues) =>
@@ -175,16 +250,48 @@ export default function AdReportingPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={t('ads.title', { defaultValue: 'Ad Reporting' })}
+        title={t('ads.title', { defaultValue: 'Ads' })}
         description={t('ads.subtitle', {
-          defaultValue: 'Track Meta and TikTok ad spend, clicks and conversions across your accounts.',
+          defaultValue: 'Track Meta and TikTok ad performance, manage campaigns and auto-scale.',
         })}
         actions={
           isManager ? (
-            <Button onClick={() => setConnectOpen(true)} disabled={!canConnect}>
-              <Link2 className="h-4 w-4" aria-hidden="true" />
-              {t('ads.connectAccount', { defaultValue: 'Connect account' })}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => void startLinkedinConnect()}
+                disabled={!status?.LINKEDIN}
+                title={
+                  status?.LINKEDIN
+                    ? undefined
+                    : t('ads.oauth.linkedinNotConfigured', {
+                        defaultValue: 'An admin must add LinkedIn ads app credentials first',
+                      })
+                }
+                variant="outline"
+              >
+                {t('ads.oauth.linkedinConnect', { defaultValue: 'Connect LinkedIn' })}
+              </Button>
+              <Button
+                onClick={() => void startTikTokConnect()}
+                disabled={!status?.TIKTOK}
+                title={
+                  status?.TIKTOK
+                    ? undefined
+                    : t('ads.oauth.tiktokNotConfigured', {
+                        defaultValue: 'An admin must add TikTok Business app credentials first',
+                      })
+                }
+                variant="outline"
+              >
+                {t('ads.oauth.tiktokConnect', {
+                  defaultValue: 'Connect TikTok for Business',
+                })}
+              </Button>
+              <Button onClick={() => setConnectOpen(true)} disabled={!canConnect} variant="outline">
+                <Link2 className="h-4 w-4" aria-hidden="true" />
+                {t('ads.connectAccount', { defaultValue: 'Connect account' })}
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -197,6 +304,7 @@ export default function AdReportingPage() {
           options={[
             { value: 'overview', label: t('ads.tabs.overview', { defaultValue: 'Overview' }) },
             { value: 'accounts', label: t('ads.tabs.accounts', { defaultValue: 'Accounts' }) },
+            { value: 'manage', label: t('ads.tabs.manage', { defaultValue: 'Manage' }) },
           ]}
         />
 
@@ -210,6 +318,7 @@ export default function AdReportingPage() {
                 <SelectItem value="ALL">{t('ads.filter.allProviders', { defaultValue: 'All providers' })}</SelectItem>
                 <SelectItem value="META">{AD_PROVIDER_LABEL.META}</SelectItem>
                 <SelectItem value="TIKTOK">{AD_PROVIDER_LABEL.TIKTOK}</SelectItem>
+                <SelectItem value="LINKEDIN">{AD_PROVIDER_LABEL.LINKEDIN}</SelectItem>
               </SelectContent>
             </Select>
             <SegmentedControl<RangeKey>
@@ -239,18 +348,34 @@ export default function AdReportingPage() {
           onGoToAccounts={() => setView('accounts')}
           canConnect={canConnect}
         />
-      ) : (
+      ) : view === 'accounts' ? (
         <AccountsView
           accounts={accounts}
           isLoading={accountsLoading}
           isManager={isManager}
           canConnect={canConnect}
           onConnect={() => setConnectOpen(true)}
+          onReconnect={handleReconnect}
           onDisconnect={setDisconnectTarget}
           onPull={(id) => pullMutation.mutate(id)}
           pullingId={pullMutation.isPending ? (pullMutation.variables as string) : null}
         />
+      ) : (
+        <ManageView
+          isLoading={accountsLoading}
+          metaAccounts={metaAccounts}
+          selectedAccount={selectedManageAccount}
+          onSelectAccount={setManageAccountId}
+          onGoToAccounts={() => setView('accounts')}
+          canConnect={canConnect}
+        />
       )}
+
+      <TiktokAdsSelectDialog
+        pendingId={connectProvider === 'tiktok' ? pendingConnectId : null}
+        onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
+        onSuccess={invalidateAccounts}
+      />
 
       <ConnectAdAccountDialog
         open={connectOpen}
@@ -258,6 +383,12 @@ export default function AdReportingPage() {
         onSubmit={(values) => connectMutation.mutate(values)}
         isPending={connectMutation.isPending}
         status={status}
+      />
+
+      <LinkedinAdsSelectDialog
+        pendingId={connectProvider === 'linkedin' ? pendingConnectId : null}
+        onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
+        onSuccess={invalidateAccounts}
       />
 
       <ConfirmDialog
@@ -456,6 +587,7 @@ interface AccountsViewProps {
   isManager: boolean;
   canConnect: boolean;
   onConnect: () => void;
+  onReconnect: (account: AdAccount) => void;
   onDisconnect: (account: AdAccount) => void;
   onPull: (id: string) => void;
   pullingId: string | null;
@@ -467,6 +599,7 @@ function AccountsView({
   isManager,
   canConnect,
   onConnect,
+  onReconnect,
   onDisconnect,
   onPull,
   pullingId,
@@ -551,10 +684,21 @@ function AccountsView({
             </p>
           ) : null}
 
+          {isManager && acc.status === 'TOKEN_EXPIRED' && acc.provider === 'TIKTOK' && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onReconnect(acc)}
+            >
+              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {t('ads.action.reconnect', { defaultValue: 'Reconnect' })}
+            </Button>
+          )}
+
           {isManager && (
             <div className="mt-auto flex items-center justify-end gap-1 pt-1">
               {needsReauth && (
-                <Button variant="outline" size="sm" onClick={onConnect}>
+                <Button variant="outline" size="sm" onClick={() => onReconnect(acc)}>
                   <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('ads.action.reconnect', { defaultValue: 'Reconnect' })}
                 </Button>
@@ -581,6 +725,84 @@ function AccountsView({
         </Card>
         );
       })}
+    </div>
+  );
+}
+
+// ── Manage (campaigns + scaling rules) ──────────────────────────────────────────
+
+interface ManageViewProps {
+  isLoading: boolean;
+  metaAccounts: AdAccount[];
+  selectedAccount: AdAccount | null;
+  onSelectAccount: (id: string) => void;
+  onGoToAccounts: () => void;
+  canConnect: boolean;
+}
+
+function ManageView({
+  isLoading,
+  metaAccounts,
+  selectedAccount,
+  onSelectAccount,
+  onGoToAccounts,
+  canConnect,
+}: ManageViewProps) {
+  const { t } = useTranslation('marketing');
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-40" />
+        <Skeleton className="h-40" />
+      </div>
+    );
+  }
+
+  if (metaAccounts.length === 0) {
+    return (
+      <EmptyState
+        icon={<Target className="h-10 w-10" />}
+        title={t('ads.manage.noMeta.title', { defaultValue: 'No Meta ad account connected' })}
+        description={t('ads.manage.noMeta.description', {
+          defaultValue:
+            'Campaign management and scaling rules are available for Meta ad accounts. Connect one to get started.',
+        })}
+        action={
+          <Button onClick={onGoToAccounts} variant="outline" disabled={!canConnect}>
+            <Link2 className="h-4 w-4" aria-hidden="true" />
+            {t('ads.connectAccount', { defaultValue: 'Connect account' })}
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {metaAccounts.length > 1 && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            {t('ads.manage.account', { defaultValue: 'Account' })}
+          </span>
+          <Select value={selectedAccount?.id ?? ''} onValueChange={onSelectAccount}>
+            <SelectTrigger className="w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {metaAccounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.displayName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {selectedAccount && <AdManagementSection key={selectedAccount.id} account={selectedAccount} />}
+
+      <AdRulesSection accounts={metaAccounts} selectedAccountId={selectedAccount?.id} />
     </div>
   );
 }

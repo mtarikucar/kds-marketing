@@ -9,19 +9,11 @@ import {
   DialogDescription,
   Button,
   Field,
-  Input,
-  Textarea,
-  Switch,
-  Checkbox,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   EmptyState,
 } from '@/components/ui';
-import type { CustomFieldDef } from '../crm/types';
 import type { CustomObjectRecord } from '../../../features/marketing/api/custom-objects.service';
+import type { CustomFieldDef } from '../crm/types';
+import { CustomFieldValueInput, seedCustomFieldValues } from '../crm/CustomFieldValueInput';
 
 interface RecordFormDialogProps {
   open: boolean;
@@ -52,9 +44,17 @@ export function RecordFormDialog({
   const active = fields.filter((f) => !f.archived);
   const [values, setValues] = useState<Record<string, unknown>>({});
 
+  // A stable signature of the field SET. Re-seed only when the dialog opens, the
+  // edited record changes, or the fields genuinely change — NOT on every
+  // `fields` array identity. The parent derives `fields` with an inline
+  // `.filter()`, so it's a fresh reference on every render; depending on it
+  // directly re-ran this effect and wiped the user's in-progress input whenever
+  // a background refetch (e.g. window refocus) re-rendered the parent.
+  const fieldsSig = fields.map((f) => f.id).join('|');
   useEffect(() => {
-    if (open) setValues(record ? { ...record.values } : {});
-  }, [open, record]);
+    if (open) setValues(seedCustomFieldValues(fields, record?.values));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, record, fieldsSig]);
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v }));
 
@@ -89,7 +89,7 @@ export function RecordFormDialog({
             {active.map((f) => (
               <Field key={f.id} label={f.label} required={f.required}>
                 {({ id, describedBy, invalid }) => (
-                  <RecordFieldInput
+                  <CustomFieldValueInput
                     field={f}
                     value={values[f.key]}
                     onChange={(v) => set(f.key, v)}
@@ -114,93 +114,4 @@ export function RecordFormDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-interface FieldInputProps {
-  field: CustomFieldDef;
-  value: unknown;
-  onChange: (v: unknown) => void;
-  id: string;
-  describedBy?: string;
-  invalid?: boolean;
-}
-
-function RecordFieldInput({ field, value, onChange, id, describedBy, invalid }: FieldInputProps) {
-  const common = { id, 'aria-describedby': describedBy, 'aria-invalid': invalid };
-
-  switch (field.type) {
-    case 'TEXTAREA':
-      return (
-        <Textarea {...common} value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value)} />
-      );
-    case 'NUMBER':
-      return (
-        <Input
-          {...common}
-          type="number"
-          value={value === undefined || value === null ? '' : String(value)}
-          onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
-        />
-      );
-    case 'DATE':
-      return (
-        <Input
-          {...common}
-          type="date"
-          value={(value as string)?.slice(0, 10) ?? ''}
-          onChange={(e) => onChange(e.target.value || undefined)}
-        />
-      );
-    case 'DATETIME':
-      return (
-        <Input
-          {...common}
-          type="datetime-local"
-          value={(value as string)?.slice(0, 16) ?? ''}
-          onChange={(e) => onChange(e.target.value || undefined)}
-        />
-      );
-    case 'BOOL':
-      return <Switch checked={!!value} onCheckedChange={onChange} />;
-    case 'SELECT':
-      return (
-        <Select value={(value as string) ?? ''} onValueChange={onChange}>
-          <SelectTrigger {...common}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(field.options ?? []).map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      );
-    case 'MULTISELECT': {
-      const arr = Array.isArray(value) ? (value as string[]) : [];
-      const toggle = (v: string, on: boolean) =>
-        onChange(on ? [...arr, v] : arr.filter((x) => x !== v));
-      return (
-        <div className="space-y-1.5">
-          {(field.options ?? []).map((o) => (
-            <label key={o.value} className="flex items-center gap-2 text-sm">
-              <Checkbox checked={arr.includes(o.value)} onCheckedChange={(c) => toggle(o.value, !!c)} />
-              {o.label}
-            </label>
-          ))}
-        </div>
-      );
-    }
-    default:
-      // TEXT, PHONE, EMAIL, URL
-      return (
-        <Input
-          {...common}
-          type={field.type === 'EMAIL' ? 'email' : field.type === 'URL' ? 'url' : 'text'}
-          value={(value as string) ?? ''}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      );
-  }
 }

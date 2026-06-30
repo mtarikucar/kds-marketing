@@ -45,6 +45,7 @@ describe('Communities (e2e)', () => {
 
   it('joins a lead to a community', async () => {
     ctx.prisma.community.findFirst.mockResolvedValue({ id: 'co1' } as never);
+    ctx.prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as never); // workspace-scoped lead guard
     (ctx.prisma.communityMember.upsert as jest.Mock).mockResolvedValue({ id: 'mem1', role: 'MEMBER' });
 
     const res = await request(app.getHttpServer())

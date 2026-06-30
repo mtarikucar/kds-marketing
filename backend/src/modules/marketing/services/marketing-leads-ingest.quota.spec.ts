@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { MarketingLeadsIngestService } from './marketing-leads-ingest.service';
 
 /**
@@ -176,5 +177,73 @@ describe('MarketingLeadsIngestService — daily quota clipping', () => {
     );
     expect(lockCalls.length).toBe(1);
     expect(lockCalls[0][0]).toContain(`ingest:${WS}`);
+  });
+
+  it('settles the refund to the SAME UTC day it reserved on (no midnight split)', async () => {
+    // Per-period-key counters so a reserve-day vs settle-day split is visible
+    // (the shared mock collapses all keys into one value and would hide it).
+    const counters: Record<string, number> = {};
+    const keyOf = (a: any) => a.where.workspaceId_metric_periodKey.periodKey;
+    const prisma2: any = {
+      marketingUser: { findFirst: jest.fn().mockResolvedValue({ id: 'sentinel-1' }) },
+      lead: {
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest
+          .fn()
+          .mockImplementationOnce(async ({ data }: any) => ({ id: 'a', ...data }))
+          .mockImplementationOnce(async ({ data }: any) => ({ id: 'b', ...data }))
+          .mockRejectedValueOnce(new Error('row exploded')), // 3rd fails → created 2, refund 1
+      },
+      leadActivity: { create: jest.fn().mockResolvedValue({}) },
+      usageCounter: {
+        findUnique: jest.fn().mockImplementation(async (a: any) => {
+          const k = keyOf(a);
+          return counters[k] ? { value: counters[k] } : null;
+        }),
+        upsert: jest.fn().mockImplementation(async (a: any) => {
+          const k = keyOf(a);
+          if (a.update?.value?.increment !== undefined) counters[k] = (counters[k] ?? 0) + a.update.value.increment;
+          else if (a.create?.value !== undefined) counters[k] = a.create.value;
+          return { value: counters[k] };
+        }),
+      },
+      $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(async (fn: any) => fn(prisma2)),
+    };
+    const svc2 = new MarketingLeadsIngestService(
+      prisma2,
+      { pickAssignee: jest.fn().mockResolvedValue(null) } as any,
+      { getDailyLeadQuota: jest.fn().mockResolvedValue(10) } as any,
+    );
+
+    // Cross midnight UTC: the FIRST new Date() (reserve / the captured key) is on
+    // Jun-30; any LATER one (the old settle path) is on Jul-01.
+    // Suppress the NestJS logger so its own new Date() (for timestamps) isn't
+    // disturbed by the clock mock below.
+    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    // Cross midnight UTC: the FIRST new Date() (reserve / the captured key) is on
+    // Jun-30; the SECOND (the old settle path) is on Jul-01; anything after gets
+    // the real clock (so unrelated callers aren't frozen).
+    const RealDate = Date;
+    const dayN = new RealDate('2026-06-30T23:59:30Z');
+    const dayN1 = new RealDate('2026-07-01T00:00:30Z');
+    let n = 0;
+    const spy = jest.spyOn(global, 'Date').mockImplementation(((...args: any[]) => {
+      if (args.length) return new (RealDate as any)(...args);
+      if (n === 0) { n++; return dayN; }
+      if (n === 1) { n++; return dayN1; }
+      return new RealDate();
+    }) as any);
+    try {
+      const res = await svc2.ingest(WS, { leads: [1, 2, 3].map(candidate) } as any);
+      expect(res.created).toBe(2);
+      // The reserve-day counter must net to the ACTUAL created count (2), and the
+      // next day must NOT be touched by a phantom negative refund.
+      expect(counters['2026-06-30']).toBe(2);
+      expect(counters['2026-07-01'] ?? 0).toBe(0);
+    } finally {
+      spy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 });

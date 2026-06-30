@@ -243,6 +243,10 @@ export class OrderFormsService {
           where: {
             workspaceId,
             mergedIntoId: null,
+            // Also skip soft-deleted (bulk-deleted) leads: a paying order from a
+            // previously-deleted buyer must surface as a fresh, visible lead, not
+            // attach (with its invoice) to a hidden record. Matches forms/booking.
+            deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
               ...(phoneNormalized ? [{ phoneNormalized }] : []),

@@ -34,9 +34,22 @@ export class UpdateAffiliateDto {
 export class AffiliateService {
   constructor(private prisma: PrismaService) {}
 
+  /** A PERCENT commission above 100% would pay out more than the sale value. */
+  private assertCommissionInRange(type: string | undefined, value: number | undefined) {
+    if (type === 'PERCENT' && value != null && value > 100) {
+      throw new BadRequestException('A PERCENT commission cannot exceed 100%');
+    }
+  }
+
+  /** Case-insensitive email match used to block self-referrals. */
+  private sameEmail(a?: string | null, b?: string | null): boolean {
+    return !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+  }
+
   // ── Affiliates ─────────────────────────────────────────────────────────────
 
   async createAffiliate(workspaceId: string, dto: CreateAffiliateDto) {
+    this.assertCommissionInRange(dto.commissionType, dto.commissionValue);
     // 409 on code collision within the workspace.
     const existing = await this.prisma.affiliate.findFirst({
       where: { workspaceId, code: dto.code },
@@ -143,6 +156,9 @@ export class AffiliateService {
     });
     if (!affiliate) throw new NotFoundException('Affiliate not found');
 
+    // Cap PERCENT against the effective type (new type if provided, else stored).
+    this.assertCommissionInRange(dto.commissionType ?? affiliate.commissionType, dto.commissionValue);
+
     // If code is being changed, check for collision within the workspace.
     if (dto.code && dto.code !== affiliate.code) {
       const conflict = await this.prisma.affiliate.findFirst({
@@ -211,6 +227,18 @@ export class AffiliateService {
       );
     }
 
+    // Block self-referral fraud: an affiliate cannot earn a commission for
+    // referring a lead that is themselves (same email in this workspace).
+    if (referredLeadId) {
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: referredLeadId, workspaceId },
+        select: { email: true },
+      });
+      if (this.sameEmail(lead?.email, affiliate.email)) {
+        throw new BadRequestException('An affiliate cannot refer themselves');
+      }
+    }
+
     return this.prisma.affiliateReferral.create({
       data: {
         workspaceId,
@@ -245,11 +273,11 @@ export class AffiliateService {
   }
 
   /** Resolve a public referral slug to its affiliate (global by the unique slug). */
-  async resolveReferralSlug(slug: string): Promise<{ id: string; workspaceId: string; status: string } | null> {
+  async resolveReferralSlug(slug: string): Promise<{ id: string; workspaceId: string; status: string; email: string | null } | null> {
     if (!slug) return null;
     return this.prisma.affiliate.findUnique({
       where: { referralSlug: slug },
-      select: { id: true, workspaceId: true, status: true },
+      select: { id: true, workspaceId: true, status: true, email: true },
     });
   }
 
@@ -263,6 +291,9 @@ export class AffiliateService {
     try {
       const aff = await this.resolveReferralSlug(slug);
       if (!aff || aff.workspaceId !== workspaceId || aff.status !== 'ACTIVE') return false;
+      // Don't credit an affiliate for referring themselves (self-referral fraud).
+      const lead = await this.prisma.lead.findFirst({ where: { id: leadId, workspaceId }, select: { email: true } });
+      if (this.sameEmail(lead?.email, aff.email)) return false;
       await this.prisma.affiliateReferral.create({
         data: { workspaceId, affiliateId: aff.id, referredLeadId: leadId, status: 'PENDING' },
       });
@@ -310,7 +341,10 @@ export class AffiliateService {
         const { affiliate } = referral;
         let amount: Prisma.Decimal;
         if (affiliate.commissionType === 'PERCENT') {
-          amount = new Prisma.Decimal(affiliate.commissionValue)
+          // Clamp to 100% so a mis-configured (or legacy) value can never pay
+          // out more than the sale — defence in depth beyond create/update.
+          const pct = Prisma.Decimal.min(new Prisma.Decimal(affiliate.commissionValue), new Prisma.Decimal(100));
+          amount = pct
             .div(100)
             .mul(conversionValue)
             .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);

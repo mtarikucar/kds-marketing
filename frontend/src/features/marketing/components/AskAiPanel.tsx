@@ -32,7 +32,11 @@ export default function AskAiPanel() {
     t('askAi.ex3', "What's the status of my campaigns?"),
   ];
 
-  const submit = () => { if (q.trim()) { setAnswer(null); ask.mutate(q.trim()); } };
+  // Guard isPending here (not just on the button): the Enter handler calls
+  // submit() directly, so without it pressing Enter again before the first
+  // answer returns fires a SECOND /ai/ask — a duplicate question that bills
+  // another 2 credits.
+  const submit = () => { if (q.trim() && !ask.isPending) { setAnswer(null); ask.mutate(q.trim()); } };
 
   return (
     <>

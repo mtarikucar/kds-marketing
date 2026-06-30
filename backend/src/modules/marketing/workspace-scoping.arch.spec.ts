@@ -159,6 +159,10 @@ const OWNED_DELEGATES = [
   // account (sealed token) and the pulled per-day metric rows are workspace-owned.
   'adAccount',
   'adMetric',
+  // Ad management + automated scaling rules (Meta) — workspace-owned; the
+  // hourly eval sweep (cross-workspace) is whitelisted in ALLOWED_GLOBAL.
+  'adRule',
+  'adRuleLog',
   // Custom Objects (GHL parity): workspace-defined record types, their records,
   // and record↔Contact links are all workspace-owned.
   'customObjectDef',
@@ -281,12 +285,33 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // (adAccountId, date, campaignId) unique index makes a re-pull idempotent.
   'ads/ads-pull.service.ts:adAccount.findMany':
     'hourly ad-insights sweep reads due ad accounts across all workspaces (system cron)',
+  // Ad-rules eval sweep: the hourly cron reads ENABLED rules whose account is
+  // ACTIVE+META across ALL workspaces — a system job, same shape as the ads
+  // sweep. Every action it triggers is workspace-scoped (campaigns/setBudget/
+  // setStatus all resolve via the rule's workspaceId) and id-keyed; the per-
+  // (rule,campaign) cooldown log guards against thrashing. list() in the same
+  // file IS workspace-scoped.
+  'ads/ad-rules.service.ts:adRule.findMany':
+    'hourly ad-rules eval sweep reads enabled rules across all workspaces (system cron)',
   // Call-recording retrieval sweep (Epic 13, inert): the hourly cron reads ended
   // api-dial calls missing a recording across ALL workspaces — a system job, same
   // shape as the ads/subscription sweeps. The only write it triggers is an
   // id-keyed salesCall.update of recordingUrl; idempotent (re-stamps the same URL).
   'telephony/recording-sync.service.ts:salesCall.findMany':
     'hourly call-recording sweep reads ended calls missing a recording across all workspaces (system cron)',
+  // Post-call AI-analysis sweep (Voice AI, inert): the 30-min cron reads CONNECTED
+  // calls that have a recording but no analysis across ALL workspaces — a system
+  // job, same shape as the recording/ads sweeps. Every write it triggers
+  // (call_analyses upsert) is keyed by the unique salesCallId and is idempotent.
+  'voice-ai/call-analysis.cron.ts:salesCall.findMany':
+    'half-hourly post-call analysis sweep reads ended recorded calls missing analysis across all workspaces (system cron)',
+  // Custom-LLM bridge (Voice AI, inert): a PUBLIC endpoint an AI voice partner
+  // (VAPI/Retell/ElevenLabs) calls, authenticated by a shared bearer secret — no
+  // workspace context exists on the request. It resolves the VOICE channel by its
+  // (id, type) handle the operator pasted into the partner config; all downstream
+  // metering/KB/agent reads are keyed off the resolved channel's OWN workspaceId.
+  'voice-ai/voice-ai-bridge.controller.ts:channel.findFirst':
+    'public partner-LLM bridge resolves the VOICE channel by id before any workspace context exists (bearer-secret authed)',
   // Review-sync sweep (Epic 13, inert): the hourly cron reads ACTIVE review
   // sources with a token across ALL workspaces — a system job, same shape as the
   // ads/recording sweeps. Every write it triggers (review upsert / source update)

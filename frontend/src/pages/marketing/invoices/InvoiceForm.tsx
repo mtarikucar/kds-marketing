@@ -36,6 +36,45 @@ interface Props {
   onCancel: () => void;
 }
 
+/**
+ * The exact line items the invoice will PERSIST: description-less rows are
+ * dropped, qty defaults to 1 (the input's min, and what gets billed), and price
+ * is converted to minor units. Both the POST payload AND the live total preview
+ * derive from this, so the editor can never show a figure different from what
+ * the server bills.
+ */
+export function normalizeInvoiceItems(
+  items: Item[],
+): { description: string; qty: number; unitPrice: number; taxRateId?: string }[] {
+  return items
+    .filter((i) => i.description)
+    .map((i) => ({
+      description: i.description,
+      qty: Number(i.qty) || 1,
+      // Financial conversion — preserved verbatim from the original payload.
+      unitPrice: Math.round((Number(i.price) || 0) * 100),
+      ...(i.taxRateId ? { taxRateId: i.taxRateId } : {}),
+    }));
+}
+
+/**
+ * Minor-unit subtotal / tax / total over the PERSISTED items — exclusive tax,
+ * rounded per line then summed, mirroring the backend computeMoneyTotals.
+ */
+export function computeInvoiceTotals(
+  items: Item[],
+  pctOf: (taxRateId?: string) => number,
+): { subtotal: number; tax: number; total: number } {
+  let subtotal = 0;
+  let tax = 0;
+  for (const it of normalizeInvoiceItems(items)) {
+    const line = it.qty * it.unitPrice;
+    subtotal += line;
+    tax += Math.round((line * pctOf(it.taxRateId)) / 100);
+  }
+  return { subtotal, tax, total: subtotal + tax };
+}
+
 export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
   const { t } = useTranslation('marketing');
 
@@ -46,27 +85,16 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
   const { data: taxRates = [] } = useQuery({ queryKey: ['marketing', 'tax-rates'], queryFn: listTaxRates });
   const pctOf = (taxRateId?: string) => Number(taxRates.find((r) => r.id === taxRateId)?.rate ?? 0);
 
-  // Live breakdown (display only — unitPrice ×100 conversion happens in onSubmit).
-  const subtotal = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.price) || 0), 0);
-  const tax = items.reduce(
-    (s, i) => s + Math.round((Number(i.qty) || 0) * (Number(i.price) || 0) * pctOf(i.taxRateId)) / 100,
-    0,
-  );
-  const total = subtotal + tax;
+  // Live breakdown in MINOR units, derived from the SAME normalized rows the
+  // payload sends — so the preview can't disagree with what gets billed (in
+  // particular, blank-description lines and a cleared qty no longer diverge).
+  const { subtotal, tax, total } = computeInvoiceTotals(items, pctOf);
 
   const handleSubmit = () => {
     onSubmit({
       currency,
       notes: notes || undefined,
-      items: items
-        .filter((i) => i.description)
-        .map((i) => ({
-          description: i.description,
-          qty: Number(i.qty) || 1,
-          // Financial conversion — preserved verbatim from original InvoicesPage
-          unitPrice: Math.round((Number(i.price) || 0) * 100),
-          ...(i.taxRateId ? { taxRateId: i.taxRateId } : {}),
-        })),
+      items: normalizeInvoiceItems(items),
     });
   };
 
@@ -174,11 +202,11 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
           <div className="text-right">
             {tax > 0 && (
               <p className="text-xs tabular-nums text-muted-foreground">
-                {t('invoices.subtotal', 'Subtotal')} {subtotal.toLocaleString()} · {t('invoices.tax', 'Tax')} {tax.toLocaleString()}
+                {t('invoices.subtotal', 'Subtotal')} {(subtotal / 100).toLocaleString()} · {t('invoices.tax', 'Tax')} {(tax / 100).toLocaleString()}
               </p>
             )}
             <p className="font-display text-h2 tabular-nums text-foreground">
-              {total.toLocaleString()} {currency}
+              {(total / 100).toLocaleString()} {currency}
             </p>
           </div>
         </div>

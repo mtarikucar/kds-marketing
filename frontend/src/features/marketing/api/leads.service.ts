@@ -25,6 +25,11 @@ export interface LeadListParams {
   source?: string;
   businessType?: string;
   assignmentStatus?: string;
+  // Server-side sort. sortBy must be one of the backend allow-listed columns
+  // (createdAt, updatedAt, businessName, contactPerson, city, status, source,
+  // priority, nextFollowUp); anything else falls back to createdAt desc.
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
   page?: number;
   limit?: number;
 }

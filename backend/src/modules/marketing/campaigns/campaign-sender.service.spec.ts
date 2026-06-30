@@ -72,6 +72,28 @@ describe('CampaignSenderService.batch', () => {
     expect(finalUpdate).toBeTruthy();
   });
 
+  // The audience freezes at send-start, but a throttled campaign sends over
+  // minutes/hours. A lead bulk-deleted (deletedAt) or merged (mergedIntoId)
+  // AFTER the freeze must not still receive the message — bulk-delete means
+  // "stop contacting", and a merged tombstone would double-send to the merge
+  // target's same address. The per-recipient lead load must apply the active-
+  // lead predicate so the DB excludes such a lead (→ SKIPPED).
+  it('does NOT send to a lead soft-deleted/merged after the audience froze', async () => {
+    prisma.lead.findFirst.mockImplementation(async ({ where }: any) => {
+      if (where.id === 'l1') return { id: 'l1', email: 'ok@lead.com', emailOptOut: false };
+      // l2 was deleted mid-campaign: a query filtering deletedAt:null won't return it.
+      return where.deletedAt === null ? null : { id: 'l2', email: 'gone@lead.com', emailOptOut: false };
+    });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    // Only the still-active lead is emailed; the deleted one is skipped.
+    expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
+    expect(email.sendPlainEmail).toHaveBeenCalledWith('ok@lead.com', 'S', expect.any(String), undefined);
+    const statuses = prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status);
+    expect(statuses).toContain('SKIPPED');
+  });
+
   it('does nothing for a campaign that is not SENDING', async () => {
     prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'PAUSED' });
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });

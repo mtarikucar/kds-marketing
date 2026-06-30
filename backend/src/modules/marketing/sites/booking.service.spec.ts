@@ -96,7 +96,7 @@ describe('BookingService', () => {
     expect(prisma.booking.create).toHaveBeenCalled();
   });
 
-  it('takes a per-calendar advisory lock inside the tx (serializes concurrent reserves)', async () => {
+  it('takes a WORKSPACE-scoped advisory lock inside the tx (serializes concurrent reserves)', async () => {
     prisma.booking.findFirst.mockResolvedValue(null);
     prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk_x', email: null });
     await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
@@ -105,10 +105,30 @@ describe('BookingService', () => {
     expect(prisma.$executeRaw).toHaveBeenCalled();
     const sqlParts = (prisma.$executeRaw as jest.Mock).mock.calls[0][0];
     expect(String(sqlParts.join?.('') ?? sqlParts)).toContain('pg_advisory_xact_lock');
+    // The lock KEY must be WORKSPACE-scoped, not per-calendar: a calendar owner /
+    // ROUND_ROBIN member can serve several calendars, so the assignee
+    // (don't-double-book-a-person) invariant spans the whole workspace. A
+    // per-calendar key lets two concurrent reserves on different calendars assign
+    // the same person to overlapping slots.
+    const lockKey = String((prisma.$executeRaw as jest.Mock).mock.calls[0][1]);
+    expect(lockKey).toContain(WS);
+    expect(lockKey).not.toContain('c1');
   });
 
   it('refuses a past slot', async () => {
     await expect(svc.book(WS, 'c1', { start: '2000-01-01T09:00:00.000Z', name: 'Ada' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('lead dedup excludes merged AND soft-deleted leads', async () => {
+    // A booking from a previously-deleted contact must surface as a fresh,
+    // visible lead — not attach to the still-hidden soft-deleted record.
+    prisma.booking.findFirst.mockResolvedValue(null); // no external block
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: 'ada@x.com' });
+    prisma.lead.create.mockResolvedValue({ id: 'lead-1' });
+    await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada', email: 'ada@x.com' });
+    const where = prisma.lead.findFirst.mock.calls[0][0].where;
+    expect(where.mergedIntoId).toBeNull();
+    expect(where.deletedAt).toBeNull();
   });
 
   // ── Calendar types (GHL parity) ──────────────────────────────────────────────
@@ -177,6 +197,53 @@ describe('BookingService', () => {
       prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
       await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
       expect(prisma.booking.create.mock.calls[0][0].data.assigneeUserId).toBe('u2');
+    });
+
+    it('ROUND_ROBIN rejects when EVERY member is booked elsewhere (no unassigned booking)', async () => {
+      // Per-calendar capacity isn't reached (0 bookings on THIS calendar), but
+      // both members are busy in this slot on OTHER calendars workspace-wide —
+      // so there is nobody to serve it. It must reject, not create an
+      // assigneeUserId=null booking.
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'ROUND_ROBIN', ownerUserId: null }));
+      prisma.booking.findFirst.mockResolvedValue(null); // no external block
+      prisma.booking.findMany
+        .mockResolvedValueOnce([]) // overlapping on THIS calendar: none → under capacity
+        .mockResolvedValueOnce([{ assigneeUserId: 'u1' }, { assigneeUserId: 'u2' }]); // both busy elsewhere
+      prisma.bookingCalendarMember.findMany.mockResolvedValue([
+        { marketingUserId: 'u1' },
+        { marketingUserId: 'u2' },
+      ]);
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+
+    it('SINGLE rejects when the calendar OWNER is already booked on another calendar (no human double-book)', async () => {
+      // The owner of this SINGLE calendar also serves another calendar and is
+      // already booked in this slot there. Per-calendar capacity (0 bookings on
+      // THIS calendar) can't see it, so without a workspace-wide owner-busy guard
+      // this would book one person into two overlapping slots — the very invariant
+      // the workspace-wide lock comment says must hold (and ROUND_ROBIN enforces).
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'SINGLE', ownerUserId: 'owner-1' }));
+      prisma.booking.findFirst
+        .mockResolvedValueOnce(null) // EXTERNAL_BUSY check: none
+        .mockResolvedValueOnce({ id: 'elsewhere' }); // owner busy on another calendar
+      prisma.booking.findMany.mockResolvedValue([]); // none overlapping on THIS calendar → under capacity
+      prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+
+    it('SINGLE books when the owner is free elsewhere, assigning the calendar owner', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'SINGLE', ownerUserId: 'owner-1' }));
+      prisma.booking.findFirst.mockResolvedValue(null); // external: none; owner-busy: none
+      prisma.booking.findMany.mockResolvedValue([]);
+      prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
+      expect(prisma.booking.create.mock.calls[0][0].data.assigneeUserId).toBe('owner-1');
     });
 
     it('CLASS rejects a reserve once the slot is at capacity', async () => {

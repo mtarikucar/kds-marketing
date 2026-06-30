@@ -33,8 +33,17 @@ export class EnrollmentService {
     if (!c) throw new NotFoundException('Course not found');
   }
 
+  /** The leadId comes from the request body — verify it belongs to this
+   *  workspace so one tenant can't enroll (and mint certificates for) another
+   *  tenant's contact. Mirrors wallet/compliance/tags services. */
+  private async assertLead(workspaceId: string, leadId: string) {
+    const lead = await this.prisma.lead.findFirst({ where: { id: leadId, workspaceId }, select: { id: true } });
+    if (!lead) throw new NotFoundException('Contact not found');
+  }
+
   async enroll(workspaceId: string, courseId: string, leadId: string) {
     await this.assertCourse(workspaceId, courseId);
+    await this.assertLead(workspaceId, leadId);
     return this.prisma.enrollment.upsert({
       where: { courseId_leadId: { courseId, leadId } },
       create: { workspaceId, courseId, leadId },
@@ -144,12 +153,18 @@ export class EnrollmentService {
       create: { enrollmentId: id, lessonId, completed: true, completedAt: new Date() },
       update: { completed: true, completedAt: new Date() },
     });
-    const total = await this.prisma.lesson.count({
-      where: { module: { courseId: enrollment.courseId } },
-    });
-    const done = await this.prisma.lessonProgress.count({
-      where: { enrollmentId: id, completed: true },
-    });
+    // Recompute progress over the LIVE lesson set only. LessonProgress.lessonId is
+    // a soft ref (no FK cascade to Lesson), so deleting a lesson orphans its
+    // completed rows; counting those would inflate `done` past `total` and could
+    // flip the enrollment to COMPLETED — minting a certificate — before the
+    // remaining lessons are finished. Intersect the completed set (the gating set
+    // plus the lesson just marked) with the ids of lessons that still exist.
+    const existingIds = new Set(ordered.map((l) => l.id));
+    const completedNow = new Set(completedSet);
+    completedNow.add(lessonId);
+    const total = existingIds.size;
+    let done = 0;
+    for (const lid of completedNow) if (existingIds.has(lid)) done++;
     const pct = total ? Math.round((done / total) * 100) : 0;
     const completed = pct >= 100;
     const updated = await this.prisma.enrollment.update({

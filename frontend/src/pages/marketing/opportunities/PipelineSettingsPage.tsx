@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Trash2, Star, ArrowUp, ArrowDown, Check } from 'lucide-react';
+import { Plus, Trash2, Star, ArrowUp, ArrowDown, Check, Archive } from 'lucide-react';
 
 import {
   listPipelines,
@@ -26,7 +26,15 @@ import {
   Input,
   Badge,
   Spinner,
+  ConfirmDialog,
 } from '@/components/ui';
+
+/** Surface the API's own message (e.g. the pipeline-delete 409) when present. */
+function errMessage(e: unknown, fallback: string): string {
+  const m = (e as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+  if (Array.isArray(m)) return String(m[0]);
+  return typeof m === 'string' ? m : fallback;
+}
 
 /**
  * Pipeline + stage configuration (GoHighLevel parity, MANAGER+). Create/rename/
@@ -39,6 +47,7 @@ export default function PipelineSettingsPage() {
   const queryClient = useQueryClient();
   const [newPipeline, setNewPipeline] = useState('');
   const [newStage, setNewStage] = useState<Record<string, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null);
 
   const { data: pipelines, isLoading } = useQuery({
     queryKey: ['marketing', 'pipelines'],
@@ -70,10 +79,23 @@ export default function PipelineSettingsPage() {
     mutationFn: (id: string) => deletePipeline(id),
     onSuccess: () => {
       invalidate();
+      setDeleteTarget(null);
       toast.success(t('opportunities.pipelineDeleted', 'Pipeline deleted'));
     },
-    onError: () =>
-      toast.error(t('opportunities.pipelineDeleteError', 'Pipeline has open deals — move them first')),
+    // Surface the API's reason verbatim — it explains that a pipeline with deals
+    // can't be deleted and should be archived (a generic string would mislead).
+    onError: (e) =>
+      toast.error(
+        errMessage(e, t('opportunities.pipelineDeleteError', 'Could not delete this pipeline')),
+      ),
+  });
+  const archiveMut = useMutation({
+    mutationFn: (id: string) => updatePipeline(id, { archived: true }),
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('opportunities.pipelineArchived', 'Pipeline archived'));
+    },
+    onError,
   });
 
   const addStageMut = useMutation({
@@ -169,7 +191,23 @@ export default function PipelineSettingsPage() {
                   {t('opportunities.makeDefault', 'Make default')}
                 </Button>
               )}
-              <Button variant="ghost" size="sm" onClick={() => deleteMut.mutate(p.id)}>
+              {!p.isDefault && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => archiveMut.mutate(p.id)}
+                  disabled={archiveMut.isPending}
+                >
+                  <Archive className="w-4 h-4" aria-hidden="true" />
+                  {t('opportunities.archive', 'Archive')}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={t('opportunities.deletePipeline', 'Delete pipeline')}
+                onClick={() => setDeleteTarget(p)}
+              >
                 <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
               </Button>
             </div>
@@ -209,6 +247,23 @@ export default function PipelineSettingsPage() {
           </CardContent>
         </Card>
       ))}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+        title={t('opportunities.deletePipelineTitle', 'Delete pipeline')}
+        description={t(
+          'opportunities.deletePipelineDesc',
+          'This permanently deletes the pipeline and its stages. A pipeline that still has deals (including closed WON/LOST ones) cannot be deleted — archive it instead to keep that history.',
+        )}
+        confirmLabel={t('common.delete', 'Delete')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        tone="danger"
+        loading={deleteMut.isPending}
+        onConfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.id)}
+      />
     </div>
   );
 }
