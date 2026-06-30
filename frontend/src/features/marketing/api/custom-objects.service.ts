@@ -60,8 +60,13 @@ export interface CreateFieldPayload {
 
 // ── Objects ───────────────────────────────────────────────────────────────────
 
-export const listObjects = (): Promise<CustomObjectDef[]> =>
-  marketingApi.get('/custom-objects').then((r) => r.data);
+export const listObjects = (includeArchived = false): Promise<CustomObjectDef[]> =>
+  marketingApi
+    .get('/custom-objects', { params: includeArchived ? { includeArchived: true } : {} })
+    .then((r) => r.data);
+
+export const restoreObject = (key: string): Promise<CustomObjectDef> =>
+  marketingApi.post(`/custom-objects/${key}/restore`).then((r) => r.data);
 
 export const getObject = (key: string): Promise<CustomObjectDef> =>
   marketingApi.get(`/custom-objects/${key}`).then((r) => r.data);

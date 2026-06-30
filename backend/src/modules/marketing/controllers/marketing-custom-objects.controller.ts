@@ -108,8 +108,11 @@ export class MarketingCustomObjectsController {
 
   @Get()
   @RequirePermission('leads.read')
-  list(@CurrentMarketingUser() a: MarketingUserPayload) {
-    return this.objects.listObjects(a.workspaceId);
+  list(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query('includeArchived') includeArchived?: string,
+  ) {
+    return this.objects.listObjects(a.workspaceId, includeArchived === 'true');
   }
 
   @Post()

@@ -95,3 +95,48 @@ describe('WebhooksPage', () => {
     ).toBeInTheDocument();
   });
 });
+
+// Regression: each endpoint row's Send-test button and Enable switch were driven
+// off a single shared mutation's isPending, so acting on ONE endpoint disabled
+// that control on EVERY endpoint (the Button maps loading/pending → disabled).
+// The per-row guard (mutation.variables === ep.id) must scope it to one row.
+describe('WebhooksPage — per-row mutation loading (no cross-row bleed)', () => {
+  const endpoints = [
+    { id: 'ep1', url: 'https://a.example.com/hook', status: 'ACTIVE', failureCount: 0, description: null, events: [], lastDeliveryAt: null },
+    { id: 'ep2', url: 'https://b.example.com/hook', status: 'ACTIVE', failureCount: 0, description: null, events: [], lastDeliveryAt: null },
+  ];
+
+  beforeEach(async () => {
+    const { default: api } = await import('../../../../features/marketing/api/marketingApi');
+    (api.get as any).mockResolvedValue({ data: endpoints });
+    // Never-resolving → the mutation stays pending so we can read the row state.
+    (api.post as any).mockImplementation(() => new Promise(() => {}));
+    (api.patch as any).mockImplementation(() => new Promise(() => {}));
+  });
+
+  it('sending a test only disables that endpoint\'s Send-test button', async () => {
+    render(<WebhooksPage />, { wrapper });
+
+    const testButtons = await screen.findAllByRole('button', { name: /send test/i });
+    expect(testButtons).toHaveLength(2);
+
+    await userEvent.click(testButtons[0]);
+
+    const after = screen.getAllByRole('button', { name: /send test/i });
+    expect(after[0]).toBeDisabled();
+    expect(after[1]).not.toBeDisabled();
+  });
+
+  it('toggling one endpoint only disables that endpoint\'s switch', async () => {
+    render(<WebhooksPage />, { wrapper });
+
+    const switches = await screen.findAllByRole('switch');
+    expect(switches).toHaveLength(2);
+
+    await userEvent.click(switches[0]);
+
+    const after = screen.getAllByRole('switch');
+    expect(after[0]).toBeDisabled();
+    expect(after[1]).not.toBeDisabled();
+  });
+});

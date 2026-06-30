@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { SortingState } from '@tanstack/react-table';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -80,6 +81,17 @@ export default function LeadsPage() {
   const [businessType, setBusinessType] = useState('');
   const [assignmentStatus, setAssignmentStatus] =
     useState<AssignmentStatus>(initialAssignment);
+  // Server-side sort: the DataTable headers were sortable but uncontrolled, so a
+  // click only reordered the 20 visible rows (and reset on paginate). Drive the
+  // sort through the query instead so the WHOLE dataset is ordered. Column ids
+  // match the backend allow-list (businessName / city / createdAt).
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const sortBy = sorting[0]?.id;
+  const sortOrder: 'asc' | 'desc' | undefined = sorting[0]
+    ? sorting[0].desc
+      ? 'desc'
+      : 'asc'
+    : undefined;
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -100,7 +112,7 @@ export default function LeadsPage() {
     queryKey: [
       'marketing',
       'leads',
-      { search, status, source, businessType, assignmentStatus, page },
+      { search, status, source, businessType, assignmentStatus, sortBy, sortOrder, page },
     ],
     queryFn: () =>
       listLeads({
@@ -109,6 +121,8 @@ export default function LeadsPage() {
         source: source || undefined,
         businessType: businessType || undefined,
         assignmentStatus: assignmentStatus || undefined,
+        sortBy,
+        sortOrder,
         page,
         limit: LIMIT,
       }),
@@ -126,7 +140,7 @@ export default function LeadsPage() {
   // checkbox state would silently drift across paginations.
   useEffect(() => {
     setSelected(new Set());
-  }, [page, search, status, source, businessType, assignmentStatus]);
+  }, [page, search, status, source, businessType, assignmentStatus, sortBy, sortOrder]);
 
   // Bulk assign mutation — preserved verbatim (keys + invalidations).
   const bulkAssign = useMutation({
@@ -402,6 +416,11 @@ export default function LeadsPage() {
           data={leads}
           isLoading={isLoading}
           loadingRowCount={8}
+          sorting={sorting}
+          onSortingChange={(s) => {
+            setSorting(s);
+            setPage(1); // a new sort order is a new first page
+          }}
           onRowClick={(lead) => navigate(`/leads/${lead.id}`)}
           emptyState={
             <EmptyState

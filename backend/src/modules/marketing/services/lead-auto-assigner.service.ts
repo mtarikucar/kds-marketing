@@ -69,6 +69,11 @@ export class LeadAutoAssignerService {
           // Terminal leads don't count toward "load" — a rep who closed
           // 50 deals shouldn't be considered the most loaded one.
           status: { notIn: ['WON', 'LOST'] },
+          // Hidden leads don't count either: a rep whose leads were merged
+          // away or bulk-deleted would otherwise look "loaded" and be unfairly
+          // skipped, even though those leads no longer exist for them.
+          mergedIntoId: null,
+          deletedAt: null,
         },
         _count: { _all: true },
       });

@@ -12,8 +12,12 @@ export interface AdMetricRow {
 export function isMetaAdsConfigured(): boolean {
   return !!(process.env.META_APP_ID && process.env.META_APP_SECRET);
 }
+/**
+ * TikTok ads uses the TikTok-for-Business platform credentials (not the
+ * social-planner TIKTOK_CLIENT_KEY/SECRET which are for the organic API).
+ */
 export function isTiktokAdsConfigured(): boolean {
-  return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
+  return !!(process.env.TIKTOK_BUSINESS_APP_ID && process.env.TIKTOK_BUSINESS_APP_SECRET);
 }
 export function isLinkedinAdsConfigured(): boolean {
   return !!(process.env.LINKEDIN_ADS_CLIENT_ID && process.env.LINKEDIN_ADS_CLIENT_SECRET);

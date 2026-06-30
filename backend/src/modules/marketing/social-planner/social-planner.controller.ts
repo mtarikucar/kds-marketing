@@ -84,7 +84,7 @@ class CreatePostDto {
   @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
   targetAccountIds?: string[];
 
-  /** Per-network publish options (currently { linkedin: { visibility } }). */
+  /** Per-network publish options (e.g. { linkedin: { visibility } }, { tiktok: {...} }). */
   @IsOptional() @IsObject()
   options?: Record<string, unknown>;
 }
@@ -102,7 +102,7 @@ class UpdatePostDto {
   @IsOptional() @IsObject()
   formats?: Record<string, string>;
 
-  /** Per-network publish options (currently { linkedin: { visibility } }). */
+  /** Per-network publish options (e.g. { linkedin: { visibility } }, { tiktok: {...} }). */
   @IsOptional() @IsObject()
   options?: Record<string, unknown>;
 }
@@ -154,6 +154,11 @@ export class SocialPlannerController {
   @RequirePermission('campaigns.send')
   disconnectAccount(@Param('accountId') accountId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.disconnectAccount(u.workspaceId, accountId);
+  }
+
+  @Get('accounts/:id/tiktok/creator-info')
+  tiktokCreatorInfo(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.tiktokCreatorInfo(u.workspaceId, id);
   }
 
   // ── Media upload ──────────────────────────────────────────────────────────

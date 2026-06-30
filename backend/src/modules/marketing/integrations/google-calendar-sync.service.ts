@@ -58,6 +58,9 @@ interface GoogleEvent {
   summary?: string;
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
+  // The private props the push stamps (events.list returns them for the owner),
+  // so pull can recognise+skip our own mirrors even before googleEventId is saved.
+  extendedProperties?: { private?: Record<string, string> };
 }
 
 interface EventsListResponse {
@@ -611,6 +614,14 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
   ): Promise<{ upserted: number; deleted: number }> {
     if (!ev.id) return { upserted: 0, deleted: 0 };
     const workspaceId = connection.workspaceId;
+
+    // Skip events WE pushed, by the tag the push stamps — the load-bearing echo
+    // guard. The googleEventId DB check below MISSES the race where a pull runs
+    // between Google-create and the booking.googleEventId write, which would then
+    // import our own mirror as a permanent phantom EXTERNAL_BUSY block.
+    if (ev.extendedProperties?.private?.kdsWorkspaceId === workspaceId) {
+      return { upserted: 0, deleted: 0 };
+    }
 
     // Skip events WE pushed (mirrors of our own bookings) to avoid echo loops:
     // a booking with this googleEventId that is NOT an EXTERNAL_BUSY block.

@@ -43,6 +43,7 @@
     "handlebars": "^4.7.8",
     "helmet": "^8.1.0",
     "ioredis": "^5.11.1",
+    "jimp": "^0.22.12",
     "nodemailer": "^8.0.11",
     "prisma": "6.19.3",
     "prom-client": "^15.1.3",
@@ -85,7 +86,7 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": ["ts-jest", { "diagnostics": false }]
     },
     "transformIgnorePatterns": [
       "node_modules/(?!(uuid)/)"

@@ -173,6 +173,7 @@ export default function AgentStudioPage() {
         status: a.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE',
       }),
     onSuccess: invalidate,
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('agents.toggleFailed', 'Could not update the agent')),
   });
 
   const deleteAgent = useMutation({
@@ -181,6 +182,7 @@ export default function AgentStudioPage() {
       invalidate();
       setDeleteTarget(null);
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('agents.deleteFailed', 'Could not delete the agent')),
   });
 
   const openCreate = () => {

@@ -17,10 +17,12 @@ import { metaGraphFetch, graphApiVersion } from '../../../common/util/meta-graph
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
+import { assertTiktokDmSecrets } from './tiktok-config.util';
 import { netgsmMoCallbackUrl } from './netgsm-callback.util';
 import { assertMetaSecrets, isMetaChannelType } from './meta-config.util';
 import { metaWebhookCallbackUrl } from './meta-callback.util';
 import { assertLinkedinEngagementSecrets } from './linkedin-config.util';
+import { tiktokWebhookCallbackUrl } from './tiktok-callback.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -112,6 +114,7 @@ export class ChannelsService {
     }
     if (dto.secrets && Object.keys(dto.secrets).length) {
       if (dto.type === 'SMS') assertNetgsmSmsSecrets(dto.secrets);
+      else if (dto.type === 'TIKTOK') assertTiktokDmSecrets(dto.secrets);
       else if (isMetaChannelType(dto.type)) assertMetaSecrets(dto.type, dto.secrets);
       else if (dto.type === 'LINKEDIN') assertLinkedinEngagementSecrets(dto.secrets);
       data.configSealed = this.seal(dto.secrets);
@@ -242,6 +245,7 @@ export class ChannelsService {
       }
       const merged = { ...current, ...dto.secrets };
       if (existing.type === 'SMS') assertNetgsmSmsSecrets(merged);
+      else if (existing.type === 'TIKTOK') assertTiktokDmSecrets(merged);
       else if (isMetaChannelType(existing.type)) assertMetaSecrets(existing.type, merged);
       else if (existing.type === 'LINKEDIN') assertLinkedinEngagementSecrets(merged);
       data.configSealed = this.seal(merged);
@@ -313,6 +317,16 @@ export class ChannelsService {
         ? {
             webhookUrl: metaWebhookCallbackUrl(process.env.PUBLIC_BASE_URL),
             verifyTokenConfigured: !!process.env.META_WEBHOOK_VERIFY_TOKEN,
+          }
+        : {}),
+      // TikTok DM (Business Messaging) inbound events arrive on a static, HMAC-
+      // signed webhook. Surface the URL operators paste into the TikTok for
+      // Business app dashboard, and the messaging-granted status from configPublic
+      // (set by the OAuth confirm flow). Token value is never returned.
+      ...(c.type === 'TIKTOK'
+        ? {
+            webhookUrl: tiktokWebhookCallbackUrl(process.env.PUBLIC_BASE_URL),
+            messaging: (c.configPublic as Record<string, unknown> | null)?.messaging ?? null,
           }
         : {}),
       lastVerifiedAt: c.lastVerifiedAt,

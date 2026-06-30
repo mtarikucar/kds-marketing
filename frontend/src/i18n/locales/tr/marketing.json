@@ -152,6 +152,7 @@
     "customDomains": "Özel Alan Adları",
     "dialer": "Güç Çevirici",
     "telephony": "Telefon (Netsantral)",
+    "voiceAiSettings": "Sesli AI",
     "apiKeys": "API Anahtarları",
     "webhooks": "Webhook'lar",
     "inboundWebhooks": "Gelen Webhook'lar",
@@ -176,7 +177,8 @@
     "agencyLocations": "Ajans Lokasyonları",
     "agencyRebilling": "Ajans Yeniden Faturalama",
     "agencySnapshots": "Ajans Anlık Görüntüleri",
-    "ivr": "Sesli Menü (IVR)"
+    "ivr": "Sesli Menü (IVR)",
+    "help": "Yardım"
   },
   "common": {
     "save": "Kaydet",
@@ -205,6 +207,8 @@
     "previous": "Önceki",
     "next": "Sonraki",
     "copied": "Kopyalandı",
+    "copy": "Kopyala",
+    "copyFailed": "Kopyalanamadı",
     "done": "Tamam",
     "saving": "Kaydediliyor…"
   },
@@ -619,6 +623,9 @@
     "markedWon": "Kazanıldı olarak işaretlendi",
     "markedLost": "Kaybedildi olarak işaretlendi",
     "deleted": "Fırsat silindi",
+    "winError": "Fırsat kazanıldı olarak işaretlenemedi",
+    "loseError": "Fırsat kaybedildi olarak işaretlenemedi",
+    "deleteError": "Fırsat silinemedi",
     "name": "Ad",
     "namePlaceholder": "Acme A.Ş. — yıllık plan",
     "value": "Değer",
@@ -693,6 +700,7 @@
     "completeSuccess": "Görev tamamlandı",
     "createSuccess": "Görev oluşturuldu",
     "deleteSuccess": "Görev silindi",
+    "deleteDesc": "Bu görev kalıcı olarak silinecek. Bu işlem geri alınamaz.",
     "emptyHint": "Lead'ler soğumasın diye bir takip görevi oluştur.",
     "presets": {
       "today6pm": "Bugün 18:00",
@@ -784,6 +792,9 @@
     "title": "Özel Nesneler",
     "subtitle": "Kişilerin ötesinde kendi kayıt türlerinizi tanımlayın — mülk, araç, poliçe, her şey.",
     "new": "Yeni nesne",
+    "showArchived": "Arşivlenenleri göster",
+    "hideArchived": "Arşivlenenleri gizle",
+    "archivedBadge": "Arşivlendi",
     "searchPlaceholder": "Kayıtlarda ara…",
     "empty": {
       "title": "Henüz özel nesne yok",
@@ -801,7 +812,8 @@
       "name": "Ad"
     },
     "action": {
-      "archive": "Arşivle"
+      "archive": "Arşivle",
+      "restore": "Geri yükle"
     },
     "form": {
       "newTitle": "Yeni özel nesne",
@@ -848,6 +860,8 @@
       "createFailed": "Nesne oluşturulamadı",
       "archived": "Nesne arşivlendi",
       "archiveFailed": "Arşivlenemedi",
+      "restored": "Nesne geri yüklendi",
+      "restoreFailed": "Geri yüklenemedi",
       "recordSaved": "Kayıt kaydedildi",
       "recordFailed": "Kayıt kaydedilemedi",
       "recordDeleted": "Kayıt silindi",
@@ -1143,6 +1157,8 @@
     "saved": "Belge kaydedildi",
     "saveFailed": "Kaydedilemedi",
     "loadFailed": "Belge yüklenemedi",
+    "archiveFailed": "Belge güncellenemedi",
+    "deleteFailed": "Belge silinemedi",
     "archived": "arşivlendi",
     "updated": "güncellendi",
     "toggleArchive": "Arşivle / geri yükle",
@@ -1216,7 +1232,66 @@
     "enrollAll": "TÜM kişileri ekle — bu, mesaj göndermeyi başlatır ve geri alınamaz",
     "filterStatus": "Durum (isteğe bağlı)",
     "filterBusinessType": "İşletme türü (isteğe bağlı)",
-    "filterSearch": "Ad/e-posta ara (isteğe bağlı)"
+    "filterSearch": "Ad/e-posta ara (isteğe bağlı)",
+    "namePlaceholder": "Otomasyon adı",
+    "activate": "Aktifleştir",
+    "pause": "Duraklat",
+    "searchPlaceholder": "Ada veya tetikleyiciye göre ara…",
+    "statusFilter": "Durum filtresi",
+    "status": { "all": "Hepsi" },
+    "newBlank": "Boş otomasyon",
+    "newFromTemplate": "Şablondan",
+    "newWithAi": "AI ile tanımla",
+    "fromTemplate": "Şablondan başla",
+    "templatesTitle": "Bir şablondan başla",
+    "templatesHint": "Builder'ı ön-doldurmak için bir tarif seç — kaydetmeden önce her şeyi değiştirebilirsin.",
+    "aiTitle": "Otomasyonunu anlat",
+    "aiDialogHint": "AI tetikleyici ve adımları taslaklar — builder'da gözden geçirip kaydedersin.",
+    "statsLine": "{{started}} başladı → {{completed}} tamamlandı",
+    "deleteTitle": "Otomasyon silinsin mi?",
+    "deleteDesc": "Çalışan örnekler iptal edilecek.",
+    "emptyTitle": "Henüz otomasyon yok",
+    "addStep": "Adım ekle",
+    "canvasHint": "Düzenlemek için bir adıma tıkla veya palet ile yeni ekle.",
+    "moveUp": "Yukarı taşı",
+    "moveDown": "Aşağı taşı",
+    "deleteStep": "Adımı sil",
+    "noConfig": "Bu adımın ayarı yok.",
+    "advancedJson": "Gelişmiş (JSON)",
+    "invalidJson": "Geçersiz JSON.",
+    "jsonNeedsType": "\"type\" alanı olan bir JSON nesnesi olmalı.",
+    "invalidFiltersJson": "Filtreler bir JSON dizisi olmalı.",
+    "unsavedConfirm": "Kaydedilmemiş değişiklikler atılsın mı?",
+    "subject": "Konu",
+    "body": "Mesaj",
+    "prompt": "İstem",
+    "message": "Mesaj",
+    "tag": "Etiket",
+    "strategy": "Strateji",
+    "waitMode": "Mod",
+    "duration": "Bir süre boyunca",
+    "untilReply": "Yanıt gelene kadar",
+    "waitSeconds": "Saniye (60–2592000)",
+    "taskTitle": "Görev başlığı",
+    "branchHint": "TÜM koşullar sağlanınca devam et; aksi halde alta düş (veya atla).",
+    "addCondition": "Koşul ekle",
+    "removeCondition": "Koşulu kaldır",
+    "condField": "Alan",
+    "condOp": "Operatör",
+    "condValue": "Değer",
+    "elseGoto": "Eşleşme yoksa — şu adıma git # (opsiyonel)",
+    "elseFallThrough": "alta düş",
+    "updateLeadHint": "Lead'de şu alanları ayarla.",
+    "fieldKey": "Alan",
+    "fieldValue": "Değer",
+    "addField": "Alan ekle",
+    "removeField": "Alanı kaldır",
+    "categories": "Kategoriler (virgülle ayrılmış)",
+    "routes": "Her kategoriyi bir adıma yönlendir # (opsiyonel)",
+    "routeFor": "{{cat}} için yönlendirme",
+    "webhookUrl": "URL",
+    "webhookMethod": "Metot",
+    "webhookBody": "Gövde (JSON)"
   },
   "campaigns": {
     "title": "Kampanyalar",
@@ -1238,6 +1313,7 @@
     "composeFailed": "Yazılamadı",
     "launched": "Gönderildi",
     "launchFailed": "Başlatılamadı",
+    "actionFailed": "İşlem başarısız",
     "sent": "gönderildi",
     "opened": "açıldı",
     "clicked": "tıklandı",
@@ -1259,6 +1335,8 @@
     "saveFailed": "Kaydedilemedi",
     "drafted": "Taslak hazır",
     "draftFailed": "Taslak oluşturulamadı",
+    "publishFailed": "Yayın durumu güncellenemedi",
+    "deleteFailed": "Sayfa silinemedi",
     "publish": "Yayınla",
     "unpublish": "Yayından kaldır",
     "copyUrl": "genel URL",
@@ -1267,6 +1345,8 @@
     "formName": "Form adı (ad/e-posta/telefon alanları)",
     "addForm": "Ekle",
     "formCreated": "Form oluşturuldu",
+    "formCreateFailed": "Form oluşturulamadı",
+    "formDeleteFailed": "Form silinemedi",
     "noForms": "Henüz form yok. Ekleyin, sonra bir form bloğunda referans verin: {\"type\":\"form\",\"formId\":\"…\"}.",
     "delete": "Sil"
   },
@@ -1342,6 +1422,57 @@
     "empty": "Henüz AI çağrısı yok.",
     "selectPrompt": "Transkripti görmek için bir çağrı seçin.",
     "noTranscript": "Bu çağrı için transkript yok."
+  },
+  "callAnalysis": {
+    "title": "Görüşme analizi",
+    "summary": "Özet",
+    "score": "Skor",
+    "actionItems": "Aksiyon maddeleri",
+    "topics": "Konular",
+    "analyse": "Analiz et",
+    "recordingRequired": "Analiz için görüşme kaydı gerekiyor",
+    "runOk": "Analiz tamamlandı",
+    "runSkipped": "Analiz zaten mevcut",
+    "runFailed": "Analiz başarısız",
+    "sentiment": {
+      "POSITIVE": "Olumlu",
+      "NEUTRAL": "Nötr",
+      "NEGATIVE": "Olumsuz"
+    }
+  },
+  "copilot": {
+    "title": "Canlı Asistan",
+    "listen": "Dinle",
+    "stop": "Durdur",
+    "thinking": "Düşünüyor…",
+    "summary": "Özet",
+    "getSuggestions": "Öneri al",
+    "pastePlaceholder": "Görüşme metnini buraya yapıştırın…"
+  },
+  "voiceAiSettings": {
+    "title": "Sesli AI",
+    "subtitle": "Sesli AI yetenekleri NetGSM eklentilerini satın alıp anahtarları girdiğinizde otomatik olarak aktifleşir. Aşağıda her yeteneğin durumu ve bağlantı adresleri yer alır.",
+    "on": "Açık",
+    "off": "Kapalı",
+    "unavailable": "Durum bilgisi alınamadı.",
+    "capability": {
+      "stt": {
+        "name": "Konuşma Metne (STT)",
+        "note": "Görüşme kayıtlarını analiz etmek için gerekir. Etkinleştirmek için: NetGSM Görüşme Kaydı + STT anahtarı."
+      },
+      "bridge": {
+        "name": "AI Köprüsü (Bridge)",
+        "note": "Gerçek zamanlı sesli yapay zeka için VAPI/Retell/ElevenLabs'i Claude beynimize bağlar. Etkinleştirmek için: SIP Trunk + Yapay Zeka + partner."
+      },
+      "netgsmIvr": {
+        "name": "NetGSM IVR (Sesli Yanıt)",
+        "note": "Gelen aramalar için NetGSM'in TTS robotunu kullanır. Etkinleştirmek için: NetGSM Özel API (Custom) eklentisi."
+      },
+      "copilot": {
+        "name": "Canlı Asistan (Copilot)",
+        "note": "Görüşme sırasında temsilciye öneri verir. Etkinleştirmek için: yalnızca STT/anahtar."
+      }
+    }
   },
   "invoices": {
     "title": "Faturalar",

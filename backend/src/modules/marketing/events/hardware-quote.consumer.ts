@@ -54,9 +54,35 @@ export class HardwareQuoteConsumer implements OnModuleInit {
         );
         return;
       }
-      // Auto-assign only matters for a brand-new lead; on an existing
-      // (resubmitted) lead we keep the current owner + status untouched.
+      // A resubmitted quote (same dedupRef) just refreshes the existing lead —
+      // keep its owner + status. Crucially, do NOT call pickAssignee on this
+      // path: under ROUND_ROBIN it advances the distribution cursor, so a tenant
+      // re-clicking "Teklif Al" would silently consume rotation slots and skew
+      // rep assignment without ever creating a lead. Auto-assign only for a
+      // genuinely new lead.
+      const updateData = {
+        contactPerson: p.contactPerson,
+        phone: p.phone,
+        email: p.email,
+        notes: p.notes,
+        productSnapshot: p.productSnapshot as any,
+      };
+      const existing = await this.prisma.lead.findFirst({
+        where: { workspaceId, externalRef: p.dedupRef },
+        select: { id: true },
+      });
+      if (existing) {
+        await this.prisma.lead.update({ where: { id: existing.id }, data: updateData });
+        this.logger.log(
+          `Hardware-quote lead refreshed for tenant=${p.tenantId} (ref=${p.dedupRef})`,
+        );
+        return;
+      }
+
       const autoOwner = await this.autoAssigner.pickAssignee(workspaceId);
+      // upsert (not create) stays as the concurrent-delivery race backstop: if a
+      // sibling delivery created the row between the check above and here, this
+      // collapses onto it via the (workspaceId, externalRef) unique.
       await this.prisma.lead.upsert({
         where: {
           workspaceId_externalRef: { workspaceId, externalRef: p.dedupRef },
@@ -75,13 +101,7 @@ export class HardwareQuoteConsumer implements OnModuleInit {
           externalRef: p.dedupRef,
           ...(autoOwner ? { assignedToId: autoOwner } : {}),
         },
-        update: {
-          contactPerson: p.contactPerson,
-          phone: p.phone,
-          email: p.email,
-          notes: p.notes,
-          productSnapshot: p.productSnapshot as any,
-        },
+        update: updateData,
       });
       this.logger.log(
         `Hardware-quote lead ready for tenant=${p.tenantId} (ref=${p.dedupRef})`,

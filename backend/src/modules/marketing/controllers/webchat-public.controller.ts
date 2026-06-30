@@ -126,14 +126,20 @@ export class WebchatPublicController {
     });
     if (!convo) throw new NotFoundException('Conversation not found');
     // Bind the thread to the visitor: the conversation's identity must match.
-    if (convo.contactIdentityId) {
-      const identity = await this.prisma.contactIdentity.findFirst({
-        where: { id: convo.contactIdentityId, workspaceId: channel.workspaceId },
-        select: { value: true },
-      });
-      if (!identity || identity.value !== visitorId) {
-        throw new NotFoundException('Conversation not found');
-      }
+    // FAIL CLOSED — a conversation with no identity has no owning visitor, so it
+    // must NOT be readable by an arbitrary visitorId (otherwise a leaked
+    // conversationId alone would surface the thread, breaking the guarantee in
+    // the class doc). Every webchat conversation is born with an identity via
+    // ingress, so this only rejects a malformed/identity-less row.
+    if (!convo.contactIdentityId) {
+      throw new NotFoundException('Conversation not found');
+    }
+    const identity = await this.prisma.contactIdentity.findFirst({
+      where: { id: convo.contactIdentityId, workspaceId: channel.workspaceId },
+      select: { value: true },
+    });
+    if (!identity || identity.value !== visitorId) {
+      throw new NotFoundException('Conversation not found');
     }
     return { workspaceId: channel.workspaceId };
   }

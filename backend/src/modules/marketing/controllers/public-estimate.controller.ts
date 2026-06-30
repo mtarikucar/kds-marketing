@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Param, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Response } from 'express';
 import { EstimatesService } from '../estimates/estimates.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(
@@ -59,21 +61,33 @@ export class PublicEstimateController {
         (resolved
           ? banner
           : `<div style="text-align:center;margin-top:20px"><button class="accept" id="ok">Accept</button><button class="decline" id="no">Decline</button></div><div id="msg" style="text-align:center;margin-top:12px"></div>` +
-            `<script>function act(p){document.getElementById('ok').disabled=true;document.getElementById('no').disabled=true;` +
-            `fetch(${JSON.stringify(`/api/public/e/${token}`)}+'/'+p,{method:'POST'}).then(r=>r.json()).then(function(d){` +
-            `document.getElementById('msg').textContent=d.status==='ACCEPTED'?'✓ Thank you — accepted.':'Estimate declined.';` +
-            `document.querySelector('div[style*=center]').style.display='none';});}` +
+            `<script>var B=${JSON.stringify(`/api/public/e/${token}`)};` +
+            `function act(p){var ok=document.getElementById('ok'),no=document.getElementById('no'),msg=document.getElementById('msg');` +
+            `ok.disabled=true;no.disabled=true;` +
+            `fetch(B+'/'+p,{method:'POST'}).then(function(r){return r.json();}).then(function(d){` +
+            // Only treat it as done when the server actually confirms ACCEPTED/
+            // DECLINED. A conflict (e.g. accepting an already-declined estimate)
+            // returns {message,...} with no `status` — the old code mislabelled
+            // that as "declined" and hid the buttons; now it shows the message
+            // and re-enables. The .catch covers a network / non-JSON failure that
+            // previously left both buttons disabled forever with no feedback.
+            `if(d.status==='ACCEPTED'||d.status==='DECLINED'){msg.textContent=d.status==='ACCEPTED'?'✓ Thank you — accepted.':'Estimate declined.';` +
+            `document.querySelector('div[style*=center]').style.display='none';}` +
+            `else{msg.textContent=d.message||'Could not submit. Please try again.';ok.disabled=false;no.disabled=false;}})` +
+            `.catch(function(){msg.textContent='Could not submit. Please check your connection and try again.';ok.disabled=false;no.disabled=false;});}` +
             `document.getElementById('ok').onclick=function(){act('accept');};document.getElementById('no').onclick=function(){act('decline');};</script>`) +
         `</body></html>`,
     );
   }
 
   @Post('e/:token/accept')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   accept(@Param('token') token: string) {
     return this.estimates.publicAccept(token);
   }
 
   @Post('e/:token/decline')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   decline(@Param('token') token: string) {
     return this.estimates.publicDecline(token);
   }

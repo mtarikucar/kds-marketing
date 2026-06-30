@@ -54,13 +54,27 @@ export function useImportList() {
   });
 }
 
-/** Status of a single import job.  Poll while RUNNING. */
+/**
+ * Polling cadence for a single import job. Returns 2s while the job is still in
+ * flight and `false` once it reaches a terminal state — without the terminal
+ * stop, the Progress step polled GET /imports/:id every 2s FOREVER after the
+ * import finished, hammering the backend for any user who left the page open.
+ */
+export function importPollInterval(
+  poll: boolean,
+  status: ImportStatus | undefined,
+): number | false {
+  if (!poll) return false;
+  return status === 'DONE' || status === 'FAILED' ? false : 2_000;
+}
+
+/** Status of a single import job.  Poll while RUNNING, stop once terminal. */
 export function useImportJob(id: string | null, poll: boolean) {
   return useQuery<ImportJob>({
     queryKey: importJobKey(id ?? ''),
     queryFn: () => marketingApi.get(`/imports/${id}`).then((r) => r.data),
     enabled: !!id,
-    refetchInterval: poll ? 2_000 : false,
+    refetchInterval: (query) => importPollInterval(poll, query.state.data?.status),
   });
 }
 

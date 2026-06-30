@@ -32,6 +32,7 @@ const EstimatesPage            = lazy(() => import('./pages/marketing/estimates/
 const DocumentsPage            = lazy(() => import('./pages/marketing/documents/DocumentsPage'));
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
+const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
 const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTemplates'));
@@ -69,6 +70,7 @@ const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLin
 const TaxRatesPage             = lazy(() => import('./pages/marketing/settings/taxRates'));
 const CouponsPage              = lazy(() => import('./pages/marketing/settings/coupons'));
 const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
+const AutomationBuilderPage    = lazy(() => import('./pages/marketing/automations/AutomationBuilderPage'));
 const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
 const BookingSettingsPage      = lazy(() => import('./pages/marketing/BookingSettingsPage'));
@@ -95,6 +97,7 @@ const ExperimentsPage          = lazy(() => import('./pages/marketing/experiment
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
 const TelephonySettingsPage    = lazy(() => import('./pages/marketing/TelephonySettingsPage'));
+const VoiceAiSettingsPage      = lazy(() => import('./pages/marketing/settings/voiceAi'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -181,6 +184,9 @@ export default function App() {
           <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
           <Route path="/performance"    element={<S><PerformancePage /></S>} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
+          {/* In-app help center (connection guides) — available to everyone. */}
+          <Route path="/help"           element={<S><HelpPage /></S>} />
+          <Route path="/help/:slug"     element={<S><HelpPage /></S>} />
           {/* Self-service 2FA — available to every authenticated marketing user. */}
           <Route path="/settings/two-factor" element={<S><TwoFactorPage /></S>} />
         </Route>
@@ -213,6 +219,8 @@ export default function App() {
             <Route path="/settings/tax-rates" element={<S><TaxRatesPage /></S>} />
             <Route path="/settings/coupons"   element={<S><CouponsPage /></S>} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
+            <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
+            <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/campaigns"   element={<S><CampaignsPage /></S>} />
             <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />
@@ -234,6 +242,7 @@ export default function App() {
             <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
+            <Route path="/settings/voice-ai"    element={<S><VoiceAiSettingsPage /></S>} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />

@@ -144,6 +144,7 @@
     "customDomains": "Custom Domains",
     "dialer": "Power Dialer",
     "telephony": "Phone (Netsantral)",
+    "voiceAiSettings": "Voice AI",
     "apiKeys": "API Keys",
     "webhooks": "Webhooks",
     "inboundWebhooks": "Inbound webhooks",
@@ -165,7 +166,8 @@
     "agencyLocations": "Agency Locations",
     "agencyRebilling": "Agency Rebilling",
     "agencySnapshots": "Agency Snapshots",
-    "ivr": "IVR Menus"
+    "ivr": "IVR Menus",
+    "help": "Help"
   },
   "common": {
     "save": "Save",
@@ -194,6 +196,8 @@
     "previous": "Previous",
     "next": "Next",
     "copied": "Copied",
+    "copy": "Copy",
+    "copyFailed": "Could not copy",
     "done": "Done",
     "saving": "Saving…"
   },
@@ -608,6 +612,9 @@
     "markedWon": "Marked as won",
     "markedLost": "Marked as lost",
     "deleted": "Deal deleted",
+    "winError": "Could not mark the deal as won",
+    "loseError": "Could not mark the deal as lost",
+    "deleteError": "Could not delete the deal",
     "name": "Name",
     "namePlaceholder": "Acme Corp — annual plan",
     "value": "Value",
@@ -682,6 +689,7 @@
     "completeSuccess": "Task completed",
     "createSuccess": "Task created",
     "deleteSuccess": "Task deleted",
+    "deleteDesc": "This task will be permanently deleted. This cannot be undone.",
     "emptyHint": "Create a follow-up so leads don't go cold.",
     "presets": {
       "today6pm": "Today 6:00 PM",
@@ -773,6 +781,9 @@
     "title": "Custom Objects",
     "subtitle": "Define your own record types beyond Contacts — properties, vehicles, policies, anything.",
     "new": "New object",
+    "showArchived": "Show archived",
+    "hideArchived": "Hide archived",
+    "archivedBadge": "Archived",
     "searchPlaceholder": "Search records…",
     "empty": {
       "title": "No custom objects yet",
@@ -790,7 +801,8 @@
       "name": "Name"
     },
     "action": {
-      "archive": "Archive"
+      "archive": "Archive",
+      "restore": "Restore"
     },
     "form": {
       "newTitle": "New custom object",
@@ -837,6 +849,8 @@
       "createFailed": "Failed to create object",
       "archived": "Object archived",
       "archiveFailed": "Failed to archive",
+      "restored": "Object restored",
+      "restoreFailed": "Failed to restore",
       "recordSaved": "Record saved",
       "recordFailed": "Failed to save record",
       "recordDeleted": "Record deleted",
@@ -900,7 +914,8 @@
     },
     "action": {
       "refresh": "Refresh",
-      "disconnect": "Disconnect"
+      "disconnect": "Disconnect",
+      "reconnect": "Reconnect"
     },
     "confirm": {
       "disconnectTitle": "Disconnect ad account",
@@ -930,7 +945,21 @@
       "disconnected": "Ad account disconnected",
       "disconnectFailed": "Failed to disconnect account",
       "pulled": "Refreshed — {{count}} day(s) updated",
-      "pullFailed": "Failed to refresh metrics"
+      "pullFailed": "Failed to refresh metrics",
+      "tiktokConnected": "TikTok advertiser(s) connected",
+      "tiktokConnectFailed": "Failed to connect TikTok account"
+    },
+    "oauth": {
+      "tiktokConnect": "Connect TikTok for Business",
+      "tiktokNotConfigured": "An admin must add TikTok Business app credentials first",
+      "selectTitle": "Choose TikTok advertiser accounts",
+      "selectBody": "Select the advertiser accounts to connect to this workspace.",
+      "noAdvertisers": "No advertiser accounts found",
+      "noAdvertisersHint": "Make sure you granted access to at least one TikTok advertiser account.",
+      "enableDm": "Also enable TikTok DM inbox",
+      "connectSelected": "Connect selected",
+      "callbackError": "TikTok connection failed or was cancelled. Please try again.",
+      "startFailed": "Could not start the TikTok connection"
     }
   },
   "reports": {
@@ -1132,6 +1161,8 @@
     "saved": "Document saved",
     "saveFailed": "Save failed",
     "loadFailed": "Could not load document",
+    "archiveFailed": "Could not update the document",
+    "deleteFailed": "Could not delete the document",
     "archived": "archived",
     "updated": "updated",
     "toggleArchive": "Archive / restore",
@@ -1205,7 +1236,66 @@
     "enrollAll": "Enroll ALL contacts — this starts sending messages and cannot be undone",
     "filterStatus": "Status (optional)",
     "filterBusinessType": "Business type (optional)",
-    "filterSearch": "Search name/email (optional)"
+    "filterSearch": "Search name/email (optional)",
+    "namePlaceholder": "Automation name",
+    "activate": "Activate",
+    "pause": "Pause",
+    "searchPlaceholder": "Search by name or trigger…",
+    "statusFilter": "Status filter",
+    "status": { "all": "All" },
+    "newBlank": "Blank automation",
+    "newFromTemplate": "From a template",
+    "newWithAi": "Describe with AI",
+    "fromTemplate": "Start from template",
+    "templatesTitle": "Start from a template",
+    "templatesHint": "Pick a recipe to pre-fill the builder — you can tweak everything before saving.",
+    "aiTitle": "Describe your automation",
+    "aiDialogHint": "AI drafts the trigger and steps — you review and save them in the builder.",
+    "statsLine": "{{started}} started → {{completed}} completed",
+    "deleteTitle": "Delete automation?",
+    "deleteDesc": "Running instances will be cancelled.",
+    "emptyTitle": "No automations yet",
+    "addStep": "Add step",
+    "canvasHint": "Click a step to edit it, or use the palette to add one.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "deleteStep": "Delete step",
+    "noConfig": "This step has no settings.",
+    "advancedJson": "Advanced (JSON)",
+    "invalidJson": "Invalid JSON.",
+    "jsonNeedsType": "Must be a JSON object with a \"type\" field.",
+    "invalidFiltersJson": "Filters must be a JSON array.",
+    "unsavedConfirm": "Discard unsaved changes?",
+    "subject": "Subject",
+    "body": "Message",
+    "prompt": "Prompt",
+    "message": "Message",
+    "tag": "Tag",
+    "strategy": "Strategy",
+    "waitMode": "Mode",
+    "duration": "For a duration",
+    "untilReply": "Until reply",
+    "waitSeconds": "Seconds (60–2592000)",
+    "taskTitle": "Task title",
+    "branchHint": "Continue when ALL conditions match; otherwise fall through (or jump).",
+    "addCondition": "Add condition",
+    "removeCondition": "Remove condition",
+    "condField": "Field",
+    "condOp": "Operator",
+    "condValue": "Value",
+    "elseGoto": "If no match — go to step # (optional)",
+    "elseFallThrough": "fall through",
+    "updateLeadHint": "Set these fields on the lead.",
+    "fieldKey": "Field",
+    "fieldValue": "Value",
+    "addField": "Add field",
+    "removeField": "Remove field",
+    "categories": "Categories (comma-separated)",
+    "routes": "Route each category to a step # (optional)",
+    "routeFor": "Route for {{cat}}",
+    "webhookUrl": "URL",
+    "webhookMethod": "Method",
+    "webhookBody": "Body (JSON)"
   },
   "campaigns": {
     "title": "Campaigns",
@@ -1227,6 +1317,7 @@
     "composeFailed": "Compose failed",
     "launched": "Launched",
     "launchFailed": "Launch failed",
+    "actionFailed": "Action failed",
     "sent": "sent",
     "opened": "opened",
     "clicked": "clicked",
@@ -1248,6 +1339,8 @@
     "saveFailed": "Save failed",
     "drafted": "Draft ready",
     "draftFailed": "Could not draft",
+    "publishFailed": "Could not update publish state",
+    "deleteFailed": "Could not delete the page",
     "publish": "Publish",
     "unpublish": "Unpublish",
     "copyUrl": "public URL",
@@ -1256,6 +1349,8 @@
     "formName": "Form name (name/email/phone fields)",
     "addForm": "Add",
     "formCreated": "Form created",
+    "formCreateFailed": "Could not create form",
+    "formDeleteFailed": "Could not delete form",
     "noForms": "No forms yet. Add one, then reference it in a page form block: {\"type\":\"form\",\"formId\":\"…\"}.",
     "delete": "Delete"
   },
@@ -1331,6 +1426,57 @@
     "empty": "No AI calls yet.",
     "selectPrompt": "Select a call to see the transcript.",
     "noTranscript": "No transcript for this call."
+  },
+  "callAnalysis": {
+    "title": "Call analysis",
+    "summary": "Summary",
+    "score": "Score",
+    "actionItems": "Action items",
+    "topics": "Topics",
+    "analyse": "Analyse",
+    "recordingRequired": "A call recording is required to analyse",
+    "runOk": "Analysis complete",
+    "runSkipped": "Analysis already exists",
+    "runFailed": "Analysis failed",
+    "sentiment": {
+      "POSITIVE": "Positive",
+      "NEUTRAL": "Neutral",
+      "NEGATIVE": "Negative"
+    }
+  },
+  "copilot": {
+    "title": "Live Assistant",
+    "listen": "Listen",
+    "stop": "Stop",
+    "thinking": "Thinking…",
+    "summary": "Summary",
+    "getSuggestions": "Get suggestions",
+    "pastePlaceholder": "Paste the call transcript here…"
+  },
+  "voiceAiSettings": {
+    "title": "Voice AI",
+    "subtitle": "Voice-AI capabilities activate automatically once you buy the NetGSM add-ons and set the keys. Each capability's status and wiring URLs are shown below.",
+    "on": "On",
+    "off": "Off",
+    "unavailable": "Could not load status.",
+    "capability": {
+      "stt": {
+        "name": "Speech-to-Text (STT)",
+        "note": "Needed to analyse call recordings. To enable: NetGSM Call Recording + an STT key."
+      },
+      "bridge": {
+        "name": "AI Bridge",
+        "note": "Lets VAPI/Retell/ElevenLabs use our Claude brain for real-time voice AI. To enable: SIP Trunk + Yapay Zeka + a partner."
+      },
+      "netgsmIvr": {
+        "name": "NetGSM IVR",
+        "note": "Uses NetGSM's TTS robot for inbound calls. To enable: NetGSM Custom API (Özel API) add-on."
+      },
+      "copilot": {
+        "name": "Live Assistant (Copilot)",
+        "note": "Suggests lines to the rep during a call. To enable: STT/key only."
+      }
+    }
   },
   "invoices": {
     "title": "Invoices",

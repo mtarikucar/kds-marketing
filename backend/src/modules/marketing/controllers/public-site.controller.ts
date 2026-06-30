@@ -107,13 +107,14 @@ export class PublicSiteController {
       `.slot{display:inline-block;margin:4px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff}` +
       `.slot:hover{border-color:#1e40af}input{display:block;width:100%;padding:10px;margin:6px 0;border:1px solid #cbd5e1;border-radius:8px}` +
       `button{background:#1e40af;color:#fff;border:none;padding:12px 20px;border-radius:10px;cursor:pointer}</style></head>` +
-      `<body><h2>${esc(info.name)}</h2><p>Times shown in UTC. Pick a slot:</p><div id="slots">Loading…</div>` +
+      `<body><h2>${esc(info.name)}</h2><p>Times shown in ${esc(info.timezone || 'UTC')}. Pick a slot:</p><div id="slots">Loading…</div>` +
       `<form id="f" style="display:none;margin-top:20px"><input name="name" placeholder="Name" required>` +
       `<input name="email" type="email" placeholder="Email"><input name="phone" placeholder="Phone">` +
       `<input type="hidden" name="start"><button type="submit">Confirm booking</button></form><div id="msg"></div>` +
-      `<script>const B=${JSON.stringify(apiBase)};let f=document.getElementById('f');` +
+      `<script>const B=${JSON.stringify(apiBase)};const TZ=${JSON.stringify(info.timezone || 'UTC')};let f=document.getElementById('f');` +
       `fetch(B+'/slots').then(r=>r.json()).then(d=>{const s=document.getElementById('slots');s.innerHTML='';` +
-      `(d.slots||[]).slice(0,60).forEach(t=>{const b=document.createElement('span');b.className='slot';b.textContent=new Date(t).toUTCString();` +
+      `(d.slots||[]).slice(0,60).forEach(t=>{const b=document.createElement('span');b.className='slot';` +
+      `b.textContent=new Date(t).toLocaleString(undefined,{timeZone:TZ,dateStyle:'medium',timeStyle:'short'});` +
       `b.onclick=()=>{f.start.value=t;f.style.display='block';window.scrollTo(0,document.body.scrollHeight);};s.appendChild(b);});` +
       `if(!d.slots||!d.slots.length)s.textContent='No slots available.';});` +
       `f.onsubmit=e=>{e.preventDefault();const fd=new FormData(f);const body={};fd.forEach((v,k)=>body[k]=v);` +

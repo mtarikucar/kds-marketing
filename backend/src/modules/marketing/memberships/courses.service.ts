@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -45,6 +46,8 @@ interface LessonInput {
  */
 @Injectable()
 export class CoursesService {
+  private readonly logger = new Logger(CoursesService.name);
+
   constructor(
     private prisma: PrismaService,
     private readonly certificates: CertificateService,
@@ -140,6 +143,20 @@ export class CoursesService {
 
   async remove(workspaceId: string, id: string) {
     await this.assertCourse(workspaceId, id);
+    // Course → Enrollment / Certificate are onDelete:Cascade, so a hard delete
+    // erases every student's enrollment + lesson progress AND any issued
+    // Certificate (a serial-numbered, publicly-verifiable credential). Refuse
+    // once anyone has enrolled and point the operator at ARCHIVED status — the
+    // soft-delete that hides the course while preserving those records.
+    const enrolled = await this.prisma.enrollment.count({
+      where: { workspaceId, courseId: id },
+    });
+    if (enrolled > 0) {
+      throw new ConflictException(
+        'Course has enrollments — set it to ARCHIVED instead of deleting ' +
+          '(deleting would erase student progress and issued certificates)',
+      );
+    }
     await this.prisma.course.delete({ where: { id } });
     return { id };
   }
@@ -178,8 +195,23 @@ export class CoursesService {
   }
 
   async removeModule(workspaceId: string, moduleId: string) {
-    await this.assertModule(workspaceId, moduleId);
-    await this.prisma.courseModule.delete({ where: { id: moduleId } });
+    const m = await this.assertModule(workspaceId, moduleId);
+    // Deleting the module cascade-deletes its lessons (FK), but LessonProgress is
+    // keyed by lessonId with NO FK to Lesson, so those rows would orphan and keep
+    // counting toward done/total on every enrollment that completed them. Clear
+    // the progress for the module's lessons in the same transaction.
+    const lessons = await this.prisma.lesson.findMany({
+      where: { moduleId },
+      select: { id: true },
+    });
+    const lessonIds = lessons.map((l) => l.id);
+    await this.prisma.$transaction([
+      this.prisma.lessonProgress.deleteMany({ where: { lessonId: { in: lessonIds } } }),
+      this.prisma.courseModule.delete({ where: { id: moduleId } }),
+    ]);
+    // The module's lessons are gone — re-derive every enrollment's stored progress
+    // (and graduate anyone now at 100% over the remaining lessons).
+    await this.recomputeCourseProgress(m.courseId);
     return { id: moduleId };
   }
 
@@ -217,10 +249,59 @@ export class CoursesService {
   private async assertLesson(workspaceId: string, lessonId: string) {
     const l = await this.prisma.lesson.findFirst({
       where: { id: lessonId, module: { course: { workspaceId } } },
-      select: { id: true },
+      select: { id: true, module: { select: { courseId: true } } },
     });
     if (!l) throw new NotFoundException('Lesson not found');
     return l;
+  }
+
+  /**
+   * Re-derive every enrollment's progress after the course's lesson set changes
+   * (a lesson or module was removed). `progressPct` is a STORED field — without
+   * this it goes stale: removing an INCOMPLETE lesson shrinks the denominator, so
+   * a learner who finished all the OTHER lessons is now at 100% but would stay
+   * ACTIVE forever (no future markLessonComplete will fire to cross 100% and mint
+   * the certificate). Recompute `done/total` over the LIVE lessons only and
+   * graduate the ACTIVE enrollments that just reached 100%. Never un-graduate or
+   * re-issue a COMPLETED enrollment, and never act on an empty course (total 0).
+   */
+  private async recomputeCourseProgress(courseId: string) {
+    const liveLessons = await this.prisma.lesson.findMany({
+      where: { module: { courseId } },
+      select: { id: true },
+    });
+    const liveIds = liveLessons.map((l) => l.id);
+    const total = liveIds.length;
+    if (total === 0) return;
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { courseId },
+      select: { id: true, workspaceId: true, courseId: true, leadId: true, status: true },
+    });
+    for (const e of enrollments) {
+      const done = await this.prisma.lessonProgress.count({
+        where: { enrollmentId: e.id, completed: true, lessonId: { in: liveIds } },
+      });
+      const pct = Math.round((done / total) * 100);
+      // Only an ACTIVE → COMPLETED crossing graduates + issues. A COMPLETED
+      // enrollment keeps its status and certificate even if pct is recomputed.
+      const graduates = pct >= 100 && e.status !== 'COMPLETED';
+      const updated = await this.prisma.enrollment.update({
+        where: { id: e.id },
+        data: {
+          progressPct: pct,
+          ...(graduates ? { status: 'COMPLETED', completedAt: new Date() } : {}),
+        },
+      });
+      if (graduates) {
+        try {
+          await this.certificates.issueForEnrollment(updated);
+        } catch (err: any) {
+          this.logger.warn(
+            `certificate issuance failed for enrollment ${e.id}: ${err?.message ?? err}`,
+          );
+        }
+      }
+    }
   }
 
   async updateLesson(workspaceId: string, lessonId: string, dto: LessonInput) {
@@ -241,8 +322,18 @@ export class CoursesService {
   }
 
   async removeLesson(workspaceId: string, lessonId: string) {
-    await this.assertLesson(workspaceId, lessonId);
-    await this.prisma.lesson.delete({ where: { id: lessonId } });
+    const lesson = await this.assertLesson(workspaceId, lessonId);
+    // LessonProgress has no FK to Lesson (only to Enrollment), so deleting the
+    // lesson would orphan its progress rows — they keep counting toward done/total,
+    // inflating completion (pct can exceed 100% and falsely flip an enrollment to
+    // COMPLETED / issue a certificate). Remove the progress in the same transaction.
+    await this.prisma.$transaction([
+      this.prisma.lessonProgress.deleteMany({ where: { lessonId } }),
+      this.prisma.lesson.delete({ where: { id: lessonId } }),
+    ]);
+    // The course now has one fewer lesson — re-derive every enrollment's stored
+    // progress so it isn't stale (and graduate anyone now at 100%).
+    await this.recomputeCourseProgress(lesson.module.courseId);
     return { id: lessonId };
   }
 }

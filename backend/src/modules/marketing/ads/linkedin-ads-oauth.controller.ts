@@ -61,7 +61,7 @@ export class LinkedinAdsOAuthController {
     }
     try {
       const { pendingId } = await this.svc.handleCallback(code, state);
-      return res.redirect(302, `${appUrl}/ads?connect=${pendingId}`);
+      return res.redirect(302, `${appUrl}/ads?connect=${pendingId}&connect_provider=linkedin`);
     } catch {
       return res.redirect(302, `${appUrl}/ads?connect_error=1`);
     }

@@ -68,6 +68,26 @@ describe('workflow DSL', () => {
     expect(dsl.trigger.filters).toEqual([]);
   });
 
+  describe('wait step', () => {
+    it('rejects a duration wait with no seconds (executor would silently default to 1h)', () => {
+      expect(() =>
+        parseWorkflowParts(okTrigger, [
+          { type: 'wait', mode: 'duration' },
+          { type: 'stop_workflow' },
+        ]),
+      ).toThrow();
+    });
+
+    it('accepts an until_reply wait with no explicit seconds (its cap is optional)', () => {
+      expect(() =>
+        parseWorkflowParts(okTrigger, [
+          { type: 'wait', mode: 'until_reply' },
+          { type: 'stop_workflow' },
+        ]),
+      ).not.toThrow();
+    });
+  });
+
   describe('ai_classify routes', () => {
     const classifyAt = (routes: Record<string, number>) => [
       {
@@ -90,6 +110,23 @@ describe('workflow DSL', () => {
     it('rejects a route target that overruns steps.length', () => {
       // 2 steps → valid indexes are 0,1; 5 is out of bounds.
       expect(() => parseWorkflowParts(okTrigger, classifyAt({ hot: 5 }))).toThrow();
+    });
+  });
+
+  describe('branch.elseGoto bounds', () => {
+    const branchAt = (elseGoto: number) => [
+      { type: 'branch', filters: [{ field: 'lead.status', op: 'eq', value: 'NEW' }], elseGoto },
+      { type: 'send_whatsapp', body: 'hi' },
+      { type: 'stop_workflow' },
+    ];
+
+    it('accepts an in-bounds elseGoto', () => {
+      expect(() => parseWorkflowParts(okTrigger, branchAt(2))).not.toThrow();
+    });
+
+    it('rejects an elseGoto that overruns steps.length (would silently end the run)', () => {
+      // 3 steps → valid indexes 0,1,2; 9 is out of bounds.
+      expect(() => parseWorkflowParts(okTrigger, branchAt(9))).toThrow();
     });
   });
 

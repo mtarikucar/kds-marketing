@@ -97,6 +97,7 @@ export default function MarketingHeader() {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'notifications'] });
       toast.success('All notifications marked as read');
     },
+    onError: (err: any) => toast.error(err.response?.data?.message || 'Could not mark all as read'),
   });
 
   const markOneReadMutation = useMutation({
@@ -104,6 +105,7 @@ export default function MarketingHeader() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'notifications'] });
     },
+    onError: (err: any) => toast.error(err.response?.data?.message || 'Could not update the notification'),
   });
 
   // --- Change Password ---

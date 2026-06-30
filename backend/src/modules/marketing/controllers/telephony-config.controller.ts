@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Put, Patch, Post, Body, Param, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -9,6 +9,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { TelephonyConfigService } from '../telephony/telephony-config.service';
+import { CallCdrSyncService } from '../telephony/call-cdr-sync.service';
 import { UpsertTelephonyConfigDto, SetDahiliDto } from '../dto/telephony-config.dto';
 
 @MarketingRoute()
@@ -17,7 +18,21 @@ import { UpsertTelephonyConfigDto, SetDahiliDto } from '../dto/telephony-config.
 @MarketingRoles('MANAGER')
 @RequiresFeature('telephony')
 export class TelephonyConfigController {
-  constructor(private readonly telephony: TelephonyConfigService) {}
+  constructor(
+    private readonly telephony: TelephonyConfigService,
+    private readonly cdr: CallCdrSyncService,
+  ) {}
+
+  /** Diagnostic: run a raw NetGSM CDR fetch from prod (allow-listed IP) and
+   *  return the raw response — confirms creds + reveals the real field shape. */
+  @Post('cdr/test')
+  @RequirePermission('settings.manage')
+  cdrTest(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Body() dto: { startdate?: string; stopdate?: string },
+  ) {
+    return this.cdr.testFetch(a.workspaceId, dto?.startdate, dto?.stopdate);
+  }
 
   @Get('config')
   get(@CurrentMarketingUser() a: MarketingUserPayload) {

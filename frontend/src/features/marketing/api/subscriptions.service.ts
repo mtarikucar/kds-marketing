@@ -30,6 +30,17 @@ export interface Subscription {
   createdAt: string;
 }
 
+/**
+ * Full record returned by GET /subscriptions/:id — the list endpoint omits
+ * `items`, `dueDays` and `notes`, so the edit dialog must fetch this to avoid
+ * replacing a plan's real line items (and its billed amount) with a blank draft.
+ */
+export interface SubscriptionDetail extends Subscription {
+  items: SubscriptionItem[];
+  dueDays: number;
+  notes: string | null;
+}
+
 export interface SubscriptionPayload {
   name: string;
   items: SubscriptionItem[];
@@ -44,6 +55,9 @@ export interface SubscriptionPayload {
 
 export const listSubscriptions = (): Promise<Subscription[]> =>
   marketingApi.get('/subscriptions').then((r) => r.data);
+
+export const getSubscription = (id: string): Promise<SubscriptionDetail> =>
+  marketingApi.get(`/subscriptions/${id}`).then((r) => r.data);
 
 export const createSubscription = (payload: SubscriptionPayload): Promise<Subscription> =>
   marketingApi.post('/subscriptions', payload).then((r) => r.data);

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import CourseEditorPage from './CourseEditorPage';
@@ -103,5 +104,30 @@ describe('CourseEditorPage — publish guard', () => {
     renderEditor();
     const publish = await screen.findByRole('button', { name: /^publish$/i });
     expect(publish).toBeEnabled();
+  });
+});
+
+describe('CourseEditorPage — add-module double-submit guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGet.mockImplementation((url: string) =>
+      url === '/enrollments'
+        ? Promise.resolve({ data: [] })
+        : Promise.resolve({ data: { ...baseCourse, modules: [] } }),
+    );
+    // The add-module POST never resolves → it stays pending while we re-press Enter.
+    (marketingApi.post as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}),
+    );
+  });
+
+  it('does not add the same module twice on Enter while the first POST is in flight', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    const input = await screen.findByPlaceholderText(/getting started/i);
+    await user.type(input, 'Intro');
+    await user.keyboard('{Enter}'); // first add → pending
+    await user.keyboard('{Enter}'); // second Enter while pending → must be ignored
+    expect(marketingApi.post).toHaveBeenCalledTimes(1);
   });
 });

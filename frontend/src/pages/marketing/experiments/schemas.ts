@@ -76,7 +76,27 @@ export const surveyQuestionSchema = z
 export const surveySchema = z.object({
   name: z.string().trim().min(1, 'required').max(160, 'tooLong'),
   redirectUrl: z.string().trim().max(2000, 'tooLong').optional().or(z.literal('')),
-  questions: z.array(surveyQuestionSchema).min(1, 'minQuestions'),
+  questions: z
+    .array(surveyQuestionSchema)
+    .min(1, 'minQuestions')
+    // Answers are stored as a map keyed by question.key, so duplicate keys
+    // collide — one respondent answer overwrites the other (lost data). The
+    // builder's default `q${n}` key can repeat after an add-delete-add. Mirror
+    // experimentSchema's variant-key guard.
+    .superRefine((questions, ctx) => {
+      const seen = new Set<string>();
+      questions.forEach((q, i) => {
+        const k = q.key.trim().toLowerCase();
+        if (seen.has(k)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'duplicateKey',
+            path: [i, 'key'],
+          });
+        }
+        seen.add(k);
+      });
+    }),
 });
 
 export type SurveyFormValues = z.infer<typeof surveySchema>;

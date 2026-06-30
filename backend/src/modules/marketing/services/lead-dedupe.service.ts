@@ -31,6 +31,27 @@ const SIMPLE_CHILD_DELEGATES = [
   'review',
   'voiceCall',
   'invoice',
+  // Lead-owned records added with later features. They are pure 1:N (no unique
+  // constraint involving leadId), so a wholesale re-parent can't collide. Before
+  // this, merging a duplicate ORPHANED these on the tombstoned (query-hidden) row
+  // — the canonical lost the dup's deals, documents, estimates, consent, etc.
+  'opportunity',
+  'document',
+  'estimate',
+  'triggerLinkClick',
+  'dialSessionItem',
+  'dataRequest',
+  'surveyResponse',
+  'consentRecord',
+  'customerSubscription',
+  'couponRedemption',
+  // NOTE: collision-keyed [<field>, leadId] children (enrollment, customObjectLink,
+  // communityMember, earnedBadge, certificate) are re-parented via reparentDeduped()
+  // in merge(); pointsLedger is handled inline there (composite [source,refId]
+  // collision). customerWallet ([workspaceId, leadId], one per lead) is NOT moved:
+  // a funded dup wallet blocks the merge (pre-tx guard) so its balance is never
+  // silently orphaned — a real balance/currency consolidation is left to a
+  // deliberate flow rather than guessed here.
 ] as const;
 
 /** Scalar fields filled onto the canonical from a duplicate when blank. */
@@ -156,6 +177,22 @@ export class LeadDedupeService {
     const dupIds = dups.map((d) => d.id);
     if (dupIds.length === 0) return { canonicalId, merged: 0 };
 
+    // Money safety: a duplicate holding store credit would otherwise have its
+    // wallet orphaned on the tombstone — one wallet per lead, so it can't simply
+    // be re-parented onto a canonical that already has one, and summing balances
+    // (with possible currency mismatch) is a deliberate decision, not a guess.
+    // Refuse the merge so the credit is consolidated on purpose. Empty wallets
+    // (zero balance) are harmless and never block.
+    const fundedDupWallet = await this.prisma.customerWallet.findFirst({
+      where: { workspaceId, leadId: { in: dupIds }, NOT: { balance: 0 } },
+      select: { id: true },
+    });
+    if (fundedDupWallet) {
+      throw new ConflictException(
+        'A duplicate has a wallet balance — consolidate the wallet before merging',
+      );
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const txc = tx as unknown as Record<string, any>;
 
@@ -199,6 +236,39 @@ export class LeadDedupeService {
         data: { leadId: canonicalId },
       });
 
+      // Children with a [<field>, leadId] unique — same collision dance, so a
+      // duplicate enrolled in / certified for / a member/badge-holder of the SAME
+      // course/community/badge as the canonical doesn't abort the merge on P2002.
+      // (workspaceId is part of the unique for earnedBadge/certificate.)
+      await this.reparentDeduped(txc, 'enrollment', 'courseId', canonicalId, dupIds);
+      await this.reparentDeduped(txc, 'customObjectLink', 'recordId', canonicalId, dupIds);
+      await this.reparentDeduped(txc, 'communityMember', 'communityId', canonicalId, dupIds);
+      await this.reparentDeduped(txc, 'earnedBadge', 'badgeId', canonicalId, dupIds, { workspaceId });
+      await this.reparentDeduped(txc, 'certificate', 'courseId', canonicalId, dupIds, { workspaceId });
+
+      // PointsLedger — unique [workspaceId, leadId, source, refId]: a COMPOSITE
+      // collision key, so the single-field helper can't express it. Drop the dup
+      // awards the canonical already holds (same source+refId — e.g. both leads
+      // completed the same lesson), then move the rest.
+      const canonAwards: { source: string; refId: string | null }[] =
+        await txc.pointsLedger.findMany({
+          where: { leadId: canonicalId, workspaceId },
+          select: { source: true, refId: true },
+        });
+      if (canonAwards.length) {
+        await txc.pointsLedger.deleteMany({
+          where: {
+            leadId: { in: dupIds },
+            workspaceId,
+            OR: canonAwards.map((a) => ({ source: a.source, refId: a.refId })),
+          },
+        });
+      }
+      await txc.pointsLedger.updateMany({
+        where: { leadId: { in: dupIds }, workspaceId },
+        data: { leadId: canonicalId },
+      });
+
       // Union custom fields (canonical wins per key) + fill blank scalars.
       const customFields = this.mergeCustomFields(canonical, dups);
       const filled = this.fillBlanks(canonical, dups);
@@ -233,6 +303,38 @@ export class LeadDedupeService {
     });
 
     return { canonicalId, merged: dupIds.length };
+  }
+
+  /**
+   * Re-parent a child whose uniqueness is `[<collisionField>, leadId]` (optionally
+   * within `scope`, e.g. workspaceId). A naive wholesale move would hit that unique
+   * and throw P2002 — aborting the entire merge — whenever the canonical already
+   * owns a row for the same collisionField (e.g. both leads enrolled in the same
+   * course). So drop the colliding duplicate rows first, then move the rest.
+   * Mirrors the inline LeadTag / CampaignRecipient dance.
+   */
+  private async reparentDeduped(
+    txc: Record<string, any>,
+    delegate: string,
+    collisionField: string,
+    canonicalId: string,
+    dupIds: string[],
+    scope: Record<string, unknown> = {},
+  ): Promise<void> {
+    const canonRows: Record<string, any>[] = await txc[delegate].findMany({
+      where: { leadId: canonicalId, ...scope },
+      select: { [collisionField]: true },
+    });
+    const collisionVals = canonRows.map((r) => r[collisionField]);
+    if (collisionVals.length) {
+      await txc[delegate].deleteMany({
+        where: { leadId: { in: dupIds }, [collisionField]: { in: collisionVals }, ...scope },
+      });
+    }
+    await txc[delegate].updateMany({
+      where: { leadId: { in: dupIds }, ...scope },
+      data: { leadId: canonicalId },
+    });
   }
 
   private mergeCustomFields(

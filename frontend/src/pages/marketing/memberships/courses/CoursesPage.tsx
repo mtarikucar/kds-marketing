@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Trash2, GraduationCap, Settings2 } from 'lucide-react';
+import { Plus, Trash2, GraduationCap, Settings2, Archive, ArchiveRestore } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
   PageHeader,
@@ -34,12 +34,31 @@ export default function CoursesPage() {
   const { t } = useTranslation('marketing');
   const navigate = useNavigate();
   const { data, isLoading } = useCourses();
-  const { create, remove } = useCourseMutations();
+  const { create, update, remove } = useCourseMutations();
 
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Course | null>(null);
 
   const courses: Course[] = data ?? [];
+
+  // Archive is the soft-delete: it retires a course from the catalog while
+  // KEEPING its enrollments + issued certificates. Delete is refused by the API
+  // once anyone has enrolled (it would cascade those records away), so archive
+  // is the safe way to take an in-use course out of circulation.
+  const setStatus = (c: Course, status: CourseStatus) =>
+    update.mutate(
+      { id: c.id, data: { status } },
+      {
+        onSuccess: () =>
+          toast.success(
+            status === 'ARCHIVED'
+              ? t('memberships.courses.archived', { defaultValue: 'Course archived' })
+              : t('memberships.courses.restored', { defaultValue: 'Course restored' }),
+          ),
+        onError: (e) =>
+          toast.error(apiError(e, t('memberships.courses.statusError', { defaultValue: 'Failed to update course' }))),
+      },
+    );
 
   const handleCreate = (values: CourseFormValues) => {
     create.mutate(
@@ -121,6 +140,17 @@ export default function CoursesPage() {
                 <Settings2 className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('memberships.courses.edit', { defaultValue: 'Edit content' })}
               </DropdownMenuItem>
+              {c.status === 'ARCHIVED' ? (
+                <DropdownMenuItem onClick={() => setStatus(c, 'DRAFT')}>
+                  <ArchiveRestore className="mr-2 h-4 w-4" aria-hidden="true" />
+                  {t('memberships.courses.restore', { defaultValue: 'Restore' })}
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onClick={() => setStatus(c, 'ARCHIVED')}>
+                  <Archive className="mr-2 h-4 w-4" aria-hidden="true" />
+                  {t('memberships.courses.archive', { defaultValue: 'Archive' })}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setDeleteTarget(c)}>
                 <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('common.delete', { defaultValue: 'Delete' })}
@@ -184,7 +214,8 @@ export default function CoursesPage() {
         }}
         title={t('memberships.courses.deleteTitle', { defaultValue: 'Delete course' })}
         description={t('memberships.courses.deleteDesc', {
-          defaultValue: 'This permanently removes the course, its modules, lessons and enrollments.',
+          defaultValue:
+            'This permanently removes the course with its modules and lessons. A course that already has enrollments cannot be deleted — archive it instead to keep student progress and issued certificates.',
         })}
         confirmLabel={t('common.delete', { defaultValue: 'Delete' })}
         cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}

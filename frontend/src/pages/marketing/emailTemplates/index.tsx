@@ -52,6 +52,7 @@ export default function EmailTemplatesPage() {
   const remove = useMutation({
     mutationFn: (id: string) => deleteEmailTemplate(id),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('email.deleteFailed', 'Could not delete the template')),
   });
 
   const openEdit = async (id: string) => {

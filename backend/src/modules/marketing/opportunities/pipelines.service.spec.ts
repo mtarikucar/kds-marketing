@@ -61,18 +61,33 @@ describe('PipelinesService', () => {
   });
 
   describe('remove', () => {
-    it('refuses to delete a pipeline that still has open opportunities', async () => {
+    it('refuses to delete a pipeline that still holds opportunities (any status)', async () => {
       prisma.pipeline.findFirst.mockResolvedValue({ id: 'p1', stages: [] } as any);
       prisma.opportunity.count.mockResolvedValue(3 as any);
 
       await expect(svc.remove(WS, 'p1')).rejects.toBeInstanceOf(ConflictException);
+      // The guard counts ALL statuses, not just OPEN — Opportunity→Pipeline is
+      // onDelete:Cascade, so a status-scoped guard would let a delete cascade
+      // away historical WON/LOST deals.
       expect(prisma.opportunity.count).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { workspaceId: WS, pipelineId: 'p1', status: 'OPEN' } }),
+        expect.objectContaining({ where: { workspaceId: WS, pipelineId: 'p1' } }),
       );
       expect(prisma.pipeline.delete).not.toHaveBeenCalled();
     });
 
-    it('deletes when no open opportunities remain', async () => {
+    it('refuses when only CLOSED (won/lost) deals remain — cascade would destroy history', async () => {
+      prisma.pipeline.findFirst.mockResolvedValue({ id: 'p1', stages: [] } as any);
+      // 0 OPEN deals, but 5 closed (won/lost) ones. A guard scoped to OPEN would
+      // see 0 and let the cascade delete those 5 sales records.
+      (prisma.opportunity.count as any).mockImplementation(({ where }: any) =>
+        Promise.resolve(where.status === undefined ? 5 : 0),
+      );
+
+      await expect(svc.remove(WS, 'p1')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.pipeline.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes when no opportunities remain at all', async () => {
       prisma.pipeline.findFirst.mockResolvedValue({ id: 'p1', stages: [] } as any);
       prisma.opportunity.count.mockResolvedValue(0 as any);
       await svc.remove(WS, 'p1');

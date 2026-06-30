@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import BookingSettingsPage from './BookingSettingsPage';
+import BookingSettingsPage, { availabilityHasInvalidWindow } from './BookingSettingsPage';
 
 vi.mock('../../features/marketing/api/marketingApi', () => ({
   default: {
@@ -64,5 +64,26 @@ describe('BookingSettingsPage', () => {
     await userEvent.click(saveBtn);
     const alerts = await screen.findAllByRole('alert');
     expect(alerts.length).toBeGreaterThan(0);
+  });
+});
+
+describe('availabilityHasInvalidWindow', () => {
+  it('accepts empty and valid windows', () => {
+    expect(availabilityHasInvalidWindow({})).toBe(false);
+    expect(availabilityHasInvalidWindow({ '1': [{ start: '09:00', end: '17:00' }] })).toBe(false);
+  });
+
+  it('flags an inverted or equal window (would yield zero bookable slots)', () => {
+    expect(availabilityHasInvalidWindow({ '1': [{ start: '17:00', end: '09:00' }] })).toBe(true);
+    expect(availabilityHasInvalidWindow({ '2': [{ start: '09:00', end: '09:00' }] })).toBe(true);
+  });
+
+  it('flags when ANY day has an invalid window', () => {
+    expect(
+      availabilityHasInvalidWindow({
+        '1': [{ start: '09:00', end: '17:00' }],
+        '2': [{ start: '18:00', end: '08:00' }],
+      }),
+    ).toBe(true);
   });
 });

@@ -159,7 +159,16 @@ export class NetsantralClient {
         this.logger.warn(`netsantral ${path} HTTP ${res.status}`);
         return { ok: false, message: `Netsantral HTTP ${res.status}` };
       }
-      return interpretNetsantralOriginate((await res.text()) ?? '');
+      const text = (await res.text()) ?? '';
+      const outcome = interpretNetsantralOriginate(text);
+      if (!outcome.ok) {
+        // Make the real wire shape visible for diagnosis WITHOUT leaking PII:
+        // mask any 7+ digit run (phone numbers/msisdn) and cap length. Creds live
+        // in the query string, not the body, so the body is otherwise safe to log.
+        const safeBody = text.replace(/\d{7,}/g, '***').slice(0, 500);
+        this.logger.warn(`netsantral ${path} not ok: ${outcome.message ?? outcome.code ?? '?'} | body=${safeBody}`);
+      }
+      return outcome;
     } catch (e: any) {
       const timedOut = e?.name === 'AbortError' || e?.name === 'TimeoutError';
       const raw = timedOut ? 'Netsantral request timed out' : (e?.message ?? String(e));

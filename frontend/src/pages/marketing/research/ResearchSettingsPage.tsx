@@ -118,6 +118,7 @@ export default function ResearchSettingsPage() {
         status: p.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE',
       }),
     onSuccess: invalidateProfiles,
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('research.toggleFailed', 'Could not update the profile')),
   });
 
   const deleteProfile = useMutation({
@@ -126,6 +127,7 @@ export default function ResearchSettingsPage() {
       invalidateProfiles();
       setDeleteTarget(null);
     },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('research.deleteProfileFailed', 'Could not delete the profile')),
   });
 
   // ── Helpers ────────────────────────────────────────────────────────────────

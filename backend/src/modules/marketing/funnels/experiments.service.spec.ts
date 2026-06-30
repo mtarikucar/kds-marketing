@@ -56,6 +56,49 @@ describe('ExperimentsService', () => {
     expect(prisma.experimentEvent.create).not.toHaveBeenCalled();
   });
 
+  it('selectVariant honours variant weights (deterministic via mocked RNG)', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.experimentEvent.create as jest.Mock).mockResolvedValue({});
+    const running = {
+      id: 'e1', workspaceId: WS, status: 'RUNNING',
+      variants: [{ key: 'a', weight: 3 }, { key: 'b', weight: 1 }], // total 4
+    } as any;
+
+    const rng = jest.spyOn(Math, 'random');
+    try {
+      // r = 0.1 * 4 = 0.4 → falls in variant 'a' bucket [0,3)
+      prisma.experiment.findUnique.mockResolvedValueOnce(running);
+      rng.mockReturnValueOnce(0.1);
+      expect((await svc.selectVariant('e1') as any).variantKey).toBe('a');
+
+      // r = 0.9 * 4 = 3.6 → falls in variant 'b' bucket [3,4)
+      prisma.experiment.findUnique.mockResolvedValueOnce(running);
+      rng.mockReturnValueOnce(0.9);
+      expect((await svc.selectVariant('e1') as any).variantKey).toBe('b');
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
+  it('selectVariant survives legacy/invalid weights without NaN-poisoning the pick', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.experimentEvent.create as jest.Mock).mockResolvedValue({});
+    // Bad weights (string + negative) that would make the un-guarded sum NaN
+    // and force every pick onto the last variant. safeWeight() coerces both to 1.
+    prisma.experiment.findUnique.mockResolvedValueOnce({
+      id: 'e1', workspaceId: WS, status: 'RUNNING',
+      variants: [{ key: 'a', weight: 'oops' }, { key: 'b', weight: -5 }],
+    } as any);
+    const rng = jest.spyOn(Math, 'random').mockReturnValue(0.1); // → first variant with equal weights
+    try {
+      const out: any = await svc.selectVariant('e1');
+      expect(out.variantKey).toBe('a'); // not forced to last ('b') by a NaN total
+      expect((prisma.experimentEvent.create as jest.Mock).mock.calls[0][0].data.kind).toBe('IMPRESSION');
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
   it('results aggregates impressions/conversions + rate per variant', async () => {
     const { prisma, svc } = makeSvc();
     prisma.experiment.findFirst.mockResolvedValue({ id: 'e1' } as any);

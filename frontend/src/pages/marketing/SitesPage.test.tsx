@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import SitesPage from './SitesPage';
+import marketingApi from '../../features/marketing/api/marketingApi';
 
 vi.mock('../../features/marketing/api/marketingApi', () => ({
   default: {
@@ -65,5 +66,33 @@ describe('SitesPage', () => {
     await userEvent.click(saveBtn);
     const alerts = await screen.findAllByRole('alert');
     expect(alerts.length).toBeGreaterThan(0);
+  });
+
+  // Each "Start from a template" button is a per-template action. Clicking ONE
+  // must only spin/disable THAT button — the shared `fromTemplate` mutation's
+  // isPending must be scoped by `variables === tpl.id`, or every template button
+  // freezes while one is creating (per-row mutation loading bleed).
+  it('only the clicked template button shows loading, not the others', async () => {
+    (marketingApi.get as any).mockImplementation((url: string) =>
+      url === '/sites/templates'
+        ? Promise.resolve({ data: [
+            { id: 'tpl-a', name: 'Coffee POS', description: 'a' },
+            { id: 'tpl-b', name: 'Salon', description: 'b' },
+          ] })
+        : Promise.resolve({ data: [] }),
+    );
+    // Keep the create request in-flight so isPending stays true while we assert.
+    (marketingApi.post as any).mockImplementation(() => new Promise(() => {}));
+
+    render(<SitesPage />, { wrapper });
+
+    const first = await screen.findByRole('button', { name: 'Coffee POS' });
+    const second = await screen.findByRole('button', { name: 'Salon' });
+    await userEvent.click(first);
+
+    await waitFor(() => expect(first).toHaveAttribute('aria-busy', 'true'));
+    // The OTHER template button must NOT be caught up in the first one's loading.
+    expect(second).not.toHaveAttribute('aria-busy', 'true');
+    expect(second).not.toBeDisabled();
   });
 });

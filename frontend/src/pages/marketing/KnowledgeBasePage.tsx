@@ -125,6 +125,8 @@ export default function KnowledgeBasePage() {
         status: d.status === 'ACTIVE' ? 'ARCHIVED' : 'ACTIVE',
       }),
     onSuccess: invalidate,
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('knowledge.archiveFailed', 'Could not update the document')),
   });
 
   const deleteDoc = useMutation({
@@ -133,6 +135,8 @@ export default function KnowledgeBasePage() {
       invalidate();
       setDeleteTarget(null);
     },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('knowledge.deleteFailed', 'Could not delete the document')),
   });
 
   const openCreate = () => {

@@ -60,4 +60,22 @@ describe('PublicAuditController (public token-gated render)', () => {
     const html = r.send.mock.calls[0][0] as string;
     expect(html).toMatch(/running|moment/i);
   });
+
+  it('auto-refreshes (JS-free) while the audit is still running', async () => {
+    // The page is intentionally script-free; a prospect who opens the link
+    // mid-run must not be stranded on a static "still running" page (lost lead).
+    audits.publicView.mockResolvedValue({ workspaceId: 'ws-1', businessName: 'B', targetUrl: 'https://x', status: 'RUNNING', score: null, sections: [] });
+    const r = res();
+    await ctrl.page('pa_token', r);
+    const html = r.send.mock.calls[0][0] as string;
+    expect(html).toMatch(/http-equiv=["']?refresh/i);
+  });
+
+  it('does NOT auto-refresh a finished (DONE) audit', async () => {
+    audits.publicView.mockResolvedValue({ workspaceId: 'ws-1', businessName: 'B', targetUrl: 'https://x', status: 'DONE', score: 42, sections: [] });
+    const r = res();
+    await ctrl.page('pa_token', r);
+    const html = r.send.mock.calls[0][0] as string;
+    expect(html).not.toMatch(/http-equiv=["']?refresh/i);
+  });
 });

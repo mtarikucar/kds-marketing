@@ -19,6 +19,7 @@ interface Props {
 const OAUTH_CAPABLE = new Set<SocialNetwork>([
   'FACEBOOK',
   'INSTAGRAM',
+  'INSTAGRAM_LOGIN',
   'LINKEDIN',
   'TIKTOK',
   'TWITTER',

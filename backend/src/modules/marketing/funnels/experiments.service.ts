@@ -84,17 +84,29 @@ export class ExperimentsService {
     return { id };
   }
 
+  /**
+   * Coerce a variant weight to a safe positive number. New variants are
+   * validated at the DTO (int 1..1000), but experiments stored before that
+   * validation existed (or written directly) may carry strings/NaN/negatives;
+   * those would poison the weighted sum (NaN total → every pick is the last
+   * variant). Anything non-finite or ≤0 falls back to the default weight of 1.
+   */
+  private safeWeight(v: Variant): number {
+    const w = Number(v.weight);
+    return Number.isFinite(w) && w > 0 ? w : 1;
+  }
+
   /** Public — weighted-random pick + impression. Returns the chosen variant. */
   async selectVariant(experimentId: string) {
     const exp = await this.prisma.experiment.findUnique({ where: { id: experimentId } });
     if (!exp || exp.status !== 'RUNNING') return null;
     const variants = (exp.variants as unknown as Variant[]) ?? [];
     if (!variants.length) return null;
-    const total = variants.reduce((s, v) => s + (v.weight ?? 1), 0);
+    const total = variants.reduce((s, v) => s + this.safeWeight(v), 0);
     let r = Math.random() * total;
     let chosen = variants[variants.length - 1];
     for (const v of variants) {
-      r -= v.weight ?? 1;
+      r -= this.safeWeight(v);
       if (r <= 0) {
         chosen = v;
         break;

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PostComposerDialog } from './PostComposerDialog';
 import type { SocialAccount } from './types';
 
@@ -24,14 +25,17 @@ const liAccount: SocialAccount = {
 describe('PostComposerDialog — LinkedinControls', () => {
   it('persists visibility=CONNECTIONS into submit.options.linkedin', async () => {
     const onSubmit = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <PostComposerDialog
-        open
-        onOpenChange={() => {}}
-        accounts={[liAccount]}
-        onSubmit={onSubmit}
-        isPending={false}
-      />,
+      <QueryClientProvider client={qc}>
+        <PostComposerDialog
+          open
+          onOpenChange={() => {}}
+          accounts={[liAccount]}
+          onSubmit={onSubmit}
+          isPending={false}
+        />
+      </QueryClientProvider>,
     );
     // type content
     fireEvent.change(screen.getByPlaceholderText('What do you want to share?'), {
@@ -50,14 +54,17 @@ describe('PostComposerDialog — LinkedinControls', () => {
 
   it('defaults visibility to PUBLIC when a LinkedIn account is selected', async () => {
     const onSubmit = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <PostComposerDialog
-        open
-        onOpenChange={() => {}}
-        accounts={[liAccount]}
-        onSubmit={onSubmit}
-        isPending={false}
-      />,
+      <QueryClientProvider client={qc}>
+        <PostComposerDialog
+          open
+          onOpenChange={() => {}}
+          accounts={[liAccount]}
+          onSubmit={onSubmit}
+          isPending={false}
+        />
+      </QueryClientProvider>,
     );
     fireEvent.change(screen.getByPlaceholderText('What do you want to share?'), {
       target: { value: 'hello' },

@@ -33,6 +33,18 @@ describe('AnalyticsService.funnel', () => {
     expect(arg.where.workspaceId).toBe(WS);
     expect(arg.where.createdAt.gte).toEqual(new Date('2026-01-01'));
   });
+
+  it('excludes soft-deleted + merged leads from every aggregation', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.lead.groupBy as unknown as jest.Mock).mockResolvedValue([]);
+    (prisma.marketingUser.findMany as unknown as jest.Mock).mockResolvedValue([]);
+    await svc.funnel(WS, {});
+    await svc.bySource(WS, {});
+    await svc.repPerformance(WS, {});
+    for (const [arg] of (prisma.lead.groupBy as unknown as jest.Mock).mock.calls) {
+      expect(arg.where).toMatchObject({ workspaceId: WS, mergedIntoId: null, deletedAt: null });
+    }
+  });
 });
 
 describe('AnalyticsService.bySource', () => {
@@ -51,16 +63,23 @@ describe('AnalyticsService.bySource', () => {
 });
 
 describe('AnalyticsService.repPerformance', () => {
-  it('rolls up totals + won per rep with a conversion rate', async () => {
+  it('rolls up totals + won per rep with a conversion rate and resolved names', async () => {
     const { prisma, svc } = makeSvc();
     (prisma.lead.groupBy as unknown as jest.Mock).mockResolvedValue([
       { assignedToId: 'r1', status: 'NEW', _count: 2 },
       { assignedToId: 'r1', status: 'WON', _count: 2 },
       { assignedToId: null, status: 'NEW', _count: 5 },
     ]);
+    (prisma.marketingUser.findMany as unknown as jest.Mock).mockResolvedValue([
+      { id: 'r1', firstName: 'Alice', lastName: 'Rep' },
+    ]);
     const out = await svc.repPerformance(WS, {});
     const r1 = out.find((r) => r.repId === 'r1');
-    expect(r1).toMatchObject({ total: 4, won: 2, conversionRate: 50 });
-    expect(out.find((r) => r.repId === 'unassigned')).toMatchObject({ total: 5, won: 0 });
+    // name is resolved (not the raw UUID) so the FE renders a readable table.
+    expect(r1).toMatchObject({ total: 4, won: 2, conversionRate: 50, name: 'Alice Rep' });
+    expect(out.find((r) => r.repId === 'unassigned')).toMatchObject({ total: 5, won: 0, name: 'Unassigned' });
+    // the name lookup is workspace-scoped to the assigned rep ids
+    const arg = (prisma.marketingUser.findMany as unknown as jest.Mock).mock.calls[0][0];
+    expect(arg.where).toMatchObject({ workspaceId: WS, id: { in: ['r1'] } });
   });
 });

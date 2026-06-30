@@ -3,6 +3,7 @@ import {
   metaGraphFollow,
   MetaGraphResult,
 } from '../../../common/util/meta-graph.util';
+import { withPermissionHint } from './meta-ads-error.util';
 
 /**
  * Meta Marketing API WRITE client — campaign/adset listing + management
@@ -51,7 +52,9 @@ function num(v: any): number | null {
 }
 
 function fail(r: MetaGraphResult, prefix: string): { error: string; isAuthError: boolean } {
-  return { error: `${prefix}: ${r.error.message}`.slice(0, 500), isAuthError: r.error.isAuthError };
+  // Append actionable guidance when Meta's opaque "missing permissions / does
+  // not exist" surfaces on a write the token isn't scoped/roled for.
+  return { error: withPermissionHint(`${prefix}: ${r.error.message}`.slice(0, 400)), isAuthError: r.error.isAuthError };
 }
 
 async function listEdge(

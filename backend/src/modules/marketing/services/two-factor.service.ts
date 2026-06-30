@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import * as QRCode from 'qrcode';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
   generateBackupCodes,
@@ -33,6 +34,17 @@ export class TwoFactorService {
 
   async beginEnroll(userId: string) {
     const u = await this.getUser(userId);
+    // Refuse to re-enroll an already-protected account. Otherwise beginEnroll —
+    // which takes NO verification code — would set twoFactorEnabled=false,
+    // silently disabling a user's working 2FA (and desyncing their authenticator
+    // if they abandon setup) AND handing a hijacked session a code-free way to
+    // strip 2FA, bypassing the deliberate code requirement on disable(). To
+    // rotate, the user must disable() with a valid code first, then re-enroll.
+    if (u.twoFactorEnabled) {
+      throw new BadRequestException(
+        'Two-factor authentication is already enabled. Disable it first to re-enroll.',
+      );
+    }
     const secret = generateTotpSecret();
     await this.prisma.marketingUser.update({
       where: { id: userId },
@@ -40,7 +52,14 @@ export class TwoFactorService {
       // user scans still carries the plaintext secret — that's by design.
       data: { twoFactorSecret: sealTotpSecret(secret), twoFactorEnabled: false },
     });
-    return { secret, otpauthUri: totpUri(secret, u.email) };
+    const otpauthUri = totpUri(secret, u.email);
+    // Render the QR HERE (the secret already lives on this server) and hand the
+    // browser a self-contained data URI. Previously the client built the QR via
+    // a third-party service (api.qrserver.com), which meant the otpauth URI —
+    // and therefore the user's TOTP secret — was sent to an external party that
+    // could log it and mint the user's codes. Keep it in-house.
+    const qrDataUri = await QRCode.toDataURL(otpauthUri, { width: 192, margin: 1 });
+    return { secret, otpauthUri, qrDataUri };
   }
 
   async enable(userId: string, code: string) {

@@ -17,6 +17,7 @@ import {
 } from '../scheduling/scheduled-job-runner.service';
 import { MessageSenderService } from './message-sender.service';
 import { ConversationStreamService } from './conversation-stream.service';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 
 const AI_REPLY_KIND = 'conversation.ai_reply';
 const FOLLOWUP_KIND = 'conversation.followup';
@@ -343,8 +344,17 @@ export class ConversationAiEngineService implements OnModuleInit {
 
     const data: any = {};
     if (fields.name && empty(lead.contactPerson)) data.contactPerson = fields.name.slice(0, 200);
-    if (fields.email && empty(lead.email) && emailRe.test(fields.email.trim())) data.email = fields.email.trim().slice(0, 200);
-    if (fields.phone && empty(lead.phone) && phoneRe.test(fields.phone.trim())) data.phone = fields.phone.trim().slice(0, 50);
+    if (fields.email && empty(lead.email) && emailRe.test(fields.email.trim())) {
+      data.email = fields.email.trim().slice(0, 200);
+      // Set the NORMALIZED key too — every dedup path (forms/booking/import/
+      // merge) matches on emailNormalized, so a raw-only capture would make this
+      // lead invisible to dedup and spawn duplicates on the next inbound.
+      data.emailNormalized = normalizeEmail(data.email);
+    }
+    if (fields.phone && empty(lead.phone) && phoneRe.test(fields.phone.trim())) {
+      data.phone = fields.phone.trim().slice(0, 50);
+      data.phoneNormalized = normalizePhone(data.phone);
+    }
     if (fields.city && empty(lead.city)) data.city = fields.city.slice(0, 120);
     if (fields.notes) {
       // Notes may append (don't clobber prior context).
@@ -418,14 +428,23 @@ export class ConversationAiEngineService implements OnModuleInit {
     const policy = this.followupPolicy(agent);
     if (!policy || convo.followupCount >= policy.maxFollowups) return;
 
+    // Don't re-engage a contact whose lead was bulk-deleted (deletedAt) or
+    // merged-away (mergedIntoId) since the last reply — the conversation may
+    // still be OPEN, but bulk-delete means "stop contacting". A lead-less
+    // conversation (leadId null) is unaffected. Gate BEFORE reserving a credit
+    // so a skipped nudge costs nothing.
+    const lead = convo.leadId
+      ? await this.prisma.lead.findFirst({
+          where: { id: convo.leadId, workspaceId, deletedAt: null, mergedIntoId: null },
+          select: { contactPerson: true, businessName: true },
+        })
+      : null;
+    if (convo.leadId && !lead) return;
+
     const cost = creditCost('conversation.followup');
     await this.credits.reserve(workspaceId, cost);
     let sent = false;
     try {
-      const lead = await this.prisma.lead.findFirst({
-        where: { id: convo.leadId, workspaceId },
-        select: { contactPerson: true, businessName: true },
-      });
       const history = await this.prisma.message.findMany({
         where: { workspaceId, conversationId },
         orderBy: { createdAt: 'desc' },

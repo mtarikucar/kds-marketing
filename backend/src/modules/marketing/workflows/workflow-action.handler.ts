@@ -115,8 +115,14 @@ export class WorkflowActionHandler {
 
     let conversationId: string | null = null;
     if (channelType === 'WEBCHAT') {
+      // Require a lead before scoping the open-conversation lookup. A bare
+      // `leadId: lead?.id` with no lead resolves to `leadId: undefined`, which
+      // Prisma DROPS from the where — matching ANY open web-chat session in the
+      // workspace and leaking the message to an unrelated customer. Skip instead
+      // (mirrors the no-email / no-phone guards on the other channels).
+      if (!lead?.id) return 'skipped (no lead for web-chat)';
       const convo = await this.prisma.conversation.findFirst({
-        where: { workspaceId: ctx.workspaceId, channelId: channel.id, leadId: lead?.id, status: 'OPEN' },
+        where: { workspaceId: ctx.workspaceId, channelId: channel.id, leadId: lead.id, status: 'OPEN' },
         orderBy: { createdAt: 'desc' },
       });
       conversationId = convo?.id ?? null;
@@ -139,9 +145,22 @@ export class WorkflowActionHandler {
       where: { channelId_value: { channelId, value } },
     });
     if (!identity) {
-      identity = await this.prisma.contactIdentity.create({
-        data: { workspaceId, channelId, kind, value, leadId },
-      });
+      try {
+        identity = await this.prisma.contactIdentity.create({
+          data: { workspaceId, channelId, kind, value, leadId },
+        });
+      } catch (e) {
+        // Lost the race on the (channelId, value) unique — a concurrent inbound
+        // ingest or a sibling workflow send just created this identity. Re-resolve
+        // the winner instead of failing the whole send step (which would FAIL the
+        // run and drop the message). conversation-ingress handles the same race.
+        if ((e as { code?: string })?.code === 'P2002') {
+          identity = await this.prisma.contactIdentity.findUnique({
+            where: { channelId_value: { channelId, value } },
+          });
+        }
+        if (!identity) throw e;
+      }
     }
     let convo = await this.prisma.conversation.findFirst({
       where: { workspaceId, channelId, contactIdentityId: identity.id, status: 'OPEN' },

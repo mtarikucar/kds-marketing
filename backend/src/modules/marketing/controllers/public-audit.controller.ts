@@ -79,6 +79,10 @@ export class PublicAuditController {
 
     res.type('html').send(
       `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+        // JS-free: while the audit is still running, auto-refresh so a prospect
+        // who opened the link mid-run sees the score appear without manually
+        // reloading (and isn't stranded on a static "still running" page).
+        (pending ? `<meta http-equiv="refresh" content="8">` : '') +
         `<title>${esc(brandName)} — ${heading}</title><style>` +
         `body{font-family:system-ui,-apple-system,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;color:#0f172a;background:#f8fafc}` +
         `h1{font-size:1.5rem;margin:0 0 4px}.target{color:#64748b;word-break:break-all;margin-bottom:24px}` +

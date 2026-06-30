@@ -50,6 +50,7 @@ export function FunnelsCard({ pages, wsId }: { pages: PageOpt[]; wsId?: string }
   const remove = useMutation({
     mutationFn: (id: string) => deleteFunnel(id),
     onSuccess: () => { invalidate(); setDeleteTarget(null); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('sites.funnelDeleteFailed', 'Could not delete the funnel')),
   });
 
   const publicUrl = (slug: string) => `${window.location.origin}/api/public/funnel/${wsId ?? ':workspace'}/${slug}/0`;

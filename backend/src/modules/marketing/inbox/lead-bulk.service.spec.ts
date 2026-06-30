@@ -241,5 +241,40 @@ describe('LeadBulkService', () => {
       expect(row).toContain("'+attack");
       expect(row).toContain("'@cmd");
     });
+
+    // The CSV must reflect the SAME filters the list shows — previously the
+    // controller forwarded only status/assignedToId/search, so source,
+    // businessType and the assignment filter silently fell out of the export.
+    const whereOf = () => prisma.lead.findMany.mock.calls[0][0].where;
+
+    it('applies source + businessType filters to the export query', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+      await svc.exportCsv(WS, { source: 'WEBSITE', businessType: 'CAFE' }, 'mgr-1', 'MANAGER');
+      expect(whereOf()).toMatchObject({ workspaceId: WS, source: 'WEBSITE', businessType: 'CAFE' });
+    });
+
+    it('maps assignmentStatus=unassigned to assignedToId null', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+      await svc.exportCsv(WS, { assignmentStatus: 'unassigned' }, 'mgr-1', 'MANAGER');
+      expect(whereOf().assignedToId).toBeNull();
+    });
+
+    it('maps assignmentStatus=assigned to assignedToId not-null', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+      await svc.exportCsv(WS, { assignmentStatus: 'assigned' }, 'mgr-1', 'MANAGER');
+      expect(whereOf().assignedToId).toEqual({ not: null });
+    });
+
+    it('maps assignmentStatus=mine to the actor', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+      await svc.exportCsv(WS, { assignmentStatus: 'mine' }, 'mgr-1', 'MANAGER');
+      expect(whereOf().assignedToId).toBe('mgr-1');
+    });
+
+    it('scopes a REP to their own leads regardless of assignmentStatus', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+      await svc.exportCsv(WS, { assignmentStatus: 'assigned' }, 'rep-1', 'REP');
+      expect(whereOf().assignedToId).toBe('rep-1');
+    });
   });
 });

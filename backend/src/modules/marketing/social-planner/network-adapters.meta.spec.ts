@@ -48,14 +48,17 @@ beforeEach(() => {
 
 describe('Instagram adapter', () => {
   it('FEED single image → container(IMAGE) then publish', async () => {
-    metaFetch.mockResolvedValueOnce(ok({ id: 'c1' })).mockResolvedValueOnce(ok({ id: 'IG_1' }));
+    metaFetch
+      .mockResolvedValueOnce(ok({ id: 'c1' })) // create IMAGE container
+      .mockResolvedValueOnce(ok({ status_code: 'FINISHED' })) // poll to FINISHED
+      .mockResolvedValueOnce(ok({ id: 'IG_1' })); // publish
     const r = await publishToNetwork(igAccount(), 'hi', ['https://cdn/a.jpg'], { format: 'FEED' });
     expect(r.ok).toBe(true);
     expect(r.externalPostId).toBe('IG_1');
     expect(pathOf(0)).toBe('/IG123/media');
     expect(bodyOf(0)).toMatchObject({ image_url: 'https://cdn/a.jpg', caption: 'hi' });
-    expect(pathOf(1)).toBe('/IG123/media_publish');
-    expect(bodyOf(1)).toMatchObject({ creation_id: 'c1' });
+    expect(pathOf(2)).toBe('/IG123/media_publish');
+    expect(bodyOf(2)).toMatchObject({ creation_id: 'c1' });
   });
 
   it('FEED single video is published as a Reel (status-polled)', async () => {
@@ -82,7 +85,10 @@ describe('Instagram adapter', () => {
   });
 
   it('STORY image → container(STORIES) then publish', async () => {
-    metaFetch.mockResolvedValueOnce(ok({ id: 'cs' })).mockResolvedValueOnce(ok({ id: 'IG_S' }));
+    metaFetch
+      .mockResolvedValueOnce(ok({ id: 'cs' })) // create STORIES container
+      .mockResolvedValueOnce(ok({ status_code: 'FINISHED' })) // poll to FINISHED
+      .mockResolvedValueOnce(ok({ id: 'IG_S' })); // publish
     const r = await publishToNetwork(igAccount(), '', ['https://cdn/s.jpg'], {
       format: 'STORY',
       mediaMime: ['image/jpeg'],

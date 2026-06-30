@@ -57,6 +57,22 @@ describe('CustomFieldsService.validateAndNormalize', () => {
     expect(await svc.validateAndNormalize(WS, 'LEAD', undefined, 'update')).toEqual({});
     expect(await svc.validateAndNormalize(WS, 'LEAD', {}, 'update')).toEqual({});
   });
+
+  // Default: an empty value is SKIPPED so a blank import cell / omitted field
+  // can't clobber the stored value (import even calls with mode='update').
+  it('skips empty values by default (blank does not clobber)', async () => {
+    expect(await svc.validateAndNormalize(WS, 'LEAD', { budget: '', signed: '' }, 'update')).toEqual({});
+  });
+
+  // Edit forms send the FULL field map and opt into clearEmpty: an explicitly
+  // emptied field becomes null so the caller's {...existing, ...partial} merge
+  // actually CLEARS it (previously the old value silently persisted).
+  it('with clearEmpty, maps an explicitly-emptied field to null', async () => {
+    const out = await svc.validateAndNormalize(
+      WS, 'LEAD', { budget: '', tier: 'gold' }, 'update', { clearEmpty: true },
+    );
+    expect(out).toEqual({ budget: null, tier: 'gold' });
+  });
 });
 
 describe('CustomFieldsService def CRUD', () => {
@@ -83,6 +99,39 @@ describe('CustomFieldsService def CRUD', () => {
     prisma.customFieldDef.findUnique.mockResolvedValue(null);
     await expect(svc.create(WS, { label: 'Tier', type: 'SELECT' } as any))
       .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // The dup pre-check is a TOCTOU window: two concurrent creates of the same key
+  // both pass findUnique, the 2nd insert trips the (workspaceId, entity, key)
+  // unique → P2002. Without a catch that bubbles as a raw 500; map it to a clean
+  // 409 like tags.create / snippets.create do (no global P2002→409 mapping).
+  it('maps a P2002 race on create to a 409 (concurrent same-key insert)', async () => {
+    prisma.customFieldDef.findUnique.mockResolvedValue(null); // pre-check passes
+    (prisma.customFieldDef.create as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    await expect(svc.create(WS, { label: 'Annual Budget', type: 'NUMBER' } as any))
+      .rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rejects clearing the options of a SELECT field on update (would brick it)', async () => {
+    // coerce() rejects every value against an empty option list, so a SELECT
+    // left optionless can never be set again — update must guard it like create.
+    prisma.customFieldDef.findFirst.mockResolvedValue({
+      id: 'd2', workspaceId: WS, entity: 'LEAD', key: 'tier', type: 'SELECT',
+      options: [{ value: 'gold' }], required: true, archived: false,
+    } as any);
+    await expect(svc.update(WS, 'd2', { options: [] } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('allows a non-SELECT field update that carries no options', async () => {
+    prisma.customFieldDef.findFirst.mockResolvedValue({
+      id: 'd1', workspaceId: WS, entity: 'LEAD', key: 'budget', type: 'NUMBER',
+      options: null, required: false, archived: false,
+    } as any);
+    (prisma.customFieldDef.update as jest.Mock).mockResolvedValue({ id: 'd1', label: 'Budget' });
+    await expect(svc.update(WS, 'd1', { label: 'Budget' } as any)).resolves.toBeDefined();
   });
 
   it('archive throws NotFound when the def is not in the workspace', async () => {

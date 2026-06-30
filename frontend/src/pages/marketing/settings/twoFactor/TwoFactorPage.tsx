@@ -39,6 +39,9 @@ interface TwoFactorStatus {
 interface EnrollResponse {
   secret: string;
   otpauthUri: string;
+  // Server-rendered QR data URI — generated where the secret already lives, so
+  // the otpauth URI is never sent to a third-party QR service.
+  qrDataUri: string;
 }
 interface EnableResponse {
   enabled: boolean;
@@ -257,12 +260,11 @@ export default function TwoFactorPage() {
             ) : (
               <>
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-                  {/* QR code via public chart endpoint of the otpauth URI */}
+                  {/* QR rendered server-side (data URI) — the otpauth URI, which
+                      embeds the TOTP secret, never leaves our infrastructure. */}
                   <div className="shrink-0 rounded-lg border border-border bg-white p-3">
                     <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
-                        enrollment.otpauthUri,
-                      )}`}
+                      src={enrollment.qrDataUri}
                       alt={t('twofa.qrAlt', { defaultValue: 'Two-factor QR code' })}
                       width={180}
                       height={180}

@@ -62,17 +62,24 @@ export class PublicOrderFormController {
         `<label>Discount code<input type="text" id="couponCode" maxlength="40" autocomplete="off"></label>` +
         `<button type="button" id="go">Continue to payment</button><div id="msg"></div></form>` +
         `<script>var b=${JSON.stringify(`/api/public/o/${token}`)};` +
-        `document.getElementById('go').onclick=function(){` +
+        `var go=document.getElementById('go'),msg=document.getElementById('msg');` +
+        // Single re-enable path so EVERY non-redirect outcome (validation error,
+        // server message, OR a network/non-JSON failure) restores the button.
+        // Without the .catch below, a transient blunder (gateway 502, offline,
+        // timeout) left the button stuck on '…' disabled forever — bricking
+        // checkout until the buyer reloaded and re-typed everything.
+        `function reset(m){msg.textContent=m;go.disabled=false;go.textContent='Continue to payment';}` +
+        `go.onclick=function(){` +
         `var n=document.getElementById('fullName').value.trim();` +
-        `if(!n){document.getElementById('msg').textContent='Please enter your name.';return;}` +
+        `if(!n){msg.textContent='Please enter your name.';return;}` +
         `var p=document.getElementById('phone');` +
         `var c=document.getElementById('couponCode');` +
         `var payload={fullName:n,email:document.getElementById('email').value.trim()||undefined,phone:p&&p.value.trim()||undefined,couponCode:c&&c.value.trim()||undefined};` +
-        `this.disabled=true;this.textContent='…';` +
+        `go.disabled=true;go.textContent='…';` +
         `fetch(b,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})` +
         `.then(function(r){return r.json();}).then(function(d){` +
-        `if(d.redirectUrl){location.href=d.redirectUrl;}else{document.getElementById('msg').textContent=(d.message||'Could not continue. Please try again.');` +
-        `document.getElementById('go').disabled=false;document.getElementById('go').textContent='Continue to payment';}});};</script>` +
+        `if(d.redirectUrl){location.href=d.redirectUrl;}else{reset(d.message||'Could not continue. Please try again.');}})` +
+        `.catch(function(){reset('Could not continue. Please check your connection and try again.');});};</script>` +
         `</body></html>`,
     );
   }

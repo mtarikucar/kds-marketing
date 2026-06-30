@@ -72,18 +72,28 @@ export class CustomFieldsService {
     ) {
       throw new BadRequestException('SELECT/MULTISELECT requires options');
     }
-    return this.prisma.customFieldDef.create({
-      data: {
-        workspaceId,
-        entity,
-        key,
-        label: dto.label,
-        type: dto.type,
-        options: (dto.options ?? undefined) as any,
-        required: dto.required ?? false,
-        position: dto.position ?? 0,
-      },
-    });
+    try {
+      return await this.prisma.customFieldDef.create({
+        data: {
+          workspaceId,
+          entity,
+          key,
+          label: dto.label,
+          type: dto.type,
+          options: (dto.options ?? undefined) as any,
+          required: dto.required ?? false,
+          position: dto.position ?? 0,
+        },
+      });
+    } catch (e) {
+      // The dup pre-check above is racy; the (workspaceId, entity, key) unique is
+      // the real guard. Map a concurrent same-key insert to a clean 409 (like
+      // tags.create / snippets.create) instead of a raw P2002 → 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(`Custom field key "${key}" already exists`);
+      }
+      throw e;
+    }
   }
 
   // `entity`, when supplied, is enforced in the lookup so a field id from a
@@ -105,7 +115,18 @@ export class CustomFieldsService {
     dto: UpdateCustomFieldDefDto,
     entity?: string,
   ) {
-    await this.getOwned(workspaceId, id, entity);
+    const def = await this.getOwned(workspaceId, id, entity);
+    // A SELECT/MULTISELECT must keep at least one option — create() guards this,
+    // and update must too: coerce() rejects every value against an empty option
+    // list, so stripping the options would silently brick the field (no record
+    // could set it again, with a confusing "value not in options" 400).
+    if (
+      dto.options !== undefined &&
+      (def.type === 'SELECT' || def.type === 'MULTISELECT') &&
+      !dto.options?.length
+    ) {
+      throw new BadRequestException('SELECT/MULTISELECT requires options');
+    }
     return this.prisma.customFieldDef.update({
       where: { id },
       data: {
@@ -201,6 +222,7 @@ export class CustomFieldsService {
     entity: string,
     input: Record<string, unknown> | undefined | null,
     mode: 'create' | 'update',
+    opts: { clearEmpty?: boolean } = {},
   ): Promise<Record<string, unknown>> {
     const defs = await this.prisma.customFieldDef.findMany({
       where: { workspaceId, entity, archived: false },
@@ -210,12 +232,20 @@ export class CustomFieldsService {
     for (const [k, v] of Object.entries(input ?? {})) {
       const def = byKey.get(k);
       if (!def) continue; // drop unknown
-      if (v === null || v === undefined || v === '') continue;
+      if (v === null || v === undefined || v === '') {
+        // SKIP empties by default so a blank import cell / omitted field can't
+        // clobber the stored value (import calls this with mode='update'). Edit
+        // forms send the FULL field map and pass clearEmpty: an explicitly
+        // emptied field becomes null, so the caller's {...existing, ...partial}
+        // merge actually CLEARS it instead of keeping the old value.
+        if (opts.clearEmpty) out[k] = null;
+        continue;
+      }
       out[k] = this.coerce(def as DefRow, v);
     }
     if (mode === 'create') {
       for (const d of defs) {
-        if (d.required && out[d.key] === undefined) {
+        if (d.required && (out[d.key] === undefined || out[d.key] === null)) {
           throw new BadRequestException(`Custom field "${d.key}" is required`);
         }
       }

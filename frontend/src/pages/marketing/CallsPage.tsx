@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Phone, PlayCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Phone, PlayCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import { ClickToDialButton } from '../../features/marketing/components';
+import CallAnalysisPanel from './calls/CallAnalysisPanel';
 import { CallStatus, CALL_STATUS_LABELS } from '../../features/marketing/types';
 import type { SalesCall, PaginatedResponse, MarketingUserInfo } from '../../features/marketing/types';
 import { fmtDateTime, fmtDuration } from '../../features/marketing/utils/format';
@@ -70,12 +72,15 @@ function TableSkeleton({ cols, rows = 8 }: { cols: number; rows?: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function CallsPage() {
+  const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const [status, setStatus] = useState('');
   const [repId, setRepId] = useState('');
   const [page, setPage] = useState(1);
+  // Which call row is expanded to show its AI analysis panel.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<PaginatedResponse<SalesCall>>({
     queryKey: ['marketing', 'calls', { status, repId, page }],
@@ -115,8 +120,8 @@ export default function CallsPage() {
     setPage(1);
   };
 
-  // Column count: To, Status, Duration, [Rep], Started, Notes
-  const colCount = isManager ? 6 : 5;
+  // Column count: toggle, To, Status, Duration, [Rep], Started, Notes
+  const colCount = isManager ? 7 : 6;
 
   return (
     <div className="space-y-6">
@@ -183,6 +188,7 @@ export default function CallsPage() {
           <Table>
             <THead>
               <TR>
+                <TH className="w-8" />
                 <TH>To</TH>
                 <TH>Status</TH>
                 <TH className="hidden md:table-cell">Duration</TH>
@@ -197,7 +203,18 @@ export default function CallsPage() {
             ) : calls.length === 0 ? null : (
               <TBody>
                 {calls.map((c) => (
-                  <TR key={c.id}>
+                  <Fragment key={c.id}>
+                  <TR
+                    className="cursor-pointer"
+                    onClick={() => setExpandedId((id) => (id === c.id ? null : c.id))}
+                  >
+                    <TD className="text-muted-foreground">
+                      {expandedId === c.id ? (
+                        <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                      )}
+                    </TD>
                     <TD className="font-medium text-foreground">
                       <span className="inline-flex items-center gap-1.5">
                         {c.toPhone}
@@ -208,6 +225,7 @@ export default function CallsPage() {
                             rel="noopener noreferrer"
                             title="Play recording"
                             className="text-primary hover:text-primary/80"
+                            onClick={(e) => e.stopPropagation()}
                           >
                             <PlayCircle className="h-4 w-4" aria-hidden="true" />
                             <span className="sr-only">Play recording</span>
@@ -235,6 +253,22 @@ export default function CallsPage() {
                       {c.notes || '—'}
                     </TD>
                   </TR>
+                  {expandedId === c.id && (
+                    <TR>
+                      <TD colSpan={colCount} className="bg-surface-muted/40">
+                        <div className="px-2">
+                          <p className="text-caption font-medium text-foreground">
+                            {t('callAnalysis.title', 'Görüşme analizi')}
+                          </p>
+                          <CallAnalysisPanel
+                            callId={c.id}
+                            hasRecording={!!c.recordingUrl}
+                          />
+                        </div>
+                      </TD>
+                    </TR>
+                  )}
+                  </Fragment>
                 ))}
               </TBody>
             )}

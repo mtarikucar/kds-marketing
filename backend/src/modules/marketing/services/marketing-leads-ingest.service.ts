@@ -75,9 +75,9 @@ export class MarketingLeadsIngestService {
   private async reserveQuota(
     workspaceId: string,
     want: number,
+    periodKey: string,
   ): Promise<{ grant: number; limit: number; usedBefore: number }> {
     const limit = await this.quotaResolver.getDailyLeadQuota(workspaceId);
-    const periodKey = utcPeriodKey();
 
     if (limit === -1) {
       // Unlimited: still count usage for the meter, but grant everything.
@@ -154,6 +154,11 @@ export class MarketingLeadsIngestService {
 
   async ingest(workspaceId: string, dto: IngestLeadsDto): Promise<IngestResult> {
     const sentinelId = await this.resolveSentinel(workspaceId);
+    // Capture the day key ONCE. reserve and settle MUST agree — if the batch
+    // straddles midnight UTC, recomputing the key at settle time would refund the
+    // unused grant from the NEXT day's counter (driving it negative) while the
+    // reserve day stays permanently overcounted.
+    const periodKey = utcPeriodKey();
 
     let created = 0;
     let skipped = 0;
@@ -187,6 +192,7 @@ export class MarketingLeadsIngestService {
     const { grant, limit, usedBefore } = await this.reserveQuota(
       workspaceId,
       fresh.length,
+      periodKey,
     );
     const admitted = fresh.slice(0, grant);
     clipped = fresh.length - admitted.length;
@@ -265,7 +271,7 @@ export class MarketingLeadsIngestService {
       // returned to the day's budget so a flaky batch can't starve a customer.
       const unsettled = grant - created;
       if (unsettled > 0 && limit !== -1) {
-        await this.bumpCounter(workspaceId, utcPeriodKey(), -unsettled).catch(
+        await this.bumpCounter(workspaceId, periodKey, -unsettled).catch(
           (e) =>
             this.logger.error(
               `quota settle failed for ${workspaceId}: ${e?.message ?? e}`,

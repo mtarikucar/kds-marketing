@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Trash2 } from 'lucide-react';
@@ -60,6 +60,18 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
   const [schedDate, setSchedDate] = useState('');
   const [schedWindow, setSchedWindow] = useState('');
   const [newTask, setNewTask] = useState('');
+
+  // Reset the schedule form + new-task input whenever the opened job changes.
+  // The parent mounts this drawer persistently (jobId is a prop, not a mount
+  // gate), so without this a crew/date/window picked — or a task typed — for one
+  // job would carry into the next and could be submitted against the wrong job
+  // (e.g. dispatching job A's crew/date onto job B).
+  useEffect(() => {
+    setSchedCrew('');
+    setSchedDate('');
+    setSchedWindow('');
+    setNewTask('');
+  }, [jobId]);
 
   const { data: job, isLoading } = useQuery<InstallationJob>({
     queryKey: ['marketing', 'installations', 'job', jobId],
@@ -254,7 +266,10 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
                   value={newTask}
                   onChange={(e) => setNewTask(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newTask.trim()) addTask.mutate(newTask.trim());
+                    // Mirror the Add button's disabled guard (incl. !isPending):
+                    // without it, Enter-spam adds the same task twice while the
+                    // first POST is still in flight.
+                    if (e.key === 'Enter' && newTask.trim() && !addTask.isPending) addTask.mutate(newTask.trim());
                   }}
                   placeholder="Add task…"
                 />
