@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Param, Query, Req, Res } from '@nestjs/com
 import { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { InvoicesService } from '../invoicing/invoices.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
 
 function esc(v: unknown): string {
@@ -60,7 +61,12 @@ export class PublicInvoiceController {
     res.status(200).type('text/plain').send(ok ? 'OK' : 'FAIL');
   }
 
+  // Mints a fresh PSP (Stripe/PayTR/Iyzico) session per call — a public write
+  // doing an external API round-trip, so it carries the same per-route throttle
+  // as every other public write (form/booking/sign). Without it a holder of a
+  // valid unpaid invoice token could loop it to flood the workspace's PSP.
   @Post('i/:token/pay')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   pay(@Param('token') token: string, @Req() req: Request) {
     return this.invoices.pay(token, getClientIp(req));
   }
