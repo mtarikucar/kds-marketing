@@ -15,6 +15,7 @@ import { useTags } from '../hooks';
 import {
   buildFieldChoices,
   comparatorsFor,
+  reshapeValueForCmp,
   CMP_LABELS,
   LIST_CMP,
   RANGE_CMP,
@@ -167,9 +168,12 @@ function LeafRow({ leaf, choices, choiceFor, tags, onChange, onRemove }: LeafRow
       const { value: _omit, ...rest } = leaf;
       void _omit;
       onChange({ ...rest, cmp });
-    } else {
-      onChange({ ...leaf, cmp, value: leaf.value ?? '' });
+      return;
     }
+    // Reset the value to the shape the NEW comparator expects when the
+    // list-vs-scalar category changes, so the builder never serializes a stale
+    // array under a scalar `eq` (which the compiler rejects) or vice-versa.
+    onChange({ ...leaf, cmp, value: reshapeValueForCmp(cmp, leaf.value) });
   };
 
   const valueless = VALUELESS_CMP.has(leaf.cmp);

@@ -146,4 +146,42 @@ describe('SegmentCompilerService.validate', () => {
       svc.validate(WS, { field: 'businessName', cmp: 'contains', value: 'acme' }),
     ).resolves.toBeUndefined();
   });
+
+  // A SCALAR comparator (eq/ne/gt/gte/lt/lte/contains/startsWith) with an ARRAY
+  // value compiles to an invalid Prisma filter — `{ status: ['a','b'] }` — that
+  // throws on EVERY later evaluation (member count / audience / campaign send).
+  // The predicate builder can leave a stale array when the operator is switched
+  // from in/nin → eq, and the raw-JSON editor can send one directly. Reject at
+  // save time so a segment can't be persisted in a 500-on-evaluation state.
+  it('rejects an array value on a string scalar comparator (eq)', async () => {
+    await expect(
+      svc.validate(WS, { field: 'status', cmp: 'eq', value: ['NEW', 'CONTACTED'] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an array value on a numeric scalar comparator (gte)', async () => {
+    await expect(
+      svc.validate(WS, { field: 'aiScore', cmp: 'gte', value: [10, 20] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // A LIST comparator (in/nin) with a scalar value compiles to `{ in: [] }`
+  // (matches nothing) silently — require the array at save time.
+  it('rejects a non-array value on a list comparator (in)', async () => {
+    await expect(
+      svc.validate(WS, { field: 'status', cmp: 'in', value: 'NEW' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('still accepts a scalar eq and a list in together', async () => {
+    await expect(
+      svc.validate(WS, {
+        op: 'and',
+        children: [
+          { field: 'status', cmp: 'eq', value: 'NEW' },
+          { field: 'status', cmp: 'in', value: ['NEW', 'CONTACTED'] },
+        ],
+      }),
+    ).resolves.toBeUndefined();
+  });
 });
