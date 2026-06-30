@@ -49,6 +49,8 @@ interface Props {
   onCycleChange: (c: 'MONTHLY' | 'YEARLY') => void;
   isOwner: boolean;
   isPending: boolean;
+  /** The package code currently being checked out, so only its button spins. */
+  pendingCode?: string;
   onBuy: (packageCode: string, provider?: string) => void;
 }
 
@@ -61,6 +63,7 @@ export function PackageMatrix({
   onCycleChange,
   isOwner,
   isPending,
+  pendingCode,
   onBuy,
 }: Props) {
   const { t } = useTranslation('marketing');
@@ -153,7 +156,7 @@ export function PackageMatrix({
                 className="mt-4 w-full"
                 variant={isCurrent ? 'secondary' : 'primary'}
                 disabled={!isOwner || isCurrent || isPending}
-                loading={isPending && !isCurrent ? false : undefined}
+                loading={isPending && pendingCode === p.code}
                 onClick={() => !isCurrent && onBuy(p.code)}
               >
                 {isCurrent
