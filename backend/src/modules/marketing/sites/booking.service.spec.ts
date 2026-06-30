@@ -219,6 +219,33 @@ describe('BookingService', () => {
       expect(prisma.booking.create).not.toHaveBeenCalled();
     });
 
+    it('SINGLE rejects when the calendar OWNER is already booked on another calendar (no human double-book)', async () => {
+      // The owner of this SINGLE calendar also serves another calendar and is
+      // already booked in this slot there. Per-calendar capacity (0 bookings on
+      // THIS calendar) can't see it, so without a workspace-wide owner-busy guard
+      // this would book one person into two overlapping slots — the very invariant
+      // the workspace-wide lock comment says must hold (and ROUND_ROBIN enforces).
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'SINGLE', ownerUserId: 'owner-1' }));
+      prisma.booking.findFirst
+        .mockResolvedValueOnce(null) // EXTERNAL_BUSY check: none
+        .mockResolvedValueOnce({ id: 'elsewhere' }); // owner busy on another calendar
+      prisma.booking.findMany.mockResolvedValue([]); // none overlapping on THIS calendar → under capacity
+      prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+
+    it('SINGLE books when the owner is free elsewhere, assigning the calendar owner', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'SINGLE', ownerUserId: 'owner-1' }));
+      prisma.booking.findFirst.mockResolvedValue(null); // external: none; owner-busy: none
+      prisma.booking.findMany.mockResolvedValue([]);
+      prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' });
+      expect(prisma.booking.create.mock.calls[0][0].data.assigneeUserId).toBe('owner-1');
+    });
+
     it('CLASS rejects a reserve once the slot is at capacity', async () => {
       prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'CLASS', capacity: 1 }));
       prisma.booking.findFirst.mockResolvedValue(null);

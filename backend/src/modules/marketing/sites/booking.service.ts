@@ -326,6 +326,25 @@ export class BookingService implements OnModuleInit {
         assigneeUserId = members.find((m) => !taken.has(m.marketingUserId))?.marketingUserId ?? null;
       } else if (cal.type === 'CLASS') {
         assigneeUserId = null;
+      } else if (assigneeUserId) {
+        // SINGLE / COLLECTIVE: the calendar OWNER serves this slot. Enforce the
+        // same workspace-wide "one human can't be in two overlapping slots"
+        // invariant ROUND_ROBIN enforces above (and the lock comment promises).
+        // The per-calendar capacity check can't see a booking the owner has on
+        // ANOTHER calendar they serve, so without this an owner of (or assignee
+        // on) multiple calendars is silently double-booked. Mirrors the
+        // ROUND_ROBIN cross-calendar busy check — reject, like capacity exhaustion.
+        const ownerBusy = await tx.booking.findFirst({
+          where: {
+            workspaceId,
+            status: 'CONFIRMED',
+            assigneeUserId,
+            startAt: { lt: end },
+            endAt: { gt: start },
+          },
+          select: { id: true },
+        });
+        if (ownerBusy) throw new BadRequestException('That slot was just taken');
       }
 
       // ROUND_ROBIN with no free member: every member is already booked in this
