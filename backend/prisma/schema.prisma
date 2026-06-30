@@ -1573,6 +1573,9 @@ model Campaign {
   completedAt    DateTime?
   /// { recipients, sent, failed, skipped, opened, clicked, unsubscribed }.
   stats          Json?
+  /// Cross-linkage (AI Social Content Studio §6.3): the companion SocialCampaign
+  /// provisioned from this blast. Nullable — manual/legacy campaigns have none.
+  socialCampaignId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

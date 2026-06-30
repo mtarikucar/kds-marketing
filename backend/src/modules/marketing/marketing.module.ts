@@ -231,6 +231,7 @@ import { FalProvider } from './ai/providers/fal.provider';
 import { MEDIA_PROVIDER } from './ai/providers/media-provider.interface';
 import { SocialCampaignsController } from './social-campaigns/social-campaigns.controller';
 import { SocialCampaignsService } from './social-campaigns/social-campaigns.service';
+import { SocialCampaignLinkService } from './social-campaigns/social-campaign-link.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
@@ -712,6 +713,7 @@ import { WalletService } from './wallet/wallet.service';
     MediaGenService,
     BrandKitService,
     SocialCampaignsService,
+    SocialCampaignLinkService,
     SocialOAuthService,
     SocialTokenRefreshService,
     // Guards
