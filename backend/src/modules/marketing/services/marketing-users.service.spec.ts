@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { MarketingUsersService } from './marketing-users.service';
 import {
   mockPrismaClient,
@@ -14,6 +14,26 @@ function makeSvc(maxUsers: number) {
   const svc = new MarketingUsersService(prisma as any, config, entitlements);
   return { prisma, svc, entitlements };
 }
+
+describe('MarketingUsersService — deactivate (delete) guards', () => {
+  // A MANAGER could deactivate a MANAGER — including THEMSELVES — locking
+  // themselves out mid-session (only another admin can reactivate). The OWNER is
+  // already protected; this closes the same footgun for self-deactivation.
+  it('refuses to let an actor deactivate their own account', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'mgr-1', workspaceId: WS, role: 'MANAGER', status: 'ACTIVE' } as any);
+    await expect((svc.delete as any)(WS, 'mgr-1', 'MANAGER', 'mgr-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a manager to deactivate a DIFFERENT manager', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'mgr-2', workspaceId: WS, role: 'MANAGER', status: 'ACTIVE' } as any);
+    (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
+    await (svc.delete as any)(WS, 'mgr-2', 'MANAGER', 'mgr-1');
+    expect(prisma.marketingUser.update).toHaveBeenCalled();
+  });
+});
 
 describe('MarketingUsersService — seat limit', () => {
   describe('update() reactivation', () => {

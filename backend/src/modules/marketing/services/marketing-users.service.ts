@@ -207,13 +207,19 @@ export class MarketingUsersService {
     }
   }
 
-  async delete(workspaceId: string, id: string, actorRole: string) {
+  async delete(workspaceId: string, id: string, actorRole: string, actorId: string) {
     const user = await this.prisma.marketingUser.findFirst({
       where: { id, workspaceId },
     });
     if (!user || user.role === 'SYSTEM') throw new NotFoundException('User not found');
     if (user.role === 'OWNER') {
       throw new ForbiddenException('The owner account cannot be deactivated');
+    }
+    // Can't deactivate your OWN account — that locks you out mid-session
+    // (recoverable only by another admin). The OWNER is already protected above;
+    // this closes the same lockout footgun for a MANAGER deactivating themselves.
+    if (id === actorId) {
+      throw new ForbiddenException('You cannot deactivate your own account');
     }
     if (user.role === 'MANAGER' && actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
       throw new ForbiddenException('Insufficient permissions');

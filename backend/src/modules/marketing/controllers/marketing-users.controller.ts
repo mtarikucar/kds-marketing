@@ -65,6 +65,6 @@ export class MarketingUsersController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
   ) {
-    return this.usersService.delete(actor.workspaceId, id, actor.role);
+    return this.usersService.delete(actor.workspaceId, id, actor.role, actor.id);
   }
 }
