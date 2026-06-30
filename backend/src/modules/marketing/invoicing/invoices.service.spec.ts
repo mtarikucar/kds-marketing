@@ -57,6 +57,24 @@ describe('InvoicesService', () => {
     expect(data.total).toBe(2000); // 2500 gross − 500 discount
   });
 
+  describe('voidInvoice', () => {
+    // A PAID invoice is terminal — voiding it would drop collected revenue from
+    // reporting while the wallet debit / PSP charge stands (no refund). Mirror
+    // update()'s PAID-immutability guard (paid→void must be refused like paid→edit).
+    it('refuses to void a PAID invoice', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+      prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', status: 'PAID' });
+      await expect(svc.voidInvoice(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.invoice.update).not.toHaveBeenCalled();
+    });
+
+    it('voids a non-terminal (SENT) invoice', async () => {
+      prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', status: 'SENT' });
+      await svc.voidInvoice(WS, 'inv1');
+      expect(prisma.invoice.update).toHaveBeenCalledWith({ where: { id: 'inv1' }, data: { status: 'VOID' } });
+    });
+  });
+
   describe('payWithWallet (atomic claim-then-charge)', () => {
     it('claims the invoice PAID then debits the wallet in one transaction', async () => {
       prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', status: 'SENT', leadId: 'l1', total: 5000, number: 'INV-1', currency: 'TRY' });

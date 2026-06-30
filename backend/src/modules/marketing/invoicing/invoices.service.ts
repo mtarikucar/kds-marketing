@@ -196,8 +196,14 @@ export class InvoicesService {
   }
 
   async voidInvoice(workspaceId: string, id: string) {
-    const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId }, select: { id: true } });
+    const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId }, select: { id: true, status: true } });
     if (!inv) throw new NotFoundException('Invoice not found');
+    // A PAID invoice is terminal — voiding it would drop collected revenue from
+    // reporting while the wallet debit / PSP charge stands (no refund). Mirror
+    // update()'s PAID-immutability; a refund / credit-note is the correct path.
+    if (inv.status === 'PAID') {
+      throw new BadRequestException('A paid invoice cannot be voided — issue a refund instead');
+    }
     return this.prisma.invoice.update({ where: { id: inv.id }, data: { status: 'VOID' } });
   }
 
