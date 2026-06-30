@@ -51,8 +51,20 @@ describe('Enrollment (e2e)', () => {
     // without this the deep-mock returns undefined → undefined.map → 500.
     (ctx.prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (ctx.prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
-    (ctx.prisma.lesson.count as jest.Mock).mockResolvedValue(2);
-    (ctx.prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
+    // Progress recomputes over the LIVE lesson set, read via course.findUnique
+    // (nested modules→lessons), not lesson.count. Ungated 2-lesson course →
+    // completing l1 of {l1,l2} = 50%.
+    (ctx.prisma.course.findUnique as jest.Mock).mockResolvedValue({
+      dripMode: null,
+      modules: [
+        {
+          lessons: [
+            { id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null },
+            { id: 'l2', position: 1, isPreview: false, gating: 'FREE', dripDays: null },
+          ],
+        },
+      ],
+    });
     (ctx.prisma.enrollment.update as jest.Mock).mockImplementation(({ data }: any) => Promise.resolve({ id: 'e1', ...data }));
 
     const res = await request(app.getHttpServer())

@@ -260,6 +260,15 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'checklist rows inherit scope from a job resolved via a scoped read',
   'parent-scoped:installationTask.updateMany':
     'mutations are keyed by (id, jobId) with the job resolved via a scoped read',
+  // Lesson / LessonProgress have NO workspaceId column — a Lesson is owned via
+  // Course (workspaceId on Course) and LessonProgress via Enrollment. Every call
+  // is keyed by a moduleId / lessonId / courseId that was resolved through a
+  // workspace-scoped read (assertModule / assertLesson / recomputeCourseProgress),
+  // so it cannot span workspaces.
+  'parent-scoped:lesson.findMany':
+    'lessons addressed by moduleId/courseId resolved via a scoped assertModule/assertLesson; Lesson is workspace-owned through Course',
+  'parent-scoped:lessonProgress.deleteMany':
+    'progress rows deleted by lessonId(s) of lessons resolved via a scoped read; LessonProgress is workspace-owned through Enrollment',
   // ScheduledJob is a single global sweeper primitive: one runner claims due
   // rows across ALL workspaces, and dedup/cancel key on (kind, dedupKey) — the
   // partial-unique index deliberately omits workspaceId, and dedupKeys embed

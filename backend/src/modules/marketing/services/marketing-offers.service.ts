@@ -110,7 +110,7 @@ export class MarketingOffersService {
 
     const [offers, total] = await Promise.all([
       this.prisma.leadOffer.findMany({
-        where,
+        where: { ...where, workspaceId },
         orderBy: { createdAt: 'desc' },
         skip,
         take: lim,
@@ -119,7 +119,7 @@ export class MarketingOffersService {
           createdBy: { select: { id: true, firstName: true, lastName: true } },
         },
       }),
-      this.prisma.leadOffer.count({ where }),
+      this.prisma.leadOffer.count({ where: { ...where, workspaceId } }),
     ]);
 
     return {
