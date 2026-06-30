@@ -1,4 +1,6 @@
+import 'reflect-metadata';
 import { CampaignTrackingController } from './campaign-tracking.controller';
+import { PublicInvoiceController } from './public-invoice.controller';
 
 /**
  * Unsubscribe must be a GET-confirm → POST-act flow: a GET that flipped the
@@ -59,5 +61,29 @@ describe('CampaignTrackingController — unsubscribe is scanner-safe', () => {
     await ctrl.unsubscribe('a"><script>x', res);
     expect(res._html).not.toContain('<script>x');
     expect(res._html).toContain('&quot;');
+  });
+
+  // The unsubscribe POST is a public state-changing write (flips the lead's
+  // opt-out + bumps the campaign counter), so like every other public write it
+  // must carry a per-route @Throttle, not rely only on the coarse global limiter.
+  describe('rate limiting', () => {
+    // Count @nestjs/throttler metadata keys on a route handler, checking both
+    // possible targets (the method fn and the prototype+propertyKey) so the
+    // assertion never depends on the throttler's internal key string.
+    const throttlerKeys = (proto: any, name: string): unknown[] => {
+      const fn = proto[name];
+      return [
+        ...(Reflect.getMetadataKeys(fn) ?? []),
+        ...(Reflect.getMetadataKeys(proto, name) ?? []),
+      ].filter((k) => String(k).toUpperCase().includes('THROTTLER'));
+    };
+
+    it('a known public write (invoice pay) is throttled — validates the probe', () => {
+      expect(throttlerKeys(PublicInvoiceController.prototype, 'pay').length).toBeGreaterThan(0);
+    });
+
+    it('throttles the unsubscribe POST', () => {
+      expect(throttlerKeys(CampaignTrackingController.prototype, 'unsubscribeSubmit').length).toBeGreaterThan(0);
+    });
   });
 });

@@ -1,7 +1,9 @@
 import { Controller, Get, Post, Param, Query, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { Throttle } from '@nestjs/throttler';
 import { CampaignTrackingService } from '../campaigns/campaign-tracking.service';
+import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 
 // 1x1 transparent GIF.
 const PIXEL = Buffer.from(
@@ -71,7 +73,11 @@ export class CampaignTrackingController {
     );
   }
 
+  // Public state-changing write (flips the lead's opt-out + bumps the campaign
+  // counter), so it carries the same per-route throttle as every other public
+  // write — not just the coarse global IP bucket. Also serves RFC 8058 One-Click.
   @Post('u/:token')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
   async unsubscribeSubmit(@Param('token') token: string, @Res() res: Response): Promise<void> {
     const ok = await this.tracking.unsubscribe(token).catch(() => false);
     res.set('Content-Type', 'text/html; charset=utf-8');
