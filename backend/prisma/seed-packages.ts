@@ -47,6 +47,7 @@ const PACKAGES = [
       voiceAi: false,
       invoicing: false,
       mediaGen: false,
+      socialCampaigns: false,
     },
     limits: {
       aiCreditsMonthly: 100,
@@ -87,6 +88,7 @@ const PACKAGES = [
       voiceAi: false,
       invoicing: false,
       mediaGen: false,
+      socialCampaigns: false,
     },
     limits: {
       aiCreditsMonthly: 500,
@@ -130,6 +132,7 @@ const PACKAGES = [
       voiceAi: false,
       invoicing: true,
       mediaGen: true,
+      socialCampaigns: true,
     },
     limits: {
       aiCreditsMonthly: 2000,
@@ -173,6 +176,7 @@ const PACKAGES = [
       voiceAi: true,
       invoicing: true,
       mediaGen: true,
+      socialCampaigns: true,
     },
     limits: {
       aiCreditsMonthly: 6000,
@@ -215,6 +219,7 @@ const PACKAGES = [
       voiceAi: true,
       invoicing: true,
       mediaGen: true,
+      socialCampaigns: true,
     },
     limits: {
       aiCreditsMonthly: -1,

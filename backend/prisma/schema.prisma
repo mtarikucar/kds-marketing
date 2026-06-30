@@ -2832,10 +2832,14 @@ model SocialPost {
   publishedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  /// AI Social Content Studio — set when a post originates from a SocialCampaign.
+  socialCampaignId String?
+  campaignItemId   String?
 
   targets SocialPostTarget[]
 
   @@index([workspaceId, status])
+  @@index([socialCampaignId])
   @@map("social_posts")
 }
 
@@ -2904,8 +2908,8 @@ model GeneratedAsset {
   costCreditsReserved Int?     // estimate reserved at submit (for refund/reconcile)
   costUsd             Decimal? @db.Decimal(10, 4)
   error               String?
-  /// Plain nullable column now; SocialCampaign relation wired in Milestone 3.
   socialCampaignId    String?
+  socialCampaign      SocialCampaign? @relation(fields: [socialCampaignId], references: [id], onDelete: SetNull)
   createdById         String
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
@@ -2913,6 +2917,95 @@ model GeneratedAsset {
   @@index([workspaceId, status])
   @@index([providerRequestId])
   @@map("generated_assets")
+}
+
+enum SocialCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum SocialCampaignAutomationMode {
+  APPROVAL
+  SEMI_AUTO
+  FULL_AUTO
+}
+
+enum SocialCampaignPlanningMode {
+  AI_PROPOSE
+  AI_FULL
+  USER_TOPICS
+}
+
+enum SocialCampaignItemStatus {
+  PLANNED
+  GENERATING
+  NEEDS_APPROVAL
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  SKIPPED
+}
+
+/// AI Social Content Studio — a goal/theme/cadence-driven content calendar that
+/// auto-progresses generated posts. One per workspace per campaign.
+model SocialCampaign {
+  id                 String   @id @default(uuid())
+  workspaceId        String
+  name               String
+  goal               String?
+  theme              String?
+  /// { audience?, keyMessages?, languages?, productRefs?, topics?[] }
+  brief              Json
+  status             SocialCampaignStatus @default(DRAFT)
+  automationMode     SocialCampaignAutomationMode
+  planningMode       SocialCampaignPlanningMode
+  /// { perWeek?, daysOfWeek:number[], timeOfDay:'HH:MM', timezone? }
+  cadence            Json
+  startDate          DateTime
+  endDate            DateTime?
+  targetAccountIds   String[]
+  mediaKinds         String[]
+  defaultImageModel  String?
+  defaultVideoModel  String?
+  dailyPublishCap    Int      @default(2)
+  linkedCampaignId   String?
+  linkedAdCampaignId String?
+  /// { planned, generated, approved, published }
+  stats              Json?
+  createdById        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  items  SocialCampaignItem[]
+  assets GeneratedAsset[]
+
+  @@index([workspaceId, status])
+  @@map("social_campaigns")
+}
+
+/// One planned slot in a SocialCampaign's calendar.
+model SocialCampaignItem {
+  id                String   @id @default(uuid())
+  socialCampaignId  String
+  campaign          SocialCampaign @relation(fields: [socialCampaignId], references: [id], onDelete: Cascade)
+  workspaceId       String
+  sequenceIndex     Int
+  scheduledFor      DateTime
+  status            SocialCampaignItemStatus @default(PLANNED)
+  topic             String?
+  socialPostId      String?
+  generatedAssetIds String[]
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([socialCampaignId, status])
+  @@index([workspaceId, status])
+  @@map("social_campaign_items")
 }
 
 /// Epic D1 — agency config SNAPSHOT (GoHighLevel "snapshot" parity).
