@@ -113,6 +113,30 @@ describe('RolesService', () => {
     expect(prisma.customRole.delete).toHaveBeenCalledWith({ where: { id: 'r2' } });
   });
 
+  // P2002 parity with create()'s pre-check: a unique (workspaceId,name) collision
+  // — a create race, or an update renaming a role onto a taken name — must surface
+  // as a clean 409, not a raw PrismaClientKnownRequestError → 500.
+  it('create surfaces a name-collision race as a 409 (not a raw 500)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.customRole.findUnique.mockResolvedValue(null as any); // pre-check passes…
+    // …but a concurrent creator wins the unique index between check and insert.
+    (prisma.customRole.create as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    await expect(
+      svc.create(WS, { name: 'Dup', permissions: ['leads.read'] }, OWNER),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('update surfaces a rename collision as a 409 (not a raw 500)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read'] } as any);
+    (prisma.customRole.update as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    await expect(svc.update(WS, 'r1', { name: 'Taken' }, OWNER)).rejects.toBeInstanceOf(ConflictException);
+  });
+
   it('assignToUser validates the user + role belong to the workspace', async () => {
     const { prisma, svc } = makeSvc();
     prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u1' } as any);

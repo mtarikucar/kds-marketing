@@ -81,9 +81,17 @@ export class RolesService {
       where: { workspaceId_name: { workspaceId, name: dto.name } },
     });
     if (dupe) throw new ConflictException('A role with this name already exists');
-    return this.prisma.customRole.create({
-      data: { workspaceId, name: dto.name, permissions: permissions as Prisma.InputJsonValue },
-    });
+    try {
+      return await this.prisma.customRole.create({
+        data: { workspaceId, name: dto.name, permissions: permissions as Prisma.InputJsonValue },
+      });
+    } catch (e) {
+      // Lost the unique (workspaceId,name) race to a concurrent create → 409, not 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('A role with this name already exists');
+      }
+      throw e;
+    }
   }
 
   private async owned(workspaceId: string, id: string) {
@@ -101,13 +109,21 @@ export class RolesService {
       this.validate(dto.permissions);
       await this.assertWithinActorGrant(dto.permissions, actor);
     }
-    return this.prisma.customRole.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined && { name: dto.name }),
-        ...(dto.permissions !== undefined && { permissions: dto.permissions as Prisma.InputJsonValue }),
-      },
-    });
+    try {
+      return await this.prisma.customRole.update({
+        where: { id },
+        data: {
+          ...(dto.name !== undefined && { name: dto.name }),
+          ...(dto.permissions !== undefined && { permissions: dto.permissions as Prisma.InputJsonValue }),
+        },
+      });
+    } catch (e) {
+      // Renaming onto a taken (workspaceId,name) → 409 like create(), not a raw 500.
+      if ((e as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('A role with this name already exists');
+      }
+      throw e;
+    }
   }
 
   async remove(workspaceId: string, id: string, actor: Actor) {
