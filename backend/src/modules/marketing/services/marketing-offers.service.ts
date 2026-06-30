@@ -172,7 +172,6 @@ export class MarketingOffersService {
     // convert(), so a client-supplied status here must never leak into the
     // write and skip those guarded flows.
     const data: Prisma.LeadOfferUpdateInput = {
-      ...(dto.planId !== undefined && { planId: dto.planId }),
       ...(dto.customPrice !== undefined && { customPrice: dto.customPrice }),
       ...(dto.discount !== undefined && { discount: dto.discount }),
       ...(dto.trialDays !== undefined && { trialDays: dto.trialDays }),
@@ -181,6 +180,21 @@ export class MarketingOffersService {
         validUntil: dto.validUntil ? new Date(dto.validUntil) : null,
       }),
     };
+
+    // When the plan changes, RE-SNAPSHOT its display facts (mirroring create) so
+    // the offer never shows a STALE plan name/price/currency for a different
+    // planId — the customer would otherwise be presented terms for the old plan.
+    // A cleared/unknown plan snapshots nulls, exactly like create's no-plan path.
+    if (dto.planId !== undefined) {
+      data.planId = dto.planId;
+      const planSnapshot = dto.planId
+        ? await this.provisioning.describePlan(dto.planId)
+        : null;
+      data.planCode = planSnapshot?.planCode ?? null;
+      data.planName = planSnapshot?.planName ?? null;
+      data.planMonthlyPrice = planSnapshot?.monthlyPrice ?? null;
+      data.planCurrency = planSnapshot?.currency ?? null;
+    }
 
     return this.prisma.leadOffer.update({
       where: { id },
