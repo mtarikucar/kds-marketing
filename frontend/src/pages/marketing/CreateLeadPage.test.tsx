@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, Link } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Stub i18n — t echoes the key so we can match on i18n keys.
@@ -93,6 +93,48 @@ describe('CreateLeadPage', () => {
   it('renders a cancel button that navigates back', () => {
     renderCreate();
     expect(screen.getByRole('button', { name: /common.cancel/i })).toBeInTheDocument();
+  });
+
+  // Both /leads/:id/edit and /leads/new render the SAME CreateLeadPage element,
+  // so React reuses the instance (no remount) when navigating between them. The
+  // edit form must not carry a previously-edited lead's values onto the fresh
+  // new-lead form (it would create a duplicate contact pre-filled with another
+  // lead's data). Mirrors the reused-component stale-state fixes elsewhere.
+  it('clears the form when navigating from edit to the new-lead form (reused instance)', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    vi.mocked(marketingApi.get).mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.includes('/custom-fields')
+          ? []
+          : url.includes('/leads/5')
+            ? { id: '5', businessName: 'Acme Corp', contactPerson: 'Jane' }
+            : {},
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <MemoryRouter initialEntries={['/leads/5/edit']}>
+          <Link to="/leads/new">go-new</Link>
+          <Routes>
+            <Route path="/leads/new" element={<CreateLeadPage />} />
+            <Route path="/leads/:id/edit" element={<CreateLeadPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const nameInput = (await screen.findByLabelText(
+      /createLead.fields.businessName/i,
+    )) as HTMLInputElement;
+    await waitFor(() => expect(nameInput.value).toBe('Acme Corp'));
+
+    await user.click(screen.getByText('go-new'));
+
+    await waitFor(() => {
+      const ni = screen.getByLabelText(/createLead.fields.businessName/i) as HTMLInputElement;
+      expect(ni.value).toBe('');
+    });
   });
 
   it('renders workspace custom fields and includes them in the create payload', async () => {

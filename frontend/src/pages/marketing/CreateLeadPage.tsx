@@ -35,6 +35,25 @@ import {
  * always shape-correct on the server too (the server stays the
  * source of truth — these checks just shorten the feedback loop).
  */
+const EMPTY_LEAD_VALUES: LeadFormValues = {
+  businessName: '',
+  contactPerson: '',
+  businessType: 'RESTAURANT',
+  source: 'PHONE',
+  priority: 'MEDIUM',
+  phone: '',
+  whatsapp: '',
+  email: '',
+  address: '',
+  city: '',
+  region: '',
+  tableCount: '',
+  branchCount: '',
+  currentSystem: '',
+  notes: '',
+  nextFollowUp: '',
+};
+
 export default function CreateLeadPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -44,24 +63,7 @@ export default function CreateLeadPage() {
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema),
     mode: 'onBlur',
-    defaultValues: {
-      businessName: '',
-      contactPerson: '',
-      businessType: 'RESTAURANT',
-      source: 'PHONE',
-      priority: 'MEDIUM',
-      phone: '',
-      whatsapp: '',
-      email: '',
-      address: '',
-      city: '',
-      region: '',
-      tableCount: '',
-      branchCount: '',
-      currentSystem: '',
-      notes: '',
-      nextFollowUp: '',
-    },
+    defaultValues: EMPTY_LEAD_VALUES,
   });
 
   const { data: existingLead } = useQuery({
@@ -106,9 +108,15 @@ export default function CreateLeadPage() {
         notes: existingLead.notes || '',
         nextFollowUp: existingLead.nextFollowUp ? existingLead.nextFollowUp.split('T')[0] : '',
       });
+    } else if (!isEdit) {
+      // Create mode. Both routes render this SAME component, so navigating from
+      // /leads/:id/edit to /leads/new REUSES the instance (no remount) — without
+      // this the previously-edited lead's values would linger on the fresh
+      // new-lead form and get submitted as a duplicate contact.
+      form.reset(EMPTY_LEAD_VALUES);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingLead]);
+  }, [existingLead, isEdit]);
 
   const mutation = useMutation({
     mutationFn: (data: unknown) =>
