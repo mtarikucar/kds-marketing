@@ -96,6 +96,6 @@ export class RolesController {
   @RequirePermission('settings.manage')
   @Audit({ action: 'role.delete', resourceType: 'role', resourceIdParam: 'id' })
   remove(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
-    return this.svc.remove(u.workspaceId, id);
+    return this.svc.remove(u.workspaceId, id, u);
   }
 }

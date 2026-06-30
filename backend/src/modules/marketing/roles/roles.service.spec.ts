@@ -88,6 +88,31 @@ describe('RolesService', () => {
     expect(await svc.hasPermission({ workspaceId: 'ws-1', role: 'REP' }, 'leads.write')).toBe(true);
   });
 
+  // Privilege-floor guard parity: update() and assignToUser() refuse to touch a
+  // target holding permissions the actor lacks, but remove() deleted any role
+  // unconditionally — and deleting unassigns every holder (→ legacy perms),
+  // downgrading users a superior elevated via a custom role. A MANAGER must not
+  // be able to delete an OWNER-level role.
+  it('remove refuses to delete a role more powerful than the actor', async () => {
+    const { prisma, svc } = makeSvc();
+    // The role grants billing.manage, which a MANAGER actor does not hold.
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['billing.manage'] } as any);
+    await expect((svc.remove as any)(WS, 'r1', MANAGER)).rejects.toBeInstanceOf(ForbiddenException);
+    // It must not have unassigned holders or deleted the role.
+    expect(prisma.marketingUser.updateMany).not.toHaveBeenCalled();
+    expect(prisma.customRole.delete).not.toHaveBeenCalled();
+  });
+
+  it('remove lets the actor delete a role within their grant', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.customRole.findFirst.mockResolvedValue({ id: 'r2', permissions: ['leads.read'] } as any);
+    (prisma.marketingUser.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+    (prisma.customRole.delete as jest.Mock).mockResolvedValue({ id: 'r2' });
+    const out = await (svc.remove as any)(WS, 'r2', MANAGER);
+    expect(out).toEqual({ id: 'r2' });
+    expect(prisma.customRole.delete).toHaveBeenCalledWith({ where: { id: 'r2' } });
+  });
+
   it('assignToUser validates the user + role belong to the workspace', async () => {
     const { prisma, svc } = makeSvc();
     prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u1' } as any);

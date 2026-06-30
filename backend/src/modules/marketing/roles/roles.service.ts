@@ -110,8 +110,13 @@ export class RolesService {
     });
   }
 
-  async remove(workspaceId: string, id: string) {
-    await this.owned(workspaceId, id);
+  async remove(workspaceId: string, id: string, actor: Actor) {
+    const existing = await this.owned(workspaceId, id);
+    // Privilege-floor guard (parity with update/assignToUser): deleting a role
+    // unassigns every holder (→ legacy permissions), so a MANAGER deleting an
+    // OWNER-level role would downgrade users a superior elevated via that role.
+    // The actor must out-rank what the role grants.
+    await this.assertActorOutranks((existing.permissions as string[]) ?? [], actor, 'delete this role');
     // unassign anyone holding this role, then delete
     await this.prisma.marketingUser.updateMany({
       where: { workspaceId, customRoleId: id },
