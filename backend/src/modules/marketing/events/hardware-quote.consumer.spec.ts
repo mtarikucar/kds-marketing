@@ -1,5 +1,6 @@
 import { HardwareQuoteConsumer } from './hardware-quote.consumer';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
+import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 
 describe('HardwareQuoteConsumer', () => {
   let prisma: MockPrismaClient;
@@ -65,6 +66,20 @@ describe('HardwareQuoteConsumer', () => {
     expect(arg.create.assignedToId).toBe('rep-9');
     // Resubmits (update path) must not reassign/overwrite ownership.
     expect(arg.update.assignedToId).toBeUndefined();
+  });
+
+  // Every other lead-create path (forms/booking/order-forms/manual) stores the
+  // NORMALIZED phone/email so the lead is discoverable by the dedup system. Omit
+  // them and a later form/booking from the same contact won't match → a DUPLICATE
+  // lead, and the lead never appears in findDuplicates clustering. Set them on
+  // both create AND the resubmit-refresh update (phone/email can change).
+  it('stores normalized phone/email so the lead is dedup-discoverable', async () => {
+    await handle(payload());
+    const arg = prisma.lead.upsert.mock.calls[0][0];
+    expect(arg.create.phoneNormalized).toBe(normalizePhone('5551112233'));
+    expect(arg.create.emailNormalized).toBe(normalizeEmail('a@b.co'));
+    expect(arg.update.phoneNormalized).toBe(normalizePhone('5551112233'));
+    expect(arg.update.emailNormalized).toBe(normalizeEmail('a@b.co'));
   });
 
   it('does NOT advance the round-robin cursor on a resubmit (existing lead → update only)', async () => {

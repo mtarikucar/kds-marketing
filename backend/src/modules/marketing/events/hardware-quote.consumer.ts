@@ -10,6 +10,7 @@ import {
 } from "./marketing-event-types";
 import { LeadAutoAssignerService } from "../services/lead-auto-assigner.service";
 import { findCoreIntegratedWorkspaceId } from "../services/core-workspace.helper";
+import { normalizeEmail, normalizePhone } from "../utils/lead-normalize";
 
 /**
  * Creates a marketing Lead (source=HARDWARE_QUOTE) when the core catalog emits
@@ -60,10 +61,16 @@ export class HardwareQuoteConsumer implements OnModuleInit {
       // re-clicking "Teklif Al" would silently consume rotation slots and skew
       // rep assignment without ever creating a lead. Auto-assign only for a
       // genuinely new lead.
+      // Store the NORMALIZED phone/email like every other lead-create path, or
+      // the lead is invisible to the dedup system (a later form/booking from the
+      // same contact wouldn't match → a duplicate, and it never clusters in
+      // findDuplicates). Recompute on the resubmit-refresh too — phone/email change.
       const updateData = {
         contactPerson: p.contactPerson,
         phone: p.phone,
         email: p.email,
+        phoneNormalized: normalizePhone(p.phone),
+        emailNormalized: normalizeEmail(p.email),
         notes: p.notes,
         productSnapshot: p.productSnapshot as any,
       };
@@ -93,6 +100,8 @@ export class HardwareQuoteConsumer implements OnModuleInit {
           contactPerson: p.contactPerson,
           phone: p.phone,
           email: p.email,
+          phoneNormalized: normalizePhone(p.phone),
+          emailNormalized: normalizeEmail(p.email),
           businessType: "OTHER",
           source: "HARDWARE_QUOTE",
           notes: p.notes,
