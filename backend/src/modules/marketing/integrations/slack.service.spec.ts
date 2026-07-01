@@ -1,8 +1,17 @@
 import { SlackService } from './slack.service';
 import {
   mockPrismaClient,
-  MockPrismaClient,
 } from '../../../common/test/prisma-mock.service';
+import { safeFetch } from '../../../common/util/safe-fetch';
+
+// The Slack webhook URL is workspace-supplied, so delivery MUST go through the
+// SSRF-hardened fetch (not raw fetch) — a tenant can't be allowed to point it at
+// cloud metadata / loopback / private nets.
+jest.mock('../../../common/util/safe-fetch', () => ({
+  safeFetch: jest.fn(),
+  SsrfBlockedError: class SsrfBlockedError extends Error {},
+}));
+const safeFetchMock = safeFetch as unknown as jest.Mock;
 
 const WS = 'ws-1';
 
@@ -19,13 +28,12 @@ const evt = (over: any = {}) => ({
 });
 
 describe('SlackService.fanOut', () => {
-  let fetchMock: jest.Mock;
   beforeEach(() => {
-    fetchMock = jest.fn().mockResolvedValue({ ok: true });
-    (global as any).fetch = fetchMock;
+    safeFetchMock.mockReset();
+    safeFetchMock.mockResolvedValue({ ok: true });
   });
 
-  it('posts a formatted message to subscribed ACTIVE integrations', async () => {
+  it('posts a formatted message to subscribed ACTIVE integrations via the SSRF-safe fetch', async () => {
     const { prisma, svc } = makeSvc();
     prisma.slackIntegration.findMany.mockResolvedValue([
       { id: 'i1', webhookUrl: 'https://hooks.slack.test/x', events: [] },
@@ -34,8 +42,11 @@ describe('SlackService.fanOut', () => {
 
     await svc.fanOut(evt() as any);
 
-    expect(fetchMock).toHaveBeenCalledWith('https://hooks.slack.test/x', expect.objectContaining({ method: 'POST' }));
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(safeFetchMock).toHaveBeenCalledWith(
+      'https://hooks.slack.test/x',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const body = JSON.parse(safeFetchMock.mock.calls[0][1].body);
     expect(body.text).toContain('New lead created');
   });
 
@@ -45,13 +56,25 @@ describe('SlackService.fanOut', () => {
       { id: 'i1', webhookUrl: 'u', events: ['marketing.booking.created.v1'] },
     ] as any);
     await svc.fanOut(evt() as any);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(safeFetchMock).not.toHaveBeenCalled();
   });
 
   it('ignores events with no workspaceId', async () => {
     const { prisma, svc } = makeSvc();
     await svc.fanOut(evt({ payload: {} }) as any);
     expect(prisma.slackIntegration.findMany).not.toHaveBeenCalled();
+  });
+
+  it('a blocked (SSRF) webhook target fails the delivery gracefully — no crash, not marked notified', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.slackIntegration.findMany.mockResolvedValue([
+      { id: 'i1', webhookUrl: 'http://169.254.169.254/latest/meta-data/', events: [] },
+    ] as any);
+    safeFetchMock.mockRejectedValue(new Error('blocked IP literal: 169.254.169.254'));
+
+    await expect(svc.fanOut(evt() as any)).resolves.toBeUndefined();
+    // Delivery failed → the row is NOT stamped lastNotifiedAt.
+    expect(prisma.slackIntegration.update).not.toHaveBeenCalled();
   });
 });
 
