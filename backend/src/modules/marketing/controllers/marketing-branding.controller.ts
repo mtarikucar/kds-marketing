@@ -1,6 +1,6 @@
 import { Controller, Get, Put, Post, Body, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, Matches } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -11,9 +11,17 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { BrandingService } from '../branding/branding.service';
 
-class BrandingDto {
+export class BrandingDto {
   @IsOptional() @IsString() @MaxLength(120) brandName?: string | null;
-  @IsOptional() @IsString() @MaxLength(7) accentColor?: string | null;
+  // accentColor must be a #RRGGBB hex — the renderer/service silently drop an
+  // invalid value to the default (branding.service.set), so reject it here
+  // authoritatively instead of ignoring it with no feedback. @IsOptional skips
+  // null (the clear signal), so clearing the accent still works.
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'accentColor must be a hex color like #1e40af' })
+  accentColor?: string | null;
 }
 
 /** White-label branding for the workspace's public surfaces. MANAGER+. */
