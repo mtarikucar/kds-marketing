@@ -275,6 +275,13 @@ export class MarketingOffersService {
     if (offer.status !== 'SENT') {
       throw new BadRequestException('Only sent offers can be accepted');
     }
+    // An offer's validUntil can pass BEFORE the periodic expire cron flips it
+    // SENT→EXPIRED; between those it's still SENT. Refuse acceptance of an expired
+    // quote here (mirrors markSent) so a lead can't be won on stale price/terms —
+    // and so an accept can't silently clobber the cron's eventual EXPIRED.
+    if (offer.validUntil && offer.validUntil.getTime() < Date.now()) {
+      throw new BadRequestException('Offer has expired — re-send it with a new validUntil');
+    }
     if (offer.lead.convertedTenantId || ['WON', 'LOST'].includes(offer.lead.status)) {
       throw new BadRequestException('Lead is already closed');
     }

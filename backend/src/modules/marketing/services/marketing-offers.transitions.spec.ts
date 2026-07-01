@@ -61,6 +61,25 @@ describe('MarketingOffersService — accept / reject transitions', () => {
       expect(leadCall.data).toEqual({ status: 'WAITING' });
     });
 
+    // markSent refuses an already-expired offer; markAccepted must too. An offer's
+    // validUntil can pass BEFORE the 30-min expire cron flips it SENT→EXPIRED, so
+    // between those it's still SENT — accepting it would win a deal on stale terms.
+    it('refuses to accept an offer whose validUntil has passed (expired quote)', async () => {
+      prisma.leadOffer.findFirst.mockResolvedValue({
+        id: 'o1',
+        workspaceId: 'ws-1',
+        leadId: 'l1',
+        createdById: 'rep-1',
+        status: 'SENT',
+        validUntil: new Date(Date.now() - 60_000), // expired 1 min ago; cron not yet run
+        lead: { status: 'OFFER_SENT', convertedTenantId: null },
+      } as any);
+      await expect(svc.markAccepted('ws-1', 'o1', 'mgr-1', 'MANAGER')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.leadOffer.update).not.toHaveBeenCalled();
+    });
+
     it('rejects accepting a non-SENT offer', async () => {
       prisma.leadOffer.findFirst.mockResolvedValue({
         id: 'o1',
