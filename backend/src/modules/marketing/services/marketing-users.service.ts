@@ -13,6 +13,11 @@ import { EntitlementsService } from '../../billing/entitlements.service';
 import { CreateMarketingUserDto } from '../dto/create-marketing-user.dto';
 import { UpdateMarketingUserDto } from '../dto/update-marketing-user.dto';
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 @Injectable()
 export class MarketingUsersService {
   constructor(
@@ -33,17 +38,30 @@ export class MarketingUsersService {
    * path — both consume a seat, so both must pass through here or a workspace at
    * its cap could bypass the limit (deactivate → create → reactivate).
    */
-  private async assertSeatAvailable(workspaceId: string) {
-    const effective = await this.entitlements.getEffective(workspaceId);
-    if (effective.maxUsers === -1) return;
-    const seats = await this.prisma.marketingUser.count({
+  private async assertSeatAvailable(
+    db: Prisma.TransactionClient,
+    workspaceId: string,
+    maxUsers: number,
+  ) {
+    if (maxUsers === -1) return;
+    const seats = await db.marketingUser.count({
       where: { workspaceId, role: { not: 'SYSTEM' }, status: 'ACTIVE' },
     });
-    if (seats >= effective.maxUsers) {
+    if (seats >= maxUsers) {
       throw new BadRequestException(
-        `Seat limit reached (${effective.maxUsers}) — upgrade your package to add users`,
+        `Seat limit reached (${maxUsers}) — upgrade your package to add users`,
       );
     }
+  }
+
+  /** Advisory-lock the workspace's seat counter so the seat-check + the
+   *  seat-consuming write (create / reactivate) is atomic — a bare
+   *  count-then-write lets two concurrent requests at (cap-1) both pass and
+   *  exceed maxUsers. Mirrors the research / knowledge / ai-credits quota lock. */
+  private seatLock(tx: Prisma.TransactionClient, workspaceId: string) {
+    return tx.$queryRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('users:' + workspaceId)}))::text AS locked`,
+    );
   }
 
   async create(workspaceId: string, dto: CreateMarketingUserDto) {
@@ -57,32 +75,37 @@ export class MarketingUsersService {
       throw new ConflictException('Email already exists');
     }
 
-    await this.assertSeatAvailable(workspaceId);
-
     if (!['MANAGER', 'REP'].includes(dto.role)) {
       // OWNER exists once per workspace (created at signup); SYSTEM is the
       // research sentinel — neither is creatable through user management.
       throw new BadRequestException('Role must be MANAGER or REP');
     }
 
+    const effective = await this.entitlements.getEffective(workspaceId);
+    // Hash BEFORE taking the lock so the (slow) bcrypt work doesn't hold the
+    // per-workspace seat lock and serialize every concurrent user create on it.
     const hashedPassword = await bcrypt.hash(dto.password, this.bcryptCost());
+    const data = { ...dto, workspaceId, password: hashedPassword };
+    const select = {
+      id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      role: true,
+      status: true,
+      createdAt: true,
+    };
 
-    return this.prisma.marketingUser.create({
-      data: {
-        ...dto,
-        workspaceId,
-        password: hashedPassword,
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
+    // Unlimited plan — no cap to race against.
+    if (effective.maxUsers === -1) {
+      return this.prisma.marketingUser.create({ data, select });
+    }
+    // Serialize the seat-check + create per workspace under an advisory xact-lock.
+    return this.prisma.$transaction(async (tx) => {
+      await this.seatLock(tx, workspaceId);
+      await this.assertSeatAvailable(tx, workspaceId, effective.maxUsers);
+      return tx.marketingUser.create({ data, select });
     });
   }
 
@@ -186,11 +209,10 @@ export class MarketingUsersService {
     }
 
     // Reactivating an INACTIVE user consumes a seat, exactly like create() — so
-    // re-check the package limit. Without this, a workspace at its cap could
-    // exceed it via deactivate → create new → reactivate the old one.
-    if (dto.status === 'ACTIVE' && user.status !== 'ACTIVE') {
-      await this.assertSeatAvailable(workspaceId);
-    }
+    // re-check the package limit (atomically, at the write below). Without this, a
+    // workspace at its cap could exceed it via deactivate → create → reactivate.
+    const reactivating = dto.status === 'ACTIVE' && user.status !== 'ACTIVE';
+    const effective = reactivating ? await this.entitlements.getEffective(workspaceId) : null;
 
     // Email is the global unique login identity. When it's being changed, reject
     // a collision with a clean 409 (mirrors create()) instead of letting the DB
@@ -215,20 +237,29 @@ export class MarketingUsersService {
       data.password = await bcrypt.hash(dto.password, this.bcryptCost());
     }
 
+    const select = {
+      id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      role: true,
+      status: true,
+    };
+    const doUpdate = (db: Prisma.TransactionClient) =>
+      db.marketingUser.update({ where: { id: user.id }, data, select });
     try {
-      return await this.prisma.marketingUser.update({
-        where: { id: user.id },
-        data,
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          role: true,
-          status: true,
-        },
-      });
+      // A reactivation consumes a seat — run the seat-check + the ACTIVE flip
+      // atomically under the per-workspace lock so two concurrent reactivations
+      // can't both pass the cap (mirrors create()).
+      if (reactivating && effective!.maxUsers !== -1) {
+        return await this.prisma.$transaction(async (tx) => {
+          await this.seatLock(tx, workspaceId);
+          await this.assertSeatAvailable(tx, workspaceId, effective!.maxUsers);
+          return doUpdate(tx);
+        });
+      }
+      return await doUpdate(this.prisma);
     } catch (e) {
       // Lost the concurrent race on the email unique index — clean 409, not 500.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
