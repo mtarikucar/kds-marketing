@@ -12,7 +12,7 @@ import LandingFooter from '../landing/LandingFooter';
 export const LEGAL = {
   brand: 'Jeeta',
   entity: 'Jeeta',
-  email: 'admin@hummytummy.com',
+  email: 'admin@jeetagrowth.com',
   city: 'Ankara',
   countryTr: 'Türkiye',
   countryEn: 'Türkiye',
