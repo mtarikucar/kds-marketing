@@ -55,6 +55,10 @@ export class MarketingSegmentsController {
   }
 
   @Get(':id/members')
+  // Returns actual Lead records for the segment — gate it like its data siblings
+  // preview/count (which expose less). Without this any authenticated marketing
+  // user, even one without contacts access, could page a segment's lead list.
+  @RequirePermission('contacts.write')
   members(
     @Param('id') id: string,
     @Query('page') page: string,
