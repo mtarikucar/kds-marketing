@@ -6,6 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
@@ -58,20 +59,29 @@ export class BookingService implements OnModuleInit {
     return c;
   }
   create(workspaceId: string, dto: any) {
-    return this.prisma.bookingCalendar.create({
-      data: {
-        workspaceId,
-        name: dto.name,
-        slug: this.slugify(dto.slug || dto.name),
-        ownerUserId: dto.ownerUserId ?? null,
-        type: CALENDAR_TYPES.includes(dto.type) ? dto.type : 'SINGLE',
-        capacity: this.normCapacity(dto.capacity),
-        availability: dto.availability ?? {},
-        slotMinutes: dto.slotMinutes ?? 30,
-        bufferMinutes: dto.bufferMinutes ?? 0,
-        timezone: dto.timezone ?? 'Europe/Istanbul',
-      },
-    });
+    return this.prisma.bookingCalendar
+      .create({
+        data: {
+          workspaceId,
+          name: dto.name,
+          slug: this.slugify(dto.slug || dto.name),
+          ownerUserId: dto.ownerUserId ?? null,
+          type: CALENDAR_TYPES.includes(dto.type) ? dto.type : 'SINGLE',
+          capacity: this.normCapacity(dto.capacity),
+          availability: dto.availability ?? {},
+          slotMinutes: dto.slotMinutes ?? 30,
+          bufferMinutes: dto.bufferMinutes ?? 0,
+          timezone: dto.timezone ?? 'Europe/Istanbul',
+        },
+      })
+      // slug is unique per (workspaceId, slug); a duplicate name/slug is a clean
+      // 400, not a raw P2002 → 500 (parity with SitesService.create).
+      .catch((e) => {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new BadRequestException('A calendar with that slug already exists');
+        }
+        throw e;
+      });
   }
   async update(workspaceId: string, id: string, dto: any) {
     const existing = await this.prisma.bookingCalendar.findFirst({ where: { id, workspaceId } });
@@ -83,7 +93,16 @@ export class BookingService implements OnModuleInit {
     if (dto.type !== undefined && CALENDAR_TYPES.includes(dto.type)) data.type = dto.type;
     if (dto.capacity !== undefined) data.capacity = this.normCapacity(dto.capacity);
     if (dto.slug !== undefined) data.slug = this.slugify(dto.slug);
-    return this.prisma.bookingCalendar.update({ where: { id: existing.id }, data });
+    return this.prisma.bookingCalendar
+      .update({ where: { id: existing.id }, data })
+      // Renaming a calendar's slug onto a taken one → clean 400, not a raw
+      // P2002 → 500 (parity with SitesService.update).
+      .catch((e) => {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new BadRequestException('A calendar with that slug already exists');
+        }
+        throw e;
+      });
   }
 
   private normCapacity(v: unknown): number {

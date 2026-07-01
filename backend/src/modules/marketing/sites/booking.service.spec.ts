@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { BookingService } from './booking.service';
 
 /**
@@ -254,6 +255,30 @@ describe('BookingService', () => {
         svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'Ada' }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // A calendar slug is unique per (workspace, slug). Two calendars named the same
+  // (or a rename onto a taken slug) hit that index — it must surface as a clean
+  // 400, not a raw PrismaClientKnownRequestError → 500. Mirrors SitesService.
+  describe('calendar slug uniqueness', () => {
+    const p2002 = () =>
+      Promise.reject(new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'x' }));
+
+    it('translates a duplicate-slug P2002 on create into a 400', async () => {
+      prisma.bookingCalendar.create = jest.fn(p2002);
+      await expect(svc.create(WS, { name: 'Consultation' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('translates a duplicate-slug P2002 on rename into a 400', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar());
+      prisma.bookingCalendar.update = jest.fn(p2002);
+      await expect(svc.update(WS, 'c1', { slug: 'taken' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rethrows a non-P2002 create error unchanged', async () => {
+      prisma.bookingCalendar.create = jest.fn(() => Promise.reject(new Error('boom')));
+      await expect(svc.create(WS, { name: 'X' })).rejects.toThrow('boom');
     });
   });
 });
