@@ -184,4 +184,47 @@ describe('SegmentCompilerService.validate', () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  // Custom-field leaves had NO value-shape validation (the cf: branch returned
+  // early, before the native shape checks). So `cf:x nin <scalar>` compiled to
+  // `{ NOT: { OR: [] } }` — which matches EVERY lead: a saved segment / campaign
+  // AUDIENCE would silently target the whole workspace. `in <scalar>` matches
+  // nothing; a non-string contains/startsWith 500s on every later evaluation.
+  it('rejects a non-array value on a cf list comparator (nin) — prevents match-ALL', async () => {
+    await expect(
+      svc.validate(WS, { field: 'cf:budget', cmp: 'nin', value: 'churned' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a non-array value on a cf list comparator (in)', async () => {
+    await expect(
+      svc.validate(WS, { field: 'cf:budget', cmp: 'in', value: 1000 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a non-string value on a cf contains', async () => {
+    await expect(
+      svc.validate(WS, { field: 'cf:budget', cmp: 'contains', value: { evil: true } }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an array value on a cf scalar comparator (eq)', async () => {
+    await expect(
+      svc.validate(WS, { field: 'cf:budget', cmp: 'eq', value: ['a', 'b'] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('still accepts well-shaped cf leaves (nin list, in list, contains string, gte scalar)', async () => {
+    await expect(
+      svc.validate(WS, {
+        op: 'and',
+        children: [
+          { field: 'cf:budget', cmp: 'nin', value: ['a', 'b'] },
+          { field: 'cf:budget', cmp: 'in', value: [1, 2] },
+          { field: 'cf:budget', cmp: 'contains', value: 'gold' },
+          { field: 'cf:budget', cmp: 'gte', value: 1000 },
+        ],
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

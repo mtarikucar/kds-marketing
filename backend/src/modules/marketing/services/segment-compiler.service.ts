@@ -232,6 +232,27 @@ export class SegmentCompilerService {
       if (!CF_CMP.includes(cmp)) {
         throw new BadRequestException(`Comparator "${cmp}" not allowed for custom field at ${path}`);
       }
+      // The value SHAPE must match the comparator (custom fields carry no declared
+      // type, but the comparator alone dictates the shape). Without this the cf:
+      // branch returned unchecked and buildCustomField's `arr = Array.isArray(v)
+      // ? v : []` fallback made a `cf:x nin <scalar>` compile to `{ NOT: { OR: [] }}`
+      // — which matches EVERY lead, so a saved segment or CAMPAIGN AUDIENCE silently
+      // targets the whole workspace; `in <scalar>` matches nothing; and a non-string
+      // contains/startsWith compiles to a Prisma string filter that 500s on every
+      // later evaluation. Mirrors the native-field shape guard below.
+      if (needsValue) {
+        if (cmp === 'in' || cmp === 'nin') {
+          if (!Array.isArray(leaf.value)) {
+            throw new BadRequestException(`custom field "${key}" ${cmp} needs a list at ${path}`);
+          }
+        } else if (cmp === 'contains' || cmp === 'startsWith') {
+          if (typeof leaf.value !== 'string') {
+            throw new BadRequestException(`custom field "${key}" ${cmp} needs a string at ${path}`);
+          }
+        } else if (Array.isArray(leaf.value)) {
+          throw new BadRequestException(`custom field "${key}" ${cmp} needs a single value at ${path}`);
+        }
+      }
       return;
     }
     const type = NATIVE_FIELDS[field];
