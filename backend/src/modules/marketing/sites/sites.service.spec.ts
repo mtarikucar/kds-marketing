@@ -41,3 +41,50 @@ describe('SitesService.update — duplicate slug', () => {
     await expect(mkSvc(prisma).update('ws-1', 'p1', { slug: 'x' })).rejects.toBe(boom);
   });
 });
+
+// A bare count-then-create lets two concurrent requests at (limit-1) BOTH pass the
+// cap and exceed maxFunnels. create() serializes the check under a per-workspace
+// advisory xact-lock (the ai-credits / message-quota / research quota pattern).
+describe('SitesService.create — quota-race safety', () => {
+  const WS = 'ws-1';
+  function make(maxFunnels: number) {
+    const prisma: any = {
+      sitePage: {
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn().mockResolvedValue({ id: 'p1' }),
+      },
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
+      $transaction: jest.fn().mockImplementation(async (fn: any) => fn(prisma)),
+    };
+    const entitlements: any = { getEffective: jest.fn().mockResolvedValue({ limits: { maxFunnels } }) };
+    const svc = new SitesService(
+      prisma as never, entitlements as never, null as never, null as never, null as never, null as never,
+    );
+    return { prisma, svc };
+  }
+
+  it('serializes the count-check + create under a per-workspace advisory lock', async () => {
+    const { prisma, svc } = make(5);
+    prisma.sitePage.count.mockResolvedValue(4);
+    await svc.create(WS, { title: 'Home' });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    const lockSql = prisma.$queryRawUnsafe.mock.calls[0][0] as string;
+    expect(lockSql).toContain('pg_advisory_xact_lock');
+    expect(lockSql).toContain('site-pages:ws-1');
+    expect(prisma.sitePage.create).toHaveBeenCalled();
+  });
+
+  it('rejects at the cap without creating (checked inside the lock)', async () => {
+    const { prisma, svc } = make(5);
+    prisma.sitePage.count.mockResolvedValue(5);
+    await expect(svc.create(WS, { title: 'Home' })).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.sitePage.create).not.toHaveBeenCalled();
+  });
+
+  it('skips the lock/count on an unlimited (-1) plan', async () => {
+    const { prisma, svc } = make(-1);
+    await svc.create(WS, { title: 'Home' });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    expect(prisma.sitePage.create).toHaveBeenCalled();
+  });
+});

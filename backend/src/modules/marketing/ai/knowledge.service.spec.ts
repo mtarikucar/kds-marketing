@@ -28,9 +28,41 @@ describe('KnowledgeService', () => {
         deleteMany: jest.fn(),
       },
       $queryRaw: jest.fn().mockResolvedValue([]),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
+      $transaction: jest.fn().mockImplementation(async (fn: any) => fn(prisma)),
     };
     entitlements = { getEffective: jest.fn() };
     svc = new KnowledgeService(prisma as any, entitlements as any);
+  });
+
+  // A bare count-then-create lets two concurrent requests at (limit-1) BOTH pass the
+  // cap and exceed maxKnowledgeDocs. create() serializes the check under a per-
+  // workspace advisory xact-lock (the ai-credits / message-quota / research pattern).
+  describe('create — quota-race safety', () => {
+    it('serializes the count-check + create under a per-workspace advisory lock', async () => {
+      withDocLimit(5);
+      prisma.knowledgeDoc.count.mockResolvedValue(4);
+      await svc.create(WS, { title: 'T', content: 'C' });
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const lockSql = prisma.$queryRawUnsafe.mock.calls[0][0] as string;
+      expect(lockSql).toContain('pg_advisory_xact_lock');
+      expect(lockSql).toContain('knowledge-docs:ws-1');
+      expect(prisma.knowledgeDoc.create).toHaveBeenCalled();
+    });
+
+    it('rejects at the cap without creating (checked inside the lock)', async () => {
+      withDocLimit(5);
+      prisma.knowledgeDoc.count.mockResolvedValue(5);
+      await expect(svc.create(WS, { title: 'T', content: 'C' })).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.knowledgeDoc.create).not.toHaveBeenCalled();
+    });
+
+    it('skips the lock/count on an unlimited (-1) plan', async () => {
+      withDocLimit(-1);
+      await svc.create(WS, { title: 'T', content: 'C' });
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+      expect(prisma.knowledgeDoc.create).toHaveBeenCalled();
+    });
   });
 
   describe('search', () => {

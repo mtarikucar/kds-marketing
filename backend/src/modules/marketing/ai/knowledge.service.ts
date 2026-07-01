@@ -14,6 +14,11 @@ export interface KnowledgeSnippet {
   rank: number;
 }
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 /**
  * Workspace knowledge base + FTS retrieval (Postgres tsvector). The agent
  * engine calls `search()` to ground replies; CRUD is the Agent Studio UI.
@@ -56,24 +61,34 @@ export class KnowledgeService {
   ) {
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxKnowledgeDocs;
-    if (limit !== -1) {
-      const count = await this.prisma.knowledgeDoc.count({ where: { workspaceId } });
+    const data = {
+      workspaceId,
+      title: dto.title,
+      content: dto.content,
+      language: dto.language ?? 'tr',
+      source: dto.source ?? 'MANUAL',
+      sourceRef: dto.sourceRef ?? null,
+    };
+    const select = { id: true, title: true, language: true, status: true, updatedAt: true };
+    // Unlimited plan — no cap to race against.
+    if (limit === -1) {
+      return this.prisma.knowledgeDoc.create({ data, select });
+    }
+    // Serialize the count-check + create per workspace under an advisory xact-lock:
+    // a bare count-then-create lets two concurrent requests at (limit-1) BOTH pass
+    // the cap and exceed it. The lock makes the read-modify-write atomic (mirrors the
+    // ai-credits / message-quota / research quota pattern).
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('knowledge-docs:' + workspaceId)}))::text AS locked`,
+      );
+      const count = await tx.knowledgeDoc.count({ where: { workspaceId } });
       if (count >= limit) {
         throw new BadRequestException(
           `Knowledge doc limit reached (${limit}) — upgrade your package`,
         );
       }
-    }
-    return this.prisma.knowledgeDoc.create({
-      data: {
-        workspaceId,
-        title: dto.title,
-        content: dto.content,
-        language: dto.language ?? 'tr',
-        source: dto.source ?? 'MANUAL',
-        sourceRef: dto.sourceRef ?? null,
-      },
-      select: { id: true, title: true, language: true, status: true, updatedAt: true },
+      return tx.knowledgeDoc.create({ data, select });
     });
   }
 
