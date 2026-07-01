@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { zonedParts, zonedWallTimeToUtcMs } from '../sites/timezone-slots';
 
 /**
  * Active leads only — exclude soft-deleted (deletedAt) and merged-away
@@ -98,19 +99,42 @@ export class MarketingDashboardService {
     }));
   }
 
+  /**
+   * Day / month boundaries in the WORKSPACE's configured timezone, as UTC Dates
+   * for Prisma. The API runs in UTC, so `new Date().setHours(0,0,0,0)` produced
+   * UTC — not the business's — day/month edges, mis-attributing every lead/task/
+   * activity in the first offset-hours of the local day to the wrong day/month
+   * (a Turkey UTC+3 workspace lost its 00:00–03:00 to "yesterday"). Booking already
+   * interprets wall-clock in the workspace tz; the dashboard now matches. DST-safe
+   * via Intl; day/month overflow (d+1, mo+1) normalizes through Date.UTC.
+   */
+  private async periodBounds(workspaceId: string) {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { timezone: true },
+    });
+    const tz = ws?.timezone || 'UTC';
+    const { y, mo, d } = zonedParts(Date.now(), tz);
+    return {
+      tz,
+      todayStart: new Date(zonedWallTimeToUtcMs(y, mo, d, 0, 0, tz)),
+      tomorrowStart: new Date(zonedWallTimeToUtcMs(y, mo, d + 1, 0, 0, tz)),
+      monthStart: new Date(zonedWallTimeToUtcMs(y, mo, 1, 0, 0, tz)),
+      nextMonthStart: new Date(zonedWallTimeToUtcMs(y, mo + 1, 1, 0, 0, tz)),
+      monthLabel: `${y}-${String(mo).padStart(2, '0')}`,
+    };
+  }
+
   async getTodaySummary(workspaceId: string, userId: string, userRole: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const { todayStart, tomorrowStart } = await this.periodBounds(workspaceId);
 
     const taskWhere: any = {
-      dueDate: { gte: today, lt: tomorrow },
+      dueDate: { gte: todayStart, lt: tomorrowStart },
       status: { not: 'CANCELLED' },
     };
 
     const activityWhere: any = {
-      createdAt: { gte: today, lt: tomorrow },
+      createdAt: { gte: todayStart, lt: tomorrowStart },
     };
 
     if (userRole === 'REP') {
@@ -131,7 +155,7 @@ export class MarketingDashboardService {
       this.prisma.marketingTask.count({
         where: {
           workspaceId,
-          dueDate: { lt: today },
+          dueDate: { lt: todayStart },
           status: { in: ['PENDING', 'IN_PROGRESS'] },
           ...(userRole === 'REP' ? { assignedToId: userId } : {}),
         },
@@ -147,31 +171,30 @@ export class MarketingDashboardService {
   }
 
   async getMonthlyMetrics(workspaceId: string, userId: string, userRole: string) {
-    const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const { monthStart, nextMonthStart, monthLabel } = await this.periodBounds(workspaceId);
+    const range = { gte: monthStart, lt: nextMonthStart };
 
     const where = userRole === 'REP' ? { ...ACTIVE_LEAD, assignedToId: userId } : { ...ACTIVE_LEAD };
 
     const [newLeads, wonLeads, activitiesCount] = await Promise.all([
       this.prisma.lead.count({
-        where: { ...where, createdAt: { gte: firstDay, lte: lastDay }, workspaceId },
+        where: { ...where, createdAt: range, workspaceId },
       }),
       this.prisma.lead.count({
-        where: { ...where, status: 'WON', convertedAt: { gte: firstDay, lte: lastDay }, workspaceId },
+        where: { ...where, status: 'WON', convertedAt: range, workspaceId },
       }),
       this.prisma.leadActivity.count({
         where: {
           // Activity scope is inherited from the parent lead's workspace.
           lead: { workspaceId },
-          createdAt: { gte: firstDay, lte: lastDay },
+          createdAt: range,
           ...(userRole === 'REP' ? { createdById: userId } : {}),
         },
       }),
     ]);
 
     return {
-      month: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+      month: monthLabel,
       newLeads,
       wonLeads,
       activitiesCount,
@@ -179,8 +202,7 @@ export class MarketingDashboardService {
   }
 
   async getTopPerformers(workspaceId: string, limit = 10) {
-    const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const { monthStart: firstDay } = await this.periodBounds(workspaceId);
 
     // Single query: get reps with counts
     const reps = await this.prisma.marketingUser.findMany({

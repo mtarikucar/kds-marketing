@@ -67,3 +67,47 @@ describe('MarketingDashboardService — active-lead scoping', () => {
     }
   });
 });
+
+// The API runs in UTC, so `new Date().setHours(0,0,0,0)` yields UTC (not the
+// business's) day/month edges — mis-attributing leads/tasks/activities in the
+// first offset-hours of the local day to the wrong day/month. The dashboard must
+// use the WORKSPACE's configured timezone. Asserted with Asia/Tokyo (UTC+9, no
+// DST) so the expectation is wrong for BOTH a UTC and a Turkey (UTC+3) runner.
+describe('MarketingDashboardService — timezone-aware period boundaries', () => {
+  const WS_TZ = 'ws-1';
+
+  afterEach(() => jest.useRealTimers());
+
+  it('getTodaySummary bounds "today" in the workspace timezone', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-01T20:00:00.000Z')); // Tokyo: Jul 2 05:00
+    const { prisma, svc } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockResolvedValue({ timezone: 'Asia/Tokyo' });
+    (prisma.marketingTask.count as jest.Mock).mockResolvedValue(0);
+    (prisma.leadActivity.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.getTodaySummary(WS_TZ, 'u1', 'MANAGER');
+
+    expect(prisma.workspace.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: WS_TZ }, select: { timezone: true } }),
+    );
+    // Tokyo day Jul 2 = [2026-07-01T15:00Z, 2026-07-02T15:00Z).
+    const taskCall = (prisma.marketingTask.count as jest.Mock).mock.calls[0][0];
+    expect(taskCall.where.dueDate.gte.toISOString()).toBe('2026-07-01T15:00:00.000Z');
+    expect(taskCall.where.dueDate.lt.toISOString()).toBe('2026-07-02T15:00:00.000Z');
+  });
+
+  it('getMonthlyMetrics bounds the month (and its label) in the workspace timezone', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-30T20:00:00.000Z')); // Tokyo: Jul 1 05:00
+    const { prisma, svc } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockResolvedValue({ timezone: 'Asia/Tokyo' });
+    (prisma.lead.count as jest.Mock).mockResolvedValue(0);
+    (prisma.leadActivity.count as jest.Mock).mockResolvedValue(0);
+
+    const out = await svc.getMonthlyMetrics(WS_TZ, 'u1', 'MANAGER');
+
+    // In Tokyo it is already July; a UTC/Turkey server would still say June.
+    expect(out.month).toBe('2026-07');
+    const call = (prisma.lead.count as jest.Mock).mock.calls[0][0];
+    expect(call.where.createdAt.gte.toISOString()).toBe('2026-06-30T15:00:00.000Z');
+  });
+});
