@@ -19,7 +19,10 @@ describe('BookingService', () => {
   let outlookSync: any;
 
   function calendar(extra: any = {}) {
-    return { id: 'c1', workspaceId: WS, active: true, slotMinutes: 30, bufferMinutes: 0, availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] }, ...extra };
+    // maxAdvanceDays is generous so the fixed far-future fixture day isn't
+    // rejected by the max-advance policy (real rows default to 60 in the DB);
+    // policy tests override it explicitly.
+    return { id: 'c1', workspaceId: WS, active: true, slotMinutes: 30, bufferMinutes: 0, maxAdvanceDays: 3650, availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] }, ...extra };
   }
 
   beforeEach(() => {
@@ -285,6 +288,55 @@ describe('BookingService', () => {
     it('rethrows a non-P2002 create error unchanged', async () => {
       prisma.bookingCalendar.create = jest.fn(() => Promise.reject(new Error('boom')));
       await expect(svc.create(WS, { name: 'X' })).rejects.toThrow('boom');
+    });
+  });
+
+  describe('availability policy', () => {
+    it('caps the offered window at maxAdvanceDays', async () => {
+      const allDays: Record<string, Array<{ start: string; end: string }>> = {};
+      for (let d = 0; d < 7; d++) allDays[String(d)] = [{ start: '09:00', end: '10:00' }];
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ availability: allDays, slotMinutes: 60, maxAdvanceDays: 3 }),
+      );
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-07-30T00:00:00.000Z');
+      expect(slots).toHaveLength(4); // days 0..3 inclusive, one slot each
+    });
+
+    it('spaces offered slots by slot + before + after buffers', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({
+          slotMinutes: 30,
+          bufferBeforeMinutes: 15,
+          bufferAfterMinutes: 15,
+          availability: { [String(dow)]: [{ start: '09:00', end: '11:00' }] },
+        }),
+      );
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+      // step = 30 + 15 + 15 = 60min → 09:00, 10:00 (not the 4 slots a 0-buffer grid gives)
+      expect(slots).toEqual([
+        '2027-06-14T09:00:00.000Z',
+        '2027-06-14T10:00:00.000Z',
+      ]);
+    });
+
+    it('rejects a booking within the minimum-notice window', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ minNoticeMinutes: 24 * 60 }),
+      );
+      const soon = new Date(Date.now() + 60 * 60_000).toISOString(); // 1h < 24h notice
+      await expect(svc.book(WS, 'c1', { start: soon, name: 'X' })).rejects.toThrow(
+        /minimum notice/i,
+      );
+    });
+
+    it('rejects a booking beyond the maximum advance window', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ maxAdvanceDays: 7 }),
+      );
+      const far = new Date(Date.now() + 30 * 86400_000).toISOString();
+      await expect(svc.book(WS, 'c1', { start: far, name: 'X' })).rejects.toThrow(
+        /maximum advance/i,
+      );
     });
   });
 

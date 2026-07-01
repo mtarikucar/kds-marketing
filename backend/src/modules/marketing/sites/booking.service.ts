@@ -26,11 +26,28 @@ const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'];
 const CONFERENCING = ['NONE', 'GOOGLE_MEET', 'TEAMS'];
 
 /**
+ * Total per-slot buffer minutes: before + after (Phase 2), falling back to the
+ * legacy single `bufferMinutes` when both before/after are zero. Used as the
+ * spacing padding added to slotMinutes when stepping the offered-slot grid.
+ */
+function bufferTotal(cal: {
+  bufferMinutes?: number;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
+}): number {
+  const beforeAfter =
+    (cal.bufferBeforeMinutes ?? 0) + (cal.bufferAfterMinutes ?? 0);
+  return beforeAfter || (cal.bufferMinutes ?? 0);
+}
+
+/**
  * Booking calendars + slot picking. Availability windows (per weekday, HH:mm)
- * are interpreted in UTC for v1 (timezone-aware slicing is a later refinement);
- * bookable slots = windows sliced into slotMinutes minus existing CONFIRMED
- * bookings. Booking mints/links a lead, emits booking.created (a workflow
- * trigger), emails a confirmation, and schedules a reminder.
+ * are wall-clock times interpreted in the calendar's IANA TIMEZONE (DST-safe via
+ * timezone-slots.ts); bookable slots = windows sliced into slotMinutes (stepping
+ * by slotMinutes + buffers) minus existing CONFIRMED bookings, EXTERNAL_BUSY
+ * blocks and blackout windows, bounded by the calendar's min-notice /
+ * max-advance policy. Booking mints/links a lead, emits booking.created (a
+ * workflow trigger), emails a confirmation (+ICS), and schedules reminders.
  */
 @Injectable()
 export class BookingService implements OnModuleInit {
@@ -75,6 +92,12 @@ export class BookingService implements OnModuleInit {
           bufferMinutes: dto.bufferMinutes ?? 0,
           timezone: dto.timezone ?? 'Europe/Istanbul',
           conferencing: CONFERENCING.includes(dto.conferencing) ? dto.conferencing : 'NONE',
+          minNoticeMinutes: dto.minNoticeMinutes ?? 0,
+          maxAdvanceDays: dto.maxAdvanceDays ?? 60,
+          bufferBeforeMinutes: dto.bufferBeforeMinutes ?? 0,
+          bufferAfterMinutes: dto.bufferAfterMinutes ?? 0,
+          requiresApproval: dto.requiresApproval ?? false,
+          ...(dto.reminderConfig !== undefined ? { reminderConfig: dto.reminderConfig } : {}),
         },
       })
       // slug is unique per (workspaceId, slug); a duplicate name/slug is a clean
@@ -90,7 +113,11 @@ export class BookingService implements OnModuleInit {
     const existing = await this.prisma.bookingCalendar.findFirst({ where: { id, workspaceId } });
     if (!existing) throw new NotFoundException('Calendar not found');
     const data: any = {};
-    for (const k of ['name', 'ownerUserId', 'availability', 'slotMinutes', 'bufferMinutes', 'timezone', 'active'] as const) {
+    for (const k of [
+      'name', 'ownerUserId', 'availability', 'slotMinutes', 'bufferMinutes', 'timezone', 'active',
+      'minNoticeMinutes', 'maxAdvanceDays', 'bufferBeforeMinutes', 'bufferAfterMinutes',
+      'requiresApproval', 'reminderConfig',
+    ] as const) {
       if (dto[k] !== undefined) data[k] = dto[k];
     }
     if (dto.type !== undefined && CALENDAR_TYPES.includes(dto.type)) data.type = dto.type;
@@ -195,9 +222,11 @@ export class BookingService implements OnModuleInit {
     if (!cal) throw new NotFoundException('Calendar not found');
     const from = new Date(fromISO);
     let to = new Date(toISO);
-    const cap = new Date(from.getTime() + MAX_RANGE_DAYS * 86400_000);
+    const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
+    const cap = new Date(from.getTime() + maxDays * 86400_000);
     if (to > cap) to = cap;
-    const now = Date.now();
+    // Earliest bookable instant = now + the calendar's minimum notice lead time.
+    const earliest = Date.now() + ((cal as any).minNoticeMinutes ?? 0) * 60_000;
 
     const memberCount = await this.prisma.bookingCalendarMember.count({
       where: { workspaceId, calendarId: calId },
@@ -230,7 +259,7 @@ export class BookingService implements OnModuleInit {
     const extIv = external.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
     const avail = (cal.availability ?? {}) as Record<string, Array<{ start: string; end: string }>>;
     const slotMs = cal.slotMinutes * 60_000;
-    const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
+    const stepMs = (cal.slotMinutes + bufferTotal(cal)) * 60_000;
     const out: string[] = [];
 
     // Availability windows are wall-clock times in the calendar's TIMEZONE (not
@@ -250,7 +279,7 @@ export class BookingService implements OnModuleInit {
         const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
         for (let s = ws; s + slotMs <= we; s += stepMs) {
           const e = s + slotMs;
-          if (s < now) continue;
+          if (s < earliest) continue; // before now + minimum notice
           if (extIv.some(([bs, be]) => s < be && e > bs)) continue; // hard block
           const taken = ourIv.filter(([bs, be]) => s < be && e > bs).length;
           if (taken >= capacity) continue; // at capacity
@@ -270,6 +299,17 @@ export class BookingService implements OnModuleInit {
     if (!cal) throw new NotFoundException('Calendar not found');
     const start = new Date(dto.start);
     if (isNaN(start.getTime()) || start.getTime() < Date.now()) throw new BadRequestException('Invalid or past slot');
+    // Enforce the calendar's booking-policy window so a direct reserve can't beat
+    // the min-notice lead time or book beyond the max-advance horizon the picker
+    // (availability()) enforces.
+    const minNotice = (cal as any).minNoticeMinutes ?? 0;
+    const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
+    if (start.getTime() < Date.now() + minNotice * 60_000) {
+      throw new BadRequestException('Slot is within the minimum notice window');
+    }
+    if (start.getTime() > Date.now() + maxDays * 86400_000) {
+      throw new BadRequestException('Slot is beyond the maximum advance window');
+    }
     // Reject an off-grid / out-of-hours timestamp: a direct API call must not be
     // able to book a slot the public picker (availability()) would never offer.
     if (!this.isAlignedSlot(cal, start)) {
@@ -554,7 +594,14 @@ export class BookingService implements OnModuleInit {
    * direct reserve call could pass an arbitrary off-grid / out-of-hours time.
    */
   private isAlignedSlot(
-    cal: { availability: unknown; slotMinutes: number; bufferMinutes: number; timezone?: string },
+    cal: {
+      availability: unknown;
+      slotMinutes: number;
+      bufferMinutes: number;
+      bufferBeforeMinutes?: number;
+      bufferAfterMinutes?: number;
+      timezone?: string;
+    },
     start: Date,
   ): boolean {
     const avail = (cal.availability ?? {}) as Record<
@@ -567,7 +614,7 @@ export class BookingService implements OnModuleInit {
     const { y, mo, d, weekday } = zonedParts(start.getTime(), tz);
     const windows = avail[String(weekday)] ?? [];
     const slotMs = cal.slotMinutes * 60_000;
-    const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
+    const stepMs = (cal.slotMinutes + bufferTotal(cal)) * 60_000;
     const target = start.getTime();
     for (const w of windows) {
       const hs = parseHm(w.start), he = parseHm(w.end);

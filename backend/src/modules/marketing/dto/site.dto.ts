@@ -46,6 +46,14 @@ export class CreateCalendarDto {
   @IsOptional() @IsString() @MaxLength(64) timezone?: string;
   /** Video-conferencing provider attached to this calendar's bookings. */
   @IsOptional() @IsString() @IsIn(['NONE', 'GOOGLE_MEET', 'TEAMS']) conferencing?: string;
+  // Booking policy (Phase 2).
+  @IsOptional() @IsInt() @Min(0) @Max(43200) minNoticeMinutes?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(365) maxAdvanceDays?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(240) bufferBeforeMinutes?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(240) bufferAfterMinutes?: number;
+  @IsOptional() @IsBoolean() requiresApproval?: boolean;
+  /** Array of { offsetMinutes, channels:['EMAIL'|'SMS'], audience:'CUSTOMER'|'HOST'|'BOTH' }. */
+  @IsOptional() @IsArray() reminderConfig?: unknown[];
 }
 export class UpdateCalendarDto extends CreateCalendarDto {
   @IsOptional() declare name: string;
