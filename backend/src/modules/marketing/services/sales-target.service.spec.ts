@@ -107,6 +107,37 @@ describe('SalesTargetService', () => {
       expect(prisma.salesTarget.findMany).not.toHaveBeenCalled();
     });
 
+    it('bounds the WON_LEADS / CONNECTED_CALLS window by the WORKSPACE timezone, not UTC', async () => {
+      // A Turkey (UTC+3) workspace's "2026-07" means 2026-07-01 00:00 Istanbul =
+      // 2026-06-30T21:00:00Z .. 2026-08-01 00:00 Istanbul = 2026-07-31T21:00:00Z.
+      // Building the window from raw Date.UTC(2026,6,1) mis-buckets every lead/call
+      // in the first 3 hours of the local month (same class the dashboard fixed).
+      (prisma.workspace.findUnique as any).mockResolvedValue({ timezone: 'Asia/Istanbul' });
+      prisma.salesTarget.findMany.mockResolvedValue([] as any);
+      prisma.lead.count.mockResolvedValue(0);
+      (prisma.commission.aggregate as any).mockResolvedValue({ _sum: { amount: null } });
+      prisma.salesCall.count.mockResolvedValue(0);
+
+      await svc.performanceFor(WS, 'rep-1', '2026-07');
+
+      const expectedStart = new Date('2026-06-30T21:00:00.000Z');
+      const expectedEnd = new Date('2026-07-31T21:00:00.000Z');
+      expect(prisma.lead.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            convertedAt: { gte: expectedStart, lt: expectedEnd },
+          }),
+        }),
+      );
+      expect(prisma.salesCall.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            startedAt: { gte: expectedStart, lt: expectedEnd },
+          }),
+        }),
+      );
+    });
+
     it('excludes soft-deleted / merged leads from WON_LEADS (parity with the Performance Report)', async () => {
       // A WON lead that is later bulk-deleted (deletedAt set) must NOT keep
       // inflating attainment here while the Performance Report drops it.

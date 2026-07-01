@@ -8,6 +8,7 @@ import {
   TARGET_METRICS,
 } from '../dto/sales-target.dto';
 import { MarketingUserPayload } from '../types';
+import { zonedWallTimeToUtcMs } from '../sites/timezone-slots';
 
 export interface MetricPerformance {
   metric: TargetMetric;
@@ -136,7 +137,7 @@ export class SalesTargetService {
     });
     if (reps.length === 0) return [];
     const repIds = reps.map((r) => r.id);
-    const { start, end } = this.periodRange(period);
+    const { start, end } = await this.periodRange(workspaceId, period);
 
     // Batch the four "actuals + target" reads across every rep at once.
     // Each call returns rows keyed by marketingUserId so we can pivot
@@ -223,7 +224,7 @@ export class SalesTargetService {
     marketingUserId: string,
     period: string,
   ): Promise<Record<TargetMetric, number>> {
-    const { start, end } = this.periodRange(period);
+    const { start, end } = await this.periodRange(workspaceId, period);
     const [wonLeads, commissionAgg, connectedCalls] = await Promise.all([
       this.prisma.lead.count({
         where: {
@@ -257,12 +258,27 @@ export class SalesTargetService {
     };
   }
 
-  /** [start, end) UTC bounds for a YYYY-MM period. */
-  private periodRange(period: string): { start: Date; end: Date } {
+  /**
+   * [start, end) bounds for a YYYY-MM period in the WORKSPACE's timezone (as UTC
+   * Dates for Prisma). `Date.UTC(y, m-1, 1)` produced UTC month edges, so for a
+   * Turkey (UTC+3) workspace every won lead / connected call in the first
+   * offset-hours of the local month bucketed into the wrong period (the same
+   * class the dashboard fixed via periodBounds). Booking already interprets
+   * wall-clock in the workspace tz; attainment now matches. DST-safe via Intl.
+   */
+  private async periodRange(
+    workspaceId: string,
+    period: string,
+  ): Promise<{ start: Date; end: Date }> {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { timezone: true },
+    });
+    const tz = ws?.timezone || 'UTC';
     const [y, m] = period.split('-').map(Number);
     return {
-      start: new Date(Date.UTC(y, m - 1, 1)),
-      end: new Date(Date.UTC(y, m, 1)),
+      start: new Date(zonedWallTimeToUtcMs(y, m, 1, 0, 0, tz)),
+      end: new Date(zonedWallTimeToUtcMs(y, m + 1, 1, 0, 0, tz)),
     };
   }
 }
