@@ -42,15 +42,25 @@ function apiError(e: unknown, fallback: string): string {
   return Array.isArray(msg) ? msg[0] : (msg ?? fallback);
 }
 
-const schema = z.object({
-  code: z.string().trim().min(1, 'required').max(40).regex(/^[A-Za-z0-9_-]+$/, 'code'),
-  kind: z.enum(['PERCENT', 'FIXED']),
-  // For PERCENT this is whole %, for FIXED it's the major-unit amount (×100 on submit).
-  value: z.coerce.number().min(0.01),
-  maxRedemptions: z.coerce.number().int().min(1).optional().or(z.literal('')),
-  expiresAt: z.string().optional().or(z.literal('')),
-  active: z.boolean(),
-});
+export const schema = z
+  .object({
+    code: z.string().trim().min(1, 'required').max(40).regex(/^[A-Za-z0-9_-]+$/, 'code'),
+    kind: z.enum(['PERCENT', 'FIXED']),
+    // For PERCENT this is whole %, for FIXED it's the major-unit amount (×100 on submit).
+    value: z.coerce.number().min(0.01),
+    maxRedemptions: z.coerce.number().int().min(1).optional().or(z.literal('')),
+    expiresAt: z.string().optional().or(z.literal('')),
+    active: z.boolean(),
+  })
+  // Mirror the backend assertShape: a PERCENT coupon value must be 1–100 (a >100%
+  // discount would drive checkout totals negative). Without this the form submitted
+  // e.g. 150 and the user got a raw server 400 instead of inline validation. FIXED
+  // is a currency amount, so it stays unbounded here.
+  .superRefine((val, ctx) => {
+    if (val.kind === 'PERCENT' && (val.value < 1 || val.value > 100)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['value'], message: 'percentRange' });
+    }
+  });
 type FormValues = z.infer<typeof schema>;
 
 export default function CouponsPage() {
@@ -214,7 +224,7 @@ export default function CouponsPage() {
               </Field>
               <Field label={kind === 'PERCENT' ? t('coupons.form.percentValue', { defaultValue: 'Value (%)' }) : t('coupons.form.fixedValue', { defaultValue: 'Amount' })} error={fieldErr(errors.value?.message)} required>
                 {({ id, describedBy, invalid }) => (
-                  <Input id={id} type="number" step="0.01" aria-describedby={describedBy} aria-invalid={invalid} {...form.register('value')} />
+                  <Input id={id} type="number" step="0.01" min={kind === 'PERCENT' ? 1 : undefined} max={kind === 'PERCENT' ? 100 : undefined} aria-describedby={describedBy} aria-invalid={invalid} {...form.register('value')} />
                 )}
               </Field>
             </div>
