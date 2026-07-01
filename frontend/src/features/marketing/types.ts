@@ -171,6 +171,9 @@ export interface MarketingTask {
 export interface LeadOffer {
   id: string;
   planId?: string;
+  /** Currency of the plan snapshot (customPrice/planMonthlyPrice are in it); the
+   *  app bills TRY or USD (dual-currency packages). Null for a plan-less offer. */
+  planCurrency?: string | null;
   customPrice?: number;
   discount?: number;
   trialDays?: number;
