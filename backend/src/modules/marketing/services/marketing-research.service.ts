@@ -12,6 +12,11 @@ import {
 import { MarketingLeadsIngestService } from './marketing-leads-ingest.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 /**
  * CRUD for research profiles — the customer-authored "who to find and how
  * to pitch" briefs the nightly routine researches against.
@@ -33,29 +38,37 @@ export class MarketingResearchService {
 
   async create(workspaceId: string, dto: CreateResearchProfileDto) {
     const effective = await this.entitlements.getEffective(workspaceId);
-    if (effective.maxResearchProfiles !== -1) {
-      const count = await this.prisma.researchProfile.count({
-        where: { workspaceId },
-      });
+    const data: Prisma.ResearchProfileUncheckedCreateInput = {
+      workspaceId,
+      name: dto.name,
+      icpDescription: dto.icpDescription,
+      productPitch: dto.productPitch ?? null,
+      geo: (dto.geo as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+      language: dto.language ?? 'en',
+      businessTypes:
+        (dto.businessTypes as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+      exclusions: dto.exclusions ?? null,
+      status: dto.status ?? 'ACTIVE',
+    };
+    // Unlimited plan — no cap to race against, so a plain create is fine.
+    if (effective.maxResearchProfiles === -1) {
+      return this.prisma.researchProfile.create({ data });
+    }
+    // Serialize the count-check + create per workspace under an advisory xact-lock:
+    // a bare count-then-create lets two concurrent requests at (max-1) BOTH pass the
+    // cap and exceed maxResearchProfiles. The lock makes the read-modify-write atomic
+    // (mirrors the ai-credits / message-quota / lead-ingest quota pattern).
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('research-profiles:' + workspaceId)}))::text AS locked`,
+      );
+      const count = await tx.researchProfile.count({ where: { workspaceId } });
       if (count >= effective.maxResearchProfiles) {
         throw new BadRequestException(
           `Profile limit reached (${effective.maxResearchProfiles}) — upgrade your package for more research focuses`,
         );
       }
-    }
-    return this.prisma.researchProfile.create({
-      data: {
-        workspaceId,
-        name: dto.name,
-        icpDescription: dto.icpDescription,
-        productPitch: dto.productPitch ?? null,
-        geo: (dto.geo as Prisma.InputJsonValue) ?? Prisma.JsonNull,
-        language: dto.language ?? 'en',
-        businessTypes:
-          (dto.businessTypes as Prisma.InputJsonValue) ?? Prisma.JsonNull,
-        exclusions: dto.exclusions ?? null,
-        status: dto.status ?? 'ACTIVE',
-      },
+      return tx.researchProfile.create({ data });
     });
   }
 
