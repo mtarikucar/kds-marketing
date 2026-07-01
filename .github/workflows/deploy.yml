@@ -91,7 +91,7 @@ jobs:
           target: production
           push: true
           build-args: |
-            VITE_API_URL=${{ vars.PUBLIC_API_URL || 'https://marketing.hummytummy.com/api' }}
+            VITE_API_URL=${{ vars.PUBLIC_API_URL || 'https://jeetagrowth.com/api' }}
             VITE_APP_TITLE=${{ vars.APP_TITLE || 'Marketing Console' }}
             VITE_APP_VERSION=${{ needs.version.outputs.version }}
           tags: |
@@ -228,14 +228,14 @@ jobs:
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
           TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET}
           STRIPE_CONNECT_CLIENT_ID=${STRIPE_CONNECT_CLIENT_ID}
-          MARKETING_PUBLIC_URL=https://marketing.hummytummy.com
+          MARKETING_PUBLIC_URL=https://jeetagrowth.com
           # Public origin for callback/tracking links the API emits (NetGSM MO
           # callbackUrl, campaign tracking, Twilio voice signature). Without it the
           # SMS channel's MO URL renders null and the operator can't wire NetGSM.
-          PUBLIC_BASE_URL=https://marketing.hummytummy.com
+          PUBLIC_BASE_URL=https://jeetagrowth.com
           CORE_SERVICE_URL=http://host.docker.internal:3000
-          CORS_ORIGIN=https://marketing.hummytummy.com
-          FRONTEND_URL=https://marketing.hummytummy.com
+          CORS_ORIGIN=https://jeetagrowth.com
+          FRONTEND_URL=https://jeetagrowth.com
           APP_NAME=HummyTummy
           APP_URL=https://hummytummy.com
           BANK_IBAN=${BANK_IBAN}

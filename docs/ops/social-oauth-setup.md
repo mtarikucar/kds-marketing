@@ -16,10 +16,10 @@ this is the live value):
 
 | Network   | Redirect URI |
 |-----------|--------------|
-| Facebook  | `https://marketing.hummytummy.com/api/marketing/social/oauth/facebook/callback` |
-| Instagram | `https://marketing.hummytummy.com/api/marketing/social/oauth/instagram/callback` |
-| LinkedIn  | `https://marketing.hummytummy.com/api/marketing/social/oauth/linkedin/callback` |
-| TikTok    | `https://marketing.hummytummy.com/api/marketing/social/oauth/tiktok/callback` |
+| Facebook  | `https://jeetagrowth.com/api/marketing/social/oauth/facebook/callback` |
+| Instagram | `https://jeetagrowth.com/api/marketing/social/oauth/instagram/callback` |
+| LinkedIn  | `https://jeetagrowth.com/api/marketing/social/oauth/linkedin/callback` |
+| TikTok    | `https://jeetagrowth.com/api/marketing/social/oauth/tiktok/callback` |
 
 **GitHub repo secrets** (Settings → Secrets and variables → Actions). The deploy
 workflow renders these into prod env on the next tag; nothing else to touch:
@@ -48,7 +48,7 @@ workflow renders these into prod env on the next tag; nothing else to touch:
 
 ### TikTok
 1. https://developers.tiktok.com → **Manage apps → Connect an app**.
-2. Add **Login Kit** + **Content Posting API**. Redirect URI: the TikTok URI above. Verify the domain `marketing.hummytummy.com` if prompted.
+2. Add **Login Kit** + **Content Posting API**. Redirect URI: the TikTok URI above. Verify the domain `jeetagrowth.com` if prompted.
 3. Copy **Client Key** → `TIKTOK_CLIENT_KEY`, **Client Secret** → `TIKTOK_CLIENT_SECRET`.
 4. Request scopes `user.info.basic`, `video.publish` — Content Posting needs an **audit**; until then it posts only to the developer's own account.
 
