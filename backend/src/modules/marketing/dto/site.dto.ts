@@ -66,6 +66,30 @@ export class CalendarMemberDto {
   @IsOptional() @IsInt() @Min(0) @Max(10000) priority?: number;
 }
 
+/** Create a blackout / time-off window. */
+export class CreateBlackoutDto {
+  @IsOptional() @IsString() @MaxLength(64) calendarId?: string;
+  @IsOptional() @IsString() @MaxLength(64) marketingUserId?: string;
+  @IsString() @IsNotEmpty() @MaxLength(40) startAt: string;
+  @IsString() @IsNotEmpty() @MaxLength(40) endAt: string;
+  @IsOptional() @IsString() @MaxLength(200) reason?: string;
+}
+
+/** Upsert a member's working hours for a calendar. */
+export class SetMemberAvailabilityDto {
+  @IsString() @IsNotEmpty() @MaxLength(64) marketingUserId: string;
+  @IsObject() availability: Record<string, unknown>;
+  @IsOptional() @IsString() @MaxLength(64) timezone?: string;
+}
+
+/** Query filter for the admin bookings list. */
+export class ListBookingsQueryDto {
+  @IsOptional() @IsString() @MaxLength(64) calendarId?: string;
+  @IsOptional() @IsString() @MaxLength(24) status?: string;
+  @IsOptional() @IsString() @MaxLength(40) from?: string;
+  @IsOptional() @IsString() @MaxLength(40) to?: string;
+}
+
 /** Move a booking to a new start time (ISO datetime). */
 export class RescheduleBookingDto {
   @IsString() @IsNotEmpty() start: string;

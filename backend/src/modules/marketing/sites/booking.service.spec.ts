@@ -17,6 +17,7 @@ describe('BookingService', () => {
   let outbox: any;
   let googleSync: any;
   let outlookSync: any;
+  let scheduledJobs: any;
 
   function calendar(extra: any = {}) {
     // maxAdvanceDays is generous so the fixed far-future fixture day isn't
@@ -46,7 +47,7 @@ describe('BookingService', () => {
       sendPlainEmailWithIcs: jest.fn().mockResolvedValue(true),
     };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
-    const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
+    scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };
     // Google / Outlook calendar sync are inert in this suite (push/cancel are
     // best-effort no-ops here); the dedicated calendar specs exercise them for real.
@@ -379,6 +380,73 @@ describe('BookingService', () => {
       prisma.booking.findFirst.mockResolvedValue({ id: 'b-1', status: 'CANCELLED', calendarId: 'c1' });
       await svc.cancel(WS, 'b-1');
       expect(outbox.append).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('blackout & member CRUD', () => {
+    it('creates a blackout after validating the window', async () => {
+      prisma.bookingBlackout.create = jest.fn().mockResolvedValue({ id: 'bo1' });
+      await svc.createBlackout(WS, { startAt: '2027-06-14T09:00:00Z', endAt: '2027-06-14T12:00:00Z' });
+      expect(prisma.bookingBlackout.create).toHaveBeenCalled();
+    });
+
+    it('rejects an inverted blackout window', async () => {
+      await expect(
+        svc.createBlackout(WS, { startAt: '2027-06-14T12:00:00Z', endAt: '2027-06-14T09:00:00Z' }),
+      ).rejects.toThrow(/invalid blackout/i);
+    });
+
+    it('upserts member availability (create when none exists)', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar()); // ownership 404 guard
+      prisma.memberAvailability = {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ma1' }),
+        update: jest.fn(),
+      };
+      await svc.setMemberAvailability(WS, 'c1', 'u1', { '1': [{ start: '09:00', end: '17:00' }] });
+      expect(prisma.memberAvailability.create).toHaveBeenCalled();
+    });
+
+    it('lists real bookings excluding external busy blocks', async () => {
+      prisma.booking.findMany.mockResolvedValue([{ id: 'b1' }]);
+      const res = await svc.listBookings(WS, {});
+      expect(res).toEqual([{ id: 'b1' }]);
+      const where = prisma.booking.findMany.mock.calls.at(-1)[0].where;
+      expect(where.status).toEqual({ not: 'EXTERNAL_BUSY' });
+    });
+  });
+
+  describe('reminders', () => {
+    it('schedules one reminder job per reminderConfig entry', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({
+          reminderConfig: [
+            { offsetMinutes: 1440, channels: ['EMAIL'], audience: 'CUSTOMER' },
+            { offsetMinutes: 60, channels: ['EMAIL'], audience: 'BOTH' },
+          ],
+        }),
+      );
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.create.mockResolvedValue({
+        id: 'b1', status: 'CONFIRMED', startAt: new Date('2027-06-14T09:00:00Z'),
+        endAt: new Date('2027-06-14T09:30:00Z'), token: 'bk', email: 'a@x.com', notes: null,
+      });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
+      const dedupKeys = scheduledJobs.schedule.mock.calls.map((c: any) => c[0].dedupKey);
+      expect(dedupKeys).toEqual(expect.arrayContaining(['b1:1440', 'b1:60']));
+      expect(scheduledJobs.schedule).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to a single T-1h reminder when no config is set', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar()); // no reminderConfig
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.create.mockResolvedValue({
+        id: 'b1', status: 'CONFIRMED', startAt: new Date('2027-06-14T09:00:00Z'),
+        endAt: new Date('2027-06-14T09:30:00Z'), token: 'bk', email: null, notes: null,
+      });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
+      expect(scheduledJobs.schedule).toHaveBeenCalledTimes(1);
+      expect(scheduledJobs.schedule.mock.calls[0][0].dedupKey).toBe('b1:60');
     });
   });
 

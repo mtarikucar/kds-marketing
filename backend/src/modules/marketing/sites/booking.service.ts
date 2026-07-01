@@ -46,6 +46,49 @@ function bufferTotal(cal: {
   return beforeAfter || (cal.bufferMinutes ?? 0);
 }
 
+/** One reminder rule: fire `offsetMinutes` before the start, over `channels`,
+ *  to `audience`. */
+interface ReminderEntry {
+  offsetMinutes: number;
+  channels: string[]; // EMAIL | SMS
+  audience: string; // CUSTOMER | HOST | BOTH
+}
+const DEFAULT_REMINDERS: ReminderEntry[] = [
+  { offsetMinutes: 60, channels: ['EMAIL'], audience: 'CUSTOMER' },
+];
+
+/** Validate + normalise a calendar's reminderConfig JSON, falling back to the
+ *  single T-1h customer email when it is absent or malformed. */
+function parseReminderConfig(raw: unknown): ReminderEntry[] {
+  if (!Array.isArray(raw) || raw.length === 0) return DEFAULT_REMINDERS;
+  const out: ReminderEntry[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== 'object') continue;
+    const offsetMinutes = Number((e as any).offsetMinutes);
+    if (!Number.isFinite(offsetMinutes) || offsetMinutes <= 0) continue;
+    const rawChannels = Array.isArray((e as any).channels) ? (e as any).channels : ['EMAIL'];
+    const channels = rawChannels.filter((c: unknown) => c === 'EMAIL' || c === 'SMS');
+    const audience = ['CUSTOMER', 'HOST', 'BOTH'].includes((e as any).audience)
+      ? (e as any).audience
+      : 'CUSTOMER';
+    out.push({ offsetMinutes, channels: channels.length ? channels : ['EMAIL'], audience });
+  }
+  return out.length ? out : DEFAULT_REMINDERS;
+}
+
+/** Render an instant in an attendee's IANA timezone (falls back to UTC). */
+function formatInTz(d: Date, tz?: string | null): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: tz || 'UTC',
+    }).format(d);
+  } catch {
+    return d.toUTCString();
+  }
+}
+
 /**
  * Booking calendars + slot picking. Availability windows (per weekday, HH:mm)
  * are wall-clock times interpreted in the calendar's IANA TIMEZONE (DST-safe via
@@ -197,6 +240,103 @@ export class BookingService implements OnModuleInit {
     const res = await this.prisma.bookingCalendar.deleteMany({ where: { id, workspaceId } });
     if (res.count === 0) throw new NotFoundException('Calendar not found');
     return { message: 'Calendar deleted' };
+  }
+
+  // ── Blackout / time-off admin CRUD ─────────────────────────────────────────
+
+  listBlackouts(workspaceId: string, calendarId?: string) {
+    return this.prisma.bookingBlackout.findMany({
+      where: {
+        workspaceId,
+        // A specific calendar sees its own windows PLUS workspace-wide ones.
+        ...(calendarId ? { OR: [{ calendarId }, { calendarId: null }] } : {}),
+      },
+      orderBy: { startAt: 'asc' },
+    });
+  }
+
+  async createBlackout(
+    workspaceId: string,
+    dto: { calendarId?: string; marketingUserId?: string; startAt: string; endAt: string; reason?: string },
+  ) {
+    const start = new Date(dto.startAt);
+    const end = new Date(dto.endAt);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+      throw new BadRequestException('Invalid blackout window');
+    }
+    if (dto.calendarId) await this.get(workspaceId, dto.calendarId); // ownership 404
+    return this.prisma.bookingBlackout.create({
+      data: {
+        workspaceId,
+        calendarId: dto.calendarId ?? null,
+        marketingUserId: dto.marketingUserId ?? null,
+        startAt: start,
+        endAt: end,
+        reason: dto.reason ?? null,
+      },
+    });
+  }
+
+  async deleteBlackout(workspaceId: string, id: string) {
+    const res = await this.prisma.bookingBlackout.deleteMany({ where: { id, workspaceId } });
+    if (res.count === 0) throw new NotFoundException('Blackout not found');
+    return { message: 'Blackout deleted' };
+  }
+
+  // ── Per-member working hours (Phase 2 model + CRUD) ─────────────────────────
+
+  listMemberAvailability(workspaceId: string, calId: string) {
+    return this.prisma.memberAvailability.findMany({ where: { workspaceId, calendarId: calId } });
+  }
+
+  /** Upsert a member's working hours for a calendar (unique per calendar+member). */
+  async setMemberAvailability(
+    workspaceId: string,
+    calId: string,
+    marketingUserId: string,
+    availability: unknown,
+    timezone?: string,
+  ) {
+    await this.get(workspaceId, calId); // ownership 404
+    const existing = await this.prisma.memberAvailability.findFirst({
+      where: { calendarId: calId, marketingUserId },
+    });
+    if (existing) {
+      return this.prisma.memberAvailability.update({
+        where: { id: existing.id },
+        data: { availability: availability as any, timezone: timezone ?? null },
+      });
+    }
+    return this.prisma.memberAvailability.create({
+      data: { workspaceId, calendarId: calId, marketingUserId, availability: availability as any, timezone: timezone ?? null },
+    });
+  }
+
+  // ── Bookings listing (admin appointments view) ──────────────────────────────
+
+  /** List real appointments (excludes EXTERNAL_BUSY busy blocks), newest window
+   *  first, optionally filtered by calendar / status / time range. */
+  listBookings(
+    workspaceId: string,
+    filters: { calendarId?: string; status?: string; from?: string; to?: string } = {},
+  ) {
+    return this.prisma.booking.findMany({
+      where: {
+        workspaceId,
+        status: filters.status ? filters.status : { not: 'EXTERNAL_BUSY' },
+        ...(filters.calendarId ? { calendarId: filters.calendarId } : {}),
+        ...(filters.from || filters.to
+          ? {
+              startAt: {
+                ...(filters.from ? { gte: new Date(filters.from) } : {}),
+                ...(filters.to ? { lte: new Date(filters.to) } : {}),
+              },
+            }
+          : {}),
+      },
+      orderBy: { startAt: 'asc' },
+      take: 500,
+    });
   }
 
   /** Public: resolve a calendar by (workspaceId, slug) for the booking page. */
@@ -641,11 +781,24 @@ export class BookingService implements OnModuleInit {
         .sendPlainEmailWithIcs(booking.email, `Booking confirmed: ${cal.name || 'Booking'}`, body, ics)
         .catch(() => undefined);
     }
-    const remindAt = new Date(booking.startAt.getTime() - 3600_000);
-    if (remindAt.getTime() > Date.now()) {
+    // One reminder job per configured lead time (default: a single T-1h customer
+    // email). dedupKey is per (booking, offset) so re-running approval is safe.
+    const reminders = parseReminderConfig((cal as any).reminderConfig);
+    for (const r of reminders) {
+      const runAt = new Date(booking.startAt.getTime() - r.offsetMinutes * 60_000);
+      if (runAt.getTime() <= Date.now()) continue;
       await this.scheduledJobs.schedule({
-        workspaceId, kind: BOOKING_REMINDER_KIND, runAt: remindAt, dedupKey: booking.id,
-        payload: { workspaceId, bookingId: booking.id },
+        workspaceId,
+        kind: BOOKING_REMINDER_KIND,
+        runAt,
+        dedupKey: `${booking.id}:${r.offsetMinutes}`,
+        payload: {
+          workspaceId,
+          bookingId: booking.id,
+          offsetMinutes: r.offsetMinutes,
+          channels: r.channels,
+          audience: r.audience,
+        },
       });
     }
   }
@@ -766,14 +919,45 @@ export class BookingService implements OnModuleInit {
   }
 
   private async remind(job: ClaimedJob): Promise<void> {
-    const { workspaceId, bookingId } = job.payload;
+    const { workspaceId, bookingId, channels, audience } = job.payload as {
+      workspaceId: string;
+      bookingId: string;
+      channels?: string[];
+      audience?: string;
+    };
     const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
-    if (!booking || booking.status !== 'CONFIRMED' || !booking.email) return;
+    if (!booking || booking.status !== 'CONFIRMED') return;
+    const chans = channels ?? ['EMAIL'];
+    const aud = audience ?? 'CUSTOMER';
+    // Customer-facing time is rendered in the attendee's timezone (fallback UTC).
+    const when = formatInTz(booking.startAt, booking.attendeeTimezone);
     const joinLine = booking.meetingUrl ? `\nJoin: ${booking.meetingUrl}` : '';
-    await this.email.sendPlainEmail(
-      booking.email, 'Reminder: your booking is soon',
-      `This is a reminder for your booking at ${booking.startAt.toUTCString()}.${joinLine}`,
-    ).catch(() => undefined);
+
+    if ((aud === 'CUSTOMER' || aud === 'BOTH') && chans.includes('EMAIL') && booking.email) {
+      await this.email
+        .sendPlainEmail(
+          booking.email, 'Reminder: your booking is soon',
+          `This is a reminder for your booking at ${when}.${joinLine}`,
+        )
+        .catch(() => undefined);
+    }
+    if ((aud === 'HOST' || aud === 'BOTH') && chans.includes('EMAIL') && booking.assigneeUserId) {
+      const host = await this.prisma.marketingUser.findFirst({
+        where: { id: booking.assigneeUserId, workspaceId },
+        select: { email: true },
+      });
+      if (host?.email) {
+        await this.email
+          .sendPlainEmail(
+            host.email, `Reminder: upcoming appointment with ${booking.name}`,
+            `You have an appointment at ${when}.${joinLine}`,
+          )
+          .catch(() => undefined);
+      }
+    }
+    // SMS reminders (channels includes 'SMS') are delivered by the notification /
+    // messaging layer that subscribes to booking events — BookingService does not
+    // couple directly to the SMS channel adapter here.
   }
 
   /**

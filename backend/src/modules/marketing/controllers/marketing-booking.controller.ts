@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -15,6 +15,9 @@ import {
   SetCalendarMembersDto,
   RescheduleBookingDto,
   SetBookingStatusDto,
+  CreateBlackoutDto,
+  SetMemberAvailabilityDto,
+  ListBookingsQueryDto,
 } from '../dto/site.dto';
 
 /** Booking calendars (config). MANAGER+ behind `funnels`. Public booking is separate. */
@@ -28,6 +31,25 @@ export class MarketingBookingController {
 
   @Get()
   list(@CurrentMarketingUser() a: MarketingUserPayload) { return this.booking.list(a.workspaceId); }
+
+  // Static GET routes declared BEFORE `:id` so they aren't captured by it.
+  /** Blackout / time-off windows (workspace-wide + optionally one calendar). */
+  @Get('blackouts')
+  listBlackouts(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query('calendarId') calendarId?: string,
+  ) {
+    return this.booking.listBlackouts(a.workspaceId, calendarId);
+  }
+
+  /** Real appointments for the in-app list (excludes external busy blocks). */
+  @Get('bookings')
+  listBookings(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query() q: ListBookingsQueryDto,
+  ) {
+    return this.booking.listBookings(a.workspaceId, q);
+  }
 
   @Post()
   @RequirePermission('settings.manage')
@@ -94,5 +116,33 @@ export class MarketingBookingController {
     @Body() dto: SetBookingStatusDto,
   ) {
     return this.booking.setStatus(a.workspaceId, bookingId, dto.status);
+  }
+
+  @Post('blackouts')
+  @RequirePermission('settings.manage')
+  createBlackout(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: CreateBlackoutDto) {
+    return this.booking.createBlackout(a.workspaceId, dto);
+  }
+
+  @Delete('blackouts/:id')
+  @RequirePermission('settings.manage')
+  deleteBlackout(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.booking.deleteBlackout(a.workspaceId, id);
+  }
+
+  /** A calendar's per-member working hours (Phase 2). */
+  @Get(':id/member-availability')
+  listMemberAvailability(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.booking.listMemberAvailability(a.workspaceId, id);
+  }
+
+  @Post(':id/member-availability')
+  @RequirePermission('settings.manage')
+  setMemberAvailability(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: SetMemberAvailabilityDto,
+  ) {
+    return this.booking.setMemberAvailability(a.workspaceId, id, dto.marketingUserId, dto.availability, dto.timezone);
   }
 }
