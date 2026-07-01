@@ -162,6 +162,18 @@ describe('RolesService', () => {
     await expect(svc.update(WS, 'r1', { name: 'Taken' }, OWNER)).rejects.toBeInstanceOf(ConflictException);
   });
 
+  // Self-action footgun: assigning yourself a weaker custom role strips your own
+  // admin access (a custom role REPLACES legacy perms) → self-lockout. Role
+  // changes must target OTHERS. Mirrors the user-account self-deactivation guard.
+  it('assignToUser refuses to change the actor’s OWN role', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'me', role: 'MANAGER', customRoleId: null } as any);
+    await expect(
+      svc.assignToUser(WS, 'me', null, { ...MANAGER, id: 'me' } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
   it('assignToUser validates the user + role belong to the workspace', async () => {
     const { prisma, svc } = makeSvc();
     prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u1' } as any);

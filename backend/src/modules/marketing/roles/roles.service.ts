@@ -17,7 +17,7 @@ interface RoleInput {
 /** The acting user — used to cap what permissions a role mutation may grant.
  *  Carries workspaceId so the actor's own permission set resolves correctly
  *  (resolvePermissions reads the custom role workspace-scoped). */
-type Actor = { workspaceId: string; role: string; customRoleId?: string | null };
+type Actor = { workspaceId: string; role: string; customRoleId?: string | null; id?: string };
 
 /**
  * Epic F — custom roles with granular permissions. When a user has a
@@ -143,6 +143,13 @@ export class RolesService {
   }
 
   async assignToUser(workspaceId: string, userId: string, roleId: string | null, actor: Actor) {
+    // Can't change your OWN role — a custom role REPLACES legacy perms, so
+    // self-assigning a weaker role strips your own admin access and locks you out
+    // (recoverable only by another admin / the owner). Role changes target OTHERS.
+    // Mirrors the self-deactivation guard on the user account itself.
+    if (actor.id && userId === actor.id) {
+      throw new ForbiddenException('You cannot change your own role');
+    }
     const user = await this.prisma.marketingUser.findFirst({
       where: { id: userId, workspaceId },
       select: { id: true, role: true, customRoleId: true },
