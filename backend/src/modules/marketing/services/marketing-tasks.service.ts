@@ -213,7 +213,11 @@ export class MarketingTasksService {
     return this.prisma.marketingTask.findMany({
       where: {
         workspaceId,
-        dueDate: { gte: from, lte: to },
+        // The grid sends a bare YYYY-MM-DD end (the last day of the visible month);
+        // a plain `lte: new Date(dateTo)` is UTC midnight, dropping every task due
+        // later on that day off the calendar. Make the end inclusive (mirrors
+        // findAll / the reports rangeEndInclusive fix).
+        dueDate: { gte: from, lte: rangeEndInclusive(dateTo) },
         ...(userRole === 'REP' ? { assignedToId: userId } : {}),
       },
       orderBy: { dueDate: 'asc' },
