@@ -25,7 +25,7 @@ function gcalErrorFallback(reason: string): string {
       case 'invalid_client':
         return 'Google rejected the OAuth credentials (invalid_client). The client ID and secret must be from the SAME OAuth client — re-set both and redeploy.';
       case 'redirect_uri_mismatch':
-        return 'Google rejected the redirect URI (redirect_uri_mismatch). Register https://marketing.hummytummy.com/api/marketing/integrations/google-calendar/callback exactly in the OAuth client.';
+        return 'Google rejected the redirect URI (redirect_uri_mismatch). Register https://jeetagrowth.com/api/marketing/integrations/google-calendar/callback exactly in the OAuth client.';
       case 'invalid_grant':
         return 'The authorization code was invalid or expired (invalid_grant). Click Connect and finish the consent promptly.';
       default:
@@ -59,7 +59,7 @@ function outlookErrorFallback(reason: string): string {
       case 'invalid_client':
         return 'Microsoft rejected the OAuth credentials (invalid_client). The client ID and secret must be from the SAME Azure AD app — re-set both and redeploy.';
       case 'redirect_uri_mismatch':
-        return 'Microsoft rejected the redirect URI. Register https://marketing.hummytummy.com/api/marketing/integrations/outlook-calendar/callback exactly in the Azure AD app.';
+        return 'Microsoft rejected the redirect URI. Register https://jeetagrowth.com/api/marketing/integrations/outlook-calendar/callback exactly in the Azure AD app.';
       case 'invalid_grant':
         return 'The authorization code was invalid or expired (invalid_grant). Click Connect and finish the consent promptly.';
       default:
