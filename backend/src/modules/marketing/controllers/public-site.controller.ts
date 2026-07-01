@@ -5,7 +5,7 @@ import { Throttle } from '@nestjs/throttler';
 import { SitesService } from '../sites/sites.service';
 import { FormsService } from '../sites/forms.service';
 import { BookingService } from '../sites/booking.service';
-import { BookSlotDto, SlotsQueryDto } from '../dto/public-site.dto';
+import { BookSlotDto, SlotsQueryDto, RescheduleTokenDto } from '../dto/public-site.dto';
 import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { readCookie, AFF_REF_COOKIE } from './public-referral.controller';
 
@@ -88,6 +88,20 @@ export class PublicSiteController {
   ) {
     const c = await this.booking.publicCalendar(ws, cal);
     return this.booking.book(ws, c.id, body);
+  }
+
+  /** Public self-service: reschedule a booking by its opaque token. */
+  @Post('book/token/:token/reschedule')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
+  rescheduleByToken(@Param('token') token: string, @Body() body: RescheduleTokenDto) {
+    return this.booking.rescheduleByToken(token, body.start);
+  }
+
+  /** Public self-service: cancel a booking by its opaque token. */
+  @Post('book/token/:token/cancel')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
+  cancelByToken(@Param('token') token: string) {
+    return this.booking.cancelByToken(token);
   }
 
   @Get('book/:ws/:cal')

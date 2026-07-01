@@ -25,6 +25,11 @@ const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
 const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'];
 const CONFERENCING = ['NONE', 'GOOGLE_MEET', 'TEAMS'];
+// Statuses that HOLD a slot (count against capacity / block an assignee). A
+// PENDING approval hold occupies the slot just like a CONFIRMED booking.
+const ACTIVE_STATUSES = ['CONFIRMED', 'PENDING'];
+// Terminal/administrative transitions an admin can set on a booking.
+const SETTABLE_STATUSES = ['CONFIRMED', 'NO_SHOW', 'COMPLETED', 'CANCELLED'];
 
 /**
  * Total per-slot buffer minutes: before + after (Phase 2), falling back to the
@@ -241,7 +246,7 @@ export class BookingService implements OnModuleInit {
       where: {
         workspaceId,
         calendarId: calId,
-        status: 'CONFIRMED',
+        status: { in: ACTIVE_STATUSES },
         startAt: { lt: to },
         endAt: { gt: from },
       },
@@ -309,7 +314,7 @@ export class BookingService implements OnModuleInit {
   /** Public: book a slot. */
   async book(
     workspaceId: string, calId: string,
-    dto: { start: string; name: string; email?: string; phone?: string; notes?: string },
+    dto: { start: string; name: string; email?: string; phone?: string; notes?: string; attendeeTimezone?: string },
   ) {
     const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: calId, workspaceId, active: true } });
     if (!cal) throw new NotFoundException('Calendar not found');
@@ -379,7 +384,7 @@ export class BookingService implements OnModuleInit {
       // COLLECTIVE→1, CLASS→capacity, ROUND_ROBIN→member count). Mirrors
       // availability() exactly so a direct reserve can't exceed what's offered.
       const overlapping = await tx.booking.findMany({
-        where: { workspaceId, calendarId: calId, status: 'CONFIRMED', startAt: { lt: end }, endAt: { gt: start } },
+        where: { workspaceId, calendarId: calId, status: { in: ACTIVE_STATUSES }, startAt: { lt: end }, endAt: { gt: start } },
         select: { assigneeUserId: true },
       });
       // Members are only needed for ROUND_ROBIN (capacity = member count + per-
@@ -409,7 +414,7 @@ export class BookingService implements OnModuleInit {
           ? await tx.booking.findMany({
               where: {
                 workspaceId,
-                status: 'CONFIRMED',
+                status: { in: ACTIVE_STATUSES },
                 assigneeUserId: { in: memberIds },
                 startAt: { lt: end },
                 endAt: { gt: start },
@@ -438,7 +443,7 @@ export class BookingService implements OnModuleInit {
         const ownerBusy = await tx.booking.findFirst({
           where: {
             workspaceId,
-            status: 'CONFIRMED',
+            status: { in: ACTIVE_STATUSES },
             assigneeUserId,
             startAt: { lt: end },
             endAt: { gt: start },
@@ -500,73 +505,46 @@ export class BookingService implements OnModuleInit {
         });
         leadId = lead.id;
       }
+      // A calendar that requires approval holds the slot as PENDING (which still
+      // counts against capacity) until a manager confirms; otherwise CONFIRMED.
+      const initialStatus = (cal as any).requiresApproval ? 'PENDING' : 'CONFIRMED';
       const created = await tx.booking.create({
         data: {
           workspaceId, calendarId: calId, leadId, startAt: start, endAt: end,
           name: dto.name, email, phone, notes: dto.notes ?? null,
+          attendeeTimezone: dto.attendeeTimezone ?? null,
           assigneeUserId,
+          status: initialStatus,
           token: `bk_${randomBytes(16).toString('hex')}`,
         },
       });
-      await this.outbox.append(
-        {
-          type: MarketingEventTypes.BookingCreated,
-          idempotencyKey: `booking-created:${created.id}`,
-          payload: { workspaceId, leadId, bookingId: created.id, calendarId: calId, startAt: start.toISOString(), occurredAt: new Date().toISOString() },
-        },
-        tx as any,
-      );
+      // Only a CONFIRMED booking fires BookingCreated (which drives the calendar
+      // push + workflow triggers). A PENDING hold fires it on approval instead.
+      if (initialStatus === 'CONFIRMED') {
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.BookingCreated,
+            idempotencyKey: `booking-created:${created.id}`,
+            payload: { workspaceId, leadId, bookingId: created.id, calendarId: calId, startAt: start.toISOString(), occurredAt: new Date().toISOString() },
+          },
+          tx as any,
+        );
+      }
       return created;
     });
 
-    // Push the new booking to a connected Google / Outlook calendar (best-effort,
-    // inert when unconfigured); the BookingCreated domain event also drives both,
-    // so a missed direct call self-heals. For a CONFERENCING calendar we AWAIT
-    // the relevant push so the meeting link is provisioned + persisted before we
-    // send the confirmation (the awaited call is the primary; the later domain
-    // event 409-adopts). Non-conferencing calendars keep fire-and-forget.
-    let meetingUrl: string | null = null;
-    const conferencing = (cal as any).conferencing ?? 'NONE';
-    if (conferencing === 'GOOGLE_MEET') {
-      await this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
-    } else if (conferencing === 'TEAMS') {
-      await this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
-    } else {
-      this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
-      this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
-    }
-    if (conferencing !== 'NONE') {
-      const fresh = await this.prisma.booking.findFirst({
-        where: { id: booking.id, workspaceId },
-        select: { meetingUrl: true },
-      });
-      meetingUrl = fresh?.meetingUrl ?? null;
-    }
-
-    // Confirmation email + ICS invite + reminder (best-effort, outside the tx).
-    if (booking.email) {
-      const joinLine = meetingUrl ? `\nJoin: ${meetingUrl}` : '';
-      const body =
-        `Your booking is confirmed for ${start.toUTCString()}.\n` +
-        `Calendar: ${cal.name}${joinLine}`;
-      const ics = buildIcs({
-        uid: booking.id,
-        start,
-        end,
-        summary: cal.name || 'Booking',
-        description: booking.notes ?? undefined,
-        joinUrl: meetingUrl ?? undefined,
-      });
+    // A CONFIRMED booking triggers the calendar push, confirmation + reminders; a
+    // PENDING (approval-required) booking just acknowledges receipt and defers all
+    // of that to approval (setStatus → CONFIRMED).
+    if (booking.status === 'CONFIRMED') {
+      await this.afterConfirmed(workspaceId, cal, booking);
+    } else if (booking.email) {
       this.email
-        .sendPlainEmailWithIcs(booking.email, `Booking confirmed: ${cal.name}`, body, ics)
+        .sendPlainEmail(
+          booking.email, `Booking received: ${cal.name || 'Booking'}`,
+          `Your booking request for ${booking.startAt.toUTCString()} is pending approval.`,
+        )
         .catch(() => undefined);
-    }
-    const remindAt = new Date(start.getTime() - 3600_000);
-    if (remindAt.getTime() > Date.now()) {
-      await this.scheduledJobs.schedule({
-        workspaceId, kind: BOOKING_REMINDER_KIND, runAt: remindAt, dedupKey: booking.id,
-        payload: { workspaceId, bookingId: booking.id },
-      });
     }
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
@@ -616,6 +594,175 @@ export class BookingService implements OnModuleInit {
       this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
     }
     return { id: existing.id, status: 'CANCELLED' };
+  }
+
+  /**
+   * Post-confirmation side effects, shared by book() (immediate CONFIRMED) and
+   * setStatus() approval (PENDING→CONFIRMED): create the conference + persist its
+   * link (awaited for a conferencing calendar so the email carries it), email the
+   * confirmation with an ICS invite, and schedule the reminder. Best-effort.
+   */
+  private async afterConfirmed(
+    workspaceId: string,
+    cal: { name: string | null; conferencing?: string },
+    booking: { id: string; email: string | null; notes: string | null; startAt: Date; endAt: Date },
+  ): Promise<void> {
+    let meetingUrl: string | null = null;
+    const conferencing = cal.conferencing ?? 'NONE';
+    if (conferencing === 'GOOGLE_MEET') {
+      await this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    } else if (conferencing === 'TEAMS') {
+      await this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    } else {
+      this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+      this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    }
+    if (conferencing !== 'NONE') {
+      const fresh = await this.prisma.booking.findFirst({
+        where: { id: booking.id, workspaceId },
+        select: { meetingUrl: true },
+      });
+      meetingUrl = fresh?.meetingUrl ?? null;
+    }
+    if (booking.email) {
+      const joinLine = meetingUrl ? `\nJoin: ${meetingUrl}` : '';
+      const body =
+        `Your booking is confirmed for ${booking.startAt.toUTCString()}.\n` +
+        `Calendar: ${cal.name || 'Booking'}${joinLine}`;
+      const ics = buildIcs({
+        uid: booking.id,
+        start: booking.startAt,
+        end: booking.endAt,
+        summary: cal.name || 'Booking',
+        description: booking.notes ?? undefined,
+        joinUrl: meetingUrl ?? undefined,
+      });
+      this.email
+        .sendPlainEmailWithIcs(booking.email, `Booking confirmed: ${cal.name || 'Booking'}`, body, ics)
+        .catch(() => undefined);
+    }
+    const remindAt = new Date(booking.startAt.getTime() - 3600_000);
+    if (remindAt.getTime() > Date.now()) {
+      await this.scheduledJobs.schedule({
+        workspaceId, kind: BOOKING_REMINDER_KIND, runAt: remindAt, dedupKey: booking.id,
+        payload: { workspaceId, bookingId: booking.id },
+      });
+    }
+  }
+
+  /**
+   * Move a booking to a new start time (in place). Re-validates the new slot
+   * (past / min-notice / max-advance / grid) and, under the workspace advisory
+   * lock, that it is clear of EXTERNAL_BUSY, blackout and — for an assigned
+   * booking — an assignee double-book (excluding itself). Patches the calendar
+   * mirror (moving the Meet/Teams meeting) and emits BookingRescheduled. Only an
+   * active (CONFIRMED/PENDING) booking can be rescheduled.
+   */
+  async reschedule(workspaceId: string, bookingId: string, newStartISO: string) {
+    const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
+    if (!booking) throw new NotFoundException('Booking not found');
+    if (!ACTIVE_STATUSES.includes(booking.status)) {
+      throw new BadRequestException('Only an active booking can be rescheduled');
+    }
+    const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: booking.calendarId, workspaceId } });
+    if (!cal) throw new NotFoundException('Calendar not found');
+    const start = new Date(newStartISO);
+    if (isNaN(start.getTime()) || start.getTime() < Date.now()) throw new BadRequestException('Invalid or past slot');
+    const minNotice = (cal as any).minNoticeMinutes ?? 0;
+    const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
+    if (start.getTime() < Date.now() + minNotice * 60_000) throw new BadRequestException('Slot is within the minimum notice window');
+    if (start.getTime() > Date.now() + maxDays * 86400_000) throw new BadRequestException('Slot is beyond the maximum advance window');
+    if (!this.isAlignedSlot(cal, start)) throw new BadRequestException('Slot is outside the calendar availability or not aligned to the grid');
+    const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${workspaceId}`}))`;
+      const external = await tx.booking.findFirst({
+        where: { workspaceId, status: 'EXTERNAL_BUSY', startAt: { lt: end }, endAt: { gt: start } },
+        select: { id: true },
+      });
+      if (external) throw new BadRequestException('That slot is unavailable');
+      const blackouts = await tx.bookingBlackout.findMany({
+        where: { workspaceId, OR: [{ calendarId: null }, { calendarId: booking.calendarId }], endAt: { gt: start }, startAt: { lt: end } },
+        select: { startAt: true, endAt: true, marketingUserId: true },
+      });
+      if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), booking.assigneeUserId ?? null)) {
+        throw new BadRequestException('That slot is unavailable');
+      }
+      if (booking.assigneeUserId) {
+        const clash = await tx.booking.findFirst({
+          where: {
+            workspaceId, status: { in: ACTIVE_STATUSES }, assigneeUserId: booking.assigneeUserId,
+            id: { not: booking.id }, startAt: { lt: end }, endAt: { gt: start },
+          },
+          select: { id: true },
+        });
+        if (clash) throw new BadRequestException('That slot was just taken');
+      }
+      await tx.booking.updateMany({ where: { id: booking.id, workspaceId }, data: { startAt: start, endAt: end } });
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.BookingRescheduled,
+          idempotencyKey: `booking-rescheduled:${booking.id}:${start.getTime()}`,
+          payload: { workspaceId, bookingId: booking.id, calendarId: booking.calendarId, occurredAt: new Date().toISOString() },
+        },
+        tx as any,
+      );
+    });
+
+    // Move the mirrored event (PATCH preserves the same Meet/Teams meeting). A
+    // PENDING booking has no mirror yet, so nothing to move until it's approved.
+    if (booking.status === 'CONFIRMED') {
+      this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+      this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    }
+    return { id: booking.id, startAt: start.toISOString() };
+  }
+
+  /**
+   * Admin status transition: approve a PENDING booking (→CONFIRMED, running the
+   * deferred confirm side-effects), or mark NO_SHOW / COMPLETED / CANCELLED.
+   * Emits BookingUpdated; CANCELLED delegates to cancel() (mirror teardown).
+   */
+  async setStatus(workspaceId: string, bookingId: string, status: string) {
+    if (!SETTABLE_STATUSES.includes(status)) throw new BadRequestException('Invalid status');
+    if (status === 'CANCELLED') return this.cancel(workspaceId, bookingId);
+    const existing = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
+    if (!existing) throw new NotFoundException('Booking not found');
+    if (existing.status === 'EXTERNAL_BUSY') {
+      throw new BadRequestException('Cannot change an external calendar block');
+    }
+    const wasPending = existing.status === 'PENDING';
+    await this.prisma.$transaction(async (tx) => {
+      await tx.booking.updateMany({ where: { id: existing.id, workspaceId }, data: { status } });
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.BookingUpdated,
+          idempotencyKey: `booking-updated:${existing.id}:${status}`,
+          payload: { workspaceId, bookingId: existing.id, calendarId: existing.calendarId, occurredAt: new Date().toISOString() },
+        },
+        tx as any,
+      );
+    });
+    if (status === 'CONFIRMED' && wasPending) {
+      const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: existing.calendarId, workspaceId } });
+      if (cal) await this.afterConfirmed(workspaceId, cal, existing);
+    }
+    return { id: existing.id, status };
+  }
+
+  /** Public self-service: reschedule a booking by its opaque token. */
+  async rescheduleByToken(token: string, newStartISO: string) {
+    const booking = await this.prisma.booking.findFirst({ where: { token }, select: { id: true, workspaceId: true } });
+    if (!booking) throw new NotFoundException('Booking not found');
+    return this.reschedule(booking.workspaceId, booking.id, newStartISO);
+  }
+
+  /** Public self-service: cancel a booking by its opaque token. */
+  async cancelByToken(token: string) {
+    const booking = await this.prisma.booking.findFirst({ where: { token }, select: { id: true, workspaceId: true } });
+    if (!booking) throw new NotFoundException('Booking not found');
+    return this.cancel(booking.workspaceId, booking.id);
   }
 
   private async remind(job: ClaimedJob): Promise<void> {

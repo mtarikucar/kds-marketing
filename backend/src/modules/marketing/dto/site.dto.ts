@@ -66,6 +66,16 @@ export class CalendarMemberDto {
   @IsOptional() @IsInt() @Min(0) @Max(10000) priority?: number;
 }
 
+/** Move a booking to a new start time (ISO datetime). */
+export class RescheduleBookingDto {
+  @IsString() @IsNotEmpty() start: string;
+}
+
+/** Admin status transition for a booking. */
+export class SetBookingStatusDto {
+  @IsString() @IsIn(['CONFIRMED', 'NO_SHOW', 'COMPLETED', 'CANCELLED']) status: string;
+}
+
 /** Replace a calendar's full member set. */
 export class SetCalendarMembersDto {
   @IsArray()

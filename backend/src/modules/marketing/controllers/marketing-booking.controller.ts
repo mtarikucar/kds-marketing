@@ -9,7 +9,13 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { BookingService } from '../sites/booking.service';
-import { CreateCalendarDto, UpdateCalendarDto, SetCalendarMembersDto } from '../dto/site.dto';
+import {
+  CreateCalendarDto,
+  UpdateCalendarDto,
+  SetCalendarMembersDto,
+  RescheduleBookingDto,
+  SetBookingStatusDto,
+} from '../dto/site.dto';
 
 /** Booking calendars (config). MANAGER+ behind `funnels`. Public booking is separate. */
 @MarketingRoute()
@@ -66,5 +72,27 @@ export class MarketingBookingController {
     @Param('bookingId') bookingId: string,
   ) {
     return this.booking.cancel(a.workspaceId, bookingId);
+  }
+
+  /** Move a booking to a new time (in place; moves the Meet/Teams meeting too). */
+  @Post('bookings/:bookingId/reschedule')
+  @RequirePermission('settings.manage')
+  rescheduleBooking(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: RescheduleBookingDto,
+  ) {
+    return this.booking.reschedule(a.workspaceId, bookingId, dto.start);
+  }
+
+  /** Approve a pending booking or mark it no-show / completed / cancelled. */
+  @Patch('bookings/:bookingId/status')
+  @RequirePermission('settings.manage')
+  setBookingStatus(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: SetBookingStatusDto,
+  ) {
+    return this.booking.setStatus(a.workspaceId, bookingId, dto.status);
   }
 }

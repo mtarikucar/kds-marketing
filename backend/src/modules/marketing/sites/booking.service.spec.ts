@@ -382,6 +382,66 @@ describe('BookingService', () => {
     });
   });
 
+  describe('reschedule & lifecycle', () => {
+    it('reschedules an active booking in place and emits BookingRescheduled', async () => {
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED', assigneeUserId: null })
+        .mockResolvedValue(null); // external + clash checks
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar());
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const res = await svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z');
+      expect(res.startAt).toBe('2027-06-14T09:30:00.000Z');
+      expect(prisma.booking.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ startAt: new Date('2027-06-14T09:30:00.000Z') }) }),
+      );
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'marketing.booking.rescheduled.v1' }),
+        expect.anything(),
+      );
+    });
+
+    it('refuses to reschedule a non-active (e.g. cancelled) booking', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CANCELLED' });
+      await expect(svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z')).rejects.toThrow(/active booking/i);
+    });
+
+    it('rejects an invalid status transition', async () => {
+      await expect(svc.setStatus(WS, 'b1', 'BOGUS')).rejects.toThrow(/invalid status/i);
+    });
+
+    it('marks a booking NO_SHOW and emits BookingUpdated', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED' });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const res = await svc.setStatus(WS, 'b1', 'NO_SHOW');
+      expect(res).toEqual({ id: 'b1', status: 'NO_SHOW' });
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'marketing.booking.updated.v1', idempotencyKey: 'booking-updated:b1:NO_SHOW' }),
+        expect.anything(),
+      );
+    });
+
+    it('approving a PENDING booking runs the deferred confirm side-effects', async () => {
+      prisma.booking.findFirst.mockResolvedValue({
+        id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'PENDING',
+        email: null, notes: null, startAt: new Date('2027-06-14T09:00:00Z'), endAt: new Date('2027-06-14T09:30:00Z'),
+      });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ conferencing: 'NONE' }));
+      await svc.setStatus(WS, 'b1', 'CONFIRMED');
+      expect(googleSync.pushBooking).toHaveBeenCalledWith(WS, 'b1');
+    });
+
+    it('creates a PENDING hold (no BookingCreated) when the calendar requires approval', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ requiresApproval: true }));
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.create.mockResolvedValue({ id: 'b1', status: 'PENDING', startAt: new Date('2027-06-14T09:00:00Z'), token: 'bk', email: null });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
+      expect(prisma.booking.create.mock.calls[0][0].data.status).toBe('PENDING');
+      const types = outbox.append.mock.calls.map((c: any) => c[0].type);
+      expect(types).not.toContain('marketing.booking.created.v1');
+    });
+  });
+
   describe('conferencing config', () => {
     it('persists a valid conferencing value on create, defaulting invalid to NONE', async () => {
       prisma.bookingCalendar.create = jest.fn().mockResolvedValue({ id: 'c1' });
