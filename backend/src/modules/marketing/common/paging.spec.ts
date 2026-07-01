@@ -14,6 +14,12 @@ describe('safePage', () => {
     expect(safePage(0)).toBe(1);
     expect(safePage(-5)).toBe(1);
   });
+  it('caps an over-large page so (page-1)*limit cannot overflow Postgres int4', () => {
+    // ?page=99999999999 → skip = (page-1)*limit exceeds int4 → Prisma throws a
+    // 500, the exact crash this helper exists to prevent (safeLimit already caps).
+    expect(safePage(99_999_999_999)).toBe(1_000_000);
+    expect(safePage('88888888888')).toBe(1_000_000);
+  });
 });
 
 describe('safeLimit', () => {
