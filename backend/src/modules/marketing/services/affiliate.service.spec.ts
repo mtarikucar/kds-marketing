@@ -103,6 +103,41 @@ describe('AffiliateService — commission math', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  // The commission-range guard must validate the EFFECTIVE (type, value) pair on
+  // update — switching a FLAT-5000 affiliate to PERCENT while OMITTING the value
+  // leaves the stored 5000 as a 5000% rate, which createAffiliate forbids. The old
+  // guard validated the raw (dto.commissionValue = undefined) and short-circuited.
+  it('updateAffiliate rejects switching to PERCENT when the retained value exceeds 100%', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.affiliate.findFirst.mockResolvedValue(
+      mockAffiliate({ commissionType: 'FLAT', commissionValue: new Prisma.Decimal('5000') }) as never,
+    );
+    await expect(
+      svc.updateAffiliate(WS_A, 'aff-1', { commissionType: 'PERCENT' } as never),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.affiliate.update).not.toHaveBeenCalled();
+  });
+
+  it('updateAffiliate allows switching to PERCENT with a valid value', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.affiliate.findFirst.mockResolvedValue(
+      mockAffiliate({ commissionType: 'FLAT', commissionValue: new Prisma.Decimal('5000') }) as never,
+    );
+    prisma.affiliate.update.mockResolvedValue({ id: 'aff-1' } as never);
+    await svc.updateAffiliate(WS_A, 'aff-1', { commissionType: 'PERCENT', commissionValue: 50 } as never);
+    expect(prisma.affiliate.update).toHaveBeenCalled();
+  });
+
+  it('updateAffiliate does not spuriously reject a non-commission edit on a high FLAT value', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.affiliate.findFirst.mockResolvedValue(
+      mockAffiliate({ commissionType: 'FLAT', commissionValue: new Prisma.Decimal('5000') }) as never,
+    );
+    prisma.affiliate.update.mockResolvedValue({ id: 'aff-1' } as never);
+    await svc.updateAffiliate(WS_A, 'aff-1', { name: 'New Name' } as never);
+    expect(prisma.affiliate.update).toHaveBeenCalled();
+  });
+
   // TOCTOU: two concurrent same-code creates both pass the findFirst pre-check;
   // the 2nd insert trips the (workspaceId, code) unique → P2002. Map to a 409.
   it('createAffiliate maps a P2002 race on code to a 409', async () => {

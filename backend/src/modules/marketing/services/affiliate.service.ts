@@ -167,8 +167,15 @@ export class AffiliateService {
     });
     if (!affiliate) throw new NotFoundException('Affiliate not found');
 
-    // Cap PERCENT against the effective type (new type if provided, else stored).
-    this.assertCommissionInRange(dto.commissionType ?? affiliate.commissionType, dto.commissionValue);
+    // Cap PERCENT against the EFFECTIVE (type, value) pair that will actually
+    // persist — new value if provided, else the STORED one. Validating the raw
+    // `dto.commissionValue` (undefined when omitted) let a FLAT→PERCENT switch that
+    // omits the value keep a stored >100 amount as a >100% rate — the exact record
+    // createAffiliate rejects. Validate what gets written, not a partial reconstruction.
+    this.assertCommissionInRange(
+      dto.commissionType ?? affiliate.commissionType,
+      dto.commissionValue ?? Number(affiliate.commissionValue),
+    );
 
     // If code is being changed, check for collision within the workspace.
     if (dto.code && dto.code !== affiliate.code) {
