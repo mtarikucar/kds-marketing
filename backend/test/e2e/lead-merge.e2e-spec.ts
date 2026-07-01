@@ -58,6 +58,12 @@ describe('Lead dedupe + merge (e2e)', () => {
     // The tombstone updateMany's .count is checked against dupIds.length (TOCTOU guard);
     // without this the deep-mock returns undefined → undefined.count → 500.
     (ctx.prisma.lead.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    // Merge fix cd6b10b re-parents collision-keyed children (reparentDeduped) +
+    // moves the points ledger; each does a canonical findMany the spec must stub,
+    // else the deep-mock returns undefined → undefined.map → 500 at the first one.
+    for (const d of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate', 'pointsLedger']) {
+      ((ctx.prisma as any)[d].findMany as jest.Mock).mockResolvedValue([]);
+    }
     (ctx.prisma.$transaction as jest.Mock).mockImplementation(async (fn: any) => fn(ctx.prisma));
 
     const res = await request(app.getHttpServer())
