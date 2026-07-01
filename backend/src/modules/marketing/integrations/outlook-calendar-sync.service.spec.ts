@@ -82,7 +82,12 @@ describe('OutlookCalendarSyncService (mocked Graph)', () => {
     prisma = mockPrismaClient();
     outlook = new OutlookCalendarService(prisma as never);
     bus = { on: jest.fn(), off: jest.fn() };
-    sync = new OutlookCalendarSyncService(prisma as never, bus as never, outlook);
+    sync = new OutlookCalendarSyncService(
+      prisma as never,
+      bus as never,
+      outlook,
+      { resolve: jest.fn().mockResolvedValue(null) } as never,
+    );
     safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
     jest.spyOn(outlook, 'getFreshAccessToken').mockResolvedValue('access-token-live');
   });

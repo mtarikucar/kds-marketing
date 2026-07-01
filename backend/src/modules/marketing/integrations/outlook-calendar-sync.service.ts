@@ -10,11 +10,15 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
-import { MarketingEventTypes } from '../events/marketing-event-types';
+import {
+  MarketingEventTypes,
+  MarketingBookingLifecyclePayload,
+} from '../events/marketing-event-types';
 import {
   OutlookCalendarService,
   OutlookConnectionRow,
 } from './outlook-calendar.service';
+import { HostResolverService } from './conferencing/host-resolver.service';
 
 /**
  * Outlook/O365 (Microsoft Graph) 2-way calendar sync — the Graph analogue of
@@ -71,6 +75,8 @@ interface GraphEvent {
   start?: { dateTime?: string; timeZone?: string };
   end?: { dateTime?: string; timeZone?: string };
   '@removed'?: { reason?: string };
+  // Teams online meeting (present when we set isOnlineMeeting on the create).
+  onlineMeeting?: { joinUrl?: string };
 }
 
 interface DeltaResponse {
@@ -100,18 +106,47 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
   private readonly bookingCreatedHandler = (event: DomainEvent<unknown>) =>
     this.onBookingCreated(event as DomainEvent<BookingCreatedPayload>);
 
+  private readonly bookingCancelledHandler = (event: DomainEvent<unknown>) =>
+    this.onBookingCancelled(
+      event as DomainEvent<MarketingBookingLifecyclePayload>,
+    );
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly bus: DomainEventBus,
     private readonly outlook: OutlookCalendarService,
+    private readonly hostResolver: HostResolverService,
   ) {}
 
   onModuleInit(): void {
     this.bus.on(MarketingEventTypes.BookingCreated, this.bookingCreatedHandler);
+    this.bus.on(
+      MarketingEventTypes.BookingCancelled,
+      this.bookingCancelledHandler,
+    );
   }
 
   onModuleDestroy(): void {
     this.bus.off(MarketingEventTypes.BookingCreated, this.bookingCreatedHandler);
+    this.bus.off(
+      MarketingEventTypes.BookingCancelled,
+      this.bookingCancelledHandler,
+    );
+  }
+
+  /** Domain-event entrypoint — tear down the Graph mirror (and its Teams
+   * meeting) on cancel. Direct call in BookingService.cancel is a fallback. */
+  private async onBookingCancelled(
+    event: DomainEvent<MarketingBookingLifecyclePayload>,
+  ): Promise<void> {
+    const { workspaceId, bookingId } =
+      event.payload ?? ({} as MarketingBookingLifecyclePayload);
+    if (!workspaceId || !bookingId) return;
+    await this.cancelBooking(workspaceId, bookingId).catch((e) =>
+      this.logger.warn(
+        `cancel(booking=${bookingId}) failed: ${(e as Error).message}`,
+      ),
+    );
   }
 
   // ===================================================================== //
@@ -143,14 +178,27 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     bookingId: string,
   ): Promise<string | null> {
     if (!this.outlook.isConfigured()) return null;
-    const conn = await this.activeConnection(workspaceId);
-    if (!conn) return null;
 
     const booking = await this.prisma.booking.findFirst({
       where: { id: bookingId, workspaceId },
     });
     // Don't echo events we pulled FROM Graph back INTO Graph.
     if (!booking || booking.status === EXTERNAL_BUSY) return null;
+
+    // Does this booking's calendar attach a Teams meeting? If so the meeting is
+    // hosted by the ASSIGNED member's own Outlook connection (falling back to the
+    // owner's, then the workspace's active one).
+    const calCfg = await this.prisma.bookingCalendar.findFirst({
+      where: { id: booking.calendarId, workspaceId },
+      select: { conferencing: true },
+    });
+    const wantsTeams = calCfg?.conferencing === 'TEAMS';
+    const conn = await this.resolveOutlookConnection(
+      workspaceId,
+      booking,
+      wantsTeams,
+    );
+    if (!conn) return null;
 
     const linked =
       booking.outlookEventId && !booking.outlookEventId.startsWith(PENDING_PREFIX)
@@ -160,7 +208,7 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     try {
       const accessToken = await this.outlook.getFreshAccessToken(conn);
       if (linked) {
-        // PATCH the existing mirror.
+        // PATCH the existing mirror (the Teams meeting, if any, is preserved).
         await this.apiVoid(
           `${GRAPH_API_BASE}/me/events/${encodeURIComponent(linked)}`,
           accessToken,
@@ -201,13 +249,28 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
         const event = await this.apiJson<GraphEvent>(
           `${GRAPH_API_BASE}/${this.eventsCollectionPath(conn)}`,
           accessToken,
-          { method: 'POST', body: JSON.stringify(this.eventBody(booking)) },
+          {
+            method: 'POST',
+            body: JSON.stringify(this.eventBody(booking, wantsTeams)),
+          },
         );
         if (event.id) {
           await this.prisma.booking.updateMany({
             where: { id: booking.id, workspaceId },
             data: { outlookEventId: event.id },
           });
+          // Persist the Teams join link (Graph returns onlineMeeting inline).
+          if (wantsTeams) {
+            const link = event.onlineMeeting?.joinUrl ?? null;
+            await this.prisma.booking.updateMany({
+              where: { id: booking.id, workspaceId },
+              data: {
+                meetingUrl: link,
+                conferenceProvider: 'TEAMS',
+                conferenceStatus: link ? 'created' : 'failed',
+              },
+            });
+          }
           return event.id;
         }
         await this.releaseClaim(booking.id, workspaceId);
@@ -234,12 +297,16 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     bookingId: string,
   ): Promise<boolean> {
     if (!this.outlook.isConfigured()) return false;
-    const conn = await this.activeConnection(workspaceId);
-    if (!conn) return false;
 
     const booking = await this.prisma.booking.findFirst({
       where: { id: bookingId, workspaceId },
-      select: { outlookEventId: true, status: true },
+      select: {
+        outlookEventId: true,
+        status: true,
+        calendarId: true,
+        assigneeUserId: true,
+        conferenceProvider: true,
+      },
     });
     if (
       !booking ||
@@ -249,6 +316,14 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     ) {
       return false;
     }
+    // Delete from the SAME connection the event was created on (the host's, for
+    // a Teams booking), tearing down the mirror + attached online meeting.
+    const conn = await this.resolveOutlookConnection(
+      workspaceId,
+      booking,
+      booking.conferenceProvider === 'TEAMS',
+    );
+    if (!conn) return false;
 
     try {
       const accessToken = await this.outlook.getFreshAccessToken(conn);
@@ -735,14 +810,21 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     return u.toString();
   }
 
-  /** Graph event body mirroring our booking (UTC times, optional attendee). */
-  private eventBody(booking: {
-    name: string | null;
-    notes: string | null;
-    startAt: Date;
-    endAt: Date;
-    email: string | null;
-  }): Record<string, unknown> {
+  /**
+   * Graph event body mirroring our booking (UTC times, optional attendee). When
+   * `wantsTeams` the event is created as a Teams online meeting — Graph mints the
+   * join link and returns it inline as `onlineMeeting.joinUrl`.
+   */
+  private eventBody(
+    booking: {
+      name: string | null;
+      notes: string | null;
+      startAt: Date;
+      endAt: Date;
+      email: string | null;
+    },
+    wantsTeams = false,
+  ): Record<string, unknown> {
     return {
       subject: booking.name || 'Booking',
       ...(booking.notes
@@ -757,7 +839,36 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
             ],
           }
         : {}),
+      ...(wantsTeams
+        ? { isOnlineMeeting: true, onlineMeetingProvider: 'teamsForBusiness' }
+        : {}),
     };
+  }
+
+  /**
+   * Pick the Outlook connection that hosts a booking's event. For a Teams
+   * booking we prefer the assigned member's own connection, falling back to the
+   * workspace's active one; a non-conferencing booking always uses active.
+   */
+  private async resolveOutlookConnection(
+    workspaceId: string,
+    booking: { calendarId: string; assigneeUserId?: string | null },
+    preferHost: boolean,
+  ): Promise<OutlookConnectionRow | null> {
+    if (preferHost) {
+      const host = await this.hostResolver.resolve(
+        workspaceId,
+        booking,
+        'TEAMS',
+      );
+      if (host) {
+        const row = (await this.prisma.outlookCalendarConnection.findFirst({
+          where: { id: host.connectionId, workspaceId, enabled: true },
+        })) as OutlookConnectionRow | null;
+        if (row) return row;
+      }
+    }
+    return this.activeConnection(workspaceId);
   }
 
   /** Authenticated Graph call returning parsed JSON; throws on !ok. */
