@@ -1754,6 +1754,11 @@ model BookingCalendar {
   timezone      String  @default("Europe/Istanbul")
   active        Boolean @default(true)
 
+  // Which conferencing provider to attach to this calendar's bookings.
+  conferencing     String @default("NONE") // NONE | GOOGLE_MEET | TEAMS
+  // Advanced-Meet config (recording/transcript/co-host), read only by Phase 4.
+  conferenceConfig Json?
+
   members BookingCalendarMember[]
 
   createdAt DateTime @default(now())
@@ -1809,6 +1814,15 @@ model Booking {
   // transient `pending:<uuid>` value claims the create so two concurrent push
   // paths can't mint duplicate Graph events (Graph has no client-supplied ids).
   outlookEventId String?
+
+  // Conferencing (Phase 1): the video-meeting join link mirrored onto the
+  // booking. provider = GOOGLE_MEET | TEAMS; conferenceId = hangout / Teams
+  // onlineMeeting id (teardown + pending follow-up); status = created | pending
+  // | failed | none (null = no conferencing on this calendar).
+  meetingUrl         String?
+  conferenceProvider String?
+  conferenceId       String?
+  conferenceStatus   String?
 
   createdAt DateTime @default(now())
 
