@@ -57,6 +57,47 @@ describe('OrderFormsService', () => {
     });
   });
 
+  describe('update / pricing XOR', () => {
+    const productForm = { id: 'f1', workspaceId: WS, productId: 'p1', items: null, currency: 'TRY' };
+
+    it('rejects clearing productId with no items — would leave the form with NEITHER source', async () => {
+      prisma.orderForm.findFirst.mockResolvedValue(productForm as any);
+      // The STALE product still resolves active — the old code validated against it
+      // and then wrote productId=null + items=null (a dud form). Validation must see
+      // the effective (empty) post-write state, not the stale product.
+      products.get.mockResolvedValue({ id: 'p1', active: true });
+      await expect(
+        svc.update(WS, 'f1', { productId: null } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.orderForm.update).not.toHaveBeenCalled();
+    });
+
+    it('allows switching a product-mode form to items mode', async () => {
+      prisma.orderForm.findFirst.mockResolvedValue(productForm as any);
+      prisma.orderForm.update.mockResolvedValue({ id: 'f1' } as any);
+      await svc.update(WS, 'f1', { items: [{ description: 'a', qty: 1, unitPrice: 100 }] } as any);
+      const arg = prisma.orderForm.update.mock.calls[0][0] as any;
+      expect(arg.data.productId).toBeNull();
+      expect(arg.data.items).toEqual([{ description: 'a', qty: 1, unitPrice: 100 }]);
+    });
+
+    it('allows switching to a different active product', async () => {
+      prisma.orderForm.findFirst.mockResolvedValue(productForm as any);
+      products.get.mockResolvedValue({ id: 'p2', active: true });
+      prisma.orderForm.update.mockResolvedValue({ id: 'f1' } as any);
+      await svc.update(WS, 'f1', { productId: 'p2' } as any);
+      expect(prisma.orderForm.update).toHaveBeenCalled();
+    });
+
+    it('does not re-validate pricing for a non-pricing edit', async () => {
+      prisma.orderForm.findFirst.mockResolvedValue(productForm as any);
+      prisma.orderForm.update.mockResolvedValue({ id: 'f1' } as any);
+      await svc.update(WS, 'f1', { name: 'Renamed' } as any);
+      expect(products.get).not.toHaveBeenCalled();
+      expect(prisma.orderForm.update).toHaveBeenCalled();
+    });
+  });
+
   describe('publicView (price binding)', () => {
     it('resolves the price SERVER-SIDE from the live product (major→minor)', async () => {
       prisma.orderForm.findUnique.mockResolvedValue({

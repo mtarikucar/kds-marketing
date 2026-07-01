@@ -114,10 +114,23 @@ export class OrderFormsService {
   async update(workspaceId: string, id: string, dto: UpdateOrderFormDto) {
     const form = await this.get(workspaceId, id);
     if (dto.productId !== undefined || dto.items !== undefined) {
-      await this.validatePricing(workspaceId, {
-        productId: dto.productId ?? (dto.items !== undefined ? null : form.productId),
-        items: dto.items ?? (dto.productId !== undefined ? null : (form.items as unknown as OrderItem[] | null)),
-      });
+      // Validate the EFFECTIVE post-write pricing source — mirror the write
+      // branches below (which honour an explicit null clear) instead of a
+      // `dto.x ?? form.x` fallback. With the old fallback, `{ productId: null }`
+      // validated against the STALE product and PASSED, yet the write cleared
+      // BOTH sources — saving a form with NEITHER (resolveLineItems → [], a dud
+      // that shows total 0 and 400s at submit). Compute what will actually persist.
+      let effProductId: string | null = form.productId;
+      let effItems: OrderItem[] | null = form.items as unknown as OrderItem[] | null;
+      if (dto.productId !== undefined) {
+        effProductId = dto.productId ?? null;
+        effItems = null;
+      }
+      if (dto.items !== undefined) {
+        effItems = (dto.items as unknown as OrderItem[]) ?? null;
+        effProductId = null;
+      }
+      await this.validatePricing(workspaceId, { productId: effProductId, items: effItems });
     }
     const data: Prisma.OrderFormUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
