@@ -90,6 +90,9 @@ const TEAM_TYPES: CalendarType[] = ['ROUND_ROBIN', 'COLLECTIVE'];
 
 interface WorkspaceUser { id: string; firstName?: string; lastName?: string; email: string }
 
+const CONFERENCING_OPTS = ['NONE', 'GOOGLE_MEET', 'TEAMS'] as const;
+type ConferencingOpt = (typeof CONFERENCING_OPTS)[number];
+
 const calSchema = z.object({
   name: z.string().min(1, 'Required').max(120),
   slug: z.string().max(80).optional(),
@@ -98,6 +101,12 @@ const calSchema = z.object({
   slotMinutes: z.coerce.number().int().min(5),
   bufferMinutes: z.coerce.number().int().min(0),
   timezone: z.string().min(1),
+  conferencing: z.enum(CONFERENCING_OPTS),
+  minNoticeMinutes: z.coerce.number().int().min(0).max(43200),
+  maxAdvanceDays: z.coerce.number().int().min(1).max(365),
+  bufferBeforeMinutes: z.coerce.number().int().min(0).max(240),
+  bufferAfterMinutes: z.coerce.number().int().min(0).max(240),
+  requiresApproval: z.boolean(),
   availability: z.record(z.array(z.object({ start: z.string(), end: z.string() }))),
 });
 type CalFormValues = z.infer<typeof calSchema>;
@@ -116,6 +125,12 @@ const DEFAULT_VALUES: CalFormValues = {
   slotMinutes: 30,
   bufferMinutes: 0,
   timezone: 'Europe/Istanbul',
+  conferencing: 'NONE',
+  minNoticeMinutes: 0,
+  maxAdvanceDays: 60,
+  bufferBeforeMinutes: 0,
+  bufferAfterMinutes: 0,
+  requiresApproval: false,
   availability: {},
 };
 
@@ -179,6 +194,12 @@ export default function BookingSettingsPage() {
         slotMinutes: Number(values.slotMinutes),
         bufferMinutes: Number(values.bufferMinutes),
         timezone: values.timezone,
+        conferencing: values.conferencing,
+        minNoticeMinutes: Number(values.minNoticeMinutes),
+        maxAdvanceDays: Number(values.maxAdvanceDays),
+        bufferBeforeMinutes: Number(values.bufferBeforeMinutes),
+        bufferAfterMinutes: Number(values.bufferAfterMinutes),
+        requiresApproval: values.requiresApproval,
         availability: values.availability,
       };
       const saved = editId
@@ -229,6 +250,12 @@ export default function BookingSettingsPage() {
       slotMinutes: full.slotMinutes,
       bufferMinutes: full.bufferMinutes,
       timezone: full.timezone ?? 'Europe/Istanbul',
+      conferencing: (full.conferencing as ConferencingOpt) ?? 'NONE',
+      minNoticeMinutes: full.minNoticeMinutes ?? 0,
+      maxAdvanceDays: full.maxAdvanceDays ?? 60,
+      bufferBeforeMinutes: full.bufferBeforeMinutes ?? 0,
+      bufferAfterMinutes: full.bufferAfterMinutes ?? 0,
+      requiresApproval: full.requiresApproval ?? false,
       availability: full.availability ?? {},
     });
     // Load existing members for team calendars.
@@ -467,6 +494,47 @@ export default function BookingSettingsPage() {
                   )}
                 </Field>
               )}
+            </div>
+
+            {/* Conferencing + booking policy */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <Field
+                label={t('booking.conferencing', 'Video conferencing')}
+                hint={t('booking.conferencingHint', 'Attach a Meet/Teams link to each booking.')}
+              >
+                {({ id, describedBy }) => (
+                  <Select
+                    value={watch('conferencing')}
+                    onValueChange={(v) => setValue('conferencing', v as ConferencingOpt, { shouldValidate: true })}
+                  >
+                    <SelectTrigger id={id} aria-describedby={describedBy}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {CONFERENCING_OPTS.map((o) => (
+                        <SelectItem key={o} value={o}>{t(`booking.conf.${o}`, o)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </Field>
+              <Field label={t('booking.minNotice', 'Min notice (min)')} error={errors.minNoticeMinutes?.message}>
+                {({ id }) => <Input id={id} type="number" min={0} {...register('minNoticeMinutes')} />}
+              </Field>
+              <Field label={t('booking.maxAdvance', 'Max advance (days)')} error={errors.maxAdvanceDays?.message}>
+                {({ id }) => <Input id={id} type="number" min={1} {...register('maxAdvanceDays')} />}
+              </Field>
+              <Field label={t('booking.bufferBefore', 'Buffer before (min)')} error={errors.bufferBeforeMinutes?.message}>
+                {({ id }) => <Input id={id} type="number" min={0} {...register('bufferBeforeMinutes')} />}
+              </Field>
+              <Field label={t('booking.bufferAfter', 'Buffer after (min)')} error={errors.bufferAfterMinutes?.message}>
+                {({ id }) => <Input id={id} type="number" min={0} {...register('bufferAfterMinutes')} />}
+              </Field>
+              <label className="mt-7 flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={watch('requiresApproval')}
+                  onCheckedChange={(c) => setValue('requiresApproval', !!c, { shouldValidate: true })}
+                />
+                {t('booking.requiresApproval', 'Require approval')}
+              </label>
             </div>
 
             {/* Team members (round-robin / collective) */}
