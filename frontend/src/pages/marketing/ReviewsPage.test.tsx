@@ -92,4 +92,34 @@ describe('ReviewsPage', () => {
     // The OTHER review's AI-draft button must stay enabled.
     expect(screen.getAllByRole('button', { name: /ai draft/i })[1]).not.toBeDisabled();
   });
+
+  // Same per-row bleed on the sources list: connecting one source must not disable
+  // the Connect button on the other sources (shared connectSource mutation).
+  it('connecting one review source does not disable the other sources’ Connect buttons', async () => {
+    (marketingApi.get as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+      url === '/reviews/sources'
+        ? Promise.resolve({
+            data: [
+              { id: 's1', name: 'Google', placeUrl: 'g', tokenSet: false },
+              { id: 's2', name: 'Yelp', placeUrl: 'y', tokenSet: false },
+            ],
+          })
+        : Promise.resolve({ data: [] }),
+    );
+    (marketingApi.post as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+      url.endsWith('/connect') ? new Promise(() => {}) : Promise.resolve({ data: {} }),
+    );
+    const user = userEvent.setup();
+    render(<ReviewsPage />, { wrapper });
+
+    const connectButtons = await screen.findAllByRole('button', { name: /connect/i });
+    expect(connectButtons).toHaveLength(2);
+
+    await user.click(connectButtons[0]); // connect s1 — stays in-flight
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /connect/i })[0]).toBeDisabled(),
+    );
+    expect(screen.getAllByRole('button', { name: /connect/i })[1]).not.toBeDisabled();
+  });
 });

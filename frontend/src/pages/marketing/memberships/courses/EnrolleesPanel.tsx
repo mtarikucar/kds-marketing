@@ -263,7 +263,7 @@ function LearnerView({ enrollmentId, course }: LearnerViewProps) {
                         <Button
                           size="sm"
                           variant={done ? 'ghost' : 'outline'}
-                          disabled={done || locked || completeLesson.isPending}
+                          disabled={done || locked || (completeLesson.isPending && completeLesson.variables?.lessonId === l.id)}
                           onClick={() =>
                             completeLesson.mutate(
                               { id: enrollmentId, lessonId: l.id },

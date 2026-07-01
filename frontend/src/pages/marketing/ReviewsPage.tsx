@@ -235,7 +235,7 @@ export default function ReviewsPage() {
                     </TD>
                     <TD>
                       <div className="flex items-center justify-end gap-2">
-                        <Button size="sm" variant="outline" loading={connectSource.isPending} onClick={() => connectSource.mutate(s.id)}>
+                        <Button size="sm" variant="outline" loading={connectSource.isPending && connectSource.variables === s.id} onClick={() => connectSource.mutate(s.id)}>
                           {s.tokenSet ? t('reviews.reconnect', 'Reconnect') : t('reviews.connect', 'Connect')}
                         </Button>
                         <IconButton
