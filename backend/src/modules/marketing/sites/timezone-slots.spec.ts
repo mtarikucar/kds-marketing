@@ -1,4 +1,4 @@
-import { zonedWallTimeToUtcMs, zonedParts, parseHm } from './timezone-slots';
+import { zonedWallTimeToUtcMs, zonedParts, parseHm, formatInTimeZone } from './timezone-slots';
 
 describe('timezone-slots', () => {
   it('converts an Istanbul wall time (UTC+3, no DST) to the right UTC instant', () => {
@@ -22,6 +22,21 @@ describe('timezone-slots', () => {
     // 2027-06-14T00:30:00Z is still 2027-06-14 03:30 in Istanbul (Monday)
     const p = zonedParts(Date.parse('2027-06-14T00:30:00Z'), 'Europe/Istanbul');
     expect(p).toMatchObject({ y: 2027, mo: 6, d: 14, weekday: 1 });
+  });
+
+  it('formatInTimeZone renders the wall-clock time in the tz, not UTC', () => {
+    // A booking confirmation/reminder must show the appointment in the calendar's
+    // timezone, not UTC. 2026-07-01T11:00:00Z is 14:00 in Istanbul (UTC+3).
+    const s = formatInTimeZone(new Date('2026-07-01T11:00:00.000Z'), 'Europe/Istanbul');
+    expect(s).toMatch(/14:00/); // Istanbul wall-clock hour
+    expect(s).not.toMatch(/11:00/); // NOT the raw UTC hour
+    expect(s).toMatch(/2026/);
+  });
+
+  it('formatInTimeZone falls back to a UTC string for a bad timezone (never throws)', () => {
+    const s = formatInTimeZone(new Date('2026-07-01T11:00:00.000Z'), 'Not/AZone');
+    expect(typeof s).toBe('string');
+    expect(s.length).toBeGreaterThan(0);
   });
 
   it('parseHm parses and rejects', () => {

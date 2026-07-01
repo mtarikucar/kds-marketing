@@ -11,7 +11,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
-import { zonedParts, zonedWallTimeToUtcMs, parseHm } from './timezone-slots';
+import { zonedParts, zonedWallTimeToUtcMs, parseHm, formatInTimeZone } from './timezone-slots';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
@@ -435,9 +435,12 @@ export class BookingService implements OnModuleInit {
 
     // Confirmation email + reminder (best-effort, outside the tx).
     if (booking.email) {
+      // Show the appointment in the calendar's timezone, not UTC — a customer
+      // booking 14:00 Istanbul must not receive "11:00 GMT".
+      const when = formatInTimeZone(start, (cal as any).timezone || 'Europe/Istanbul');
       this.email.sendPlainEmail(
         booking.email, `Booking confirmed: ${cal.name}`,
-        `Your booking is confirmed for ${start.toUTCString()}.\nCalendar: ${cal.name}`,
+        `Your booking is confirmed for ${when}.\nCalendar: ${cal.name}`,
       ).catch(() => undefined);
     }
     const remindAt = new Date(start.getTime() - 3600_000);
@@ -487,9 +490,16 @@ export class BookingService implements OnModuleInit {
     const { workspaceId, bookingId } = job.payload;
     const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
     if (!booking || booking.status !== 'CONFIRMED' || !booking.email) return;
+    // Resolve the calendar timezone so the reminder shows the appointment in local
+    // time, not UTC (matches the confirmation email).
+    const cal = await this.prisma.bookingCalendar.findFirst({
+      where: { id: booking.calendarId, workspaceId },
+      select: { timezone: true },
+    });
+    const when = formatInTimeZone(booking.startAt, cal?.timezone || 'Europe/Istanbul');
     await this.email.sendPlainEmail(
       booking.email, 'Reminder: your booking is soon',
-      `This is a reminder for your booking at ${booking.startAt.toUTCString()}.`,
+      `This is a reminder for your booking at ${when}.`,
     ).catch(() => undefined);
   }
 
