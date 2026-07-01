@@ -51,6 +51,18 @@ describe('Compliance (e2e)', () => {
     const auth = ownerAuth();
     ctx.prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', activities: [], offers: [], tasks: [] } as never);
     ctx.prisma.consentRecord.findMany.mockResolvedValue([] as never);
+    // The DSAR export gathers ~26 lead-scoped categories (expanded in f4daaaa/5587a92/
+    // d5583ce); the service reads conversations.length + wallets.map, so every
+    // un-stubbed findMany returning undefined → 500. Stub the whole gather to empty.
+    for (const m of [
+      'conversation', 'booking', 'document', 'estimate', 'invoice', 'review', 'voiceCall',
+      'salesCall', 'surveyResponse', 'opportunity', 'contactIdentity', 'enrollment',
+      'certificate', 'communityMember', 'earnedBadge', 'customerSubscription', 'customerWallet',
+      'pointsLedger', 'customObjectLink', 'triggerLinkClick', 'couponRedemption',
+      'campaignRecipient', 'leadTag', 'communityPost', 'communityComment', 'walletLedgerEntry',
+    ]) {
+      ((ctx.prisma as any)[m].findMany as jest.Mock).mockResolvedValue([]);
+    }
     (ctx.prisma.dataRequest.create as jest.Mock).mockResolvedValue({});
 
     const res = await request(app.getHttpServer())
