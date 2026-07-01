@@ -76,6 +76,27 @@ function parseReminderConfig(raw: unknown): ReminderEntry[] {
   return out.length ? out : DEFAULT_REMINDERS;
 }
 
+/** True when a member's custom weekly hours cover the slot [s, s+slotMs).
+ *  `windows` is the member's weekday->[{start,end}] map, read in `tz`. */
+function memberCoversSlot(
+  windows: Record<string, Array<{ start: string; end: string }>>,
+  tz: string,
+  s: number,
+  slotMs: number,
+): boolean {
+  const { y, mo, d, weekday } = zonedParts(s, tz);
+  const wins = windows[String(weekday)] ?? [];
+  for (const w of wins) {
+    const hs = parseHm(w.start);
+    const he = parseHm(w.end);
+    if (!hs || !he) continue;
+    const ws = zonedWallTimeToUtcMs(y, mo, d, hs[0], hs[1], tz);
+    const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
+    if (s >= ws && s + slotMs <= we) return true;
+  }
+  return false;
+}
+
 /** Render an instant in an attendee's IANA timezone (falls back to UTC). */
 function formatInTz(d: Date, tz?: string | null): string {
   try {
@@ -379,6 +400,33 @@ export class BookingService implements OnModuleInit {
     });
     const capacity = this.effectiveCapacity(cal, memberCount);
 
+    // For ROUND_ROBIN, a member with CUSTOM working hours only counts toward a
+    // slot's capacity when their hours cover it (members without custom hours
+    // inherit the calendar windows). Precompute {windows|null, tz} per member.
+    let memberHours: Array<{
+      windows: Record<string, Array<{ start: string; end: string }>> | null;
+      tz: string;
+    }> = [];
+    if (cal.type === 'ROUND_ROBIN') {
+      const members = await this.prisma.bookingCalendarMember.findMany({
+        where: { workspaceId, calendarId: calId },
+        select: { marketingUserId: true },
+      });
+      const rows = await this.prisma.memberAvailability.findMany({
+        where: { workspaceId, calendarId: calId },
+        select: { marketingUserId: true, availability: true, timezone: true },
+      });
+      const byUser = new Map(rows.map((r) => [r.marketingUserId, r]));
+      const calTz = (cal as any).timezone || 'UTC';
+      memberHours = members.map((m) => {
+        const row = byUser.get(m.marketingUserId);
+        return {
+          windows: row ? (row.availability as any) : null,
+          tz: row?.timezone || calTz,
+        };
+      });
+    }
+
     // CONFIRMED bookings on THIS calendar are COUNTED against the slot capacity;
     // EXTERNAL_BUSY blocks (Google-pulled, workspace-wide) are a HARD block that
     // ignores capacity. Fetch them separately so capacity only applies to ours.
@@ -443,7 +491,15 @@ export class BookingService implements OnModuleInit {
           if (extIv.some(([bs, be]) => s < be && e > bs)) continue; // hard block
           if (overlapsBlackout(blackouts, s, e, ownerId)) continue; // blackout / time-off
           const taken = ourIv.filter(([bs, be]) => s < be && e > bs).length;
-          if (taken >= capacity) continue; // at capacity
+          // ROUND_ROBIN with per-member hours: a slot's effective capacity is
+          // how many members are actually available at this instant.
+          let slotCap = capacity;
+          if (cal.type === 'ROUND_ROBIN' && memberHours.length) {
+            slotCap = memberHours.filter(
+              (mh) => mh.windows == null || memberCoversSlot(mh.windows, mh.tz, s, slotMs),
+            ).length;
+          }
+          if (taken >= slotCap) continue; // at (effective) capacity
           out.push(new Date(s).toISOString());
         }
       }
@@ -563,13 +619,27 @@ export class BookingService implements OnModuleInit {
             })
           : [];
         const taken = new Set(busyRows.map((o) => o.assigneeUserId).filter(Boolean) as string[]);
-        // Skip a member who is busy elsewhere OR on personal time off (blackout).
+        // Per-member custom working hours (if any) further constrain who can take
+        // the slot — mirrors availability()'s effective-capacity computation.
+        const maRows = await tx.memberAvailability.findMany({
+          where: { workspaceId, calendarId: calId },
+          select: { marketingUserId: true, availability: true, timezone: true },
+        });
+        const maByUser = new Map(maRows.map((r) => [r.marketingUserId, r]));
+        const calTz = (cal as any).timezone || 'UTC';
+        const slotMs = cal.slotMinutes * 60_000;
+        // Skip a member who is busy elsewhere, on personal time off (blackout), or
+        // outside their own custom working hours.
         assigneeUserId =
-          members.find(
-            (m) =>
-              !taken.has(m.marketingUserId) &&
-              !overlapsBlackout(blackouts, start.getTime(), end.getTime(), m.marketingUserId),
-          )?.marketingUserId ?? null;
+          members.find((m) => {
+            if (taken.has(m.marketingUserId)) return false;
+            if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), m.marketingUserId)) return false;
+            const row = maByUser.get(m.marketingUserId);
+            if (row && !memberCoversSlot(row.availability as any, row.timezone || calTz, start.getTime(), slotMs)) {
+              return false;
+            }
+            return true;
+          })?.marketingUserId ?? null;
       } else if (cal.type === 'CLASS') {
         assigneeUserId = null;
       } else if (assigneeUserId) {

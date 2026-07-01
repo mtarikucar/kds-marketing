@@ -36,6 +36,7 @@ describe('BookingService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       bookingBlackout: { findMany: jest.fn().mockResolvedValue([]) },
+      memberAvailability: { findMany: jest.fn().mockResolvedValue([]) },
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
       // The per-slot advisory lock acquired at the top of the booking tx.
       $executeRaw: jest.fn().mockResolvedValue(1),
@@ -339,6 +340,28 @@ describe('BookingService', () => {
       await expect(svc.book(WS, 'c1', { start: far, name: 'X' })).rejects.toThrow(
         /maximum advance/i,
       );
+    });
+
+    it('reduces ROUND_ROBIN slot capacity by per-member working hours', async () => {
+      // 2 members; one has custom hours 09:00-09:30 only. The calendar window is
+      // 09:00-10:00 (slots 09:00, 09:30). At 09:30 only the no-custom-hours member
+      // is available → capacity 1; at 09:00 both are → capacity 2.
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ type: 'ROUND_ROBIN', availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] } }),
+      );
+      prisma.bookingCalendarMember.count.mockResolvedValue(2);
+      prisma.bookingCalendarMember.findMany.mockResolvedValue([
+        { marketingUserId: 'u1' }, { marketingUserId: 'u2' },
+      ]);
+      prisma.memberAvailability.findMany.mockResolvedValue([
+        { marketingUserId: 'u2', availability: { [String(dow)]: [{ start: '09:00', end: '09:30' }] }, timezone: null },
+      ]);
+      // One CONFIRMED booking overlaps 09:30 → that slot (cap 1) is now full.
+      prisma.booking.findMany
+        .mockResolvedValueOnce([{ startAt: new Date('2027-06-14T09:30:00Z'), endAt: new Date('2027-06-14T10:00:00Z') }]) // ours
+        .mockResolvedValueOnce([]); // external
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+      expect(slots).toEqual(['2027-06-14T09:00:00.000Z']); // 09:30 hidden (only member u1 free, and taken)
     });
 
     it('hides slots overlapping a blackout window', async () => {
