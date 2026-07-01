@@ -444,6 +444,14 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'same workspaceId-scoped where object as the paired findMany; heuristic cannot see through the where variable',
   'services/marketing-research.service.ts:researchProfile.create':
     'row created with { workspaceId } via a ResearchProfileUncheckedCreateInput data variable; heuristic cannot see through the data variable',
+  'ai/agent-profile.service.ts:agentProfile.create':
+    'row created via a data var from toData(workspaceId, dto) (fast path + advisory-lock tx); heuristic cannot see through the data variable',
+  'ai/knowledge.service.ts:knowledgeDoc.create':
+    'row created with { ...data, workspaceId } data var (fast path + advisory-lock tx); heuristic cannot see through the data variable',
+  'services/marketing-users.service.ts:marketingUser.create':
+    'row created with { ...dto, workspaceId } data var (fast path + seat-lock tx); heuristic cannot see through the data variable',
+  'sites/sites.service.ts:sitePage.create':
+    'row created with { workspaceId, ... } data var (fast path + advisory-lock tx); heuristic cannot see through the data variable',
   'parent-scoped:communityMember.upsert':
     'membership keyed by (communityId, leadId) under assertCommunity(workspaceId, …)',
   'parent-scoped:communityMember.deleteMany':
