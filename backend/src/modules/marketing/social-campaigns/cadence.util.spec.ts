@@ -25,4 +25,14 @@ describe('nextCadenceSlot', () => {
   it('returns null when no weekday is configured', () => {
     expect(nextCadenceSlot(cadence({ daysOfWeek: [] }), new Date())).toBeNull();
   });
+
+  it('clamps a malformed timeOfDay so it cannot roll onto a different UTC day', () => {
+    const from = new Date('2026-07-06T00:00:00Z'); // Monday 00:00
+    const slot = nextCadenceSlot(cadence({ timeOfDay: '99:99' }), from)!;
+    // clamped to 23:59 on a configured weekday, not overflowed forward several days
+    expect([1, 3, 5]).toContain(slot.getUTCDay());
+    expect(slot.getUTCHours()).toBe(23);
+    expect(slot.getUTCMinutes()).toBe(59);
+    expect(slot.getUTCDate()).toBe(6);
+  });
 });

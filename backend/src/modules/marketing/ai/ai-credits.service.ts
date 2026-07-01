@@ -110,6 +110,15 @@ export class AiCreditsService {
       );
   }
 
+  /** Meter an already-incurred overage that MUST be recorded even past the cap
+   *  (the work was already delivered — e.g. a media generation cost more than the
+   *  reserved estimate). Unlike reserve(), this never throws at the limit, so the
+   *  meter can't understate what was actually consumed. */
+  async chargeOverage(workspaceId: string, cost: number): Promise<void> {
+    if (cost <= 0) return;
+    await this.bump(workspaceId, monthKey(), cost);
+  }
+
   /** Read-only meter for the billing summary / UI gauges. */
   async usage(workspaceId: string): Promise<{ limit: number; used: number; remaining: number }> {
     const effective = await this.entitlements.getEffective(workspaceId);

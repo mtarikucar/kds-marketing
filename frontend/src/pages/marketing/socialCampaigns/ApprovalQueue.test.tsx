@@ -38,6 +38,26 @@ describe('ApprovalQueue', () => {
     expect(onReview).toHaveBeenCalledWith('a', 'regenerate');
   });
 
+  it('disables all of a row\'s buttons while that row action is pending', () => {
+    render(
+      <ApprovalQueue items={[item({ id: 'a', topic: 'Needs review' })]} onReview={vi.fn()} pendingId="a" />,
+    );
+    expect(screen.getByRole('button', { name: /Approve/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+  });
+
+  it('does not fire a second review once a row action is pending', async () => {
+    const user = userEvent.setup();
+    const onReview = vi.fn();
+    render(
+      <ApprovalQueue items={[item({ id: 'a', topic: 'Needs review' })]} onReview={onReview} pendingId="a" />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(onReview).not.toHaveBeenCalled();
+  });
+
   it('shows an empty state when nothing needs approval', () => {
     render(<ApprovalQueue items={[item({ status: 'PUBLISHED' })]} onReview={vi.fn()} />);
     expect(screen.getByText('Nothing waiting for approval')).toBeInTheDocument();

@@ -772,16 +772,36 @@ function AiGeneratePanel({ open, onOpenChange, onAdd }: AiGeneratePanelProps) {
   const [type, setType] = useState<GeneratedAssetType>('IMAGE');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
+  // Cancels the in-flight poll so a late READY doesn't add media / toast / close
+  // after the user closed the sheet or the whole composer.
+  const cancelledRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  // Closing the sheet cancels any running poll…
+  useEffect(() => {
+    if (!open) cancelledRef.current = true;
+  }, [open]);
+  // …and so does unmounting the panel (e.g. the whole dialog closes).
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      cancelledRef.current = true;
+    },
+    [],
+  );
 
   const run = async () => {
     const text = prompt.trim();
     if (!text) return;
+    cancelledRef.current = false;
     setBusy(true);
     try {
       const { assetId } = await generateMedia({ type, prompt: text });
       // Poll until terminal (composer is short-lived; cap the wait).
       for (let i = 0; i < 60; i += 1) {
+        if (cancelledRef.current) return;
         const a = await getGeneration(assetId);
+        if (cancelledRef.current) return;
         if (isTerminal(a.status)) {
           if (a.status === 'READY' && a.url) {
             onAdd({ url: a.url, key: a.r2Key ?? undefined, mime: a.mime ?? undefined });
@@ -794,11 +814,13 @@ function AiGeneratePanel({ open, onOpenChange, onAdd }: AiGeneratePanelProps) {
         }
         await new Promise((r) => setTimeout(r, 3000));
       }
+      if (cancelledRef.current) return;
       toast.error(t('social.composer.aiTimeout', { defaultValue: 'Still generating — check the Studio' }));
     } catch {
+      if (cancelledRef.current) return;
       toast.error(t('social.composer.aiFailed', { defaultValue: 'Generation failed' }));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 

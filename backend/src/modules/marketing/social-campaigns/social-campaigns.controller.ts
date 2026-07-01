@@ -4,7 +4,7 @@ import {
 import { Type } from 'class-transformer';
 import {
   IsArray, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString,
-  ArrayMaxSize, MaxLength, Min, ValidateNested,
+  ArrayMaxSize, Matches, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
@@ -24,7 +24,7 @@ const PLANNING = ['AI_PROPOSE', 'AI_FULL', 'USER_TOPICS'] as const;
 class CadenceDto {
   @IsOptional() @IsInt() @Min(1) perWeek?: number;
   @IsArray() @IsInt({ each: true }) @ArrayMaxSize(7) daysOfWeek: number[];
-  @IsString() @MaxLength(5) timeOfDay: string;
+  @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'timeOfDay must be HH:MM (24-hour)' }) timeOfDay: string;
   @IsOptional() @IsString() @MaxLength(64) timezone?: string;
 }
 

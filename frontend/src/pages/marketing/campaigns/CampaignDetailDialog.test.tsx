@@ -9,9 +9,9 @@ const get = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: { get: (...a: unknown[]) => get(...a) },
 }));
-const createSocialCampaign = vi.fn();
-vi.mock('../../../features/marketing/api/socialCampaigns.service', () => ({
-  createSocialCampaign: (...a: unknown[]) => createSocialCampaign(...a),
+const provisionSocialFromCampaign = vi.fn();
+vi.mock('../../../features/marketing/api/social-link.service', () => ({
+  provisionSocialFromCampaign: (...a: unknown[]) => provisionSocialFromCampaign(...a),
 }));
 const navigate = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -35,7 +35,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 describe('CampaignDetailDialog', () => {
-  beforeEach(() => { get.mockReset(); createSocialCampaign.mockReset(); navigate.mockReset(); });
+  beforeEach(() => { get.mockReset(); provisionSocialFromCampaign.mockReset(); navigate.mockReset(); });
 
   it('loads stats and recipients for the campaign', async () => {
     get.mockImplementation((url: string) =>
@@ -49,19 +49,21 @@ describe('CampaignDetailDialog', () => {
     expect(get).toHaveBeenCalledWith('/campaigns/c1/recipients');
   });
 
-  it('provisions a social campaign linked to this blast and navigates to it', async () => {
+  it('provisions a social campaign from this blast via the prefill endpoint and navigates to it', async () => {
     get.mockImplementation((url: string) =>
       url.endsWith('/recipients')
         ? Promise.resolve({ data: [] })
         : Promise.resolve({ data: { id: 'c1', name: 'Promo', channel: 'EMAIL', status: 'SENT', stats: {} } }),
     );
-    createSocialCampaign.mockResolvedValue({ id: 'sc-new' });
+    provisionSocialFromCampaign.mockResolvedValue({ socialCampaignId: 'sc-new' });
     const user = userEvent.setup();
     render(<CampaignDetailDialog campaignId="c1" onClose={vi.fn()} />, { wrapper });
     await screen.findByText('Promo');
     await user.click(screen.getByRole('button', { name: 'Create social content' }));
-    expect(createSocialCampaign).toHaveBeenCalledTimes(1);
-    expect(createSocialCampaign.mock.calls[0][0]).toMatchObject({ name: 'Promo', linkedCampaignId: 'c1' });
+    // Uses the dedicated provision endpoint (which prefills audience/leads/brief
+    // from the blast) — NOT a bare createSocialCampaign with an empty brief.
+    expect(provisionSocialFromCampaign).toHaveBeenCalledTimes(1);
+    expect(provisionSocialFromCampaign).toHaveBeenCalledWith('c1');
     expect(navigate).toHaveBeenCalledWith('/social-campaigns/sc-new');
   });
 });

@@ -5,6 +5,9 @@ import {
 
 const FAL_QUEUE_BASE = 'https://queue.fal.run';
 const BLOCK_RE = /nsfw|moderat|content polic|safety|flagged|prohibited/i;
+// Bound every fal call so a hung connection can't block the HTTP request path
+// (submit, after credits are reserved) or a scheduled-job poll tick indefinitely.
+const FAL_TIMEOUT_MS = Number(process.env.FAL_TIMEOUT_MS ?? 30_000);
 
 /**
  * fal.ai queue REST provider. Inert until FAL_KEY is set (mirrors R2 fallback).
@@ -36,7 +39,10 @@ export class FalProvider implements MediaProvider {
     let url = `${FAL_QUEUE_BASE}/${opts.model}`;
     if (opts.webhookUrl) url += `?fal_webhook=${encodeURIComponent(opts.webhookUrl)}`;
 
-    const res = await fetch(url, { method: 'POST', headers: this.headers(), body: JSON.stringify(input) });
+    const res = await fetch(url, {
+      method: 'POST', headers: this.headers(), body: JSON.stringify(input),
+      signal: AbortSignal.timeout(FAL_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await this.readDetail(res);
       throw new Error(`fal submit failed (${res.status}): ${detail}`);
@@ -49,7 +55,7 @@ export class FalProvider implements MediaProvider {
   async getResult(requestId: string, model: string): Promise<MediaGenResult> {
     const statusRes = await fetch(
       `${FAL_QUEUE_BASE}/${model}/requests/${requestId}/status`,
-      { headers: this.headers() },
+      { headers: this.headers(), signal: AbortSignal.timeout(FAL_TIMEOUT_MS) },
     );
     if (!statusRes.ok) return this.errorResult(await this.readDetail(statusRes));
 
@@ -60,7 +66,7 @@ export class FalProvider implements MediaProvider {
 
     const resultRes = await fetch(
       `${FAL_QUEUE_BASE}/${model}/requests/${requestId}`,
-      { headers: this.headers() },
+      { headers: this.headers(), signal: AbortSignal.timeout(FAL_TIMEOUT_MS) },
     );
     if (!resultRes.ok) return this.errorResult(await this.readDetail(resultRes));
     return { status: 'COMPLETED', outputs: this.mapOutputs(await resultRes.json()) };
