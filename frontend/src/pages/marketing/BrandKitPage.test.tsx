@@ -43,6 +43,39 @@ describe('BrandKitPage', () => {
     expect(screen.getByDisplayValue('Book now')).toBeInTheDocument();
   });
 
+  it('keeps unsaved edits when the query refetches (e.g. after a logo/reference upload)', async () => {
+    // First load returns the kit; a later refetch returns a kit that differs only
+    // in referenceImages (as an upload would) so react-query yields a fresh object.
+    vi.mocked(brandKitService.getBrandKit).mockReset();
+    vi.mocked(brandKitService.getBrandKit)
+      .mockResolvedValueOnce(KIT as never)
+      .mockResolvedValue({
+        ...KIT,
+        referenceImages: [{ url: 'u', r2Key: 'k', mime: 'image/png' }],
+      } as never);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <BrandKitPage />
+      </QueryClientProvider>,
+    );
+
+    const tone = await screen.findByDisplayValue('friendly');
+    await userEvent.clear(tone);
+    await userEvent.type(tone, 'bold and playful');
+
+    // Simulate an upload's onSuccess invalidating + refetching the brand kit.
+    await qc.invalidateQueries({ queryKey: ['marketing', 'brandKit'] });
+    // Wait until the refetched data has rendered (the new reference image appears),
+    // which guarantees the seeding effect had its chance to run against fresh data.
+    await screen.findByAltText('reference');
+
+    // The unsaved edit must survive the refetch (not be reset to server 'friendly').
+    expect(screen.getByDisplayValue('bold and playful')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('friendly')).not.toBeInTheDocument();
+  });
+
   it('saving sends the edited tone/cta/hashtags to updateBrandKit', async () => {
     render(<BrandKitPage />, { wrapper });
     const tone = await screen.findByDisplayValue('friendly');

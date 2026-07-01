@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { PostComposerDialog } from './PostComposerDialog';
 import * as mediaService from '../../../features/marketing/api/media.service';
 
@@ -71,5 +72,46 @@ describe('PostComposerDialog AI generate', () => {
     expect(mediaService.generateMedia).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'IMAGE', prompt: 'a sunset' }),
     );
+  });
+
+  it('cancels the poll loop when the dialog closes mid-generation', async () => {
+    // Hold generateMedia pending so we can close the dialog before it resolves.
+    let resolveGen: (v: { assetId: string }) => void = () => {};
+    vi.mocked(mediaService.generateMedia).mockReturnValue(
+      new Promise<{ assetId: string }>((res) => {
+        resolveGen = res;
+      }),
+    );
+    // If the loop keeps running it would fetch this READY asset and add it.
+    vi.mocked(mediaService.getGeneration).mockResolvedValue({
+      id: 'a-1', type: 'IMAGE', status: 'READY', provider: 'fal', model: 'm',
+      prompt: 'p', params: {}, url: 'https://r2/gen.png', r2Key: 'k',
+      mime: 'image/png', createdById: 'u', createdAt: '', updatedAt: '',
+    } as never);
+
+    const { rerender } = render(
+      <PostComposerDialog open onOpenChange={() => {}} accounts={[ACCOUNT as never]} onSubmit={() => {}} isPending={false} />,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /ai ile üret/i }));
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a sunset');
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    // The generation kicked off; run() is now awaiting generateMedia.
+    await waitFor(() => expect(mediaService.generateMedia).toHaveBeenCalled());
+
+    // User closes the whole composer mid-generation → the AI panel unmounts.
+    rerender(
+      <PostComposerDialog open={false} onOpenChange={() => {}} accounts={[ACCOUNT as never]} onSubmit={() => {}} isPending={false} />,
+    );
+
+    // Now the pending generation resolves; the cancelled loop must bail out.
+    resolveGen({ assetId: 'a-1' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // No further polling, and no late add/toast for the cancelled generation.
+    expect(mediaService.getGeneration).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
   });
 });

@@ -1874,7 +1874,83 @@
       "aiVideo": "Video",
       "aiPrompt": "İstem",
       "aiPromptPlaceholder": "Medyayı tanımlayın…",
-      "aiRun": "Üret"
+      "aiRun": "Üret",
+      "linkedinVisibility": "LinkedIn görünürlüğü",
+      "linkedinVisibilityHint": "Bu gönderiyi LinkedIn'de kimlerin görebileceğini belirler.",
+      "linkedinVisibility_PUBLIC": "Herkes (genel)",
+      "linkedinVisibility_CONNECTIONS": "Yalnızca bağlantılar",
+      "tiktok": {
+        "title": "TikTok ayarları",
+        "loading": "TikTok seçenekleri yükleniyor…",
+        "privacy": "Gizlilik",
+        "interactions": "Etkileşimler",
+        "disableComment": "Yorumları kapat",
+        "disableDuet": "Düet'i kapat",
+        "disableStitch": "Stitch'i kapat",
+        "mediaType": "Gönderi türü",
+        "photo": "Fotoğraf",
+        "video": "Video",
+        "photoMode": "Fotoğraf / karusel moduna geç",
+        "maxDuration": "Maksimum video uzunluğu:",
+        "maxDurationContext": "bu hesap için",
+        "coverIndex": "Kapak görseli dizini (0'dan başlar)",
+        "coverIndexHint": "0 ile son medya dizini arasında"
+      }
+    },
+    "title": "Sosyal Planlayıcı",
+    "subtitle": "Sosyal ağlarınızda gönderi oluşturun, zamanlayın ve yayınlayın.",
+    "newPost": "Yeni gönderi",
+    "viewToggle": "Sosyal planlayıcı görünümü",
+    "connectAccount": "Hesap bağla",
+    "tabs": {
+      "posts": "Gönderiler",
+      "accounts": "Hesaplar"
+    },
+    "table": {
+      "content": "İçerik",
+      "status": "Durum",
+      "targets": "Hedefler",
+      "scheduledAt": "Zamanlanmış",
+      "mediaCount": "{{count}} medya"
+    },
+    "empty": {
+      "title": "Henüz gönderi yok",
+      "hint": "İlk sosyal gönderinizi oluşturun.",
+      "connectFirst": "Bir sosyal hesap bağlayın, ardından ilk gönderinizi oluşturun."
+    },
+    "accounts": {
+      "empty": "Bağlı hesap yok",
+      "emptyHint": "Yayınlamaya başlamak için bir Facebook, Instagram veya LinkedIn hesabı bağlayın.",
+      "expired": "Yetki süresi doldu",
+      "disabled": "Devre dışı"
+    },
+    "action": {
+      "disconnect": "Bağlantıyı kes",
+      "reconnect": "Yeniden bağlan",
+      "publishNow": "Şimdi yayınla"
+    },
+    "confirm": {
+      "publish": "Bu, gönderiyi bekleyen tüm hedeflerine hemen yayınlar.",
+      "deleteTitle": "Gönderiyi sil",
+      "deleteBody": "Bu, gönderiyi ve hedeflerini kalıcı olarak kaldırır. Bu işlem geri alınamaz.",
+      "disconnectTitle": "Hesap bağlantısını kes",
+      "disconnectBody": "Planlayıcı artık bu hesaba yayın yapamayacak."
+    },
+    "oauth": {
+      "callbackError": "Bağlantı başarısız oldu veya iptal edildi. Lütfen tekrar deneyin."
+    },
+    "toast": {
+      "connected": "Hesap bağlandı",
+      "connectFailed": "Hesap bağlanamadı",
+      "disconnected": "Hesap bağlantısı kesildi",
+      "disconnectFailed": "Hesap bağlantısı kesilemedi",
+      "postUpdated": "Gönderi güncellendi",
+      "postCreated": "Gönderi oluşturuldu",
+      "postFailed": "Gönderi kaydedilemedi",
+      "published": "Yayınlama başlatıldı",
+      "publishFailed": "Gönderi yayınlanamadı",
+      "postDeleted": "Gönderi silindi",
+      "deleteFailed": "Gönderi silinemedi"
     }
   },
   "socialCampaign": {

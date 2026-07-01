@@ -13,7 +13,7 @@ function makeSvc(asset: any) {
   const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
   const provider = { name: 'fal', isConfigured: () => true, submit: jest.fn(), getResult: jest.fn() };
   const jobs = { schedule: jest.fn() };
-  const r2 = { isConfigured: () => true, upload: jest.fn().mockResolvedValue({ url: 'https://r2/cat.png', key: 'social/ws-1/x.png', mime: 'image/png' }) };
+  const r2 = { isConfigured: () => true, upload: jest.fn().mockResolvedValue({ url: 'https://r2/cat.png', key: 'social/ws-1/x.png', mime: 'image/png' }), deleteKeys: jest.fn().mockResolvedValue(undefined) };
   const runner = { registerHandler: jest.fn() };
   const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any);
   // stub the server-side download so no real network call
@@ -61,6 +61,26 @@ describe('MediaGenService.finalizeAsset', () => {
     const { svc, prisma, credits } = makeSvc({ ...QUEUED });
     prisma.generatedAsset.updateMany.mockResolvedValue({ count: 0 });
     await svc.finalizeAsset('a1', { status: 'FAILED', error: 'boom' });
+    expect(credits.refund).not.toHaveBeenCalled();
+  });
+
+  it('COMPLETED but download/upload fails → terminalizes FAILED + refunds (not stuck GENERATING)', async () => {
+    const { svc, prisma, credits, r2 } = makeSvc({ ...QUEUED });
+    (svc as any).download = jest.fn().mockRejectedValue(new Error('R2 down'));
+    await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png' }] });
+    expect(r2.upload).not.toHaveBeenCalled();
+    expect(prisma.generatedAsset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'a1', status: { notIn: ['READY', 'FAILED', 'BLOCKED'] } },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    }));
+    expect(credits.refund).toHaveBeenCalledWith(WS, 2);
+  });
+
+  it('COMPLETED but the finalize race is lost (count 0) → deletes the orphaned R2 object, no reconcile', async () => {
+    const { svc, prisma, credits, r2 } = makeSvc({ ...QUEUED });
+    prisma.generatedAsset.updateMany.mockResolvedValue({ count: 0 });
+    await svc.finalizeAsset('a1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/cat.png', mime: 'image/png' }] });
+    expect(r2.deleteKeys).toHaveBeenCalledWith(['social/ws-1/x.png']);
     expect(credits.refund).not.toHaveBeenCalled();
   });
 });

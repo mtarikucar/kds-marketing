@@ -62,6 +62,9 @@ export default function SocialPlannerPage() {
   const [disconnectAccount, setDisconnectAccount] = useState<SocialAccount | null>(null);
   // post pending a schedule confirmation (carries the picked ISO time)
   const [publishTarget, setPublishTarget] = useState<SocialPost | null>(null);
+  // Media handed off from AI Studio, captured into local state so it survives the
+  // router state-clear below and stays stable while the composer is open.
+  const [seededMedia, setSeededMedia] = useState<MediaItemValue[] | undefined>(undefined);
 
   // ── OAuth return handling ────────────────────────────────────────────────────
   // The OAuth callback redirects back to /social?connect=<pendingId> (success)
@@ -97,6 +100,9 @@ export default function SocialPlannerPage() {
   useEffect(() => {
     if (seedMedia?.length) {
       setEditingPost(null);
+      // Snapshot the seed before clearing router state: the navigate() below wipes
+      // location.state in the same batch, so the composer would otherwise open empty.
+      setSeededMedia(seedMedia);
       setComposerOpen(true);
       // Clear router state via the router (a raw window.history.replaceState does
       // NOT update useLocation().state), so a later "New post" won't re-seed it.
@@ -241,6 +247,7 @@ export default function SocialPlannerPage() {
 
   const openCreate = () => {
     setEditingPost(null);
+    setSeededMedia(undefined);
     setComposerOpen(true);
   };
 
@@ -251,7 +258,10 @@ export default function SocialPlannerPage() {
 
   const handleComposerClose = (open: boolean) => {
     setComposerOpen(open);
-    if (!open) setEditingPost(null);
+    if (!open) {
+      setEditingPost(null);
+      setSeededMedia(undefined);
+    }
   };
 
   // ── Post columns ────────────────────────────────────────────────────────────
@@ -452,7 +462,7 @@ export default function SocialPlannerPage() {
         onOpenChange={handleComposerClose}
         accounts={accounts}
         post={editingPost}
-        seedMedia={editingPost ? undefined : seedMedia}
+        seedMedia={editingPost ? undefined : seededMedia}
         onSubmit={(values) => composerMutation.mutate(values)}
         isPending={composerMutation.isPending}
       />

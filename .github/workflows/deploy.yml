@@ -159,6 +159,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          # fal.ai queue provider for AI Social Content Studio (photo/video gen).
+          # OPTIONAL — unset FAL_KEY = media generation inert (provider
+          # isConfigured()=false, endpoints 503). FAL_WEBHOOK_SECRET gates the
+          # public fal completion callback; unset = poll-only fallback path.
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          FAL_WEBHOOK_SECRET: ${{ secrets.FAL_WEBHOOK_SECRET }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -223,6 +229,9 @@ jobs:
           R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
           R2_BUCKET=${R2_BUCKET}
           R2_PUBLIC_BASE_URL=${R2_PUBLIC_BASE_URL}
+          # AI media generation (fal.ai); empty = inert.
+          FAL_KEY=${FAL_KEY}
+          FAL_WEBHOOK_SECRET=${FAL_WEBHOOK_SECRET}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}

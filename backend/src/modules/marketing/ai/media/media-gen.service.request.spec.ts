@@ -65,4 +65,13 @@ describe('MediaGenService.requestGeneration', () => {
       where: { id: 'asset-1' }, data: expect.objectContaining({ status: 'FAILED' }),
     }));
   });
+
+  it('refunds the reservation when the asset create() itself throws (no leaked credits)', async () => {
+    const { svc, prisma, credits, provider } = makeSvc();
+    prisma.generatedAsset.create.mockRejectedValue(new Error('DB down'));
+    await expect(svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' })).rejects.toThrow('DB down');
+    expect(credits.reserve).toHaveBeenCalledWith(WS, 3);
+    expect(credits.refund).toHaveBeenCalledWith(WS, 3);
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
 });

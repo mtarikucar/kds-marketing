@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import AiStudioPage from './AiStudioPage';
@@ -69,6 +70,51 @@ describe('AiStudioPage', () => {
         expect.objectContaining({ type: 'IMAGE', prompt: 'a dog' }),
       ),
     );
+  });
+
+  it('a partially-failed batch keeps the accepted generations instead of dropping the whole batch', async () => {
+    // 2 requested: one succeeds, one rejects.
+    vi.mocked(mediaService.generateMedia)
+      .mockReset()
+      .mockResolvedValueOnce({ assetId: 'a-ok' })
+      .mockRejectedValueOnce(new Error('boom'));
+    // Keep the accepted one visibly "Generating" (non-terminal) so it isn't cleared.
+    vi.mocked(mediaService.getGeneration).mockResolvedValue({
+      ...READY,
+      id: 'a-ok',
+      status: 'GENERATING',
+    } as never);
+
+    render(<AiStudioPage />, { wrapper });
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    fireEvent.change(screen.getByRole('spinbutton', { name: /how many/i }), {
+      target: { value: '2' },
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    // The accepted generation is polled (i.e. added to pendingIds), not dropped.
+    await waitFor(() => expect(mediaService.getGeneration).toHaveBeenCalledWith('a-ok'));
+    expect(screen.getByRole('heading', { name: /generating/i })).toBeInTheDocument();
+    // Partial failure is surfaced as a warning, not a plain success.
+    expect(toast.error).toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('a status poll that keeps failing stops polling, drops from pending, and shows failed', async () => {
+    vi.mocked(mediaService.getGeneration).mockReset().mockRejectedValue(new Error('gone'));
+
+    render(<AiStudioPage />, { wrapper });
+    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    // The card polls the failing status endpoint once...
+    await waitFor(() => expect(mediaService.getGeneration).toHaveBeenCalledWith('a-new'));
+    // ...then treats the persistent failure as terminal: removed from "Generating".
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: /generating/i })).not.toBeInTheDocument(),
+    );
+    // Polling is bounded — no endless 4s re-fetch loop.
+    expect(vi.mocked(mediaService.getGeneration).mock.calls.length).toBe(1);
   });
 
   it('"Add to post" on a READY asset navigates to /social with seedMedia state', async () => {

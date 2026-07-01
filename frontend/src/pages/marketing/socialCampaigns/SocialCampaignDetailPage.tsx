@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { SocialCampaignCalendar } from './SocialCampaignCalendar';
 import { ApprovalQueue } from './ApprovalQueue';
 import {
+  confirmSocialCampaignPlan,
   getSocialCampaign,
   listSocialCampaignItems,
   reviewSocialCampaignItem,
@@ -51,9 +52,17 @@ export default function SocialCampaignDetailPage() {
     onError: () => toast.error(t('socialCampaign.lifecycleFailed', 'Action failed')),
   });
 
+  const confirmPlan = useMutation({
+    mutationFn: () => confirmSocialCampaignPlan(id),
+    onSuccess: () => { invalidate(); toast.success(t('socialCampaign.planConfirmed', 'Plan confirmed')); },
+    onError: () => toast.error(t('socialCampaign.planConfirmFailed', 'Action failed')),
+  });
+
   if (campaignQuery.isLoading || !campaignQuery.data) return <Spinner />;
   const c = campaignQuery.data;
   const items = itemsQuery.data ?? [];
+  const awaitingPlanConfirm =
+    c.planningMode === 'AI_PROPOSE' && items.some((i) => i.status === 'PLANNED');
 
   return (
     <div className="space-y-6">
@@ -63,6 +72,11 @@ export default function SocialCampaignDetailPage() {
         actions={
           <div className="flex items-center gap-2">
             <Badge tone="neutral">{c.status}</Badge>
+            {awaitingPlanConfirm ? (
+              <Button loading={confirmPlan.isPending} onClick={() => confirmPlan.mutate()}>
+                {t('socialCampaign.confirmPlan', 'Confirm plan')}
+              </Button>
+            ) : null}
             {c.status === 'ACTIVE' ? (
               <Button variant="secondary" loading={lifecycle.isPending} onClick={() => lifecycle.mutate('pause')}>
                 {t('socialCampaign.pause', 'Pause')}

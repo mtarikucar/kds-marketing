@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Stepper, type StepperStep } from '@/components/ui/Stepper';
@@ -11,6 +11,10 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/RadioGroup';
 import { Label } from '@/components/ui/Label';
+import { Checkbox } from '@/components/ui/Checkbox';
+import marketingApi from '../../../features/marketing/api/marketingApi';
+import { NETWORK_META } from '../social/networks';
+import type { SocialAccount } from '../social/types';
 import {
   createSocialCampaign,
   type SocialCampaignPayload,
@@ -24,6 +28,7 @@ interface BuilderState {
   theme: string;
   audience: string;
   perWeek: number;
+  targetAccountIds: string[];
   mediaKinds: string[];
   automationMode: SocialCampaignAutomationMode;
   planningMode: SocialCampaignPlanningMode;
@@ -35,6 +40,7 @@ const INITIAL: BuilderState = {
   theme: '',
   audience: '',
   perWeek: 3,
+  targetAccountIds: [],
   mediaKinds: ['IMAGE'],
   automationMode: 'APPROVAL',
   planningMode: 'AI_PROPOSE',
@@ -48,6 +54,21 @@ export default function SocialCampaignBuilder() {
   const [s, setS] = useState<BuilderState>(INITIAL);
   const set = <K extends keyof BuilderState>(k: K, v: BuilderState[K]) =>
     setS((prev) => ({ ...prev, [k]: v }));
+
+  // Reuse the Social Planner's connected-accounts query (same key/endpoint) so the
+  // builder can offer the workspace's real destinations, not an empty list.
+  const { data: accountsData, isLoading: accountsLoading } = useQuery({
+    queryKey: ['marketing', 'social', 'accounts'],
+    queryFn: () =>
+      marketingApi.get('/social-planner/accounts').then((r) => r.data as SocialAccount[]),
+  });
+  const accounts: SocialAccount[] = Array.isArray(accountsData) ? accountsData : [];
+
+  const toggleAccount = (id: string, on: boolean) =>
+    set(
+      'targetAccountIds',
+      on ? [...s.targetAccountIds, id] : s.targetAccountIds.filter((x) => x !== id),
+    );
 
   const steps: StepperStep[] = [
     { id: 'goal', label: t('socialCampaign.step.goal', 'Goal & theme') },
@@ -74,7 +95,7 @@ export default function SocialCampaignBuilder() {
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
         startDate: new Date().toISOString(),
-        targetAccountIds: [],
+        targetAccountIds: s.targetAccountIds,
         mediaKinds: s.mediaKinds,
       };
       return createSocialCampaign(payload);
@@ -87,7 +108,10 @@ export default function SocialCampaignBuilder() {
     onError: () => toast.error(t('socialCampaign.createFailed', 'Could not create campaign')),
   });
 
-  const canAdvance = step !== 0 || s.name.trim().length > 0;
+  // Automated modes must have somewhere to publish; APPROVAL can attach targets later.
+  const accountsMissing = s.automationMode !== 'APPROVAL' && s.targetAccountIds.length === 0;
+  // Gate Next on the name (step 0) and on target accounts once the mode is picked (step 3).
+  const canAdvance = (step !== 0 || s.name.trim().length > 0) && (step !== 3 || !accountsMissing);
   const isLast = step === steps.length - 1;
 
   return (
@@ -133,31 +157,91 @@ export default function SocialCampaignBuilder() {
         )}
 
         {step === 2 && (
-          <Field label={t('socialCampaign.f.perWeek', 'Posts per week')}>
-            {({ id }) => (
-              <Input
-                id={id}
-                type="number"
-                min={1}
-                value={s.perWeek}
-                onChange={(e) => set('perWeek', Number(e.target.value) || 1)}
-              />
-            )}
-          </Field>
+          <div className="space-y-4">
+            <Field label={t('socialCampaign.f.perWeek', 'Posts per week')}>
+              {({ id }) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={1}
+                  value={s.perWeek}
+                  onChange={(e) => set('perWeek', Number(e.target.value) || 1)}
+                />
+              )}
+            </Field>
+
+            <div className="space-y-2">
+              <span className="text-sm font-medium text-foreground">
+                {t('socialCampaign.f.accounts', 'Target accounts')}
+              </span>
+              {accountsLoading ? (
+                <p className="text-caption text-muted-foreground">
+                  {t('socialCampaign.accounts.loading', 'Loading connected accounts…')}
+                </p>
+              ) : accounts.length === 0 ? (
+                <p className="text-caption text-muted-foreground">
+                  {t('socialCampaign.accounts.empty', 'No connected accounts yet. ')}
+                  <Link to="/social" className="text-primary underline">
+                    {t('socialCampaign.accounts.connect', 'Connect one in the Social Planner')}
+                  </Link>
+                  {t('socialCampaign.accounts.emptyAfter', ' so this campaign has somewhere to publish.')}
+                </p>
+              ) : (
+                <div className="grid gap-1.5 rounded-lg border border-border p-2 sm:grid-cols-2">
+                  {accounts.map((acc) => {
+                    const meta = NETWORK_META[acc.network];
+                    const Icon = meta.icon;
+                    const checked = s.targetAccountIds.includes(acc.id);
+                    return (
+                      <label
+                        key={acc.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-muted"
+                      >
+                        <Checkbox
+                          checked={checked}
+                          disabled={!acc.enabled}
+                          onCheckedChange={(v) => toggleAccount(acc.id, v === true)}
+                        />
+                        <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                        <span className="truncate text-sm text-foreground">{acc.displayName}</span>
+                        <span className="ms-auto text-micro text-muted-foreground">{meta.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-caption text-muted-foreground">
+                {t(
+                  'socialCampaign.accounts.hint',
+                  'Automated publishing (Semi-auto / Full-auto) needs at least one target account.',
+                )}
+              </p>
+            </div>
+          </div>
         )}
 
         {step === 3 && (
-          <RadioGroup
-            value={s.automationMode}
-            onValueChange={(v) => set('automationMode', v as SocialCampaignAutomationMode)}
-          >
-            {(['APPROVAL', 'SEMI_AUTO', 'FULL_AUTO'] as const).map((m) => (
-              <div key={m} className="flex items-center gap-2">
-                <RadioGroupItem value={m} id={`auto-${m}`} />
-                <Label htmlFor={`auto-${m}`}>{m}</Label>
-              </div>
-            ))}
-          </RadioGroup>
+          <div className="space-y-3">
+            <RadioGroup
+              value={s.automationMode}
+              onValueChange={(v) => set('automationMode', v as SocialCampaignAutomationMode)}
+            >
+              {(['APPROVAL', 'SEMI_AUTO', 'FULL_AUTO'] as const).map((m) => (
+                <div key={m} className="flex items-center gap-2">
+                  <RadioGroupItem value={m} id={`auto-${m}`} />
+                  <Label htmlFor={`auto-${m}`}>{m}</Label>
+                </div>
+              ))}
+            </RadioGroup>
+            {accountsMissing && (
+              <p className="text-caption text-danger" role="alert">
+                {t(
+                  'socialCampaign.accounts.required',
+                  'Automated publishing needs at least one target account — go back to “Channels & cadence” to pick one, or choose Approval.',
+                )}
+              </p>
+            )}
+          </div>
         )}
 
         {step === 4 && (
@@ -175,12 +259,23 @@ export default function SocialCampaignBuilder() {
         )}
 
         {step === 5 && (
-          <dl className="space-y-1 text-sm">
-            <div><dt className="inline font-medium">{t('socialCampaign.f.name', 'Name')}: </dt><dd className="inline">{s.name}</dd></div>
-            <div><dt className="inline font-medium">{t('socialCampaign.f.automation', 'Automation')}: </dt><dd className="inline">{s.automationMode}</dd></div>
-            <div><dt className="inline font-medium">{t('socialCampaign.f.planning', 'Planning')}: </dt><dd className="inline">{s.planningMode}</dd></div>
-            <div><dt className="inline font-medium">{t('socialCampaign.f.perWeek', 'Posts per week')}: </dt><dd className="inline">{s.perWeek}</dd></div>
-          </dl>
+          <>
+            <dl className="space-y-1 text-sm">
+              <div><dt className="inline font-medium">{t('socialCampaign.f.name', 'Name')}: </dt><dd className="inline">{s.name}</dd></div>
+              <div><dt className="inline font-medium">{t('socialCampaign.f.automation', 'Automation')}: </dt><dd className="inline">{s.automationMode}</dd></div>
+              <div><dt className="inline font-medium">{t('socialCampaign.f.planning', 'Planning')}: </dt><dd className="inline">{s.planningMode}</dd></div>
+              <div><dt className="inline font-medium">{t('socialCampaign.f.perWeek', 'Posts per week')}: </dt><dd className="inline">{s.perWeek}</dd></div>
+              <div><dt className="inline font-medium">{t('socialCampaign.f.accounts', 'Target accounts')}: </dt><dd className="inline">{s.targetAccountIds.length}</dd></div>
+            </dl>
+            {accountsMissing && (
+              <p className="mt-2 text-caption text-danger" role="alert">
+                {t(
+                  'socialCampaign.accounts.required',
+                  'Automated publishing needs at least one target account — go back to “Channels & cadence” to pick one, or choose Approval.',
+                )}
+              </p>
+            )}
+          </>
         )}
       </div>
 
@@ -191,7 +286,7 @@ export default function SocialCampaignBuilder() {
           </Button>
         )}
         {isLast ? (
-          <Button loading={create.isPending} onClick={() => create.mutate()}>
+          <Button loading={create.isPending} disabled={accountsMissing} onClick={() => create.mutate()}>
             {t('socialCampaign.create', 'Create campaign')}
           </Button>
         ) : (

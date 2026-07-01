@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import type { MediaItemValue } from './socialSchemas';
 import SocialPlannerPage from './SocialPlannerPage';
 import * as socialPlannerService from '../../../features/marketing/api/social-planner.service';
 
@@ -92,6 +93,25 @@ describe('SocialPlannerPage', () => {
   it('renders the posts/accounts view toggle', () => {
     render(<SocialPlannerPage />, { wrapper });
     expect(screen.getByRole('group', { name: /social planner view/i })).toBeInTheDocument();
+  });
+
+  it('opens the composer pre-seeded with media handed off from AI Studio', async () => {
+    // AI Studio navigates to /social with { seedMedia } in router state.
+    const seedMedia: MediaItemValue[] = [
+      { url: 'https://r2/seed.png', key: 'k', mime: 'image/png' },
+    ];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[{ pathname: '/social', state: { seedMedia } }]}>
+          <SocialPlannerPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // The composer opens automatically and the seeded asset survives the router
+    // state-clear (regression: it used to reset the media list to empty).
+    expect(await screen.findByText('seed.png')).toBeInTheDocument();
   });
 
   it('opens the composer and validates an empty post', async () => {

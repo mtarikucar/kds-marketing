@@ -4,10 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Sparkles } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
-import {
-  createSocialCampaign,
-  type SocialCampaignPayload,
-} from '../../../features/marketing/api/socialCampaigns.service';
+import { provisionSocialFromCampaign } from '../../../features/marketing/api/social-link.service';
 import {
   Dialog,
   DialogContent,
@@ -59,31 +56,18 @@ export function CampaignDetailDialog({ campaignId, onClose }: CampaignDetailDial
     enabled: open,
   });
 
+  // Provision a Social Campaign from this blast via the dedicated prefill
+  // endpoint (POST /campaigns/:id/social) — same path as the per-row
+  // CampaignSocialLinkButton — so the new campaign inherits the blast's
+  // audience/leads/brief and a duplicate is refused for an already-linked blast.
   const provision = useMutation({
-    mutationFn: () => {
-      const c = campaignQuery.data!;
-      const payload: SocialCampaignPayload = {
-        name: c.name,
-        automationMode: 'APPROVAL',
-        planningMode: 'AI_PROPOSE',
-        cadence: {
-          perWeek: 3,
-          daysOfWeek: [1, 3, 5],
-          timeOfDay: '09:00',
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-        startDate: new Date().toISOString(),
-        targetAccountIds: [],
-        mediaKinds: ['IMAGE'],
-        linkedCampaignId: c.id,
-      };
-      return createSocialCampaign(payload);
+    mutationFn: () => provisionSocialFromCampaign(campaignId!),
+    onSuccess: (r) => {
+      toast.success(t('campaigns.socialCreated', 'Social content campaign created'));
+      navigate(`/social-campaigns/${r.socialCampaignId}`);
     },
-    onSuccess: (sc) => {
-      toast.success(t('socialCampaign.provisioned', 'Social campaign created'));
-      navigate(`/social-campaigns/${sc.id}`);
-    },
-    onError: () => toast.error(t('socialCampaign.provisionFailed', 'Could not create social content')),
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('campaigns.socialCreateFailed', 'Could not create social content')),
   });
 
   const c = campaignQuery.data;
