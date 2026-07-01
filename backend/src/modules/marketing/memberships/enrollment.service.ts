@@ -10,6 +10,11 @@ import { resolveLessonAccess, AccessLesson } from './lesson-access';
 import { CertificateService } from './certificate.service';
 import { GamificationService } from './gamification.service';
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 /**
  * Epic C2 — enrolls Leads (contacts) into courses and tracks lesson progress.
  * `progressPct` is recomputed from LessonProgress on each completion and the
@@ -148,33 +153,50 @@ export class EnrollmentService {
         );
       }
     }
-    await this.prisma.lessonProgress.upsert({
-      where: { enrollmentId_lessonId: { enrollmentId: id, lessonId } },
-      create: { enrollmentId: id, lessonId, completed: true, completedAt: new Date() },
-      update: { completed: true, completedAt: new Date() },
+    // Persist this completion and recompute progress under a per-enrollment
+    // advisory lock, re-counting the LIVE completed set FRESH after the upsert.
+    // Two lessons of the same enrollment completed concurrently would otherwise
+    // each recompute from a pre-upsert snapshot that omits the sibling's just-
+    // committed completion — the FINAL pair would both write <100%, leaving the
+    // enrollment permanently stuck below COMPLETED (there is no later completion
+    // to trigger a recompute), so the certificate is never issued. Serializing +
+    // re-counting makes the last writer observe every completion. (Mirrors the
+    // ai-credits / message-quota advisory-lock pattern.)
+    //
+    // The recount is scoped to `lessonId: { in: live }` because
+    // LessonProgress.lessonId is a soft ref (no FK cascade to Lesson): deleting a
+    // lesson orphans its completed rows, and counting those would inflate `done`
+    // past `total`, flipping COMPLETED — minting a certificate — before the
+    // remaining lessons are finished. The filter counts only completions for
+    // lessons that still exist.
+    const live = ordered.map((l) => l.id);
+    const total = live.length;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('enrollment-progress:' + id)}))::text AS locked`,
+      );
+      await tx.lessonProgress.upsert({
+        where: { enrollmentId_lessonId: { enrollmentId: id, lessonId } },
+        create: { enrollmentId: id, lessonId, completed: true, completedAt: new Date() },
+        update: { completed: true, completedAt: new Date() },
+      });
+      const done = total
+        ? await tx.lessonProgress.count({
+            where: { enrollmentId: id, completed: true, lessonId: { in: live } },
+          })
+        : 0;
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const isComplete = pct >= 100;
+      return tx.enrollment.update({
+        where: { id },
+        data: {
+          progressPct: pct,
+          status: isComplete ? 'COMPLETED' : 'ACTIVE',
+          completedAt: isComplete ? new Date() : null,
+        },
+      });
     });
-    // Recompute progress over the LIVE lesson set only. LessonProgress.lessonId is
-    // a soft ref (no FK cascade to Lesson), so deleting a lesson orphans its
-    // completed rows; counting those would inflate `done` past `total` and could
-    // flip the enrollment to COMPLETED — minting a certificate — before the
-    // remaining lessons are finished. Intersect the completed set (the gating set
-    // plus the lesson just marked) with the ids of lessons that still exist.
-    const existingIds = new Set(ordered.map((l) => l.id));
-    const completedNow = new Set(completedSet);
-    completedNow.add(lessonId);
-    const total = existingIds.size;
-    let done = 0;
-    for (const lid of completedNow) if (existingIds.has(lid)) done++;
-    const pct = total ? Math.round((done / total) * 100) : 0;
-    const completed = pct >= 100;
-    const updated = await this.prisma.enrollment.update({
-      where: { id },
-      data: {
-        progressPct: pct,
-        status: completed ? 'COMPLETED' : 'ACTIVE',
-        completedAt: completed ? new Date() : null,
-      },
-    });
+    const completed = updated.status === 'COMPLETED';
     // Gamification (Epic 10c) — award points; idempotent per (lead, source, ref),
     // so re-completing a lesson can't double-award. Best-effort.
     try {

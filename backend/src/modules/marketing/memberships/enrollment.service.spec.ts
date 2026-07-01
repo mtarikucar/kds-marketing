@@ -9,6 +9,10 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
+  // The progress recompute runs inside an advisory-locked $transaction; run the
+  // callback against the same mock and stub the raw lock SELECT.
+  (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
+  (prisma.$queryRawUnsafe as any).mockResolvedValue([{ locked: 'x' }]);
   const certificates = { issueForEnrollment: jest.fn().mockResolvedValue(null), getForEnrollment: jest.fn() };
   const gamification = { award: jest.fn().mockResolvedValue(undefined) };
   return { prisma, certificates, gamification, svc: new EnrollmentService(prisma as any, certificates as any, gamification as any) };
@@ -55,6 +59,8 @@ describe('EnrollmentService', () => {
     ]) as any);
     (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    // Authoritative post-upsert count over the 2 live lessons: only l1 done.
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
 
     const out: any = await svc.markLessonComplete(WS, 'e1', 'l1');
@@ -68,8 +74,8 @@ describe('EnrollmentService', () => {
     prisma.course.findUnique.mockResolvedValue(course(null, [{ id: 'l2', position: 0, isPreview: false, gating: 'FREE', dripDays: null }]) as any);
     (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
-    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
-    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(2);
+    // Single-lesson course → the one live lesson (l2) is now done → 1/1 = 100%.
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }));
 
     const out: any = await svc.markLessonComplete(WS, 'e1', 'l2');
@@ -82,6 +88,38 @@ describe('EnrollmentService', () => {
     expect(gamification.award).toHaveBeenCalledWith(WS, 'lead-1', 'COURSE_COMPLETE', 'c1');
   });
 
+  // Concurrency: two lessons of the same enrollment completed near-simultaneously.
+  // The recompute must reflect the AUTHORITATIVE live completed set (re-counted
+  // after this request's own upsert), NOT a pre-upsert snapshot that omits a
+  // sibling's just-committed completion. Otherwise the final pair each write
+  // <100%, the enrollment sticks below COMPLETED forever (no later completion to
+  // recompute) and the certificate is never issued.
+  it('recomputes from the authoritative post-upsert set, not a stale pre-read snapshot', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1', enrolledAt: new Date('2026-06-01') } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l3' } as any);
+    prisma.course.findUnique.mockResolvedValue(course(null, [
+      { id: 'l1', position: 0, isPreview: false, gating: 'FREE', dripDays: null },
+      { id: 'l2', position: 1, isPreview: false, gating: 'FREE', dripDays: null },
+      { id: 'l3', position: 2, isPreview: false, gating: 'FREE', dripDays: null },
+    ]) as any);
+    // Gating pre-read is a STALE snapshot: only l1 is visible; a concurrent
+    // sibling has completed l2 but its write isn't in this snapshot.
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([{ lessonId: 'l1' }]);
+    (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    // Authoritative post-upsert count over the LIVE lessons: l1 + l2 (sibling) +
+    // l3 (this request) = all 3 done.
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(3);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }));
+
+    const out: any = await svc.markLessonComplete(WS, 'e1', 'l3');
+    // A stale-snapshot recompute would see only {l1,l3} → 67%/ACTIVE and never
+    // issue the certificate. The fresh count sees all 3 → 100%/COMPLETED.
+    expect(out.progressPct).toBe(100);
+    expect(out.status).toBe('COMPLETED');
+    expect(certificates.issueForEnrollment).toHaveBeenCalled();
+  });
+
   it('does not issue a certificate below 100%', async () => {
     const { prisma, certificates, svc } = makeSvc();
     prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', enrolledAt: new Date('2026-06-01') } as any);
@@ -92,6 +130,8 @@ describe('EnrollmentService', () => {
     ]) as any);
     (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    // 1 of 2 live lessons done → 50%, below the certificate threshold.
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
     await svc.markLessonComplete(WS, 'e1', 'l1');
     expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
@@ -114,9 +154,10 @@ describe('EnrollmentService', () => {
       { lessonId: 'l1' }, { lessonId: 'l2' }, { lessonId: 'l3' },
     ]);
     (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
-    // The naive counts (which include orphans) would compute 4/2 = 200% → COMPLETED.
-    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
-    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(4);
+    // The recompute count is scoped `lessonId: { in: [l4, l5] }`, so orphaned
+    // completions for deleted lessons (l1..l3) are excluded at the DB level — only
+    // l4 is a completed LIVE lesson → 1/2 = 50%, not a premature COMPLETED.
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve(a.data));
 
     const out: any = await svc.markLessonComplete(WS, 'e1', 'l4');
@@ -125,6 +166,12 @@ describe('EnrollmentService', () => {
     expect(out.status).toBe('ACTIVE');
     expect(out.completedAt).toBeNull();
     expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
+    // The recount is scoped to the LIVE lessons only (orphans excluded in-DB).
+    expect((prisma.lessonProgress.count as jest.Mock).mock.calls[0][0].where).toMatchObject({
+      enrollmentId: 'e1',
+      completed: true,
+      lessonId: { in: ['l4', 'l5'] },
+    });
   });
 
   it('rejects completing a lesson that is not in the enrollment course', async () => {
