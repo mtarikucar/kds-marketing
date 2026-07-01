@@ -15,6 +15,20 @@ export type EmailBlock = Record<string, any> & { type: string };
 const asArr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 const clone = <T,>(v: T): T => structuredClone(v);
 
+/**
+ * Prepend `https://` to a scheme-less URL so a button/image doesn't render as a
+ * dead `#` link — the email renderer's safeUrl keeps only http(s) and drops
+ * anything else to `#` silently. A value that already parses as a URL (any
+ * scheme) is left unchanged; a `javascript:`/`data:` scheme still parses, so it
+ * isn't "fixed" here and is blocked downstream by safeUrl. Run on blur.
+ */
+function normalizeUrl(v: string): string {
+  const s = v.trim();
+  if (!s) return s;
+  try { new URL(s); return s; } catch { /* no scheme — try https below */ }
+  try { new URL(`https://${s}`); return `https://${s}`; } catch { return s; }
+}
+
 const PALETTE: { type: string; label: string; icon: typeof Type }[] = [
   { type: 'heading', label: 'Heading', icon: Heading },
   { type: 'text', label: 'Text', icon: Type },
@@ -88,7 +102,7 @@ function Editor({ block, onPatch }: { block: EmailBlock; onPatch: (p: Record<str
     case 'image':
       return (
         <div className="grid grid-cols-2 gap-2">
-          <Input value={block.url ?? ''} onChange={(e) => onPatch({ url: e.target.value })} placeholder="https://…/image.png" />
+          <Input value={block.url ?? ''} onChange={(e) => onPatch({ url: e.target.value })} onBlur={(e) => onPatch({ url: normalizeUrl(e.target.value) })} placeholder="https://…/image.png" />
           <Input value={block.alt ?? ''} onChange={(e) => onPatch({ alt: e.target.value })} placeholder={t('email.alt', 'Alt text')} />
         </div>
       );
@@ -97,7 +111,7 @@ function Editor({ block, onPatch }: { block: EmailBlock; onPatch: (p: Record<str
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <Input value={block.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} placeholder={t('email.btnText', 'Button text')} />
-            <Input value={block.url ?? ''} onChange={(e) => onPatch({ url: e.target.value })} placeholder="https://…" />
+            <Input value={block.url ?? ''} onChange={(e) => onPatch({ url: e.target.value })} onBlur={(e) => onPatch({ url: normalizeUrl(e.target.value) })} placeholder="https://…" />
           </div>
           <Select value={block.align ?? 'center'} onValueChange={(v) => onPatch({ align: v })}>
             <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
