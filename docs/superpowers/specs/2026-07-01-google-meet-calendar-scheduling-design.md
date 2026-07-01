@@ -2,7 +2,11 @@
 
 - **Date:** 2026-07-01
 - **Status:** Approved (user granted full autonomy: most comprehensive + most professional-engineering option at every decision point)
-- **Implementation progress:** Phase 1 (conferencing links — Google Meet + Teams) ✅ implemented & unit/e2e-tested on `feat/google-meet-calendar-scheduling`. Phases 2–4 pending. Plan: `docs/superpowers/plans/2026-07-01-phase1-conferencing-links.md`.
+- **Implementation progress (branch `feat/google-meet-calendar-scheduling`):**
+  - Phase 1 (conferencing links — Google Meet + Teams) ✅ implemented & unit/e2e-tested. Plan: `docs/superpowers/plans/2026-07-01-phase1-conferencing-links.md`.
+  - Phase 2 (rich availability + appointment lifecycle) ✅ backend complete & unit-tested — policy (min-notice/max-advance/before-after buffers), blackout/time-off, reschedule, PENDING/NO_SHOW/COMPLETED lifecycle + approval, public token self-service, multi-lead-time reminders + attendee tz, blackout/member-availability admin CRUD + bookings-list. Plan: `docs/superpowers/plans/2026-07-01-phase2-availability-lifecycle.md`. Deferred refinement: full ROUND_ROBIN per-member working-hours *intersection* in `availability()` (model + CRUD shipped; blackout already covers member time-off).
+  - Phases 3–4 pending.
+  - Verification: full unit suite 295/296 suites green; the single failing suite (`workspace-scoping.arch.spec.ts`) is **pre-existing on `origin/main`** (unrelated to this work).
 - **Scope owner:** marketing module (NestJS 11 + Prisma 6 + Postgres backend; React + TanStack Query frontend)
 - **Branch base:** `chore/code-review-fixes` (synced to `origin/main`)
 
