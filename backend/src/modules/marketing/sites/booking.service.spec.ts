@@ -14,6 +14,9 @@ describe('BookingService', () => {
   const dow = new Date(dayISO).getUTCDay();
   let prisma: any;
   let svc: BookingService;
+  let outbox: any;
+  let googleSync: any;
+  let outlookSync: any;
 
   function calendar(extra: any = {}) {
     return { id: 'c1', workspaceId: WS, active: true, slotMinutes: 30, bufferMinutes: 0, availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] }, ...extra };
@@ -33,18 +36,18 @@ describe('BookingService', () => {
       $executeRaw: jest.fn().mockResolvedValue(1),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
-    const outbox = { append: jest.fn().mockResolvedValue('e') };
+    outbox = { append: jest.fn().mockResolvedValue('e') };
     const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };
     // Google / Outlook calendar sync are inert in this suite (push/cancel are
     // best-effort no-ops here); the dedicated calendar specs exercise them for real.
-    const googleSync = {
+    googleSync = {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
-    const outlookSync = {
+    outlookSync = {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
@@ -279,6 +282,30 @@ describe('BookingService', () => {
     it('rethrows a non-P2002 create error unchanged', async () => {
       prisma.bookingCalendar.create = jest.fn(() => Promise.reject(new Error('boom')));
       await expect(svc.create(WS, { name: 'X' })).rejects.toThrow('boom');
+    });
+  });
+
+  describe('cancel', () => {
+    it('emits BookingCancelled via the outbox and tears down both mirrors', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b-1', status: 'CONFIRMED', calendarId: 'c1' });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      await svc.cancel(WS, 'b-1');
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'marketing.booking.cancelled.v1',
+          idempotencyKey: 'booking-cancelled:b-1',
+          payload: expect.objectContaining({ bookingId: 'b-1', calendarId: 'c1' }),
+        }),
+        expect.anything(),
+      );
+      expect(googleSync.cancelBooking).toHaveBeenCalledWith(WS, 'b-1');
+      expect(outlookSync.cancelBooking).toHaveBeenCalledWith(WS, 'b-1');
+    });
+
+    it('is a no-op (no event) when the booking is already cancelled', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b-1', status: 'CANCELLED', calendarId: 'c1' });
+      await svc.cancel(WS, 'b-1');
+      expect(outbox.append).not.toHaveBeenCalled();
     });
   });
 

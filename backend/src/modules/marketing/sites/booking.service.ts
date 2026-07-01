@@ -467,7 +467,7 @@ export class BookingService implements OnModuleInit {
   async cancel(workspaceId: string, id: string) {
     const existing = await this.prisma.booking.findFirst({
       where: { id, workspaceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, calendarId: true },
     });
     if (!existing) throw new NotFoundException('Booking not found');
     if (existing.status === 'EXTERNAL_BUSY') {
@@ -475,11 +475,30 @@ export class BookingService implements OnModuleInit {
       throw new BadRequestException('Cannot cancel an external calendar block');
     }
     if (existing.status !== 'CANCELLED') {
-      await this.prisma.booking.updateMany({
-        where: { id: existing.id, workspaceId },
-        data: { status: 'CANCELLED' },
+      // Flip the status and emit BookingCancelled transactionally so downstream
+      // teardown (conference + calendar-mirror delete) and workflow automations
+      // fire off ONE reliable event via the outbox.
+      await this.prisma.$transaction(async (tx) => {
+        await tx.booking.updateMany({
+          where: { id: existing.id, workspaceId },
+          data: { status: 'CANCELLED' },
+        });
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.BookingCancelled,
+            idempotencyKey: `booking-cancelled:${existing.id}`,
+            payload: {
+              workspaceId,
+              bookingId: existing.id,
+              calendarId: existing.calendarId,
+              occurredAt: new Date().toISOString(),
+            },
+          },
+          tx as any,
+        );
       });
-      // Remove the Google / Outlook mirror so the slot frees up on both sides.
+      // Direct calls stay as a self-healing fallback (the BookingCancelled event
+      // also drives both syncs, so a missed direct call recovers).
       this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
       this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
     }
