@@ -40,6 +40,29 @@ export function zonedParts(utcMs: number, tz: string): { y: number; mo: number; 
   return { y: +m.year, mo: +m.month, d: +m.day, weekday: WEEKDAY[m.weekday] ?? 0 };
 }
 
+/**
+ * Human-readable date+time rendered in `tz` (not UTC) — for booking
+ * confirmation / reminder emails, so a customer sees "14:00 GMT+3" for a 14:00
+ * Istanbul appointment instead of the raw "11:00 GMT" UTC instant. Falls back to
+ * a UTC string on an invalid timezone so it can never throw in an email path.
+ */
+export function formatInTimeZone(dt: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(dt);
+  } catch {
+    return dt.toUTCString();
+  }
+}
+
 /** Parse "HH:mm" → [hour, minute] or null. */
 export function parseHm(s: string): [number, number] | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec((s ?? '').trim());

@@ -67,6 +67,17 @@ describe('PublicEstimateController.page', () => {
     expect(res._html).not.toContain('id="ok"');
   });
 
+  it('renders validUntil as an ISO date (YYYY-MM-DD), not a JS Date toString', async () => {
+    // publicView returns the Prisma row, so validUntil is a Date OBJECT (not an
+    // ISO string). `String(date).slice(0,10)` yields "Wed Jul 15" (weekday+month,
+    // no year) — a broken "Valid until" on the customer-facing page.
+    const { ctrl } = makeCtrl({ ...OPEN_VIEW, validUntil: new Date('2026-07-15T00:00:00.000Z') });
+    const res = makeRes();
+    await ctrl.page('es_token', res);
+    expect(res._html).toContain('Valid until 2026-07-15');
+    expect(res._html).not.toMatch(/Valid until [A-Z][a-z]{2} [A-Z][a-z]{2} \d{2}/);
+  });
+
   it('404s a missing estimate without throwing', async () => {
     const { ctrl, estimates } = makeCtrl(OPEN_VIEW);
     estimates.publicView.mockRejectedValueOnce(new Error('not found'));

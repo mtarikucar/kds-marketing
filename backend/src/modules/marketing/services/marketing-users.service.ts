@@ -131,11 +131,35 @@ export class MarketingUsersService {
     return user;
   }
 
+  /**
+   * Authorization for DEACTIVATING a user — shared by delete() and update()'s
+   * `status: 'INACTIVE'` path so a PATCH can't be a backdoor around the delete
+   * guards: the OWNER account is never deactivatable, no one may deactivate
+   * themselves (mid-session lockout, recoverable only by another admin), and a
+   * MANAGER target requires an OWNER/MANAGER actor.
+   */
+  private assertCanDeactivate(
+    user: { id: string; role: string },
+    actorRole: string,
+    actorId: string,
+  ) {
+    if (user.role === 'OWNER') {
+      throw new ForbiddenException('The owner account cannot be deactivated');
+    }
+    if (user.id === actorId) {
+      throw new ForbiddenException('You cannot deactivate your own account');
+    }
+    if (user.role === 'MANAGER' && actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
+      throw new ForbiddenException('Insufficient permissions');
+    }
+  }
+
   async update(
     workspaceId: string,
     id: string,
     dto: UpdateMarketingUserDto,
     actorRole: string,
+    actorId?: string,
   ) {
     const user = await this.prisma.marketingUser.findFirst({
       where: { id, workspaceId },
@@ -152,6 +176,13 @@ export class MarketingUsersService {
     }
     if (dto.role && user.role === 'OWNER') {
       throw new BadRequestException('The owner role cannot be changed here');
+    }
+
+    // Deactivation via update() is a real state change — hold it to the SAME
+    // guards delete() enforces (self-lockout, owner protection, role floor), or a
+    // PATCH silently bypasses them.
+    if (dto.status === 'INACTIVE' && user.status === 'ACTIVE') {
+      this.assertCanDeactivate(user, actorRole, actorId ?? '');
     }
 
     // Reactivating an INACTIVE user consumes a seat, exactly like create() — so
@@ -212,18 +243,9 @@ export class MarketingUsersService {
       where: { id, workspaceId },
     });
     if (!user || user.role === 'SYSTEM') throw new NotFoundException('User not found');
-    if (user.role === 'OWNER') {
-      throw new ForbiddenException('The owner account cannot be deactivated');
-    }
-    // Can't deactivate your OWN account — that locks you out mid-session
-    // (recoverable only by another admin). The OWNER is already protected above;
-    // this closes the same lockout footgun for a MANAGER deactivating themselves.
-    if (id === actorId) {
-      throw new ForbiddenException('You cannot deactivate your own account');
-    }
-    if (user.role === 'MANAGER' && actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
-      throw new ForbiddenException('Insufficient permissions');
-    }
+    // Same authorization update()'s deactivation path uses (owner-protected, no
+    // self-deactivation, MANAGER target needs an OWNER/MANAGER actor).
+    this.assertCanDeactivate(user, actorRole, actorId);
 
     await this.prisma.marketingUser.update({
       where: { id: user.id },

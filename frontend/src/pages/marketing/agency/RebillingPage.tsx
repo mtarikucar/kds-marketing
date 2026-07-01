@@ -65,6 +65,18 @@ function RebillingPageInner() {
     return m;
   }, [locations]);
 
+  // A RebillCharge has no currency of its own — it belongs to a location, whose
+  // defaultCurrency may not be TRY. Map location → currency so the Charges tab
+  // formats each total in the sub-account's real currency (a USD charge must not
+  // render as ₺/TRY — a false conversion), matching the Plans tab + compute dialog.
+  const locCurrency = useMemo(() => {
+    const m = new Map<string, string>();
+    (locations ?? []).forEach((l) => {
+      if (l.defaultCurrency) m.set(l.id, l.defaultCurrency);
+    });
+    return m;
+  }, [locations]);
+
   const rows: LocRow[] = useMemo(
     () => (locations ?? []).map((l) => ({ ...l, plan: planByLoc.get(l.id) })),
     [locations, planByLoc],
@@ -159,7 +171,7 @@ function RebillingPageInner() {
     {
       id: 'total',
       header: t('agency.rebilling.total', { defaultValue: 'Total' }),
-      cell: ({ row }) => <span className="text-sm font-medium tabular-nums text-foreground">{formatMoney(row.original.totalAmount)}</span>,
+      cell: ({ row }) => <span className="text-sm font-medium tabular-nums text-foreground">{formatMoney(row.original.totalAmount, locCurrency.get(row.original.locationWorkspaceId))}</span>,
     },
     {
       accessorKey: 'status',

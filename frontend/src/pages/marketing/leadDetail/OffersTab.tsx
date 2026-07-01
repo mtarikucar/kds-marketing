@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { offerSchema, type OfferFormValues } from '../../../features/marketing/schemas';
-import { formatMoney } from '../../../lib/money';
+import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 import type { LeadOffer } from '../../../features/marketing/types';
 
 const offerStatusTone: Record<string, BadgeProps['tone']> = {
@@ -150,7 +150,7 @@ export default function OffersTab({
                     <div>
                       <span className="text-muted-foreground">Price:</span>{' '}
                       <span className="font-medium text-foreground">
-                        {formatMoney(offer.customPrice)}
+                        {formatMoney(offer.customPrice, asWorkspaceCurrency(offer.planCurrency))}
                       </span>
                     </div>
                   )}

@@ -56,6 +56,19 @@ describe('OffersTab — zero-value rendering', () => {
   });
 });
 
+describe('OffersTab — offer currency', () => {
+  // A LeadOffer carries planCurrency (from the plan snapshot; the app bills TRY OR
+  // USD — dual-currency packages). The price must render in the offer's own
+  // currency, not a hardcoded ₺ — a USD offer shown as "₺100" is a false conversion
+  // (same class as the rebilling/board fixes).
+  it('formats the price in the offer plan currency (USD), not a hardcoded ₺', () => {
+    renderTab([offer({ customPrice: 100, planCurrency: 'USD' } as Partial<LeadOffer>)]);
+    const price = screen.getByText(/100[.,]00/);
+    expect(price.textContent).toMatch(/\$/); // USD symbol
+    expect(price.textContent).not.toMatch(/₺/);
+  });
+});
+
 describe('OffersTab — send confirmation', () => {
   afterEach(() => vi.restoreAllMocks());
 

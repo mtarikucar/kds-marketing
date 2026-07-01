@@ -11,7 +11,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
-import { zonedParts, zonedWallTimeToUtcMs, parseHm } from './timezone-slots';
+import { zonedParts, zonedWallTimeToUtcMs, parseHm, formatInTimeZone } from './timezone-slots';
 import { buildIcs } from './ics.util';
 import { overlapsBlackout } from './blackout.util';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
@@ -95,19 +95,6 @@ function memberCoversSlot(
     if (s >= ws && s + slotMs <= we) return true;
   }
   return false;
-}
-
-/** Render an instant in an attendee's IANA timezone (falls back to UTC). */
-function formatInTz(d: Date, tz?: string | null): string {
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: tz || 'UTC',
-    }).format(d);
-  } catch {
-    return d.toUTCString();
-  }
 }
 
 /**
@@ -745,14 +732,16 @@ export class BookingService implements OnModuleInit {
 
     // A CONFIRMED booking triggers the calendar push, confirmation + reminders; a
     // PENDING (approval-required) booking just acknowledges receipt and defers all
-    // of that to approval (setStatus → CONFIRMED).
+    // of that to approval (setStatus → CONFIRMED). Times render in the calendar's
+    // timezone (not UTC) — a 14:00 Istanbul booking must not read "11:00 GMT".
     if (booking.status === 'CONFIRMED') {
       await this.afterConfirmed(workspaceId, cal, booking);
     } else if (booking.email) {
+      const when = formatInTimeZone(booking.startAt, (cal as any).timezone || 'Europe/Istanbul');
       this.email
         .sendPlainEmail(
           booking.email, `Booking received: ${cal.name || 'Booking'}`,
-          `Your booking request for ${booking.startAt.toUTCString()} is pending approval.`,
+          `Your booking request for ${when} is pending approval.`,
         )
         .catch(() => undefined);
     }
@@ -814,8 +803,15 @@ export class BookingService implements OnModuleInit {
    */
   private async afterConfirmed(
     workspaceId: string,
-    cal: { name: string | null; conferencing?: string },
-    booking: { id: string; email: string | null; notes: string | null; startAt: Date; endAt: Date },
+    cal: { name: string | null; conferencing?: string; timezone?: string },
+    booking: {
+      id: string;
+      email: string | null;
+      notes: string | null;
+      startAt: Date;
+      endAt: Date;
+      attendeeTimezone?: string | null;
+    },
   ): Promise<void> {
     let meetingUrl: string | null = null;
     const conferencing = cal.conferencing ?? 'NONE';
@@ -836,8 +832,13 @@ export class BookingService implements OnModuleInit {
     }
     if (booking.email) {
       const joinLine = meetingUrl ? `\nJoin: ${meetingUrl}` : '';
+      // Render in the attendee's timezone when captured, else the calendar's.
+      const when = formatInTimeZone(
+        booking.startAt,
+        booking.attendeeTimezone || cal.timezone || 'Europe/Istanbul',
+      );
       const body =
-        `Your booking is confirmed for ${booking.startAt.toUTCString()}.\n` +
+        `Your booking is confirmed for ${when}.\n` +
         `Calendar: ${cal.name || 'Booking'}${joinLine}`;
       const ics = buildIcs({
         uid: booking.id,
@@ -999,8 +1000,16 @@ export class BookingService implements OnModuleInit {
     if (!booking || booking.status !== 'CONFIRMED') return;
     const chans = channels ?? ['EMAIL'];
     const aud = audience ?? 'CUSTOMER';
-    // Customer-facing time is rendered in the attendee's timezone (fallback UTC).
-    const when = formatInTz(booking.startAt, booking.attendeeTimezone);
+    // Render in the attendee's timezone when captured, else the calendar's (not
+    // UTC), matching the confirmation email.
+    const cal = await this.prisma.bookingCalendar.findFirst({
+      where: { id: booking.calendarId, workspaceId },
+      select: { timezone: true },
+    });
+    const when = formatInTimeZone(
+      booking.startAt,
+      booking.attendeeTimezone || cal?.timezone || 'Europe/Istanbul',
+    );
     const joinLine = booking.meetingUrl ? `\nJoin: ${booking.meetingUrl}` : '';
 
     if ((aud === 'CUSTOMER' || aud === 'BOTH') && chans.includes('EMAIL') && booking.email) {

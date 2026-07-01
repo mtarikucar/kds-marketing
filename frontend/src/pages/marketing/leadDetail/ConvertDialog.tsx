@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/Dialog';
-import { formatMoney } from '../../../lib/money';
+import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 import type { ConvertLeadPayload } from '../../../features/marketing/api/leads.service';
 import type { ConvertDialogState } from './useConvertDialog';
 
@@ -161,7 +161,7 @@ export default function ConvertDialog({ state, fmtDate, onSubmit, isPending }: C
                   <option value="">No offer</option>
                   {sentOffers.map((o) => (
                     <option key={o.id} value={o.id}>
-                      {o.customPrice ? formatMoney(o.customPrice) : 'Standard'}{' '}
+                      {o.customPrice ? formatMoney(o.customPrice, asWorkspaceCurrency(o.planCurrency)) : 'Standard'}{' '}
                       {o.discount ? `(${o.discount}% off)` : ''} — {fmtDate(o.createdAt)}
                     </option>
                   ))}

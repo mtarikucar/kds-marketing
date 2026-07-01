@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import RebillingPage from './RebillingPage';
+import marketingApi from '../../../features/marketing/api/marketingApi';
 
 const LOCATION = {
   id: 'loc1',
@@ -92,6 +93,33 @@ describe('Agency RebillingPage', () => {
   it('mounts and renders the rebilling heading', async () => {
     render(<RebillingPage />, { wrapper });
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  // A RebillCharge carries no currency of its own — it belongs to a location, whose
+  // defaultCurrency may be USD/EUR (not the TRY default). The Charges tab total must
+  // be formatted in the LOCATION's currency, or a $100 charge renders as "₺100" (a
+  // false conversion — the same class the board/forecast guard). The sibling Plans
+  // tab + ComputeChargeDialog already pass the location currency.
+  it('renders a charge total in the location currency, not a hardcoded ₺', async () => {
+    const USD_LOCATION = { ...LOCATION, id: 'loc-usd', name: 'USD Loc', defaultCurrency: 'USD' };
+    const USD_CHARGE = { ...DRAFT_CHARGE, id: 'ch-usd', locationWorkspaceId: 'loc-usd', totalAmount: '100.00' };
+    (marketingApi.get as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url === '/auth/profile') {
+        return Promise.resolve({ data: { workspace: { id: 'ws1', slug: 'a', name: 'A', kind: 'AGENCY' } } });
+      }
+      if (url === '/agency/locations') return Promise.resolve({ data: [USD_LOCATION] });
+      if (url === '/agency/rebilling/charges') return Promise.resolve({ data: [USD_CHARGE] });
+      return Promise.resolve({ data: [] });
+    });
+    const user = userEvent.setup();
+    render(<RebillingPage />, { wrapper });
+    await screen.findByRole('heading', { level: 1 });
+
+    await user.click(screen.getByRole('tab', { name: /charges/i }));
+
+    const total = await screen.findByText(/100[.,]00/);
+    expect(total.textContent).toMatch(/\$/); // USD symbol, not the TRY default
+    expect(total.textContent).not.toMatch(/₺/);
   });
 
   it('shows the env-gated "rebilling not configured" state instead of crashing', async () => {

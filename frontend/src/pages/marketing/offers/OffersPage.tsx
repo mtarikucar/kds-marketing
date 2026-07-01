@@ -9,7 +9,7 @@ import marketingApi from '../../../features/marketing/api/marketingApi';
 import type { LeadOffer, Lead, PaginatedResponse } from '../../../features/marketing/types';
 import type { OfferFormValues } from '../../../features/marketing/schemas';
 import { fmtDate } from '../../../features/marketing/utils/format';
-import { formatMoney } from '../../../lib/money';
+import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -260,10 +260,10 @@ export default function OffersPage() {
       {
         accessorKey: 'customPrice',
         header: t('offers.table.amount'),
-        cell: ({ getValue }) => {
+        cell: ({ getValue, row }) => {
           const val = getValue<number | undefined>();
           return val != null ? (
-            <span className="text-sm text-foreground">{formatMoney(val)}</span>
+            <span className="text-sm text-foreground">{formatMoney(val, asWorkspaceCurrency(row.original.planCurrency))}</span>
           ) : (
             <span className="text-muted-foreground">—</span>
           );
