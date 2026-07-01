@@ -44,6 +44,8 @@ export class CreateCalendarDto {
   @IsOptional() @IsInt() @Min(5) @Max(480) slotMinutes?: number;
   @IsOptional() @IsInt() @Min(0) @Max(240) bufferMinutes?: number;
   @IsOptional() @IsString() @MaxLength(64) timezone?: string;
+  /** Video-conferencing provider attached to this calendar's bookings. */
+  @IsOptional() @IsString() @IsIn(['NONE', 'GOOGLE_MEET', 'TEAMS']) conferencing?: string;
 }
 export class UpdateCalendarDto extends CreateCalendarDto {
   @IsOptional() declare name: string;

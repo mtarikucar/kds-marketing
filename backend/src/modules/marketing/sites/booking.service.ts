@@ -22,6 +22,7 @@ import { OutlookCalendarSyncService } from '../integrations/outlook-calendar-syn
 const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
 const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'];
+const CONFERENCING = ['NONE', 'GOOGLE_MEET', 'TEAMS'];
 
 /**
  * Booking calendars + slot picking. Availability windows (per weekday, HH:mm)
@@ -72,6 +73,7 @@ export class BookingService implements OnModuleInit {
           slotMinutes: dto.slotMinutes ?? 30,
           bufferMinutes: dto.bufferMinutes ?? 0,
           timezone: dto.timezone ?? 'Europe/Istanbul',
+          conferencing: CONFERENCING.includes(dto.conferencing) ? dto.conferencing : 'NONE',
         },
       })
       // slug is unique per (workspaceId, slug); a duplicate name/slug is a clean
@@ -91,6 +93,7 @@ export class BookingService implements OnModuleInit {
       if (dto[k] !== undefined) data[k] = dto[k];
     }
     if (dto.type !== undefined && CALENDAR_TYPES.includes(dto.type)) data.type = dto.type;
+    if (dto.conferencing !== undefined && CONFERENCING.includes(dto.conferencing)) data.conferencing = dto.conferencing;
     if (dto.capacity !== undefined) data.capacity = this.normCapacity(dto.capacity);
     if (dto.slug !== undefined) data.slug = this.slugify(dto.slug);
     return this.prisma.bookingCalendar

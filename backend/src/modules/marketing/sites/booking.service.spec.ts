@@ -281,4 +281,23 @@ describe('BookingService', () => {
       await expect(svc.create(WS, { name: 'X' })).rejects.toThrow('boom');
     });
   });
+
+  describe('conferencing config', () => {
+    it('persists a valid conferencing value on create, defaulting invalid to NONE', async () => {
+      prisma.bookingCalendar.create = jest.fn().mockResolvedValue({ id: 'c1' });
+      await svc.create(WS, { name: 'Sales', conferencing: 'GOOGLE_MEET' });
+      expect(prisma.bookingCalendar.create.mock.calls[0][0].data.conferencing).toBe('GOOGLE_MEET');
+      await svc.create(WS, { name: 'X', conferencing: 'BOGUS' });
+      expect(prisma.bookingCalendar.create.mock.calls[1][0].data.conferencing).toBe('NONE');
+    });
+
+    it('updates conferencing only when a valid value is provided', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar());
+      prisma.bookingCalendar.update = jest.fn().mockResolvedValue({ id: 'c1' });
+      await svc.update(WS, 'c1', { conferencing: 'TEAMS' });
+      expect(prisma.bookingCalendar.update.mock.calls[0][0].data.conferencing).toBe('TEAMS');
+      await svc.update(WS, 'c1', { conferencing: 'BOGUS' });
+      expect(prisma.bookingCalendar.update.mock.calls[1][0].data.conferencing).toBeUndefined();
+    });
+  });
 });
