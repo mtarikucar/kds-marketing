@@ -2753,6 +2753,9 @@ model GoogleCalendarConnection {
   resourceId        String? // Google watch resource id (push webhook)
   channelToken      String? // per-channel verification nonce (validated on the incoming webhook)
   channelExpiration DateTime? // when the Google watch channel expires (drives the renewal cron)
+  // Space-separated OAuth scopes Google granted (Phase 4). Presence of
+  // meetings.space.created gates advanced Meet (recording/transcript/co-host).
+  scopes            String?
   enabled           Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

@@ -26,6 +26,7 @@ function makeSvc() {
     hostResolver as any,
     scheduledJobs as any,
     runner as any,
+    { available: () => false, createConfiguredSpace: jest.fn() } as any,
   );
   return { svc, prisma };
 }

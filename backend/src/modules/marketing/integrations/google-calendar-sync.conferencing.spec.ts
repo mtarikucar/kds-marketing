@@ -53,6 +53,7 @@ function makeSvc(overrides: any = {}) {
   };
   const scheduledJobs = { schedule: jest.fn() };
   const runner = { registerHandler: jest.fn() };
+  const meetSpaces = { available: () => false, createConfiguredSpace: jest.fn() };
   const svc = new GoogleCalendarSyncService(
     prisma,
     bus as any,
@@ -60,8 +61,9 @@ function makeSvc(overrides: any = {}) {
     hostResolver as any,
     scheduledJobs as any,
     runner as any,
+    meetSpaces as any,
   );
-  return { svc, prisma, scheduledJobs, hostResolver };
+  return { svc, prisma, scheduledJobs, hostResolver, meetSpaces };
 }
 
 describe('GoogleCalendarSyncService.pushBooking — conferencing', () => {

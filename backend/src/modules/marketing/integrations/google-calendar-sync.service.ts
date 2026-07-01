@@ -19,6 +19,11 @@ import {
   GoogleCalendarConnectionRow,
 } from './google-calendar.service';
 import { HostResolverService } from './conferencing/host-resolver.service';
+import {
+  GoogleMeetSpacesService,
+  parseMeetSpaceConfig,
+  MeetSpace,
+} from './conferencing/google-meet-spaces.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import {
   ScheduledJobRunnerService,
@@ -124,6 +129,7 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     private readonly hostResolver: HostResolverService,
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
+    private readonly meetSpaces: GoogleMeetSpacesService,
   ) {}
 
   onModuleInit(): void {
@@ -201,7 +207,7 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     // owner's, then the workspace's active one).
     const calCfg = await this.prisma.bookingCalendar.findFirst({
       where: { id: booking.calendarId, workspaceId },
-      select: { conferencing: true },
+      select: { conferencing: true, conferenceConfig: true },
     });
     const wantsMeet = calCfg?.conferencing === 'GOOGLE_MEET';
     const conn = await this.resolveGoogleConnection(
@@ -210,6 +216,20 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       wantsMeet,
     );
     if (!conn) return null;
+
+    // Advanced Meet (Phase 4): when the calendar requests recording/transcript/
+    // moderation AND the host connection has the advanced scope, provision a
+    // configured Meet space and ATTACH it to the event (instead of the standard
+    // conferenceData.createRequest). Inert → null → falls back to the standard.
+    let advancedSpace: MeetSpace | null = null;
+    if (wantsMeet) {
+      const spaceCfg = parseMeetSpaceConfig((calCfg as any)?.conferenceConfig);
+      if (spaceCfg && this.meetSpaces.available(conn)) {
+        advancedSpace = await this.meetSpaces
+          .createConfiguredSpace(conn, spaceCfg)
+          .catch(() => null);
+      }
+    }
 
     const body: Record<string, unknown> = {
       summary: booking.name || 'Booking',
@@ -223,9 +243,23 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       extendedProperties: {
         private: { kdsBookingId: booking.id, kdsWorkspaceId: workspaceId },
       },
-      // Request a Meet conference (requestId stable per booking ⇒ retries never
-      // spawn a duplicate). Needs `?conferenceDataVersion=1` on the write.
-      ...(wantsMeet
+      // Advanced: attach the pre-created configured space (no createRequest).
+      // Standard: request a fresh Meet (requestId stable per booking ⇒ retries
+      // never duplicate). Both need `?conferenceDataVersion=1` on the write.
+      ...(wantsMeet && advancedSpace
+        ? {
+            conferenceData: {
+              conferenceId: advancedSpace.meetingCode || undefined,
+              conferenceSolution: {
+                key: { type: 'hangoutsMeet' },
+                name: 'Google Meet',
+              },
+              entryPoints: [
+                { entryPointType: 'video', uri: advancedSpace.meetingUri },
+              ],
+            },
+          }
+        : wantsMeet
         ? {
             conferenceData: {
               createRequest: {
@@ -279,9 +313,20 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
           });
         }
       }
-      // Persist the Meet join link (or queue a follow-up when Google is still
-      // provisioning the conference and returned it as pending).
-      if (wantsMeet) {
+      // Persist the Meet join link. For an advanced space we already have the
+      // configured URI; otherwise read it back (or queue a follow-up when Google
+      // is still provisioning a standard conference).
+      if (wantsMeet && advancedSpace) {
+        await this.prisma.booking.updateMany({
+          where: { id: booking.id, workspaceId },
+          data: {
+            meetingUrl: advancedSpace.meetingUri,
+            conferenceProvider: 'GOOGLE_MEET',
+            conferenceId: advancedSpace.meetingCode || null,
+            conferenceStatus: 'created',
+          },
+        });
+      } else if (wantsMeet) {
         await this.persistConference(workspaceId, booking.id, event);
       }
       return event.id ?? booking.googleEventId ?? null;

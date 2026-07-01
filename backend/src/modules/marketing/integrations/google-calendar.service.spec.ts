@@ -346,6 +346,7 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
       { resolve: jest.fn().mockResolvedValue(null) } as never,
       { schedule: jest.fn() } as never,
       { registerHandler: jest.fn() } as never,
+      { available: () => false, createConfiguredSpace: jest.fn() } as never,
     );
     safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
     // Make getFreshAccessToken trivial: stub it to return a constant.

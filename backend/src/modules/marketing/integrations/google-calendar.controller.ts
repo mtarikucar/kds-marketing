@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsBooleanString, MaxLength } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -35,6 +35,11 @@ class ConnectQueryDto {
   @IsString()
   @MaxLength(256)
   calendarId?: string;
+
+  /** 'true' to also request the advanced Meet-space scope (recording/transcript). */
+  @IsOptional()
+  @IsBooleanString()
+  advanced?: string;
 }
 
 /**
@@ -77,7 +82,12 @@ export class GoogleCalendarController {
     @Query() q: ConnectQueryDto,
     @CurrentMarketingUser() u: MarketingUserPayload,
   ) {
-    const { url } = this.svc.getAuthUrl(u.workspaceId, u.id, q.calendarId);
+    const { url } = this.svc.getAuthUrl(
+      u.workspaceId,
+      u.id,
+      q.calendarId,
+      q.advanced === 'true',
+    );
     return { url };
   }
 
