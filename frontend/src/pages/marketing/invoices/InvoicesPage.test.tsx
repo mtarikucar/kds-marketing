@@ -25,11 +25,11 @@ vi.mock('react-i18next', () => ({
 // InvoiceForm is a heavy sub-component irrelevant to the list-action test.
 vi.mock('./InvoiceForm', () => ({ InvoiceForm: () => null }));
 
-const invoice = (id: string, number: string) => ({
+const invoice = (id: string, number: string, currency = 'TRY') => ({
   id,
   number,
   total: 9900,
-  currency: 'USD',
+  currency,
   status: 'SENT',
   createdAt: '2026-06-21T00:00:00Z',
 });
@@ -67,5 +67,21 @@ describe('InvoicesPage — per-invoice action guards', () => {
     // invoice's pay button stays actionable (guard scoped to i1, not shared).
     expect(after[0]).toBeDisabled();
     expect(after[1]).not.toBeDisabled();
+  });
+
+  // Store-credit wallets are TRY-only; the backend refuses a cross-currency debit,
+  // so a non-TRY invoice must NOT offer "Pay from store credit" (a doomed action).
+  it('hides the pay-from-wallet button for a non-TRY invoice', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/invoices') return Promise.resolve({ data: [invoice('i1', 'INV-1', 'TRY'), invoice('i2', 'INV-2', 'USD')] });
+      if (url === '/invoices/psp') return Promise.resolve({ data: { provider: 'MANUAL' } });
+      return Promise.resolve({ data: {} });
+    });
+    render(<InvoicesPage />, { wrapper });
+
+    // Both rows load…
+    expect(await screen.findByText('INV-2')).toBeInTheDocument();
+    // …but only the TRY invoice offers pay-from-wallet.
+    expect(screen.getAllByTitle('Pay from store credit')).toHaveLength(1);
   });
 });
