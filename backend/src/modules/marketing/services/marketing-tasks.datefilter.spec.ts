@@ -25,3 +25,36 @@ describe('MarketingTasksService.findAll — dueDate range', () => {
     expect(where.dueDate.lte.toISOString()).toBe('2026-06-27T23:59:59.999Z');
   });
 });
+
+// findToday built its "today" window from server-LOCAL midnight (setHours), but the
+// API runs UTC — so a Turkey (UTC+3) rep's Tasks→Today missed/mis-showed tasks due
+// in the first offset-hours of the local day. It must bound the day in the
+// WORKSPACE's timezone (mirrors the dashboard fix). Asserted with Asia/Tokyo (UTC+9,
+// no DST) so the expectation is wrong for BOTH a UTC and a Turkey test runner.
+describe('MarketingTasksService.findToday — workspace-timezone day window', () => {
+  const WS = 'ws-1';
+  let prisma: MockPrismaClient;
+  let svc: MarketingTasksService;
+
+  beforeEach(() => {
+    prisma = mockPrismaClient();
+    svc = new MarketingTasksService(prisma as any, {} as any, {} as any);
+    prisma.marketingTask.findMany.mockResolvedValue([] as any);
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it('bounds "today" in the workspace timezone, not server-local', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-01T20:00:00.000Z')); // Tokyo: Jul 2 05:00
+    (prisma.workspace.findUnique as jest.Mock).mockResolvedValue({ timezone: 'Asia/Tokyo' });
+
+    await svc.findToday(WS, 'u1', 'MANAGER');
+
+    expect(prisma.workspace.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: WS }, select: { timezone: true } }),
+    );
+    // Tokyo day Jul 2 = [2026-07-01T15:00Z, 2026-07-02T15:00Z).
+    const where = (prisma.marketingTask.findMany as jest.Mock).mock.calls[0][0].where;
+    expect(where.dueDate.gte.toISOString()).toBe('2026-07-01T15:00:00.000Z');
+    expect(where.dueDate.lt.toISOString()).toBe('2026-07-02T15:00:00.000Z');
+  });
+});

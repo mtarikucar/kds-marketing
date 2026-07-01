@@ -9,6 +9,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateTaskDto } from '../dto/create-task.dto';
 import { UpdateTaskDto } from '../dto/update-task.dto';
 import { TaskFilterDto } from '../dto/task-filter.dto';
+import { zonedParts, zonedWallTimeToUtcMs } from '../sites/timezone-slots';
 import { MarketingNotificationsService } from './marketing-notifications.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
@@ -141,10 +142,18 @@ export class MarketingTasksService {
   }
 
   async findToday(workspaceId: string, userId: string, userRole: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // Bound "today" in the WORKSPACE's timezone, not the server's local time. The
+    // API runs UTC, so `setHours(0,0,0,0)` yielded UTC — not e.g. Istanbul — day
+    // edges, dropping/duplicating tasks due in the first offset-hours of the local
+    // day for a Turkey (UTC+3) rep. Mirrors the dashboard periodBounds fix.
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { timezone: true },
+    });
+    const tz = ws?.timezone || 'UTC';
+    const { y, mo, d } = zonedParts(Date.now(), tz);
+    const today = new Date(zonedWallTimeToUtcMs(y, mo, d, 0, 0, tz));
+    const tomorrow = new Date(zonedWallTimeToUtcMs(y, mo, d + 1, 0, 0, tz));
 
     return this.prisma.marketingTask.findMany({
       where: {
