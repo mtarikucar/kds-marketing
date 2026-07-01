@@ -207,6 +207,7 @@
   "validation": {
     "required": "Required",
     "percentRange": "Percent value must be between 1 and 100",
+    "percentMax": "Cannot exceed 100%",
     "emailInvalid": "Please enter a valid email",
     "phoneInvalid": "Please enter a valid phone number",
     "minLength": "Minimum {{count}} characters",

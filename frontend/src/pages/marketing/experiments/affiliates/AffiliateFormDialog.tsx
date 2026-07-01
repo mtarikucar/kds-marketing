@@ -175,6 +175,7 @@ export function AffiliateFormDialog({ open, onOpenChange, affiliate, onSubmit, i
                   type="number"
                   step="0.01"
                   min={0}
+                  max={commissionType === 'PERCENT' ? 100 : undefined}
                   aria-describedby={describedBy}
                   aria-invalid={invalid}
                   {...form.register('commissionValue')}
