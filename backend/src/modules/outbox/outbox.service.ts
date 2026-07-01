@@ -87,8 +87,12 @@ export class OutboxService {
     // collapses the common sequential-retry case (webhook re-delivery, retried
     // HTTP call) into a single row by short-circuiting on an existing key.
     if (opts.idempotencyKey) {
+      // Scope the dedup by tenantId: idempotency is PER-TENANT. Not all sanctioned
+      // key shapes are tenant-prefixed (`{paymentRef}`, `{eventId}`), so a bare
+      // idempotencyKey lookup could match ANOTHER tenant's row — the 2nd tenant's
+      // append would return the 1st's id and its event would be silently dropped.
       const existing = await client.outboxEvent.findFirst({
-        where: { idempotencyKey: opts.idempotencyKey },
+        where: { idempotencyKey: opts.idempotencyKey, tenantId: opts.tenantId ?? null },
         select: { id: true },
       });
       if (existing) return existing.id;
@@ -120,7 +124,7 @@ export class OutboxService {
         (e as { code?: string })?.code === "P2002"
       ) {
         const winner = await client.outboxEvent.findFirst({
-          where: { idempotencyKey: opts.idempotencyKey },
+          where: { idempotencyKey: opts.idempotencyKey, tenantId: opts.tenantId ?? null },
           select: { id: true },
         });
         if (winner) return winner.id;

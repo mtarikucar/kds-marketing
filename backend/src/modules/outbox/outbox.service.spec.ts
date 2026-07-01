@@ -93,9 +93,38 @@ describe('OutboxService.append', () => {
     });
     expect(id).toBe('existing-id');
     expect(prisma.outboxEvent.findFirst).toHaveBeenCalledWith({
-      where: { idempotencyKey: 'dup-key' },
+      where: { idempotencyKey: 'dup-key', tenantId: null },
       select: { id: true },
     });
+    expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+  });
+
+  // Idempotency is PER-TENANT. The dedup pre-check must scope by tenantId — else
+  // two tenants emitting the SAME key collide: tenant B's append finds tenant A's
+  // row and returns A's id, silently DROPPING B's event (cross-tenant leak/loss).
+  it('scopes the dedup pre-check by tenantId', async () => {
+    prisma.outboxEvent.findFirst.mockResolvedValue(null);
+    await service.append({
+      type: 'marketing.lead.converted.v1',
+      payload: {},
+      tenantId: 'tenant-B',
+      idempotencyKey: 'shared-key',
+    });
+    expect(prisma.outboxEvent.findFirst).toHaveBeenCalledWith({
+      where: { idempotencyKey: 'shared-key', tenantId: 'tenant-B' },
+      select: { id: true },
+    });
+  });
+
+  it('still dedups within the SAME tenant (returns the existing id)', async () => {
+    prisma.outboxEvent.findFirst.mockResolvedValue({ id: 'same-tenant-existing' });
+    const id = await service.append({
+      type: 'payment.succeeded.v1',
+      payload: {},
+      tenantId: 'tenant-A',
+      idempotencyKey: 'k',
+    });
+    expect(id).toBe('same-tenant-existing');
     expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
   });
 
