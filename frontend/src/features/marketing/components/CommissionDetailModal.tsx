@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDate, fmtDateTime } from '../utils/format';
+import { formatMoney, type WorkspaceCurrency } from '../../../lib/money';
 import {
   Dialog,
   DialogContent,
@@ -96,6 +97,11 @@ function typeTone(t: string): 'primary' | 'success' | 'info' | 'neutral' {
 interface Props {
   commissionId: string | null;
   onClose: () => void;
+  /** The workspace currency — commissions have no per-row currency, so amounts
+   *  are formatted in the workspace's currency, matching CommissionsPage's list.
+   *  Without this the modal hardcoded ₺ and showed a false symbol on a non-TRY
+   *  workspace (the list already uses formatMoney with the dynamic currency). */
+  currency?: WorkspaceCurrency;
 }
 
 /**
@@ -108,7 +114,7 @@ interface Props {
  * CommissionsPage already calls; they invalidate the same query keys
  * so the parent table refreshes on close.
  */
-export default function CommissionDetailModal({ commissionId, onClose }: Props) {
+export default function CommissionDetailModal({ commissionId, onClose, currency = 'TRY' }: Props) {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
@@ -208,7 +214,7 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
               {/* Amount + type + status headline */}
               <div className="flex flex-wrap items-baseline gap-3">
                 <span className="font-display text-h1 text-foreground tabular-nums">
-                  ₺{amount.toFixed(2)}
+                  {formatMoney(amount, currency)}
                 </span>
                 <Badge tone={typeTone(data.type)}>
                   {t(`commissionType.${data.type}`, data.type)}
@@ -307,8 +313,8 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
                   <dd className="mt-0.5 font-mono text-xs text-foreground">
                     {paidAmount != null && commissionRate != null ? (
                       <>
-                        ₺{paidAmount.toFixed(2)} × {(commissionRate * 100).toFixed(1)}% = ₺
-                        {amount.toFixed(2)}
+                        {formatMoney(paidAmount, currency)} × {(commissionRate * 100).toFixed(1)}% ={' '}
+                        {formatMoney(amount, currency)}
                       </>
                     ) : (
                       <span className="text-muted-foreground">
@@ -366,7 +372,7 @@ export default function CommissionDetailModal({ commissionId, onClose }: Props) 
                   {(data.auditLog ?? []).map((entry, idx) => (
                     <AuditEntry
                       key={`${entry.action}-${entry.at}-${idx}`}
-                      label={describeAuditEntry(entry, t)}
+                      label={describeAuditEntry(entry, t, currency)}
                       at={entry.at}
                       actorName={
                         entry.actor
@@ -447,6 +453,7 @@ function describeAuditEntry(
     nextAmount?: string;
   },
   t: any,
+  currency: WorkspaceCurrency,
 ): string {
   if (entry.action === 'approve') {
     return t('commission.history.approved', 'Onaylandı');
@@ -455,9 +462,8 @@ function describeAuditEntry(
     return t('commission.history.paid', 'Ödendi olarak işaretlendi');
   }
   if (entry.action === 'amount') {
-    const prev = entry.prevAmount ?? '?';
-    const next = entry.nextAmount ?? '?';
-    return `${t('commission.history.amount', 'Tutar değiştirildi')} (₺${prev} → ₺${next})`;
+    const fmt = (v?: string) => (v == null ? '?' : formatMoney(v, currency));
+    return `${t('commission.history.amount', 'Tutar değiştirildi')} (${fmt(entry.prevAmount)} → ${fmt(entry.nextAmount)})`;
   }
   return entry.action;
 }

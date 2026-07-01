@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CommissionDetailModal from './CommissionDetailModal';
+import { formatMoney } from '../../../lib/money';
 
 const get = vi.fn();
 vi.mock('../api/marketingApi', () => ({
@@ -60,7 +61,7 @@ describe('CommissionDetailModal — amount editor reset', () => {
       { wrapper },
     );
 
-    await screen.findByText('₺100.00');
+    await screen.findByText(formatMoney(100, 'TRY'));
     // Open the inline editor for cA and type a new amount.
     await user.click(screen.getByText('Tutarı düzelt'));
     const input = screen.getByRole('spinbutton') as HTMLInputElement;
@@ -69,11 +70,23 @@ describe('CommissionDetailModal — amount editor reset', () => {
 
     // Switch the modal to commission cB.
     rerender(<CommissionDetailModal commissionId="cB" onClose={() => undefined} />);
-    await screen.findByText('₺200.00');
+    await screen.findByText(formatMoney(200, 'TRY'));
 
     // The editor must be closed (no stale 500 input carried from cA).
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
     // And the edit affordance is offered fresh for cB.
     expect(screen.getByText('Tutarı düzelt')).toBeInTheDocument();
+  });
+
+  // The modal has no per-row currency, so it must format amounts in the workspace
+  // currency (passed by CommissionsPage, which does the same in its list). It used
+  // to hardcode ₺, showing a false symbol on a non-TRY workspace.
+  it('formats the amount in the workspace currency (not a hardcoded ₺)', async () => {
+    render(
+      <CommissionDetailModal commissionId="cA" onClose={() => undefined} currency="USD" />,
+      { wrapper },
+    );
+    await screen.findByText(formatMoney(100, 'USD'));
+    expect(screen.queryByText('₺100.00')).not.toBeInTheDocument();
   });
 });

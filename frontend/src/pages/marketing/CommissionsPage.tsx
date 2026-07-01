@@ -318,6 +318,7 @@ export default function CommissionsPage() {
       <CommissionDetailModal
         commissionId={selectedId}
         onClose={() => setSelectedId(null)}
+        currency={currency}
       />
     </div>
   );
