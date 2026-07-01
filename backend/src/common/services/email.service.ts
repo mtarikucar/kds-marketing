@@ -249,6 +249,51 @@ export class EmailService {
   }
 
   /**
+   * Send a plain-text transactional email with an attached iCalendar invite
+   * (`.ics`). Used by booking confirmations so the recipient can one-click add
+   * the appointment (with its Meet/Teams join link) to their calendar. Same
+   * mock/timeout behaviour as sendPlainEmail; best-effort (returns false on
+   * failure rather than throwing).
+   */
+  async sendPlainEmailWithIcs(
+    to: string,
+    subject: string,
+    body: string,
+    ics: string,
+    fromOverride?: EmailFrom,
+  ): Promise<boolean> {
+    try {
+      if (!this.transporter) {
+        this.logger.log(`[EMAIL MOCK] To: ${maskEmail(to)}`);
+        this.logger.log(`[EMAIL MOCK] Subject: ${subject}`);
+        this.logger.log(
+          `[EMAIL MOCK] Body length: ${body.length} chars, ics: ${ics.length} chars`,
+        );
+        return true;
+      }
+      await withTimeout(
+        this.transporter.sendMail({
+          from: this.fromHeader(fromOverride),
+          to,
+          subject,
+          text: body,
+          icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: ics },
+          ...(fromOverride?.dkim ? { dkim: fromOverride.dkim } : {}),
+        }),
+        25_000,
+        `sendMail to ${maskEmail(to)}`,
+      );
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send ics email to ${maskEmail(to)}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return false;
+    }
+  }
+
+  /**
    * Compile Handlebars template. Iter-98: first call per templateName
    * compiles + caches; subsequent calls skip the disk read and the
    * compile. Misses still throw — auth flows depend on the loud error.

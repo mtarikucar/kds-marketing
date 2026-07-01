@@ -37,7 +37,10 @@ describe('BookingService', () => {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     outbox = { append: jest.fn().mockResolvedValue('e') };
-    const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
+    const email = {
+      sendPlainEmail: jest.fn().mockResolvedValue(true),
+      sendPlainEmailWithIcs: jest.fn().mockResolvedValue(true),
+    };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };

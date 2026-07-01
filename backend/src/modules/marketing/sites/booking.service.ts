@@ -12,6 +12,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { zonedParts, zonedWallTimeToUtcMs, parseHm } from './timezone-slots';
+import { buildIcs } from './ics.util';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
@@ -436,12 +437,47 @@ export class BookingService implements OnModuleInit {
       return created;
     });
 
-    // Confirmation email + reminder (best-effort, outside the tx).
+    // Push the new booking to a connected Google / Outlook calendar (best-effort,
+    // inert when unconfigured); the BookingCreated domain event also drives both,
+    // so a missed direct call self-heals. For a CONFERENCING calendar we AWAIT
+    // the relevant push so the meeting link is provisioned + persisted before we
+    // send the confirmation (the awaited call is the primary; the later domain
+    // event 409-adopts). Non-conferencing calendars keep fire-and-forget.
+    let meetingUrl: string | null = null;
+    const conferencing = (cal as any).conferencing ?? 'NONE';
+    if (conferencing === 'GOOGLE_MEET') {
+      await this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    } else if (conferencing === 'TEAMS') {
+      await this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    } else {
+      this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+      this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    }
+    if (conferencing !== 'NONE') {
+      const fresh = await this.prisma.booking.findFirst({
+        where: { id: booking.id, workspaceId },
+        select: { meetingUrl: true },
+      });
+      meetingUrl = fresh?.meetingUrl ?? null;
+    }
+
+    // Confirmation email + ICS invite + reminder (best-effort, outside the tx).
     if (booking.email) {
-      this.email.sendPlainEmail(
-        booking.email, `Booking confirmed: ${cal.name}`,
-        `Your booking is confirmed for ${start.toUTCString()}.\nCalendar: ${cal.name}`,
-      ).catch(() => undefined);
+      const joinLine = meetingUrl ? `\nJoin: ${meetingUrl}` : '';
+      const body =
+        `Your booking is confirmed for ${start.toUTCString()}.\n` +
+        `Calendar: ${cal.name}${joinLine}`;
+      const ics = buildIcs({
+        uid: booking.id,
+        start,
+        end,
+        summary: cal.name || 'Booking',
+        description: booking.notes ?? undefined,
+        joinUrl: meetingUrl ?? undefined,
+      });
+      this.email
+        .sendPlainEmailWithIcs(booking.email, `Booking confirmed: ${cal.name}`, body, ics)
+        .catch(() => undefined);
     }
     const remindAt = new Date(start.getTime() - 3600_000);
     if (remindAt.getTime() > Date.now()) {
@@ -450,11 +486,6 @@ export class BookingService implements OnModuleInit {
         payload: { workspaceId, bookingId: booking.id },
       });
     }
-    // Push the new booking to a connected Google / Outlook calendar (best-effort,
-    // inert when unconfigured); the BookingCreated domain event also drives both,
-    // so a missed direct call self-heals.
-    this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
-    this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
   }
@@ -509,9 +540,10 @@ export class BookingService implements OnModuleInit {
     const { workspaceId, bookingId } = job.payload;
     const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
     if (!booking || booking.status !== 'CONFIRMED' || !booking.email) return;
+    const joinLine = booking.meetingUrl ? `\nJoin: ${booking.meetingUrl}` : '';
     await this.email.sendPlainEmail(
       booking.email, 'Reminder: your booking is soon',
-      `This is a reminder for your booking at ${booking.startAt.toUTCString()}.`,
+      `This is a reminder for your booking at ${booking.startAt.toUTCString()}.${joinLine}`,
     ).catch(() => undefined);
   }
 
