@@ -25,6 +25,7 @@ describe('InvoicesService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       workspacePspConfig: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn().mockResolvedValue({}) },
+      customerWallet: { findUnique: jest.fn().mockResolvedValue({ currency: 'TRY' }) },
       $transaction: jest.fn((fn: any) => fn(prisma)),
     };
     outbox = { append: jest.fn().mockResolvedValue('e') };
@@ -101,6 +102,18 @@ describe('InvoicesService', () => {
       await expect(svc.payWithWallet(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
       prisma.invoice.findFirst.mockResolvedValueOnce({ id: 'inv1', status: 'SENT', leadId: null, total: 5000 });
       await expect(svc.payWithWallet(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // The wallet is single-currency (TRY). Paying a non-TRY invoice from it would
+    // debit the invoice's minor units as if they were the wallet's — draining store
+    // credit at the wrong (unconverted) amount and marking it PAID. Refuse it.
+    it('refuses to pay a non-TRY invoice from a TRY wallet (no cross-currency debit)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+      prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, status: 'SENT', leadId: 'l1', total: 10000, number: 'INV-1', currency: 'USD' });
+      prisma.customerWallet.findUnique.mockResolvedValue({ currency: 'TRY' });
+      await expect(svc.payWithWallet(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(walletMock.debit).not.toHaveBeenCalled();
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
     });
   });
 

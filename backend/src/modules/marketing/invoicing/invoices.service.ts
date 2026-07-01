@@ -157,6 +157,21 @@ export class InvoicesService {
     if (!inv.leadId) throw new BadRequestException('Invoice has no contact wallet to charge');
     if (inv.total <= 0) throw new BadRequestException('Nothing to pay');
     const leadId = inv.leadId;
+    // The store-credit wallet is single-currency (its own `currency`, default TRY),
+    // but `total` is in the INVOICE's minor units — debiting a USD invoice's cents
+    // from a TRY wallet would drain store credit at the wrong (unconverted) amount
+    // and mark it PAID. There's no FX here, so refuse a currency mismatch (mirrors
+    // the PayTR "collects TRY only" guard; Stripe threads inv.currency).
+    const wallet = await this.prisma.customerWallet.findUnique({
+      where: { workspaceId_leadId: { workspaceId, leadId } },
+      select: { currency: true },
+    });
+    const walletCurrency = wallet?.currency ?? 'TRY';
+    if (inv.currency !== walletCurrency) {
+      throw new BadRequestException(
+        `This invoice is in ${inv.currency} but the contact's wallet holds ${walletCurrency} — pay it another way`,
+      );
+    }
     // Claim-then-charge, ALL in ONE transaction so the debit and the settle commit
     // together (a settle failure rolls back the debit — no drained-wallet money
     // loss) and concurrent calls can't double-debit: only the request whose
