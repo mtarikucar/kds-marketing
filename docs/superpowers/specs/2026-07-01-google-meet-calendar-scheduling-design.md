@@ -5,8 +5,9 @@
 - **Implementation progress (branch `feat/google-meet-calendar-scheduling`):**
   - Phase 1 (conferencing links — Google Meet + Teams) ✅ implemented & unit/e2e-tested. Plan: `docs/superpowers/plans/2026-07-01-phase1-conferencing-links.md`.
   - Phase 2 (rich availability + appointment lifecycle) ✅ backend complete & unit-tested — policy (min-notice/max-advance/before-after buffers), blackout/time-off, reschedule, PENDING/NO_SHOW/COMPLETED lifecycle + approval, public token self-service, multi-lead-time reminders + attendee tz, blackout/member-availability admin CRUD + bookings-list. Plan: `docs/superpowers/plans/2026-07-01-phase2-availability-lifecycle.md`. Deferred refinement: full ROUND_ROBIN per-member working-hours *intersection* in `availability()` (model + CRUD shipped; blackout already covers member time-off).
-  - Phases 3–4 pending.
-  - Verification: full unit suite 295/296 suites green; the single failing suite (`workspace-scoping.arch.spec.ts`) is **pre-existing on `origin/main`** (unrelated to this work).
+  - Phase 3 (in-app appointments UI + public self-service booking) ✅ — typed `booking.service.ts`, `AppointmentsPage` (list + reschedule/cancel/no-show/complete/approve), public `PublicBookingPage` (slot-picker → reserve → confirmation), conferencing + policy config added to `BookingSettingsPage`, routes + nav + en/tr i18n. Frontend suite 174 files / 715 tests green.
+  - Phase 4 (advanced Meet — spaces API) ✅ env-gated/inert — `GoogleMeetSpacesService` (recording/transcript/moderation via Meet REST v2), granted-scope tracking (`scopes` column, reversible migration), `meetings.space.created` re-consent via `connect?advanced=true`, capability surfaced on status; `pushBooking` attaches a configured space when available, falls back to standard conferenceData. Requires Google app verification to go live (operational).
+  - **All four phases implemented.** Verification: backend unit suite green except the pre-existing `workspace-scoping.arch.spec.ts` (fails identically on `origin/main`, unrelated); frontend suite fully green.
 - **Scope owner:** marketing module (NestJS 11 + Prisma 6 + Postgres backend; React + TanStack Query frontend)
 - **Branch base:** `chore/code-review-fixes` (synced to `origin/main`)
 
