@@ -13,6 +13,7 @@ import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { zonedParts, zonedWallTimeToUtcMs, parseHm } from './timezone-slots';
 import { buildIcs } from './ics.util';
+import { overlapsBlackout } from './blackout.util';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
@@ -257,6 +258,20 @@ export class BookingService implements OnModuleInit {
     });
     const ourIv = ours.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
     const extIv = external.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
+    // Blackout / time-off windows for this calendar (calendarId null = all
+    // calendars). Null-scoped windows hide the slot for everyone; owner-scoped
+    // windows hide it for a SINGLE/COLLECTIVE calendar's owner. Member-scoped
+    // reductions for ROUND_ROBIN are enforced precisely in book().
+    const blackouts = await this.prisma.bookingBlackout.findMany({
+      where: {
+        workspaceId,
+        OR: [{ calendarId: null }, { calendarId: calId }],
+        endAt: { gt: from },
+        startAt: { lt: to },
+      },
+      select: { startAt: true, endAt: true, marketingUserId: true },
+    });
+    const ownerId = cal.ownerUserId ?? null;
     const avail = (cal.availability ?? {}) as Record<string, Array<{ start: string; end: string }>>;
     const slotMs = cal.slotMinutes * 60_000;
     const stepMs = (cal.slotMinutes + bufferTotal(cal)) * 60_000;
@@ -281,6 +296,7 @@ export class BookingService implements OnModuleInit {
           const e = s + slotMs;
           if (s < earliest) continue; // before now + minimum notice
           if (extIv.some(([bs, be]) => s < be && e > bs)) continue; // hard block
+          if (overlapsBlackout(blackouts, s, e, ownerId)) continue; // blackout / time-off
           const taken = ourIv.filter(([bs, be]) => s < be && e > bs).length;
           if (taken >= capacity) continue; // at capacity
           out.push(new Date(s).toISOString());
@@ -342,6 +358,22 @@ export class BookingService implements OnModuleInit {
       });
       if (external) throw new BadRequestException('That slot was just taken');
 
+      // Blackout / time-off: a calendar/workspace-wide window (marketingUserId
+      // null) blocks the whole slot; member-scoped windows are applied to the
+      // assignee pick below. Loaded under the lock so it's race-free with book.
+      const blackouts = await tx.bookingBlackout.findMany({
+        where: {
+          workspaceId,
+          OR: [{ calendarId: null }, { calendarId: calId }],
+          endAt: { gt: start },
+          startAt: { lt: end },
+        },
+        select: { startAt: true, endAt: true, marketingUserId: true },
+      });
+      if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), null)) {
+        throw new BadRequestException('That slot is unavailable');
+      }
+
       // Capacity-aware check: count our CONFIRMED bookings overlapping the slot
       // and reject once they reach the calendar's effective capacity (SINGLE/
       // COLLECTIVE→1, CLASS→capacity, ROUND_ROBIN→member count). Mirrors
@@ -386,7 +418,13 @@ export class BookingService implements OnModuleInit {
             })
           : [];
         const taken = new Set(busyRows.map((o) => o.assigneeUserId).filter(Boolean) as string[]);
-        assigneeUserId = members.find((m) => !taken.has(m.marketingUserId))?.marketingUserId ?? null;
+        // Skip a member who is busy elsewhere OR on personal time off (blackout).
+        assigneeUserId =
+          members.find(
+            (m) =>
+              !taken.has(m.marketingUserId) &&
+              !overlapsBlackout(blackouts, start.getTime(), end.getTime(), m.marketingUserId),
+          )?.marketingUserId ?? null;
       } else if (cal.type === 'CLASS') {
         assigneeUserId = null;
       } else if (assigneeUserId) {
@@ -408,6 +446,10 @@ export class BookingService implements OnModuleInit {
           select: { id: true },
         });
         if (ownerBusy) throw new BadRequestException('That slot was just taken');
+        // The owner may be on personal time off (member-scoped blackout).
+        if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), assigneeUserId)) {
+          throw new BadRequestException('That slot is unavailable');
+        }
       }
 
       // ROUND_ROBIN with no free member: every member is already booked in this

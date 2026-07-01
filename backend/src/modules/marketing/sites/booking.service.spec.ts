@@ -34,6 +34,7 @@ describe('BookingService', () => {
         count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      bookingBlackout: { findMany: jest.fn().mockResolvedValue([]) },
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
       // The per-slot advisory lock acquired at the top of the booking tx.
       $executeRaw: jest.fn().mockResolvedValue(1),
@@ -337,6 +338,23 @@ describe('BookingService', () => {
       await expect(svc.book(WS, 'c1', { start: far, name: 'X' })).rejects.toThrow(
         /maximum advance/i,
       );
+    });
+
+    it('hides slots overlapping a blackout window', async () => {
+      prisma.bookingBlackout.findMany.mockResolvedValue([
+        { startAt: new Date('2027-06-14T09:00:00Z'), endAt: new Date('2027-06-14T09:30:00Z'), marketingUserId: null },
+      ]);
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+      expect(slots).toEqual(['2027-06-14T09:30:00.000Z']); // 09:00 blocked, 09:30 free
+    });
+
+    it('rejects a booking inside a blackout window', async () => {
+      prisma.bookingBlackout.findMany.mockResolvedValue([
+        { startAt: new Date('2027-06-14T09:00:00Z'), endAt: new Date('2027-06-14T10:00:00Z'), marketingUserId: null },
+      ]);
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' }),
+      ).rejects.toThrow(/unavailable/i);
     });
   });
 
