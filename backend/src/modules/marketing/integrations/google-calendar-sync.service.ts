@@ -10,11 +10,25 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
-import { MarketingEventTypes } from '../events/marketing-event-types';
+import {
+  MarketingEventTypes,
+  MarketingBookingLifecyclePayload,
+} from '../events/marketing-event-types';
 import {
   GoogleCalendarService,
   GoogleCalendarConnectionRow,
 } from './google-calendar.service';
+import { HostResolverService } from './conferencing/host-resolver.service';
+import {
+  GoogleMeetSpacesService,
+  parseMeetSpaceConfig,
+  MeetSpace,
+} from './conferencing/google-meet-spaces.service';
+import { ScheduledJobService } from '../scheduling/scheduled-job.service';
+import {
+  ScheduledJobRunnerService,
+  ClaimedJob,
+} from '../scheduling/scheduled-job-runner.service';
 
 /**
  * Google Calendar 2-way sync (real logic, both directions).
@@ -41,6 +55,9 @@ import {
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 const CHANNELS_STOP_ENDPOINT = `${CALENDAR_API_BASE}/channels/stop`;
 const EXTERNAL_BUSY = 'EXTERNAL_BUSY';
+// Durable job that re-fetches a Google Meet link when conferenceData came back
+// `pending` on the initial insert (Google provisions the conference async).
+const CONFERENCE_RESOLVE_KIND = 'booking.conference.resolve';
 // Page cap so one webhook/scheduler tick can't spin forever on a huge backlog.
 const MAX_PULL_PAGES = 10;
 // We REQUEST a 7-day watch TTL (Google's calendar maximum); Google may return a
@@ -61,6 +78,14 @@ interface GoogleEvent {
   // The private props the push stamps (events.list returns them for the owner),
   // so pull can recognise+skip our own mirrors even before googleEventId is saved.
   extendedProperties?: { private?: Record<string, string> };
+  // Google Meet conferencing (present when we requested conferenceData). The
+  // hangoutLink is the join URL; conferenceData carries the async create status.
+  hangoutLink?: string;
+  conferenceData?: {
+    conferenceId?: string;
+    entryPoints?: Array<{ entryPointType?: string; uri?: string }>;
+    createRequest?: { status?: { statusCode?: string } };
+  };
 }
 
 interface EventsListResponse {
@@ -92,18 +117,38 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
   private readonly bookingCreatedHandler = (event: DomainEvent<unknown>) =>
     this.onBookingCreated(event as DomainEvent<BookingCreatedPayload>);
 
+  private readonly bookingCancelledHandler = (event: DomainEvent<unknown>) =>
+    this.onBookingCancelled(
+      event as DomainEvent<MarketingBookingLifecyclePayload>,
+    );
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly bus: DomainEventBus,
     private readonly google: GoogleCalendarService,
+    private readonly hostResolver: HostResolverService,
+    private readonly scheduledJobs: ScheduledJobService,
+    private readonly runner: ScheduledJobRunnerService,
+    private readonly meetSpaces: GoogleMeetSpacesService,
   ) {}
 
   onModuleInit(): void {
     this.bus.on(MarketingEventTypes.BookingCreated, this.bookingCreatedHandler);
+    this.bus.on(
+      MarketingEventTypes.BookingCancelled,
+      this.bookingCancelledHandler,
+    );
+    this.runner.registerHandler(CONFERENCE_RESOLVE_KIND, (job) =>
+      this.resolvePendingConference(job),
+    );
   }
 
   onModuleDestroy(): void {
     this.bus.off(MarketingEventTypes.BookingCreated, this.bookingCreatedHandler);
+    this.bus.off(
+      MarketingEventTypes.BookingCancelled,
+      this.bookingCancelledHandler,
+    );
   }
 
   // ===================================================================== //
@@ -123,6 +168,22 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     );
   }
 
+  /** Domain-event entrypoint — tear down the Google mirror (and its attached
+   * Meet conference) when a booking is cancelled. The direct call in
+   * BookingService.cancel stays as a self-healing fallback. */
+  private async onBookingCancelled(
+    event: DomainEvent<MarketingBookingLifecyclePayload>,
+  ): Promise<void> {
+    const { workspaceId, bookingId } =
+      event.payload ?? ({} as MarketingBookingLifecyclePayload);
+    if (!workspaceId || !bookingId) return;
+    await this.cancelBooking(workspaceId, bookingId).catch((e) =>
+      this.logger.warn(
+        `cancel(booking=${bookingId}) failed: ${(e as Error).message}`,
+      ),
+    );
+  }
+
   /**
    * Create (or patch) the Google event mirroring our booking, and store the
    * event id on the booking. No-op when the feature is inert or no enabled
@@ -134,8 +195,6 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     bookingId: string,
   ): Promise<string | null> {
     if (!this.google.isConfigured()) return null;
-    const conn = await this.activeConnection(workspaceId);
-    if (!conn) return null;
 
     const booking = await this.prisma.booking.findFirst({
       where: { id: bookingId, workspaceId },
@@ -143,7 +202,36 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     // Don't echo events we pulled FROM Google back INTO Google.
     if (!booking || booking.status === EXTERNAL_BUSY) return null;
 
-    const body = {
+    // Does this booking's calendar attach a Google Meet link? If so the meeting
+    // is hosted by the ASSIGNED member's own connection (falling back to the
+    // owner's, then the workspace's active one).
+    const calCfg = await this.prisma.bookingCalendar.findFirst({
+      where: { id: booking.calendarId, workspaceId },
+      select: { conferencing: true, conferenceConfig: true },
+    });
+    const wantsMeet = calCfg?.conferencing === 'GOOGLE_MEET';
+    const conn = await this.resolveGoogleConnection(
+      workspaceId,
+      booking,
+      wantsMeet,
+    );
+    if (!conn) return null;
+
+    // Advanced Meet (Phase 4): when the calendar requests recording/transcript/
+    // moderation AND the host connection has the advanced scope, provision a
+    // configured Meet space and ATTACH it to the event (instead of the standard
+    // conferenceData.createRequest). Inert → null → falls back to the standard.
+    let advancedSpace: MeetSpace | null = null;
+    if (wantsMeet) {
+      const spaceCfg = parseMeetSpaceConfig((calCfg as any)?.conferenceConfig);
+      if (spaceCfg && this.meetSpaces.available(conn)) {
+        advancedSpace = await this.meetSpaces
+          .createConfiguredSpace(conn, spaceCfg)
+          .catch(() => null);
+      }
+    }
+
+    const body: Record<string, unknown> = {
       summary: booking.name || 'Booking',
       description: booking.notes || undefined,
       start: { dateTime: booking.startAt.toISOString() },
@@ -155,16 +243,43 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       extendedProperties: {
         private: { kdsBookingId: booking.id, kdsWorkspaceId: workspaceId },
       },
+      // Advanced: attach the pre-created configured space (no createRequest).
+      // Standard: request a fresh Meet (requestId stable per booking ⇒ retries
+      // never duplicate). Both need `?conferenceDataVersion=1` on the write.
+      ...(wantsMeet && advancedSpace
+        ? {
+            conferenceData: {
+              conferenceId: advancedSpace.meetingCode || undefined,
+              conferenceSolution: {
+                key: { type: 'hangoutsMeet' },
+                name: 'Google Meet',
+              },
+              entryPoints: [
+                { entryPointType: 'video', uri: advancedSpace.meetingUri },
+              ],
+            },
+          }
+        : wantsMeet
+        ? {
+            conferenceData: {
+              createRequest: {
+                requestId: `bk${booking.id.replace(/-/g, '')}`,
+                conferenceSolutionKey: { type: 'hangoutsMeet' },
+              },
+            },
+          }
+        : {}),
     };
 
     try {
       const accessToken = await this.google.getFreshAccessToken(conn);
       const cal = encodeURIComponent(conn.googleCalendarId);
+      const confQuery = wantsMeet ? '?conferenceDataVersion=1' : '';
       let event: GoogleEvent;
       if (booking.googleEventId) {
         // PATCH the existing mirror.
         event = await this.apiJson(
-          `${CALENDAR_API_BASE}/calendars/${cal}/events/${encodeURIComponent(booking.googleEventId)}`,
+          `${CALENDAR_API_BASE}/calendars/${cal}/events/${encodeURIComponent(booking.googleEventId)}${confQuery}`,
           accessToken,
           { method: 'PATCH', body: JSON.stringify(body) },
         );
@@ -179,7 +294,7 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
         const eventId = `bk${booking.id.replace(/-/g, '')}`;
         try {
           event = await this.apiJson(
-            `${CALENDAR_API_BASE}/calendars/${cal}/events`,
+            `${CALENDAR_API_BASE}/calendars/${cal}/events${confQuery}`,
             accessToken,
             { method: 'POST', body: JSON.stringify({ ...body, id: eventId }) },
           );
@@ -197,6 +312,22 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
             data: { googleEventId: event.id },
           });
         }
+      }
+      // Persist the Meet join link. For an advanced space we already have the
+      // configured URI; otherwise read it back (or queue a follow-up when Google
+      // is still provisioning a standard conference).
+      if (wantsMeet && advancedSpace) {
+        await this.prisma.booking.updateMany({
+          where: { id: booking.id, workspaceId },
+          data: {
+            meetingUrl: advancedSpace.meetingUri,
+            conferenceProvider: 'GOOGLE_MEET',
+            conferenceId: advancedSpace.meetingCode || null,
+            conferenceStatus: 'created',
+          },
+        });
+      } else if (wantsMeet) {
+        await this.persistConference(workspaceId, booking.id, event);
       }
       return event.id ?? booking.googleEventId ?? null;
     } catch (e) {
@@ -216,16 +347,28 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     bookingId: string,
   ): Promise<boolean> {
     if (!this.google.isConfigured()) return false;
-    const conn = await this.activeConnection(workspaceId);
-    if (!conn) return false;
 
     const booking = await this.prisma.booking.findFirst({
       where: { id: bookingId, workspaceId },
-      select: { googleEventId: true, status: true },
+      select: {
+        googleEventId: true,
+        status: true,
+        calendarId: true,
+        assigneeUserId: true,
+        conferenceProvider: true,
+      },
     });
     if (!booking || !booking.googleEventId || booking.status === EXTERNAL_BUSY) {
       return false;
     }
+    // Delete from the SAME connection the event was created on (the host's, for
+    // a Meet booking), so the mirror + attached conference are torn down.
+    const conn = await this.resolveGoogleConnection(
+      workspaceId,
+      booking,
+      booking.conferenceProvider === 'GOOGLE_MEET',
+    );
+    if (!conn) return false;
 
     try {
       const accessToken = await this.google.getFreshAccessToken(conn);
@@ -686,6 +829,115 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
       where: { workspaceId, enabled: true },
       orderBy: { createdAt: 'asc' },
     })) as GoogleCalendarConnectionRow | null;
+  }
+
+  /**
+   * Pick the Google connection that hosts a booking's event. For a Meet booking
+   * we prefer the assigned member's own connection (so they organise the
+   * meeting), falling back to the workspace's active connection; a
+   * non-conferencing booking always uses the active connection (unchanged).
+   */
+  private async resolveGoogleConnection(
+    workspaceId: string,
+    booking: { calendarId: string; assigneeUserId?: string | null },
+    preferHost: boolean,
+  ): Promise<GoogleCalendarConnectionRow | null> {
+    if (preferHost) {
+      const host = await this.hostResolver.resolve(
+        workspaceId,
+        booking,
+        'GOOGLE_MEET',
+      );
+      if (host) {
+        const row = (await this.prisma.googleCalendarConnection.findFirst({
+          where: { id: host.connectionId, workspaceId, enabled: true },
+        })) as GoogleCalendarConnectionRow | null;
+        if (row) return row;
+      }
+    }
+    return this.activeConnection(workspaceId);
+  }
+
+  /**
+   * Persist the Google Meet link onto the booking. When Google returned the
+   * conference as still `pending` (no hangoutLink yet), queue a durable
+   * follow-up that re-fetches it. A 409-adopted event carries only an id (the
+   * sibling push already persisted the link) — skip it.
+   */
+  private async persistConference(
+    workspaceId: string,
+    bookingId: string,
+    event: GoogleEvent,
+  ): Promise<void> {
+    if (!event.hangoutLink && !event.conferenceData) return;
+    const link =
+      event.hangoutLink ??
+      event.conferenceData?.entryPoints?.find(
+        (e) => e.entryPointType === 'video',
+      )?.uri ??
+      null;
+    const confId = event.conferenceData?.conferenceId ?? null;
+    const pending =
+      event.conferenceData?.createRequest?.status?.statusCode === 'pending';
+    await this.prisma.booking.updateMany({
+      where: { id: bookingId, workspaceId },
+      data: {
+        meetingUrl: link,
+        conferenceProvider: 'GOOGLE_MEET',
+        conferenceId: confId,
+        conferenceStatus: link ? 'created' : pending ? 'pending' : 'failed',
+      },
+    });
+    if (!link && pending) {
+      await this.scheduledJobs.schedule({
+        workspaceId,
+        kind: CONFERENCE_RESOLVE_KIND,
+        runAt: new Date(Date.now() + 30_000),
+        dedupKey: `conf:${bookingId}`,
+        payload: { workspaceId, bookingId },
+      });
+    }
+  }
+
+  /**
+   * Scheduled follow-up: re-fetch the event once Google finished provisioning
+   * the conference, then persist the (now available) Meet link. No-op once the
+   * link is already recorded.
+   */
+  private async resolvePendingConference(job: ClaimedJob): Promise<void> {
+    if (!this.google.isConfigured()) return;
+    const { workspaceId, bookingId } = job.payload as {
+      workspaceId: string;
+      bookingId: string;
+    };
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, workspaceId },
+    });
+    if (
+      !booking ||
+      !booking.googleEventId ||
+      booking.conferenceStatus === 'created'
+    ) {
+      return;
+    }
+    const conn = await this.resolveGoogleConnection(workspaceId, booking, true);
+    if (!conn) return;
+    try {
+      const accessToken = await this.google.getFreshAccessToken(conn);
+      const cal = encodeURIComponent(conn.googleCalendarId);
+      const event = await this.apiJson<GoogleEvent>(
+        `${CALENDAR_API_BASE}/calendars/${cal}/events/${encodeURIComponent(
+          booking.googleEventId,
+        )}?conferenceDataVersion=1`,
+        accessToken,
+        { method: 'GET' },
+      );
+      await this.persistConference(workspaceId, bookingId, event);
+    } catch (e) {
+      this.logger.warn(
+        `resolvePendingConference(${bookingId}) failed: ${(e as Error).message}`,
+      );
+    }
   }
 
   /** Authenticated Google API call returning parsed JSON; throws on !ok. */

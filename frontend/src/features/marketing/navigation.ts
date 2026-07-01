@@ -154,6 +154,7 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/calendar', labelKey: 'nav.calendar', label: 'Calendar', icon: Calendar },
       { path: '/booking', labelKey: 'nav.booking', label: 'Booking', icon: CalendarDays, feature: 'funnels', managerOnly: true },
+      { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
     ],
   },
   {

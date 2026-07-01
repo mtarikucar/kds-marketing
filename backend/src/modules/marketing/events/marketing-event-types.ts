@@ -35,6 +35,12 @@ export const MarketingEventTypes = {
   LeadStatusChanged: "marketing.lead.status_changed.v1",
   FormSubmitted: "marketing.form.submitted.v1",
   BookingCreated: "marketing.booking.created.v1",
+  // Booking lifecycle beyond creation. Cancelled drives conference/calendar
+  // teardown (subscribed by the Google/Outlook sync services); Updated /
+  // Rescheduled are emitted by Phase-2 edit/reschedule flows.
+  BookingCancelled: "marketing.booking.cancelled.v1",
+  BookingUpdated: "marketing.booking.updated.v1",
+  BookingRescheduled: "marketing.booking.rescheduled.v1",
   ReviewReceived: "marketing.review.received.v1",
   TaskCompleted: "marketing.task.completed.v1",
   // Phase F P9 — end-customer invoicing.
@@ -167,5 +173,17 @@ export interface MarketingConversationMessageSentPayload {
   channelId: string;
   messageId: string;
   authorType: string; // AI | AGENT
+  occurredAt: string;
+}
+
+/**
+ * Booking lifecycle payload (cancelled / updated / rescheduled). Minimal +
+ * self-contained; consumers re-read the booking for fresh state. `workspaceId`
+ * is the scope anchor.
+ */
+export interface MarketingBookingLifecyclePayload {
+  workspaceId: string;
+  bookingId: string;
+  calendarId?: string;
   occurredAt: string;
 }

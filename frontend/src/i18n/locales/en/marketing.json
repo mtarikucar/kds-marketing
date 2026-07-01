@@ -170,7 +170,8 @@
     "agencyRebilling": "Agency Rebilling",
     "agencySnapshots": "Agency Snapshots",
     "ivr": "IVR Menus",
-    "help": "Help"
+    "help": "Help",
+    "appointments": "Appointments"
   },
   "common": {
     "save": "Save",
@@ -1247,7 +1248,9 @@
     "pause": "Pause",
     "searchPlaceholder": "Search by name or trigger…",
     "statusFilter": "Status filter",
-    "status": { "all": "All" },
+    "status": {
+      "all": "All"
+    },
     "newBlank": "Blank automation",
     "newFromTemplate": "From a template",
     "newWithAi": "Describe with AI",
@@ -1402,7 +1405,19 @@
       "4": "Thu",
       "5": "Fri",
       "6": "Sat"
-    }
+    },
+    "conferencing": "Video conferencing",
+    "conferencingHint": "Attach a Meet/Teams link to each booking.",
+    "conf": {
+      "NONE": "None",
+      "GOOGLE_MEET": "Google Meet",
+      "TEAMS": "Microsoft Teams"
+    },
+    "minNotice": "Min notice (min)",
+    "maxAdvance": "Max advance (days)",
+    "bufferBefore": "Buffer before (min)",
+    "bufferAfter": "Buffer after (min)",
+    "requiresApproval": "Require approval"
   },
   "reviews": {
     "title": "Reviews",
@@ -2018,5 +2033,52 @@
       "linkTerms": "Terms of use",
       "rights": "All rights reserved."
     }
+  },
+  "appointments": {
+    "title": "Appointments",
+    "subtitle": "Booked appointments across your calendars. Reschedule, confirm, or mark outcomes.",
+    "allCalendars": "All calendars",
+    "allStatuses": "All statuses",
+    "empty": "No appointments",
+    "emptyDesc": "Booked appointments will show up here.",
+    "who": "Who",
+    "calendar": "Calendar",
+    "when": "When",
+    "statusCol": "Status",
+    "meeting": "Meeting",
+    "approve": "Approve",
+    "reschedule": "Reschedule",
+    "noShow": "No-show",
+    "complete": "Complete",
+    "cancelled": "Appointment cancelled",
+    "updated": "Appointment updated",
+    "rescheduled": "Appointment rescheduled",
+    "actionFailed": "Action failed",
+    "cancelTitle": "Cancel appointment?",
+    "cancelDesc": "The attendee will lose this slot and any meeting link.",
+    "rescheduleDesc": "Pick a new time. The backend re-validates availability, notice and buffers.",
+    "confirmReschedule": "Reschedule",
+    "status": {
+      "CONFIRMED": "Confirmed",
+      "PENDING": "Pending",
+      "CANCELLED": "Cancelled",
+      "NO_SHOW": "No-show",
+      "COMPLETED": "Completed",
+      "RESCHEDULED": "Rescheduled"
+    }
+  },
+  "publicBooking": {
+    "title": "Book a time",
+    "confirmed": "Your booking is confirmed",
+    "joinLink": "Join the video meeting",
+    "emailed": "A confirmation with a calendar invite has been sent.",
+    "noSlots": "No available times in the next two weeks.",
+    "pickSlot": "Pick a time to continue.",
+    "name": "Your name",
+    "email": "Email",
+    "phone": "Phone (optional)",
+    "notes": "Notes (optional)",
+    "reserve": "Confirm booking",
+    "failed": "Could not reserve that slot. Please pick another."
   }
 }

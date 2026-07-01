@@ -1754,6 +1754,23 @@ model BookingCalendar {
   timezone      String  @default("Europe/Istanbul")
   active        Boolean @default(true)
 
+  // Which conferencing provider to attach to this calendar's bookings.
+  conferencing     String @default("NONE") // NONE | GOOGLE_MEET | TEAMS
+  // Advanced-Meet config (recording/transcript/co-host), read only by Phase 4.
+  conferenceConfig Json?
+
+  // Booking policy (Phase 2). minNotice = earliest lead time before a slot;
+  // maxAdvance = furthest bookable day (replaces the old hard-coded 21). Buffers
+  // are dead time offered BEFORE/AFTER each slot. requiresApproval holds new
+  // bookings as PENDING until a manager confirms. reminderConfig is an array of
+  // {offsetMinutes, channels:['EMAIL'|'SMS'], audience:'CUSTOMER'|'HOST'|'BOTH'}.
+  minNoticeMinutes    Int     @default(0)
+  maxAdvanceDays      Int     @default(60)
+  bufferBeforeMinutes Int     @default(0)
+  bufferAfterMinutes  Int     @default(0)
+  requiresApproval    Boolean @default(false)
+  reminderConfig      Json?
+
   members BookingCalendarMember[]
 
   createdAt DateTime @default(now())
@@ -1779,6 +1796,41 @@ model BookingCalendarMember {
   @@unique([calendarId, marketingUserId])
   @@index([workspaceId, calendarId])
   @@map("booking_calendar_members")
+}
+
+/// Time-off / blackout window that hard-blocks bookings (Phase 2). calendarId
+/// null = all calendars in the workspace; marketingUserId null = whole calendar,
+/// set = one staff member's personal time off (only blocks that assignee).
+model BookingBlackout {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  calendarId      String?
+  marketingUserId String?
+  startAt         DateTime
+  endAt           DateTime
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  @@index([workspaceId, calendarId])
+  @@index([workspaceId, marketingUserId])
+  @@map("booking_blackouts")
+}
+
+/// Per-member working hours for a ROUND_ROBIN/COLLECTIVE calendar (Phase 2).
+/// When present, that member is only offered inside calendar ∩ member windows.
+model MemberAvailability {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  calendarId      String
+  marketingUserId String
+  availability    Json // same weekday-index -> [{start,end}] shape as BookingCalendar
+  timezone        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([calendarId, marketingUserId])
+  @@index([workspaceId])
+  @@map("member_availability")
 }
 
 /// A booked slot. Creating one mints/links a Lead, emits booking.created (a
@@ -1809,6 +1861,21 @@ model Booking {
   // transient `pending:<uuid>` value claims the create so two concurrent push
   // paths can't mint duplicate Graph events (Graph has no client-supplied ids).
   outlookEventId String?
+
+  // Conferencing (Phase 1): the video-meeting join link mirrored onto the
+  // booking. provider = GOOGLE_MEET | TEAMS; conferenceId = hangout / Teams
+  // onlineMeeting id (teardown + pending follow-up); status = created | pending
+  // | failed | none (null = no conferencing on this calendar).
+  meetingUrl         String?
+  conferenceProvider String?
+  conferenceId       String?
+  conferenceStatus   String?
+
+  // Phase 2: the attendee's IANA timezone (captured at reserve) for
+  // customer-facing times; rescheduledFromId links a reschedule chain (the new
+  // booking points at the RESCHEDULED old one).
+  attendeeTimezone  String?
+  rescheduledFromId String?
 
   createdAt DateTime @default(now())
 
@@ -2686,6 +2753,9 @@ model GoogleCalendarConnection {
   resourceId        String? // Google watch resource id (push webhook)
   channelToken      String? // per-channel verification nonce (validated on the incoming webhook)
   channelExpiration DateTime? // when the Google watch channel expires (drives the renewal cron)
+  // Space-separated OAuth scopes Google granted (Phase 4). Presence of
+  // meetings.space.created gates advanced Meet (recording/transcript/co-host).
+  scopes            String?
   enabled           Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

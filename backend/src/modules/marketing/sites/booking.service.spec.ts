@@ -14,9 +14,16 @@ describe('BookingService', () => {
   const dow = new Date(dayISO).getUTCDay();
   let prisma: any;
   let svc: BookingService;
+  let outbox: any;
+  let googleSync: any;
+  let outlookSync: any;
+  let scheduledJobs: any;
 
   function calendar(extra: any = {}) {
-    return { id: 'c1', workspaceId: WS, active: true, slotMinutes: 30, bufferMinutes: 0, availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] }, ...extra };
+    // maxAdvanceDays is generous so the fixed far-future fixture day isn't
+    // rejected by the max-advance policy (real rows default to 60 in the DB);
+    // policy tests override it explicitly.
+    return { id: 'c1', workspaceId: WS, active: true, slotMinutes: 30, bufferMinutes: 0, maxAdvanceDays: 3650, availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] }, ...extra };
   }
 
   beforeEach(() => {
@@ -28,23 +35,28 @@ describe('BookingService', () => {
         count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      bookingBlackout: { findMany: jest.fn().mockResolvedValue([]) },
+      memberAvailability: { findMany: jest.fn().mockResolvedValue([]) },
       lead: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
       // The per-slot advisory lock acquired at the top of the booking tx.
       $executeRaw: jest.fn().mockResolvedValue(1),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
-    const outbox = { append: jest.fn().mockResolvedValue('e') };
-    const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
+    outbox = { append: jest.fn().mockResolvedValue('e') };
+    const email = {
+      sendPlainEmail: jest.fn().mockResolvedValue(true),
+      sendPlainEmailWithIcs: jest.fn().mockResolvedValue(true),
+    };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
-    const scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
+    scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
     const runner = { registerHandler: jest.fn() };
     // Google / Outlook calendar sync are inert in this suite (push/cancel are
     // best-effort no-ops here); the dedicated calendar specs exercise them for real.
-    const googleSync = {
+    googleSync = {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
-    const outlookSync = {
+    outlookSync = {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
@@ -279,6 +291,264 @@ describe('BookingService', () => {
     it('rethrows a non-P2002 create error unchanged', async () => {
       prisma.bookingCalendar.create = jest.fn(() => Promise.reject(new Error('boom')));
       await expect(svc.create(WS, { name: 'X' })).rejects.toThrow('boom');
+    });
+  });
+
+  describe('availability policy', () => {
+    it('caps the offered window at maxAdvanceDays', async () => {
+      const allDays: Record<string, Array<{ start: string; end: string }>> = {};
+      for (let d = 0; d < 7; d++) allDays[String(d)] = [{ start: '09:00', end: '10:00' }];
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ availability: allDays, slotMinutes: 60, maxAdvanceDays: 3 }),
+      );
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-07-30T00:00:00.000Z');
+      expect(slots).toHaveLength(4); // days 0..3 inclusive, one slot each
+    });
+
+    it('spaces offered slots by slot + before + after buffers', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({
+          slotMinutes: 30,
+          bufferBeforeMinutes: 15,
+          bufferAfterMinutes: 15,
+          availability: { [String(dow)]: [{ start: '09:00', end: '11:00' }] },
+        }),
+      );
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+      // step = 30 + 15 + 15 = 60min → 09:00, 10:00 (not the 4 slots a 0-buffer grid gives)
+      expect(slots).toEqual([
+        '2027-06-14T09:00:00.000Z',
+        '2027-06-14T10:00:00.000Z',
+      ]);
+    });
+
+    it('rejects a booking within the minimum-notice window', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ minNoticeMinutes: 24 * 60 }),
+      );
+      const soon = new Date(Date.now() + 60 * 60_000).toISOString(); // 1h < 24h notice
+      await expect(svc.book(WS, 'c1', { start: soon, name: 'X' })).rejects.toThrow(
+        /minimum notice/i,
+      );
+    });
+
+    it('rejects a booking beyond the maximum advance window', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ maxAdvanceDays: 7 }),
+      );
+      const far = new Date(Date.now() + 30 * 86400_000).toISOString();
+      await expect(svc.book(WS, 'c1', { start: far, name: 'X' })).rejects.toThrow(
+        /maximum advance/i,
+      );
+    });
+
+    it('reduces ROUND_ROBIN slot capacity by per-member working hours', async () => {
+      // 2 members; one has custom hours 09:00-09:30 only. The calendar window is
+      // 09:00-10:00 (slots 09:00, 09:30). At 09:30 only the no-custom-hours member
+      // is available → capacity 1; at 09:00 both are → capacity 2.
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ type: 'ROUND_ROBIN', availability: { [String(dow)]: [{ start: '09:00', end: '10:00' }] } }),
+      );
+      prisma.bookingCalendarMember.count.mockResolvedValue(2);
+      prisma.bookingCalendarMember.findMany.mockResolvedValue([
+        { marketingUserId: 'u1' }, { marketingUserId: 'u2' },
+      ]);
+      prisma.memberAvailability.findMany.mockResolvedValue([
+        { marketingUserId: 'u2', availability: { [String(dow)]: [{ start: '09:00', end: '09:30' }] }, timezone: null },
+      ]);
+      // One CONFIRMED booking overlaps 09:30 → that slot (cap 1) is now full.
+      prisma.booking.findMany
+        .mockResolvedValueOnce([{ startAt: new Date('2027-06-14T09:30:00Z'), endAt: new Date('2027-06-14T10:00:00Z') }]) // ours
+        .mockResolvedValueOnce([]); // external
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+      expect(slots).toEqual(['2027-06-14T09:00:00.000Z']); // 09:30 hidden (only member u1 free, and taken)
+    });
+
+    it('hides slots overlapping a blackout window', async () => {
+      prisma.bookingBlackout.findMany.mockResolvedValue([
+        { startAt: new Date('2027-06-14T09:00:00Z'), endAt: new Date('2027-06-14T09:30:00Z'), marketingUserId: null },
+      ]);
+      const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');
+      expect(slots).toEqual(['2027-06-14T09:30:00.000Z']); // 09:00 blocked, 09:30 free
+    });
+
+    it('rejects a booking inside a blackout window', async () => {
+      prisma.bookingBlackout.findMany.mockResolvedValue([
+        { startAt: new Date('2027-06-14T09:00:00Z'), endAt: new Date('2027-06-14T10:00:00Z'), marketingUserId: null },
+      ]);
+      await expect(
+        svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' }),
+      ).rejects.toThrow(/unavailable/i);
+    });
+  });
+
+  describe('cancel', () => {
+    it('emits BookingCancelled via the outbox and tears down both mirrors', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b-1', status: 'CONFIRMED', calendarId: 'c1' });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      await svc.cancel(WS, 'b-1');
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'marketing.booking.cancelled.v1',
+          idempotencyKey: 'booking-cancelled:b-1',
+          payload: expect.objectContaining({ bookingId: 'b-1', calendarId: 'c1' }),
+        }),
+        expect.anything(),
+      );
+      expect(googleSync.cancelBooking).toHaveBeenCalledWith(WS, 'b-1');
+      expect(outlookSync.cancelBooking).toHaveBeenCalledWith(WS, 'b-1');
+    });
+
+    it('is a no-op (no event) when the booking is already cancelled', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b-1', status: 'CANCELLED', calendarId: 'c1' });
+      await svc.cancel(WS, 'b-1');
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('blackout & member CRUD', () => {
+    it('creates a blackout after validating the window', async () => {
+      prisma.bookingBlackout.create = jest.fn().mockResolvedValue({ id: 'bo1' });
+      await svc.createBlackout(WS, { startAt: '2027-06-14T09:00:00Z', endAt: '2027-06-14T12:00:00Z' });
+      expect(prisma.bookingBlackout.create).toHaveBeenCalled();
+    });
+
+    it('rejects an inverted blackout window', async () => {
+      await expect(
+        svc.createBlackout(WS, { startAt: '2027-06-14T12:00:00Z', endAt: '2027-06-14T09:00:00Z' }),
+      ).rejects.toThrow(/invalid blackout/i);
+    });
+
+    it('upserts member availability (create when none exists)', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar()); // ownership 404 guard
+      prisma.memberAvailability = {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'ma1' }),
+        update: jest.fn(),
+      };
+      await svc.setMemberAvailability(WS, 'c1', 'u1', { '1': [{ start: '09:00', end: '17:00' }] });
+      expect(prisma.memberAvailability.create).toHaveBeenCalled();
+    });
+
+    it('lists real bookings excluding external busy blocks', async () => {
+      prisma.booking.findMany.mockResolvedValue([{ id: 'b1' }]);
+      const res = await svc.listBookings(WS, {});
+      expect(res).toEqual([{ id: 'b1' }]);
+      const where = prisma.booking.findMany.mock.calls.at(-1)[0].where;
+      expect(where.status).toEqual({ not: 'EXTERNAL_BUSY' });
+    });
+  });
+
+  describe('reminders', () => {
+    it('schedules one reminder job per reminderConfig entry', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({
+          reminderConfig: [
+            { offsetMinutes: 1440, channels: ['EMAIL'], audience: 'CUSTOMER' },
+            { offsetMinutes: 60, channels: ['EMAIL'], audience: 'BOTH' },
+          ],
+        }),
+      );
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.create.mockResolvedValue({
+        id: 'b1', status: 'CONFIRMED', startAt: new Date('2027-06-14T09:00:00Z'),
+        endAt: new Date('2027-06-14T09:30:00Z'), token: 'bk', email: 'a@x.com', notes: null,
+      });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
+      const dedupKeys = scheduledJobs.schedule.mock.calls.map((c: any) => c[0].dedupKey);
+      expect(dedupKeys).toEqual(expect.arrayContaining(['b1:1440', 'b1:60']));
+      expect(scheduledJobs.schedule).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to a single T-1h reminder when no config is set', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar()); // no reminderConfig
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.create.mockResolvedValue({
+        id: 'b1', status: 'CONFIRMED', startAt: new Date('2027-06-14T09:00:00Z'),
+        endAt: new Date('2027-06-14T09:30:00Z'), token: 'bk', email: null, notes: null,
+      });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
+      expect(scheduledJobs.schedule).toHaveBeenCalledTimes(1);
+      expect(scheduledJobs.schedule.mock.calls[0][0].dedupKey).toBe('b1:60');
+    });
+  });
+
+  describe('reschedule & lifecycle', () => {
+    it('reschedules an active booking in place and emits BookingRescheduled', async () => {
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED', assigneeUserId: null })
+        .mockResolvedValue(null); // external + clash checks
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar());
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const res = await svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z');
+      expect(res.startAt).toBe('2027-06-14T09:30:00.000Z');
+      expect(prisma.booking.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ startAt: new Date('2027-06-14T09:30:00.000Z') }) }),
+      );
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'marketing.booking.rescheduled.v1' }),
+        expect.anything(),
+      );
+    });
+
+    it('refuses to reschedule a non-active (e.g. cancelled) booking', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CANCELLED' });
+      await expect(svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z')).rejects.toThrow(/active booking/i);
+    });
+
+    it('rejects an invalid status transition', async () => {
+      await expect(svc.setStatus(WS, 'b1', 'BOGUS')).rejects.toThrow(/invalid status/i);
+    });
+
+    it('marks a booking NO_SHOW and emits BookingUpdated', async () => {
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED' });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const res = await svc.setStatus(WS, 'b1', 'NO_SHOW');
+      expect(res).toEqual({ id: 'b1', status: 'NO_SHOW' });
+      expect(outbox.append).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'marketing.booking.updated.v1', idempotencyKey: 'booking-updated:b1:NO_SHOW' }),
+        expect.anything(),
+      );
+    });
+
+    it('approving a PENDING booking runs the deferred confirm side-effects', async () => {
+      prisma.booking.findFirst.mockResolvedValue({
+        id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'PENDING',
+        email: null, notes: null, startAt: new Date('2027-06-14T09:00:00Z'), endAt: new Date('2027-06-14T09:30:00Z'),
+      });
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ conferencing: 'NONE' }));
+      await svc.setStatus(WS, 'b1', 'CONFIRMED');
+      expect(googleSync.pushBooking).toHaveBeenCalledWith(WS, 'b1');
+    });
+
+    it('creates a PENDING hold (no BookingCreated) when the calendar requires approval', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ requiresApproval: true }));
+      prisma.booking.findFirst.mockResolvedValue(null);
+      prisma.booking.create.mockResolvedValue({ id: 'b1', status: 'PENDING', startAt: new Date('2027-06-14T09:00:00Z'), token: 'bk', email: null });
+      await svc.book(WS, 'c1', { start: '2027-06-14T09:00:00.000Z', name: 'X' });
+      expect(prisma.booking.create.mock.calls[0][0].data.status).toBe('PENDING');
+      const types = outbox.append.mock.calls.map((c: any) => c[0].type);
+      expect(types).not.toContain('marketing.booking.created.v1');
+    });
+  });
+
+  describe('conferencing config', () => {
+    it('persists a valid conferencing value on create, defaulting invalid to NONE', async () => {
+      prisma.bookingCalendar.create = jest.fn().mockResolvedValue({ id: 'c1' });
+      await svc.create(WS, { name: 'Sales', conferencing: 'GOOGLE_MEET' });
+      expect(prisma.bookingCalendar.create.mock.calls[0][0].data.conferencing).toBe('GOOGLE_MEET');
+      await svc.create(WS, { name: 'X', conferencing: 'BOGUS' });
+      expect(prisma.bookingCalendar.create.mock.calls[1][0].data.conferencing).toBe('NONE');
+    });
+
+    it('updates conferencing only when a valid value is provided', async () => {
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar());
+      prisma.bookingCalendar.update = jest.fn().mockResolvedValue({ id: 'c1' });
+      await svc.update(WS, 'c1', { conferencing: 'TEAMS' });
+      expect(prisma.bookingCalendar.update.mock.calls[0][0].data.conferencing).toBe('TEAMS');
+      await svc.update(WS, 'c1', { conferencing: 'BOGUS' });
+      expect(prisma.bookingCalendar.update.mock.calls[1][0].data.conferencing).toBeUndefined();
     });
   });
 });

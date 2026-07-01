@@ -12,6 +12,8 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { zonedParts, zonedWallTimeToUtcMs, parseHm, formatInTimeZone } from './timezone-slots';
+import { buildIcs } from './ics.util';
+import { overlapsBlackout } from './blackout.util';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-job-runner.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
@@ -22,13 +24,87 @@ import { OutlookCalendarSyncService } from '../integrations/outlook-calendar-syn
 const BOOKING_REMINDER_KIND = 'booking.reminder';
 const MAX_RANGE_DAYS = 21;
 const CALENDAR_TYPES = ['SINGLE', 'ROUND_ROBIN', 'COLLECTIVE', 'CLASS'];
+const CONFERENCING = ['NONE', 'GOOGLE_MEET', 'TEAMS'];
+// Statuses that HOLD a slot (count against capacity / block an assignee). A
+// PENDING approval hold occupies the slot just like a CONFIRMED booking.
+const ACTIVE_STATUSES = ['CONFIRMED', 'PENDING'];
+// Terminal/administrative transitions an admin can set on a booking.
+const SETTABLE_STATUSES = ['CONFIRMED', 'NO_SHOW', 'COMPLETED', 'CANCELLED'];
+
+/**
+ * Total per-slot buffer minutes: before + after (Phase 2), falling back to the
+ * legacy single `bufferMinutes` when both before/after are zero. Used as the
+ * spacing padding added to slotMinutes when stepping the offered-slot grid.
+ */
+function bufferTotal(cal: {
+  bufferMinutes?: number;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
+}): number {
+  const beforeAfter =
+    (cal.bufferBeforeMinutes ?? 0) + (cal.bufferAfterMinutes ?? 0);
+  return beforeAfter || (cal.bufferMinutes ?? 0);
+}
+
+/** One reminder rule: fire `offsetMinutes` before the start, over `channels`,
+ *  to `audience`. */
+interface ReminderEntry {
+  offsetMinutes: number;
+  channels: string[]; // EMAIL | SMS
+  audience: string; // CUSTOMER | HOST | BOTH
+}
+const DEFAULT_REMINDERS: ReminderEntry[] = [
+  { offsetMinutes: 60, channels: ['EMAIL'], audience: 'CUSTOMER' },
+];
+
+/** Validate + normalise a calendar's reminderConfig JSON, falling back to the
+ *  single T-1h customer email when it is absent or malformed. */
+function parseReminderConfig(raw: unknown): ReminderEntry[] {
+  if (!Array.isArray(raw) || raw.length === 0) return DEFAULT_REMINDERS;
+  const out: ReminderEntry[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== 'object') continue;
+    const offsetMinutes = Number((e as any).offsetMinutes);
+    if (!Number.isFinite(offsetMinutes) || offsetMinutes <= 0) continue;
+    const rawChannels = Array.isArray((e as any).channels) ? (e as any).channels : ['EMAIL'];
+    const channels = rawChannels.filter((c: unknown) => c === 'EMAIL' || c === 'SMS');
+    const audience = ['CUSTOMER', 'HOST', 'BOTH'].includes((e as any).audience)
+      ? (e as any).audience
+      : 'CUSTOMER';
+    out.push({ offsetMinutes, channels: channels.length ? channels : ['EMAIL'], audience });
+  }
+  return out.length ? out : DEFAULT_REMINDERS;
+}
+
+/** True when a member's custom weekly hours cover the slot [s, s+slotMs).
+ *  `windows` is the member's weekday->[{start,end}] map, read in `tz`. */
+function memberCoversSlot(
+  windows: Record<string, Array<{ start: string; end: string }>>,
+  tz: string,
+  s: number,
+  slotMs: number,
+): boolean {
+  const { y, mo, d, weekday } = zonedParts(s, tz);
+  const wins = windows[String(weekday)] ?? [];
+  for (const w of wins) {
+    const hs = parseHm(w.start);
+    const he = parseHm(w.end);
+    if (!hs || !he) continue;
+    const ws = zonedWallTimeToUtcMs(y, mo, d, hs[0], hs[1], tz);
+    const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
+    if (s >= ws && s + slotMs <= we) return true;
+  }
+  return false;
+}
 
 /**
  * Booking calendars + slot picking. Availability windows (per weekday, HH:mm)
- * are interpreted in UTC for v1 (timezone-aware slicing is a later refinement);
- * bookable slots = windows sliced into slotMinutes minus existing CONFIRMED
- * bookings. Booking mints/links a lead, emits booking.created (a workflow
- * trigger), emails a confirmation, and schedules a reminder.
+ * are wall-clock times interpreted in the calendar's IANA TIMEZONE (DST-safe via
+ * timezone-slots.ts); bookable slots = windows sliced into slotMinutes (stepping
+ * by slotMinutes + buffers) minus existing CONFIRMED bookings, EXTERNAL_BUSY
+ * blocks and blackout windows, bounded by the calendar's min-notice /
+ * max-advance policy. Booking mints/links a lead, emits booking.created (a
+ * workflow trigger), emails a confirmation (+ICS), and schedules reminders.
  */
 @Injectable()
 export class BookingService implements OnModuleInit {
@@ -72,6 +148,13 @@ export class BookingService implements OnModuleInit {
           slotMinutes: dto.slotMinutes ?? 30,
           bufferMinutes: dto.bufferMinutes ?? 0,
           timezone: dto.timezone ?? 'Europe/Istanbul',
+          conferencing: CONFERENCING.includes(dto.conferencing) ? dto.conferencing : 'NONE',
+          minNoticeMinutes: dto.minNoticeMinutes ?? 0,
+          maxAdvanceDays: dto.maxAdvanceDays ?? 60,
+          bufferBeforeMinutes: dto.bufferBeforeMinutes ?? 0,
+          bufferAfterMinutes: dto.bufferAfterMinutes ?? 0,
+          requiresApproval: dto.requiresApproval ?? false,
+          ...(dto.reminderConfig !== undefined ? { reminderConfig: dto.reminderConfig } : {}),
         },
       })
       // slug is unique per (workspaceId, slug); a duplicate name/slug is a clean
@@ -87,10 +170,15 @@ export class BookingService implements OnModuleInit {
     const existing = await this.prisma.bookingCalendar.findFirst({ where: { id, workspaceId } });
     if (!existing) throw new NotFoundException('Calendar not found');
     const data: any = {};
-    for (const k of ['name', 'ownerUserId', 'availability', 'slotMinutes', 'bufferMinutes', 'timezone', 'active'] as const) {
+    for (const k of [
+      'name', 'ownerUserId', 'availability', 'slotMinutes', 'bufferMinutes', 'timezone', 'active',
+      'minNoticeMinutes', 'maxAdvanceDays', 'bufferBeforeMinutes', 'bufferAfterMinutes',
+      'requiresApproval', 'reminderConfig',
+    ] as const) {
       if (dto[k] !== undefined) data[k] = dto[k];
     }
     if (dto.type !== undefined && CALENDAR_TYPES.includes(dto.type)) data.type = dto.type;
+    if (dto.conferencing !== undefined && CONFERENCING.includes(dto.conferencing)) data.conferencing = dto.conferencing;
     if (dto.capacity !== undefined) data.capacity = this.normCapacity(dto.capacity);
     if (dto.slug !== undefined) data.slug = this.slugify(dto.slug);
     return this.prisma.bookingCalendar
@@ -162,6 +250,103 @@ export class BookingService implements OnModuleInit {
     return { message: 'Calendar deleted' };
   }
 
+  // ── Blackout / time-off admin CRUD ─────────────────────────────────────────
+
+  listBlackouts(workspaceId: string, calendarId?: string) {
+    return this.prisma.bookingBlackout.findMany({
+      where: {
+        workspaceId,
+        // A specific calendar sees its own windows PLUS workspace-wide ones.
+        ...(calendarId ? { OR: [{ calendarId }, { calendarId: null }] } : {}),
+      },
+      orderBy: { startAt: 'asc' },
+    });
+  }
+
+  async createBlackout(
+    workspaceId: string,
+    dto: { calendarId?: string; marketingUserId?: string; startAt: string; endAt: string; reason?: string },
+  ) {
+    const start = new Date(dto.startAt);
+    const end = new Date(dto.endAt);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+      throw new BadRequestException('Invalid blackout window');
+    }
+    if (dto.calendarId) await this.get(workspaceId, dto.calendarId); // ownership 404
+    return this.prisma.bookingBlackout.create({
+      data: {
+        workspaceId,
+        calendarId: dto.calendarId ?? null,
+        marketingUserId: dto.marketingUserId ?? null,
+        startAt: start,
+        endAt: end,
+        reason: dto.reason ?? null,
+      },
+    });
+  }
+
+  async deleteBlackout(workspaceId: string, id: string) {
+    const res = await this.prisma.bookingBlackout.deleteMany({ where: { id, workspaceId } });
+    if (res.count === 0) throw new NotFoundException('Blackout not found');
+    return { message: 'Blackout deleted' };
+  }
+
+  // ── Per-member working hours (Phase 2 model + CRUD) ─────────────────────────
+
+  listMemberAvailability(workspaceId: string, calId: string) {
+    return this.prisma.memberAvailability.findMany({ where: { workspaceId, calendarId: calId } });
+  }
+
+  /** Upsert a member's working hours for a calendar (unique per calendar+member). */
+  async setMemberAvailability(
+    workspaceId: string,
+    calId: string,
+    marketingUserId: string,
+    availability: unknown,
+    timezone?: string,
+  ) {
+    await this.get(workspaceId, calId); // ownership 404
+    const existing = await this.prisma.memberAvailability.findFirst({
+      where: { calendarId: calId, marketingUserId },
+    });
+    if (existing) {
+      return this.prisma.memberAvailability.update({
+        where: { id: existing.id },
+        data: { availability: availability as any, timezone: timezone ?? null },
+      });
+    }
+    return this.prisma.memberAvailability.create({
+      data: { workspaceId, calendarId: calId, marketingUserId, availability: availability as any, timezone: timezone ?? null },
+    });
+  }
+
+  // ── Bookings listing (admin appointments view) ──────────────────────────────
+
+  /** List real appointments (excludes EXTERNAL_BUSY busy blocks), newest window
+   *  first, optionally filtered by calendar / status / time range. */
+  listBookings(
+    workspaceId: string,
+    filters: { calendarId?: string; status?: string; from?: string; to?: string } = {},
+  ) {
+    return this.prisma.booking.findMany({
+      where: {
+        workspaceId,
+        status: filters.status ? filters.status : { not: 'EXTERNAL_BUSY' },
+        ...(filters.calendarId ? { calendarId: filters.calendarId } : {}),
+        ...(filters.from || filters.to
+          ? {
+              startAt: {
+                ...(filters.from ? { gte: new Date(filters.from) } : {}),
+                ...(filters.to ? { lte: new Date(filters.to) } : {}),
+              },
+            }
+          : {}),
+      },
+      orderBy: { startAt: 'asc' },
+      take: 500,
+    });
+  }
+
   /** Public: resolve a calendar by (workspaceId, slug) for the booking page. */
   async publicCalendar(workspaceId: string, slug: string) {
     const c = await this.prisma.bookingCalendar.findFirst({ where: { workspaceId, slug, active: true } });
@@ -191,14 +376,43 @@ export class BookingService implements OnModuleInit {
     if (!cal) throw new NotFoundException('Calendar not found');
     const from = new Date(fromISO);
     let to = new Date(toISO);
-    const cap = new Date(from.getTime() + MAX_RANGE_DAYS * 86400_000);
+    const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
+    const cap = new Date(from.getTime() + maxDays * 86400_000);
     if (to > cap) to = cap;
-    const now = Date.now();
+    // Earliest bookable instant = now + the calendar's minimum notice lead time.
+    const earliest = Date.now() + ((cal as any).minNoticeMinutes ?? 0) * 60_000;
 
     const memberCount = await this.prisma.bookingCalendarMember.count({
       where: { workspaceId, calendarId: calId },
     });
     const capacity = this.effectiveCapacity(cal, memberCount);
+
+    // For ROUND_ROBIN, a member with CUSTOM working hours only counts toward a
+    // slot's capacity when their hours cover it (members without custom hours
+    // inherit the calendar windows). Precompute {windows|null, tz} per member.
+    let memberHours: Array<{
+      windows: Record<string, Array<{ start: string; end: string }>> | null;
+      tz: string;
+    }> = [];
+    if (cal.type === 'ROUND_ROBIN') {
+      const members = await this.prisma.bookingCalendarMember.findMany({
+        where: { workspaceId, calendarId: calId },
+        select: { marketingUserId: true },
+      });
+      const rows = await this.prisma.memberAvailability.findMany({
+        where: { workspaceId, calendarId: calId },
+        select: { marketingUserId: true, availability: true, timezone: true },
+      });
+      const byUser = new Map(rows.map((r) => [r.marketingUserId, r]));
+      const calTz = (cal as any).timezone || 'UTC';
+      memberHours = members.map((m) => {
+        const row = byUser.get(m.marketingUserId);
+        return {
+          windows: row ? (row.availability as any) : null,
+          tz: row?.timezone || calTz,
+        };
+      });
+    }
 
     // CONFIRMED bookings on THIS calendar are COUNTED against the slot capacity;
     // EXTERNAL_BUSY blocks (Google-pulled, workspace-wide) are a HARD block that
@@ -207,7 +421,7 @@ export class BookingService implements OnModuleInit {
       where: {
         workspaceId,
         calendarId: calId,
-        status: 'CONFIRMED',
+        status: { in: ACTIVE_STATUSES },
         startAt: { lt: to },
         endAt: { gt: from },
       },
@@ -224,9 +438,23 @@ export class BookingService implements OnModuleInit {
     });
     const ourIv = ours.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
     const extIv = external.map((b) => [b.startAt.getTime(), b.endAt.getTime()] as [number, number]);
+    // Blackout / time-off windows for this calendar (calendarId null = all
+    // calendars). Null-scoped windows hide the slot for everyone; owner-scoped
+    // windows hide it for a SINGLE/COLLECTIVE calendar's owner. Member-scoped
+    // reductions for ROUND_ROBIN are enforced precisely in book().
+    const blackouts = await this.prisma.bookingBlackout.findMany({
+      where: {
+        workspaceId,
+        OR: [{ calendarId: null }, { calendarId: calId }],
+        endAt: { gt: from },
+        startAt: { lt: to },
+      },
+      select: { startAt: true, endAt: true, marketingUserId: true },
+    });
+    const ownerId = cal.ownerUserId ?? null;
     const avail = (cal.availability ?? {}) as Record<string, Array<{ start: string; end: string }>>;
     const slotMs = cal.slotMinutes * 60_000;
-    const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
+    const stepMs = (cal.slotMinutes + bufferTotal(cal)) * 60_000;
     const out: string[] = [];
 
     // Availability windows are wall-clock times in the calendar's TIMEZONE (not
@@ -246,10 +474,19 @@ export class BookingService implements OnModuleInit {
         const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
         for (let s = ws; s + slotMs <= we; s += stepMs) {
           const e = s + slotMs;
-          if (s < now) continue;
+          if (s < earliest) continue; // before now + minimum notice
           if (extIv.some(([bs, be]) => s < be && e > bs)) continue; // hard block
+          if (overlapsBlackout(blackouts, s, e, ownerId)) continue; // blackout / time-off
           const taken = ourIv.filter(([bs, be]) => s < be && e > bs).length;
-          if (taken >= capacity) continue; // at capacity
+          // ROUND_ROBIN with per-member hours: a slot's effective capacity is
+          // how many members are actually available at this instant.
+          let slotCap = capacity;
+          if (cal.type === 'ROUND_ROBIN' && memberHours.length) {
+            slotCap = memberHours.filter(
+              (mh) => mh.windows == null || memberCoversSlot(mh.windows, mh.tz, s, slotMs),
+            ).length;
+          }
+          if (taken >= slotCap) continue; // at (effective) capacity
           out.push(new Date(s).toISOString());
         }
       }
@@ -260,12 +497,23 @@ export class BookingService implements OnModuleInit {
   /** Public: book a slot. */
   async book(
     workspaceId: string, calId: string,
-    dto: { start: string; name: string; email?: string; phone?: string; notes?: string },
+    dto: { start: string; name: string; email?: string; phone?: string; notes?: string; attendeeTimezone?: string },
   ) {
     const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: calId, workspaceId, active: true } });
     if (!cal) throw new NotFoundException('Calendar not found');
     const start = new Date(dto.start);
     if (isNaN(start.getTime()) || start.getTime() < Date.now()) throw new BadRequestException('Invalid or past slot');
+    // Enforce the calendar's booking-policy window so a direct reserve can't beat
+    // the min-notice lead time or book beyond the max-advance horizon the picker
+    // (availability()) enforces.
+    const minNotice = (cal as any).minNoticeMinutes ?? 0;
+    const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
+    if (start.getTime() < Date.now() + minNotice * 60_000) {
+      throw new BadRequestException('Slot is within the minimum notice window');
+    }
+    if (start.getTime() > Date.now() + maxDays * 86400_000) {
+      throw new BadRequestException('Slot is beyond the maximum advance window');
+    }
     // Reject an off-grid / out-of-hours timestamp: a direct API call must not be
     // able to book a slot the public picker (availability()) would never offer.
     if (!this.isAlignedSlot(cal, start)) {
@@ -298,12 +546,28 @@ export class BookingService implements OnModuleInit {
       });
       if (external) throw new BadRequestException('That slot was just taken');
 
+      // Blackout / time-off: a calendar/workspace-wide window (marketingUserId
+      // null) blocks the whole slot; member-scoped windows are applied to the
+      // assignee pick below. Loaded under the lock so it's race-free with book.
+      const blackouts = await tx.bookingBlackout.findMany({
+        where: {
+          workspaceId,
+          OR: [{ calendarId: null }, { calendarId: calId }],
+          endAt: { gt: start },
+          startAt: { lt: end },
+        },
+        select: { startAt: true, endAt: true, marketingUserId: true },
+      });
+      if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), null)) {
+        throw new BadRequestException('That slot is unavailable');
+      }
+
       // Capacity-aware check: count our CONFIRMED bookings overlapping the slot
       // and reject once they reach the calendar's effective capacity (SINGLE/
       // COLLECTIVE→1, CLASS→capacity, ROUND_ROBIN→member count). Mirrors
       // availability() exactly so a direct reserve can't exceed what's offered.
       const overlapping = await tx.booking.findMany({
-        where: { workspaceId, calendarId: calId, status: 'CONFIRMED', startAt: { lt: end }, endAt: { gt: start } },
+        where: { workspaceId, calendarId: calId, status: { in: ACTIVE_STATUSES }, startAt: { lt: end }, endAt: { gt: start } },
         select: { assigneeUserId: true },
       });
       // Members are only needed for ROUND_ROBIN (capacity = member count + per-
@@ -333,7 +597,7 @@ export class BookingService implements OnModuleInit {
           ? await tx.booking.findMany({
               where: {
                 workspaceId,
-                status: 'CONFIRMED',
+                status: { in: ACTIVE_STATUSES },
                 assigneeUserId: { in: memberIds },
                 startAt: { lt: end },
                 endAt: { gt: start },
@@ -342,7 +606,27 @@ export class BookingService implements OnModuleInit {
             })
           : [];
         const taken = new Set(busyRows.map((o) => o.assigneeUserId).filter(Boolean) as string[]);
-        assigneeUserId = members.find((m) => !taken.has(m.marketingUserId))?.marketingUserId ?? null;
+        // Per-member custom working hours (if any) further constrain who can take
+        // the slot — mirrors availability()'s effective-capacity computation.
+        const maRows = await tx.memberAvailability.findMany({
+          where: { workspaceId, calendarId: calId },
+          select: { marketingUserId: true, availability: true, timezone: true },
+        });
+        const maByUser = new Map(maRows.map((r) => [r.marketingUserId, r]));
+        const calTz = (cal as any).timezone || 'UTC';
+        const slotMs = cal.slotMinutes * 60_000;
+        // Skip a member who is busy elsewhere, on personal time off (blackout), or
+        // outside their own custom working hours.
+        assigneeUserId =
+          members.find((m) => {
+            if (taken.has(m.marketingUserId)) return false;
+            if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), m.marketingUserId)) return false;
+            const row = maByUser.get(m.marketingUserId);
+            if (row && !memberCoversSlot(row.availability as any, row.timezone || calTz, start.getTime(), slotMs)) {
+              return false;
+            }
+            return true;
+          })?.marketingUserId ?? null;
       } else if (cal.type === 'CLASS') {
         assigneeUserId = null;
       } else if (assigneeUserId) {
@@ -356,7 +640,7 @@ export class BookingService implements OnModuleInit {
         const ownerBusy = await tx.booking.findFirst({
           where: {
             workspaceId,
-            status: 'CONFIRMED',
+            status: { in: ACTIVE_STATUSES },
             assigneeUserId,
             startAt: { lt: end },
             endAt: { gt: start },
@@ -364,6 +648,10 @@ export class BookingService implements OnModuleInit {
           select: { id: true },
         });
         if (ownerBusy) throw new BadRequestException('That slot was just taken');
+        // The owner may be on personal time off (member-scoped blackout).
+        if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), assigneeUserId)) {
+          throw new BadRequestException('That slot is unavailable');
+        }
       }
 
       // ROUND_ROBIN with no free member: every member is already booked in this
@@ -414,47 +702,49 @@ export class BookingService implements OnModuleInit {
         });
         leadId = lead.id;
       }
+      // A calendar that requires approval holds the slot as PENDING (which still
+      // counts against capacity) until a manager confirms; otherwise CONFIRMED.
+      const initialStatus = (cal as any).requiresApproval ? 'PENDING' : 'CONFIRMED';
       const created = await tx.booking.create({
         data: {
           workspaceId, calendarId: calId, leadId, startAt: start, endAt: end,
           name: dto.name, email, phone, notes: dto.notes ?? null,
+          attendeeTimezone: dto.attendeeTimezone ?? null,
           assigneeUserId,
+          status: initialStatus,
           token: `bk_${randomBytes(16).toString('hex')}`,
         },
       });
-      await this.outbox.append(
-        {
-          type: MarketingEventTypes.BookingCreated,
-          idempotencyKey: `booking-created:${created.id}`,
-          payload: { workspaceId, leadId, bookingId: created.id, calendarId: calId, startAt: start.toISOString(), occurredAt: new Date().toISOString() },
-        },
-        tx as any,
-      );
+      // Only a CONFIRMED booking fires BookingCreated (which drives the calendar
+      // push + workflow triggers). A PENDING hold fires it on approval instead.
+      if (initialStatus === 'CONFIRMED') {
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.BookingCreated,
+            idempotencyKey: `booking-created:${created.id}`,
+            payload: { workspaceId, leadId, bookingId: created.id, calendarId: calId, startAt: start.toISOString(), occurredAt: new Date().toISOString() },
+          },
+          tx as any,
+        );
+      }
       return created;
     });
 
-    // Confirmation email + reminder (best-effort, outside the tx).
-    if (booking.email) {
-      // Show the appointment in the calendar's timezone, not UTC — a customer
-      // booking 14:00 Istanbul must not receive "11:00 GMT".
-      const when = formatInTimeZone(start, (cal as any).timezone || 'Europe/Istanbul');
-      this.email.sendPlainEmail(
-        booking.email, `Booking confirmed: ${cal.name}`,
-        `Your booking is confirmed for ${when}.\nCalendar: ${cal.name}`,
-      ).catch(() => undefined);
+    // A CONFIRMED booking triggers the calendar push, confirmation + reminders; a
+    // PENDING (approval-required) booking just acknowledges receipt and defers all
+    // of that to approval (setStatus → CONFIRMED). Times render in the calendar's
+    // timezone (not UTC) — a 14:00 Istanbul booking must not read "11:00 GMT".
+    if (booking.status === 'CONFIRMED') {
+      await this.afterConfirmed(workspaceId, cal, booking);
+    } else if (booking.email) {
+      const when = formatInTimeZone(booking.startAt, (cal as any).timezone || 'Europe/Istanbul');
+      this.email
+        .sendPlainEmail(
+          booking.email, `Booking received: ${cal.name || 'Booking'}`,
+          `Your booking request for ${when} is pending approval.`,
+        )
+        .catch(() => undefined);
     }
-    const remindAt = new Date(start.getTime() - 3600_000);
-    if (remindAt.getTime() > Date.now()) {
-      await this.scheduledJobs.schedule({
-        workspaceId, kind: BOOKING_REMINDER_KIND, runAt: remindAt, dedupKey: booking.id,
-        payload: { workspaceId, bookingId: booking.id },
-      });
-    }
-    // Push the new booking to a connected Google / Outlook calendar (best-effort,
-    // inert when unconfigured); the BookingCreated domain event also drives both,
-    // so a missed direct call self-heals.
-    this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
-    this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
 
     return { id: booking.id, startAt: booking.startAt, token: booking.token };
   }
@@ -467,7 +757,7 @@ export class BookingService implements OnModuleInit {
   async cancel(workspaceId: string, id: string) {
     const existing = await this.prisma.booking.findFirst({
       where: { id, workspaceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, calendarId: true },
     });
     if (!existing) throw new NotFoundException('Booking not found');
     if (existing.status === 'EXTERNAL_BUSY') {
@@ -475,32 +765,278 @@ export class BookingService implements OnModuleInit {
       throw new BadRequestException('Cannot cancel an external calendar block');
     }
     if (existing.status !== 'CANCELLED') {
-      await this.prisma.booking.updateMany({
-        where: { id: existing.id, workspaceId },
-        data: { status: 'CANCELLED' },
+      // Flip the status and emit BookingCancelled transactionally so downstream
+      // teardown (conference + calendar-mirror delete) and workflow automations
+      // fire off ONE reliable event via the outbox.
+      await this.prisma.$transaction(async (tx) => {
+        await tx.booking.updateMany({
+          where: { id: existing.id, workspaceId },
+          data: { status: 'CANCELLED' },
+        });
+        await this.outbox.append(
+          {
+            type: MarketingEventTypes.BookingCancelled,
+            idempotencyKey: `booking-cancelled:${existing.id}`,
+            payload: {
+              workspaceId,
+              bookingId: existing.id,
+              calendarId: existing.calendarId,
+              occurredAt: new Date().toISOString(),
+            },
+          },
+          tx as any,
+        );
       });
-      // Remove the Google / Outlook mirror so the slot frees up on both sides.
+      // Direct calls stay as a self-healing fallback (the BookingCancelled event
+      // also drives both syncs, so a missed direct call recovers).
       this.googleSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
       this.outlookSync.cancelBooking(workspaceId, existing.id).catch(() => undefined);
     }
     return { id: existing.id, status: 'CANCELLED' };
   }
 
-  private async remind(job: ClaimedJob): Promise<void> {
-    const { workspaceId, bookingId } = job.payload;
+  /**
+   * Post-confirmation side effects, shared by book() (immediate CONFIRMED) and
+   * setStatus() approval (PENDING→CONFIRMED): create the conference + persist its
+   * link (awaited for a conferencing calendar so the email carries it), email the
+   * confirmation with an ICS invite, and schedule the reminder. Best-effort.
+   */
+  private async afterConfirmed(
+    workspaceId: string,
+    cal: { name: string | null; conferencing?: string; timezone?: string },
+    booking: {
+      id: string;
+      email: string | null;
+      notes: string | null;
+      startAt: Date;
+      endAt: Date;
+      attendeeTimezone?: string | null;
+    },
+  ): Promise<void> {
+    let meetingUrl: string | null = null;
+    const conferencing = cal.conferencing ?? 'NONE';
+    if (conferencing === 'GOOGLE_MEET') {
+      await this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    } else if (conferencing === 'TEAMS') {
+      await this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    } else {
+      this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+      this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    }
+    if (conferencing !== 'NONE') {
+      const fresh = await this.prisma.booking.findFirst({
+        where: { id: booking.id, workspaceId },
+        select: { meetingUrl: true },
+      });
+      meetingUrl = fresh?.meetingUrl ?? null;
+    }
+    if (booking.email) {
+      const joinLine = meetingUrl ? `\nJoin: ${meetingUrl}` : '';
+      // Render in the attendee's timezone when captured, else the calendar's.
+      const when = formatInTimeZone(
+        booking.startAt,
+        booking.attendeeTimezone || cal.timezone || 'Europe/Istanbul',
+      );
+      const body =
+        `Your booking is confirmed for ${when}.\n` +
+        `Calendar: ${cal.name || 'Booking'}${joinLine}`;
+      const ics = buildIcs({
+        uid: booking.id,
+        start: booking.startAt,
+        end: booking.endAt,
+        summary: cal.name || 'Booking',
+        description: booking.notes ?? undefined,
+        joinUrl: meetingUrl ?? undefined,
+      });
+      this.email
+        .sendPlainEmailWithIcs(booking.email, `Booking confirmed: ${cal.name || 'Booking'}`, body, ics)
+        .catch(() => undefined);
+    }
+    // One reminder job per configured lead time (default: a single T-1h customer
+    // email). dedupKey is per (booking, offset) so re-running approval is safe.
+    const reminders = parseReminderConfig((cal as any).reminderConfig);
+    for (const r of reminders) {
+      const runAt = new Date(booking.startAt.getTime() - r.offsetMinutes * 60_000);
+      if (runAt.getTime() <= Date.now()) continue;
+      await this.scheduledJobs.schedule({
+        workspaceId,
+        kind: BOOKING_REMINDER_KIND,
+        runAt,
+        dedupKey: `${booking.id}:${r.offsetMinutes}`,
+        payload: {
+          workspaceId,
+          bookingId: booking.id,
+          offsetMinutes: r.offsetMinutes,
+          channels: r.channels,
+          audience: r.audience,
+        },
+      });
+    }
+  }
+
+  /**
+   * Move a booking to a new start time (in place). Re-validates the new slot
+   * (past / min-notice / max-advance / grid) and, under the workspace advisory
+   * lock, that it is clear of EXTERNAL_BUSY, blackout and — for an assigned
+   * booking — an assignee double-book (excluding itself). Patches the calendar
+   * mirror (moving the Meet/Teams meeting) and emits BookingRescheduled. Only an
+   * active (CONFIRMED/PENDING) booking can be rescheduled.
+   */
+  async reschedule(workspaceId: string, bookingId: string, newStartISO: string) {
     const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
-    if (!booking || booking.status !== 'CONFIRMED' || !booking.email) return;
-    // Resolve the calendar timezone so the reminder shows the appointment in local
-    // time, not UTC (matches the confirmation email).
+    if (!booking) throw new NotFoundException('Booking not found');
+    if (!ACTIVE_STATUSES.includes(booking.status)) {
+      throw new BadRequestException('Only an active booking can be rescheduled');
+    }
+    const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: booking.calendarId, workspaceId } });
+    if (!cal) throw new NotFoundException('Calendar not found');
+    const start = new Date(newStartISO);
+    if (isNaN(start.getTime()) || start.getTime() < Date.now()) throw new BadRequestException('Invalid or past slot');
+    const minNotice = (cal as any).minNoticeMinutes ?? 0;
+    const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
+    if (start.getTime() < Date.now() + minNotice * 60_000) throw new BadRequestException('Slot is within the minimum notice window');
+    if (start.getTime() > Date.now() + maxDays * 86400_000) throw new BadRequestException('Slot is beyond the maximum advance window');
+    if (!this.isAlignedSlot(cal, start)) throw new BadRequestException('Slot is outside the calendar availability or not aligned to the grid');
+    const end = new Date(start.getTime() + cal.slotMinutes * 60_000);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${workspaceId}`}))`;
+      const external = await tx.booking.findFirst({
+        where: { workspaceId, status: 'EXTERNAL_BUSY', startAt: { lt: end }, endAt: { gt: start } },
+        select: { id: true },
+      });
+      if (external) throw new BadRequestException('That slot is unavailable');
+      const blackouts = await tx.bookingBlackout.findMany({
+        where: { workspaceId, OR: [{ calendarId: null }, { calendarId: booking.calendarId }], endAt: { gt: start }, startAt: { lt: end } },
+        select: { startAt: true, endAt: true, marketingUserId: true },
+      });
+      if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), booking.assigneeUserId ?? null)) {
+        throw new BadRequestException('That slot is unavailable');
+      }
+      if (booking.assigneeUserId) {
+        const clash = await tx.booking.findFirst({
+          where: {
+            workspaceId, status: { in: ACTIVE_STATUSES }, assigneeUserId: booking.assigneeUserId,
+            id: { not: booking.id }, startAt: { lt: end }, endAt: { gt: start },
+          },
+          select: { id: true },
+        });
+        if (clash) throw new BadRequestException('That slot was just taken');
+      }
+      await tx.booking.updateMany({ where: { id: booking.id, workspaceId }, data: { startAt: start, endAt: end } });
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.BookingRescheduled,
+          idempotencyKey: `booking-rescheduled:${booking.id}:${start.getTime()}`,
+          payload: { workspaceId, bookingId: booking.id, calendarId: booking.calendarId, occurredAt: new Date().toISOString() },
+        },
+        tx as any,
+      );
+    });
+
+    // Move the mirrored event (PATCH preserves the same Meet/Teams meeting). A
+    // PENDING booking has no mirror yet, so nothing to move until it's approved.
+    if (booking.status === 'CONFIRMED') {
+      this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+      this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+    }
+    return { id: booking.id, startAt: start.toISOString() };
+  }
+
+  /**
+   * Admin status transition: approve a PENDING booking (→CONFIRMED, running the
+   * deferred confirm side-effects), or mark NO_SHOW / COMPLETED / CANCELLED.
+   * Emits BookingUpdated; CANCELLED delegates to cancel() (mirror teardown).
+   */
+  async setStatus(workspaceId: string, bookingId: string, status: string) {
+    if (!SETTABLE_STATUSES.includes(status)) throw new BadRequestException('Invalid status');
+    if (status === 'CANCELLED') return this.cancel(workspaceId, bookingId);
+    const existing = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
+    if (!existing) throw new NotFoundException('Booking not found');
+    if (existing.status === 'EXTERNAL_BUSY') {
+      throw new BadRequestException('Cannot change an external calendar block');
+    }
+    const wasPending = existing.status === 'PENDING';
+    await this.prisma.$transaction(async (tx) => {
+      await tx.booking.updateMany({ where: { id: existing.id, workspaceId }, data: { status } });
+      await this.outbox.append(
+        {
+          type: MarketingEventTypes.BookingUpdated,
+          idempotencyKey: `booking-updated:${existing.id}:${status}`,
+          payload: { workspaceId, bookingId: existing.id, calendarId: existing.calendarId, occurredAt: new Date().toISOString() },
+        },
+        tx as any,
+      );
+    });
+    if (status === 'CONFIRMED' && wasPending) {
+      const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: existing.calendarId, workspaceId } });
+      if (cal) await this.afterConfirmed(workspaceId, cal, existing);
+    }
+    return { id: existing.id, status };
+  }
+
+  /** Public self-service: reschedule a booking by its opaque token. */
+  async rescheduleByToken(token: string, newStartISO: string) {
+    const booking = await this.prisma.booking.findFirst({ where: { token }, select: { id: true, workspaceId: true } });
+    if (!booking) throw new NotFoundException('Booking not found');
+    return this.reschedule(booking.workspaceId, booking.id, newStartISO);
+  }
+
+  /** Public self-service: cancel a booking by its opaque token. */
+  async cancelByToken(token: string) {
+    const booking = await this.prisma.booking.findFirst({ where: { token }, select: { id: true, workspaceId: true } });
+    if (!booking) throw new NotFoundException('Booking not found');
+    return this.cancel(booking.workspaceId, booking.id);
+  }
+
+  private async remind(job: ClaimedJob): Promise<void> {
+    const { workspaceId, bookingId, channels, audience } = job.payload as {
+      workspaceId: string;
+      bookingId: string;
+      channels?: string[];
+      audience?: string;
+    };
+    const booking = await this.prisma.booking.findFirst({ where: { id: bookingId, workspaceId } });
+    if (!booking || booking.status !== 'CONFIRMED') return;
+    const chans = channels ?? ['EMAIL'];
+    const aud = audience ?? 'CUSTOMER';
+    // Render in the attendee's timezone when captured, else the calendar's (not
+    // UTC), matching the confirmation email.
     const cal = await this.prisma.bookingCalendar.findFirst({
       where: { id: booking.calendarId, workspaceId },
       select: { timezone: true },
     });
-    const when = formatInTimeZone(booking.startAt, cal?.timezone || 'Europe/Istanbul');
-    await this.email.sendPlainEmail(
-      booking.email, 'Reminder: your booking is soon',
-      `This is a reminder for your booking at ${when}.`,
-    ).catch(() => undefined);
+    const when = formatInTimeZone(
+      booking.startAt,
+      booking.attendeeTimezone || cal?.timezone || 'Europe/Istanbul',
+    );
+    const joinLine = booking.meetingUrl ? `\nJoin: ${booking.meetingUrl}` : '';
+
+    if ((aud === 'CUSTOMER' || aud === 'BOTH') && chans.includes('EMAIL') && booking.email) {
+      await this.email
+        .sendPlainEmail(
+          booking.email, 'Reminder: your booking is soon',
+          `This is a reminder for your booking at ${when}.${joinLine}`,
+        )
+        .catch(() => undefined);
+    }
+    if ((aud === 'HOST' || aud === 'BOTH') && chans.includes('EMAIL') && booking.assigneeUserId) {
+      const host = await this.prisma.marketingUser.findFirst({
+        where: { id: booking.assigneeUserId, workspaceId },
+        select: { email: true },
+      });
+      if (host?.email) {
+        await this.email
+          .sendPlainEmail(
+            host.email, `Reminder: upcoming appointment with ${booking.name}`,
+            `You have an appointment at ${when}.${joinLine}`,
+          )
+          .catch(() => undefined);
+      }
+    }
+    // SMS reminders (channels includes 'SMS') are delivered by the notification /
+    // messaging layer that subscribes to booking events — BookingService does not
+    // couple directly to the SMS channel adapter here.
   }
 
   /**
@@ -510,7 +1046,14 @@ export class BookingService implements OnModuleInit {
    * direct reserve call could pass an arbitrary off-grid / out-of-hours time.
    */
   private isAlignedSlot(
-    cal: { availability: unknown; slotMinutes: number; bufferMinutes: number; timezone?: string },
+    cal: {
+      availability: unknown;
+      slotMinutes: number;
+      bufferMinutes: number;
+      bufferBeforeMinutes?: number;
+      bufferAfterMinutes?: number;
+      timezone?: string;
+    },
     start: Date,
   ): boolean {
     const avail = (cal.availability ?? {}) as Record<
@@ -523,7 +1066,7 @@ export class BookingService implements OnModuleInit {
     const { y, mo, d, weekday } = zonedParts(start.getTime(), tz);
     const windows = avail[String(weekday)] ?? [];
     const slotMs = cal.slotMinutes * 60_000;
-    const stepMs = (cal.slotMinutes + cal.bufferMinutes) * 60_000;
+    const stepMs = (cal.slotMinutes + bufferTotal(cal)) * 60_000;
     const target = start.getTime();
     for (const w of windows) {
       const hs = parseHm(w.start), he = parseHm(w.end);

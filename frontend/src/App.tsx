@@ -74,6 +74,8 @@ const AutomationBuilderPage    = lazy(() => import('./pages/marketing/automation
 const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
 const BookingSettingsPage      = lazy(() => import('./pages/marketing/BookingSettingsPage'));
+const AppointmentsPage         = lazy(() => import('./pages/marketing/appointments/AppointmentsPage'));
+const PublicBookingPage        = lazy(() => import('./pages/marketing/appointments/PublicBookingPage'));
 const ReviewsPage              = lazy(() => import('./pages/marketing/ReviewsPage'));
 const VoicePage                = lazy(() => import('./pages/marketing/VoicePage'));
 const InvoicesPage             = lazy(() => import('./pages/marketing/invoices'));
@@ -150,6 +152,8 @@ export default function App() {
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
       <Route path="/widget"   element={<S><WidgetChatPage /></S>} />
+      {/* Public self-service booking page (no auth). */}
+      <Route path="/book/:ws/:cal" element={<S><PublicBookingPage /></S>} />
       {/* Standalone affiliate self-serve portal (token-authenticated, no session). */}
       <Route path="/affiliate-portal" element={<S><AffiliatePortalPage /></S>} />
 
@@ -230,6 +234,7 @@ export default function App() {
             <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />
             <Route path="/booking"     element={<S><BookingSettingsPage /></S>} />
+            <Route path="/appointments" element={<S><AppointmentsPage /></S>} />
             <Route path="/reviews"     element={<S><ReviewsPage /></S>} />
             <Route path="/voice"       element={<S><VoicePage /></S>} />
             <Route path="/invoices"    element={<S><InvoicesPage /></S>} />

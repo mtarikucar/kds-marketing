@@ -44,6 +44,16 @@ export class CreateCalendarDto {
   @IsOptional() @IsInt() @Min(5) @Max(480) slotMinutes?: number;
   @IsOptional() @IsInt() @Min(0) @Max(240) bufferMinutes?: number;
   @IsOptional() @IsString() @MaxLength(64) timezone?: string;
+  /** Video-conferencing provider attached to this calendar's bookings. */
+  @IsOptional() @IsString() @IsIn(['NONE', 'GOOGLE_MEET', 'TEAMS']) conferencing?: string;
+  // Booking policy (Phase 2).
+  @IsOptional() @IsInt() @Min(0) @Max(43200) minNoticeMinutes?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(365) maxAdvanceDays?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(240) bufferBeforeMinutes?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(240) bufferAfterMinutes?: number;
+  @IsOptional() @IsBoolean() requiresApproval?: boolean;
+  /** Array of { offsetMinutes, channels:['EMAIL'|'SMS'], audience:'CUSTOMER'|'HOST'|'BOTH' }. */
+  @IsOptional() @IsArray() reminderConfig?: unknown[];
 }
 export class UpdateCalendarDto extends CreateCalendarDto {
   @IsOptional() declare name: string;
@@ -54,6 +64,40 @@ export class UpdateCalendarDto extends CreateCalendarDto {
 export class CalendarMemberDto {
   @IsString() @IsNotEmpty() @MaxLength(64) marketingUserId: string;
   @IsOptional() @IsInt() @Min(0) @Max(10000) priority?: number;
+}
+
+/** Create a blackout / time-off window. */
+export class CreateBlackoutDto {
+  @IsOptional() @IsString() @MaxLength(64) calendarId?: string;
+  @IsOptional() @IsString() @MaxLength(64) marketingUserId?: string;
+  @IsString() @IsNotEmpty() @MaxLength(40) startAt: string;
+  @IsString() @IsNotEmpty() @MaxLength(40) endAt: string;
+  @IsOptional() @IsString() @MaxLength(200) reason?: string;
+}
+
+/** Upsert a member's working hours for a calendar. */
+export class SetMemberAvailabilityDto {
+  @IsString() @IsNotEmpty() @MaxLength(64) marketingUserId: string;
+  @IsObject() availability: Record<string, unknown>;
+  @IsOptional() @IsString() @MaxLength(64) timezone?: string;
+}
+
+/** Query filter for the admin bookings list. */
+export class ListBookingsQueryDto {
+  @IsOptional() @IsString() @MaxLength(64) calendarId?: string;
+  @IsOptional() @IsString() @MaxLength(24) status?: string;
+  @IsOptional() @IsString() @MaxLength(40) from?: string;
+  @IsOptional() @IsString() @MaxLength(40) to?: string;
+}
+
+/** Move a booking to a new start time (ISO datetime). */
+export class RescheduleBookingDto {
+  @IsString() @IsNotEmpty() start: string;
+}
+
+/** Admin status transition for a booking. */
+export class SetBookingStatusDto {
+  @IsString() @IsIn(['CONFIRMED', 'NO_SHOW', 'COMPLETED', 'CANCELLED']) status: string;
 }
 
 /** Replace a calendar's full member set. */

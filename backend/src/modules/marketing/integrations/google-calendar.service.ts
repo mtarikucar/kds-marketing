@@ -38,6 +38,11 @@ import { safeFetch, SsrfBlockedError } from '../../../common/util/safe-fetch';
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
+// Advanced Meet (Phase 4): creating a configured Meet space (recording /
+// transcript / co-host) needs this scope AND a Google-verified app. Requested
+// only when the operator opts a connection into advanced Meet (re-consent).
+export const MEET_SPACE_SCOPE =
+  'https://www.googleapis.com/auth/meetings.space.created';
 const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes to complete the round-trip
 // Refresh a little before the real expiry so a request mid-flight never 401s.
 const REFRESH_SKEW_MS = 60 * 1000;
@@ -87,6 +92,7 @@ export interface GoogleCalendarConnectionRow {
   resourceId: string | null;
   channelToken: string | null;
   channelExpiration: Date | null;
+  scopes: string | null;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -170,6 +176,7 @@ export class GoogleCalendarService {
     workspaceId: string,
     marketingUserId: string,
     googleCalendarId = 'primary',
+    advancedMeet = false,
   ): { url: string; state: string } {
     this.assertConfigured();
     const state = this.encodeState({
@@ -183,7 +190,11 @@ export class GoogleCalendarService {
     u.searchParams.set('response_type', 'code');
     u.searchParams.set('client_id', this.envClientId()!);
     u.searchParams.set('redirect_uri', this.redirectUri());
-    u.searchParams.set('scope', CALENDAR_SCOPE);
+    // Request the advanced Meet-space scope alongside calendar only when opted in.
+    u.searchParams.set(
+      'scope',
+      advancedMeet ? `${CALENDAR_SCOPE} ${MEET_SPACE_SCOPE}` : CALENDAR_SCOPE,
+    );
     u.searchParams.set('access_type', 'offline');
     u.searchParams.set('include_granted_scopes', 'true');
     u.searchParams.set('prompt', 'consent');
@@ -233,6 +244,7 @@ export class GoogleCalendarService {
           refreshToken: sealSecret(tokens.refresh_token),
           tokenExpiresAt: expiresAt,
           enabled: true,
+          scopes: tokens.scope ?? null,
           // A fresh grant invalidates the old incremental cursor.
           syncToken: null,
         },
@@ -247,6 +259,7 @@ export class GoogleCalendarService {
           refreshToken: sealSecret(tokens.refresh_token),
           tokenExpiresAt: expiresAt,
           enabled: true,
+          scopes: tokens.scope ?? null,
         },
       })) as GoogleCalendarConnectionRow;
     }
@@ -337,6 +350,11 @@ export class GoogleCalendarService {
     return row;
   }
 
+  /** True when the connection was granted the advanced Meet-space scope. */
+  hasAdvancedMeet(row: { scopes: string | null }): boolean {
+    return !!row.scopes && row.scopes.split(/\s+/).includes(MEET_SPACE_SCOPE);
+  }
+
   /** Strip sealed tokens; expose only safe metadata + boolean presence flags. */
   mask(row: GoogleCalendarConnectionRow) {
     return {
@@ -350,6 +368,7 @@ export class GoogleCalendarService {
       pushChannelActive: !!row.channelId,
       pushExpiresAt: row.channelExpiration,
       lastSyncToken: row.syncToken ? true : false,
+      advancedMeet: this.hasAdvancedMeet(row),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

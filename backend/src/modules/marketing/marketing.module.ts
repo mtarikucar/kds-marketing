@@ -294,6 +294,8 @@ import {
 } from './integrations/google-calendar.controller';
 import { GoogleCalendarService } from './integrations/google-calendar.service';
 import { GoogleCalendarSyncService } from './integrations/google-calendar-sync.service';
+import { HostResolverService } from './integrations/conferencing/host-resolver.service';
+import { GoogleMeetSpacesService } from './integrations/conferencing/google-meet-spaces.service';
 import {
   OutlookCalendarController,
   OutlookCalendarPublicController,
@@ -739,6 +741,10 @@ import { WalletService } from './wallet/wallet.service';
     OutlookCalendarService,
     GoogleCalendarSyncService,
     OutlookCalendarSyncService,
+    // Conferencing (Meet / Teams) host resolution shared by both sync services.
+    HostResolverService,
+    // Advanced Meet spaces (Phase 4 — recording/transcript/co-host, env-gated).
+    GoogleMeetSpacesService,
     // Epic F — custom roles + permissions.
     RolesService,
     PermissionsGuard,

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -9,7 +9,16 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { BookingService } from '../sites/booking.service';
-import { CreateCalendarDto, UpdateCalendarDto, SetCalendarMembersDto } from '../dto/site.dto';
+import {
+  CreateCalendarDto,
+  UpdateCalendarDto,
+  SetCalendarMembersDto,
+  RescheduleBookingDto,
+  SetBookingStatusDto,
+  CreateBlackoutDto,
+  SetMemberAvailabilityDto,
+  ListBookingsQueryDto,
+} from '../dto/site.dto';
 
 /** Booking calendars (config). MANAGER+ behind `funnels`. Public booking is separate. */
 @MarketingRoute()
@@ -22,6 +31,25 @@ export class MarketingBookingController {
 
   @Get()
   list(@CurrentMarketingUser() a: MarketingUserPayload) { return this.booking.list(a.workspaceId); }
+
+  // Static GET routes declared BEFORE `:id` so they aren't captured by it.
+  /** Blackout / time-off windows (workspace-wide + optionally one calendar). */
+  @Get('blackouts')
+  listBlackouts(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query('calendarId') calendarId?: string,
+  ) {
+    return this.booking.listBlackouts(a.workspaceId, calendarId);
+  }
+
+  /** Real appointments for the in-app list (excludes external busy blocks). */
+  @Get('bookings')
+  listBookings(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Query() q: ListBookingsQueryDto,
+  ) {
+    return this.booking.listBookings(a.workspaceId, q);
+  }
 
   @Post()
   @RequirePermission('settings.manage')
@@ -66,5 +94,55 @@ export class MarketingBookingController {
     @Param('bookingId') bookingId: string,
   ) {
     return this.booking.cancel(a.workspaceId, bookingId);
+  }
+
+  /** Move a booking to a new time (in place; moves the Meet/Teams meeting too). */
+  @Post('bookings/:bookingId/reschedule')
+  @RequirePermission('settings.manage')
+  rescheduleBooking(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: RescheduleBookingDto,
+  ) {
+    return this.booking.reschedule(a.workspaceId, bookingId, dto.start);
+  }
+
+  /** Approve a pending booking or mark it no-show / completed / cancelled. */
+  @Patch('bookings/:bookingId/status')
+  @RequirePermission('settings.manage')
+  setBookingStatus(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: SetBookingStatusDto,
+  ) {
+    return this.booking.setStatus(a.workspaceId, bookingId, dto.status);
+  }
+
+  @Post('blackouts')
+  @RequirePermission('settings.manage')
+  createBlackout(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: CreateBlackoutDto) {
+    return this.booking.createBlackout(a.workspaceId, dto);
+  }
+
+  @Delete('blackouts/:id')
+  @RequirePermission('settings.manage')
+  deleteBlackout(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.booking.deleteBlackout(a.workspaceId, id);
+  }
+
+  /** A calendar's per-member working hours (Phase 2). */
+  @Get(':id/member-availability')
+  listMemberAvailability(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.booking.listMemberAvailability(a.workspaceId, id);
+  }
+
+  @Post(':id/member-availability')
+  @RequirePermission('settings.manage')
+  setMemberAvailability(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: SetMemberAvailabilityDto,
+  ) {
+    return this.booking.setMemberAvailability(a.workspaceId, id, dto.marketingUserId, dto.availability, dto.timezone);
   }
 }

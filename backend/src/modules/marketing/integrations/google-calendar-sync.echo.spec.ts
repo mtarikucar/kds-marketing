@@ -16,7 +16,18 @@ function makeSvc() {
     },
   };
   const bus = { on: jest.fn(), off: jest.fn() };
-  const svc = new GoogleCalendarSyncService(prisma as any, bus as any, {} as any);
+  const hostResolver = { resolve: jest.fn() };
+  const scheduledJobs = { schedule: jest.fn() };
+  const runner = { registerHandler: jest.fn() };
+  const svc = new GoogleCalendarSyncService(
+    prisma as any,
+    bus as any,
+    {} as any,
+    hostResolver as any,
+    scheduledJobs as any,
+    runner as any,
+    { available: () => false, createConfiguredSpace: jest.fn() } as any,
+  );
   return { svc, prisma };
 }
 

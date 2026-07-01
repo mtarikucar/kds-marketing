@@ -181,7 +181,8 @@
     "agencyRebilling": "Ajans Yeniden Faturalama",
     "agencySnapshots": "Ajans Anlık Görüntüleri",
     "ivr": "Sesli Menü (IVR)",
-    "help": "Yardım"
+    "help": "Yardım",
+    "appointments": "Randevular"
   },
   "common": {
     "save": "Kaydet",
@@ -1243,7 +1244,9 @@
     "pause": "Duraklat",
     "searchPlaceholder": "Ada veya tetikleyiciye göre ara…",
     "statusFilter": "Durum filtresi",
-    "status": { "all": "Hepsi" },
+    "status": {
+      "all": "Hepsi"
+    },
     "newBlank": "Boş otomasyon",
     "newFromTemplate": "Şablondan",
     "newWithAi": "AI ile tanımla",
@@ -1398,7 +1401,19 @@
       "4": "Per",
       "5": "Cum",
       "6": "Cmt"
-    }
+    },
+    "conferencing": "Görüntülü toplantı",
+    "conferencingHint": "Her randevuya Meet/Teams bağlantısı ekle.",
+    "conf": {
+      "NONE": "Yok",
+      "GOOGLE_MEET": "Google Meet",
+      "TEAMS": "Microsoft Teams"
+    },
+    "minNotice": "Min. önceden haber (dk)",
+    "maxAdvance": "En ileri tarih (gün)",
+    "bufferBefore": "Öncesi tampon (dk)",
+    "bufferAfter": "Sonrası tampon (dk)",
+    "requiresApproval": "Onay gerektir"
   },
   "reviews": {
     "title": "Yorumlar",
@@ -2067,5 +2082,52 @@
       "linkTerms": "Kullanım şartları",
       "rights": "Tüm hakları saklıdır."
     }
+  },
+  "appointments": {
+    "title": "Randevular",
+    "subtitle": "Takvimlerinizdeki randevular. Yeniden planlayın, onaylayın veya sonucu işaretleyin.",
+    "allCalendars": "Tüm takvimler",
+    "allStatuses": "Tüm durumlar",
+    "empty": "Randevu yok",
+    "emptyDesc": "Alınan randevular burada görünür.",
+    "who": "Kişi",
+    "calendar": "Takvim",
+    "when": "Zaman",
+    "statusCol": "Durum",
+    "meeting": "Toplantı",
+    "approve": "Onayla",
+    "reschedule": "Yeniden planla",
+    "noShow": "Gelmedi",
+    "complete": "Tamamlandı",
+    "cancelled": "Randevu iptal edildi",
+    "updated": "Randevu güncellendi",
+    "rescheduled": "Randevu yeniden planlandı",
+    "actionFailed": "İşlem başarısız",
+    "cancelTitle": "Randevu iptal edilsin mi?",
+    "cancelDesc": "Katılımcı bu slotu ve varsa toplantı bağlantısını kaybeder.",
+    "rescheduleDesc": "Yeni bir zaman seçin. Sunucu müsaitlik, önceden haber ve tamponları yeniden doğrular.",
+    "confirmReschedule": "Yeniden planla",
+    "status": {
+      "CONFIRMED": "Onaylı",
+      "PENDING": "Beklemede",
+      "CANCELLED": "İptal",
+      "NO_SHOW": "Gelmedi",
+      "COMPLETED": "Tamamlandı",
+      "RESCHEDULED": "Yeniden planlandı"
+    }
+  },
+  "publicBooking": {
+    "title": "Randevu al",
+    "confirmed": "Randevunuz onaylandı",
+    "joinLink": "Görüntülü toplantıya katıl",
+    "emailed": "Takvim davetli bir onay e-postası gönderildi.",
+    "noSlots": "Önümüzdeki iki hafta içinde uygun zaman yok.",
+    "pickSlot": "Devam etmek için bir zaman seçin.",
+    "name": "Adınız",
+    "email": "E-posta",
+    "phone": "Telefon (isteğe bağlı)",
+    "notes": "Notlar (isteğe bağlı)",
+    "reserve": "Randevuyu onayla",
+    "failed": "Bu slot ayrılamadı. Lütfen başka bir tane seçin."
   }
 }
