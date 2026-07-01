@@ -53,7 +53,10 @@ export class PublicEstimateController {
         `.ok{background:#dcfce7;color:#166534;padding:10px;border-radius:8px;text-align:center}.no{background:#fef2f2;color:#991b1b;padding:10px;border-radius:8px;text-align:center}</style></head>` +
         `<body><h2>Estimate ${esc(est.number)}</h2>` +
         (est.validUntil
-          ? `<p style="color:#64748b">Valid until ${esc(String(est.validUntil).slice(0, 10))}</p>`
+          ? // validUntil is a Date object (Prisma row, in-process — not a string),
+            // so String(date).slice(0,10) gave "Wed Jul 15" (no year). Normalise to
+            // an ISO calendar date "YYYY-MM-DD".
+            `<p style="color:#64748b">Valid until ${esc(new Date(est.validUntil).toISOString().slice(0, 10))}</p>`
           : '') +
         `<table><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th></tr>${rows}</table>` +
         `<div class="total">${esc(money(est.total, est.currency))}</div>` +
