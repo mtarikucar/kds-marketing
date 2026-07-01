@@ -25,6 +25,13 @@ export interface CheckoutInput {
   provider: 'paytr' | 'stripe' | 'manual';
 }
 
+/** A checkout retry (double-click / auto-retry of POST /checkout) within this
+ *  window reuses the existing PENDING order instead of minting a duplicate order
+ *  + PSP handle. The schema's `idempotencyKey @unique` was meant to "collapse
+ *  retries", but the key is generated per-call (randomUUID), so it never fires —
+ *  this rolling-window pre-check is the actual guard. */
+const CHECKOUT_DEDUP_MS = 10 * 60_000;
+
 /** Add-on price anchors (per unit, per current period). */
 const ADDON_PRICES: Record<string, { TRY: number; USD: number; name: string }> = {
   quota_boost_10: { TRY: 2690, USD: 79, name: '+10 leads/day boost' },
@@ -207,18 +214,35 @@ export class BillingService {
         where: { workspaceId },
         select: { packageId: true },
       });
-      order = await this.prisma.paymentOrder.create({
-        data: {
-          workspaceId,
-          type: existing && existing.packageId !== pkg.id ? 'UPGRADE' : 'SUBSCRIPTION',
-          packageId: pkg.id,
-          billingCycle: cycle,
-          amount,
-          currency,
-          provider: provider.id,
-          idempotencyKey: randomUUID(),
-        },
-      });
+      // Reuse a recent PENDING order for the SAME intent (package + cycle +
+      // currency + provider) instead of minting a duplicate order + PSP handle on a
+      // double-click / auto-retry; on a double-payment settlement would otherwise
+      // grant/charge twice. A genuine re-checkout past the window still mints fresh.
+      order =
+        (await this.prisma.paymentOrder.findFirst({
+          where: {
+            workspaceId,
+            status: 'PENDING',
+            packageId: pkg.id,
+            billingCycle: cycle,
+            currency,
+            provider: provider.id,
+            createdAt: { gte: new Date(Date.now() - CHECKOUT_DEDUP_MS) },
+          },
+          orderBy: { createdAt: 'desc' },
+        })) ??
+        (await this.prisma.paymentOrder.create({
+          data: {
+            workspaceId,
+            type: existing && existing.packageId !== pkg.id ? 'UPGRADE' : 'SUBSCRIPTION',
+            packageId: pkg.id,
+            billingCycle: cycle,
+            amount,
+            currency,
+            provider: provider.id,
+            idempotencyKey: randomUUID(),
+          },
+        }));
     } else {
       const code = input.addOnCode!;
       const price = ADDON_PRICES[code];
@@ -232,17 +256,30 @@ export class BillingService {
           'An active subscription is required before buying add-ons',
         );
       }
-      order = await this.prisma.paymentOrder.create({
-        data: {
-          workspaceId,
-          type: 'ADDON',
-          addOnCode: code,
-          amount: new Prisma.Decimal(currency === 'TRY' ? price.TRY : price.USD),
-          currency,
-          provider: provider.id,
-          idempotencyKey: randomUUID(),
-        },
-      });
+      order =
+        (await this.prisma.paymentOrder.findFirst({
+          where: {
+            workspaceId,
+            status: 'PENDING',
+            type: 'ADDON',
+            addOnCode: code,
+            currency,
+            provider: provider.id,
+            createdAt: { gte: new Date(Date.now() - CHECKOUT_DEDUP_MS) },
+          },
+          orderBy: { createdAt: 'desc' },
+        })) ??
+        (await this.prisma.paymentOrder.create({
+          data: {
+            workspaceId,
+            type: 'ADDON',
+            addOnCode: code,
+            amount: new Prisma.Decimal(currency === 'TRY' ? price.TRY : price.USD),
+            currency,
+            provider: provider.id,
+            idempotencyKey: randomUUID(),
+          },
+        }));
     }
 
     const returnUrl =
