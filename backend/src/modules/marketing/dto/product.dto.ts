@@ -10,7 +10,7 @@ import {
   MaxLength,
   IsInt,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 const CURRENCIES = ['TRY', 'USD', 'EUR'];
 const BILLING_TYPES = ['ONE_TIME', 'RECURRING'];
@@ -43,7 +43,22 @@ export class UpdateProductDto {
 export class ProductFilterDto {
   @IsOptional() @IsString() @MaxLength(120) search?: string;
   @IsOptional() @IsString() @IsIn(BILLING_TYPES) billingType?: string;
-  @IsOptional() @Type(() => Boolean) @IsBoolean() active?: boolean;
+  // The global ValidationPipe runs enableImplicitConversion, which coerces every
+  // query STRING via Boolean(value) — so `?active=false` becomes Boolean('false')
+  // === true and the "inactive products" filter silently returns ACTIVE products.
+  // Implicit conversion has already replaced `value`, so read the RAW string off
+  // obj[key] and map it explicitly (mirrors the string+parse convention used for
+  // other query booleans, e.g. marketing-notifications `isRead`).
+  @IsOptional()
+  @Transform(({ obj, key }) => {
+    const raw = obj?.[key];
+    if (typeof raw === 'boolean') return raw;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return undefined;
+  })
+  @IsBoolean()
+  active?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number;
 }
