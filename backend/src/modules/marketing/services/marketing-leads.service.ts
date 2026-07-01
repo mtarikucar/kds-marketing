@@ -132,9 +132,15 @@ export class MarketingLeadsService {
       // id from another workspace must not silently leak the lead there.
       const rep = await this.prisma.marketingUser.findFirst({
         where: { id: dto.assignedToId, workspaceId },
-        select: { id: true },
+        select: { id: true, role: true, status: true },
       });
       if (!rep) throw new NotFoundException('Sales rep not found');
+      // Parity with assign()/bulkAssign(): a lead may only be OWNED by an ACTIVE
+      // REP. Without this, create() could mint a lead assigned to a MANAGER or a
+      // deactivated rep (a state the dedicated assign endpoints reject) — it would
+      // sit in no active queue and, on convert, stamp a commission to a non-REP.
+      if (rep.role !== 'REP') throw new BadRequestException('Target must be a REP');
+      if (rep.status !== 'ACTIVE') throw new BadRequestException('Target rep is not active');
       resolvedAssignee = dto.assignedToId;
     } else if (userRole === 'REP') {
       resolvedAssignee = userId;
