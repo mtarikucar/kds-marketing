@@ -339,7 +339,14 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
     prisma = mockPrismaClient();
     google = new GoogleCalendarService(prisma as never);
     bus = { on: jest.fn(), off: jest.fn() };
-    sync = new GoogleCalendarSyncService(prisma as never, bus as never, google);
+    sync = new GoogleCalendarSyncService(
+      prisma as never,
+      bus as never,
+      google,
+      { resolve: jest.fn().mockResolvedValue(null) } as never,
+      { schedule: jest.fn() } as never,
+      { registerHandler: jest.fn() } as never,
+    );
     safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
     // Make getFreshAccessToken trivial: stub it to return a constant.
     jest
