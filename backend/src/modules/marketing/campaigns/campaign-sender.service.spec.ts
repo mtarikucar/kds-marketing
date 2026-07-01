@@ -146,6 +146,41 @@ describe('CampaignSenderService.batch', () => {
     );
   });
 
+  it('recomputes opened/clicked/unsubscribed from recipient rows, not the stale stats blob', async () => {
+    // Snapshot the recompute reads. The tracker's atomic jsonb_set bump() has since
+    // advanced the true engagement counts; the old `...s` spread re-wrote these
+    // stale values, clobbering a concurrent open/click/unsubscribe (lost-update).
+    prisma.campaign.findUnique.mockResolvedValue({
+      stats: { recipients: 10, opened: 5, clicked: 2, unsubscribed: 1 },
+      abEnabled: false,
+    });
+    prisma.campaignRecipient.groupBy.mockResolvedValue([
+      { status: 'SENT', _count: { _all: 3 } },
+      { status: 'FAILED', _count: { _all: 1 } },
+      { status: 'SKIPPED', _count: { _all: 2 } },
+      { status: 'UNSUBSCRIBED', _count: { _all: 4 } },
+    ]);
+    // Authoritative engagement from the recipient openedAt/clickedAt timestamps.
+    prisma.campaignRecipient.count.mockImplementation(async ({ where }: any) =>
+      where?.openedAt ? 6 : where?.clickedAt ? 3 : 0,
+    );
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats);
+    // Engagement is derived from rows (6/3/4), NOT carried from the stale blob
+    // (5/2/1); the static launch-time `recipients` total is preserved.
+    expect(statsUpdate[0].data.stats).toEqual({
+      recipients: 10,
+      sent: 3,
+      failed: 1,
+      skipped: 2,
+      opened: 6,
+      clicked: 3,
+      unsubscribed: 4,
+    });
+  });
+
   describe('A/B WINNER mode', () => {
     it('does NOT mark a campaign SENT while HOLD recipients await the winner', async () => {
       prisma.campaignRecipient.findMany.mockResolvedValue([]); // test cohort all sent → no PENDING

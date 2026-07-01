@@ -306,11 +306,18 @@ export class CampaignSenderService implements OnModuleInit {
    * on the JSON `stats` blob: even interleaved writers converge on the true count.
    */
   private async recomputeStats(workspaceId: string, campaignId: string): Promise<void> {
-    const groups = await this.prisma.campaignRecipient.groupBy({
-      by: ['status'],
-      where: { workspaceId, campaignId },
-      _count: { _all: true },
-    });
+    const [groups, openedCount, clickedCount] = await Promise.all([
+      this.prisma.campaignRecipient.groupBy({
+        by: ['status'],
+        where: { workspaceId, campaignId },
+        _count: { _all: true },
+      }),
+      // Engagement is authoritatively recorded per-recipient (open/click set a
+      // timestamp; unsubscribe sets status UNSUBSCRIBED — see CampaignTracking),
+      // so it is fully derivable from the rows.
+      this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, openedAt: { not: null } } }),
+      this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, clickedAt: { not: null } } }),
+    ]);
     const countOf = (status: string) =>
       groups.find((g) => g.status === status)?._count._all ?? 0;
     const c = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { stats: true, abEnabled: true } });
@@ -319,10 +326,21 @@ export class CampaignSenderService implements OnModuleInit {
       where: { id: campaignId },
       data: {
         stats: {
-          ...s,
+          // `recipients` is a static launch-time total (never bumped) — preserve it.
+          ...(s.recipients !== undefined ? { recipients: s.recipients } : {}),
           sent: countOf('SENT'),
           failed: countOf('FAILED'),
           skipped: countOf('SKIPPED'),
+          // Recompute engagement from the recipient rows (the source of truth)
+          // rather than carrying it forward from the stored blob. opened/clicked/
+          // unsubscribed are maintained by the tracker's atomic jsonb_set bump();
+          // re-writing them here from a STALE `...s` snapshot clobbered a concurrent
+          // open/click/unsubscribe (the live lost-update this method claimed to be
+          // immune to). Deriving all fields from rows makes the recompute truly
+          // convergent under concurrency.
+          opened: openedCount,
+          clicked: clickedCount,
+          unsubscribed: countOf('UNSUBSCRIBED'),
         } as Prisma.InputJsonValue,
       },
     });
