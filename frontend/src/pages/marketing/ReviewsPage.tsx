@@ -306,8 +306,8 @@ export default function ReviewsPage() {
                           variant="outline"
                           size="sm"
                           onClick={() => draft.mutate(r.id)}
-                          disabled={draft.isPending}
-                          loading={draft.isPending}
+                          disabled={draft.isPending && draft.variables === r.id}
+                          loading={draft.isPending && draft.variables === r.id}
                         >
                           <Sparkles className="h-3.5 w-3.5" />
                           {t('reviews.aiDraft', 'AI draft')}
@@ -318,8 +318,8 @@ export default function ReviewsPage() {
                           onClick={() =>
                             reply.mutate({ id: r.id, text: replyText[r.id] ?? r.replyDraft ?? '' })
                           }
-                          disabled={!(replyText[r.id] ?? r.replyDraft) || reply.isPending}
-                          loading={reply.isPending}
+                          disabled={!(replyText[r.id] ?? r.replyDraft) || (reply.isPending && reply.variables?.id === r.id)}
+                          loading={reply.isPending && reply.variables?.id === r.id}
                         >
                           {t('reviews.saveReply', 'Save reply')}
                         </Button>

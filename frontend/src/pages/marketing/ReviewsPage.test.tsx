@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import ReviewsPage from './ReviewsPage';
+import marketingApi from '../../features/marketing/api/marketingApi';
 
 vi.mock('../../features/marketing/api/marketingApi', () => ({
   default: {
@@ -56,5 +57,39 @@ describe('ReviewsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /add|reviews\.addSource/i }));
     const alerts = await screen.findAllByRole('alert');
     expect(alerts.length).toBeGreaterThan(0);
+  });
+
+  // Each review's "AI draft" button is a per-row action driven by the SHARED
+  // draft mutation — its isPending/loading must be scoped by `variables === r.id`,
+  // or drafting one review's reply freezes the AI-draft button on EVERY review row
+  // (per-row loading bleed; the draft call takes seconds).
+  it('drafting one review does not disable the AI-draft button on other reviews', async () => {
+    (marketingApi.get as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+      url === '/reviews'
+        ? Promise.resolve({
+            data: [
+              // PRIVATE_FEEDBACK renders the reply/AI-draft affordance per review.
+              { id: 'rv1', status: 'PRIVATE_FEEDBACK', createdAt: '2026-01-01T00:00:00Z', rating: 5, text: 'Great' },
+              { id: 'rv2', status: 'PRIVATE_FEEDBACK', createdAt: '2026-01-02T00:00:00Z', rating: 4, text: 'Good' },
+            ],
+          })
+        : Promise.resolve({ data: [] }),
+    );
+    (marketingApi.post as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+      url.endsWith('/draft') ? new Promise(() => {}) : Promise.resolve({ data: {} }),
+    );
+    const user = userEvent.setup();
+    render(<ReviewsPage />, { wrapper });
+
+    const draftButtons = await screen.findAllByRole('button', { name: /ai draft/i });
+    expect(draftButtons).toHaveLength(2);
+
+    await user.click(draftButtons[0]); // draft for rv1 — stays in-flight
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /ai draft/i })[0]).toBeDisabled(),
+    );
+    // The OTHER review's AI-draft button must stay enabled.
+    expect(screen.getAllByRole('button', { name: /ai draft/i })[1]).not.toBeDisabled();
   });
 });
