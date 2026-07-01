@@ -43,6 +43,24 @@ describe('Invoice DTO bounds', () => {
     expect(msgs.length).toBeGreaterThan(0);
   });
 
+  // qty/unitPrice are integer minor-unit magnitudes (parity with estimate/
+  // order-form/subscription DTOs + money.util's integer math). A fractional qty
+  // was silently ROUNDED by computeMoneyTotals (2.5 → billed as 3) → an over-bill;
+  // reject it at the DTO instead.
+  it('rejects a fractional qty', async () => {
+    const msgs = await validateDto(CreateInvoiceDto, {
+      items: [{ ...item, qty: 2.5 }],
+    });
+    expect(msgs.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a fractional unitPrice (minor units are integers)', async () => {
+    const msgs = await validateDto(CreateInvoiceDto, {
+      items: [{ ...item, unitPrice: 19.99 }],
+    });
+    expect(msgs.length).toBeGreaterThan(0);
+  });
+
   it('rejects unitPrice over the 1,000,000 cap', async () => {
     const msgs = await validateDto(CreateInvoiceDto, {
       items: [{ ...item, unitPrice: 2_000_000 }],

@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   IsNumber,
+  IsInt,
   Min,
   Max,
   MaxLength,
@@ -22,12 +23,16 @@ export class InvoiceItemDto {
   @MaxLength(500)
   description: string;
 
-  @IsNumber()
+  // qty + unitPrice are INTEGER minor-unit magnitudes (unitPrice = kuruş/cents),
+  // matching the estimate/order-form/subscription line DTOs and money.util's
+  // integer math. @IsNumber let a fractional qty through, which computeMoneyTotals
+  // then silently ROUNDED (2.5 → billed as 3) — an over-bill. Reject it here.
+  @IsInt()
   @Min(0)
   @Max(1_000_000)
   qty: number;
 
-  @IsNumber()
+  @IsInt()
   @Min(0)
   @Max(1_000_000)
   unitPrice: number;
