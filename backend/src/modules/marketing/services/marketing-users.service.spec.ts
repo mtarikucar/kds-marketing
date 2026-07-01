@@ -35,6 +35,33 @@ describe('MarketingUsersService — deactivate (delete) guards', () => {
   });
 });
 
+describe('MarketingUsersService — update() deactivation guards (parity with delete())', () => {
+  // update() writes dto.status, so `status: 'INACTIVE'` deactivates a user — but it
+  // must NOT bypass the same guards delete() enforces, or a user locks themselves
+  // out (self-deactivation) / the OWNER account gets deactivated via a PATCH.
+  it('refuses to let an actor deactivate THEIR OWN account via a status update', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'mgr-1', workspaceId: WS, role: 'MANAGER', status: 'ACTIVE', email: 'm@x.co' } as any);
+    await expect((svc.update as any)(WS, 'mgr-1', { status: 'INACTIVE' }, 'MANAGER', 'mgr-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to deactivate the OWNER account via a status update', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE', email: 'o@x.co' } as any);
+    await expect((svc.update as any)(WS, 'owner-1', { status: 'INACTIVE' }, 'OWNER', 'owner-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
+  it('still allows deactivating a DIFFERENT user via a status update', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'mgr-2', workspaceId: WS, role: 'MANAGER', status: 'ACTIVE', email: 'm2@x.co' } as any);
+    (prisma.marketingUser.update as jest.Mock).mockResolvedValue({ id: 'mgr-2' });
+    await (svc.update as any)(WS, 'mgr-2', { status: 'INACTIVE' }, 'MANAGER', 'mgr-1');
+    expect(prisma.marketingUser.update).toHaveBeenCalled();
+  });
+});
+
 describe('MarketingUsersService — seat limit', () => {
   describe('update() reactivation', () => {
     it('rejects reactivating an INACTIVE user when the workspace is at its seat cap', async () => {

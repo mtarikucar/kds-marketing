@@ -56,7 +56,7 @@ export class MarketingUsersController {
     @Param('id') id: string,
     @Body() dto: UpdateMarketingUserDto,
   ) {
-    return this.usersService.update(actor.workspaceId, id, dto, actor.role);
+    return this.usersService.update(actor.workspaceId, id, dto, actor.role, actor.id);
   }
 
   @Delete(':id')
