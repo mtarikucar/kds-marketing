@@ -243,6 +243,18 @@ export class SubscriptionsService {
     },
     now: Date = new Date(),
   ): Promise<'billed' | 'skipped'> {
+    // The scheduler selects ACTIVE due rows in one batch, then bills them one by
+    // one — so its ACTIVE filter is a SNAPSHOT. Re-assert status at bill time:
+    // an operator who cancels/pauses a subscription after the batch read (but
+    // before this row is reached) must not be billed for a period past that
+    // change. Cheap id-lookup; a genuine cancel/pause between here and the mint is
+    // a microsecond window vs. the whole-batch window it closes.
+    const fresh = await this.prisma.customerSubscription.findUnique({
+      where: { id: sub.id },
+      select: { status: true },
+    });
+    if (!fresh || fresh.status !== 'ACTIVE') return 'skipped';
+
     const periodKey = this.periodKeyFor(sub.interval, sub.nextBillingAt);
 
     const advance = (extra: Prisma.CustomerSubscriptionUpdateInput = {}) =>

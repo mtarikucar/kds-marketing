@@ -95,6 +95,24 @@ describe('SubscriptionsService', () => {
       nextBillingAt: new Date('2026-06-01T00:00:00Z'),
     };
 
+    beforeEach(() => {
+      // billOne re-reads the CURRENT status (the scheduler's ACTIVE filter is a
+      // snapshot) — default to ACTIVE for the happy-path tests.
+      prisma.customerSubscription.findUnique.mockResolvedValue({ status: 'ACTIVE' } as any);
+    });
+
+    // A subscription cancelled/paused AFTER the scheduler's batch snapshot but
+    // before this row is billed must not be charged for a post-change period.
+    it('re-checks status and does NOT bill a subscription no longer ACTIVE', async () => {
+      prisma.customerSubscription.findUnique.mockResolvedValue({ status: 'CANCELLED' } as any);
+
+      const res = await svc.billOne(sub as any, new Date('2026-06-01T06:00:00Z'));
+
+      expect(res).toBe('skipped');
+      expect(invoices.create).not.toHaveBeenCalled();
+      expect(prisma.customerSubscription.update).not.toHaveBeenCalled();
+    });
+
     it('mints an invoice STAMPED at create-time (no orphan window) and advances', async () => {
       prisma.invoice.findFirst.mockResolvedValue(null); // no prior invoice this period
       prisma.customerSubscription.update.mockResolvedValue({ id: 's1' } as any);
