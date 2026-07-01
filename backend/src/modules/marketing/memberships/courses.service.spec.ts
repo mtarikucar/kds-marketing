@@ -55,6 +55,37 @@ describe('CoursesService', () => {
     expect(out.status).toBe('PUBLISHED');
   });
 
+  // The publish guard ("≥1 lesson") must ALSO hold on update() — otherwise
+  // PATCH { status: 'PUBLISHED' } takes an empty course live, bypassing publish().
+  it('update() refuses to set status PUBLISHED on a course with no lessons', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1', certificateEnabled: false } as any);
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(0);
+    await expect(
+      svc.update(WS, 'c1', { status: 'PUBLISHED' } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.course.update).not.toHaveBeenCalled();
+  });
+
+  it('update() allows status PUBLISHED when the course has lessons', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1', certificateEnabled: false } as any);
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
+    (prisma.course.update as jest.Mock).mockResolvedValue({ id: 'c1', status: 'PUBLISHED' });
+    const out: any = await svc.update(WS, 'c1', { status: 'PUBLISHED' } as any);
+    expect(out.status).toBe('PUBLISHED');
+  });
+
+  it('update() does not require a lesson for a non-publish edit (e.g. title, or DRAFT/ARCHIVED)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1', certificateEnabled: false } as any);
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(0); // empty course
+    (prisma.course.update as jest.Mock).mockResolvedValue({ id: 'c1' });
+    await expect(svc.update(WS, 'c1', { title: 'New' } as any)).resolves.toBeDefined();
+    await expect(svc.update(WS, 'c1', { status: 'ARCHIVED' } as any)).resolves.toBeDefined();
+    expect(prisma.course.update).toHaveBeenCalledTimes(2);
+  });
+
   it('backfills certificates when certificateEnabled flips on', async () => {
     const { prisma, certificates, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue({ id: 'c1', certificateEnabled: false } as any);

@@ -118,12 +118,28 @@ export class CoursesService {
     return c;
   }
 
+  /**
+   * A course may only be PUBLISHED with at least one lesson. Enforced on BOTH
+   * publish() and update() — otherwise PATCH { status: 'PUBLISHED' } would take an
+   * empty course live, bypassing the dedicated publish endpoint's guard.
+   */
+  private async assertHasLesson(id: string) {
+    const lessons = await this.prisma.lesson.count({
+      where: { module: { courseId: id } },
+    });
+    if (lessons === 0) {
+      throw new BadRequestException('A course needs at least one lesson to publish');
+    }
+  }
+
   async update(workspaceId: string, id: string, dto: UpdateCourseInput) {
     const prev = await this.prisma.course.findFirst({
       where: { id, workspaceId },
       select: { id: true, certificateEnabled: true },
     });
     if (!prev) throw new NotFoundException('Course not found');
+    // Publishing via update() must satisfy the same "≥1 lesson" invariant as publish().
+    if (dto.status === 'PUBLISHED') await this.assertHasLesson(id);
     const updated = await this.prisma.course.update({
       where: { id },
       data: {
@@ -172,12 +188,7 @@ export class CoursesService {
 
   async publish(workspaceId: string, id: string) {
     await this.assertCourse(workspaceId, id);
-    const lessons = await this.prisma.lesson.count({
-      where: { module: { courseId: id } },
-    });
-    if (lessons === 0) {
-      throw new BadRequestException('A course needs at least one lesson to publish');
-    }
+    await this.assertHasLesson(id);
     return this.prisma.course.update({ where: { id }, data: { status: 'PUBLISHED' } });
   }
 
