@@ -1534,7 +1534,7 @@
     "logo": "Logo",
     "uploadLogo": "Logo yükle",
     "uploading": "Yükleniyor…",
-    "logoHint": "PNG, JPEG, WEBP veya SVG, 1 MB altı.",
+    "logoHint": "PNG, JPEG veya WEBP, 1 MB altı.",
     "saved": "Marka kaydedildi",
     "saveFailed": "Kaydedilemedi",
     "logoUploaded": "Logo yüklendi",

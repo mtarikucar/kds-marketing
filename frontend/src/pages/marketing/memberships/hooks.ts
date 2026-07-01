@@ -303,8 +303,13 @@ export function useCommunityMutations(communityId?: string) {
       marketingApi
         .post(`/communities/posts/${postId}/comments`, { body })
         .then((r) => r.data as CommunityComment),
-    onSuccess: (_data, vars) =>
-      qc.invalidateQueries({ queryKey: postCommentsKey(vars.postId) }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: postCommentsKey(vars.postId) });
+      // Also refresh the posts list — its post._count.comments drives the
+      // "N comments" badge, which otherwise stays stale after commenting
+      // (the sibling post mutations already refresh via invalidateDetail).
+      invalidateDetail();
+    },
   });
 
   return {

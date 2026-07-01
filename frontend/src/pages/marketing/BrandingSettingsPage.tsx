@@ -235,7 +235,7 @@ export default function BrandingSettingsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                {t('branding.logoHint', 'PNG, JPEG, WEBP or SVG, under 1 MB.')}
+                {t('branding.logoHint', 'PNG, JPEG or WEBP, under 1 MB.')}
               </p>
             </div>
           </CardContent>

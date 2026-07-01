@@ -1538,7 +1538,7 @@
     "logo": "Logo",
     "uploadLogo": "Upload logo",
     "uploading": "Uploading…",
-    "logoHint": "PNG, JPEG, WEBP or SVG, under 1 MB.",
+    "logoHint": "PNG, JPEG or WEBP, under 1 MB.",
     "saved": "Branding saved",
     "saveFailed": "Save failed",
     "logoUploaded": "Logo uploaded",
