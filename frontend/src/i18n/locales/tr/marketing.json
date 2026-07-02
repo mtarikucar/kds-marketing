@@ -73,19 +73,40 @@
     "done": "Anladım",
     "progress": "{{step}} / {{total}}",
     "steps": {
-      "palette": { "title": "⌘K ile her yere atla", "body": "Herhangi bir sayfada Cmd/Ctrl+K'ye bas; ara ve istediğin ekrana atla ya da hızlı bir işlem başlat — menülerde arama derdi yok." },
-      "focus": { "title": "Odaklı bir menü", "body": "Kenar çubuğu günlük hub'larını gösterir; gerisi \"Daha fazla\" altında. Bir öğenin üzerine gelip yıldıza dokunarak favorilerini en üste sabitle." },
-      "create": { "title": "Her yerden oluştur", "body": "Üst bardaki \"+ Oluştur\" düğmesi nerede olursan ol lead, görev, fırsat veya şirket oluşturur." },
-      "modules": { "title": "Özellikleri aç/kapat", "body": "Platformun sadece bir kısmı mı lazım? Ayarlar › Modüller'e git ve kullanmadıklarını kapat — geri isteyene kadar menüden kaybolur." }
+      "palette": {
+        "title": "⌘K ile her yere atla",
+        "body": "Herhangi bir sayfada Cmd/Ctrl+K'ye bas; ara ve istediğin ekrana atla ya da hızlı bir işlem başlat — menülerde arama derdi yok."
+      },
+      "focus": {
+        "title": "Odaklı bir menü",
+        "body": "Kenar çubuğu günlük hub'larını gösterir; gerisi \"Daha fazla\" altında. Bir öğenin üzerine gelip yıldıza dokunarak favorilerini en üste sabitle."
+      },
+      "create": {
+        "title": "Her yerden oluştur",
+        "body": "Üst bardaki \"+ Oluştur\" düğmesi nerede olursan ol lead, görev, fırsat veya şirket oluşturur."
+      },
+      "modules": {
+        "title": "Özellikleri aç/kapat",
+        "body": "Platformun sadece bir kısmı mı lazım? Ayarlar › Modüller'e git ve kullanmadıklarını kapat — geri isteyene kadar menüden kaybolur."
+      }
     }
   },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",
     "subtitle": "Çalışma alanın hazır. İlk birkaç dakikada değer görmenin en hızlı yolları burada.",
     "later": "Kendim keşfederim",
-    "import": { "title": "Kişilerini içe aktar", "desc": "Mevcut lead'lerini getir, pipeline'ın boş kalmasın." },
-    "invite": { "title": "Ekibini davet et", "desc": "İş atanıp takip edilebilsin diye ekip arkadaşlarını ekle." },
-    "modules": { "title": "Modüllerini seç", "desc": "Sadece ihtiyacın olanı aç — konsolu odaklı tut." }
+    "import": {
+      "title": "Kişilerini içe aktar",
+      "desc": "Mevcut lead'lerini getir, pipeline'ın boş kalmasın."
+    },
+    "invite": {
+      "title": "Ekibini davet et",
+      "desc": "İş atanıp takip edilebilsin diye ekip arkadaşlarını ekle."
+    },
+    "modules": {
+      "title": "Modüllerini seç",
+      "desc": "Sadece ihtiyacın olanı aç — konsolu odaklı tut."
+    }
   },
   "modules": {
     "title": "Modüller",
@@ -344,7 +365,8 @@
     "copy": "Kopyala",
     "copyFailed": "Kopyalanamadı",
     "done": "Tamam",
-    "saving": "Kaydediliyor…"
+    "saving": "Kaydediliyor…",
+    "retry": "Tekrar dene"
   },
   "validation": {
     "required": "Zorunlu",
@@ -2122,7 +2144,7 @@
     "regenerate": "Yeniden üret",
     "queueEmpty": "Onay bekleyen bir şey yok",
     "calendarEmpty": "Henüz içerik planlanmadı",
-    "tabCalendar": "Takvim",
+    "tabCalendar": "İçerik takvimi",
     "tabQueue": "Onay kuyruğu",
     "activate": "Etkinleştir",
     "pause": "Duraklat",
@@ -2133,7 +2155,115 @@
     "lifecycleFailed": "İşlem başarısız",
     "crossLink": "Sosyal içerik oluştur",
     "provisioned": "Sosyal kampanya oluşturuldu",
-    "provisionFailed": "Sosyal içerik oluşturulamadı"
+    "provisionFailed": "Sosyal içerik oluşturulamadı",
+    "confirmPlan": "Planı Onayla",
+    "cancel": "İptal",
+    "reviewNow": "{{n}} incele",
+    "live": "Yayında",
+    "publishedOf": "{{done}} / {{total}} yayınlandı",
+    "factMode": "Mod",
+    "factCadence": "Sıklık",
+    "factNext": "Sıradaki",
+    "factAccounts": "Hesap",
+    "factMedia": "Medya",
+    "calendarEmptyHint": "Kampanya aktifken, sistem oluşturdukça planlanan gönderiler burada görünür.",
+    "queueEmptyHint": "İncelemen gereken gönderiler yayınlanmadan önce burada görünür.",
+    "planConfirmed": "Plan onaylandı",
+    "planConfirmFailed": "İşlem başarısız",
+    "cancelTitle": "Bu kampanya iptal edilsin mi?",
+    "cancelDesc": "Zamanlanmış gönderiler durur ve kampanya iptal edilir. Zaten yayınlanmış gönderiler yayında kalır. Bu geri alınamaz.",
+    "cancelConfirm": "Kampanyayı iptal et",
+    "phase": {
+      "draft": {
+        "title": "Başlatmaya hazır",
+        "desc": "Etkinleştir’e bas — sistem gönderilerini otomatik planlayıp oluşturmaya başlasın."
+      },
+      "planning": {
+        "title": "İçeriğin planlanıyor…",
+        "desc": "Sistem ilk gönderini şu an hazırlıyor — birazdan burada görünecek. Bir şey yapmana gerek yok."
+      },
+      "awaiting_confirm": {
+        "title": "Planın onayını bekliyor",
+        "desc": "Yapay zekâ bir içerik planı önerdi. Metin ve görsellerin üretilmesi için onayla."
+      },
+      "generating": {
+        "title": "İçerik oluşturuluyor…",
+        "desc": "{{n}} gönderi için metin ve görsel hazırlanıyor. Kısa sürede tamamlanır."
+      },
+      "needs_approval": {
+        "title": "Onayını bekleyen gönderiler",
+        "desc": "{{n}} gönderi hazır — yayınlanmadan önce incele."
+      },
+      "running": {
+        "title": "Her şey yolunda",
+        "desc": "Zamanlanmış gönderiler saatlerinde yayınlanacak."
+      },
+      "idle": {
+        "title": "Aktif",
+        "desc": "Şu an bekleyen gönderi yok — sıradaki gönderi, belirlediğin sıklıkta otomatik planlanacak."
+      },
+      "paused": {
+        "title": "Duraklatıldı",
+        "desc": "Zamanlanmış gönderiler beklemede. Devam etmek için Devam Et’e bas."
+      },
+      "completed": {
+        "title": "Tamamlandı",
+        "desc": "Planlanan tüm içerik işlendi."
+      },
+      "cancelled": {
+        "title": "İptal edildi",
+        "desc": "Bu kampanya iptal edildi."
+      },
+      "needs_approval_auto": {
+        "title": "Yakında yayınlanıyor — istersen incele",
+        "desc": "{{n}} gönderi, planlanan zamanında otomatik yayınlanacak — istemediklerini reddet."
+      }
+    },
+    "mode": {
+      "approval": "Yalnızca sen onayladıkça yayınlar",
+      "semiAuto": "Zamanında reddetmezsen otomatik yayınlar",
+      "fullAuto": "Her zamanlanan saatte otomatik yayınlar"
+    },
+    "stat": {
+      "planned": "Planlandı",
+      "generating": "Üretiliyor",
+      "needsApproval": "Onay",
+      "scheduled": "Zamanlandı",
+      "published": "Yayınlandı",
+      "failed": "Başarısız",
+      "skipped": "Atlandı"
+    },
+    "itemStatus": {
+      "PLANNED": "Planlandı",
+      "GENERATING": "Üretiliyor",
+      "NEEDS_APPROVAL": "Onay bekliyor",
+      "APPROVED": "Onaylandı",
+      "SCHEDULED": "Zamanlandı",
+      "PUBLISHED": "Yayınlandı",
+      "FAILED": "Başarısız",
+      "SKIPPED": "Atlandı"
+    },
+    "status": {
+      "DRAFT": "Taslak",
+      "ACTIVE": "Aktif",
+      "PAUSED": "Duraklatıldı",
+      "COMPLETED": "Tamamlandı",
+      "CANCELLED": "İptal edildi"
+    },
+    "mediaKind": {
+      "IMAGE": "Görsel",
+      "VIDEO": "Video",
+      "CAROUSEL": "Galeri",
+      "STORY": "Hikaye",
+      "REEL": "Reel",
+      "TEXT": "Metin"
+    },
+    "mediaPreparing": "Görsel hazırlanıyor…",
+    "mediaFailed": "Görsel oluşturulamadı — yayınlanmadan önce yeniden oluştur",
+    "mediaFailedInline": "Görsel oluşturulamadı — yeniden oluşturmazsan bu gönderi görselsiz yayınlanacak.",
+    "generateFailed": "Oluşturma başarısız oldu.",
+    "itemsError": "Kampanya içeriği yüklenemedi",
+    "itemsErrorHint": "Gönderiler yüklenirken bir hata oluştu. Bu, yayındaki kampanyanı etkilemez — tekrar dene."
   },
   "landing": {
     "a11y": {
@@ -2189,7 +2319,7 @@
       "titleLead": "Tüm pazarlaman",
       "titleAccent": "tek panelde.",
       "subtitle": "Lead'den satışa, kampanyadan otomasyona, gelen kutusundan analitiğe — Jeeta işletmenin büyümesini tek yerden yönetir.",
-        "audience": "Küçük işletmeler, satış ekipleri ve ajanslar için.",
+      "audience": "Küçük işletmeler, satış ekipleri ve ajanslar için.",
       "ctaPrimary": "Ücretsiz başla",
       "ctaSecondary": "Özellikleri keşfet",
       "trust": "Kredi kartı gerekmez · Dakikalar içinde kurulum · KVKK uyumlu"

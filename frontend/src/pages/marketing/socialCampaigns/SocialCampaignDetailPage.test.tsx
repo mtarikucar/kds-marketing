@@ -42,6 +42,7 @@ const campaign = (over: Partial<SocialCampaign> = {}): SocialCampaign => ({
 const item = (over: Partial<SocialCampaignItem> = {}): SocialCampaignItem => ({
   id: 'it', socialCampaignId: 'sc1', sequenceIndex: 0, scheduledFor: '2026-07-01T09:00:00.000Z',
   status: 'PLANNED', topic: 'Draft post', socialPostId: null, generatedAssetIds: [],
+  caption: null, media: [], publishedAt: null,
   error: null, createdAt: '', updatedAt: '', ...over,
 });
 
@@ -63,7 +64,10 @@ describe('SocialCampaignDetailPage', () => {
   });
 
   it('shows Confirm plan for AI_PROPOSE campaigns with PLANNED items, fires the mutation and invalidates', async () => {
-    getSocialCampaign.mockResolvedValue(campaign({ planningMode: 'AI_PROPOSE' }));
+    // A PLANNED item awaiting confirmation only exists on an ACTIVE campaign
+    // (the planner runs only when ACTIVE), so the "Confirm plan" gate is an
+    // ACTIVE + AI_PROPOSE + PLANNED state.
+    getSocialCampaign.mockResolvedValue(campaign({ status: 'ACTIVE', planningMode: 'AI_PROPOSE' }));
     listSocialCampaignItems.mockResolvedValue([item({ status: 'PLANNED' })]);
     confirmSocialCampaignPlan.mockResolvedValue({ message: 'ok' });
     const user = userEvent.setup();
@@ -86,7 +90,7 @@ describe('SocialCampaignDetailPage', () => {
   });
 
   it('hides Confirm plan when the planning mode is not AI_PROPOSE', async () => {
-    getSocialCampaign.mockResolvedValue(campaign({ planningMode: 'AI_FULL' }));
+    getSocialCampaign.mockResolvedValue(campaign({ status: 'ACTIVE', planningMode: 'AI_FULL' }));
     listSocialCampaignItems.mockResolvedValue([item({ status: 'PLANNED' })]);
     render(<SocialCampaignDetailPage />, { wrapper: makeWrapper().wrapper });
 
@@ -95,11 +99,38 @@ describe('SocialCampaignDetailPage', () => {
   });
 
   it('hides Confirm plan when no items are awaiting confirmation', async () => {
-    getSocialCampaign.mockResolvedValue(campaign({ planningMode: 'AI_PROPOSE' }));
+    getSocialCampaign.mockResolvedValue(campaign({ status: 'ACTIVE', planningMode: 'AI_PROPOSE' }));
     listSocialCampaignItems.mockResolvedValue([item({ status: 'PUBLISHED' })]);
     render(<SocialCampaignDetailPage />, { wrapper: makeWrapper().wrapper });
 
     await screen.findByText('Q3 Push');
     expect(screen.queryByRole('button', { name: 'Confirm plan' })).not.toBeInTheDocument();
+  });
+
+  it('frames SEMI_AUTO review as auto-publishing, not a blocking approval gate', async () => {
+    getSocialCampaign.mockResolvedValue(campaign({ status: 'ACTIVE', automationMode: 'SEMI_AUTO' }));
+    listSocialCampaignItems.mockResolvedValue([item({ status: 'NEEDS_APPROVAL' })]);
+    render(<SocialCampaignDetailPage />, { wrapper: makeWrapper().wrapper });
+
+    expect(await screen.findByText('Publishing soon — review if you want')).toBeInTheDocument();
+    expect(screen.queryByText('Posts waiting for your approval')).not.toBeInTheDocument();
+  });
+
+  it('keeps the blocking approval copy for APPROVAL mode', async () => {
+    getSocialCampaign.mockResolvedValue(campaign({ status: 'ACTIVE', automationMode: 'APPROVAL' }));
+    listSocialCampaignItems.mockResolvedValue([item({ status: 'NEEDS_APPROVAL' })]);
+    render(<SocialCampaignDetailPage />, { wrapper: makeWrapper().wrapper });
+
+    expect(await screen.findByText('Posts waiting for your approval')).toBeInTheDocument();
+  });
+
+  it('shows an items-load error instead of a misleading empty studio', async () => {
+    getSocialCampaign.mockResolvedValue(campaign({ status: 'ACTIVE' }));
+    listSocialCampaignItems.mockRejectedValue(new Error('boom'));
+    render(<SocialCampaignDetailPage />, { wrapper: makeWrapper().wrapper });
+
+    expect(await screen.findByText("Couldn't load this campaign's content")).toBeInTheDocument();
+    // The happy-empty "planning" hero must NOT render on a failed load.
+    expect(screen.queryByText('Planning your content…')).not.toBeInTheDocument();
   });
 });

@@ -70,6 +70,16 @@ export interface SocialCampaignPayload {
   linkedCampaignId?: string;
 }
 
+/** A generated media asset attached to a campaign item (image/video). */
+export interface SocialCampaignItemMedia {
+  id: string;
+  type: 'IMAGE' | 'VIDEO' | string;
+  status: 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED' | 'BLOCKED' | string;
+  url: string | null;
+  thumbnailUrl: string | null;
+  mime: string | null;
+}
+
 export interface SocialCampaignItem {
   id: string;
   socialCampaignId: string;
@@ -82,6 +92,10 @@ export interface SocialCampaignItem {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Enriched by the items endpoint so the calendar can show the REAL content. */
+  caption: string | null;
+  media: SocialCampaignItemMedia[];
+  publishedAt: string | null;
 }
 
 export const listSocialCampaigns = (): Promise<SocialCampaign[]> =>

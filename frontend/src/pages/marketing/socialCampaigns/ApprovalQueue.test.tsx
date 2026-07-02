@@ -11,6 +11,7 @@ import type { SocialCampaignItem } from '../../../features/marketing/api/socialC
 const item = (over: Partial<SocialCampaignItem>): SocialCampaignItem => ({
   id: 'it', socialCampaignId: 'sc', sequenceIndex: 0, scheduledFor: '2026-07-01T09:00:00.000Z',
   status: 'NEEDS_APPROVAL', topic: 'Draft post', socialPostId: null, generatedAssetIds: [],
+  caption: null, media: [], publishedAt: null,
   error: null, createdAt: '', updatedAt: '', ...over,
 });
 
@@ -61,5 +62,26 @@ describe('ApprovalQueue', () => {
   it('shows an empty state when nothing needs approval', () => {
     render(<ApprovalQueue items={[item({ status: 'PUBLISHED' })]} onReview={vi.fn()} />);
     expect(screen.getByText('Nothing waiting for approval')).toBeInTheDocument();
+  });
+
+  const media = (status: string) => [{ id: 'm', type: 'IMAGE', status, url: null, thumbnailUrl: null, mime: null }];
+
+  it('disables Approve and surfaces a hint when the creative failed', () => {
+    render(<ApprovalQueue items={[item({ id: 'a', media: media('FAILED') })]} onReview={vi.fn()} />);
+    expect(screen.getByText(/Image failed/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve/ })).toBeDisabled();
+  });
+
+  it('shows a preparing hint while the media is still generating', () => {
+    render(<ApprovalQueue items={[item({ id: 'a', media: media('GENERATING') })]} onReview={vi.fn()} />);
+    expect(screen.getByText(/Preparing the image/i)).toBeInTheDocument();
+  });
+
+  it('spins the pending action button, not always Approve', () => {
+    render(
+      <ApprovalQueue items={[item({ id: 'a' })]} onReview={vi.fn()} pendingId="a" pendingAction="regenerate" />,
+    );
+    expect(screen.getByRole('button', { name: /Regenerate/ })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: /Approve/ })).not.toHaveAttribute('aria-busy', 'true');
   });
 });
