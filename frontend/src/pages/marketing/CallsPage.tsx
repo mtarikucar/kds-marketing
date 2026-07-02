@@ -31,6 +31,7 @@ import {
   EmptyState,
   Pagination,
   Button,
+  QueryStateBoundary,
 } from '../../components/ui';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ export default function CallsPage() {
   // Which call row is expanded to show its AI analysis panel.
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<PaginatedResponse<SalesCall>>({
+  const { data, isLoading, isError, refetch } = useQuery<PaginatedResponse<SalesCall>>({
     queryKey: ['marketing', 'calls', { status, repId, page }],
     queryFn: () =>
       marketingApi
@@ -182,7 +183,15 @@ export default function CallsPage() {
         )}
       </FilterBar>
 
+      {/* ── Error state ── */}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
+
       {/* ── Table ── */}
+      {!isError && (
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -306,6 +315,7 @@ export default function CallsPage() {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

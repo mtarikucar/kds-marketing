@@ -50,6 +50,7 @@ import {
 } from '@/components/ui/Select';
 import { Callout } from '@/components/ui/Callout';
 import { Separator } from '@/components/ui/Separator';
+import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -153,7 +154,7 @@ export default function CampaignsPage() {
   const [launchTarget, setLaunchTarget] = useState<CampaignRow | null>(null);
 
   // ── Query ─────────────────────────────────────────────────────────────────
-  const { data: campaigns } = useQuery<CampaignRow[]>({
+  const { data: campaigns, isError, refetch } = useQuery<CampaignRow[]>({
     queryKey: ['marketing', 'campaigns'],
     queryFn: () => marketingApi.get('/campaigns').then((r) => r.data),
     refetchInterval: 15_000,
@@ -615,6 +616,13 @@ export default function CampaignsPage() {
       />
 
       {/* ── Campaign list ─────────────────────────────────────────────────── */}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
+
+      {!isError && (
       <div className="space-y-3">
         {(campaigns ?? []).map((c) => (
           <Card key={c.id}>
@@ -716,6 +724,7 @@ export default function CampaignsPage() {
           />
         )}
       </div>
+      )}
     </div>
   );
 }

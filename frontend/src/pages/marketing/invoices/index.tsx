@@ -37,6 +37,7 @@ import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import {
   Select,
   SelectTrigger,
@@ -73,7 +74,7 @@ export default function InvoicesPage() {
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────────
-  const { data: invoices } = useQuery<InvoiceRow[]>({
+  const { data: invoices, isError, refetch } = useQuery<InvoiceRow[]>({
     queryKey: ['marketing', 'invoices'],
     queryFn: () => marketingApi.get('/invoices').then((r) => r.data),
     refetchInterval: 20_000,
@@ -313,8 +314,15 @@ export default function InvoicesPage() {
         />
       )}
 
+      {/* Error state */}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
+
       {/* Invoice list */}
-      {(invoices?.length ?? 0) === 0 && !showForm ? (
+      {!isError && ((invoices?.length ?? 0) === 0 && !showForm ? (
         <EmptyState
           icon={<FileText className="h-8 w-8" />}
           title={t('invoices.empty', 'No invoices yet.')}
@@ -421,7 +429,7 @@ export default function InvoicesPage() {
             </Table>
           </div>
         </Card>
-      ) : null}
+      ) : null)}
 
       {/* Confirm void */}
       <ConfirmDialog

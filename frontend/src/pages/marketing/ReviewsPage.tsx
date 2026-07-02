@@ -17,6 +17,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
+import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import {
   Table,
   TBody,
@@ -107,7 +108,12 @@ export default function ReviewsPage() {
 
   // ── Queries ──────────────────────────────────────────────────────────────────
 
-  const { data: reviews } = useQuery<Review[]>({
+  const {
+    data: reviews,
+    isLoading: reviewsLoading,
+    isError: reviewsError,
+    refetch: refetchReviews,
+  } = useQuery<Review[]>({
     queryKey: ['marketing', 'reviews'],
     queryFn: () => marketingApi.get('/reviews').then((r) => r.data),
   });
@@ -258,14 +264,20 @@ export default function ReviewsPage() {
       </Card>
 
       {/* Reviews */}
-      {(reviews ?? []).length === 0 ? (
-        <EmptyState
-          icon={<Star className="h-10 w-10" />}
-          title={t('reviews.empty', 'No reviews yet')}
-          description={t('reviews.emptyDesc', 'Add a source and send review requests from an automation.')}
-        />
-      ) : (
-        <div className="space-y-3">
+      <QueryStateBoundary
+        isLoading={reviewsLoading}
+        isError={reviewsError}
+        onRetry={() => refetchReviews()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      >
+        {(reviews ?? []).length === 0 ? (
+          <EmptyState
+            icon={<Star className="h-10 w-10" />}
+            title={t('reviews.empty', 'No reviews yet')}
+            description={t('reviews.emptyDesc', 'Add a source and send review requests from an automation.')}
+          />
+        ) : (
+          <div className="space-y-3">
           {(reviews ?? []).map((r) => (
             <Card key={r.id}>
               <CardContent className="pt-5 space-y-3">
@@ -331,7 +343,8 @@ export default function ReviewsPage() {
             </Card>
           ))}
         </div>
-      )}
+        )}
+      </QueryStateBoundary>
 
       {/* Delete source confirm */}
       <ConfirmDialog

@@ -6,7 +6,7 @@ import { Search, ExternalLink, UserPlus, Gauge } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { API_URL } from '../../lib/env';
 import {
-  PageHeader, Card, CardContent, Button, Input, Field, Badge, EmptyState,
+  PageHeader, Card, CardContent, Button, Input, Field, Badge, EmptyState, QueryStateBoundary,
 } from '@/components/ui';
 
 interface Audit {
@@ -46,7 +46,7 @@ export default function ProspectingPage() {
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
 
-  const { data: audits = [] } = useQuery({
+  const { data: audits = [], isError, refetch } = useQuery({
     queryKey: ['prospect-audits'],
     queryFn: () => marketingApi.get('/prospecting/audits').then((r) => r.data as Audit[]),
     // Poll while any audit is still being graded so the score lands without a manual refresh.
@@ -97,15 +97,20 @@ export default function ProspectingPage() {
         </CardContent>
       </Card>
 
-      {audits.length === 0 ? (
-        <EmptyState
-          icon={<Gauge className="h-10 w-10 text-muted-foreground" />}
-          title={t('prospecting.empty', { defaultValue: 'No audits yet' })}
-          description={t('prospecting.emptyHint', { defaultValue: 'Run your first website audit above.' })}
-        />
-      ) : (
-        <div className="space-y-3">
-          {audits.map((a) => (
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      >
+        {audits.length === 0 ? (
+          <EmptyState
+            icon={<Gauge className="h-10 w-10 text-muted-foreground" />}
+            title={t('prospecting.empty', { defaultValue: 'No audits yet' })}
+            description={t('prospecting.emptyHint', { defaultValue: 'Run your first website audit above.' })}
+          />
+        ) : (
+          <div className="space-y-3">
+            {audits.map((a) => (
             <Card key={a.id}>
               <CardContent className="flex flex-wrap items-center gap-4 p-4">
                 <div className="min-w-0 flex-1">
@@ -140,9 +145,10 @@ export default function ProspectingPage() {
                 </div>
               </CardContent>
             </Card>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </QueryStateBoundary>
     </div>
   );
 }
