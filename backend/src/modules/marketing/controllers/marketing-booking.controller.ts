@@ -13,6 +13,7 @@ import {
   CreateCalendarDto,
   UpdateCalendarDto,
   SetCalendarMembersDto,
+  AdminBookDto,
   RescheduleBookingDto,
   SetBookingStatusDto,
   CreateBlackoutDto,
@@ -54,6 +55,14 @@ export class MarketingBookingController {
   @Post()
   @RequirePermission('settings.manage')
   create(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: CreateCalendarDto) { return this.booking.create(a.workspaceId, dto); }
+
+  /** Staff-created (in-app) booking — same validation as the public reserve path. */
+  @Post('bookings')
+  @RequirePermission('settings.manage')
+  createBooking(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: AdminBookDto) {
+    const { calendarId, ...slot } = dto;
+    return this.booking.book(a.workspaceId, calendarId, slot);
+  }
 
   @Get(':id')
   get(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) { return this.booking.get(a.workspaceId, id); }

@@ -31,9 +31,11 @@ import {
   listCalendars,
   listBookings,
   cancelBooking,
+  createBooking,
   rescheduleBooking,
   setBookingStatus,
   type Booking,
+  type CreateBookingPayload,
 } from '../../../features/marketing/api/booking.service';
 
 const STATUS_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
@@ -59,6 +61,9 @@ export default function AppointmentsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [cancelTarget, setCancelTarget] = useState<string | null>(null);
   const [reschedule, setReschedule] = useState<{ booking: Booking; value: string } | null>(null);
+  const [createForm, setCreateForm] = useState<{
+    calendarId: string; start: string; name: string; email: string; phone: string; notes: string;
+  } | null>(null);
 
   const { data: calendars } = useQuery({
     queryKey: ['marketing', 'calendars'],
@@ -104,6 +109,40 @@ export default function AppointmentsPage() {
     new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
 
   const calName = (id: string) => calendars?.find((c) => c.id === id)?.name ?? '—';
+
+  const createM = useMutation({
+    mutationFn: (payload: CreateBookingPayload) => createBooking(payload),
+    onSuccess: () => {
+      invalidate();
+      setCreateForm(null);
+      toast.success(t('appointments.created', 'Appointment booked'));
+    },
+    onError: (e: any) =>
+      toast.error(
+        e?.response?.data?.message ||
+          t('appointments.createFailed', 'Could not book — check the time is within the calendar’s availability'),
+      ),
+  });
+
+  const openCreate = () =>
+    setCreateForm({
+      calendarId: calendars?.[0]?.id ?? '',
+      start: toLocalInput(new Date(Date.now() + 3600_000).toISOString()),
+      name: '', email: '', phone: '', notes: '',
+    });
+
+  const submitCreate = () => {
+    if (!createForm) return;
+    createM.mutate({
+      calendarId: createForm.calendarId,
+      start: new Date(createForm.start).toISOString(),
+      name: createForm.name.trim(),
+      email: createForm.email.trim() || undefined,
+      phone: createForm.phone.trim() || undefined,
+      notes: createForm.notes.trim() || undefined,
+      attendeeTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+  };
   const rows = bookings ?? [];
 
   return (
@@ -111,7 +150,75 @@ export default function AppointmentsPage() {
       <PageHeader
         title={t('appointments.title', 'Appointments')}
         description={t('appointments.subtitle', 'Booked appointments across your calendars. Reschedule, confirm, or mark outcomes.')}
+        actions={
+          <Button onClick={openCreate} disabled={!calendars?.length}>
+            <CalendarCheck className="h-4 w-4" />
+            {t('appointments.new', 'New appointment')}
+          </Button>
+        }
       />
+
+      {createForm && (
+        <Dialog open onOpenChange={(o) => { if (!o) setCreateForm(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t('appointments.new', 'New appointment')}</DialogTitle>
+              <DialogDescription>
+                {t('appointments.newDesc', 'Book a slot on one of your calendars. The time must be within its availability.')}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Select
+                value={createForm.calendarId}
+                onValueChange={(v) => setCreateForm((f) => (f ? { ...f, calendarId: v } : f))}
+              >
+                <SelectTrigger><SelectValue placeholder={t('appointments.calendar', 'Calendar')} /></SelectTrigger>
+                <SelectContent>
+                  {calendars?.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input
+                type="datetime-local"
+                value={createForm.start}
+                onChange={(e) => setCreateForm((f) => (f ? { ...f, start: e.target.value } : f))}
+              />
+              <Input
+                placeholder={t('appointments.attendeeName', 'Attendee name')}
+                value={createForm.name}
+                onChange={(e) => setCreateForm((f) => (f ? { ...f, name: e.target.value } : f))}
+              />
+              <Input
+                type="email"
+                placeholder={t('appointments.attendeeEmail', 'Email (optional)')}
+                value={createForm.email}
+                onChange={(e) => setCreateForm((f) => (f ? { ...f, email: e.target.value } : f))}
+              />
+              <Input
+                placeholder={t('appointments.attendeePhone', 'Phone (optional)')}
+                value={createForm.phone}
+                onChange={(e) => setCreateForm((f) => (f ? { ...f, phone: e.target.value } : f))}
+              />
+              <Input
+                placeholder={t('appointments.notes', 'Notes (optional)')}
+                value={createForm.notes}
+                onChange={(e) => setCreateForm((f) => (f ? { ...f, notes: e.target.value } : f))}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreateForm(null)}>
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button
+                onClick={submitCreate}
+                loading={createM.isPending}
+                disabled={!createForm.calendarId || !createForm.name.trim() || !createForm.start}
+              >
+                {t('appointments.book', 'Book')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <div className="flex flex-wrap gap-3">
         <Select value={calendarId} onValueChange={setCalendarId}>

@@ -2159,6 +2159,15 @@
     }
   },
   "appointments": {
+    "new": "New appointment",
+    "newDesc": "Book a slot on one of your calendars. The time must be within its availability.",
+    "attendeeName": "Attendee name",
+    "attendeeEmail": "Email (optional)",
+    "attendeePhone": "Phone (optional)",
+    "notes": "Notes (optional)",
+    "book": "Book",
+    "created": "Appointment booked",
+    "createFailed": "Could not book — check the time is within the calendar's availability",
     "title": "Appointments",
     "subtitle": "Booked appointments across your calendars. Reschedule, confirm, or mark outcomes.",
     "allCalendars": "All calendars",

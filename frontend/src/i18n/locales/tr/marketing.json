@@ -2208,6 +2208,15 @@
     }
   },
   "appointments": {
+    "new": "Yeni randevu",
+    "newDesc": "Takvimlerinden birine bir slot ayır. Saat, takvimin müsaitliği içinde olmalı.",
+    "attendeeName": "Katılımcı adı",
+    "attendeeEmail": "E-posta (opsiyonel)",
+    "attendeePhone": "Telefon (opsiyonel)",
+    "notes": "Notlar (opsiyonel)",
+    "book": "Randevu al",
+    "created": "Randevu oluşturuldu",
+    "createFailed": "Oluşturulamadı — saatin takvim müsaitliği içinde olduğundan emin ol",
     "title": "Randevular",
     "subtitle": "Takvimlerinizdeki randevular. Yeniden planlayın, onaylayın veya sonucu işaretleyin.",
     "allCalendars": "Tüm takvimler",

@@ -83,6 +83,21 @@ export const getCalendar = (id: string): Promise<BookingCalendar> =>
 export const listBookings = (filter: BookingsFilter = {}): Promise<Booking[]> =>
   marketingApi.get('/calendars/bookings', { params: filter }).then((r) => r.data);
 
+export interface CreateBookingPayload {
+  calendarId: string;
+  start: string; // ISO
+  name: string;
+  email?: string;
+  phone?: string;
+  notes?: string;
+  attendeeTimezone?: string;
+}
+
+/** Staff-created in-app booking. The slot must be valid for the calendar
+ *  (future, within notice/advance window, aligned to its availability grid). */
+export const createBooking = (payload: CreateBookingPayload): Promise<Booking> =>
+  marketingApi.post('/calendars/bookings', payload).then((r) => r.data);
+
 export const cancelBooking = (bookingId: string): Promise<{ id: string; status: string }> =>
   marketingApi.post(`/calendars/bookings/${bookingId}/cancel`).then((r) => r.data);
 

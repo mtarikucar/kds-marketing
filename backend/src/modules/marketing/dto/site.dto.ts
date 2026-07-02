@@ -1,6 +1,6 @@
 import {
   IsString, IsNotEmpty, IsOptional, IsArray, IsObject, IsBoolean, IsInt, IsIn, Min, Max, MaxLength,
-  ValidateNested, ArrayMaxSize,
+  ValidateNested, ArrayMaxSize, IsISO8601, IsEmail,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -93,6 +93,18 @@ export class ListBookingsQueryDto {
 /** Move a booking to a new start time (ISO datetime). */
 export class RescheduleBookingDto {
   @IsString() @IsNotEmpty() start: string;
+}
+
+/** Staff-created (in-app) booking. Runs the same BookingService.book() validation
+ *  as the public reserve path (future / min-notice / max-advance / grid-aligned). */
+export class AdminBookDto {
+  @IsString() @IsNotEmpty() @MaxLength(60) calendarId: string;
+  @IsISO8601() @MaxLength(40) start: string;
+  @IsString() @IsNotEmpty() @MaxLength(120) name: string;
+  @IsOptional() @IsEmail() @MaxLength(200) email?: string;
+  @IsOptional() @IsString() @MaxLength(40) phone?: string;
+  @IsOptional() @IsString() @MaxLength(2000) notes?: string;
+  @IsOptional() @IsString() @MaxLength(64) attendeeTimezone?: string;
 }
 
 /** Admin status transition for a booking. */
