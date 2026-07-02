@@ -20,6 +20,7 @@ import { startLinkedinAdsOAuth, startTiktokAdsOAuth } from '../../../features/ma
 import { navigateExternal } from '../../../lib/navigateExternal';
 import { ManualChannelDialog } from './ManualChannelDialog';
 import { EmailChannelDialog } from './EmailChannelDialog';
+import { WebchatChannelDialog } from './WebchatChannelDialog';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
 import type { ChannelType } from '../channels/channelFields';
 
@@ -74,6 +75,7 @@ export default function AccountCenterPage() {
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectionGroup | null>(null);
   const [manualType, setManualType] = useState<ChannelType | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
+  const [webchatOpen, setWebchatOpen] = useState(false);
   const disconnect = useDisconnect();
 
   // The OAuth callback returns to /accounts?connect=<pendingId> (origin=account-center).
@@ -219,7 +221,11 @@ export default function AccountCenterPage() {
                   size="sm"
                   variant="outline"
                   onClick={() =>
-                    manualChannel === 'EMAIL' ? setEmailOpen(true) : setManualType(manualChannel)
+                    manualChannel === 'EMAIL'
+                      ? setEmailOpen(true)
+                      : manualChannel === 'WEBCHAT'
+                        ? setWebchatOpen(true)
+                        : setManualType(manualChannel)
                   }
                 >
                   <Plug className="h-4 w-4" />
@@ -272,6 +278,7 @@ export default function AccountCenterPage() {
       />
 
       <EmailChannelDialog open={emailOpen} onOpenChange={setEmailOpen} onCreated={onConnected} />
+      <WebchatChannelDialog open={webchatOpen} onOpenChange={setWebchatOpen} onCreated={onConnected} />
 
       <ConfirmDialog
         open={!!disconnectTarget}
