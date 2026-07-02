@@ -1,4 +1,20 @@
 {
+  "commandPalette": {
+    "title": "Komut menüsü",
+    "description": "Bir sayfa veya hızlı işlem ara",
+    "placeholder": "Sayfa ve işlem ara…",
+    "quickActions": "Hızlı işlemler",
+    "goTo": "Git",
+    "actionHint": "Oluştur",
+    "empty": "Sonuç yok"
+  },
+  "quickCreate": {
+    "button": "Oluştur",
+    "lead": "Yeni Lead",
+    "task": "Yeni Görev",
+    "opportunity": "Yeni Fırsat",
+    "company": "Yeni Şirket"
+  },
   "leadStatus": {
     "NEW": "Yeni",
     "CONTACTED": "İletişime geçildi",

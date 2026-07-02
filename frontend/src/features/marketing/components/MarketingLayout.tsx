@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import MarketingSidebar from './MarketingSidebar';
@@ -6,18 +6,34 @@ import MarketingHeader from './MarketingHeader';
 import HubSubNav from './HubSubNav';
 import SettingsLayout from './SettingsLayout';
 import AskAiPanel from './AskAiPanel';
+import CommandPalette from './CommandPalette';
 import WebphoneHost from '../webphone/WebphoneHost';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { IconButton } from '@/components/ui/IconButton';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
 import { NAV_HUBS, findActiveHub } from '../navigation';
+import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
 
 export default function MarketingLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+  const toggleCommandPalette = useCommandPaletteStore((s) => s.toggle);
 
   // Area detection is structural (no gating needed) — the active hub's `area`.
   const isSettings = findActiveHub(NAV_HUBS, location.pathname)?.area === 'settings';
+
+  // Global command palette shortcut (Cmd/Ctrl+K) — a deliberate app-wide
+  // override, so it fires even while a form field is focused (like Slack/Linear).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        toggleCommandPalette();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleCommandPalette]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -64,6 +80,8 @@ export default function MarketingLayout() {
           </ErrorBoundary>
         </main>
       </div>
+      {/* Global command palette (Cmd/Ctrl+K) — page-jump + quick actions. */}
+      <CommandPalette />
       {/* Global Ask-AI slide-over (gated on the askAi feature server-side). */}
       <AskAiPanel />
       {/* App-wide webphone: keeps the rep's dahili registered on every page so

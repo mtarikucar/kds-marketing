@@ -1,4 +1,20 @@
 {
+  "commandPalette": {
+    "title": "Command menu",
+    "description": "Search for a page or a quick action",
+    "placeholder": "Search pages and actions…",
+    "quickActions": "Quick actions",
+    "goTo": "Go to",
+    "actionHint": "Create",
+    "empty": "No results"
+  },
+  "quickCreate": {
+    "button": "Create",
+    "lead": "New lead",
+    "task": "New task",
+    "opportunity": "New opportunity",
+    "company": "New company"
+  },
   "leadStatus": {
     "NEW": "New",
     "CONTACTED": "Contacted",
