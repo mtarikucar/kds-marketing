@@ -295,6 +295,15 @@ export class WorkflowActionHandler {
     if (Object.keys(data).length === 0) return 'skipped (no writable fields)';
     await this.prisma.lead.updateMany({ where: { id: ctx.lead.id, workspaceId: ctx.workspaceId }, data });
     Object.assign(ctx.lead, data);
+    // DELIBERATE: unlike the manual marketing-leads.updateStatus, we do NOT emit
+    // LeadStatusChanged here even when `data.status` changed. `lead.status_changed`
+    // is a workflow trigger, and update_lead can itself change status — emitting it
+    // would let workflow A's status write fire workflow B whose status write fires A,
+    // a status ping-pong runaway (cross-workflow cascades aren't bounded by the
+    // executor's per-run caps). Re-enabling it for parity requires a cascade/re-entry
+    // guard first (tag add/remove DO emit + cascade, but those self-terminate — an
+    // idempotent re-add fires no new event; a status flip doesn't). Do not "fix" the
+    // missing emit without that guard.
     return 'lead updated';
   }
 
