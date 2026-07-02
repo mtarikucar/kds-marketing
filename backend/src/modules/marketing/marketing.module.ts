@@ -249,6 +249,8 @@ import { SocialCampaignsService } from './social-campaigns/social-campaigns.serv
 import { SocialCampaignLinkService } from './social-campaigns/social-campaign-link.service';
 import { SocialOAuthController } from './social-planner/oauth/social-oauth.controller';
 import { SocialOAuthService } from './social-planner/oauth/social-oauth.service';
+import { AccountCenterController } from './account-center/account-center.controller';
+import { AccountCenterService } from './account-center/account-center.service';
 import { SocialTokenRefreshService } from './social-planner/oauth/social-token-refresh.service';
 
 // Epic C — memberships: courses/modules/lessons + enrollment/progress.
@@ -544,6 +546,7 @@ import { WalletService } from './wallet/wallet.service';
     RebillingController,
     SocialPlannerController,
     SocialOAuthController,
+    AccountCenterController,
     MarketingMediaController,
     MarketingMediaWebhookController,
     SocialCampaignsController,
@@ -766,6 +769,7 @@ import { WalletService } from './wallet/wallet.service';
     SocialCampaignsService,
     SocialCampaignLinkService,
     SocialOAuthService,
+    AccountCenterService,
     SocialTokenRefreshService,
     // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
     LinkedinAdsOAuthService,
