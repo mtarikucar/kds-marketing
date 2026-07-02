@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Settings, Trophy, XCircle, Trash2, GripVertical, TrendingUp, ChevronDown } from 'lucide-react';
+import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
 
 import {
   getBoard,
@@ -218,6 +219,9 @@ export default function OpportunitiesPage() {
     setForm({ ...EMPTY_FORM, stageId });
     setDialogOpen(true);
   };
+
+  // Honor ?create=1 from the global "+ Create" menu / command palette.
+  useCreateParam(() => openNew());
   const openEdit = (o: Opportunity) => {
     setForm({
       id: o.id,

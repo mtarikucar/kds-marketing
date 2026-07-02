@@ -1,6 +1,7 @@
 {
   "commandPalette": {
     "title": "Command menu",
+    "search": "Search",
     "description": "Search for a page or a quick action",
     "placeholder": "Search pages and actions…",
     "quickActions": "Quick actions",

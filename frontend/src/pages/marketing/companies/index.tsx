@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Building2, Trash2, Users, Target, MessagesSquare, Globe } from 'lucide-react';
+import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
 import {
   listCompanies,
   getCompany,
@@ -39,6 +40,9 @@ export default function CompaniesPage() {
   const [form, setForm] = useState<NewCompany>(EMPTY);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
+
+  // Honor ?create=1 from the global "+ Create" menu / command palette.
+  useCreateParam(() => setCreateOpen(true));
 
   const { data: companies } = useQuery<Company[]>({
     queryKey: ['marketing', 'companies', search],

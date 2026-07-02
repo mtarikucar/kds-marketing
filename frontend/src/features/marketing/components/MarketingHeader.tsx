@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Bell } from 'lucide-react';
+import { Bell, Search, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
+import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
 import {
@@ -70,10 +73,18 @@ const changePasswordSchema = z.object({
 
 type ChangePasswordValues = z.infer<typeof changePasswordSchema>;
 
+/** OS-appropriate hint for the command-palette shortcut. */
+const isMac =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
+const PALETTE_SHORTCUT = isMac ? '⌘K' : 'Ctrl K';
+
 export default function MarketingHeader() {
   const { user, logout } = useMarketingAuthStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { t } = useTranslation('marketing');
+  const openPalette = useCommandPaletteStore((s) => s.setOpen);
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -164,6 +175,48 @@ export default function MarketingHeader() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Global search — opens the command palette (Cmd/Ctrl+K). */}
+          <button
+            type="button"
+            onClick={() => openPalette(true)}
+            className="hidden items-center gap-2 rounded-lg border border-border bg-surface-muted px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex"
+          >
+            <Search className="h-4 w-4" />
+            <span>{t('commandPalette.search', 'Search')}</span>
+            <kbd className="ms-2 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+              {PALETTE_SHORTCUT}
+            </kbd>
+          </button>
+          <IconButton
+            aria-label={t('commandPalette.search', 'Search')}
+            variant="ghost"
+            className="sm:hidden"
+            onClick={() => openPalette(true)}
+          >
+            <Search className="h-5 w-5" />
+          </IconButton>
+
+          {/* Global "+ Create" quick action. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" className="gap-1.5">
+                <Plus className="h-4 w-4" />
+                <span className="hidden sm:inline">{t('quickCreate.button', 'Create')}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              {QUICK_ACTIONS.map((a) => {
+                const Icon = a.icon;
+                return (
+                  <DropdownMenuItem key={a.id} onSelect={() => navigate(a.to)}>
+                    <Icon className="me-2 h-4 w-4" />
+                    {t(a.labelKey, a.label)}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <LanguageSwitcher />
           <ThemeToggle />
 

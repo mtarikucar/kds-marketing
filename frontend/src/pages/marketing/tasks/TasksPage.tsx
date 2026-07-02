@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useSearchParams, Link } from 'react-router-dom';
+import { useCreateParam } from '../../../features/marketing/hooks/useCreateParam';
 import { Plus, AlertTriangle, CheckCircle2, Play, Pencil, Trash2, ClipboardList } from 'lucide-react';
 import type { ColumnDef, SortingState } from '@tanstack/react-table';
 import marketingApi from '../../../features/marketing/api/marketingApi';
@@ -215,6 +216,9 @@ export default function TasksPage() {
     setEditingTask(null);
     setFormOpen(true);
   };
+
+  // Honor ?create=1 from the global "+ Create" menu / command palette.
+  useCreateParam(openCreate);
 
   const handleDialogClose = (open: boolean) => {
     setFormOpen(open);
