@@ -61,6 +61,12 @@ describe('Enrollment (e2e)', () => {
     // without this the deep-mock returns undefined → undefined.map → 500.
     (ctx.prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
     (ctx.prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    // The advisory-lock recompute derives `done` from a FRESH DB count
+    // (`tx.lessonProgress.count` scoped to the live lesson ids), not from the
+    // findMany set — the shared test-app deep-mock defaults every `.count` to 0
+    // (test-app.ts), so without this override `done`=0 → progressPct 0 instead
+    // of 50. After upserting l1, the live count of completed lessons is 1 → 1/2.
+    (ctx.prisma.lessonProgress.count as jest.Mock).mockResolvedValue(1);
     // Progress recomputes over the LIVE lesson set, read via course.findUnique
     // (nested modules→lessons), not lesson.count. Ungated 2-lesson course →
     // completing l1 of {l1,l2} = 50%.
