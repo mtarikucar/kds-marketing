@@ -61,12 +61,14 @@ export default function MarketingLayout() {
           <ErrorBoundary key={location.pathname}>
             {isSettings ? (
               <SettingsLayout>
-                <div className="p-4 lg:p-6">
+                <div className="px-4 pt-4 pb-28 lg:px-6 lg:pt-6">
                   <Outlet />
                 </div>
               </SettingsLayout>
             ) : (
-              <div className="h-full overflow-y-auto p-4 lg:p-6">
+              // Extra bottom padding so page content (e.g. a bottom-right action
+              // button) clears the fixed Ask-AI + webphone widgets.
+              <div className="h-full overflow-y-auto px-4 pt-4 pb-28 lg:px-6 lg:pt-6">
                 <Outlet />
               </div>
             )}

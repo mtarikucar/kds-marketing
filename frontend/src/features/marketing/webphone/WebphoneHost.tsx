@@ -62,11 +62,13 @@ export default function WebphoneHost() {
       {/* Live-call copilot — only while a call is connected. Self-contained:
           listens to the rep's mic (Web Speech API) and surfaces AI suggestions. */}
       {state.status === 'incall' && (
-        <div className="fixed bottom-14 right-3 z-50 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-surface p-3 shadow-lg">
+        <div className="fixed bottom-32 right-3 z-50 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-surface p-3 shadow-lg">
           <CopilotPanel />
         </div>
       )}
-      <div className="fixed bottom-3 right-3 z-50 flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 shadow-md">
+      {/* Stacked ABOVE the Ask-AI launcher (which lives at bottom-5 right-5) so the
+          two fixed widgets never overlap each other. */}
+      <div className="fixed bottom-20 right-3 z-50 flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 shadow-md">
         <span className={`h-2 w-2 rounded-full ${dot}`} aria-hidden="true" />
         {state.status === 'incall' ? (
           <PhoneCall className="h-4 w-4 text-foreground" aria-hidden="true" />
