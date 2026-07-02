@@ -655,6 +655,7 @@
     }
   },
   "products": {
+    "loadError": "Ürünler yüklenemedi.",
     "title": "Ürünler",
     "subtitle": "Sattığınız tekrar kullanılabilir fiyatlı kalemler.",
     "newProduct": "Yeni ürün",

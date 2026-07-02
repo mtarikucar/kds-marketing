@@ -644,6 +644,7 @@
     }
   },
   "products": {
+    "loadError": "Could not load products.",
     "title": "Products",
     "subtitle": "Reusable priced items you sell.",
     "newProduct": "New product",

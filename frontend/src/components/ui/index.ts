@@ -29,6 +29,7 @@ export {
 } from './StatCard';
 export { EmptyState, type EmptyStateProps } from './EmptyState';
 export { QueryStateBoundary, type QueryStateBoundaryProps } from './QueryStateBoundary';
+export { ListPageShell, type ListPageShellProps } from './ListPageShell';
 export { Progress, type ProgressProps, type ProgressTone } from './Progress';
 export {
   SegmentedControl,

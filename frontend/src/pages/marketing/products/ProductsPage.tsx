@@ -13,12 +13,11 @@ import {
   type Product,
 } from '../../../features/marketing/api/products.service';
 import {
-  PageHeader,
+  ListPageShell,
   Button,
   Card,
   CardContent,
   Badge,
-  Spinner,
   EmptyState,
   Dialog,
   DialogContent,
@@ -107,7 +106,7 @@ export default function ProductsPage() {
   const [form, setForm] = useState<FormState>(EMPTY);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'products'],
     queryFn: () => listProducts({ limit: 100 }),
   });
@@ -181,8 +180,8 @@ export default function ProductsPage() {
   const products = data?.data ?? [];
 
   return (
-    <div className="space-y-4">
-      <PageHeader
+    <>
+      <ListPageShell
         title={t('products.title', 'Products')}
         description={t('products.subtitle', 'Reusable priced items you sell.')}
         actions={
@@ -191,28 +190,24 @@ export default function ProductsPage() {
             {t('products.newProduct', 'New product')}
           </Button>
         }
-      />
-
-      {isLoading && (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      )}
-
-      {!isLoading && products.length === 0 && (
-        <EmptyState
-          title={t('products.emptyTitle', 'No products yet')}
-          description={t('products.empty', 'Create products to reuse on invoices and deals.')}
-          action={
-            <Button size="sm" onClick={openNew}>
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              {t('products.newProduct', 'New product')}
-            </Button>
-          }
-        />
-      )}
-
-      {products.length > 0 && (
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('products.loadError', 'Could not load products.')}
+        isEmpty={products.length === 0}
+        emptyState={
+          <EmptyState
+            title={t('products.emptyTitle', 'No products yet')}
+            description={t('products.empty', 'Create products to reuse on invoices and deals.')}
+            action={
+              <Button size="sm" onClick={openNew}>
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                {t('products.newProduct', 'New product')}
+              </Button>
+            }
+          />
+        }
+      >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {products.map((p) => (
             <Card key={p.id} className={p.active ? '' : 'opacity-60'}>
@@ -271,7 +266,7 @@ export default function ProductsPage() {
             </Card>
           ))}
         </div>
-      )}
+      </ListPageShell>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -395,6 +390,6 @@ export default function ProductsPage() {
         loading={deleteMutation.isPending}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
       />
-    </div>
+    </>
   );
 }
