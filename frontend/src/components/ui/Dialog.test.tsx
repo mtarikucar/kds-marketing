@@ -59,4 +59,16 @@ describe('Dialog', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+
+  it('caps its height and scrolls internally so tall content keeps actions reachable', async () => {
+    const user = userEvent.setup();
+    render(<DialogDemo />);
+    await user.click(screen.getByRole('button', { name: 'Open dialog' }));
+    const dialog = await screen.findByRole('dialog');
+    // jsdom has no layout engine, so assert the class contract that guarantees
+    // the content is height-capped and scrolls rather than clipping the footer
+    // (and its Save/Cancel actions) off the top and bottom of the viewport.
+    expect(dialog.className).toMatch(/max-h-\[/);
+    expect(dialog.className).toMatch(/overflow-y-auto/);
+  });
 });
