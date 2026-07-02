@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -17,6 +18,7 @@ import {
   Building2,
   ShieldCheck,
   Code2,
+  ChevronDown,
 } from 'lucide-react';
 import { Eyebrow, Reveal, SHELL } from './landingShared';
 
@@ -49,6 +51,7 @@ const MORE: Array<{ key: string; icon: LucideIcon }> = [
 
 export default function FeatureGrid() {
   const { t } = useTranslation('marketing');
+  const [showAll, setShowAll] = useState(false);
 
   return (
     <section id="features" className="scroll-mt-24 bg-white py-20 sm:py-28">
@@ -82,25 +85,38 @@ export default function FeatureGrid() {
           })}
         </div>
 
-        {/* And more */}
-        <Reveal className="mt-14 text-center" delay={80}>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
-            {t('landing.more.title')}
-          </p>
-          <div className="mx-auto mt-5 flex max-w-4xl flex-wrap items-center justify-center gap-2.5">
-            {MORE.map((m) => {
-              const Icon = m.icon;
-              return (
-                <span
-                  key={m.key}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
-                >
-                  <Icon className="h-4 w-4 text-primary-500" />
-                  {t(`landing.more.${m.key}`)}
-                </span>
-              );
-            })}
-          </div>
+        {/* And more — collapsed behind a disclosure so the section leads with the
+            core capabilities instead of dumping all 16 at once. */}
+        <Reveal className="mt-12 text-center" delay={80}>
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            aria-expanded={showAll}
+            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-primary-200 hover:text-primary-700"
+          >
+            {showAll
+              ? t('landing.more.showLess', 'Show less')
+              : t('landing.more.seeAll', 'See all modules')}
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${showAll ? 'rotate-180' : ''}`}
+            />
+          </button>
+          {showAll && (
+            <div className="mx-auto mt-6 flex max-w-4xl flex-wrap items-center justify-center gap-2.5">
+              {MORE.map((m) => {
+                const Icon = m.icon;
+                return (
+                  <span
+                    key={m.key}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
+                  >
+                    <Icon className="h-4 w-4 text-primary-500" />
+                    {t(`landing.more.${m.key}`)}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </Reveal>
       </div>
     </section>

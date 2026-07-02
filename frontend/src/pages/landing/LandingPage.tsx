@@ -5,6 +5,7 @@ import Hero from './Hero';
 import FeatureGrid from './FeatureGrid';
 import HowItWorks from './HowItWorks';
 import Highlights from './Highlights';
+import TrustBand from './TrustBand';
 import FaqSection from './FaqSection';
 import FinalCta from './FinalCta';
 import LandingFooter from './LandingFooter';
@@ -49,6 +50,7 @@ export default function LandingPage() {
         <FeatureGrid />
         <HowItWorks />
         <Highlights />
+        <TrustBand />
         <FaqSection />
         <FinalCta />
       </main>

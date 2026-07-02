@@ -2095,8 +2095,22 @@
       "billingTitle": "Faturalama & Ödemeler",
       "billingDesc": "Teklif, fatura, abonelik ve ürünler — Iyzico ile online tahsilat."
     },
+    "trust": {
+      "eyebrow": "Güvenlik ve uyum",
+      "title": "İlk günden yerleşik güven",
+      "complianceTitle": "KVKK & GDPR",
+      "complianceDesc": "Onay, veri sahibi hakları ve uyum araçları hazır gelir.",
+      "authTitle": "2FA & roller",
+      "authDesc": "İki adımlı doğrulama ve ayrıntılı rol-bazlı erişim.",
+      "encryptionTitle": "Şifreli saklama",
+      "encryptionDesc": "Verileriniz beklerken ve iletilirken şifrelenir.",
+      "auditTitle": "Denetim & kontrol",
+      "auditDesc": "Kim ne yaptı görün, tam çalışma-alanı kontrolleriyle."
+    },
     "more": {
       "title": "Ve dahası",
+      "seeAll": "Tüm modülleri gör",
+      "showLess": "Daha az göster",
       "analytics": "Analitik & Raporlama",
       "ai": "Yapay Zekâ Asistanı",
       "memberships": "Üyelik & Topluluk",

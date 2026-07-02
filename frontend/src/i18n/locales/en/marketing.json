@@ -2046,8 +2046,22 @@
       "billingTitle": "Billing & Payments",
       "billingDesc": "Estimates, invoices, subscriptions and products — collect payments online."
     },
+    "trust": {
+      "eyebrow": "Security & compliance",
+      "title": "Trust built in, from day one",
+      "complianceTitle": "KVKK & GDPR",
+      "complianceDesc": "Consent, data-subject and compliance tooling built in.",
+      "authTitle": "2FA & roles",
+      "authDesc": "Two-factor auth and granular role-based access control.",
+      "encryptionTitle": "Encrypted storage",
+      "encryptionDesc": "Your data is encrypted at rest and in transit.",
+      "auditTitle": "Audit & control",
+      "auditDesc": "See who did what, with full workspace controls."
+    },
     "more": {
       "title": "And more",
+      "seeAll": "See all modules",
+      "showLess": "Show less",
       "analytics": "Analytics & Reporting",
       "ai": "AI Assistant",
       "memberships": "Memberships & Community",
