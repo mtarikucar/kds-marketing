@@ -526,6 +526,14 @@ describe('BookingService', () => {
       );
     });
 
+    it('rejects reactivating a terminal (CANCELLED) booking via setStatus — no double-book revive', async () => {
+      // A cancelled booking released its slot; flipping it back to CONFIRMED here
+      // would re-occupy the slot with no availability re-check. Mirror reschedule()'s
+      // active-only guard so setStatus can't silently create a double-book.
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CANCELLED' });
+      await expect(svc.setStatus(WS, 'b1', 'CONFIRMED')).rejects.toThrow(/active booking/i);
+    });
+
     it('approving a PENDING booking runs the deferred confirm side-effects', async () => {
       prisma.booking.findFirst.mockResolvedValue({
         id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'PENDING',

@@ -978,6 +978,16 @@ export class BookingService implements OnModuleInit {
     if (existing.status === 'EXTERNAL_BUSY') {
       throw new BadRequestException('Cannot change an external calendar block');
     }
+    // Only an ACTIVE (PENDING/CONFIRMED) booking can be transitioned. A terminal
+    // booking (CANCELLED/NO_SHOW/COMPLETED) has already RELEASED its slot (excluded
+    // from ACTIVE_STATUSES capacity/availability) and torn down its conference — so
+    // flipping it back to CONFIRMED here would silently re-occupy the slot with NO
+    // availability re-check (a double-book, the very thing book()/reschedule() guard)
+    // and no meeting link. reschedule() already rejects a non-active source; this is
+    // the sibling modify-path that didn't. Re-activating = a fresh book(), not a flip.
+    if (!ACTIVE_STATUSES.includes(existing.status)) {
+      throw new BadRequestException('Only an active booking can be updated — re-book instead');
+    }
     const wasPending = existing.status === 'PENDING';
     await this.prisma.$transaction(async (tx) => {
       await tx.booking.updateMany({ where: { id: existing.id, workspaceId }, data: { status } });
