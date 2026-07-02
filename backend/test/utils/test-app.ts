@@ -3,7 +3,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.config';
@@ -71,6 +71,21 @@ export async function createTestApp(
   // quiet. (Specs that drive readiness "down" override this transiently.)
   (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
   (prisma.$queryRawUnsafe as jest.Mock).mockResolvedValue([]);
+
+  // Empty-DB defaults for every model delegate: multi-row reads resolve to an
+  // empty set instead of `undefined`, so a service that adds a new findMany/
+  // count/groupBy doesn't crash unrelated specs with `undefined.map/.length`.
+  // Specs override per-method as needed; single-row reads (findUnique/findFirst)
+  // stay `undefined` (= "not found"), which callers already handle.
+  for (const model of Prisma.dmmf.datamodel.models) {
+    const delegate = (prisma as Record<string, any>)[
+      model.name.charAt(0).toLowerCase() + model.name.slice(1)
+    ];
+    if (!delegate) continue;
+    delegate.findMany?.mockResolvedValue([]);
+    delegate.count?.mockResolvedValue(0);
+    delegate.groupBy?.mockResolvedValue([]);
+  }
 
   const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(PrismaService)
