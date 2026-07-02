@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -76,8 +76,10 @@ export default function CommandPalette() {
     [actionOptions, navOptions],
   );
 
-  // Fresh query + selection each time the palette opens.
-  useEffect(() => {
+  // Fresh query + selection each time the palette opens. useLayoutEffect (not
+  // useEffect) so the reset happens BEFORE paint — otherwise the previous search
+  // text flashes for one frame on reopen since the component stays mounted.
+  useLayoutEffect(() => {
     if (open) {
       setQuery('');
       setActive(0);
@@ -124,6 +126,7 @@ export default function CommandPalette() {
         role="option"
         id={`cmdk-opt-${index}`}
         data-index={index}
+        tabIndex={-1}
         aria-selected={isActive}
         onMouseEnter={() => setActive(index)}
         onClick={() => select(opt)}

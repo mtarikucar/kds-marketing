@@ -29,3 +29,24 @@ export const useOnboardingStore = create<OnboardingState>()(
     { name: 'kds-onboarding' },
   ),
 );
+
+// One-time migration from the pre-store dismissal keys
+// (`marketing:onboarding:dismissed:<ws>`, written by the old GettingStarted), so
+// existing users who already dismissed the checklist aren't nagged again. Seeds
+// the store then deletes the legacy keys, so it's a no-op on every later load.
+try {
+  const LEGACY = 'marketing:onboarding:dismissed:';
+  const legacyWorkspaces: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(LEGACY) && localStorage.getItem(k) === '1') {
+      legacyWorkspaces.push(k.slice(LEGACY.length));
+    }
+  }
+  for (const ws of legacyWorkspaces) {
+    useOnboardingStore.getState().dismiss(ws);
+    localStorage.removeItem(LEGACY + ws);
+  }
+} catch {
+  /* best effort — Safari private mode etc. */
+}

@@ -175,7 +175,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
         <div className="flex min-w-0 items-center gap-2">
           {onMenuClick && (
             <IconButton
-              aria-label="Open menu"
+              aria-label={t('nav.openMenu', 'Open menu')}
               variant="ghost"
               className="lg:hidden"
               onClick={onMenuClick}
@@ -211,7 +211,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
           {/* Global "+ Create" quick action. */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" className="gap-1.5">
+              <Button size="sm" className="gap-1.5" aria-label={t('quickCreate.button', 'Create')}>
                 <Plus className="h-4 w-4" />
                 <span className="hidden sm:inline">{t('quickCreate.button', 'Create')}</span>
               </Button>
@@ -329,6 +329,9 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                   onSelect={() => {
                     reopenOnboarding(user?.workspaceId ?? 'unknown');
                     navigate('/dashboard');
+                    // Confirm the action even when the workspace is fully set up
+                    // (in which case the checklist stays hidden — nothing to do).
+                    toast.success(t('onboarding.reopened', 'Setup guide reopened'));
                   }}
                 >
                   {t('onboarding.reopen', 'Show setup guide')}

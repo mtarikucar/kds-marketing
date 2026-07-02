@@ -37,7 +37,10 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
 
   const totalLeads = stats.totalLeads ?? 0;
 
-  if (totalLeads === 0) {
+  // Only a MANAGER's zero means "empty workspace" — a REP's totalLeads is scoped
+  // to leads assigned to them, so their zero just means "nothing assigned yet"
+  // and must NOT push a create-lead CTA. Reps fall through to the day's work.
+  if (isManager && totalLeads === 0) {
     return (
       <EmptyState
         icon={<UserPlus className="h-6 w-6" />}
@@ -61,12 +64,18 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
   const offers = stats.activeOffers ?? 0;
   const waiting = overdue + unassigned + pending + offers;
 
+  // Every branch of the waiting count (overdue → unassigned → pending → offers)
+  // has a matching CTA, so the subtitle count and the button never disagree.
   const primary =
     overdue > 0
       ? { to: '/tasks?tab=overdue', label: t('dashboard.hero.reviewOverdue', 'Review overdue tasks') }
       : unassigned > 0
         ? { to: '/leads?assignmentStatus=unassigned', label: t('dashboard.hero.reviewUnassigned', 'Assign leads') }
-        : { to: '/leads', label: t('dashboard.hero.goToLeads', 'Go to your leads') };
+        : pending > 0
+          ? { to: '/tasks', label: t('dashboard.hero.reviewTasks', 'Review your tasks') }
+          : offers > 0
+            ? { to: '/offers?status=SENT', label: t('dashboard.hero.reviewOffers', 'Review open offers') }
+            : { to: '/leads', label: t('dashboard.hero.goToLeads', 'Go to your leads') };
 
   const greeting = firstName
     ? t('dashboard.hero.greetingNamed', { name: firstName, defaultValue: 'Hi {{name}}' })

@@ -167,6 +167,7 @@
     "more": "More",
     "pin": "Pin",
     "unpin": "Unpin",
+    "openMenu": "Open menu",
     "group": {
       "pipeline": "Pipeline",
       "sales": "Sales",
@@ -330,6 +331,8 @@
       "clear": "You're all caught up — nice work.",
       "reviewOverdue": "Review overdue tasks",
       "reviewUnassigned": "Assign leads",
+      "reviewTasks": "Review your tasks",
+      "reviewOffers": "Review open offers",
       "goToLeads": "Go to your leads"
     },
     "downloadGuide": "Download Marketer Guide (PDF)",
@@ -1624,6 +1627,7 @@
     "progress": "{{done}} of {{total}} done",
     "dismiss": "Dismiss",
     "reopen": "Show setup guide",
+    "reopened": "Setup guide reopened",
     "steps": {
       "agent": {
         "title": "Create your first AI agent",

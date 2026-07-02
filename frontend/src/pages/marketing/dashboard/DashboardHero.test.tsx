@@ -71,4 +71,27 @@ describe('DashboardHero', () => {
     expect(screen.getByRole('button', { name: /Go to your leads/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Assign leads/i })).not.toBeInTheDocument();
   });
+
+  it('does NOT show the create-lead CTA to a rep with no assigned leads', () => {
+    // A rep's totalLeads is scoped to leads assigned to them, so zero means
+    // "nothing assigned", not "empty workspace" — they should fall through.
+    renderHero({
+      stats: { totalLeads: 0, pendingTasks: 0, activeOffers: 0 },
+      today: { overdueTasks: 0 },
+      isManager: false,
+    });
+    expect(screen.queryByText(/Start with your first lead/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Go to your leads/i })).toBeInTheDocument();
+  });
+
+  it('routes to tasks when only pending tasks are waiting (count matches CTA)', async () => {
+    const user = userEvent.setup();
+    renderHero({
+      stats: { totalLeads: 5, unassignedLeads: 0, pendingTasks: 3, activeOffers: 0 },
+      today: { overdueTasks: 0 },
+      isManager: false,
+    });
+    await user.click(screen.getByRole('button', { name: /Review your tasks/i }));
+    expect(screen.getByTestId('loc')).toHaveTextContent('/tasks');
+  });
 });

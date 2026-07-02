@@ -167,6 +167,7 @@
     "more": "Daha fazla",
     "pin": "Sabitle",
     "unpin": "Sabiti kaldır",
+    "openMenu": "Menüyü aç",
     "group": {
       "conversations": "Mesajlar",
       "contacts": "Kişiler",
@@ -341,6 +342,8 @@
       "clear": "Her şey yolunda — güzel iş.",
       "reviewOverdue": "Geciken görevleri incele",
       "reviewUnassigned": "Lead ata",
+      "reviewTasks": "Görevlerini incele",
+      "reviewOffers": "Açık teklifleri incele",
       "goToLeads": "Lead'lerine git"
     },
     "downloadGuide": "Pazarlamacı Rehberini İndir (PDF)",
@@ -1620,6 +1623,7 @@
     "progress": "{{total}} adımdan {{done}} tamamlandı",
     "dismiss": "Kapat",
     "reopen": "Kurulum rehberini göster",
+    "reopened": "Kurulum rehberi yeniden açıldı",
     "steps": {
       "agent": {
         "title": "İlk AI temsilcini oluştur",

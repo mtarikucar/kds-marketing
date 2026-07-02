@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { LogOut, PanelLeftClose, PanelLeft, Star, ChevronRight } from 'lucide-react';
@@ -66,8 +66,16 @@ export default function MarketingSidebar({
   const pinned = [...core, ...advanced].filter(isPinned);
   const coreRest = core.filter((h) => !isPinned(h));
   const advancedRest = advanced.filter((h) => !isPinned(h));
-  // The active hub always shows even if it lives in a collapsed "More".
+  // Auto-open "More" when the user NAVIGATES into an advanced page (keyed on the
+  // active hub id, so a later manual collapse is respected instead of snapping
+  // back open). The section is then driven purely by `advancedOpen`, so the
+  // toggle always does something.
   const activeInAdvanced = !!activeHub && advancedRest.some((h) => h.id === activeHub.id);
+  const activeHubId = activeHub?.id;
+  useEffect(() => {
+    if (activeInAdvanced) setAdvancedOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeHubId]);
 
   const hubTarget = (h: NavHub) => h.path ?? h.children?.[0]?.path ?? '/dashboard';
 
@@ -108,10 +116,12 @@ export default function MarketingSidebar({
             aria-pressed={pinnedNow}
             className={cn(
               'absolute end-1.5 top-1/2 -translate-y-1/2 rounded p-1 transition-opacity',
-              'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               pinnedNow
                 ? 'text-primary opacity-100'
-                : 'text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100',
+                : // hidden until hover/focus — pointer-events-none so an invisible
+                  // star is never an accidental tap target (esp. in the touch drawer)
+                  'text-muted-foreground opacity-0 pointer-events-none hover:text-foreground group-hover:opacity-100 group-hover:pointer-events-auto',
             )}
           >
             <Star className={cn('h-3.5 w-3.5', pinnedNow && 'fill-current')} />
@@ -188,18 +198,18 @@ export default function MarketingSidebar({
                 <button
                   type="button"
                   onClick={() => setAdvancedOpen(!advancedOpen)}
-                  aria-expanded={advancedOpen || activeInAdvanced}
+                  aria-expanded={advancedOpen}
                   className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ChevronRight
                     className={cn(
                       'h-3.5 w-3.5 transition-transform',
-                      (advancedOpen || activeInAdvanced) && 'rotate-90',
+                      (advancedOpen) && 'rotate-90',
                     )}
                   />
                   {t('nav.more', 'More')}
                 </button>
-                {(advancedOpen || activeInAdvanced) && (
+                {(advancedOpen) && (
                   <div className="mt-1 space-y-1">{advancedRest.map((h) => renderHub(h))}</div>
                 )}
               </div>
