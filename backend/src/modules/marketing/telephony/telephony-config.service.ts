@@ -80,13 +80,14 @@ export class TelephonyConfigService {
   async setDahili(
     workspaceId: string,
     marketingUserId: string,
-    dahili: string | null,
+    dahili: string | null | undefined,
     sipPassword?: string,
     phone?: string | null,
   ) {
-    const data: { dahili: string | null; dahiliSecret?: string | null; phone?: string | null } = {
-      dahili: dahili?.trim() || null,
-    };
+    const data: { dahili?: string | null; dahiliSecret?: string | null; phone?: string | null } = {};
+    // Only touch dahili when explicitly provided (undefined = leave as-is) — so a
+    // caller editing just the phone/SIP password can't null out a saved extension.
+    if (dahili !== undefined) data.dahili = dahili?.trim() || null;
     if (sipPassword !== undefined) {
       if (sipPassword && !isSecretBoxConfigured()) {
         throw new ServiceUnavailableException('MARKETING_SECRET_KEY is not configured — cannot store the SIP password');

@@ -140,22 +140,24 @@ export function EmailChannelDialog({
                 value={created.webhookUrl}
               />
             )}
-            <div
-              className={`flex items-center gap-2 rounded-lg border p-2 text-sm ${
-                created.inboundSecretConfigured
-                  ? 'border-success/30 bg-success/10 text-foreground'
-                  : 'border-warning/30 bg-warning/10 text-foreground'
-              }`}
-            >
-              {created.inboundSecretConfigured ? (
-                <CheckCircle2 className="h-4 w-4 text-success" />
-              ) : (
-                <AlertTriangle className="h-4 w-4 text-warning" />
-              )}
-              {created.inboundSecretConfigured
-                ? t('accounts.email.inboundOn', 'Inbound signing key is configured — replies will flow.')
-                : t('accounts.email.inboundOff', 'Inbound not active yet — an admin must set EMAIL_INBOUND_SECRET on the server.')}
-            </div>
+            {(() => {
+              const ready = created.inboundSecretConfigured && !!created.inboundAddress;
+              const msg = !created.inboundSecretConfigured
+                ? t('accounts.email.inboundOff', 'Inbound not active yet — an admin must set EMAIL_INBOUND_SECRET on the server.')
+                : !created.inboundAddress
+                  ? t('accounts.email.inboundNoAddr', 'Inbound signing key is set, but no inbound address was configured — replies can’t be matched to this channel.')
+                  : t('accounts.email.inboundOn', 'Inbound signing key is configured — replies will flow.');
+              return (
+                <div
+                  className={`flex items-center gap-2 rounded-lg border p-2 text-sm ${
+                    ready ? 'border-success/30 bg-success/10 text-foreground' : 'border-warning/30 bg-warning/10 text-foreground'
+                  }`}
+                >
+                  {ready ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+                  {msg}
+                </div>
+              );
+            })()}
             <Button variant="outline" size="sm" onClick={() => verify.mutate(created.id)} loading={verify.isPending}>
               <MailCheck className="h-4 w-4" /> {t('accounts.email.testSmtp', 'Test SMTP connection')}
             </Button>

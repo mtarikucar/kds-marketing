@@ -104,7 +104,52 @@
     "setUpChannelDesc": "Aşağıdaki bilgileri gir — bu, kanalı gelen kutuna bağlar.",
     "channelName": "Ad",
     "channelCreated": "Kanal bağlandı",
-    "channelFailed": "Kanal bağlanamadı"
+    "channelFailed": "Kanal bağlanamadı",
+    "connectedCount": "{{count}} bağlı",
+    "disconnect": "Bağlantıyı kes",
+    "reconnect": "Yeniden bağlan",
+    "email": {
+      "title": "E-posta bağla",
+      "desc": "E-posta iki yönlüdür: SMTP sunucundan gönder, sağlayıcının gelen webhook'uyla yanıtları al.",
+      "sending": "Gönderim (SMTP)",
+      "receiving": "Yanıt alma",
+      "webhookLabel": "Gelen webhook URL'si — e-posta sağlayıcının gelen-ayrıştırma rotasına yapıştır",
+      "inboundOn": "Gelen imza anahtarı ayarlı — yanıtlar akacak.",
+      "inboundOff": "Gelen henüz aktif değil — bir yönetici sunucuda EMAIL_INBOUND_SECRET ayarlamalı.",
+      "testSmtp": "SMTP bağlantısını test et"
+    },
+    "webchat": {
+      "title": "Web sohbet",
+      "desc": "Web sitene canlı sohbet balonu ekle. Ziyaretçiler yazar, AI ajanın otomatik yanıtlar — kimlik bilgisi gerekmez.",
+      "agent": "Yanıtlayan AI ajanı",
+      "noAgent": "— yok (yalnızca manuel gelen kutusu) —",
+      "noAgentWarn": "Ajan olmadan mesajlar gelen kutusuna düşer ama kimse otomatik yanıtlamaz.",
+      "greeting": "Karşılama (opsiyonel)",
+      "embedLabel": "Her sayfada </body> etiketinden hemen önce yapıştır",
+      "preview": "Widget'ı önizle →"
+    },
+    "tel": {
+      "title": "Telefon (Netsantral)",
+      "subtitle": "NetGSM bulut santral — müşterileri CRM'den ara",
+      "connected": "Bağlı",
+      "incomplete": "Eksik",
+      "manage": "Yönet",
+      "clickToCall": "Tıkla-ara hazır",
+      "webphoneReady": "Tıkla-ara + web telefon hazır",
+      "workspace": "Çalışma alanı kimlik bilgileri",
+      "webphone": "Tarayıcı içi web telefon (opsiyonel)",
+      "reps": "Kim arayabilir",
+      "repsHint": "Her temsilciye kendi telefonu (köprü arama — hemen çalışır) ve/veya dahili + SIP parolası (web telefon) ver.",
+      "test": "Kimlik bilgilerini doğrula"
+    },
+    "voice": {
+      "title": "AI Sesli",
+      "subtitle": "AI sesli ajan, CRM AI'ını kullanarak çağrıları yanıtlar",
+      "available": "Kullanılabilir",
+      "explain": "Aşağıdaki köprü URL'sini bir ElevenLabs / VAPI / Retell sesli ajanına \"Custom LLM\" olarak ver ya da NetGSM çağrılarını IVR'a yönlendir. AI ajanının kişiliği + bilgisi yanıtları sürer.",
+      "bridge": "AI ses köprüsü (ElevenLabs / VAPI / Retell)",
+      "ivr": "NetGSM IVR"
+    }
   },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",

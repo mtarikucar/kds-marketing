@@ -118,6 +118,9 @@ export class MarketingUsersService {
         firstName: true,
         lastName: true,
         phone: true,
+        // Telephony extension (for the Account Center per-rep table). NOT
+        // dahiliSecret — the sealed SIP password stays write-only.
+        dahili: true,
         role: true,
         status: true,
         lastLogin: true,
