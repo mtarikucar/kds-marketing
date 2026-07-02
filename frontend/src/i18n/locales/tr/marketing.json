@@ -1619,6 +1619,7 @@
     "subtitle": "Çalışma alanını çalışır hâle getirmek için birkaç adım.",
     "progress": "{{total}} adımdan {{done}} tamamlandı",
     "dismiss": "Kapat",
+    "reopen": "Kurulum rehberini göster",
     "steps": {
       "agent": {
         "title": "İlk AI temsilcini oluştur",
@@ -1635,6 +1636,10 @@
       "leads": {
         "title": "İlk lead'ini ekle",
         "desc": "Pipeline'ı başlatmak için bir lead içe aktar veya oluştur."
+      },
+      "team": {
+        "title": "Ekibini davet et",
+        "desc": "Lead'lerin atanıp işlenebilmesi için ekip arkadaşlarını ekle."
       },
       "site": {
         "title": "Açılış sayfası yayınla",

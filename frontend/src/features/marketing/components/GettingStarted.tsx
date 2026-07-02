@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { CheckCircle, ChevronRight, X } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { useOnboardingStore } from '../../../store/onboardingStore';
 import {
   Card,
   CardHeader,
@@ -15,36 +16,21 @@ import {
   Progress,
 } from '@/components/ui';
 
-const DISMISS_PREFIX = 'marketing:onboarding:dismissed:';
-
-function readDismissed(ws: string): boolean {
-  try {
-    return localStorage.getItem(DISMISS_PREFIX + ws) === '1';
-  } catch {
-    return false; // Safari private mode etc. — treat as not-dismissed
-  }
-}
-function writeDismissed(ws: string): void {
-  try {
-    localStorage.setItem(DISMISS_PREFIX + ws, '1');
-  } catch {
-    /* ignore — best effort */
-  }
-}
-
 /**
  * Manager-only first-run checklist on the dashboard. Self-fetches each setup
  * area's list (reusing the AI pages' exact query keys, so the data is shared —
  * no duplicate fetches) and marks a step done when that area has ≥1 item.
- * Dismissible, and auto-hides once every step is complete; both states latch
- * per-workspace in localStorage so a configured workspace is never nagged.
+ * Dismissible, and auto-hides once every step is complete; dismissal latches
+ * per-workspace in the (persisted) onboarding store so a configured workspace is
+ * never nagged, yet a "Show setup guide" action can reopen it.
  */
 export default function GettingStarted() {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const workspaceId = user?.workspaceId ?? 'unknown';
-  const [dismissed, setDismissed] = useState(() => readDismissed(workspaceId));
+  const dismissed = useOnboardingStore((s) => !!s.dismissed[workspaceId]);
+  const dismissWs = useOnboardingStore((s) => s.dismiss);
   const active = isManager && !dismissed;
 
   const agents = useQuery<any[]>({
@@ -74,12 +60,20 @@ export default function GettingStarted() {
     enabled: active,
     staleTime: 60_000,
   });
+  const team = useQuery<any[]>({
+    queryKey: ['marketing', 'users'],
+    queryFn: () => marketingApi.get('/users').then((r) => r.data),
+    enabled: active,
+    staleTime: 60_000,
+  });
 
   const steps = [
     { id: 'agent', to: '/ai/agents', done: (agents.data?.length ?? 0) > 0 },
     { id: 'knowledge', to: '/ai/knowledge', done: (docs.data?.length ?? 0) > 0 },
     { id: 'channel', to: '/channels', done: (channels.data?.length ?? 0) > 0 },
     { id: 'leads', to: '/leads', done: (leads.data?.meta?.total ?? 0) > 0 },
+    // "Invite your team" — done once there's more than just the owner.
+    { id: 'team', to: '/users', done: (team.data?.length ?? 0) > 1 },
     { id: 'site', to: '/sites', done: (sites.data?.length ?? 0) > 0 },
   ];
   const total = steps.length;
@@ -90,17 +84,13 @@ export default function GettingStarted() {
   // setup item is later removed.
   useEffect(() => {
     if (active && allDone) {
-      writeDismissed(workspaceId);
-      setDismissed(true);
+      dismissWs(workspaceId);
     }
-  }, [active, allDone, workspaceId]);
+  }, [active, allDone, workspaceId, dismissWs]);
 
   if (!active || allDone) return null;
 
-  const dismiss = () => {
-    writeDismissed(workspaceId);
-    setDismissed(true);
-  };
+  const dismiss = () => dismissWs(workspaceId);
 
   return (
     <Card>

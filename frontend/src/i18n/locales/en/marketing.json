@@ -1623,6 +1623,7 @@
     "subtitle": "A few steps to get your workspace working for you.",
     "progress": "{{done}} of {{total}} done",
     "dismiss": "Dismiss",
+    "reopen": "Show setup guide",
     "steps": {
       "agent": {
         "title": "Create your first AI agent",
@@ -1639,6 +1640,10 @@
       "leads": {
         "title": "Add your first lead",
         "desc": "Import or create a lead to start your pipeline."
+      },
+      "team": {
+        "title": "Invite your team",
+        "desc": "Add teammates so leads can be assigned and worked."
       },
       "site": {
         "title": "Publish a landing page",

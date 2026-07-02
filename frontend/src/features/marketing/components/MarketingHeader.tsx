@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
+import { useOnboardingStore } from '../../../store/onboardingStore';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
@@ -85,6 +86,7 @@ export default function MarketingHeader() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
   const openPalette = useCommandPaletteStore((s) => s.setOpen);
+  const reopenOnboarding = useOnboardingStore((s) => s.reopen);
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -312,6 +314,16 @@ export default function MarketingHeader() {
                 </Badge>
               </div>
               <DropdownMenuSeparator />
+              {isManager && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    reopenOnboarding(user?.workspaceId ?? 'unknown');
+                    navigate('/dashboard');
+                  }}
+                >
+                  {t('onboarding.reopen', 'Show setup guide')}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={() => setShowChangePassword(true)}>
                 Change Password
               </DropdownMenuItem>
