@@ -64,7 +64,7 @@ export class SocialOAuthController {
     @Res() res: Response,
   ) {
     // The marketing console (where /social lives) is FRONTEND_URL
-    // (https://marketing.hummytummy.com) — NOT APP_URL, which is the core product.
+    // (https://jeetagrowth.com) — NOT APP_URL, which is the core product.
     const appUrl = (process.env.FRONTEND_URL ?? process.env.APP_URL ?? '').replace(/\/+$/, '');
     if (error || !code || !state) {
       return res.redirect(302, `${appUrl}/social?connect_error=1`);

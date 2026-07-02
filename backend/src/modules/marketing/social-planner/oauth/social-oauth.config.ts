@@ -156,7 +156,7 @@ export function usesPkce(n: Network): boolean {
 /**
  * The provider redirect URI — must be registered verbatim in each provider's
  * app. Built from the PUBLIC backend origin (`PUBLIC_BASE_URL`, e.g.
- * https://marketing.hummytummy.com) plus the global `/api` prefix the backend
+ * https://jeetagrowth.com) plus the global `/api` prefix the backend
  * is served under — the same construction as the netgsm public callback.
  */
 export function redirectUri(n: Network): string {
