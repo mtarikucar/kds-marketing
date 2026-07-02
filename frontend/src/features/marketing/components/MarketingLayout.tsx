@@ -6,6 +6,7 @@ import HubSubNav from './HubSubNav';
 import SettingsLayout from './SettingsLayout';
 import AskAiPanel from './AskAiPanel';
 import CommandPalette from './CommandPalette';
+import ProductTour from './ProductTour';
 import WebphoneHost from '../webphone/WebphoneHost';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
@@ -74,6 +75,8 @@ export default function MarketingLayout() {
       </div>
       {/* Global command palette (Cmd/Ctrl+K) — page-jump + quick actions. */}
       <CommandPalette />
+      {/* One-time guided tour (managers); relaunchable from the profile menu. */}
+      <ProductTour />
       {/* Global Ask-AI slide-over (gated on the askAi feature server-side). */}
       <AskAiPanel />
       {/* App-wide webphone: keeps the rep's dahili registered on every page so

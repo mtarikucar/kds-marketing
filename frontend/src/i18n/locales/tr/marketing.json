@@ -65,6 +65,20 @@
     "emptyTitle": "Performans verisi yok",
     "emptyDesc": "Performans verileri bu dönem için hedefler tanımlandığında görünür."
   },
+  "tour": {
+    "reopen": "Turu başlat",
+    "next": "İleri",
+    "back": "Geri",
+    "skip": "Atla",
+    "done": "Anladım",
+    "progress": "{{step}} / {{total}}",
+    "steps": {
+      "palette": { "title": "⌘K ile her yere atla", "body": "Herhangi bir sayfada Cmd/Ctrl+K'ye bas; ara ve istediğin ekrana atla ya da hızlı bir işlem başlat — menülerde arama derdi yok." },
+      "focus": { "title": "Odaklı bir menü", "body": "Kenar çubuğu günlük hub'larını gösterir; gerisi \"Daha fazla\" altında. Bir öğenin üzerine gelip yıldıza dokunarak favorilerini en üste sabitle." },
+      "create": { "title": "Her yerden oluştur", "body": "Üst bardaki \"+ Oluştur\" düğmesi nerede olursan ol lead, görev, fırsat veya şirket oluşturur." },
+      "modules": { "title": "Özellikleri aç/kapat", "body": "Platformun sadece bir kısmı mı lazım? Ayarlar › Modüller'e git ve kullanmadıklarını kapat — geri isteyene kadar menüden kaybolur." }
+    }
+  },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",
     "subtitle": "Çalışma alanın hazır. İlk birkaç dakikada değer görmenin en hızlı yolları burada.",

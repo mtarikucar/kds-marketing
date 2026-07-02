@@ -65,6 +65,20 @@
     "emptyTitle": "No performance data",
     "emptyDesc": "Performance data will appear once targets are configured for this period."
   },
+  "tour": {
+    "reopen": "Take a tour",
+    "next": "Next",
+    "back": "Back",
+    "skip": "Skip",
+    "done": "Got it",
+    "progress": "{{step}} of {{total}}",
+    "steps": {
+      "palette": { "title": "Jump anywhere with ⌘K", "body": "Press Cmd/Ctrl+K on any page to search and jump to any screen, or run a quick action — no hunting through menus." },
+      "focus": { "title": "A focused menu", "body": "The sidebar shows your everyday hubs; the rest lives under \"More\". Hover any item and tap the star to pin your favourites to the top." },
+      "create": { "title": "Create from anywhere", "body": "The \"+ Create\" button in the top bar starts a lead, task, opportunity or company from wherever you are." },
+      "modules": { "title": "Turn features on or off", "body": "Only need part of the platform? Go to Settings › Modules and switch off what you don't use — it disappears from the menu until you want it back." }
+    }
+  },
   "welcome": {
     "title": "Welcome to Jeeta 🎉",
     "subtitle": "Your workspace is ready. Here are the fastest ways to get value in the first few minutes.",

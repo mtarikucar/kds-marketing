@@ -11,6 +11,7 @@ import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
 import { useOnboardingStore } from '../../../store/onboardingStore';
+import { useTourStore } from '../../../store/tourStore';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
@@ -87,6 +88,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
   const { t } = useTranslation('marketing');
   const openPalette = useCommandPaletteStore((s) => s.setOpen);
   const reopenOnboarding = useOnboardingStore((s) => s.reopen);
+  const openTour = useTourStore((s) => s.setOpen);
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -335,6 +337,11 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                   }}
                 >
                   {t('onboarding.reopen', 'Show setup guide')}
+                </DropdownMenuItem>
+              )}
+              {isManager && (
+                <DropdownMenuItem onSelect={() => openTour(true)}>
+                  {t('tour.reopen', 'Take a tour')}
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onSelect={() => setShowChangePassword(true)}>
