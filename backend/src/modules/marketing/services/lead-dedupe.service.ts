@@ -367,6 +367,18 @@ export class LeadDedupeService {
     }
     if ('phone' in out) out.phoneNormalized = normalizePhone(out.phone as string);
     if ('email' in out) out.emailNormalized = normalizeEmail(out.email as string);
+    // Per-channel opt-outs are COMPLIANCE state, not "fill when blank": a merge
+    // must NEVER re-subscribe someone. Carry an opt-out from ANY merged lead onto
+    // the canonical (logical OR) — if the canonical OR any duplicate unsubscribed
+    // on a channel, the merged lead stays unsubscribed there. The campaign
+    // audience filter + the send-time guard read these booleans off the canonical
+    // lead, so silently dropping a dup's opt-out resumes mailing a contact who had
+    // unsubscribed (a consent/GDPR-KVKK violation).
+    for (const f of ['emailOptOut', 'smsOptOut', 'waOptOut'] as const) {
+      if (canonical[f] !== true && dups.some((d) => d[f] === true)) {
+        out[f] = true;
+      }
+    }
     return out;
   }
 }

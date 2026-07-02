@@ -133,6 +133,29 @@ describe('LeadDedupeService.merge', () => {
     });
   });
 
+  it('carries a per-channel opt-out from a duplicate onto the canonical (never re-subscribes)', async () => {
+    const { prisma, svc } = makeSvc();
+    // The canonical is still subscribed; the duplicate had unsubscribed from email
+    // + WhatsApp. The merge must NOT drop those opt-outs — the campaign audience +
+    // send-time guard read them off the canonical, so losing them resumes mailing
+    // an unsubscribed contact (a consent violation).
+    const subCanon = { ...canonical, emailOptOut: false, smsOptOut: false, waOptOut: false };
+    const optedOutDup = { ...dup, emailOptOut: true, smsOptOut: false, waOptOut: true };
+    prisma.lead.findMany.mockResolvedValue([subCanon, optedOutDup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    const updArg = (prisma.lead.update as jest.Mock).mock.calls[0][0];
+    expect(updArg.data.emailOptOut).toBe(true);
+    expect(updArg.data.waOptOut).toBe(true);
+    // sms: neither lead opted out → not forced (stays its default; not written).
+    expect(updArg.data.smsOptOut).toBeUndefined();
+  });
+
   it('re-parents the lead-owned business records too (deals, documents, estimates, consent, ...)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
