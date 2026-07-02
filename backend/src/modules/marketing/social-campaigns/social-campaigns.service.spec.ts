@@ -25,7 +25,8 @@ function build() {
   const prisma: any = {
     socialCampaign: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
     socialCampaignItem: { create: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn(), update: jest.fn() },
-    socialPost: { create: jest.fn(), findFirst: jest.fn() },
+    socialPost: { create: jest.fn(), findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+    generatedAsset: { findMany: jest.fn().mockResolvedValue([]) },
     brandKit: { findUnique: jest.fn() },
   };
   const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1'), cancel: jest.fn().mockResolvedValue(true) };
@@ -62,6 +63,29 @@ describe('SocialCampaignsService — lifecycle + plan confirm', () => {
       kind: SOCIAL_CAMPAIGN_PLAN_KIND, dedupKey: planDedup('c-1'),
       payload: { campaignId: 'c-1', workspaceId: WS },
     }));
+  });
+
+  it('listItems enriches each item with its caption + media (batched, workspace-scoped)', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaignItem.findMany.mockResolvedValue([
+      { id: 'it-1', socialCampaignId: 'c-1', workspaceId: WS, sequenceIndex: 0, status: 'SCHEDULED', topic: 'Summer', socialPostId: 'post-1', generatedAssetIds: ['a-1'], error: null },
+      { id: 'it-2', socialCampaignId: 'c-1', workspaceId: WS, sequenceIndex: 1, status: 'PLANNED', topic: 'Teaser', socialPostId: null, generatedAssetIds: [], error: null },
+    ]);
+    prisma.socialPost.findMany.mockResolvedValue([{ id: 'post-1', content: 'Big summer sale!', mediaUrls: ['u'], publishedAt: null }]);
+    prisma.generatedAsset.findMany.mockResolvedValue([{ id: 'a-1', type: 'IMAGE', status: 'READY', url: 'http://img', thumbnailUrl: 'http://thumb', mime: 'image/jpeg' }]);
+
+    const out: any[] = await svc.listItems(WS, 'c-1');
+
+    expect(out[0].caption).toBe('Big summer sale!');
+    expect(out[0].media).toEqual([{ id: 'a-1', type: 'IMAGE', status: 'READY', url: 'http://img', thumbnailUrl: 'http://thumb', mime: 'image/jpeg' }]);
+    // A PLANNED item with no post/assets yields clean nulls/empties.
+    expect(out[1].caption).toBeNull();
+    expect(out[1].media).toEqual([]);
+    // Batched: exactly one post query + one asset query (no N+1), workspace-scoped.
+    expect(prisma.socialPost.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.generatedAsset.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.socialPost.findMany.mock.calls[0][0].where).toMatchObject({ id: { in: ['post-1'] }, workspaceId: WS });
+    expect(prisma.generatedAsset.findMany.mock.calls[0][0].where).toMatchObject({ id: { in: ['a-1'] }, workspaceId: WS });
   });
 
   it('activate rejects from a terminal status', async () => {
