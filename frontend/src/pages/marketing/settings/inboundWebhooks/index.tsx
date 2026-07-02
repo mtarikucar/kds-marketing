@@ -64,6 +64,7 @@ export default function InboundWebhooksPage() {
   const [name, setName] = useState('');
   const [revealed, setRevealed] = useState<InboundWebhookWithSecret | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<InboundWebhook | null>(null);
+  const [rotateTarget, setRotateTarget] = useState<InboundWebhook | null>(null);
   const [rotatingId, setRotatingId] = useState<string | null>(null);
 
   const { data: hooks, isLoading } = useQuery<InboundWebhook[]>({
@@ -97,7 +98,7 @@ export default function InboundWebhooksPage() {
       toast.success(t('inboundWebhooks.rotated', 'Secret rotated — the old one no longer works'));
     },
     onError: (e: any) => toast.error(e.response?.data?.message ?? t('inboundWebhooks.rotateFailed', 'Could not rotate the secret')),
-    onSettled: () => setRotatingId(null),
+    onSettled: () => { setRotatingId(null); setRotateTarget(null); },
   });
 
   const remove = useMutation({
@@ -184,6 +185,25 @@ export default function InboundWebhooksPage() {
         onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)}
       />
 
+      {/* ── Rotate-secret confirm (irreversible) ────────────────────────── */}
+      <ConfirmDialog
+        open={!!rotateTarget}
+        onOpenChange={(o) => { if (!o) setRotateTarget(null); }}
+        title={t('inboundWebhooks.rotateTitle', 'Rotate this secret?')}
+        description={t(
+          'inboundWebhooks.rotateDesc',
+          'A new secret is generated and the current one stops working immediately. Any external system still posting with the old secret will fail until you update it there. This cannot be undone.',
+        )}
+        confirmLabel={t('inboundWebhooks.rotateConfirm', 'Rotate now')}
+        tone="danger"
+        loading={rotate.isPending}
+        onConfirm={() => {
+          if (!rotateTarget) return;
+          setRotatingId(rotateTarget.id);
+          rotate.mutate(rotateTarget.id);
+        }}
+      />
+
       {/* ── List ────────────────────────────────────────────────────────── */}
       <div className="space-y-3">
         {(hooks ?? []).map((w) => (
@@ -215,9 +235,12 @@ export default function InboundWebhooksPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { setRotatingId(w.id); rotate.mutate(w.id); }}
+                    // Rotation is irreversible (the old secret dies instantly, so
+                    // every caller still using it starts failing auth) — confirm
+                    // first, like Delete. Loading + disabled scoped to THIS row.
+                    onClick={() => setRotateTarget(w)}
                     loading={rotate.isPending && rotatingId === w.id}
-                    disabled={rotate.isPending}
+                    disabled={rotate.isPending && rotatingId === w.id}
                   >
                     <KeyRound className="h-3.5 w-3.5" />
                     {t('inboundWebhooks.rotate', 'Rotate secret')}
