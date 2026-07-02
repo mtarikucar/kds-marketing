@@ -71,7 +71,7 @@ export default function RegisterWorkspacePage() {
         language: i18n.language?.split('-')[0],
       });
       login(data.user, data.accessToken, data.refreshToken);
-      navigate('/dashboard');
+      navigate('/dashboard?welcome=1');
     } catch (err: any) {
       setError('root', {
         message:

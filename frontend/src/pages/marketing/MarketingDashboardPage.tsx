@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Download, BookOpen } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
@@ -13,6 +15,7 @@ import {
   DropdownMenuItem,
 } from '@/components/ui';
 import { DashboardHero } from './dashboard/DashboardHero';
+import { WelcomeDialog } from './dashboard/WelcomeDialog';
 import { KpiGrid } from './dashboard/KpiGrid';
 import { TodaySummary } from './dashboard/TodaySummary';
 import { MonthlyMetrics } from './dashboard/MonthlyMetrics';
@@ -23,6 +26,19 @@ export default function MarketingDashboardPage() {
   const { user } = useMarketingAuthStore();
   const { t } = useTranslation('marketing');
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+
+  // One-time post-register welcome (register redirects to /dashboard?welcome=1).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [welcome, setWelcome] = useState(false);
+  useEffect(() => {
+    if (searchParams.get('welcome') === '1') {
+      setWelcome(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('welcome');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: stats } = useQuery({
     queryKey: ['marketing', 'dashboard', 'stats'],
@@ -89,6 +105,7 @@ export default function MarketingDashboardPage() {
 
   return (
     <div className="space-y-6">
+      <WelcomeDialog open={welcome} onClose={() => setWelcome(false)} />
       <PageHeader
         title={t('dashboard.title')}
         description={t('dashboard.subtitleTask', 'What needs you today')}

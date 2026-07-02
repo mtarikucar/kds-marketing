@@ -65,6 +65,14 @@
     "emptyTitle": "No performance data",
     "emptyDesc": "Performance data will appear once targets are configured for this period."
   },
+  "welcome": {
+    "title": "Welcome to Jeeta 🎉",
+    "subtitle": "Your workspace is ready. Here are the fastest ways to get value in the first few minutes.",
+    "later": "Explore on my own",
+    "import": { "title": "Import your contacts", "desc": "Bring your existing leads in so your pipeline isn't empty." },
+    "invite": { "title": "Invite your team", "desc": "Add teammates so work can be assigned and tracked." },
+    "modules": { "title": "Choose your modules", "desc": "Turn on only what you need — keep the console focused." }
+  },
   "modules": {
     "title": "Modules",
     "subtitle": "Turn modules on or off to keep your console focused. Off modules disappear from the menu until you re-enable them.",

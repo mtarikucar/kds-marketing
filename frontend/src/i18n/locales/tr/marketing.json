@@ -65,6 +65,14 @@
     "emptyTitle": "Performans verisi yok",
     "emptyDesc": "Performans verileri bu dönem için hedefler tanımlandığında görünür."
   },
+  "welcome": {
+    "title": "Jeeta'ya hoş geldin 🎉",
+    "subtitle": "Çalışma alanın hazır. İlk birkaç dakikada değer görmenin en hızlı yolları burada.",
+    "later": "Kendim keşfederim",
+    "import": { "title": "Kişilerini içe aktar", "desc": "Mevcut lead'lerini getir, pipeline'ın boş kalmasın." },
+    "invite": { "title": "Ekibini davet et", "desc": "İş atanıp takip edilebilsin diye ekip arkadaşlarını ekle." },
+    "modules": { "title": "Modüllerini seç", "desc": "Sadece ihtiyacın olanı aç — konsolu odaklı tut." }
+  },
   "modules": {
     "title": "Modüller",
     "subtitle": "Konsolunu odaklı tutmak için modülleri aç/kapat. Kapalı modüller yeniden açana kadar menüden kaybolur.",
