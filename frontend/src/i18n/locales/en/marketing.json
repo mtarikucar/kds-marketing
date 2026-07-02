@@ -255,6 +255,21 @@
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Performance at a glance",
+    "subtitleTask": "What needs you today",
+    "guides": "Guides",
+    "nothingToday": "Nothing scheduled for today yet.",
+    "nothingThisMonth": "No activity yet this month.",
+    "hero": {
+      "emptyTitle": "Start with your first lead",
+      "emptyDesc": "Add a lead to begin building your pipeline — everything else follows from here.",
+      "greeting": "Welcome back",
+      "greetingNamed": "Hi {{name}}",
+      "waiting": "{{n}} items need your attention today",
+      "clear": "You're all caught up — nice work.",
+      "reviewOverdue": "Review overdue tasks",
+      "reviewUnassigned": "Assign leads",
+      "goToLeads": "Go to your leads"
+    },
     "downloadGuide": "Download Marketer Guide (PDF)",
     "downloadManagerGuide": "Download Manager Guide (PDF)",
     "totalLeads": "Total leads",

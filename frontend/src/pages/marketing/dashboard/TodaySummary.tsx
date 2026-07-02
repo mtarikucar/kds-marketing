@@ -55,13 +55,20 @@ export function TodaySummary({ today }: TodaySummaryProps) {
     },
   ];
 
+  const isEmpty = rows.every((row) => row.value === 0);
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>{t('dashboard.today')}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
+        {isEmpty ? (
+          <p className="py-2 text-sm text-muted-foreground">
+            {t('dashboard.nothingToday', 'Nothing scheduled for today yet.')}
+          </p>
+        ) : (
+          <div className="space-y-3">
           {rows.map((row) => (
             <div key={row.label} className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">{row.label}</span>
@@ -70,7 +77,8 @@ export function TodaySummary({ today }: TodaySummaryProps) {
               </span>
             </div>
           ))}
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

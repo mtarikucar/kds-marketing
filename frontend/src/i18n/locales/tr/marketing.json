@@ -266,6 +266,21 @@
   "dashboard": {
     "title": "Gösterge Paneli",
     "subtitle": "Performansa bir bakış",
+    "subtitleTask": "Bugün seni bekleyenler",
+    "guides": "Rehberler",
+    "nothingToday": "Bugün için henüz bir şey planlanmadı.",
+    "nothingThisMonth": "Bu ay henüz aktivite yok.",
+    "hero": {
+      "emptyTitle": "İlk lead'inle başla",
+      "emptyDesc": "Pipeline'ını oluşturmaya bir lead ekleyerek başla — gerisi buradan gelir.",
+      "greeting": "Tekrar hoş geldin",
+      "greetingNamed": "Merhaba {{name}}",
+      "waiting": "{{n}} öğe bugün ilgini bekliyor",
+      "clear": "Her şey yolunda — güzel iş.",
+      "reviewOverdue": "Geciken görevleri incele",
+      "reviewUnassigned": "Lead ata",
+      "goToLeads": "Lead'lerine git"
+    },
     "downloadGuide": "Pazarlamacı Rehberini İndir (PDF)",
     "downloadManagerGuide": "Yönetici Rehberini İndir (PDF)",
     "totalLeads": "Toplam lead",

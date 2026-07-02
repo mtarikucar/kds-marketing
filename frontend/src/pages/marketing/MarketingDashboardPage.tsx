@@ -1,10 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Download } from 'lucide-react';
+import { Download, BookOpen } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { GettingStarted, NeedsAttention } from '../../features/marketing/components';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
-import { PageHeader } from '@/components/ui';
+import {
+  PageHeader,
+  Button,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui';
+import { DashboardHero } from './dashboard/DashboardHero';
 import { KpiGrid } from './dashboard/KpiGrid';
 import { TodaySummary } from './dashboard/TodaySummary';
 import { MonthlyMetrics } from './dashboard/MonthlyMetrics';
@@ -67,48 +75,63 @@ export default function MarketingDashboardPage() {
   const guideUrl = `${basePath}pazarlamaci-rehberi.pdf`;
   const managerGuideUrl = `${basePath}yonetici-rehberi.pdf`;
 
+  // Trigger a PDF guide download from a menu item (preserves the download name).
+  const downloadFile = (url: string, name: string) => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         title={t('dashboard.title')}
-        description={t('dashboard.subtitle')}
+        description={t('dashboard.subtitleTask', 'What needs you today')}
         actions={
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Manager rehberi — sadece MANAGER görür: lead atama,
-                otomatik dağıtım, komisyon onay akışı, ekip yönetimi. */}
-            {isManager && (
-              <a
-                href={managerGuideUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                download="Yonetici-Rehberi.pdf"
-                className="inline-flex items-center gap-2 rounded-lg border border-success/30 bg-success-subtle px-3 py-2 text-sm font-medium text-success hover:opacity-80 transition-opacity"
-                data-testid="dashboard-manager-guide-download"
-              >
-                <Download className="w-4 h-4" />
-                {t('dashboard.downloadManagerGuide', 'Yönetici Rehberini İndir (PDF)')}
-              </a>
-            )}
-            {/* Pazarlamacı rehberi — sahaya çıkış, komisyon yapısı, sıkça
-                sorulan sorular. Manager da görür: ekibinin elindeki belgenin
-                aynısını okuyabilsin. */}
-            <a
-              href={guideUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              download="Pazarlamaci-Rehberi.pdf"
-              className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:opacity-80 transition-opacity"
-              data-testid="dashboard-guide-download"
-            >
-              <Download className="w-4 h-4" />
-              {t('dashboard.downloadGuide', 'Pazarlamacı Rehberini İndir (PDF)')}
-            </a>
-          </div>
+          // The guide PDFs were the loudest thing on the page; demote them into
+          // a quiet "Guides" menu so the primary CTA (the hero) leads instead.
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2" data-testid="dashboard-guides">
+                <BookOpen className="h-4 w-4" />
+                {t('dashboard.guides', 'Guides')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              {isManager && (
+                <DropdownMenuItem
+                  onSelect={() => downloadFile(managerGuideUrl, 'Yonetici-Rehberi.pdf')}
+                >
+                  <Download className="me-2 h-4 w-4" />
+                  {t('dashboard.downloadManagerGuide', 'Yönetici Rehberini İndir (PDF)')}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => downloadFile(guideUrl, 'Pazarlamaci-Rehberi.pdf')}>
+                <Download className="me-2 h-4 w-4" />
+                {t('dashboard.downloadGuide', 'Pazarlamacı Rehberini İndir (PDF)')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         }
       />
 
-      {/* First-run orientation: setup checklist (managers) + actionable items. */}
+      {/* Role-aware "what do I do now?" anchor — the first thing every user sees. */}
+      <DashboardHero
+        stats={stats}
+        today={today}
+        isManager={isManager}
+        firstName={user?.firstName}
+      />
+
+      {/* First-run setup checklist (managers). */}
       {isManager && <GettingStarted />}
+
+      {/* Actionable "what's waiting on you" — deep links, hidden when clean. */}
       <NeedsAttention
         stats={stats}
         today={today}
@@ -117,14 +140,14 @@ export default function MarketingDashboardPage() {
         unreadCount={unreadCount}
       />
 
-      {/* KPI tiles */}
-      <KpiGrid stats={stats} isManager={isManager} />
-
-      {/* Today + Monthly side by side */}
+      {/* The day's work sits above the at-a-glance metrics. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <TodaySummary today={today} />
         <MonthlyMetrics monthly={monthly} />
       </div>
+
+      {/* KPI tiles — the "performance at a glance" report, below the day's work. */}
+      <KpiGrid stats={stats} isManager={isManager} />
 
       {/* Leads by Status breakdown */}
       <LeadsByStatus leadsByStatus={leadsByStatus} />
