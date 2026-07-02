@@ -25,10 +25,20 @@ import {
   SelectItem,
   Input,
   Skeleton,
+  ConfirmDialog,
 } from '../../../components/ui';
 import type { BadgeProps } from '../../../components/ui/Badge';
 
 const WINDOWS = ['MORNING', 'AFTERNOON', 'FULL_DAY'] as const;
+
+// Irreversible / negative transitions get a confirm: the status machine has NO
+// path back to an active state from CANCELLED, and NO_SHOW only leads to
+// CANCELLED — so a stray click on either permanently closes a booked
+// installation with no UI recovery.
+const CONFIRM_TRANSITIONS = new Set<string>([
+  InstallationStatus.CANCELLED,
+  InstallationStatus.NO_SHOW,
+]);
 const errMsg = (err: any, fallback: string) =>
   err?.response?.data?.message || fallback;
 
@@ -60,6 +70,7 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
   const [schedDate, setSchedDate] = useState('');
   const [schedWindow, setSchedWindow] = useState('');
   const [newTask, setNewTask] = useState('');
+  const [confirmStatus, setConfirmStatus] = useState<InstallationStatus | null>(null);
 
   // Reset the schedule form + new-task input whenever the opened job changes.
   // The parent mounts this drawer persistently (jobId is a prop, not a mount
@@ -98,7 +109,7 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
   const setStatus = useMutation({
     mutationFn: (s: string) =>
       marketingApi.patch(`/installations/jobs/${jobId}/status`, { status: s }),
-    onSuccess: () => { toast.success('Status updated'); refresh(); },
+    onSuccess: () => { toast.success('Status updated'); setConfirmStatus(null); refresh(); },
     onError: (e: any) => toast.error(errMsg(e, 'Failed to update status')),
   });
 
@@ -217,8 +228,13 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
                       key={s}
                       variant="outline"
                       size="sm"
-                      onClick={() => setStatus.mutate(s)}
-                      loading={setStatus.isPending}
+                      // Terminal/negative moves confirm first; the rest fire
+                      // directly. Loading is scoped to the clicked target so one
+                      // transition doesn't spin every button.
+                      onClick={() =>
+                        CONFIRM_TRANSITIONS.has(s) ? setConfirmStatus(s) : setStatus.mutate(s)
+                      }
+                      loading={setStatus.isPending && setStatus.variables === s}
                     >
                       {INSTALLATION_STATUS_LABELS[s]}
                     </Button>
@@ -291,6 +307,27 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
           </div>
         )}
       </SheetContent>
+
+      <ConfirmDialog
+        open={confirmStatus !== null}
+        onOpenChange={(o) => { if (!o) setConfirmStatus(null); }}
+        title={
+          confirmStatus === InstallationStatus.NO_SHOW
+            ? 'Mark this installation as a no-show?'
+            : 'Cancel this installation?'
+        }
+        description={
+          confirmStatus === InstallationStatus.NO_SHOW
+            ? 'Records the customer as a no-show. It can only be moved to Cancelled afterwards — there is no path back to an active state.'
+            : 'Cancels the scheduled installation. It cannot be moved back to an active state.'
+        }
+        confirmLabel={
+          confirmStatus === InstallationStatus.NO_SHOW ? 'Mark no-show' : 'Cancel installation'
+        }
+        tone="danger"
+        loading={setStatus.isPending}
+        onConfirm={() => confirmStatus && setStatus.mutate(confirmStatus)}
+      />
     </Sheet>
   );
 }
