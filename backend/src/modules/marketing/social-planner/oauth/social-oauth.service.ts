@@ -16,6 +16,8 @@ import { buildAuthorizeUrl, providerFor, ConnectableAsset } from './social-oauth
 import { ChannelsService } from '../../channels/channels.service';
 import { AdAccountService } from '../../ads/ad-account.service';
 import { ConnectAdAccountDto } from '../../dto/ad-account.dto';
+import { metaGraphFetch } from '../../../../common/util/meta-graph.util';
+import { EntitlementsService } from '../../../billing/entitlements.service';
 
 const PENDING_TTL_MS = 15 * 60 * 1000;
 
@@ -41,6 +43,7 @@ export class SocialOAuthService {
     private readonly prisma: PrismaService,
     private readonly channels: ChannelsService,
     private readonly ads: AdAccountService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   private assertNetwork(network: string): Network {
@@ -50,7 +53,11 @@ export class SocialOAuthService {
     return network;
   }
 
-  start(workspaceId: string, network: string): { authorizeUrl: string } {
+  start(
+    workspaceId: string,
+    network: string,
+    origin?: 'social' | 'channels',
+  ): { authorizeUrl: string } {
     const n = this.assertNetwork(network);
     if (!isSecretBoxConfigured()) {
       throw new BadRequestException('Cannot connect: MARKETING_SECRET_KEY is not configured');
@@ -63,10 +70,10 @@ export class SocialOAuthService {
     // and put only the S256 challenge on the authorize URL.
     if (usesPkce(n)) {
       const { verifier, challenge } = generatePkce();
-      const state = signState({ workspaceId, network: n, cv: sealSecret(verifier) });
+      const state = signState({ workspaceId, network: n, cv: sealSecret(verifier), origin });
       return { authorizeUrl: buildAuthorizeUrl(n, state, challenge) };
     }
-    const state = signState({ workspaceId, network: n });
+    const state = signState({ workspaceId, network: n, origin });
     return { authorizeUrl: buildAuthorizeUrl(n, state) };
   }
 
@@ -74,7 +81,7 @@ export class SocialOAuthService {
     network: string,
     code: string,
     state: string,
-  ): Promise<{ pendingId: string; workspaceId: string }> {
+  ): Promise<{ pendingId: string; workspaceId: string; origin?: 'social' | 'channels' }> {
     const n = this.assertNetwork(network);
     const payload = verifyState(state);
     if (!payload || payload.network !== n) {
@@ -111,7 +118,7 @@ export class SocialOAuthService {
         expiresAt: new Date(Date.now() + PENDING_TTL_MS),
       },
     });
-    return { pendingId: pending.id, workspaceId: payload.workspaceId };
+    return { pendingId: pending.id, workspaceId: payload.workspaceId, origin: payload.origin };
   }
 
   private async loadPending(workspaceId: string, id: string) {
@@ -171,10 +178,24 @@ export class SocialOAuthService {
       skipped: [] as { externalId: string; reason: string }[],
     };
 
+    // Minting a messaging Channel (Meta DM or WhatsApp) is gated on the SAME
+    // conversationAi entitlement the marketing/channels API enforces — otherwise
+    // this OAuth path would be a backdoor that creates a live inbox the operator
+    // can't manage (the channels API 403s for an unentitled plan). Publishing
+    // SocialAccounts + ad accounts stay ungated.
+    const canMessaging = (await this.entitlements.getEffective(workspaceId)).features.conversationAi;
+    const gateMessaging = (externalId: string) => {
+      summary.skipped.push({ externalId, reason: 'messaging: conversationAi feature not in plan' });
+    };
+
     for (const asset of chosen) {
       const token = asset.token ?? data.token;
       try {
         if (asset.accountType === 'WHATSAPP_NUMBER') {
+          if (!canMessaging) {
+            gateMessaging(asset.externalId);
+            continue;
+          }
           await this.provisionWhatsAppChannel(workspaceId, asset, token);
           summary.channels++;
         } else if (asset.accountType === 'AD_ACCOUNT') {
@@ -187,11 +208,15 @@ export class SocialOAuthService {
             provisionMessaging.includes(asset.externalId) &&
             (asset.accountType === 'PAGE' || asset.accountType === 'IG_BUSINESS')
           ) {
-            try {
-              await this.provisionMetaMessagingChannel(workspaceId, asset, token);
-              summary.channels++;
-            } catch (e: any) {
-              summary.skipped.push({ externalId: asset.externalId, reason: `messaging: ${e?.message ?? e}` });
+            if (!canMessaging) {
+              gateMessaging(asset.externalId);
+            } else {
+              try {
+                await this.provisionMetaMessagingChannel(workspaceId, asset, token);
+                summary.channels++;
+              } catch (e: any) {
+                summary.skipped.push({ externalId: asset.externalId, reason: `messaging: ${e?.message ?? e}` });
+              }
             }
           }
         }
@@ -232,14 +257,42 @@ export class SocialOAuthService {
     });
   }
 
-  private provisionMetaMessagingChannel(workspaceId: string, asset: ConnectableAsset, token: string) {
+  private async provisionMetaMessagingChannel(workspaceId: string, asset: ConnectableAsset, token: string) {
     const type = asset.accountType === 'IG_BUSINESS' ? 'INSTAGRAM' : 'MESSENGER';
-    return this.channels.create(workspaceId, {
+    const channel = await this.channels.create(workspaceId, {
       type,
       name: asset.displayName,
       externalId: asset.externalId,
       secrets: { pageAccessToken: token },
     });
+    // Subscribe the owning Page to our app's messaging webhook — without this,
+    // inbound DMs are never delivered (same reason the WhatsApp signup subscribes
+    // the WABA). For an IG business account the subscription lives on the LINKED
+    // PAGE (asset.meta.pageId); for a Page it's the page itself. Best-effort: the
+    // channel row already exists, so a subscribe failure (e.g. the Meta app lacks
+    // pages_manage_metadata / messaging permissions until App Review) is logged,
+    // not fatal — re-verifying the channel later can re-subscribe.
+    const pageId = type === 'INSTAGRAM' ? String(asset.meta?.pageId ?? asset.externalId) : asset.externalId;
+    // Truly best-effort: the channel row is already persisted, so neither a
+    // graceful Graph error (sub.ok === false) NOR a transport throw (timeout /
+    // DNS / SSRF from metaGraphFetch) may propagate — that would divert an
+    // already-created channel into `skipped` and, on retry, hit the (type,
+    // externalId) collision guard forever. Log and move on; re-verify re-subscribes.
+    try {
+      const sub = await metaGraphFetch(`/${pageId}/subscribed_apps`, {
+        accessToken: token,
+        method: 'POST',
+        query: { subscribed_fields: 'messages,messaging_postbacks,message_reactions' },
+      });
+      if (!sub.ok) {
+        this.logger.warn(
+          `Messaging webhook subscribe for page ${pageId} (${type}) failed: ${sub.error?.message ?? sub.status}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`Messaging webhook subscribe for page ${pageId} (${type}) errored: ${e?.message ?? e}`);
+    }
+    return channel;
   }
 
   private provisionWhatsAppChannel(workspaceId: string, asset: ConnectableAsset, token: string) {

@@ -55,6 +55,13 @@ export const NETWORK_OAUTH: Record<Network, OAuthDef> = {
       'pages_read_engagement',
       'business_management',
       'pages_messaging',
+      // Subscribe the Page to our messaging webhook (subscribed_apps) so inbound
+      // Messenger/IG DMs are delivered — required by provisionMetaMessagingChannel.
+      'pages_manage_metadata',
+      // Instagram Direct: read the Page-linked IG account + receive/send IG DMs.
+      // (IG messaging is delivered via the linked Page's subscription.)
+      'instagram_basic',
+      'instagram_manage_messages',
       'whatsapp_business_management',
       'whatsapp_business_messaging',
       'ads_read',

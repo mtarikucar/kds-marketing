@@ -25,12 +25,20 @@ export function useSocialConnect() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
-  /** POST start → redirect the browser to the provider's consent screen. */
-  const startConnect = async (network: SocialNetwork) => {
+  /** POST start → redirect the browser to the provider's consent screen. The
+   *  `origin` tells the callback which page to land back on ('channels' when the
+   *  connect was launched from the inbox/channels page). */
+  const startConnect = async (
+    network: SocialNetwork,
+    opts?: { origin?: 'social' | 'channels' },
+  ) => {
     try {
-      const { data } = await marketingApi.post(
-        `/social/oauth/${network.toLowerCase()}/start`,
-      );
+      const url = `/social/oauth/${network.toLowerCase()}/start`;
+      // Only send a body when there's an origin, so existing (no-origin) callers
+      // keep their exact 1-arg POST signature.
+      const { data } = opts?.origin
+        ? await marketingApi.post(url, { origin: opts.origin })
+        : await marketingApi.post(url);
       navigateExternal(data?.authorizeUrl as string | undefined);
     } catch {
       toast.error(

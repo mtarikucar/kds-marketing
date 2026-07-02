@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useForm, useWatch, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -11,10 +12,13 @@ import {
   Clipboard,
   BadgeCheck,
   Plus,
+  Facebook,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { startTiktokAdsOAuth } from '../../features/marketing/api/ads.service';
 import { WhatsappSignupButton } from './WhatsappSignupButton';
+import { useSocialConnect } from './social/useSocialConnect';
+import { AccountSelectDialog } from './social/AccountSelectDialog';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -135,6 +139,41 @@ export default function ChannelsSettingsPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'channels'] });
 
+  // ── OAuth connect (Messenger + Instagram DM via the shared Meta grant) ──────
+  // Reuses the Social Planner's Meta OAuth: one Facebook grant enumerates the
+  // user's Pages + linked IG business accounts, and the pick dialog turns the
+  // chosen ones into messaging Channels (and Social publishing accounts). Gated
+  // on the platform Meta app being configured (same status the Social page uses).
+  const { startConnect } = useSocialConnect();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
+  const { data: socialStatus } = useQuery<Record<string, boolean>>({
+    queryKey: ['marketing', 'social', 'status'],
+    queryFn: () => marketingApi.get('/social-planner/status').then((r) => r.data),
+  });
+  const fbConnectable = !!socialStatus?.FACEBOOK;
+
+  // The OAuth callback returns to /channels?connect=<pendingId> (success) or
+  // ?connect_error=1 (failure). Pick it up once, open the account picker, strip it.
+  useEffect(() => {
+    const connectId = searchParams.get('connect');
+    const connectErr = searchParams.get('connect_error');
+    if (connectId) {
+      setPendingConnectId(connectId);
+      searchParams.delete('connect');
+      setSearchParams(searchParams, { replace: true });
+    } else if (connectErr) {
+      toast.error(
+        t('social.oauth.callbackError', {
+          defaultValue: 'Connection failed or was cancelled. Please try again.',
+        }),
+      );
+      searchParams.delete('connect_error');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Form ─────────────────────────────────────────────────────────────────
   const form = useForm<ChannelFormValues>({
     resolver: zodResolver(channelSchema),
@@ -205,7 +244,23 @@ export default function ChannelsSettingsPage() {
           'Connect where your customers message you — web chat, WhatsApp, SMS, Instagram, Messenger. Pick which AI agent answers on each.',
         )}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="md"
+              disabled={!fbConnectable}
+              title={
+                fbConnectable
+                  ? undefined
+                  : t('channels.metaConnectHint', {
+                      defaultValue: 'An admin must add the Meta (Facebook) app credentials first',
+                    })
+              }
+              onClick={() => startConnect('FACEBOOK', { origin: 'channels' })}
+            >
+              <Facebook className="h-4 w-4" />
+              {t('channels.metaConnect', 'Connect Messenger & Instagram')}
+            </Button>
             <WhatsappSignupButton />
             <Button onClick={openForm} size="md">
               <Plus className="h-4 w-4" />
@@ -213,6 +268,17 @@ export default function ChannelsSettingsPage() {
             </Button>
           </div>
         }
+      />
+
+      {/* Post-OAuth account picker: turns the granted Pages / IG accounts into
+          messaging Channels (messaging pre-checked since we came from here). */}
+      <AccountSelectDialog
+        context="channels"
+        pendingId={pendingConnectId}
+        onOpenChange={(open) => {
+          if (!open) setPendingConnectId(null);
+        }}
+        onConnected={invalidate}
       />
 
       {/* ── Create dialog ─────────────────────────────────────────────────── */}

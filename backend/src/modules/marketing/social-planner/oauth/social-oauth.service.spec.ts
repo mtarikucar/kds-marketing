@@ -1,12 +1,21 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SocialOAuthService } from './social-oauth.service';
 import { sealSecret } from '../../../../common/crypto/secret-box.helper';
+import { metaGraphFetch } from '../../../../common/util/meta-graph.util';
+
+// provisionMetaMessagingChannel subscribes the Page to our messaging webhook via
+// the Graph API — mock it so no real network call fires; default to success.
+jest.mock('../../../../common/util/meta-graph.util', () => ({
+  metaGraphFetch: jest.fn().mockResolvedValue({ ok: true }),
+}));
+const mockGraph = metaGraphFetch as jest.Mock;
 
 describe('SocialOAuthService', () => {
   const WS = 'ws-1';
   let prisma: any;
   let channels: any;
   let ads: any;
+  let entitlements: any;
   let svc: SocialOAuthService;
 
   const sealedPayload = (assets: any[], token = 'usertok', refreshToken: string | null = null) =>
@@ -28,7 +37,10 @@ describe('SocialOAuthService', () => {
     };
     channels = { create: jest.fn().mockResolvedValue({ id: 'ch' }) };
     ads = { connect: jest.fn().mockResolvedValue({ id: 'ad' }) };
-    svc = new SocialOAuthService(prisma as any, channels as any, ads as any);
+    // Messaging-channel provisioning is gated on conversationAi — entitled by default.
+    entitlements = { getEffective: jest.fn().mockResolvedValue({ features: { conversationAi: true } }) };
+    mockGraph.mockReset().mockResolvedValue({ ok: true });
+    svc = new SocialOAuthService(prisma as any, channels as any, ads as any, entitlements as any);
   });
 
   describe('start', () => {
@@ -192,6 +204,72 @@ describe('SocialOAuthService', () => {
         WS,
         expect.objectContaining({ type: 'MESSENGER', externalId: 'P1', secrets: { pageAccessToken: 'pt1' } }),
       );
+    });
+
+    it('subscribes the Page to the messaging webhook when provisioning MESSENGER', async () => {
+      await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      expect(mockGraph).toHaveBeenCalledWith(
+        '/P1/subscribed_apps',
+        expect.objectContaining({ method: 'POST', accessToken: 'pt1' }),
+      );
+    });
+
+    it('IG_BUSINESS → an INSTAGRAM channel keyed by the IG id, webhook on the LINKED Page', async () => {
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() + 60000),
+        payload: sealedPayload([
+          { externalId: 'IG9', displayName: '@acme', accountType: 'IG_BUSINESS', token: 'pt9', meta: { pageId: 'PG9' } },
+        ]),
+      });
+      const out = await svc.confirm(WS, 'p1', ['IG9'], ['IG9']);
+      expect(out).toMatchObject({ channels: 1 });
+      expect(channels.create).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({ type: 'INSTAGRAM', externalId: 'IG9', secrets: { pageAccessToken: 'pt9' } }),
+      );
+      // The subscription lives on the linked PAGE (PG9), not the IG account id.
+      expect(mockGraph).toHaveBeenCalledWith('/PG9/subscribed_apps', expect.objectContaining({ method: 'POST' }));
+    });
+
+    it('a webhook-subscribe failure is best-effort — the channel is still created + counted', async () => {
+      mockGraph.mockResolvedValue({ ok: false, status: 403, error: { message: 'needs review' } });
+      const out = await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      expect(out).toMatchObject({ socialAccounts: 1, channels: 1 });
+      expect(out.skipped).toEqual([]);
+    });
+
+    it('a webhook-subscribe TRANSPORT throw is still best-effort (channel kept + counted, not skipped)', async () => {
+      mockGraph.mockRejectedValue(new Error('socket hang up'));
+      const out = await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      expect(out).toMatchObject({ socialAccounts: 1, channels: 1 });
+      expect(out.skipped).toEqual([]);
+      expect(channels.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('gates messaging on conversationAi: still connects the SocialAccount but skips the channel when unentitled', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { conversationAi: false } });
+      const out = await svc.confirm(WS, 'p1', ['P1'], ['P1']);
+      expect(out).toMatchObject({ socialAccounts: 1, channels: 0 });
+      expect(out.skipped).toEqual([
+        { externalId: 'P1', reason: 'messaging: conversationAi feature not in plan' },
+      ]);
+      expect(channels.create).not.toHaveBeenCalled();
+    });
+
+    it('gates a WhatsApp number on conversationAi when unentitled', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { conversationAi: false } });
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'FACEBOOK', expiresAt: new Date(Date.now() + 60000),
+        payload: sealedPayload([
+          { externalId: 'PN1', displayName: 'WA', accountType: 'WHATSAPP_NUMBER', token: 'usertok', meta: { phoneNumberId: 'PN1' } },
+        ]),
+      });
+      const out = await svc.confirm(WS, 'p1', ['PN1']);
+      expect(out).toMatchObject({ channels: 0, socialAccounts: 0 });
+      expect(out.skipped).toEqual([
+        { externalId: 'PN1', reason: 'messaging: conversationAi feature not in plan' },
+      ]);
+      expect(channels.create).not.toHaveBeenCalled();
     });
 
     it('records a (type,externalId) collision in skipped instead of aborting', async () => {

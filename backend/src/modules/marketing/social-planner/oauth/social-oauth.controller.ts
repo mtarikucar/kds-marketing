@@ -8,7 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { IsArray, IsString, ArrayMaxSize, IsOptional } from 'class-validator';
+import { IsArray, IsString, ArrayMaxSize, IsOptional, IsIn } from 'class-validator';
 import type { Response } from 'express';
 import { MarketingGuard } from '../../guards/marketing.guard';
 import { MarketingRolesGuard } from '../../guards/marketing-roles.guard';
@@ -17,6 +17,16 @@ import { MarketingRoute, MarketingPublic } from '../../decorators/marketing-publ
 import { CurrentMarketingUser } from '../../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../../types';
 import { SocialOAuthService } from './social-oauth.service';
+import { verifyState } from './social-oauth-state.util';
+
+class StartDto {
+  /** Which page launched the connect ('social' Planner vs 'channels' inbox), so
+   *  the public callback lands the user back there. Optional; default 'social'
+   *  keeps existing links unchanged. */
+  @IsOptional()
+  @IsIn(['social', 'channels'])
+  origin?: 'social' | 'channels';
+}
 
 class ConfirmDto {
   @IsArray()
@@ -49,9 +59,10 @@ export class SocialOAuthController {
   @MarketingRoles('MANAGER')
   start(
     @Param('network') network: string,
+    @Body() dto: StartDto,
     @CurrentMarketingUser() u: MarketingUserPayload,
   ) {
-    return this.svc.start(u.workspaceId, network.toUpperCase());
+    return this.svc.start(u.workspaceId, network.toUpperCase(), dto?.origin);
   }
 
   @Get(':network/callback')
@@ -66,14 +77,19 @@ export class SocialOAuthController {
     // The marketing console (where /social lives) is FRONTEND_URL
     // (https://jeetagrowth.com) — NOT APP_URL, which is the core product.
     const appUrl = (process.env.FRONTEND_URL ?? process.env.APP_URL ?? '').replace(/\/+$/, '');
+    // Land the user back where they launched from — the origin is inside the
+    // signed state; peek it (best-effort) so even the error redirects go to the
+    // right page. handleCallback still runs its own authoritative verify below.
+    const origin = state ? verifyState(state)?.origin : undefined;
+    const path = origin === 'channels' ? 'channels' : 'social';
     if (error || !code || !state) {
-      return res.redirect(302, `${appUrl}/social?connect_error=1`);
+      return res.redirect(302, `${appUrl}/${path}?connect_error=1`);
     }
     try {
       const { pendingId } = await this.svc.handleCallback(network.toUpperCase(), code, state);
-      return res.redirect(302, `${appUrl}/social?connect=${pendingId}`);
+      return res.redirect(302, `${appUrl}/${path}?connect=${pendingId}`);
     } catch {
-      return res.redirect(302, `${appUrl}/social?connect_error=1`);
+      return res.redirect(302, `${appUrl}/${path}?connect_error=1`);
     }
   }
 

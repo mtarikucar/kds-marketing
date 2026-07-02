@@ -1325,6 +1325,8 @@
     "title": "Channels",
     "subtitle": "Connect where your customers message you — web chat, WhatsApp, SMS, Instagram, Messenger. Pick which AI agent answers on each.",
     "new": "Connect a channel",
+    "metaConnect": "Connect Messenger & Instagram",
+    "metaConnectHint": "An admin must add the Meta (Facebook) app credentials first",
     "type": "Type",
     "name": "Name",
     "agent": "Answering agent",

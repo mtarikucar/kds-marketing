@@ -1321,6 +1321,8 @@
     "title": "Kanallar",
     "subtitle": "Müşterilerinizin size yazdığı yerleri bağlayın — web sohbet, WhatsApp, SMS, Instagram, Messenger. Her birinde hangi AI ajanının yanıt vereceğini seçin.",
     "new": "Kanal bağla",
+    "metaConnect": "Messenger & Instagram bağla",
+    "metaConnectHint": "Önce bir yönetici Meta (Facebook) uygulama kimlik bilgilerini eklemeli",
     "type": "Tür",
     "name": "Ad",
     "agent": "Yanıtlayan ajan",

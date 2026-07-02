@@ -25,6 +25,10 @@ export interface StatePayload {
    *  Sealed, not plaintext, so an interceptor who sees the redirect state can't
    *  recover the verifier and defeat PKCE's code-interception protection. */
   cv?: string;
+  /** Which page launched the connect, so the public callback lands the user back
+   *  there ('social' Planner vs 'channels' inbox). In-HMAC → cannot be tampered.
+   *  Absent = 'social' (back-compat with existing links). */
+  origin?: 'social' | 'channels';
 }
 
 function b64url(buf: Buffer): string {
@@ -36,7 +40,7 @@ function fromB64url(s: string): Buffer {
 }
 
 export function signState(
-  data: { workspaceId: string; network: string; cv?: string },
+  data: { workspaceId: string; network: string; cv?: string; origin?: 'social' | 'channels' },
   ttlMs: number = TTL_MS,
 ): string {
   const payload: StatePayload = {
@@ -45,6 +49,7 @@ export function signState(
     nonce: b64url(randomBytes(12)),
     exp: Date.now() + ttlMs,
     ...(data.cv ? { cv: data.cv } : {}),
+    ...(data.origin ? { origin: data.origin } : {}),
   };
   const body = b64url(Buffer.from(JSON.stringify(payload)));
   const sig = b64url(createHmac('sha256', key()).update(body).digest());

@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { Label } from '@/components/ui/Label';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Link2 } from 'lucide-react';
 import { useSocialConnect } from './useSocialConnect';
@@ -18,14 +17,21 @@ import { useSocialConnect } from './useSocialConnect';
 interface Props {
   pendingId: string | null;
   onOpenChange: (open: boolean) => void;
+  /** 'channels' launched the connect from the inbox/Channels page: pre-select the
+   *  messaging inbox for Meta (Page/IG) assets and use channel-oriented copy.
+   *  Default 'social' keeps the Social Planner flow unchanged. */
+  context?: 'social' | 'channels';
+  /** Called after a successful confirm — e.g. to refetch the channels list. */
+  onConnected?: () => void;
 }
 
 /**
- * After the OAuth callback redirects to /social?connect=<id>, this lists the
- * provider assets the user can connect (pages, IG accounts, LinkedIn org/profile)
- * and turns the chosen ones into SocialAccounts.
+ * After the OAuth callback redirects to /social?connect=<id> (or /channels?connect=),
+ * this lists the provider assets the user can connect (pages, IG accounts,
+ * LinkedIn org/profile) and turns the chosen ones into SocialAccounts — and,
+ * for Meta Page/IG assets, optionally a two-way messaging Channel.
  */
-export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
+export function AccountSelectDialog({ pendingId, onOpenChange, context = 'social', onConnected }: Props) {
   const { t } = useTranslation('marketing');
   const { usePending, confirm } = useSocialConnect();
   const { data, isLoading, isError } = usePending(pendingId);
@@ -33,10 +39,23 @@ export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
   // externalIds of Pages/IG accounts the user also wants as a messaging Channel.
   const [messaging, setMessaging] = useState<string[]>([]);
 
-  // Default to all assets selected once they load (messaging stays opt-in/off).
+  // Default selection once assets load. From Social, pre-select everything (the
+  // point is publishing). From Channels, pre-select ONLY the messaging-eligible
+  // Meta assets (Page/IG) and pre-check their inbox — so we never silently connect
+  // ad accounts or WhatsApp numbers the user didn't come here for; they stay
+  // visible and opt-in-able.
   useEffect(() => {
-    if (data?.assets) setSelected(data.assets.map((a) => a.externalId));
-  }, [data]);
+    if (!data?.assets) return;
+    if (context === 'channels') {
+      const metaIds = data.assets
+        .filter((a) => a.accountType === 'PAGE' || a.accountType === 'IG_BUSINESS')
+        .map((a) => a.externalId);
+      setSelected(metaIds);
+      setMessaging(metaIds);
+    } else {
+      setSelected(data.assets.map((a) => a.externalId));
+    }
+  }, [data, context]);
 
   const toggle = (id: string) =>
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -48,7 +67,12 @@ export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
     if (!pendingId || selected.length === 0) return;
     confirm.mutate(
       { pendingId, selected, provisionMessaging: messaging.filter((id) => selected.includes(id)) },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          onConnected?.();
+          onOpenChange(false);
+        },
+      },
     );
   };
 
@@ -57,12 +81,19 @@ export function AccountSelectDialog({ pendingId, onOpenChange }: Props) {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {t('social.oauth.selectTitle', { defaultValue: 'Choose accounts to connect' })}
+            {context === 'channels'
+              ? t('social.oauth.selectChannelTitle', { defaultValue: 'Connect messaging channels' })
+              : t('social.oauth.selectTitle', { defaultValue: 'Choose accounts to connect' })}
           </DialogTitle>
           <DialogDescription>
-            {t('social.oauth.selectBody', {
-              defaultValue: 'Pick the pages/accounts the planner may publish to.',
-            })}
+            {context === 'channels'
+              ? t('social.oauth.selectChannelBody', {
+                  defaultValue:
+                    'Pick the Facebook Pages / Instagram accounts to use as a two-way inbox. They are also added to the Social Planner.',
+                })
+              : t('social.oauth.selectBody', {
+                  defaultValue: 'Pick the pages/accounts the planner may publish to.',
+                })}
           </DialogDescription>
         </DialogHeader>
 

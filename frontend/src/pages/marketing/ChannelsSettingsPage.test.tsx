@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -13,6 +13,9 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
     delete: vi.fn().mockResolvedValue({ data: {} }),
   },
 }));
+
+// The OAuth "start" does a full-page redirect — stub it so jsdom doesn't navigate.
+vi.mock('../../lib/navigateExternal', () => ({ navigateExternal: vi.fn() }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -72,5 +75,52 @@ describe('ChannelsSettingsPage', () => {
     );
     render(<ChannelsSettingsPage />, { wrapper });
     expect(await screen.findByText(/Community Management access is approved/i)).toBeInTheDocument();
+  });
+
+  it('disables the Meta connect button until the Facebook app is configured', async () => {
+    // Default status mock returns [] → no FACEBOOK flag → button stays disabled.
+    render(<ChannelsSettingsPage />, { wrapper });
+    const btn = await screen.findByRole('button', { name: /Connect Messenger & Instagram/i });
+    expect(btn).toBeDisabled();
+  });
+
+  it('starts the Meta OAuth with origin=channels when the app is configured', async () => {
+    const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+    marketingApi.get.mockImplementation((url: string) =>
+      url.includes('/social-planner/status')
+        ? Promise.resolve({ data: { FACEBOOK: true } })
+        : Promise.resolve({ data: [] }),
+    );
+    marketingApi.post.mockResolvedValue({ data: { authorizeUrl: 'https://facebook.com/authorize' } });
+    render(<ChannelsSettingsPage />, { wrapper });
+    const btn = await screen.findByRole('button', { name: /Connect Messenger & Instagram/i });
+    await waitFor(() => expect(btn).toBeEnabled());
+    await userEvent.click(btn);
+    expect(marketingApi.post).toHaveBeenCalledWith('/social/oauth/facebook/start', { origin: 'channels' });
+  });
+
+  it('opens the account picker on return from OAuth (?connect=)', async () => {
+    const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+    marketingApi.get.mockImplementation((url: string) =>
+      url.includes('/social/oauth/pending/')
+        ? Promise.resolve({
+            data: {
+              network: 'FACEBOOK',
+              assets: [{ externalId: 'P1', displayName: 'Acme', accountType: 'PAGE' }],
+            },
+          })
+        : Promise.resolve({ data: [] }),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channels?connect=pend1']}>
+          <ChannelsSettingsPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    // The channel-context picker uses its own title + lists the granted Page.
+    expect(await screen.findByText(/Connect messaging channels/i)).toBeInTheDocument();
+    expect(await screen.findByText('Acme')).toBeInTheDocument();
   });
 });
