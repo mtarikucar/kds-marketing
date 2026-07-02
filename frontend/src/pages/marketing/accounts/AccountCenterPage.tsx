@@ -16,6 +16,8 @@ import type { Capability, ConnectionGroup, Health, Provider, ProviderBlock } fro
 import { useSocialConnect } from '../social/useSocialConnect';
 import { AccountSelectDialog } from '../social/AccountSelectDialog';
 import type { SocialNetwork } from '../social/socialSchemas';
+import { startLinkedinAdsOAuth, startTiktokAdsOAuth } from '../../../features/marketing/api/ads.service';
+import { navigateExternal } from '../../../lib/navigateExternal';
 
 /** OAuth providers map to a social-connect network; manual ones are added on the
  *  Channels page (SMS/Email/Web chat) or Voice hub. */
@@ -94,6 +96,27 @@ export default function AccountCenterPage() {
     qc.invalidateQueries({ queryKey: ['marketing', 'social', 'accounts'] });
   };
 
+  // Reconnect must follow the capability, not just the provider bucket: a
+  // LinkedIn/TikTok ad account uses a SEPARATE ads-OAuth app, so an ads-only
+  // identity there must re-auth via that flow (the social grant wouldn't rotate
+  // the ad token). Meta + any identity with a publishing account uses social OAuth
+  // (Meta's grant also re-provisions ad accounts).
+  const reconnect = async (provider: Provider, g: ConnectionGroup) => {
+    const hasSocial = g.sources.some((s) => s.model === 'SocialAccount');
+    if (!hasSocial && (provider === 'LINKEDIN' || provider === 'TIKTOK')) {
+      try {
+        const { authorizeUrl } =
+          provider === 'LINKEDIN' ? await startLinkedinAdsOAuth() : await startTiktokAdsOAuth();
+        navigateExternal(authorizeUrl);
+      } catch {
+        toast.error(t('accounts.reconnectFailed', 'Could not start reconnect — check server config.'));
+      }
+      return;
+    }
+    const network = PROVIDER_NETWORK[provider];
+    if (network) startConnect(network, { origin: 'account-center' });
+  };
+
   const capLabel = (c: Capability) =>
     t(`accounts.cap.${c}`, {
       defaultValue: { PUBLISH: 'Publishing', INBOX: 'Inbox', ADS: 'Ads', WHATSAPP: 'WhatsApp', CALLS: 'Calls' }[c],
@@ -123,11 +146,7 @@ export default function AccountCenterPage() {
         </Badge>
       )}
       {g.health === 'REAUTH_REQUIRED' && PROVIDER_NETWORK[provider] && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => startConnect(PROVIDER_NETWORK[provider]!, { origin: 'account-center' })}
-        >
+        <Button variant="outline" size="sm" onClick={() => reconnect(provider, g)}>
           <RefreshCw className="h-3.5 w-3.5" />
           {t('accounts.reconnect', 'Reconnect')}
         </Button>
@@ -234,8 +253,8 @@ export default function AccountCenterPage() {
         title={t('accounts.disconnectTitle', 'Disconnect account')}
         description={t('accounts.disconnectDesc', {
           name: disconnectTarget?.displayName ?? '',
-          defaultValue:
-            'This removes “{{name}}” from every surface it powers here (publishing, inbox, ads). You can reconnect it any time.',
+          surfaces: (disconnectTarget?.capabilities ?? []).map(capLabel).join(', '),
+          defaultValue: 'This removes “{{name}}” from: {{surfaces}}. You can reconnect it any time.',
         })}
         confirmLabel={t('accounts.disconnect', 'Disconnect')}
         cancelLabel={t('common.cancel', 'Cancel')}
@@ -246,9 +265,21 @@ export default function AccountCenterPage() {
           disconnect.mutate(
             { identityKey: disconnectTarget.identityKey },
             {
-              onSuccess: () => {
+              onSuccess: (res) => {
+                // The backend never throws on a per-source failure, so inspect the
+                // summary: nothing removed = a real failure (keep the dialog open).
+                if (res.removed.length === 0 && res.skipped.length > 0) {
+                  toast.error(t('accounts.disconnectFailed', 'Could not disconnect'));
+                  return;
+                }
                 setDisconnectTarget(null);
-                toast.success(t('accounts.disconnected', 'Account disconnected'));
+                if (res.skipped.length > 0) {
+                  toast.warning(
+                    t('accounts.disconnectPartial', 'Partly disconnected — some surfaces could not be removed'),
+                  );
+                } else {
+                  toast.success(t('accounts.disconnected', 'Account disconnected'));
+                }
               },
               onError: () => toast.error(t('accounts.disconnectFailed', 'Could not disconnect')),
             },

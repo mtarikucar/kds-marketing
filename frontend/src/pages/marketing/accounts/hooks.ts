@@ -12,20 +12,26 @@ export function useConnections() {
   });
 }
 
+export interface DisconnectResult {
+  removed: { model: string; capability: string; id: string }[];
+  skipped: { model: string; capability: string; id: string; reason: string }[];
+}
+
 /** Disconnect a whole identity (or selected capabilities) across every surface. */
 export function useDisconnect() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: { identityKey: string; capabilities?: string[] }) =>
+  return useMutation<DisconnectResult, unknown, { identityKey: string; capabilities?: string[] }>({
+    mutationFn: (vars) =>
       marketingApi
         .delete(`/connections/${encodeURIComponent(vars.identityKey)}`, {
           data: vars.capabilities?.length ? { capabilities: vars.capabilities } : undefined,
         })
-        .then((r) => r.data),
+        .then((r) => r.data as DisconnectResult),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: connectionsKey });
       qc.invalidateQueries({ queryKey: ['marketing', 'channels'] });
       qc.invalidateQueries({ queryKey: ['marketing', 'social', 'accounts'] });
+      qc.invalidateQueries({ queryKey: ['marketing', 'ads', 'accounts'] });
     },
   });
 }

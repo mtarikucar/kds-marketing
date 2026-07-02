@@ -50,9 +50,16 @@ function assertNetwork(network: string): asserts network is Network {
   }
 }
 
-/** Mask the access token in a SocialAccount row before returning to API callers. */
+/** Mask EVERY sealed credential in a SocialAccount row before returning it to API
+ *  callers — both accessToken and the (long-lived, LinkedIn/TikTok) refreshToken,
+ *  which the schema marks "SEALED — never returned raw". Masking, not spreading
+ *  raw, so a future sealed column can't silently leak through this list DTO. */
 function maskAccount(row: any) {
-  return { ...row, accessToken: maskSecret(row.accessToken, 4) };
+  return {
+    ...row,
+    accessToken: maskSecret(row.accessToken, 4),
+    refreshToken: row.refreshToken ? maskSecret(row.refreshToken, 4) : null,
+  };
 }
 
 @Injectable()
