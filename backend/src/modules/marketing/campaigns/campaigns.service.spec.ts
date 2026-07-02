@@ -147,4 +147,29 @@ describe('CampaignsService', () => {
         .rejects.toBeInstanceOf(BadRequestException);
     });
   });
+
+  describe('subject clear parity (nullable-field normalization)', () => {
+    beforeEach(() => {
+      prisma.campaign.create = jest.fn().mockResolvedValue({ id: 'c1' });
+    });
+
+    it('create normalizes an empty subject to null (not "")', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', subject: '', body: 'Hi' });
+      expect(prisma.campaign.create.mock.calls[0][0].data.subject).toBeNull();
+    });
+
+    it('update clears the subject when edited to empty (maps "" → null so it persists)', async () => {
+      // The bug: '' persisted as '' (or, when the FE sent undefined, the old subject
+      // survived). An emptied subject must normalize to null like bodyHtml/template.
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
+      await svc.update(WS, 'c1', { subject: '' });
+      expect(prisma.campaign.update.mock.calls[0][0].data.subject).toBeNull();
+    });
+
+    it('update keeps a non-empty subject as-is', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
+      await svc.update(WS, 'c1', { subject: 'Spring sale' });
+      expect(prisma.campaign.update.mock.calls[0][0].data.subject).toBe('Spring sale');
+    });
+  });
 });
