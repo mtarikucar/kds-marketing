@@ -69,6 +69,13 @@ export default function Hero() {
               {t('landing.hero.subtitle')}
             </p>
 
+            <p
+              className="mx-auto mt-3 max-w-xl animate-slide-up text-sm font-medium text-indigo-200/80 motion-reduce:animate-none lg:mx-0"
+              style={load(200)}
+            >
+              {t('landing.hero.audience')}
+            </p>
+
             <div
               className="mt-8 flex animate-slide-up flex-col items-center gap-3 motion-reduce:animate-none sm:flex-row sm:justify-center lg:justify-start"
               style={load(240)}
