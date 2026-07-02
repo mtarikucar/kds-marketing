@@ -15,6 +15,9 @@ describe('CampaignTrackingService', () => {
       campaignRecipient: {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
+        // The conditional claim: count 1 = this hit won the open/click/unsub
+        // transition (→ bump); count 0 = a concurrent hit already claimed it.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       campaign: {
         findFirst: jest.fn(),
@@ -43,6 +46,25 @@ describe('CampaignTrackingService', () => {
     expect(sql).toContain('jsonb_set');
     expect(key).toBe('opened');
     expect(id).toBe('c1');
+  });
+
+  it('open does NOT bump the counter when a concurrent hit already claimed it (no double-count)', async () => {
+    // Mail-client prefetch + real open both read openedAt=null; the loser's
+    // conditional updateMany matches 0 rows, so it must NOT bump (unique opens).
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, openedAt: null });
+    prisma.campaignRecipient.updateMany.mockResolvedValue({ count: 0 });
+    await svc.open('tok');
+    expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'r1', openedAt: null } }),
+    );
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it('open bumps exactly once when it wins the openedAt claim', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, openedAt: null });
+    prisma.campaignRecipient.updateMany.mockResolvedValue({ count: 1 });
+    await svc.open('tok');
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(1);
   });
 
   it('click refuses an out-of-range index (no redirect target)', async () => {

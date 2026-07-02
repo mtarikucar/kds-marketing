@@ -15,8 +15,17 @@ export class CampaignTrackingService {
   async open(token: string): Promise<void> {
     const r = await this.prisma.campaignRecipient.findUnique({ where: { token } });
     if (!r || r.openedAt) return;
-    await this.prisma.campaignRecipient.update({ where: { id: r.id }, data: { openedAt: new Date() } });
-    await this.bump(r.campaignId, 'opened');
+    // A mail-client prefetch + the real open (or a proxied retry) hit the pixel
+    // near-simultaneously — a VERY common case. The old check-then-act let BOTH
+    // pass the openedAt-null check and each `bump`, double-counting the campaign's
+    // "unique opens". Gate the bump on WINNING the openedAt:null→set transition:
+    // only the first concurrent hit's updateMany matches a row (count 1), so the
+    // open is counted exactly once. (The bump itself was already atomic.)
+    const claim = await this.prisma.campaignRecipient.updateMany({
+      where: { id: r.id, openedAt: null },
+      data: { openedAt: new Date() },
+    });
+    if (claim.count === 1) await this.bump(r.campaignId, 'opened');
   }
 
   /** Returns the campaign-authored destination URL, or null (no open redirect). */
@@ -31,8 +40,12 @@ export class CampaignTrackingService {
     const url = links[index];
     if (!url || !/^https?:\/\//i.test(url)) return null;
     if (!r.clickedAt) {
-      await this.prisma.campaignRecipient.update({ where: { id: r.id }, data: { clickedAt: new Date() } });
-      await this.bump(r.campaignId, 'clicked');
+      // Same race-safe claim as open(): only the first concurrent click counts.
+      const claim = await this.prisma.campaignRecipient.updateMany({
+        where: { id: r.id, clickedAt: null },
+        data: { clickedAt: new Date() },
+      });
+      if (claim.count === 1) await this.bump(r.campaignId, 'clicked');
     }
     return url;
   }
@@ -47,8 +60,13 @@ export class CampaignTrackingService {
     const field = campaign?.channel === 'EMAIL' ? 'emailOptOut' : campaign?.channel === 'SMS' ? 'smsOptOut' : 'waOptOut';
     await this.prisma.lead.updateMany({ where: { id: r.leadId, workspaceId: r.workspaceId }, data: { [field]: true } });
     if (r.status !== 'UNSUBSCRIBED') {
-      await this.prisma.campaignRecipient.update({ where: { id: r.id }, data: { status: 'UNSUBSCRIBED' } });
-      await this.bump(r.campaignId, 'unsubscribed');
+      // Race-safe claim: only the first hit flips the status + counts (the opt-out
+      // above is idempotent and always runs, so consent is honored regardless).
+      const claim = await this.prisma.campaignRecipient.updateMany({
+        where: { id: r.id, status: { not: 'UNSUBSCRIBED' } },
+        data: { status: 'UNSUBSCRIBED' },
+      });
+      if (claim.count === 1) await this.bump(r.campaignId, 'unsubscribed');
     }
     return true;
   }
