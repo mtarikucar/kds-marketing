@@ -16,6 +16,55 @@
     "opportunity": "Yeni Fırsat",
     "company": "Yeni Şirket"
   },
+  "reports": {
+    "title": "Raporlar",
+    "subtitle": "Pipeline genelinde analiz ve performans dökümleri.",
+    "tabs": {
+      "sources": "Lead Kaynakları",
+      "regional": "Bölgesel",
+      "conversion": "Dönüşüm",
+      "performance": "Performans"
+    },
+    "col": {
+      "source": "Kaynak",
+      "total": "Toplam",
+      "won": "Kazanılan",
+      "lost": "Kaybedilen",
+      "conversionRate": "Dönüşüm Oranı",
+      "city": "Şehir",
+      "totalLeads": "Toplam Lead",
+      "rep": "Temsilci",
+      "leads": "Lead",
+      "activities": "Aktiviteler",
+      "demos": "Demolar",
+      "meetings": "Görüşmeler",
+      "conversion": "Dönüşüm"
+    },
+    "funnelTitle": "Dönüşüm Hunisi",
+    "empty": {
+      "sourcesTitle": "Henüz kaynak verisi yok",
+      "sourcesDesc": "Lead kaynağı verileri lead yakalandıkça görünür.",
+      "regionalTitle": "Bölgesel veri yok",
+      "regionalDesc": "Bölgesel döküm, lead'lerde şehir verisi oldukça görünür.",
+      "funnelTitle": "Huni verisi yok",
+      "funnelDesc": "Dönüşüm hunisi verileri lead'ler aşamalardan geçtikçe görünür.",
+      "perfTitle": "Performans verisi yok",
+      "perfDesc": "Temsilci performans verileri hedefler belirlendikçe görünür."
+    }
+  },
+  "performance": {
+    "title": "Performans",
+    "subtitleManager": "Ekibinin hedef gerçekleşmesini takip et.",
+    "subtitleRep": "Hedeflere göre metrik gerçekleşmen.",
+    "period": "Dönem",
+    "rep": "Temsilci",
+    "wholeTeam": "Tüm ekip",
+    "ofTarget": "hedefin %{{pct}}'i / {{target}}",
+    "emptyRepsTitle": "Temsilci yok",
+    "emptyRepsDesc": "Performansı burada görmek için ekibine temsilci ekle.",
+    "emptyTitle": "Performans verisi yok",
+    "emptyDesc": "Performans verileri bu dönem için hedefler tanımlandığında görünür."
+  },
   "settingsGroup": {
     "workspace": "Çalışma alanı",
     "team": "Ekip ve erişim",
@@ -1008,28 +1057,6 @@
       "pulled": "Yenilendi — {{count}} gün güncellendi",
       "pullFailed": "Metrikler yenilenemedi"
     }
-  },
-  "reports": {
-    "title": "Raporlar",
-    "subtitle": "Pazarlama analitiği",
-    "tabs": {
-      "leadSources": "Lead kaynakları",
-      "regional": "Bölgesel",
-      "conversion": "Dönüşüm hunisi",
-      "performance": "Performans"
-    },
-    "headers": {
-      "source": "Kaynak",
-      "leads": "Lead",
-      "converted": "Dönüştürülen",
-      "rate": "Oran",
-      "region": "Bölge",
-      "stage": "Aşama",
-      "count": "Sayı",
-      "rep": "Satış temsilcisi",
-      "totalCommission": "Toplam komisyon"
-    },
-    "empty": "Bu dönem için veri yok."
   },
   "register": {
     "title": "Çalışma alanınızı oluşturun",

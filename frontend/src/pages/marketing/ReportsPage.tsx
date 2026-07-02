@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { BarChart3, MapPin, TrendingUp, Users } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
@@ -52,6 +53,7 @@ function TableSkeleton({ cols, rows = 5 }: { cols: number; rows?: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
+  const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const [tab, setTab] = useState<'sources' | 'regional' | 'conversion' | 'performance'>('sources');
@@ -81,22 +83,22 @@ export default function ReportsPage() {
   });
 
   const tabs = [
-    { id: 'sources', label: 'Lead Sources', icon: BarChart3 },
-    { id: 'regional', label: 'Regional', icon: MapPin },
-    { id: 'conversion', label: 'Conversion', icon: TrendingUp },
-    ...(isManager ? [{ id: 'performance', label: 'Performance', icon: Users }] : []),
+    { id: 'sources', labelKey: 'reports.tabs.sources', icon: BarChart3 },
+    { id: 'regional', labelKey: 'reports.tabs.regional', icon: MapPin },
+    { id: 'conversion', labelKey: 'reports.tabs.conversion', icon: TrendingUp },
+    ...(isManager ? [{ id: 'performance', labelKey: 'reports.tabs.performance', icon: Users }] : []),
   ] as const;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Reports" description="Analytics and performance breakdowns across your pipeline." />
+      <PageHeader title={t('reports.title')} description={t('reports.subtitle')} />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
         <TabsList>
-          {tabs.map((t) => (
-            <TabsTrigger key={t.id} value={t.id} className="flex items-center gap-1.5">
-              <t.icon className="h-4 w-4" aria-hidden="true" />
-              {t.label}
+          {tabs.map((tt) => (
+            <TabsTrigger key={tt.id} value={tt.id} className="flex items-center gap-1.5">
+              <tt.icon className="h-4 w-4" aria-hidden="true" />
+              {t(tt.labelKey)}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -108,11 +110,11 @@ export default function ReportsPage() {
               <Table className="min-w-[560px]">
                 <THead>
                   <TR>
-                    <TH>Source</TH>
-                    <TH numeric>Total</TH>
-                    <TH numeric>Won</TH>
-                    <TH numeric>Lost</TH>
-                    <TH>Conversion Rate</TH>
+                    <TH>{t('reports.col.source')}</TH>
+                    <TH numeric>{t('reports.col.total')}</TH>
+                    <TH numeric>{t('reports.col.won')}</TH>
+                    <TH numeric>{t('reports.col.lost')}</TH>
+                    <TH>{t('reports.col.conversionRate')}</TH>
                   </TR>
                 </THead>
                 {loadingSources ? (
@@ -149,8 +151,8 @@ export default function ReportsPage() {
               {!loadingSources && (sources?.length ?? 0) === 0 && (
                 <EmptyState
                   icon={<BarChart3 className="h-10 w-10" />}
-                  title="No source data yet"
-                  description="Lead source data will appear once leads are captured."
+                  title={t('reports.empty.sourcesTitle')}
+                  description={t('reports.empty.sourcesDesc')}
                   className="m-4"
                 />
               )}
@@ -165,9 +167,9 @@ export default function ReportsPage() {
               <Table className="min-w-[400px]">
                 <THead>
                   <TR>
-                    <TH>City</TH>
-                    <TH numeric>Total Leads</TH>
-                    <TH numeric>Won</TH>
+                    <TH>{t('reports.col.city')}</TH>
+                    <TH numeric>{t('reports.col.totalLeads')}</TH>
+                    <TH numeric>{t('reports.col.won')}</TH>
                   </TR>
                 </THead>
                 {loadingRegional ? (
@@ -189,8 +191,8 @@ export default function ReportsPage() {
               {!loadingRegional && (regional?.length ?? 0) === 0 && (
                 <EmptyState
                   icon={<MapPin className="h-10 w-10" />}
-                  title="No regional data"
-                  description="Regional breakdown appears once leads have city data."
+                  title={t('reports.empty.regionalTitle')}
+                  description={t('reports.empty.regionalDesc')}
                   className="m-4"
                 />
               )}
@@ -202,7 +204,7 @@ export default function ReportsPage() {
         <TabsContent value="conversion">
           <Card>
             <CardContent className="space-y-4">
-              <h3 className="font-display text-h3 text-foreground">Conversion Funnel</h3>
+              <h3 className="font-display text-h3 text-foreground">{t('reports.funnelTitle')}</h3>
               {loadingConversion ? (
                 <div className="space-y-3">
                   {Array.from({ length: 5 }).map((_, i) => (
@@ -212,8 +214,8 @@ export default function ReportsPage() {
               ) : (conversion?.length ?? 0) === 0 ? (
                 <EmptyState
                   icon={<TrendingUp className="h-10 w-10" />}
-                  title="No funnel data"
-                  description="Conversion funnel data will appear once leads move through stages."
+                  title={t('reports.empty.funnelTitle')}
+                  description={t('reports.empty.funnelDesc')}
                 />
               ) : (
                 <div className="space-y-3">
@@ -254,14 +256,14 @@ export default function ReportsPage() {
                 <Table className="min-w-[760px]">
                   <THead>
                     <TR>
-                      <TH>Rep</TH>
-                      <TH numeric>Leads</TH>
-                      <TH numeric>Won</TH>
-                      <TH numeric>Lost</TH>
-                      <TH numeric>Activities</TH>
-                      <TH numeric>Demos</TH>
-                      <TH numeric>Meetings</TH>
-                      <TH numeric>Conversion</TH>
+                      <TH>{t('reports.col.rep')}</TH>
+                      <TH numeric>{t('reports.col.leads')}</TH>
+                      <TH numeric>{t('reports.col.won')}</TH>
+                      <TH numeric>{t('reports.col.lost')}</TH>
+                      <TH numeric>{t('reports.col.activities')}</TH>
+                      <TH numeric>{t('reports.col.demos')}</TH>
+                      <TH numeric>{t('reports.col.meetings')}</TH>
+                      <TH numeric>{t('reports.col.conversion')}</TH>
                     </TR>
                   </THead>
                   {loadingPerformance ? (
@@ -292,8 +294,8 @@ export default function ReportsPage() {
                 {!loadingPerformance && (performance?.length ?? 0) === 0 && (
                   <EmptyState
                     icon={<Users className="h-10 w-10" />}
-                    title="No performance data"
-                    description="Rep performance data will appear once targets are set."
+                    title={t('reports.empty.perfTitle')}
+                    description={t('reports.empty.perfDesc')}
                     className="m-4"
                   />
                 )}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { TrendingUp, Users } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
@@ -64,6 +65,7 @@ function attainmentTone(pct: number | null): 'success' | 'warning' | 'danger' | 
 // ─── Metric Card (individual rep view) ───────────────────────────────────────
 
 function MetricCard({ m }: { m: MetricPerformance }) {
+  const { t } = useTranslation('marketing');
   const pct = m.attainmentPct;
   const tone = attainmentTone(pct);
   return (
@@ -74,7 +76,10 @@ function MetricCard({ m }: { m: MetricPerformance }) {
       delta={
         m.target != null
           ? {
-              value: `${pct != null ? pct : 0}% of ${fmtValue(m.metric, m.target)} target`,
+              value: t('performance.ofTarget', {
+                pct: pct != null ? pct : 0,
+                target: fmtValue(m.metric, m.target),
+              }),
               direction: pct == null ? 'flat' : pct >= 100 ? 'up' : pct >= 70 ? 'flat' : 'down',
             }
           : undefined
@@ -105,6 +110,7 @@ function TableSkeleton({ cols, rows = 4 }: { cols: number; rows?: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function PerformancePage() {
+  const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
@@ -136,8 +142,8 @@ export default function PerformancePage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Performance"
-        description={isManager ? 'Track target attainment for your team.' : 'Your metric attainment against targets.'}
+        title={t('performance.title')}
+        description={isManager ? t('performance.subtitleManager') : t('performance.subtitleRep')}
       />
 
       {/* ── Filters ── */}
@@ -146,7 +152,7 @@ export default function PerformancePage() {
           <FilterBar>
             <div className="flex flex-col gap-1">
               <Label htmlFor="perf-period" className="text-xs text-muted-foreground">
-                Period
+                {t('performance.period')}
               </Label>
               <input
                 id="perf-period"
@@ -160,17 +166,17 @@ export default function PerformancePage() {
             {isManager && (
               <div className="flex flex-col gap-1">
                 <Label htmlFor="perf-rep" className="text-xs text-muted-foreground">
-                  Rep
+                  {t('performance.rep')}
                 </Label>
                 <Select
                   value={repId || '__all__'}
                   onValueChange={(v) => setRepId(v === '__all__' ? '' : v)}
                 >
                   <SelectTrigger id="perf-rep" className="w-48">
-                    <SelectValue placeholder="Whole team" />
+                    <SelectValue placeholder={t('performance.wholeTeam')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__all__">Whole team</SelectItem>
+                    <SelectItem value="__all__">{t('performance.wholeTeam')}</SelectItem>
                     {repOptions.map((r) => (
                       <SelectItem key={r.id} value={r.id}>
                         {r.firstName} {r.lastName}
@@ -207,7 +213,7 @@ export default function PerformancePage() {
             <Table>
               <THead>
                 <TR>
-                  <TH>Rep</TH>
+                  <TH>{t('performance.rep')}</TH>
                   {TARGET_METRICS.map((m) => (
                     <TH key={m} numeric>
                       {metricLabel(m)}
@@ -254,8 +260,8 @@ export default function PerformancePage() {
             {team.length === 0 && (
               <EmptyState
                 icon={<Users className="h-10 w-10" />}
-                title="No reps"
-                description="Add reps to your team to see performance here."
+                title={t('performance.emptyRepsTitle')}
+                description={t('performance.emptyRepsDesc')}
                 className="m-4"
               />
             )}
@@ -264,8 +270,8 @@ export default function PerformancePage() {
       ) : metrics.length === 0 ? (
         <EmptyState
           icon={<TrendingUp className="h-10 w-10" />}
-          title="No performance data"
-          description="Performance data will appear once targets are configured for this period."
+          title={t('performance.emptyTitle')}
+          description={t('performance.emptyDesc')}
         />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

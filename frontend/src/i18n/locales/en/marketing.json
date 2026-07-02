@@ -16,6 +16,55 @@
     "opportunity": "New opportunity",
     "company": "New company"
   },
+  "reports": {
+    "title": "Reports",
+    "subtitle": "Analytics and performance breakdowns across your pipeline.",
+    "tabs": {
+      "sources": "Lead Sources",
+      "regional": "Regional",
+      "conversion": "Conversion",
+      "performance": "Performance"
+    },
+    "col": {
+      "source": "Source",
+      "total": "Total",
+      "won": "Won",
+      "lost": "Lost",
+      "conversionRate": "Conversion Rate",
+      "city": "City",
+      "totalLeads": "Total Leads",
+      "rep": "Rep",
+      "leads": "Leads",
+      "activities": "Activities",
+      "demos": "Demos",
+      "meetings": "Meetings",
+      "conversion": "Conversion"
+    },
+    "funnelTitle": "Conversion Funnel",
+    "empty": {
+      "sourcesTitle": "No source data yet",
+      "sourcesDesc": "Lead source data will appear once leads are captured.",
+      "regionalTitle": "No regional data",
+      "regionalDesc": "Regional breakdown appears once leads have city data.",
+      "funnelTitle": "No funnel data",
+      "funnelDesc": "Conversion funnel data will appear once leads move through stages.",
+      "perfTitle": "No performance data",
+      "perfDesc": "Rep performance data will appear once targets are set."
+    }
+  },
+  "performance": {
+    "title": "Performance",
+    "subtitleManager": "Track target attainment for your team.",
+    "subtitleRep": "Your metric attainment against targets.",
+    "period": "Period",
+    "rep": "Rep",
+    "wholeTeam": "Whole team",
+    "ofTarget": "{{pct}}% of {{target}} target",
+    "emptyRepsTitle": "No reps",
+    "emptyRepsDesc": "Add reps to your team to see performance here.",
+    "emptyTitle": "No performance data",
+    "emptyDesc": "Performance data will appear once targets are configured for this period."
+  },
   "settingsGroup": {
     "workspace": "Workspace",
     "team": "Team & access",
@@ -1012,28 +1061,6 @@
       "callbackError": "TikTok connection failed or was cancelled. Please try again.",
       "startFailed": "Could not start the TikTok connection"
     }
-  },
-  "reports": {
-    "title": "Reports",
-    "subtitle": "Marketing analytics",
-    "tabs": {
-      "leadSources": "Lead sources",
-      "regional": "Regional",
-      "conversion": "Conversion funnel",
-      "performance": "Performance"
-    },
-    "headers": {
-      "source": "Source",
-      "leads": "Leads",
-      "converted": "Converted",
-      "rate": "Rate",
-      "region": "Region",
-      "stage": "Stage",
-      "count": "Count",
-      "rep": "Sales rep",
-      "totalCommission": "Total commission"
-    },
-    "empty": "No data for this period."
   },
   "register": {
     "title": "Create your workspace",
