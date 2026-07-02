@@ -190,8 +190,10 @@ export default {
       // Border radius scale
       borderRadius: {
         'sm': '0.375rem',
-        'DEFAULT': '0.5rem',
-        'md': '0.5rem',
+        // DEFAULT + md derive from the --radius token so corner roundness is
+        // centrally tunable (same 0.5rem value — no visual change).
+        'DEFAULT': 'var(--radius)',
+        'md': 'var(--radius)',
         'lg': '0.75rem',
         'xl': '1rem',
         '2xl': '1.5rem',

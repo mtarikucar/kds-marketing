@@ -78,7 +78,7 @@ export default function WebphoneHost() {
           <button
             type="button"
             onClick={() => wpRef.current?.hangup()}
-            className="ml-1 inline-flex items-center gap-1 rounded-full bg-red-500 px-2 py-0.5 text-micro text-white hover:bg-red-600"
+            className="ml-1 inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-micro text-danger-foreground hover:bg-danger/90"
           >
             <PhoneOff className="h-3 w-3" aria-hidden="true" /> Kapat
           </button>
