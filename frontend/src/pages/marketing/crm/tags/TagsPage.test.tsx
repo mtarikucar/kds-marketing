@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import TagsPage from './TagsPage';
+import TagsPage, { tagFormPayload } from './TagsPage';
 
 vi.mock('../../../../features/marketing/api/marketingApi', () => ({
   default: {
@@ -49,5 +49,18 @@ describe('TagsPage', () => {
     await userEvent.click(saveBtn);
     const alerts = await screen.findAllByRole('alert');
     expect(alerts.length).toBeGreaterThan(0);
+  });
+});
+
+describe('tagFormPayload', () => {
+  it('sends color:null when the colour is cleared (so a PATCH removes it, not keeps it)', () => {
+    expect(tagFormPayload({ name: 'VIP', color: '' } as any)).toEqual({ name: 'VIP', color: null });
+  });
+
+  it('passes a chosen hex colour through unchanged', () => {
+    expect(tagFormPayload({ name: 'VIP', color: '#6366f1' } as any)).toEqual({
+      name: 'VIP',
+      color: '#6366f1',
+    });
   });
 });

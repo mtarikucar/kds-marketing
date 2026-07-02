@@ -80,12 +80,13 @@ export function useTagMutations() {
   const invalidate = () => qc.invalidateQueries({ queryKey: tagsKey });
 
   const create = useMutation({
-    mutationFn: (payload: { name: string; color?: string }) =>
+    // color:null clears the colour (backend accepts it; '' would fail @IsHexColor).
+    mutationFn: (payload: { name: string; color?: string | null }) =>
       marketingApi.post('/tags', payload).then((r) => r.data),
     onSuccess: invalidate,
   });
   const update = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name?: string; color?: string } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { name?: string; color?: string | null } }) =>
       marketingApi.patch(`/tags/${id}`, data).then((r) => r.data),
     onSuccess: invalidate,
   });
