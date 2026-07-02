@@ -12,6 +12,7 @@ import type { SocialCampaignItem } from '../../../features/marketing/api/socialC
 const item = (over: Partial<SocialCampaignItem>): SocialCampaignItem => ({
   id: 'it', socialCampaignId: 'sc', sequenceIndex: 0, scheduledFor: '2026-07-01T09:00:00.000Z',
   status: 'PLANNED', topic: null, socialPostId: null, generatedAssetIds: [], error: null,
+  caption: null, media: [], publishedAt: null,
   createdAt: '', updatedAt: '', ...over,
 });
 
@@ -27,8 +28,9 @@ describe('SocialCampaignCalendar', () => {
     );
     expect(screen.getByText('Summer sale')).toBeInTheDocument();
     expect(screen.getByText('Customer story')).toBeInTheDocument();
-    expect(screen.getByText('NEEDS_APPROVAL')).toBeInTheDocument();
-    expect(screen.getByText('PUBLISHED')).toBeInTheDocument();
+    // The redesign shows a human-friendly status label, not the raw enum.
+    expect(screen.getByText('To review')).toBeInTheDocument();
+    expect(screen.getByText('Published')).toBeInTheDocument();
   });
 
   it('buckets items by the viewer local day, not the UTC day', () => {
@@ -44,14 +46,48 @@ describe('SocialCampaignCalendar', () => {
     );
     // One localized local-day header, both posts grouped under it.
     expect(screen.getAllByRole('heading')).toHaveLength(1);
-    expect(screen.getByRole('heading', { name: 'Jul 1, 2026' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Jul 1/ })).toBeInTheDocument();
     // The raw UTC calendar date must not leak into the grouping/header.
     expect(screen.queryByText('2026-07-02')).not.toBeInTheDocument();
-    expect(screen.queryByText('Jul 2, 2026')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Jul 2/)).not.toBeInTheDocument();
   });
 
   it('renders an empty state when there are no items', () => {
     render(<SocialCampaignCalendar items={[]} />);
     expect(screen.getByText('No content scheduled yet')).toBeInTheDocument();
+  });
+
+  const media = (status: string) => [{ id: 'm', type: 'IMAGE', status, url: null, thumbnailUrl: null, mime: null }];
+
+  it('warns about failed media on a publishable item, without a dead Regenerate on SCHEDULED', () => {
+    render(
+      <SocialCampaignCalendar
+        items={[item({ id: 'a', status: 'SCHEDULED', topic: 'Promo', media: media('FAILED') })]}
+        onRegenerate={vi.fn()}
+      />,
+    );
+    // The image failed but the item still heads to publish → surface it.
+    expect(screen.getByText(/without media/i)).toBeInTheDocument();
+    // SCHEDULED is not regeneratable server-side, so no button that would 400.
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).not.toBeInTheDocument();
+  });
+
+  it('offers Regenerate for failed media on a NEEDS_APPROVAL item', () => {
+    render(
+      <SocialCampaignCalendar
+        items={[item({ id: 'a', status: 'NEEDS_APPROVAL', topic: 'Promo', media: media('BLOCKED') })]}
+        onRegenerate={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeInTheDocument();
+  });
+
+  it('does not warn about failed media on an already-published item', () => {
+    render(
+      <SocialCampaignCalendar
+        items={[item({ id: 'a', status: 'PUBLISHED', topic: 'Promo', media: media('FAILED') })]}
+      />,
+    );
+    expect(screen.queryByText(/without media/i)).not.toBeInTheDocument();
   });
 });

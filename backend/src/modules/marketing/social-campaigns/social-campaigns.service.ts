@@ -137,10 +137,48 @@ export class SocialCampaignsService implements OnModuleInit {
     });
   }
 
-  listItems(workspaceId: string, campaignId: string) {
-    return this.prisma.socialCampaignItem.findMany({
+  /**
+   * List a campaign's items ENRICHED with their generated content, so the
+   * content-calendar UI can show the real post (caption + media thumbnail),
+   * not just a bare topic + status. Batched (one query for posts, one for
+   * assets — no N+1) and workspace-scoped. `caption` comes from the linked
+   * SocialPost; `media` from the GeneratedAsset rows (carrying their own
+   * status so the UI can show a spinner while a slot is still GENERATING).
+   */
+  async listItems(workspaceId: string, campaignId: string) {
+    const items = await this.prisma.socialCampaignItem.findMany({
       where: { workspaceId, socialCampaignId: campaignId },
       orderBy: { sequenceIndex: 'asc' },
+    });
+    const postIds = [...new Set(items.map((i) => i.socialPostId).filter((x): x is string => !!x))];
+    const assetIds = [...new Set(items.flatMap((i) => i.generatedAssetIds ?? []))];
+    const [posts, assets] = await Promise.all([
+      postIds.length
+        ? this.prisma.socialPost.findMany({
+            where: { id: { in: postIds }, workspaceId },
+            select: { id: true, content: true, mediaUrls: true, publishedAt: true },
+          })
+        : Promise.resolve([]),
+      assetIds.length
+        ? this.prisma.generatedAsset.findMany({
+            where: { id: { in: assetIds }, workspaceId },
+            select: { id: true, type: true, status: true, url: true, thumbnailUrl: true, mime: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const postById = new Map(posts.map((p) => [p.id, p]));
+    const assetById = new Map(assets.map((a) => [a.id, a]));
+    return items.map((i) => {
+      const post = i.socialPostId ? postById.get(i.socialPostId) : undefined;
+      return {
+        ...i,
+        caption: post?.content ?? null,
+        publishedAt: post?.publishedAt ?? null,
+        media: (i.generatedAssetIds ?? [])
+          .map((id) => assetById.get(id))
+          .filter((a): a is NonNullable<typeof a> => !!a)
+          .map((a) => ({ id: a.id, type: a.type, status: a.status, url: a.url, thumbnailUrl: a.thumbnailUrl, mime: a.mime })),
+      };
     });
   }
 
