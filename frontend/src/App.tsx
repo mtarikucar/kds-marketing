@@ -186,13 +186,15 @@ export default function App() {
           <Route path="/estimates"      element={<S><EstimatesPage /></S>} />
           <Route path="/documents"      element={<S><DocumentsPage /></S>} />
           <Route path="/reports"        element={<S><ReportsPage /></S>} />
-          <Route path="/ads"            element={<S><AdReportingPage /></S>} />
+          <Route path="/reports/ads"    element={<S><AdReportingPage /></S>} />
+          <Route path="/ads"            element={<Navigate to="/reports/ads" replace />} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           <Route path="/calls"          element={<S><CallsPage /></S>} />
           <Route path="/dialer"         element={<S><DialerPage /></S>} />
           <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
-          <Route path="/performance"    element={<S><PerformancePage /></S>} />
+          <Route path="/reports/performance" element={<S><PerformancePage /></S>} />
+          <Route path="/performance"    element={<Navigate to="/reports/performance" replace />} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
           {/* In-app help center (connection guides) — available to everyone. */}
           <Route path="/help"           element={<S><HelpPage /></S>} />
@@ -206,9 +208,12 @@ export default function App() {
             <Route path="/targets"     element={<S><TargetsPage /></S>} />
             <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
             <Route path="/settings/pipelines" element={<S><PipelineSettingsPage /></S>} />
-            <Route path="/settings/tags"          element={<S><TagsPage /></S>} />
-            <Route path="/settings/segments"      element={<S><SegmentsPage /></S>} />
-            <Route path="/settings/import"        element={<S><ImportWizardPage /></S>} />
+            <Route path="/tags" element={<S><TagsPage /></S>} />
+            <Route path="/settings/tags" element={<Navigate to="/tags" replace />} />
+            <Route path="/segments" element={<S><SegmentsPage /></S>} />
+            <Route path="/settings/segments" element={<Navigate to="/segments" replace />} />
+            <Route path="/import" element={<S><ImportWizardPage /></S>} />
+            <Route path="/settings/import" element={<Navigate to="/import" replace />} />
             <Route path="/memberships/courses"            element={<S><CoursesPage /></S>} />
             <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
             <Route path="/memberships/communities"        element={<S><CommunitiesPage /></S>} />
@@ -223,11 +228,14 @@ export default function App() {
             <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
             <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
             <Route path="/channels"    element={<S><ChannelsSettingsPage /></S>} />
-            <Route path="/settings/snippets" element={<S><SnippetsPage /></S>} />
+            <Route path="/snippets" element={<S><SnippetsPage /></S>} />
+            <Route path="/settings/snippets" element={<Navigate to="/snippets" replace />} />
             <Route path="/settings/sending-domains" element={<S><SendingDomainsPage /></S>} />
             <Route path="/settings/custom-domains" element={<S><CustomDomainsPage /></S>} />
-            <Route path="/settings/tax-rates" element={<S><TaxRatesPage /></S>} />
-            <Route path="/settings/coupons"   element={<S><CouponsPage /></S>} />
+            <Route path="/tax-rates" element={<S><TaxRatesPage /></S>} />
+            <Route path="/settings/tax-rates" element={<Navigate to="/tax-rates" replace />} />
+            <Route path="/coupons" element={<S><CouponsPage /></S>} />
+            <Route path="/settings/coupons" element={<Navigate to="/coupons" replace />} />
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
             <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
@@ -245,7 +253,8 @@ export default function App() {
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
             <Route path="/brand-kit"   element={<S><BrandKitPage /></S>} />
             {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
-            <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
+            <Route path="/reports/analytics" element={<S><AnalyticsPage /></S>} />
+            <Route path="/analytics"   element={<Navigate to="/reports/analytics" replace />} />
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
             <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
             <Route path="/settings/modules"     element={<S><ModulesPage /></S>} />

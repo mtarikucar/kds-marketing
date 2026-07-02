@@ -7,7 +7,7 @@ import {
 } from '@/components/ui';
 
 const FIRST_WINS: { key: string; icon: LucideIcon; to: string }[] = [
-  { key: 'import', icon: FileUp, to: '/settings/import' },
+  { key: 'import', icon: FileUp, to: '/import' },
   { key: 'invite', icon: UserPlus, to: '/users' },
   { key: 'modules', icon: Blocks, to: '/settings/modules' },
 ];

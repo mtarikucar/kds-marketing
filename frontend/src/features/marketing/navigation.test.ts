@@ -29,7 +29,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(ids).not.toContain('agency');
     expect(childPaths(hubs, 'contacts')).toEqual(['/leads', '/companies']);
     expect(childPaths(hubs, 'sales')).toEqual(['/opportunities', '/estimates', '/documents', '/offers']);
-    expect(childPaths(hubs, 'reporting')).toEqual(['/reports', '/ads', '/performance']);
+    expect(childPaths(hubs, 'reporting')).toEqual(['/reports', '/reports/ads', '/reports/performance']);
     expect(childPaths(hubs, 'settings')).toEqual(['/settings/two-factor']);
   });
 
@@ -48,7 +48,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
 
   it('reveals exactly the entitled modules, nothing more', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle('conversationAi') });
-    expect(childPaths(hubs, 'conversations').sort()).toEqual(['/channels', '/inbox', '/settings/snippets']);
+    expect(childPaths(hubs, 'conversations').sort()).toEqual(['/channels', '/inbox', '/snippets']);
     expect(hubs.find((h) => h.id === 'voice')).toBeUndefined();
   });
 
@@ -89,8 +89,8 @@ describe('findActiveHub — path → owning hub', () => {
   });
 
   it('resolves a child path to its hub (not by URL prefix)', () => {
-    expect(findActiveHub(NAV_HUBS, '/settings/tags')?.id).toBe('contacts');
-    expect(findActiveHub(NAV_HUBS, '/settings/segments')?.id).toBe('contacts');
+    expect(findActiveHub(NAV_HUBS, '/tags')?.id).toBe('contacts');
+    expect(findActiveHub(NAV_HUBS, '/segments')?.id).toBe('contacts');
     expect(findActiveHub(NAV_HUBS, '/settings/custom-fields')?.id).toBe('settings');
     expect(findActiveHub(NAV_HUBS, '/voice/ivr')?.id).toBe('voice');
   });

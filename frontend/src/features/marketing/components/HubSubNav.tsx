@@ -32,6 +32,9 @@ export default function HubSubNav() {
         <NavLink
           key={c.path}
           to={c.path}
+          // A hub "overview" path (e.g. /reports) is a prefix of its sub-tabs
+          // (/reports/ads); `end` there keeps it from staying highlighted on them.
+          end={active.children!.some((s) => s.path !== c.path && s.path.startsWith(c.path + '/'))}
           className="relative whitespace-nowrap px-3 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {({ isActive }) => (
