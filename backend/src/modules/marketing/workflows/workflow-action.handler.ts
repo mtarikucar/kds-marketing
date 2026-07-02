@@ -104,6 +104,11 @@ export class WorkflowActionHandler {
     const lead = ctx.lead;
     if (type === 'send_email') {
       if (!lead?.email) return 'skipped (no lead email)';
+      // Honor the per-channel opt-out — a lead who unsubscribed must not receive
+      // automation mail either (campaign-tracking's unsubscribe flips this flag
+      // precisely so "future sends" stop). The campaign sender already skips
+      // opted-out recipients; this was the sibling send path that didn't.
+      if (lead.emailOptOut) return 'skipped (lead opted out of email)';
       await this.email.sendPlainEmail(lead.email, subject ?? 'Message', body);
       return 'email sent';
     }
@@ -130,6 +135,10 @@ export class WorkflowActionHandler {
     } else {
       const value = channelType === 'WHATSAPP' ? lead?.whatsapp || lead?.phone : lead?.phone;
       if (!value) return `skipped (lead has no ${channelType === 'WHATSAPP' ? 'whatsapp/phone' : 'phone'})`;
+      // Honor the per-channel opt-out (parity with send_email + the campaign sender)
+      // — a lead who unsubscribed from SMS/WhatsApp must not get automation messages.
+      if (channelType === 'SMS' && lead?.smsOptOut) return 'skipped (lead opted out of sms)';
+      if (channelType === 'WHATSAPP' && lead?.waOptOut) return 'skipped (lead opted out of whatsapp)';
       conversationId = await this.ensureConversation(
         ctx.workspaceId, channel.id, channelType === 'WHATSAPP' ? 'WA' : 'PHONE', value, lead.id,
       );
