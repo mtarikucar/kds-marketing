@@ -22,6 +22,7 @@ import { ManualChannelDialog } from './ManualChannelDialog';
 import { EmailChannelDialog } from './EmailChannelDialog';
 import { WebchatChannelDialog } from './WebchatChannelDialog';
 import { TelephonyCard } from './TelephonyCard';
+import { VoiceAiCard } from './VoiceAiCard';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
 import type { ChannelType } from '../channels/channelFields';
 
@@ -332,6 +333,7 @@ export default function AccountCenterPage() {
         <div className="grid gap-3 md:grid-cols-2">
           {(data?.providers ?? []).map(renderProvider)}
           <TelephonyCard />
+          <VoiceAiCard />
         </div>
       </QueryStateBoundary>
     </div>

@@ -29,7 +29,15 @@ export class VoiceAdapter implements ChannelAdapter, OnModuleInit {
   }
 
   async healthCheck(config: ResolvedChannelConfig): Promise<{ ok: boolean; details?: Record<string, unknown> }> {
-    const ok = !!config.secrets.accountSid && !!config.secrets.authToken && !!config.externalId;
-    return { ok, details: { hasCreds: ok, number: config.externalId } };
+    // Twilio transport: needs the account creds + a number.
+    const hasTwilio = !!config.secrets.accountSid && !!config.secrets.authToken && !!config.externalId;
+    if (hasTwilio) {
+      return { ok: true, details: { transport: 'twilio', number: config.externalId } };
+    }
+    // Bridge / IVR transport (e.g. an ElevenLabs / VAPI / Retell agent pointed at
+    // our per-channel Custom-LLM bridge URL, or the NetGSM IVR): no Twilio creds —
+    // healthy once the platform bridge secret is configured.
+    const bridgeReady = !!process.env.VOICE_AI_BRIDGE_SECRET;
+    return { ok: bridgeReady, details: { transport: 'bridge', bridgeReady } };
   }
 }
