@@ -52,7 +52,36 @@ describe('InvoicesPage — per-invoice action guards', () => {
     post.mockImplementation(() => new Promise(() => {}));
   });
 
-  it("paying one invoice from wallet does not disable another invoice's pay button", async () => {
+  it('requires confirmation before debiting the wallet (a stray click must not move money)', async () => {
+    const user = userEvent.setup();
+    render(<InvoicesPage />, { wrapper });
+
+    const payBtns = await screen.findAllByTitle('Pay from store credit');
+    await user.click(payBtns[0]);
+
+    // The click opens a confirm dialog — an irreversible wallet debit must NOT
+    // fire on a single icon click (parity with this file's guarded `void`).
+    expect(post).not.toHaveBeenCalledWith('/invoices/i1/pay-with-wallet');
+    expect(await screen.findByText('Pay from store credit?')).toBeInTheDocument();
+
+    // Confirming actually settles from the wallet.
+    await user.click(screen.getByRole('button', { name: 'Pay now' }));
+    expect(post).toHaveBeenCalledWith('/invoices/i1/pay-with-wallet');
+  });
+
+  it('requires confirmation before texting the pay link (billable outbound SMS)', async () => {
+    const user = userEvent.setup();
+    render(<InvoicesPage />, { wrapper });
+
+    const textBtns = await screen.findAllByTitle('Text pay link (SMS)');
+    await user.click(textBtns[0]);
+
+    expect(post).not.toHaveBeenCalledWith('/invoices/i1/text-to-pay', { channel: 'SMS' });
+    await user.click(await screen.findByRole('button', { name: 'Send SMS' }));
+    expect(post).toHaveBeenCalledWith('/invoices/i1/text-to-pay', { channel: 'SMS' });
+  });
+
+  it("confirming one invoice's wallet debit does not disable another invoice's pay button", async () => {
     const user = userEvent.setup();
     render(<InvoicesPage />, { wrapper });
 
@@ -60,6 +89,7 @@ describe('InvoicesPage — per-invoice action guards', () => {
     expect(payBtns).toHaveLength(2);
 
     await user.click(payBtns[0]);
+    await user.click(await screen.findByRole('button', { name: 'Pay now' }));
     expect(post).toHaveBeenCalledWith('/invoices/i1/pay-with-wallet');
 
     const after = screen.getAllByTitle('Pay from store credit');
