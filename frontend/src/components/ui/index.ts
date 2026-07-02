@@ -28,6 +28,7 @@ export {
   type StatCardTone,
 } from './StatCard';
 export { EmptyState, type EmptyStateProps } from './EmptyState';
+export { QueryStateBoundary, type QueryStateBoundaryProps } from './QueryStateBoundary';
 export { Progress, type ProgressProps, type ProgressTone } from './Progress';
 export {
   SegmentedControl,

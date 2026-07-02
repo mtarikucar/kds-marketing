@@ -37,7 +37,7 @@ import {
   Input,
   Textarea,
   Badge,
-  Spinner,
+  QueryStateBoundary,
 } from '@/components/ui';
 
 const CURRENCIES = ['TRY', 'USD', 'EUR'] as const;
@@ -359,22 +359,13 @@ export default function OpportunitiesPage() {
         </div>
       )}
 
-      {isError && (
-        <div className="flex flex-col items-center gap-3 py-10">
-          <p className="text-sm text-danger">
-            {t('opportunities.loadFailed', 'Could not load the board.')}
-          </p>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
-            {t('common.retry', 'Retry')}
-          </Button>
-        </div>
-      )}
-
-      {isLoading && (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      )}
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('opportunities.loadFailed', 'Could not load the board.')}
+        retryLabel={t('common.retry', 'Retry')}
+      />
 
       {/* Kanban columns */}
       {board && !isError && (
