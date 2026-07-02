@@ -74,11 +74,11 @@ describe('GamificationService', () => {
   });
 
   describe('leaderboard', () => {
-    it('ranks leads by summed points and attaches names, workspace-scoped', async () => {
+    it('ranks leads by summed points and attaches names, excluding hidden leads via a JOIN', async () => {
       const { prisma, svc } = makeSvc();
-      (prisma.pointsLedger.groupBy as any).mockResolvedValue([
-        { leadId: 'l1', _sum: { points: 120 } },
-        { leadId: 'l2', _sum: { points: 80 } },
+      (prisma.$queryRawUnsafe as any) = jest.fn().mockResolvedValue([
+        { leadId: 'l1', points: 120 },
+        { leadId: 'l2', points: 80 },
       ]);
       prisma.lead.findMany.mockResolvedValue([
         { id: 'l1', contactPerson: 'Ada', businessName: null },
@@ -89,17 +89,23 @@ describe('GamificationService', () => {
         { rank: 1, leadId: 'l1', name: 'Ada', points: 120 },
         { rank: 2, leadId: 'l2', name: 'Acme', points: 80 },
       ]);
-      expect((prisma.pointsLedger.groupBy as any).mock.calls[0][0].where).toEqual({ workspaceId: WS });
+      // The raw query JOINs leads and excludes soft-deleted / merged members
+      // BEFORE limit/offset, so a hidden lead never ranks or takes a page slot.
+      const [sql, ws] = (prisma.$queryRawUnsafe as any).mock.calls[0];
+      expect(sql).toContain('JOIN leads');
+      expect(sql).toContain('"deletedAt" IS NULL');
+      expect(sql).toContain('"mergedIntoId" IS NULL');
+      expect(ws).toBe(WS);
       expect(prisma.lead.findMany.mock.calls[0][0].where).toMatchObject({ workspaceId: WS });
     });
 
-    it('clamps pageSize and computes skip', async () => {
+    it('clamps pageSize and passes the computed skip to the query', async () => {
       const { prisma, svc } = makeSvc();
-      (prisma.pointsLedger.groupBy as any).mockResolvedValue([]);
+      (prisma.$queryRawUnsafe as any) = jest.fn().mockResolvedValue([]);
       await svc.leaderboard(WS, 3, 999);
-      const arg = (prisma.pointsLedger.groupBy as any).mock.calls[0][0];
-      expect(arg.take).toBe(100); // clamped
-      expect(arg.skip).toBe(200); // (3-1)*100
+      const [, , take, skip] = (prisma.$queryRawUnsafe as any).mock.calls[0];
+      expect(take).toBe(100); // clamped
+      expect(skip).toBe(200); // (3-1)*100
     });
   });
 
