@@ -193,6 +193,14 @@ export class CampaignSenderService implements OnModuleInit {
         payload: { workspaceId, campaignId },
       });
     } else {
+      // A/B WINNER: draining the test cohort to 0 PENDING does NOT complete the
+      // campaign while the remainder is still HELD awaiting the winner decision.
+      // Mirror the empty-batch guard at the top of batch() — without this, the
+      // batch that sends the LAST test-cohort recipient marks the campaign SENT,
+      // and the later ab.decide job (which requires status=SENDING) then bails,
+      // stranding the held-back majority so they are NEVER sent.
+      const held = await this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, status: 'HOLD' } });
+      if (held > 0) return;
       await this.prisma.campaign.update({ where: { id: campaignId }, data: { status: 'SENT', completedAt: new Date() } });
     }
   }
