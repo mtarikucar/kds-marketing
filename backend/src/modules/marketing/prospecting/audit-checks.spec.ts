@@ -32,6 +32,19 @@ describe('audit-checks (pure scoring)', () => {
       const s = analyzeOnPage(html, 'https://x.example/');
       expect(s.findings.join(' ')).toMatch(/2 H1/);
     });
+
+    it('detects a meta description regardless of attribute order (content before name)', () => {
+      // HTML allows attributes in any order; `<meta content="…" name="description">`
+      // is valid and common. A fixed name-then-content regex false-negatives it and
+      // tells the prospect their (present) description is MISSING.
+      const desc = 'd'.repeat(80); // within the ideal 50–160 range
+      const html =
+        `<title>${'t'.repeat(20)}</title>` +
+        `<meta content="${desc}" name="description">`;
+      const s = analyzeOnPage(html, 'https://x.example/');
+      expect(s.findings.join(' ')).toMatch(/Meta description present/);
+      expect(s.findings.join(' ')).not.toMatch(/Missing a meta description/);
+    });
   });
 
   describe('analyzePageSpeed', () => {

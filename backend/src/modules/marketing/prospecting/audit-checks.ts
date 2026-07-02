@@ -32,6 +32,27 @@ function firstMatch(html: string, re: RegExp): string {
 }
 
 /**
+ * Extract a `<meta>` tag's `content` by its `name`, tolerant of attribute ORDER.
+ * HTML lets attributes appear in any order, so `<meta content="…" name="…">` is
+ * just as valid as the name-first form. A fixed name-then-content regex
+ * false-negatives the content-first variant — reporting a PRESENT tag as
+ * "missing" in the audit a prospect sees. Scans each meta tag and reads its
+ * `name`/`content` independently. Returns '' when no such tag exists.
+ */
+function metaContentByName(html: string, name: string): string {
+  const wanted = name.toLowerCase();
+  const tagRe = /<meta\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(html)) !== null) {
+    const tag = m[0];
+    const nameAttr = /\bname\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1]?.trim().toLowerCase();
+    if (nameAttr !== wanted) continue;
+    return (/\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? '').trim();
+  }
+  return '';
+}
+
+/**
  * On-page checks from the raw HTML: title, meta description, viewport (mobile),
  * a single H1, and whether the resolved URL is HTTPS. All free (no API key).
  */
@@ -55,10 +76,7 @@ export function analyzeOnPage(html: string, finalUrl: string): AuditSection {
 
   // Meta description.
   max += 20;
-  const desc = firstMatch(
-    html,
-    /<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["'][^>]*>/i,
-  );
+  const desc = metaContentByName(html, 'description');
   if (desc.length >= 50 && desc.length <= 160) {
     points += 20;
     findings.push(`Meta description present (${desc.length} chars).`);
