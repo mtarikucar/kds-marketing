@@ -354,6 +354,15 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // manager send() updateMany DOES carry workspaceId.)
   'documents/documents.service.ts:document.updateMany':
     'public sign/decline keyed by id from a token-scoped findUnique(publicToken)',
+  // Campaign open/click/unsubscribe tracking: the recipient is resolved from a
+  // token-scoped findUnique(token) (the unguessable per-recipient token IS the
+  // capability), then a status-conditional updateMany claims it BY PRIMARY KEY
+  // (where.id = r.id + openedAt/clickedAt/status guard) so only the first of
+  // near-simultaneous hits counts. No workspace context exists on the public
+  // pixel/redirect/unsub routes; the id PK touches at most that one row. Same
+  // sanctioned token-scoped pattern as documents/public-invoice.
+  'campaigns/campaign-tracking.service.ts:campaignRecipient.updateMany':
+    'public open/click/unsub tracking keyed by id from a token-scoped findUnique(token); race-safe conditional claim, no cross-tenant surface',
   // Inbound public webhooks have NO workspace context — the provider only
   // gives a widget key or a page/phone id. This lookup (the ONLY cross-workspace
   // channel access) lives in one resolver so the exemption surface is a single
