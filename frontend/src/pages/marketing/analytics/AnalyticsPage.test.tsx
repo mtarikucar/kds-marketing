@@ -16,9 +16,14 @@ vi.mock('../../../features/marketing/api/marketingApi', () => ({
 // ── mock auth store ───────────────────────────────────────────────────────────
 
 vi.mock('../../../store/marketingAuthStore', () => ({
-  useMarketingAuthStore: () => ({
-    user: { role: 'MANAGER', name: 'Test Manager' },
-  }),
+  // Selector-aware mock: some consumers (e.g. useWorkspaceProfile) read a single
+  // field via a selector — `useMarketingAuthStore((s) => s.isAuthenticated)` — so
+  // the mock must apply the selector, not always return the whole object (which
+  // made `enabled` a non-boolean and threw inside react-query).
+  useMarketingAuthStore: (selector?: (s: unknown) => unknown) => {
+    const state = { user: { role: 'MANAGER', name: 'Test Manager' }, isAuthenticated: true };
+    return selector ? selector(state) : state;
+  },
 }));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
