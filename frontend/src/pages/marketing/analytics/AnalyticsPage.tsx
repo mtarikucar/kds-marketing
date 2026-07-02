@@ -12,6 +12,8 @@ import {
 import { format, subDays } from 'date-fns';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { useWorkspaceProfile } from '../../../features/marketing/hooks/useWorkspaceProfile';
+import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 import {
   PageHeader,
   Card,
@@ -88,9 +90,6 @@ function fmtPct(v: number) {
   return `${v}%`;
 }
 
-function fmtCurrency(v: number) {
-  return new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(v);
-}
 
 function conversionTone(rate: number): 'success' | 'warning' | 'danger' {
   if (rate >= 40) return 'success';
@@ -253,6 +252,10 @@ export default function AnalyticsPage() {
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const [tab, setTab] = useState<AnalyticsTab>('funnel');
+  // Attribution revenue is derived from offer prices in the WORKSPACE's currency —
+  // format it as such, not a hardcoded ₺ (a non-TRY workspace saw the wrong symbol).
+  const { workspace } = useWorkspaceProfile();
+  const currency = asWorkspaceCurrency(workspace?.defaultCurrency);
 
   const defaultRange: DateRange = {
     from: subDays(new Date(), 30),
@@ -537,7 +540,7 @@ export default function AnalyticsPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <StatCard
                       label="Total Revenue"
-                      value={fmtCurrency(attribution.totalRevenue)}
+                      value={formatMoney(attribution.totalRevenue, currency)}
                       icon={<DollarSign className="h-5 w-5" />}
                       tone="success"
                     />
@@ -558,7 +561,7 @@ export default function AnalyticsPage() {
                             <TH>Channel</TH>
                             <TH numeric>Leads</TH>
                             <TH numeric>Conversions</TH>
-                            <TH numeric>Revenue (TRY)</TH>
+                            <TH numeric>Revenue ({currency})</TH>
                             <TH>Conv. Rate</TH>
                           </TR>
                         </THead>
@@ -572,7 +575,7 @@ export default function AnalyticsPage() {
                                   <Badge tone="success">{ch.conversions}</Badge>
                                 </TD>
                                 <TD numeric className="tabular-nums">
-                                  {fmtCurrency(ch.revenue)}
+                                  {formatMoney(ch.revenue, currency)}
                                 </TD>
                                 <TD>
                                   <div className="flex items-center gap-2">
