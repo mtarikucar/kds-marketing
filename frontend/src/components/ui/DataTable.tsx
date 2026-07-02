@@ -80,7 +80,7 @@ export function DataTable<T>({
 
   return (
     <div className={cn('w-full overflow-x-auto rounded-xl border border-border', className)}>
-      <Table>
+      <Table className="dt-responsive">
         <THead>
           {table.getHeaderGroups().map((headerGroup) => (
             <TR key={headerGroup.id} className="hover:bg-transparent">
@@ -160,11 +160,15 @@ export function DataTable<T>({
                       : {})}
                     className={cn(clickable && 'cursor-pointer')}
                   >
-                    {row.getVisibleCells().map((cell) => (
-                      <TD key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TD>
-                    ))}
+                    {row.getVisibleCells().map((cell) => {
+                      const header = cell.column.columnDef.header;
+                      const label = typeof header === 'string' && header ? header : undefined;
+                      return (
+                        <TD key={cell.id} data-label={label}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TD>
+                      );
+                    })}
                   </TR>
                 );
               })}
