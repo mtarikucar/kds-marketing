@@ -169,6 +169,8 @@ jobs:
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
           TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          X_CLIENT_ID: ${{ secrets.X_CLIENT_ID }}
+          X_CLIENT_SECRET: ${{ secrets.X_CLIENT_SECRET }}
           STRIPE_CONNECT_CLIENT_ID: ${{ secrets.STRIPE_CONNECT_CLIENT_ID }}
           BANK_IBAN: ${{ secrets.BANK_IBAN }}
           BANK_ACCOUNT_NAME: ${{ secrets.BANK_ACCOUNT_NAME }}
@@ -236,6 +238,8 @@ jobs:
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
           TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET}
+          X_CLIENT_ID=${X_CLIENT_ID}
+          X_CLIENT_SECRET=${X_CLIENT_SECRET}
           STRIPE_CONNECT_CLIENT_ID=${STRIPE_CONNECT_CLIENT_ID}
           MARKETING_PUBLIC_URL=https://jeetagrowth.com
           # Public origin for callback/tracking links the API emits (NetGSM MO
