@@ -126,6 +126,13 @@ export interface NavHub {
   agencyOnly?: boolean;
   /** 'settings' hubs render in the separate Settings area (gear), not the primary rail. */
   area?: 'main' | 'settings';
+  /**
+   * Progressive-disclosure tier for main-area hubs. 'core' (default) is always
+   * in the rail; 'advanced' is tucked behind a collapsed "More" section so the
+   * default view stays focused. Nothing is removed — the command palette and the
+   * "More" section still reach every advanced hub.
+   */
+  tier?: 'core' | 'advanced';
 }
 
 export const NAV_HUBS: NavHub[] = [
@@ -173,7 +180,7 @@ export const NAV_HUBS: NavHub[] = [
   },
   { id: 'tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList, path: '/tasks' },
   {
-    id: 'marketing', labelKey: 'nav.group.marketing', label: 'Marketing', icon: Megaphone,
+    id: 'marketing', labelKey: 'nav.group.marketing', label: 'Marketing', icon: Megaphone, tier: 'advanced',
     children: [
       { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
       { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
@@ -186,7 +193,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'sites', labelKey: 'nav.group.sites', label: 'Sites', icon: Globe,
+    id: 'sites', labelKey: 'nav.group.sites', label: 'Sites', icon: Globe, tier: 'advanced',
     children: [
       { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
       { path: '/surveys', labelKey: 'nav.surveys', label: 'Surveys', icon: ClipboardList, managerOnly: true },
@@ -194,7 +201,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap,
+    id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap, tier: 'advanced',
     children: [
       { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
       { path: '/ai/agents', labelKey: 'nav.agentStudio', label: 'AI Agents', icon: Sparkles, feature: 'agentStudio', managerOnly: true },
@@ -202,7 +209,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'memberships', labelKey: 'nav.group.memberships', label: 'Memberships', icon: GraduationCap,
+    id: 'memberships', labelKey: 'nav.group.memberships', label: 'Memberships', icon: GraduationCap, tier: 'advanced',
     children: [
       { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, managerOnly: true },
       { path: '/memberships/communities', labelKey: 'nav.communities', label: 'Communities', icon: MessagesSquare, managerOnly: true },
@@ -210,7 +217,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'voice', labelKey: 'nav.group.voice', label: 'Voice', icon: Mic,
+    id: 'voice', labelKey: 'nav.group.voice', label: 'Voice', icon: Mic, tier: 'advanced',
     children: [
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
@@ -226,7 +233,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'payments', labelKey: 'nav.group.payments', label: 'Payments', icon: Banknote,
+    id: 'payments', labelKey: 'nav.group.payments', label: 'Payments', icon: Banknote, tier: 'advanced',
     children: [
       { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
       { path: '/subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions', icon: Repeat, managerOnly: true },
@@ -239,7 +246,7 @@ export const NAV_HUBS: NavHub[] = [
   },
   { id: 'help', labelKey: 'nav.help', label: 'Help', icon: BookOpen, path: '/help' },
   {
-    id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true,
+    id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true, tier: 'advanced',
     children: [
       { path: '/agency/locations', labelKey: 'nav.agencyLocations', label: 'Sub-accounts', icon: Building2, managerOnly: true },
       { path: '/agency/snapshots', labelKey: 'nav.agencySnapshots', label: 'Snapshots', icon: Camera, managerOnly: true },
@@ -298,6 +305,20 @@ export function visibleNav(hubs: NavHub[], opts: NavVisibilityOpts): NavHub[] {
     })
     .filter((h) => (h.children ? h.children.length > 0 : !!h.path) &&
       (h.managerOnly ? opts.isManager : true) && opts.has(h.feature));
+}
+
+/**
+ * Split already-visible MAIN-area hubs into `core` (always in the rail) and
+ * `advanced` (tucked behind the collapsed "More" section). Settings-area hubs
+ * are excluded — they render in the gear area, not the primary rail. Pure so it
+ * stays unit-testable.
+ */
+export function splitByTier(hubs: NavHub[]): { core: NavHub[]; advanced: NavHub[] } {
+  const main = hubs.filter((h) => (h.area ?? 'main') === 'main');
+  return {
+    core: main.filter((h) => (h.tier ?? 'core') === 'core'),
+    advanced: main.filter((h) => h.tier === 'advanced'),
+  };
 }
 
 /** All routable paths a hub owns (its own `path` + every child path). */

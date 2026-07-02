@@ -105,6 +105,10 @@
     "REP": "Satış Temsilcisi"
   },
   "nav": {
+    "pinned": "Sabitlenenler",
+    "more": "Daha fazla",
+    "pin": "Sabitle",
+    "unpin": "Sabiti kaldır",
     "group": {
       "conversations": "Mesajlar",
       "contacts": "Kişiler",

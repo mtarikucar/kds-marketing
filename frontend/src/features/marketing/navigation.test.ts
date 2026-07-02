@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NAV_HUBS, visibleNav, findActiveHub, type FeatureKey } from './navigation';
+import { NAV_HUBS, visibleNav, findActiveHub, splitByTier, type FeatureKey } from './navigation';
 
 /** Entitle only the given feature keys; core (undefined) is always allowed. */
 const entitle =
@@ -100,5 +100,26 @@ describe('findActiveHub — path → owning hub', () => {
 
   it('returns undefined for an unknown path', () => {
     expect(findActiveHub(NAV_HUBS, '/nope')).toBeUndefined();
+  });
+});
+
+describe('splitByTier — progressive disclosure', () => {
+  it('keeps daily hubs in core and tucks niche hubs into advanced', () => {
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
+    const { core, advanced } = splitByTier(hubs);
+    const coreIds = core.map((h) => h.id);
+    const advIds = advanced.map((h) => h.id);
+    expect(coreIds).toEqual(
+      expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reporting']),
+    );
+    expect(advIds).toEqual(expect.arrayContaining(['marketing', 'memberships', 'payments']));
+    // The two tiers never overlap.
+    expect(coreIds.some((id) => advIds.includes(id))).toBe(false);
+  });
+
+  it('excludes the settings-area hub from both tiers', () => {
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
+    const { core, advanced } = splitByTier(hubs);
+    expect([...core, ...advanced].some((h) => h.area === 'settings')).toBe(false);
   });
 });

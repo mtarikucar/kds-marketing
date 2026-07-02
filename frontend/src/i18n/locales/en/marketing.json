@@ -105,6 +105,10 @@
     "REP": "Sales Rep"
   },
   "nav": {
+    "pinned": "Pinned",
+    "more": "More",
+    "pin": "Pin",
+    "unpin": "Unpin",
     "group": {
       "pipeline": "Pipeline",
       "sales": "Sales",
