@@ -141,6 +141,14 @@ export class InvoicesService {
   async markPaid(workspaceId: string, id: string, via = 'manual') {
     const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId } });
     if (!inv) throw new NotFoundException('Invoice not found');
+    // A VOID invoice is terminal: settle()'s DRAFT/SENT claim would match nothing,
+    // so it silently no-ops and the operator gets no feedback. Reject explicitly —
+    // the only invoice transition that DIDN'T validate its precondition, unlike its
+    // siblings (send / voidInvoice / payWithWallet all throw on an invalid state).
+    // PAID stays idempotent (settle early-returns), matching payWithWallet.
+    if (inv.status === 'VOID') {
+      throw new BadRequestException('A void invoice cannot be marked paid — reissue it instead');
+    }
     return this.settle(inv, via);
   }
   /**

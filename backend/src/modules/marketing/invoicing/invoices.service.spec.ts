@@ -142,6 +142,15 @@ describe('InvoicesService', () => {
     expect(outbox.append).not.toHaveBeenCalled();
   });
 
+  it('markPaid rejects a VOID invoice with a clear error (no silent no-op)', async () => {
+    const { BadRequestException } = require('@nestjs/common');
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, status: 'VOID', total: 2500, currency: 'TRY' });
+    await expect(svc.markPaid(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+    // never reaches the settle claim — it would have silently matched 0 rows
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
   it('seals the workspace Stripe secret (never stored in clear)', async () => {
     await svc.setPspConfig(WS, { provider: 'STRIPE', secrets: { secretKey: 'sk_live_secret' } });
     const data = prisma.workspacePspConfig.upsert.mock.calls[0][0];
