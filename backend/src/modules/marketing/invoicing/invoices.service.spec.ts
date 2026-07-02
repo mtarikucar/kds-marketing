@@ -229,7 +229,7 @@ describe('InvoicesService', () => {
       prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
       prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
       prisma.invoice.updateMany.mockResolvedValue({ count: 1 });
-      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', conversationId: 'inv1', basketId: 'inv1' }) });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', currency: 'TRY', conversationId: 'inv1', basketId: 'inv1' }) });
       const ok = await svc.iyzicoCallback('tok', 'iyz-token');
       expect(ok).toBe(true);
       expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PAID', paidVia: 'iyzico' }) }));
@@ -239,6 +239,18 @@ describe('InvoicesService', () => {
       prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
       prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
       (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00', conversationId: 'inv1', basketId: 'inv1' }) });
+      const ok = await svc.iyzicoCallback('tok', 'iyz-token');
+      expect(ok).toBe(false);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('callback: a SUCCESS retrieve with a MISMATCHED currency (same numeric amount) does NOT settle', async () => {
+      // A USD invoice (total 10000 = $100.00) whose payment came back in TRY
+      // (paidPrice 100.00 → 10000 kuruş) passes the numeric amount check. Without
+      // a currency check it would settle $100 for ~$3. Parity with the Stripe path.
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 10000, currency: 'USD', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00', currency: 'TRY', conversationId: 'inv1', basketId: 'inv1' }) });
       const ok = await svc.iyzicoCallback('tok', 'iyz-token');
       expect(ok).toBe(false);
       expect(prisma.invoice.updateMany).not.toHaveBeenCalled();

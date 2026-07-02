@@ -531,6 +531,16 @@ export class InvoicesService {
       this.logger.warn(`Iyzico amount mismatch for invoice ${inv.id}: collected ${json.paidPrice} vs billed ${inv.total} — not settling`);
       return false;
     }
+    // Verify the CURRENCY too, not just the numeric amount — parity with the
+    // Stripe return handler. `total` is minor units of the INVOICE's currency, so
+    // without this a USD invoice (total 10000 = $100) whose payment came back in
+    // TRY (paidPrice 100.00 → 10000 kuruş) would pass the amount check and settle
+    // $100 for ~$3. The currency is server-fixed at init, so this is defence in
+    // depth against a provider/account currency mismatch, not a buyer-reachable hole.
+    if (String(json.currency ?? '').toUpperCase() !== inv.currency.toUpperCase()) {
+      this.logger.warn(`Iyzico currency mismatch for invoice ${inv.id}: paid ${json.currency} vs billed ${inv.currency} — not settling`);
+      return false;
+    }
     await this.settle(inv, 'iyzico');
     return true;
   }
