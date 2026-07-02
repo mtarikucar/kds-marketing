@@ -29,6 +29,7 @@ import {
   Banknote,
   Palette,
   SlidersHorizontal,
+  Blocks,
   Tag,
   Filter,
   FileUp,
@@ -258,6 +259,7 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/branding', labelKey: 'nav.branding', label: 'Business & Branding', icon: Palette, managerOnly: true },
       { path: '/brand-kit', labelKey: 'nav.brandKit', label: 'Brand Kit', icon: Palette, managerOnly: true },
+      { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
       { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: Lock, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },

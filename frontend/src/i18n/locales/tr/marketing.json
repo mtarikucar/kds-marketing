@@ -65,6 +65,33 @@
     "emptyTitle": "Performans verisi yok",
     "emptyDesc": "Performans verileri bu dönem için hedefler tanımlandığında görünür."
   },
+  "modules": {
+    "title": "Modüller",
+    "subtitle": "Konsolunu odaklı tutmak için modülleri aç/kapat. Kapalı modüller yeniden açana kadar menüden kaybolur.",
+    "saved": "Modüller güncellendi",
+    "saveFailed": "Modüller güncellenemedi",
+    "ownerOnly": "Hangi modüllerin aktif olduğunu yalnızca çalışma alanı sahibi değiştirebilir.",
+    "emptyTitle": "İsteğe bağlı modül yok",
+    "emptyDesc": "Mevcut planında aç/kapat yapılabilir modül yok.",
+    "keys": {
+      "conversationAi": "Mesajlar & Gelen Kutusu",
+      "campaigns": "Kampanyalar",
+      "socialCampaigns": "Sosyal kampanyalar",
+      "mediaGen": "AI medya stüdyosu",
+      "workflows": "Otomasyonlar",
+      "agentStudio": "AI ajanları",
+      "askAi": "AI'ya sor",
+      "funnels": "Siteler & funnel'lar",
+      "reviews": "Değerlendirmeler",
+      "telephony": "Telefon & aramalar",
+      "voiceAi": "Sesli AI",
+      "invoicing": "Faturalama",
+      "commissions": "Komisyonlar",
+      "installations": "Kurulumlar",
+      "advancedReports": "Gelişmiş raporlar",
+      "apiAccess": "API erişimi"
+    }
+  },
   "settingsGroup": {
     "workspace": "Çalışma alanı",
     "team": "Ekip ve erişim",
@@ -255,6 +282,7 @@
     "socialCampaigns": "Sosyal Kampanyalar",
     "aiStudio": "AI Stüdyo",
     "brandKit": "Marka Kiti",
+    "modules": "Modüller",
     "surveys": "Anketler",
     "tags": "Etiketler",
     "agencyLocations": "Ajans Lokasyonları",

@@ -87,6 +87,7 @@ const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'))
 const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/AnalyticsPage'));
 // GHL-parity settings/tools UIs
 const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/apiKeys'));
+const ModulesPage              = lazy(() => import('./pages/marketing/settings/modules'));
 const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
 const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
 const ConnectionsPage          = lazy(() => import('./pages/marketing/settings/connections'));
@@ -247,6 +248,7 @@ export default function App() {
             <Route path="/analytics"   element={<S><AnalyticsPage /></S>} />
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
             <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
+            <Route path="/settings/modules"     element={<S><ModulesPage /></S>} />
             <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
             <Route path="/settings/inbound-webhooks" element={<S><InboundWebhooksPage /></S>} />
             <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />

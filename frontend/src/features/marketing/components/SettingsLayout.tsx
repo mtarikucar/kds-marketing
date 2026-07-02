@@ -13,7 +13,7 @@ import { cn } from '../../../components/ui/cn';
  * instead of one undifferentiated grab-bag. Paths not listed fall into "Other".
  */
 const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
-  { key: 'workspace', label: 'Workspace', paths: ['/branding', '/brand-kit', '/targets'] },
+  { key: 'workspace', label: 'Workspace', paths: ['/branding', '/brand-kit', '/settings/modules', '/targets'] },
   { key: 'team', label: 'Team & access', paths: ['/users', '/settings/roles', '/settings/two-factor'] },
   { key: 'data', label: 'CRM data', paths: ['/settings/custom-fields', '/research'] },
   {

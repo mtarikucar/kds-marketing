@@ -65,6 +65,33 @@
     "emptyTitle": "No performance data",
     "emptyDesc": "Performance data will appear once targets are configured for this period."
   },
+  "modules": {
+    "title": "Modules",
+    "subtitle": "Turn modules on or off to keep your console focused. Off modules disappear from the menu until you re-enable them.",
+    "saved": "Modules updated",
+    "saveFailed": "Could not update modules",
+    "ownerOnly": "Only the workspace owner can change which modules are active.",
+    "emptyTitle": "No optional modules",
+    "emptyDesc": "Your current plan has no toggleable modules.",
+    "keys": {
+      "conversationAi": "Conversations & Inbox",
+      "campaigns": "Campaigns",
+      "socialCampaigns": "Social campaigns",
+      "mediaGen": "AI media studio",
+      "workflows": "Automations",
+      "agentStudio": "AI agents",
+      "askAi": "Ask AI",
+      "funnels": "Sites & funnels",
+      "reviews": "Reviews",
+      "telephony": "Phone & calls",
+      "voiceAi": "Voice AI",
+      "invoicing": "Invoicing",
+      "commissions": "Commissions",
+      "installations": "Installations",
+      "advancedReports": "Advanced reports",
+      "apiAccess": "API access"
+    }
+  },
   "settingsGroup": {
     "workspace": "Workspace",
     "team": "Team & access",
@@ -245,6 +272,7 @@
     "socialCampaigns": "Social Campaigns",
     "aiStudio": "AI Studio",
     "brandKit": "Brand Kit",
+    "modules": "Modules",
     "surveys": "Surveys",
     "agencyLocations": "Agency Locations",
     "agencyRebilling": "Agency Rebilling",

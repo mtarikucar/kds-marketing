@@ -3,7 +3,11 @@ import marketingApi from '../api/marketingApi';
 import type { FeatureKey } from '../navigation';
 
 interface BillingSummary {
-  entitlements?: { features?: Record<string, boolean> };
+  entitlements?: {
+    features?: Record<string, boolean>;
+    /** Toggleable modules the plan entitles, BEFORE per-workspace activation. */
+    entitledModules?: string[];
+  };
 }
 
 /**
@@ -26,11 +30,14 @@ export function useEntitlements() {
   });
 
   const features = data?.entitlements?.features ?? {};
+  const entitledModules = data?.entitlements?.entitledModules ?? [];
 
   return {
     isLoading,
     isError,
     features,
+    /** Toggleable modules the plan entitles (pre-activation) — drives the catalog. */
+    entitledModules,
     /** No key → always true (core item). Otherwise true only when entitled. */
     has: (key?: FeatureKey) => (key ? !!features[key] : true),
   };
