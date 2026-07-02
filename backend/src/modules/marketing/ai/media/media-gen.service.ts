@@ -182,12 +182,18 @@ export class MediaGenService implements OnModuleInit {
         maxAttempts: 30,
       });
     } catch (e: any) {
-      await this.credits.refund(workspaceId, estimate);
       if (asset) {
-        await this.prisma.generatedAsset.update({
-          where: { id: asset.id },
-          data: { status: 'FAILED', error: String(e?.message ?? e) },
-        }).catch(() => undefined);
+        // Terminalize + refund via the SAME conditional-claim path the poll/
+        // webhook failures use (failTerminal), so the reservation is refunded
+        // EXACTLY once. The old code refunded UNCONDITIONALLY then best-effort set
+        // FAILED; if that update was swallowed (or the worker crashed between the
+        // two), the row stayed QUEUED and the orphan sweep later reaped it and
+        // refunded the SAME reservation a second time — over-crediting the meter.
+        await this.failTerminal({ id: asset.id, workspaceId }, String(e?.message ?? e).slice(0, 500), estimate);
+      } else {
+        // create() itself threw — the reservation exists but no asset row does,
+        // so the sweep can't reap it; refund directly (no double-refund possible).
+        await this.credits.refund(workspaceId, estimate);
       }
       throw e;
     }

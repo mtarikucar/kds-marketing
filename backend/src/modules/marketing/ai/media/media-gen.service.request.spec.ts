@@ -9,6 +9,9 @@ function makeSvc() {
       count: jest.fn().mockResolvedValue(0),
       create: jest.fn().mockResolvedValue({ id: 'asset-1' }),
       update: jest.fn().mockResolvedValue({}),
+      // failTerminal's conditional claim: count 1 = this path won the → FAILED
+      // transition (→ refund); count 0 = already terminalized (no double-refund).
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
   };
   const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
@@ -56,14 +59,27 @@ describe('MediaGenService.requestGeneration', () => {
     }));
   });
 
-  it('refunds and marks FAILED when provider.submit throws', async () => {
+  it('refunds via the conditional claim (not unconditionally) and marks FAILED when provider.submit throws', async () => {
     const { svc, prisma, credits, provider } = makeSvc();
     provider.submit.mockRejectedValue(new Error('fal 500'));
     await expect(svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' })).rejects.toThrow('fal 500');
-    expect(credits.refund).toHaveBeenCalledWith(WS, 3);
-    expect(prisma.generatedAsset.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'asset-1' }, data: expect.objectContaining({ status: 'FAILED' }),
+    // Terminalize via the SAME conditional claim the poll/webhook + sweep use, then
+    // refund only because THIS path won it (count 1) — so the refund can't fire twice.
+    expect(prisma.generatedAsset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'asset-1', status: { notIn: ['READY', 'FAILED', 'BLOCKED'] } },
+      data: expect.objectContaining({ status: 'FAILED' }),
     }));
+    expect(credits.refund).toHaveBeenCalledWith(WS, 3);
+  });
+
+  it('does NOT double-refund on submit failure when the row was already terminalized (claim lost)', async () => {
+    const { svc, prisma, credits, provider } = makeSvc();
+    provider.submit.mockRejectedValue(new Error('fal 500'));
+    // The FAILED claim matches 0 rows — another path (e.g. the orphan sweep) already
+    // terminalized + refunded this reservation, so the catch must NOT refund again.
+    prisma.generatedAsset.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'x', createdById: 'u1' })).rejects.toThrow('fal 500');
+    expect(credits.refund).not.toHaveBeenCalled();
   });
 
   it('refunds the reservation when the asset create() itself throws (no leaked credits)', async () => {
