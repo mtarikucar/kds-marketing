@@ -19,6 +19,7 @@ import type { SocialNetwork } from '../social/socialSchemas';
 import { startLinkedinAdsOAuth, startTiktokAdsOAuth } from '../../../features/marketing/api/ads.service';
 import { navigateExternal } from '../../../lib/navigateExternal';
 import { ManualChannelDialog } from './ManualChannelDialog';
+import { ProviderLogo, providerBrand } from './ProviderLogo';
 import type { ChannelType } from '../channels/channelFields';
 
 /** OAuth providers map to a social-connect network; manual ones are added on the
@@ -172,16 +173,24 @@ export default function AccountCenterPage() {
       <Card key={p.provider}>
         <CardContent className="space-y-3 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="font-medium text-foreground">{p.displayName}</p>
-              <p className="text-caption text-muted-foreground">
-                {p.connections.length > 0
-                  ? t('accounts.connectedCount', {
-                      count: p.connections.length,
-                      defaultValue: '{{count}} connected',
-                    })
-                  : t('accounts.notConnected', 'Not connected')}
-              </p>
+            <div className="flex min-w-0 items-center gap-3">
+              <span
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-muted"
+                style={{ color: providerBrand(p.provider) }}
+              >
+                <ProviderLogo provider={p.provider} className="h-5 w-5" />
+              </span>
+              <div className="min-w-0">
+                <p className="font-medium text-foreground">{p.displayName}</p>
+                <p className="text-caption text-muted-foreground">
+                  {p.connections.length > 0
+                    ? t('accounts.connectedCount', {
+                        count: p.connections.length,
+                        defaultValue: '{{count}} connected',
+                      })
+                    : t('accounts.notConnected', 'Not connected')}
+                </p>
+              </div>
             </div>
             {p.connectMethod === 'OAUTH' && network ? (
               <Button
