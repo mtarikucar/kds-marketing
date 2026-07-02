@@ -10,6 +10,7 @@ import {
   ConfirmDialog, Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
   Field, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui';
+import { buildBadgeBody } from './badgePayload';
 
 interface LeaderRow { rank: number; leadId: string; name: string; points: number }
 interface BadgeDef { id: string; key: string; name: string; iconUrl: string | null; ruleType: 'POINTS' | 'LESSONS' | 'COURSES'; threshold: number }
@@ -58,7 +59,9 @@ export default function LeaderboardPage() {
 
   const save = useMutation({
     mutationFn: (v: BadgeForm) => {
-      const body = { name: v.name, ruleType: v.ruleType, threshold: Number(v.threshold) || 0, iconUrl: v.iconUrl || undefined };
+      // buildBadgeBody sends iconUrl:null (not undefined) on EDIT so an emptied
+      // icon actually CLEARS — see the helper for the undefined-skip rationale.
+      const body = buildBadgeBody(v, !!badgeDialog?.badge);
       return badgeDialog?.badge
         ? marketingApi.patch(`/gamification/badges/${badgeDialog.badge.id}`, body)
         : marketingApi.post('/gamification/badges', { key: v.key, ...body });
