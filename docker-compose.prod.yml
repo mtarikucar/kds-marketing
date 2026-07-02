@@ -57,7 +57,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: sh -c "npx prisma migrate deploy && node dist/main"
+    # migrate (fatal) → seed the package catalog (idempotent upsert; non-fatal so
+    # a seed hiccup can't block startup) → start. Keeps the packages table in sync
+    # with prisma/seed-packages.ts (feature/limit keys) on every deploy.
+    command: sh -c "npx prisma migrate deploy && (node dist-seed/seed-packages.js || echo 'package seed failed (non-fatal), continuing') && node dist/main"
     env_file:
       - .env.production
     ports:

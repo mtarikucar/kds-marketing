@@ -95,6 +95,20 @@ describe('HardwareQuoteConsumer', () => {
     );
   });
 
+  it('revives a soft-deleted lead on resubmit (clears deletedAt) so a re-quote is not swallowed', async () => {
+    // The (workspace, externalRef) dedup is UNIQUE, so a re-quote resolves the
+    // SAME lead — it cannot mint a fresh one. If a rep bulk-deleted the earlier
+    // hardware-quote lead (deletedAt set), a new "Teklif Al" click is renewed
+    // interest; without clearing deletedAt the update just refreshes a HIDDEN
+    // tombstone and the rep never sees the re-quote. Matches the lead-dedup-
+    // soft-deleted class fixed for forms/booking/import/order-forms.
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    await handle(payload());
+    expect(prisma.lead.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'lead-1' }, data: expect.objectContaining({ deletedAt: null }) }),
+    );
+  });
+
   it('skips (warn) when no core-integrated workspace exists', async () => {
     prisma.workspace.findFirst.mockResolvedValue(null);
     await expect(handle(payload())).resolves.toBeUndefined();

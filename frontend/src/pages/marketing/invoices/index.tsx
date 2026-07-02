@@ -72,6 +72,12 @@ export default function InvoicesPage() {
   const [showForm, setShowForm] = useState(false);
   const [psp, setPsp] = useState({ provider: 'MANUAL', secretKey: '', instructions: '', merchantId: '', merchantKey: '', merchantSalt: '', apiKey: '' });
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
+  // Confirm gate for the two CONSEQUENTIAL, hard-to-undo actions: paying an
+  // invoice from the contact's store-credit wallet (an irreversible money
+  // movement) and texting the pay link (a billable outbound SMS to a real
+  // customer). A single stray click on an icon button must not do either —
+  // mirrors the `void` action's ConfirmDialog guard in this same file.
+  const [confirmAction, setConfirmAction] = useState<{ inv: InvoiceRow; kind: 'wallet' | 'text' } | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: invoices, isError, refetch } = useQuery<InvoiceRow[]>({
@@ -123,14 +129,14 @@ export default function InvoicesPage() {
   // Text-to-pay: send the public pay link to the contact via SMS.
   const textToPay = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/text-to-pay`, { channel: 'SMS' }),
-    onSuccess: () => { invalidate(); toast.success(t('invoices.texted', { defaultValue: 'Pay link sent' })); },
+    onSuccess: () => { invalidate(); setConfirmAction(null); toast.success(t('invoices.texted', { defaultValue: 'Pay link sent' })); },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.textFailed', { defaultValue: 'Could not send' })),
   });
 
   // Settle the invoice from the contact's store-credit wallet.
   const payWallet = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/pay-with-wallet`),
-    onSuccess: () => { invalidate(); toast.success(t('invoices.paidWallet', { defaultValue: 'Paid from wallet' })); },
+    onSuccess: () => { invalidate(); setConfirmAction(null); toast.success(t('invoices.paidWallet', { defaultValue: 'Paid from wallet' })); },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.walletFailed', { defaultValue: 'Wallet payment failed' })),
   });
 
@@ -390,21 +396,26 @@ export default function InvoicesPage() {
                             <Clipboard className="h-4 w-4" aria-hidden />
                           </button>
                           <button
-                            onClick={() => textToPay.mutate(inv.id)}
+                            onClick={() => setConfirmAction({ inv, kind: 'text' })}
                             disabled={textToPay.isPending && textToPay.variables === inv.id}
                             title={t('invoices.textToPay', 'Text pay link (SMS)')}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                           >
                             <MessageSquare className="h-4 w-4" aria-hidden />
                           </button>
-                          <button
-                            onClick={() => payWallet.mutate(inv.id)}
-                            disabled={payWallet.isPending && payWallet.variables === inv.id}
-                            title={t('invoices.payWithWallet', 'Pay from store credit')}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
-                          >
-                            <Wallet className="h-4 w-4" aria-hidden />
-                          </button>
+                          {/* Store-credit wallets are TRY-only, so pay-from-wallet
+                              is offered only for a TRY invoice — the backend refuses
+                              a cross-currency debit, so don't present a doomed action. */}
+                          {inv.currency === 'TRY' && (
+                            <button
+                              onClick={() => setConfirmAction({ inv, kind: 'wallet' })}
+                              disabled={payWallet.isPending && payWallet.variables === inv.id}
+                              title={t('invoices.payWithWallet', 'Pay from store credit')}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
+                            >
+                              <Wallet className="h-4 w-4" aria-hidden />
+                            </button>
+                          )}
                           <button
                             onClick={() => markPaid.mutate(inv.id)}
                             disabled={markPaid.isPending && markPaid.variables === inv.id}
@@ -449,6 +460,50 @@ export default function InvoicesPage() {
         tone="danger"
         onConfirm={() => voidTarget && voidInv.mutate(voidTarget.id)}
         loading={voidInv.isPending}
+      />
+
+      {/* Confirm the two consequential actions: an irreversible wallet debit and
+          a billable outbound SMS. Distinct confirm labels (not the icon buttons'
+          titles) so the modal button is unambiguous. */}
+      <ConfirmDialog
+        open={!!confirmAction}
+        onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
+        title={
+          confirmAction?.kind === 'wallet'
+            ? t('invoices.payWalletTitle', 'Pay from store credit?')
+            : t('invoices.textToPayTitle', 'Text the pay link?')
+        }
+        description={
+          confirmAction?.kind === 'wallet'
+            ? t(
+                'invoices.payWalletDesc',
+                'Debit {{amount}} {{currency}} from the contact’s store credit to settle invoice {{number}}? This cannot be undone.',
+                {
+                  amount: (confirmAction.inv.total / 100).toLocaleString(),
+                  currency: confirmAction.inv.currency,
+                  number: confirmAction.inv.number,
+                },
+              )
+            : confirmAction?.kind === 'text'
+              ? t(
+                  'invoices.textToPayDesc',
+                  'Send invoice {{number}}’s pay link to the contact by SMS?',
+                  { number: confirmAction.inv.number },
+                )
+              : undefined
+        }
+        confirmLabel={
+          confirmAction?.kind === 'wallet'
+            ? t('invoices.payWalletConfirm', 'Pay now')
+            : t('invoices.textToPayConfirm', 'Send SMS')
+        }
+        tone={confirmAction?.kind === 'wallet' ? 'danger' : 'default'}
+        loading={confirmAction?.kind === 'wallet' ? payWallet.isPending : textToPay.isPending}
+        onConfirm={() => {
+          if (!confirmAction) return;
+          if (confirmAction.kind === 'wallet') payWallet.mutate(confirmAction.inv.id);
+          else textToPay.mutate(confirmAction.inv.id);
+        }}
       />
     </div>
   );

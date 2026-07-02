@@ -5,11 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { JobDrawer } from './JobDrawer';
 
 const get = vi.fn();
+const patch = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...args: unknown[]) => get(...args),
     post: vi.fn().mockResolvedValue({ data: {} }),
-    patch: vi.fn().mockResolvedValue({ data: {} }),
+    patch: (...args: unknown[]) => patch(...args),
     delete: vi.fn().mockResolvedValue({ data: {} }),
   },
 }));
@@ -95,5 +96,46 @@ describe('JobDrawer — add-task double-submit guard', () => {
 
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.post).toHaveBeenCalledWith('/installations/jobs/jA/tasks', { title: 'wire the panel' });
+  });
+});
+
+describe('JobDrawer — confirm irreversible status transitions', () => {
+  beforeEach(() => {
+    get.mockReset();
+    patch.mockReset();
+    patch.mockResolvedValue({ data: {} });
+    get.mockImplementation((url: string) =>
+      url === '/installations/jobs/jA'
+        ? Promise.resolve({ data: { ...job('jA', 'Alpha Co'), status: 'SCHEDULED' } })
+        : Promise.resolve({ data: {} }),
+    );
+  });
+
+  it('confirms before CANCELLED — a stray click must not cancel the installation', async () => {
+    const user = userEvent.setup();
+    render(<JobDrawer jobId="jA" crews={[]} onClose={() => undefined} onChanged={() => undefined} />, { wrapper });
+    await screen.findByText('Alpha Co');
+
+    // The row transition button carries the status label 'Cancelled'; clicking it
+    // must open a confirm, NOT immediately cancel (the move is irreversible).
+    await user.click(screen.getByRole('button', { name: 'Cancelled' }));
+    expect(patch).not.toHaveBeenCalled();
+
+    // Confirming (distinct label) fires the status change.
+    await user.click(await screen.findByRole('button', { name: 'Cancel installation' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/installations/jobs/jA/status', { status: 'CANCELLED' }),
+    );
+  });
+
+  it('fires a normal transition (In Progress) immediately, without a confirm', async () => {
+    const user = userEvent.setup();
+    render(<JobDrawer jobId="jA" crews={[]} onClose={() => undefined} onChanged={() => undefined} />, { wrapper });
+    await screen.findByText('Alpha Co');
+
+    await user.click(screen.getByRole('button', { name: 'In Progress' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/installations/jobs/jA/status', { status: 'IN_PROGRESS' }),
+    );
   });
 });

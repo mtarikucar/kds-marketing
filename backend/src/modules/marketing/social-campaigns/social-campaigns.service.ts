@@ -1,7 +1,7 @@
 import {
   BadRequestException, Injectable, NotFoundException, OnModuleInit,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, SocialCampaignItemStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import {
@@ -22,6 +22,15 @@ export const SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND = 'social.campaign.item.confirm';
 export const planDedup = (id: string) => `social-campaign-plan-${id}`;
 export const generateDedup = (id: string) => `social-campaign-generate-${id}`;
 export const confirmDedup = (id: string) => `social-campaign-confirm-${id}`;
+
+// Item states from which the confirm gate may publish. SCHEDULED = auto/approved;
+// NEEDS_APPROVAL is publishable only for SEMI_AUTO (auto-publish-unless-rejected).
+const REGENERATABLE_STATES = ['PLANNED', 'NEEDS_APPROVAL', 'FAILED', 'SKIPPED'];
+const REJECTABLE_STATES = ['PLANNED', 'NEEDS_APPROVAL', 'SCHEDULED'];
+// Confirm gate waits this long (from scheduledFor) for still-generating media
+// before giving up, retrying every MEDIA_READY_RETRY_MS.
+const MEDIA_READY_MAX_WAIT_MS = Number(process.env.SOCIAL_CAMPAIGN_MEDIA_WAIT_MS ?? 30 * 60 * 1000);
+const MEDIA_READY_RETRY_MS = Number(process.env.SOCIAL_CAMPAIGN_MEDIA_RETRY_MS ?? 2 * 60 * 1000);
 
 export interface CreateSocialCampaignInput {
   name: string;
@@ -213,12 +222,22 @@ export class SocialCampaignsService implements OnModuleInit {
   }
 
   async rejectItem(workspaceId: string, itemId: string) {
-    await this.getOwnedItem(workspaceId, itemId);
+    const item = await this.getOwnedItem(workspaceId, itemId);
+    // Only pending items can be vetoed — never a PUBLISHED (already-live) item.
+    if (!REJECTABLE_STATES.includes(item.status)) {
+      throw new BadRequestException(`Cannot reject an item in status ${item.status}`);
+    }
     return this.prisma.socialCampaignItem.update({ where: { id: itemId }, data: { status: 'SKIPPED' } });
   }
 
   async regenerateItem(workspaceId: string, itemId: string) {
     const item = await this.getOwnedItem(workspaceId, itemId);
+    // Guard the source state (mirrors approveItem): regenerating a PUBLISHED or
+    // in-flight (SCHEDULED/GENERATING) item would re-charge AI+media credits and
+    // re-publish the slot with a fresh, un-deduped post.
+    if (!REGENERATABLE_STATES.includes(item.status)) {
+      throw new BadRequestException(`Cannot regenerate an item in status ${item.status}`);
+    }
     // Reset to PLANNED so generateItem's atomic PLANNED→GENERATING claim matches.
     await this.prisma.socialCampaignItem.update({
       where: { id: itemId }, data: { status: 'PLANNED', error: null },
@@ -285,10 +304,17 @@ export class SocialCampaignsService implements OnModuleInit {
     const brief = (c.brief ?? {}) as Record<string, any>;
     let topic: string | undefined;
     if (c.planningMode === 'USER_TOPICS') {
-      const topics: string[] = Array.isArray(brief.topics) ? brief.topics : [];
+      // Only non-empty topics count; an empty string / gap in the middle is
+      // skipped (filtered) rather than permanently stalling the campaign, and once
+      // every topic is consumed the campaign COMPLETEs instead of idling ACTIVE.
+      const topics: string[] = (Array.isArray(brief.topics) ? brief.topics : [])
+        .filter((t: unknown): t is string => typeof t === 'string' && t.trim().length > 0);
       const used = await this.prisma.socialCampaignItem.count({ where: { socialCampaignId: campaignId } });
       topic = topics[used];
-      if (!topic) return; // user supplied no further topics — idle (no reschedule)
+      if (!topic) {
+        await this.prisma.socialCampaign.update({ where: { id: campaignId }, data: { status: 'COMPLETED' } });
+        return;
+      }
     } else {
       const t = await this.contentAi.compose(workspaceId, {
         kind: 'social',
@@ -371,18 +397,31 @@ export class SocialCampaignsService implements OnModuleInit {
         },
       });
 
-      if (c.automationMode === 'APPROVAL') {
-        await this.prisma.socialCampaignItem.update({
-          where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
-        });
-      } else {
-        // SEMI_AUTO + FULL_AUTO: schedule the slot and gate it at scheduledFor.
+      if (c.automationMode === 'FULL_AUTO') {
+        // Fully automatic: schedule the slot and gate it at scheduledFor.
         await this.prisma.socialCampaignItem.update({
           where: { id: itemId }, data: { status: 'SCHEDULED', socialPostId: post.id, generatedAssetIds: assetIds },
         });
         await this.scheduledJobs.schedule({
           workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
           payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
+        });
+      } else if (c.automationMode === 'SEMI_AUTO') {
+        // Review window: surface the item in the approval queue (NEEDS_APPROVAL) AND
+        // arm an auto-confirm at the slot that publishes UNLESS the user rejects it
+        // first. This is the SEMI_AUTO distinction from FULL_AUTO (previously it was
+        // identical to FULL_AUTO, giving no review window).
+        await this.prisma.socialCampaignItem.update({
+          where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
+        });
+        await this.scheduledJobs.schedule({
+          workspaceId, kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: item.scheduledFor,
+          payload: { itemId, workspaceId }, dedupKey: confirmDedup(itemId),
+        });
+      } else {
+        // APPROVAL: hold for an explicit user decision (approveItem arms the gate).
+        await this.prisma.socialCampaignItem.update({
+          where: { id: itemId }, data: { status: 'NEEDS_APPROVAL', socialPostId: post.id, generatedAssetIds: assetIds },
         });
       }
       await this.bumpStats(c.id, { generated: 1 });
@@ -412,8 +451,30 @@ export class SocialCampaignsService implements OnModuleInit {
       return;
     }
 
-    // User veto (reject set the item SKIPPED before the gate fired).
-    if (item.status !== 'SCHEDULED') return;
+    // Publishable source states. FULL_AUTO/APPROVAL publish only from SCHEDULED
+    // (auto or user-approved); SEMI_AUTO also auto-publishes from NEEDS_APPROVAL
+    // unless the user rejected it (→ SKIPPED, which matches neither and is dropped).
+    const publishableFrom: SocialCampaignItemStatus[] = c.automationMode === 'SEMI_AUTO'
+      ? ['SCHEDULED', 'NEEDS_APPROVAL']
+      : ['SCHEDULED'];
+    if (!publishableFrom.includes(item.status)) return;
+
+    // Don't publish before the generated media is READY: for a near-term slot the
+    // asset may still be GENERATING. Retry (bounded) instead of publishing a
+    // text-only post and terminalizing the item, which would orphan the media that
+    // finishes moments later.
+    const assetIds = item.generatedAssetIds ?? [];
+    if (assetIds.length) {
+      const assets = await this.prisma.generatedAsset.findMany({
+        where: { id: { in: assetIds }, workspaceId }, select: { status: true },
+      });
+      const anyReady = assets.some((a) => a.status === 'READY');
+      const anyPending = assets.some((a) => a.status === 'QUEUED' || a.status === 'GENERATING');
+      const waitedMs = Date.now() - new Date(item.scheduledFor).getTime();
+      if (!anyReady && anyPending && waitedMs < MEDIA_READY_MAX_WAIT_MS) {
+        return { reschedule: { runAt: new Date(Date.now() + MEDIA_READY_RETRY_MS), payload: { itemId, workspaceId } } };
+      }
+    }
 
     // dailyPublishCap rollover — count items already PUBLISHED in this UTC day.
     const dayStart = new Date(item.scheduledFor); dayStart.setUTCHours(0, 0, 0, 0);
@@ -426,6 +487,16 @@ export class SocialCampaignsService implements OnModuleInit {
       await this.prisma.socialCampaignItem.update({ where: { id: itemId }, data: { scheduledFor: next } });
       return { reschedule: { runAt: next, payload: { itemId, workspaceId } } };
     }
+
+    // Atomically claim the publish (publishableFrom → PUBLISHED) BEFORE the paid
+    // brand-safety check and schedulePost. If a later step throws and the runner
+    // retries, the item is already PUBLISHED (no longer in publishableFrom) so the
+    // gate no-ops instead of re-charging credits and re-publishing the post.
+    const claim = await this.prisma.socialCampaignItem.updateMany({
+      where: { id: itemId, status: { in: publishableFrom } },
+      data: { status: 'PUBLISHED' },
+    });
+    if (claim.count !== 1) return;
 
     const post = await this.prisma.socialPost.findFirst({
       where: { id: item.socialPostId, workspaceId }, select: { id: true, content: true },
@@ -442,9 +513,8 @@ export class SocialCampaignsService implements OnModuleInit {
 
     // Attach the generated media to the post before it goes out, then hand off
     // to the existing social.publish path (per-network adapters unchanged).
-    await this.attachAssetsToPost(workspaceId, item.generatedAssetIds ?? [], post.id);
+    await this.attachAssetsToPost(workspaceId, assetIds, post.id);
     await this.planner.schedulePost(workspaceId, post.id, new Date(), c.targetAccountIds);
-    await this.prisma.socialCampaignItem.update({ where: { id: itemId }, data: { status: 'PUBLISHED' } });
     await this.bumpStats(c.id, { published: 1 });
   }
 

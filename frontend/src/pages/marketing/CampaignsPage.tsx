@@ -229,7 +229,10 @@ export default function CampaignsPage() {
   const buildPayload = (values: CampaignFormValues) => ({
     name: values.name,
     channel: values.channel,
-    subject: values.subject || undefined,
+    // Send '' (not undefined) when cleared so an edit actually CLEARS the subject
+    // — the backend maps '' → null (like bodyHtml/emailTemplateId below). Sending
+    // undefined would leave the stale subject in the DB.
+    subject: values.subject || '',
     // The backend requires a non-empty body; when an HTML template is attached
     // and the operator left the plain-text field blank, derive it from the HTML
     // so attaching a template never blocks the save.

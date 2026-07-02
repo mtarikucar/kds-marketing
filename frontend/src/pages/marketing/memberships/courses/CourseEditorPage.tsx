@@ -38,7 +38,7 @@ import {
 } from '@/components/ui';
 import { useCourse, useCourseMutations } from '../hooks';
 import type { CourseModule, CourseStatus, CourseWithModules, Lesson } from '../types';
-import { apiError, formatPrice, toCents } from '../util';
+import { apiError, formatPrice, coursePriceCents } from '../util';
 import { CourseFormDialog } from './CourseFormDialog';
 import { LessonFormDialog } from './LessonFormDialog';
 import { EnrolleesPanel } from './EnrolleesPanel';
@@ -93,7 +93,9 @@ export default function CourseEditorPage() {
         data: {
           title: values.title,
           description: values.description ?? '',
-          ...(values.price !== undefined ? { priceCents: toCents(Number(values.price)) } : {}),
+          // A cleared price reverts the course to Free (priceCents null); a real
+          // amount → cents. Omitting it left a paid course stuck at its old price.
+          priceCents: coursePriceCents(values.price),
           ...(values.currency ? { currency: values.currency } : {}),
           coverImageUrl: values.coverImageUrl ?? '',
           ...(values.dripMode ? { dripMode: values.dripMode } : {}),

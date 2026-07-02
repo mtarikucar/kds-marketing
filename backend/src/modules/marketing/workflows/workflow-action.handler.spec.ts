@@ -74,6 +74,45 @@ describe('WorkflowActionHandler send (contactIdentity race)', () => {
     expect(sender.send).toHaveBeenCalled();
   });
 
+  // Compliance: a lead who unsubscribed must NOT receive automation messages —
+  // the workflow send path (drip / nurture) has to honor the same per-channel
+  // opt-out the campaign sender does. The unsubscribe flow flips these flags
+  // precisely so future sends stop.
+  it('send_email skips a lead who opted out of email (never sends)', async () => {
+    const email = { sendPlainEmail: jest.fn().mockResolvedValue(true) };
+    const handler = new WorkflowActionHandler(
+      {} as any, email as any, null as any, null as any,
+      null as any, null as any, null as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', email: 'x@y.com', emailOptOut: true },
+      trigger: {},
+      context: {},
+    };
+    const res = await handler.execute({ type: 'send_email', body: 'hi' } as any, ctx);
+    expect(email.sendPlainEmail).not.toHaveBeenCalled();
+    expect(String(res.output?.result)).toContain('opted out');
+  });
+
+  it('send_sms skips a lead who opted out of SMS (no channel send)', async () => {
+    const prisma = { channel: { findFirst: jest.fn().mockResolvedValue({ id: 'ch-1' }) } };
+    const sender = { send: jest.fn().mockResolvedValue(undefined) };
+    const handler = new WorkflowActionHandler(
+      prisma as any, null as any, null as any, null as any,
+      null as any, null as any, sender as any, null as any, null as any,
+    );
+    const ctx: WorkflowContext = {
+      workspaceId: 'ws-1',
+      lead: { id: 'lead-1', phone: '5551112233', smsOptOut: true },
+      trigger: {},
+      context: {},
+    };
+    const res = await handler.execute({ type: 'send_sms', body: 'hi' } as any, ctx);
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(String(res.output?.result)).toContain('opted out');
+  });
+
   // Regression: send_webchat scoped the open-conversation lookup with
   // `leadId: lead?.id`. With no lead (a lead-less subject, or a lead deleted
   // mid-run), Prisma DROPS an `undefined` where-field, so the query matched ANY

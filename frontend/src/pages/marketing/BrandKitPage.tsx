@@ -30,6 +30,7 @@ export default function BrandKitPage() {
   const queryClient = useQueryClient();
   const logoRef = useRef<HTMLInputElement>(null);
   const refRef = useRef<HTMLInputElement>(null);
+  const hydrated = useRef(false);
 
   const [tone, setTone] = useState('');
   const [palette, setPalette] = useState('');
@@ -41,8 +42,12 @@ export default function BrandKitPage() {
     queryFn: getBrandKit,
   });
 
+  // Seed the text fields from the server only once, on first hydration. Later
+  // refetches (e.g. logo/reference uploads invalidate the query) must not clobber
+  // the user's unsaved edits to tone/palette/hashtags/cta.
   useEffect(() => {
-    if (!data) return;
+    if (!data || hydrated.current) return;
+    hydrated.current = true;
     setTone(data.tone ?? '');
     setPalette((data.palette ?? []).join(', '));
     setHashtags((data.defaultHashtags ?? []).join(' '));

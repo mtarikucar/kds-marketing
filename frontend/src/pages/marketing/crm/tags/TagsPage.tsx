@@ -28,6 +28,17 @@ function apiError(e: unknown, fallback: string): string {
   return msg ?? fallback;
 }
 
+/**
+ * Build the tag create/update payload. `color` is sent as `null` (not omitted)
+ * when empty so clearing the colour on edit actually removes it — omitting left
+ * the PATCH untouched and the old colour persisted. `null` is accepted by the
+ * DTO (@IsOptional skips @IsHexColor for null) and the service writes it; an
+ * empty string would fail @IsHexColor, so the cleared value must be null.
+ */
+export function tagFormPayload(values: TagFormValues): { name: string; color: string | null } {
+  return { name: values.name, color: values.color || null };
+}
+
 export default function TagsPage() {
   const { t } = useTranslation('marketing');
   const { data, isLoading } = useTags();
@@ -49,7 +60,7 @@ export default function TagsPage() {
   };
 
   const handleSubmit = (values: TagFormValues) => {
-    const payload = { name: values.name, ...(values.color ? { color: values.color } : {}) };
+    const payload = tagFormPayload(values);
     if (editing) {
       update.mutate(
         { id: editing.id, data: payload },

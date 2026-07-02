@@ -14,6 +14,22 @@ import { TokenListInput } from './TokenListInput';
 
 const asArr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 
+/**
+ * Normalize a scheme-less button URL to https:// so it doesn't render as a dead
+ * `#` link (the site renderer's safeUrl serves only http(s) and relative paths).
+ * LEAVE a relative ("/pricing") or anchor ("#…") URL — those are valid internal
+ * links the renderer keeps. A value that already has a scheme is left unchanged
+ * (javascript:/data: still parse, so they're untouched here and blocked
+ * downstream by safeUrl). Run on blur. NOTE: `new URL('https://'+'/x')` parses as
+ * host="x", so the relative guard MUST come first.
+ */
+function normalizeUrl(v: string): string {
+  const s = v.trim();
+  if (!s || s.startsWith('/') || s.startsWith('#')) return s;
+  try { new URL(s); return s; } catch { /* no scheme — try https below */ }
+  try { new URL(`https://${s}`); return `https://${s}`; } catch { return s; }
+}
+
 export type AnyBlock = Record<string, any> & { type: string };
 export interface FormOption { id: string; name: string }
 
@@ -116,7 +132,7 @@ function BlockEditor({ block, forms, onPatch }: { block: AnyBlock; forms: FormOp
           <L label={t('sites.sub', 'Subheading')}><Input value={block.sub ?? ''} onChange={(e) => onPatch({ sub: e.target.value })} /></L>
           <div className="grid grid-cols-2 gap-2">
             <L label={t('sites.ctaText', 'Button text')}><Input value={block.ctaText ?? ''} onChange={(e) => onPatch({ ctaText: e.target.value })} /></L>
-            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.ctaUrl ?? ''} onChange={(e) => onPatch({ ctaUrl: e.target.value })} /></L>
+            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.ctaUrl ?? ''} onChange={(e) => onPatch({ ctaUrl: e.target.value })} onBlur={(e) => onPatch({ ctaUrl: normalizeUrl(e.target.value) })} /></L>
           </div>
         </div>
       );
@@ -126,7 +142,7 @@ function BlockEditor({ block, forms, onPatch }: { block: AnyBlock; forms: FormOp
           <L label={t('sites.heading', 'Heading')}><Input value={block.heading ?? ''} onChange={(e) => onPatch({ heading: e.target.value })} /></L>
           <div className="grid grid-cols-2 gap-2">
             <L label={t('sites.ctaText', 'Button text')}><Input value={block.buttonText ?? ''} onChange={(e) => onPatch({ buttonText: e.target.value })} /></L>
-            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.buttonUrl ?? ''} onChange={(e) => onPatch({ buttonUrl: e.target.value })} /></L>
+            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.buttonUrl ?? ''} onChange={(e) => onPatch({ buttonUrl: e.target.value })} onBlur={(e) => onPatch({ buttonUrl: normalizeUrl(e.target.value) })} /></L>
           </div>
         </div>
       );
@@ -140,7 +156,7 @@ function BlockEditor({ block, forms, onPatch }: { block: AnyBlock; forms: FormOp
           <L label={t('sites.text', 'Text')}><Textarea className="min-h-16" value={block.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} /></L>
           <div className="grid grid-cols-2 gap-2">
             <L label={t('sites.ctaText', 'Button text')}><Input value={block.ctaText ?? ''} onChange={(e) => onPatch({ ctaText: e.target.value })} /></L>
-            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.ctaUrl ?? ''} onChange={(e) => onPatch({ ctaUrl: e.target.value })} /></L>
+            <L label={t('sites.ctaUrl', 'Button URL')}><Input value={block.ctaUrl ?? ''} onChange={(e) => onPatch({ ctaUrl: e.target.value })} onBlur={(e) => onPatch({ ctaUrl: normalizeUrl(e.target.value) })} /></L>
           </div>
         </div>
       );
@@ -200,7 +216,7 @@ function BlockEditor({ block, forms, onPatch }: { block: AnyBlock; forms: FormOp
               />
               <div className="grid grid-cols-2 gap-2">
                 <Input placeholder={t('sites.ctaText', 'Button text')} value={p.ctaText ?? ''} onChange={(e) => set({ ...p, ctaText: e.target.value })} />
-                <Input placeholder={t('sites.ctaUrl', 'Button URL')} value={p.ctaUrl ?? ''} onChange={(e) => set({ ...p, ctaUrl: e.target.value })} />
+                <Input placeholder={t('sites.ctaUrl', 'Button URL')} value={p.ctaUrl ?? ''} onChange={(e) => set({ ...p, ctaUrl: e.target.value })} onBlur={(e) => set({ ...p, ctaUrl: normalizeUrl(e.target.value) })} />
               </div>
             </div>
           )}

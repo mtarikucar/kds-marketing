@@ -9,6 +9,10 @@ const WS = 'ws-1';
 
 function makeSvc(maxUsers: number) {
   const prisma = mockPrismaClient();
+  // The seat-limit paths (create + reactivation) run under an advisory-locked
+  // $transaction; make it execute the callback against the same mock client.
+  (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
+  (prisma.$queryRawUnsafe as any).mockResolvedValue([{ locked: 'x' }]);
   const config = { get: () => undefined } as any;
   const entitlements = { getEffective: jest.fn().mockResolvedValue({ maxUsers }) } as any;
   const svc = new MarketingUsersService(prisma as any, config, entitlements);
@@ -143,6 +147,45 @@ describe('MarketingUsersService — seat limit', () => {
       await expect(
         svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  // A bare seat-count-then-write lets two concurrent seat-consuming requests at
+  // (cap-1) BOTH pass and exceed maxUsers. The seat-check + write is serialized
+  // under a per-workspace advisory xact-lock (the research / knowledge pattern).
+  describe('seat-limit — advisory-lock race safety', () => {
+    it('create() serializes the seat-check + create under a per-workspace advisory lock', async () => {
+      const { prisma, svc } = makeSvc(5);
+      prisma.marketingUser.findUnique.mockResolvedValue(null);
+      (prisma.marketingUser.count as jest.Mock).mockResolvedValue(4);
+      (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u1' });
+      await svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any);
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const lockSql = (prisma.$queryRawUnsafe as jest.Mock).mock.calls[0][0] as string;
+      expect(lockSql).toContain('pg_advisory_xact_lock');
+      expect(lockSql).toContain('users:ws-1');
+      expect(prisma.marketingUser.create).toHaveBeenCalled();
+    });
+
+    it('reactivation locks the seat-check + the ACTIVE flip', async () => {
+      const { prisma, svc } = makeSvc(5);
+      prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u1', workspaceId: WS, role: 'REP', status: 'INACTIVE' } as any);
+      (prisma.marketingUser.count as jest.Mock).mockResolvedValue(4);
+      (prisma.marketingUser.update as jest.Mock).mockResolvedValue({ id: 'u1' });
+      await svc.update(WS, 'u1', { status: 'ACTIVE' } as any, 'MANAGER');
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const lockSql = (prisma.$queryRawUnsafe as jest.Mock).mock.calls[0][0] as string;
+      expect(lockSql).toContain('users:ws-1');
+      expect(prisma.marketingUser.update).toHaveBeenCalled();
+    });
+
+    it('create() on an unlimited (-1) plan skips the lock', async () => {
+      const { prisma, svc } = makeSvc(-1);
+      prisma.marketingUser.findUnique.mockResolvedValue(null);
+      (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u1' });
+      await svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any);
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+      expect(prisma.marketingUser.create).toHaveBeenCalled();
     });
   });
 

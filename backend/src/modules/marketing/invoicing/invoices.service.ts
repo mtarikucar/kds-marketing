@@ -141,6 +141,14 @@ export class InvoicesService {
   async markPaid(workspaceId: string, id: string, via = 'manual') {
     const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId } });
     if (!inv) throw new NotFoundException('Invoice not found');
+    // A VOID invoice is terminal: settle()'s DRAFT/SENT claim would match nothing,
+    // so it silently no-ops and the operator gets no feedback. Reject explicitly —
+    // the only invoice transition that DIDN'T validate its precondition, unlike its
+    // siblings (send / voidInvoice / payWithWallet all throw on an invalid state).
+    // PAID stays idempotent (settle early-returns), matching payWithWallet.
+    if (inv.status === 'VOID') {
+      throw new BadRequestException('A void invoice cannot be marked paid — reissue it instead');
+    }
     return this.settle(inv, via);
   }
   /**
@@ -157,6 +165,21 @@ export class InvoicesService {
     if (!inv.leadId) throw new BadRequestException('Invoice has no contact wallet to charge');
     if (inv.total <= 0) throw new BadRequestException('Nothing to pay');
     const leadId = inv.leadId;
+    // The store-credit wallet is single-currency (its own `currency`, default TRY),
+    // but `total` is in the INVOICE's minor units — debiting a USD invoice's cents
+    // from a TRY wallet would drain store credit at the wrong (unconverted) amount
+    // and mark it PAID. There's no FX here, so refuse a currency mismatch (mirrors
+    // the PayTR "collects TRY only" guard; Stripe threads inv.currency).
+    const wallet = await this.prisma.customerWallet.findUnique({
+      where: { workspaceId_leadId: { workspaceId, leadId } },
+      select: { currency: true },
+    });
+    const walletCurrency = wallet?.currency ?? 'TRY';
+    if (inv.currency !== walletCurrency) {
+      throw new BadRequestException(
+        `This invoice is in ${inv.currency} but the contact's wallet holds ${walletCurrency} — pay it another way`,
+      );
+    }
     // Claim-then-charge, ALL in ONE transaction so the debit and the settle commit
     // together (a settle failure rolls back the debit — no drained-wallet money
     // loss) and concurrent calls can't double-debit: only the request whose
@@ -514,6 +537,16 @@ export class InvoicesService {
     }
     if (Math.round(Number(json.paidPrice) * 100) !== inv.total) {
       this.logger.warn(`Iyzico amount mismatch for invoice ${inv.id}: collected ${json.paidPrice} vs billed ${inv.total} — not settling`);
+      return false;
+    }
+    // Verify the CURRENCY too, not just the numeric amount — parity with the
+    // Stripe return handler. `total` is minor units of the INVOICE's currency, so
+    // without this a USD invoice (total 10000 = $100) whose payment came back in
+    // TRY (paidPrice 100.00 → 10000 kuruş) would pass the amount check and settle
+    // $100 for ~$3. The currency is server-fixed at init, so this is defence in
+    // depth against a provider/account currency mismatch, not a buyer-reachable hole.
+    if (String(json.currency ?? '').toUpperCase() !== inv.currency.toUpperCase()) {
+      this.logger.warn(`Iyzico currency mismatch for invoice ${inv.id}: paid ${json.currency} vs billed ${inv.currency} — not settling`);
       return false;
     }
     await this.settle(inv, 'iyzico');

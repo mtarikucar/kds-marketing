@@ -118,8 +118,13 @@ export default function ProductsPage() {
     mutationFn: (f: FormState) => {
       const payload = {
         name: f.name.trim(),
-        description: f.description || undefined,
-        sku: f.sku || undefined,
+        // Clearing a text field must PERSIST on edit: send '' so the PATCH
+        // actually blanks it. Sending undefined is skipped by the backend's
+        // Prisma merge, so the OLD value silently survives ("I removed the SKU
+        // but it came back"). A create can leave an empty field absent (the
+        // backend defaults it to null). Backend DTO allows '' (no @IsNotEmpty).
+        description: f.id ? f.description.trim() : (f.description.trim() || undefined),
+        sku: f.id ? f.sku.trim() : (f.sku.trim() || undefined),
         price: f.price === '' ? undefined : Number(f.price),
         currency: f.currency,
         billingType: f.billingType,

@@ -189,6 +189,22 @@ describe('CampaignSenderService.batch', () => {
       expect(prisma.campaign.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }));
     });
 
+    it('does NOT mark SENT when the LAST PENDING batch drains but HOLD recipients remain', async () => {
+      // The real completion path (not the empty-batch shortcut above): a batch
+      // PROCESSES the last test-cohort recipient (recipients.length > 0), draining
+      // PENDING to 0 — but the A/B WINNER remainder is still HELD. The campaign must
+      // stay SENDING so the later ab.decide job can release + send the remainder;
+      // marking it SENT here strands the held-back majority forever.
+      prisma.campaignRecipient.findMany.mockResolvedValue([{ id: 'r2', leadId: 'l2', token: 't2' }]);
+      prisma.campaignRecipient.count.mockImplementation(async ({ where }: any) =>
+        where.status === 'HOLD' ? 8 : 0,
+      );
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+      expect(prisma.campaign.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+      );
+    });
+
     it('picks the variant with most opens, releases the remainder to it, and kicks the batch', async () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abWinnerKey: null, abWinnerMetric: 'OPEN' });
       prisma.campaignVariant.findMany.mockResolvedValue([

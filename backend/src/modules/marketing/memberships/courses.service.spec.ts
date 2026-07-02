@@ -116,8 +116,32 @@ describe('CoursesService', () => {
     prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1' } as any);
     (prisma.lesson.count as jest.Mock).mockResolvedValue(1);
     (prisma.lesson.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'l1', ...a.data }));
+    (prisma.lesson.findMany as jest.Mock).mockResolvedValue([]); // recompute no-ops (empty)
     const out: any = await svc.addLesson(WS, 'm1', { title: 'Lesson 2', type: 'VIDEO' });
     expect(out).toMatchObject({ moduleId: 'm1', position: 1, type: 'VIDEO' });
+  });
+
+  it('addLesson recomputes progress (grown denominator → ACTIVE progress drops, never a wrong graduation)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1' } as any);
+    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
+    (prisma.lesson.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'l3', ...a.data }));
+    // After adding, 3 live lessons; an ACTIVE enrollment done 2 of 3.
+    (prisma.lesson.findMany as jest.Mock).mockResolvedValue([{ id: 'l1' }, { id: 'l2' }, { id: 'l3' }]);
+    (prisma.enrollment.findMany as jest.Mock).mockResolvedValue([
+      { id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', status: 'ACTIVE' },
+    ]);
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(2);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'e1', ...a.data }));
+
+    await svc.addLesson(WS, 'm1', { title: 'Lesson 3', type: 'VIDEO' });
+
+    // 2/3 = 67% — the stored pct is refreshed DOWN (was stale-high before), and
+    // adding a lesson can never graduate anyone (pct only decreases).
+    const call = (prisma.enrollment.update as jest.Mock).mock.calls[0][0];
+    expect(call.where).toEqual({ id: 'e1' });
+    expect(call.data.progressPct).toBe(67);
+    expect(call.data.status).toBeUndefined();
   });
 
   it('addLesson 404s when the module is not in the workspace', async () => {

@@ -24,6 +24,11 @@ export interface AgentProfileDto {
   status?: 'ACTIVE' | 'PAUSED';
 }
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 /**
  * Agent Studio CRUD. An AgentProfile is the persona Conversation/Content/Voice
  * AI run grounded on. `findActiveForChannel` is the engine's lookup: the
@@ -52,13 +57,25 @@ export class AgentProfileService {
   async create(workspaceId: string, dto: AgentProfileDto) {
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxAgents;
-    if (limit !== -1) {
-      const count = await this.prisma.agentProfile.count({ where: { workspaceId } });
+    const data = this.toData(workspaceId, dto);
+    // Unlimited plan — no cap to race against.
+    if (limit === -1) {
+      return this.prisma.agentProfile.create({ data });
+    }
+    // Serialize the count-check + create per workspace under an advisory xact-lock:
+    // a bare count-then-create lets two concurrent requests at (limit-1) BOTH pass
+    // the cap and exceed it. The lock makes the read-modify-write atomic (mirrors the
+    // ai-credits / message-quota / research quota pattern).
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('agent-profiles:' + workspaceId)}))::text AS locked`,
+      );
+      const count = await tx.agentProfile.count({ where: { workspaceId } });
       if (count >= limit) {
         throw new BadRequestException(`Agent limit reached (${limit}) — upgrade your package`);
       }
-    }
-    return this.prisma.agentProfile.create({ data: this.toData(workspaceId, dto) });
+      return tx.agentProfile.create({ data });
+    });
   }
 
   async update(workspaceId: string, id: string, dto: Partial<AgentProfileDto>) {

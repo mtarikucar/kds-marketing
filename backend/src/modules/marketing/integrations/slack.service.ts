@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/com
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
+import { safeFetch } from '../../../common/util/safe-fetch';
 
 export const SLACK_EVENTS = [
   'marketing.lead.created.v1',
@@ -71,11 +72,16 @@ export class SlackService implements OnModuleInit {
 
   private async post(url: string, text: string): Promise<boolean> {
     try {
-      const res = await fetch(url, {
+      // The webhook URL is workspace-supplied (@IsUrl only — no host allow-list),
+      // so route it through the SSRF guard: a tenant must not be able to point a
+      // Slack webhook at cloud metadata / loopback / private nets (a blocked target
+      // throws SsrfBlockedError → caught below as a failed delivery). Mirrors the
+      // webhook-outbound / workflow http_webhook_out egress.
+      const res = await safeFetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text }),
-        signal: AbortSignal.timeout(8000),
+        timeoutMs: 8000,
       });
       return res.ok;
     } catch (e) {

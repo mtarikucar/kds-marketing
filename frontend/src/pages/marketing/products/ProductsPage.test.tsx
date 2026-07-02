@@ -7,11 +7,13 @@ import ProductsPage from './ProductsPage';
 
 const get = vi.fn();
 const del = vi.fn();
+const patch = vi.fn();
+const post = vi.fn();
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...args: unknown[]) => get(...args),
-    post: vi.fn().mockResolvedValue({ data: {} }),
-    patch: vi.fn().mockResolvedValue({ data: {} }),
+    post: (...args: unknown[]) => post(...args),
+    patch: (...args: unknown[]) => patch(...args),
     delete: (...args: unknown[]) => del(...args),
   },
 }));
@@ -55,7 +57,11 @@ describe('ProductsPage', () => {
   beforeEach(() => {
     get.mockReset();
     del.mockReset();
+    patch.mockReset();
+    post.mockReset();
     del.mockResolvedValue({ data: { message: 'ok' } });
+    patch.mockResolvedValue({ data: {} });
+    post.mockResolvedValue({ data: {} });
     get.mockResolvedValue({ data: PRODUCTS });
   });
 
@@ -76,5 +82,31 @@ describe('ProductsPage', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
     await waitFor(() => expect(del).toHaveBeenCalledWith('/products/p1'));
+  });
+
+  it('persists a cleared description/SKU on edit (sends "" not undefined so the blank sticks)', async () => {
+    // A PATCH that omits a field leaves it unchanged in the backend's Prisma
+    // merge, so coercing a cleared field to undefined meant "remove the SKU"
+    // silently kept the old value. Editing to blank must send '' to clear.
+    get.mockResolvedValue({
+      data: {
+        ...PRODUCTS,
+        data: [{ ...PRODUCTS.data[0], description: 'Old description', sku: 'OLD-SKU' }],
+      },
+    });
+    render(<ProductsPage />, { wrapper });
+    await screen.findByText('Pro plan');
+
+    await userEvent.click(screen.getByRole('button', { name: /edit product/i }));
+    await userEvent.clear(await screen.findByDisplayValue('Old description'));
+    await userEvent.clear(screen.getByDisplayValue('OLD-SKU'));
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        '/products/p1',
+        expect.objectContaining({ description: '', sku: '' }),
+      ),
+    );
   });
 });

@@ -159,6 +159,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          # fal.ai queue provider for AI Social Content Studio (photo/video gen).
+          # OPTIONAL — unset FAL_KEY = media generation inert (provider
+          # isConfigured()=false, endpoints 503). FAL_WEBHOOK_SECRET gates the
+          # public fal completion callback; unset = poll-only fallback path.
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          FAL_WEBHOOK_SECRET: ${{ secrets.FAL_WEBHOOK_SECRET }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
           LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
@@ -223,6 +229,9 @@ jobs:
           R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
           R2_BUCKET=${R2_BUCKET}
           R2_PUBLIC_BASE_URL=${R2_PUBLIC_BASE_URL}
+          # AI media generation (fal.ai); empty = inert.
+          FAL_KEY=${FAL_KEY}
+          FAL_WEBHOOK_SECRET=${FAL_WEBHOOK_SECRET}
           LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
           LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
           TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
@@ -250,6 +259,13 @@ jobs:
           ENV
 
       - name: Ship env + compose (atomic)
+        env:
+          # Marketing sender identity = admin@jeetagrowth.com (GoDaddy secureserver
+          # mailbox). Appended AFTER .env.shared below so it overrides core's
+          # admin@hummytummy.com EMAIL_* values for the MARKETING stack only.
+          # Optional: if the secret is unset the app falls back to .env.shared /
+          # mock-mode (never fails the deploy).
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: |
           set -euo pipefail
           scp -o ServerAliveInterval=15 .env.rendered \
@@ -262,6 +278,17 @@ jobs:
             # Final env = rendered part + shared (PSP/email) part from core.
             cat .env.rendered.new > .env.production.new
             if [ -f .env.shared ]; then cat .env.shared >> .env.production.new; fi
+            # Marketing sender override (jeetagrowth.com mailbox). These come AFTER
+            # .env.shared so they win over core's admin@hummytummy.com EMAIL_*
+            # (dotenv + docker compose env_file are both last-wins). secure is
+            # derived from port===465 in the mailer, so 587 → STARTTLS.
+            if [ -n \"${EMAIL_PASSWORD}\" ]; then
+              echo 'EMAIL_HOST=smtpout.secureserver.net' >> .env.production.new
+              echo 'EMAIL_PORT=587' >> .env.production.new
+              echo 'EMAIL_USER=admin@jeetagrowth.com' >> .env.production.new
+              echo 'EMAIL_FROM=admin@jeetagrowth.com' >> .env.production.new
+              echo 'EMAIL_PASSWORD=${EMAIL_PASSWORD}' >> .env.production.new
+            fi
             rm .env.rendered.new
             chmod 600 .env.production.new
             mv .env.production.new .env.production

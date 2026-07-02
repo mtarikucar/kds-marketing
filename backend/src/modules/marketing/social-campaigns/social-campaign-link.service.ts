@@ -57,7 +57,17 @@ export class SocialCampaignLinkService {
         },
         select: { id: true },
       });
-      await tx.campaign.update({ where: { id: campaign.id }, data: { socialCampaignId: sc.id } });
+      // Conditional link: only set socialCampaignId if it is still null. If a
+      // concurrent provision already linked the blast, count is 0 → throw, which
+      // rolls back the SocialCampaign we just created (no orphan). The check-then-
+      // act guard above is a fast path; this is the race-safe backstop.
+      const linked = await tx.campaign.updateMany({
+        where: { id: campaign.id, workspaceId, socialCampaignId: null },
+        data: { socialCampaignId: sc.id },
+      });
+      if (linked.count !== 1) {
+        throw new BadRequestException('Campaign already linked to a social campaign');
+      }
       return sc;
     });
 

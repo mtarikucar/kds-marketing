@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -85,12 +85,31 @@ export default function AiStudioPage() {
         ...(type === 'VIDEO' ? { durationSec } : {}),
       };
       const n = Math.max(1, Math.min(4, count));
-      const results = await Promise.all(Array.from({ length: n }, () => generateMedia(payload)));
-      return results.map((r) => r.assetId);
+      // allSettled, not all: a single rejection must not discard the sibling
+      // generations that were already accepted (and charged) server-side.
+      const settled = await Promise.allSettled(
+        Array.from({ length: n }, () => generateMedia(payload)),
+      );
+      const ids = settled
+        .filter((r): r is PromiseFulfilledResult<{ assetId: string }> => r.status === 'fulfilled')
+        .map((r) => r.value.assetId);
+      const failed = settled.length - ids.length;
+      // Only a wholesale failure is a hard error; otherwise keep the winners.
+      if (ids.length === 0) throw settled.find((r) => r.status === 'rejected')?.reason;
+      return { ids, failed };
     },
-    onSuccess: (ids) => {
+    onSuccess: ({ ids, failed }) => {
       setPendingIds((prev) => [...ids, ...prev]);
-      toast.success(t('aiStudio.toast.started', 'Generation started'));
+      if (failed > 0) {
+        toast.error(
+          t('aiStudio.toast.partial', '{{done}} started, {{failed}} failed', {
+            done: ids.length,
+            failed,
+          }),
+        );
+      } else {
+        toast.success(t('aiStudio.toast.started', 'Generation started'));
+      }
     },
     onError: (e: any) =>
       toast.error(e?.response?.data?.message ?? t('aiStudio.toast.failed', 'Generation failed')),
@@ -344,21 +363,49 @@ function GenerationCard({
   onTerminal: (a: GeneratedAsset) => void;
 }) {
   const { t } = useTranslation('marketing');
-  const { data } = useQuery({
+  // Guard so the parent is notified exactly once, whether we finish via a
+  // terminal status or by giving up on a persistently-failing status endpoint.
+  const notified = useRef(false);
+  const notifyOnce = (a: GeneratedAsset) => {
+    if (notified.current) return;
+    notified.current = true;
+    onTerminal(a);
+  };
+
+  const q = useQuery({
     queryKey: ['marketing', 'aiStudio', 'asset', assetId],
     queryFn: async () => {
       const a = await getGeneration(assetId);
-      if (isTerminal(a.status)) onTerminal(a);
+      if (isTerminal(a.status)) notifyOnce(a);
       return a;
     },
-    refetchInterval: (q) => (q.state.data && isTerminal(q.state.data.status) ? false : 4000),
+    refetchInterval: (query) => {
+      // Stop polling once the asset is terminal OR the status endpoint keeps
+      // failing (deleted server-side / persistent 5xx) — never loop forever.
+      if (query.state.status === 'error') return false;
+      if (query.state.data && isTerminal(query.state.data.status)) return false;
+      return 4000;
+    },
   });
+
+  // A persistently-failing poll is terminal too: drop it from the pending list
+  // (in an effect, never during render) so the card can't spin indefinitely.
+  useEffect(() => {
+    if (q.isError) notifyOnce({ id: assetId, status: 'FAILED' } as GeneratedAsset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.isError]);
 
   return (
     <Card className="flex aspect-square items-center justify-center bg-surface-muted">
       <div className="flex flex-col items-center gap-2 text-caption text-muted-foreground">
-        <Spinner />
-        <span>{data?.status ?? t('aiStudio.status.queued', 'QUEUED')}</span>
+        {q.isError ? (
+          <span className="text-danger">{t('aiStudio.status.failed', 'FAILED')}</span>
+        ) : (
+          <>
+            <Spinner />
+            <span>{q.data?.status ?? t('aiStudio.status.queued', 'QUEUED')}</span>
+          </>
+        )}
       </div>
     </Card>
   );

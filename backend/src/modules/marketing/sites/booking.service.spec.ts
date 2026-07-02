@@ -491,6 +491,21 @@ describe('BookingService', () => {
       );
     });
 
+    it('refuses to reschedule into a full CLASS slot (capacity enforced like book())', async () => {
+      // book() caps a CLASS slot at its capacity, but reschedule() had no slot
+      // capacity check — and a CLASS attendee has no assignee, so the per-assignee
+      // clash guard is a no-op. Moving a booking into a full class slot must be
+      // rejected, or the slot goes over capacity.
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED', assigneeUserId: null })
+        .mockResolvedValue(null); // external-busy check
+      prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ type: 'CLASS', capacity: 2 }));
+      prisma.booking.findMany.mockResolvedValue([{ id: 'x1' }, { id: 'x2' }]); // slot already 2/2
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      await expect(svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z')).rejects.toThrow(/full/i);
+      expect(prisma.booking.updateMany).not.toHaveBeenCalled();
+    });
+
     it('refuses to reschedule a non-active (e.g. cancelled) booking', async () => {
       prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CANCELLED' });
       await expect(svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z')).rejects.toThrow(/active booking/i);
@@ -509,6 +524,14 @@ describe('BookingService', () => {
         expect.objectContaining({ type: 'marketing.booking.updated.v1', idempotencyKey: 'booking-updated:b1:NO_SHOW' }),
         expect.anything(),
       );
+    });
+
+    it('rejects reactivating a terminal (CANCELLED) booking via setStatus — no double-book revive', async () => {
+      // A cancelled booking released its slot; flipping it back to CONFIRMED here
+      // would re-occupy the slot with no availability re-check. Mirror reschedule()'s
+      // active-only guard so setStatus can't silently create a double-book.
+      prisma.booking.findFirst.mockResolvedValue({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CANCELLED' });
+      await expect(svc.setStatus(WS, 'b1', 'CONFIRMED')).rejects.toThrow(/active booking/i);
     });
 
     it('approving a PENDING booking runs the deferred confirm side-effects', async () => {

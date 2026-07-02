@@ -8,7 +8,10 @@ describe('SocialCampaignLinkService.provisionFromBlast', () => {
 
   beforeEach(() => {
     prisma = {
-      campaign: { findFirst: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+      campaign: {
+        findFirst: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       socialCampaign: {
         create: jest.fn().mockResolvedValue({ id: 'sc-9' }),
         update: jest.fn().mockResolvedValue({}),
@@ -41,10 +44,21 @@ describe('SocialCampaignLinkService.provisionFromBlast', () => {
     expect(data.createdById).toBe('user-7');
     expect(data.brief.audience).toEqual([{ field: 'city', op: 'eq', value: 'Istanbul' }]);
     expect(data.brief.keyMessages[0]).toContain('20% off');
-    expect(prisma.campaign.update).toHaveBeenCalledWith({
-      where: { id: 'camp-1' },
+    // Race-safe conditional link: only sets socialCampaignId when still null.
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 'camp-1', workspaceId: WS, socialCampaignId: null },
       data: { socialCampaignId: 'sc-9' },
     });
+  });
+
+  it('aborts (BadRequest) when a concurrent provision already linked the blast', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'camp-1', workspaceId: WS, name: 'X', body: 'b', channel: 'email',
+      audienceFilter: [], socialCampaignId: null,
+    });
+    // The conditional update matches 0 rows → someone else won the link race.
+    prisma.campaign.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.provisionFromBlast(WS, 'camp-1', 'u')).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('rejects when the campaign is missing', async () => {

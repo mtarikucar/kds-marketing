@@ -153,6 +153,40 @@ describe('OpportunitiesService', () => {
     });
   });
 
+  describe('win / lose', () => {
+    it('win() emits stage_changed too (parity with move) when it moves into the win stage', async () => {
+      prisma.opportunity.findFirst.mockResolvedValue({ id: 'o1', workspaceId: WS, pipelineId: 'p1', stageId: 's-new', assignedToId: MGR.id, wonAt: null, lostAt: null } as any);
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's-won', isWon: true, isLost: false } as any);
+      prisma.opportunity.update.mockResolvedValue({ id: 'o1', value: 500, status: 'WON' } as any);
+      await svc.win(WS, 'o1', MGR);
+      const types = outbox.append.mock.calls.map((c) => c[0].type);
+      // Without stage_changed, a "deal entered the Won stage" workflow trigger fired
+      // only on drag (move), not on the Win button — inconsistent automation.
+      expect(types).toContain('marketing.opportunity.stage_changed.v1');
+      expect(types).toContain('marketing.opportunity.won.v1');
+    });
+
+    it('lose() emits stage_changed too when it moves into the lost stage', async () => {
+      prisma.opportunity.findFirst.mockResolvedValue({ id: 'o1', workspaceId: WS, pipelineId: 'p1', stageId: 's-new', assignedToId: MGR.id, wonAt: null, lostAt: null } as any);
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's-lost', isWon: false, isLost: true } as any);
+      prisma.opportunity.update.mockResolvedValue({ id: 'o1', value: 500, status: 'LOST' } as any);
+      await svc.lose(WS, 'o1', { reason: 'budget' } as any, MGR);
+      const types = outbox.append.mock.calls.map((c) => c[0].type);
+      expect(types).toContain('marketing.opportunity.stage_changed.v1');
+      expect(types).toContain('marketing.opportunity.lost.v1');
+    });
+
+    it('win() does NOT emit stage_changed when the deal is already in the win stage (no move)', async () => {
+      prisma.opportunity.findFirst.mockResolvedValue({ id: 'o1', workspaceId: WS, pipelineId: 'p1', stageId: 's-won', assignedToId: MGR.id, wonAt: null, lostAt: null } as any);
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's-won', isWon: true, isLost: false } as any);
+      prisma.opportunity.update.mockResolvedValue({ id: 'o1', value: 500, status: 'WON' } as any);
+      await svc.win(WS, 'o1', MGR);
+      const types = outbox.append.mock.calls.map((c) => c[0].type);
+      expect(types).not.toContain('marketing.opportunity.stage_changed.v1');
+      expect(types).toContain('marketing.opportunity.won.v1');
+    });
+  });
+
   describe('list', () => {
     it('hard-scopes a REP to their own opportunities within the workspace', async () => {
       prisma.opportunity.findMany.mockResolvedValue([]);

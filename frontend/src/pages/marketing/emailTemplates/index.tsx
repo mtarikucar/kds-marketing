@@ -82,7 +82,12 @@ export default function EmailTemplatesPage() {
                   {({ id }) => <Input id={id} value={draft.name} maxLength={120} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />}
                 </Field>
                 <Field label={t('email.accent', 'Accent color')}>
-                  {({ id }) => <Input id={id} type="text" value={draft.accent} placeholder="#1e40af" onChange={(e) => setDraft({ ...draft, accent: e.target.value })} />}
+                  {/* A native color picker only ever produces a valid #RRGGBB, so the
+                      chosen accent can't be silently dropped by the renderer's hex guard
+                      (a free-text "red"/"#FFF" used to fall back to the default with no
+                      feedback). Guard the value so an old invalid accent shows the
+                      default swatch instead of resetting to black. */}
+                  {({ id }) => <Input id={id} type="color" className="h-9 w-16 p-1" value={/^#[0-9a-fA-F]{6}$/.test(draft.accent) ? draft.accent : '#1e40af'} onChange={(e) => setDraft({ ...draft, accent: e.target.value })} />}
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">

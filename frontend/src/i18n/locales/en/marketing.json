@@ -1664,7 +1664,7 @@
     "logo": "Logo",
     "uploadLogo": "Upload logo",
     "uploading": "Uploading…",
-    "logoHint": "PNG, JPEG, WEBP or SVG, under 1 MB.",
+    "logoHint": "PNG, JPEG or WEBP, under 1 MB.",
     "saved": "Branding saved",
     "saveFailed": "Save failed",
     "logoUploaded": "Logo uploaded",
@@ -1957,7 +1957,83 @@
       "aiVideo": "Video",
       "aiPrompt": "Prompt",
       "aiPromptPlaceholder": "Describe the media…",
-      "aiRun": "Generate"
+      "aiRun": "Generate",
+      "linkedinVisibility": "LinkedIn visibility",
+      "linkedinVisibilityHint": "Controls who can see this post on LinkedIn.",
+      "linkedinVisibility_PUBLIC": "Anyone (public)",
+      "linkedinVisibility_CONNECTIONS": "Connections only",
+      "tiktok": {
+        "title": "TikTok settings",
+        "loading": "Loading TikTok options…",
+        "privacy": "Privacy",
+        "interactions": "Interactions",
+        "disableComment": "Disable comments",
+        "disableDuet": "Disable duet",
+        "disableStitch": "Disable stitch",
+        "mediaType": "Post type",
+        "photo": "Photo",
+        "video": "Video",
+        "photoMode": "Switch to photo / carousel",
+        "maxDuration": "Max video length:",
+        "maxDurationContext": "for this account",
+        "coverIndex": "Cover image index (0-based)",
+        "coverIndexHint": "0 to the last media index"
+      }
+    },
+    "title": "Social Planner",
+    "subtitle": "Compose, schedule and publish posts across your social networks.",
+    "newPost": "New post",
+    "viewToggle": "Social planner view",
+    "connectAccount": "Connect account",
+    "tabs": {
+      "posts": "Posts",
+      "accounts": "Accounts"
+    },
+    "table": {
+      "content": "Content",
+      "status": "Status",
+      "targets": "Targets",
+      "scheduledAt": "Scheduled",
+      "mediaCount": "{{count}} media"
+    },
+    "empty": {
+      "title": "No posts yet",
+      "hint": "Compose your first social post.",
+      "connectFirst": "Connect a social account, then compose your first post."
+    },
+    "accounts": {
+      "empty": "No connected accounts",
+      "emptyHint": "Connect a Facebook, Instagram or LinkedIn account to start publishing.",
+      "expired": "Token expired",
+      "disabled": "Disabled"
+    },
+    "action": {
+      "disconnect": "Disconnect",
+      "reconnect": "Reconnect",
+      "publishNow": "Publish now"
+    },
+    "confirm": {
+      "publish": "This publishes the post to all its pending targets immediately.",
+      "deleteTitle": "Delete post",
+      "deleteBody": "This permanently removes the post and its targets. This cannot be undone.",
+      "disconnectTitle": "Disconnect account",
+      "disconnectBody": "The planner will no longer be able to publish to this account."
+    },
+    "oauth": {
+      "callbackError": "Connection failed or was cancelled. Please try again."
+    },
+    "toast": {
+      "connected": "Account connected",
+      "connectFailed": "Failed to connect account",
+      "disconnected": "Account disconnected",
+      "disconnectFailed": "Failed to disconnect account",
+      "postUpdated": "Post updated",
+      "postCreated": "Post created",
+      "postFailed": "Failed to save post",
+      "published": "Publishing started",
+      "publishFailed": "Failed to publish post",
+      "postDeleted": "Post deleted",
+      "deleteFailed": "Failed to delete post"
     }
   },
   "socialCampaign": {

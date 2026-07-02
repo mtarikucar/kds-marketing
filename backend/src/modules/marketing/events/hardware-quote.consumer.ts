@@ -73,6 +73,13 @@ export class HardwareQuoteConsumer implements OnModuleInit {
         emailNormalized: normalizeEmail(p.email),
         notes: p.notes,
         productSnapshot: p.productSnapshot as any,
+        // REVIVE a soft-deleted lead on resubmit: the (workspace, externalRef)
+        // dedup is a UNIQUE constraint, so a re-quote can't mint a fresh row — it
+        // resolves the SAME lead. If a rep bulk-deleted it (deletedAt set), a new
+        // "Teklif Al" click is renewed interest that must resurface, not silently
+        // refresh a hidden tombstone. No-op for a live lead (already null); a
+        // MERGED lead stays hidden via mergedIntoId, so this never un-hides one.
+        deletedAt: null,
       };
       const existing = await this.prisma.lead.findFirst({
         where: { workspaceId, externalRef: p.dedupRef },

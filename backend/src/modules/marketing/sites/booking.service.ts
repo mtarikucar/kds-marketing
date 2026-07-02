@@ -913,6 +913,28 @@ export class BookingService implements OnModuleInit {
       if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), booking.assigneeUserId ?? null)) {
         throw new BadRequestException('That slot is unavailable');
       }
+      // Capacity check — MIRRORS book(). Without it, reschedule() enforced only
+      // the per-assignee clash below, but a CLASS booking has NO assignee (group
+      // attendee), so nothing stopped moving unlimited bookings into a full class
+      // slot (over-capacity). ROUND_ROBIN's capacity is per-member and already
+      // enforced by the assignee clash (each booking keeps its distinct member),
+      // so only the capacity-N / capacity-1 types need this slot-level count.
+      if (cal.type !== 'ROUND_ROBIN') {
+        const overlapping = await tx.booking.findMany({
+          where: {
+            workspaceId,
+            calendarId: booking.calendarId,
+            status: { in: ACTIVE_STATUSES },
+            id: { not: booking.id },
+            startAt: { lt: end },
+            endAt: { gt: start },
+          },
+          select: { id: true },
+        });
+        if (overlapping.length >= this.effectiveCapacity(cal, 0)) {
+          throw new BadRequestException('That slot is full');
+        }
+      }
       if (booking.assigneeUserId) {
         const clash = await tx.booking.findFirst({
           where: {
@@ -955,6 +977,16 @@ export class BookingService implements OnModuleInit {
     if (!existing) throw new NotFoundException('Booking not found');
     if (existing.status === 'EXTERNAL_BUSY') {
       throw new BadRequestException('Cannot change an external calendar block');
+    }
+    // Only an ACTIVE (PENDING/CONFIRMED) booking can be transitioned. A terminal
+    // booking (CANCELLED/NO_SHOW/COMPLETED) has already RELEASED its slot (excluded
+    // from ACTIVE_STATUSES capacity/availability) and torn down its conference — so
+    // flipping it back to CONFIRMED here would silently re-occupy the slot with NO
+    // availability re-check (a double-book, the very thing book()/reschedule() guard)
+    // and no meeting link. reschedule() already rejects a non-active source; this is
+    // the sibling modify-path that didn't. Re-activating = a fresh book(), not a flip.
+    if (!ACTIVE_STATUSES.includes(existing.status)) {
+      throw new BadRequestException('Only an active booking can be updated — re-book instead');
     }
     const wasPending = existing.status === 'PENDING';
     await this.prisma.$transaction(async (tx) => {

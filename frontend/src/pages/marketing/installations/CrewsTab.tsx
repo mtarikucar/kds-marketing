@@ -132,7 +132,10 @@ export function CrewsTab({ isManager, crews, onInvalidate }: Props) {
         name: values.name,
         active: values.active,
         dailyCapacity: values.dailyCapacity ? Number(values.dailyCapacity) : undefined,
-        notes: values.notes || undefined,
+        // Send '' (not undefined) so clearing the notes on edit actually blanks
+        // them — the PATCH skips undefined, so `|| undefined` silently kept the
+        // old notes. UpdateCrewDto.notes has no @IsNotEmpty, so '' is accepted.
+        notes: values.notes ?? '',
       },
     });
   }

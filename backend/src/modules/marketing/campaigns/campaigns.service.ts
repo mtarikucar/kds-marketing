@@ -123,7 +123,7 @@ export class CampaignsService {
         workspaceId,
         name: dto.name,
         channel: dto.channel,
-        subject: dto.subject ?? null,
+        subject: dto.subject || null,
         body: dto.body,
         bodyHtml: dto.bodyHtml || null,
         emailTemplateId: dto.emailTemplateId || null,
@@ -142,7 +142,11 @@ export class CampaignsService {
     }
     const data: any = {};
     for (const k of ['name', 'subject', 'body', 'bodyHtml', 'emailTemplateId'] as const) if (dto[k] !== undefined) data[k] = dto[k];
-    // An explicit '' for the HTML fields means "revert to plain text" → clear them.
+    // An explicit '' for a nullable field means "clear it" → null. Without this the
+    // '' would persist (subject) or the stale HTML/template would keep shipping. The
+    // sender treats a null subject as the "Update" default; an '' would send a blank
+    // subject line, so subject must normalize to null on clear like its siblings.
+    if (data.subject === '') data.subject = null;
     if (data.bodyHtml === '') data.bodyHtml = null;
     if (data.emailTemplateId === '') data.emailTemplateId = null;
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;

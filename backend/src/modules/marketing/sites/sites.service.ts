@@ -24,6 +24,11 @@ Block types:
  {"type":"text","text"}
 Keep copy tight and conversion-focused. 3-6 blocks.`;
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 @Injectable()
 export class SitesService {
   constructor(
@@ -53,26 +58,41 @@ export class SitesService {
   async create(workspaceId: string, dto: { slug?: string; title: string; blocks?: unknown; seo?: unknown; theme?: unknown }) {
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxFunnels;
-    if (limit !== -1) {
-      const count = await this.prisma.sitePage.count({ where: { workspaceId } });
-      if (count >= limit) throw new BadRequestException(`Funnel/page limit reached (${limit}) — upgrade your package`);
-    }
     const slug = this.slugify(dto.slug || dto.title);
-    return this.prisma.sitePage.create({
-      data: {
-        workspaceId,
-        slug,
-        title: dto.title,
-        blocks: (dto.blocks ?? []) as Prisma.InputJsonValue,
-        seo: (dto.seo ?? undefined) as Prisma.InputJsonValue,
-        theme: (dto.theme ?? undefined) as Prisma.InputJsonValue,
-      },
-    }).catch((e) => {
+    const data = {
+      workspaceId,
+      slug,
+      title: dto.title,
+      blocks: (dto.blocks ?? []) as Prisma.InputJsonValue,
+      seo: (dto.seo ?? undefined) as Prisma.InputJsonValue,
+      theme: (dto.theme ?? undefined) as Prisma.InputJsonValue,
+    };
+    const onError = (e: unknown) => {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new BadRequestException('A page with that slug already exists');
       }
       throw e;
-    });
+    };
+    // Unlimited plan — no cap to race against.
+    if (limit === -1) {
+      return this.prisma.sitePage.create({ data }).catch(onError);
+    }
+    // Serialize the count-check + create per workspace under an advisory xact-lock:
+    // a bare count-then-create lets two concurrent requests at (limit-1) BOTH pass
+    // the cap and exceed it. The lock makes the read-modify-write atomic (mirrors the
+    // ai-credits / message-quota / research quota pattern).
+    return this.prisma
+      .$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('site-pages:' + workspaceId)}))::text AS locked`,
+        );
+        const count = await tx.sitePage.count({ where: { workspaceId } });
+        if (count >= limit) {
+          throw new BadRequestException(`Funnel/page limit reached (${limit}) — upgrade your package`);
+        }
+        return tx.sitePage.create({ data });
+      })
+      .catch(onError);
   }
 
   /** Starter template catalog (audit A5). */

@@ -81,6 +81,30 @@ describe('planTick — planning modes + cadence + stop', () => {
     );
   });
 
+  it('USER_TOPICS: COMPLETEs (not idle) once every topic is consumed', async () => {
+    const { svc, prisma, scheduledJobs } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ planningMode: 'USER_TOPICS' }));
+    prisma.socialCampaignItem.count.mockResolvedValueOnce(2); // both topics already used
+    const res = await plan(svc);
+    expect(prisma.socialCampaignItem.create).not.toHaveBeenCalled();
+    expect(prisma.socialCampaign.update).toHaveBeenCalledWith({ where: { id: 'c-1' }, data: { status: 'COMPLETED' } });
+    expect(res).toBeUndefined();
+    expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+  });
+
+  it('USER_TOPICS: skips a blank topic in the middle instead of stalling', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(
+      makeCampaign({ planningMode: 'USER_TOPICS', brief: { topics: ['A', '', 'C'] } }),
+    );
+    prisma.socialCampaignItem.count.mockResolvedValueOnce(1); // filtered topics = ['A','C'] → index 1 = 'C'
+    prisma.socialCampaignItem.create.mockResolvedValueOnce({ id: 'i-2' });
+    await plan(svc);
+    expect(prisma.socialCampaignItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ topic: 'C' }) }),
+    );
+  });
+
   it('stop-on-pause: a non-ACTIVE campaign creates nothing and does not reschedule', async () => {
     const { svc, prisma, scheduledJobs } = build();
     prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ status: 'PAUSED' }));
@@ -133,12 +157,15 @@ describe('generateItem — automation-mode transitions', () => {
     );
   });
 
-  it('SEMI_AUTO → item SCHEDULED + confirm gate enqueued at scheduledFor', async () => {
+  it('SEMI_AUTO → item NEEDS_APPROVAL (review window) + auto-confirm gate enqueued at scheduledFor', async () => {
     const { svc, prisma, scheduledJobs } = build();
     primeItem(prisma, 'SEMI_AUTO');
     await gen(svc);
+    // SEMI_AUTO surfaces the item for review (approval queue) yet still arms the
+    // gate to auto-publish at the slot unless the user rejects — distinct from
+    // FULL_AUTO (SCHEDULED, no review) and APPROVAL (NEEDS_APPROVAL, no auto-gate).
     expect(prisma.socialCampaignItem.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'SCHEDULED' }) }),
+      expect.objectContaining({ data: expect.objectContaining({ status: 'NEEDS_APPROVAL' }) }),
     );
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({
       kind: SOCIAL_CAMPAIGN_ITEM_CONFIRM_KIND, runAt: new Date('2026-07-08T09:00:00Z'),

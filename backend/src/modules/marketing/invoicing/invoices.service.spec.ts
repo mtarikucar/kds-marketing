@@ -25,6 +25,7 @@ describe('InvoicesService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       workspacePspConfig: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn().mockResolvedValue({}) },
+      customerWallet: { findUnique: jest.fn().mockResolvedValue({ currency: 'TRY' }) },
       $transaction: jest.fn((fn: any) => fn(prisma)),
     };
     outbox = { append: jest.fn().mockResolvedValue('e') };
@@ -102,6 +103,18 @@ describe('InvoicesService', () => {
       prisma.invoice.findFirst.mockResolvedValueOnce({ id: 'inv1', status: 'SENT', leadId: null, total: 5000 });
       await expect(svc.payWithWallet(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    // The wallet is single-currency (TRY). Paying a non-TRY invoice from it would
+    // debit the invoice's minor units as if they were the wallet's — draining store
+    // credit at the wrong (unconverted) amount and marking it PAID. Refuse it.
+    it('refuses to pay a non-TRY invoice from a TRY wallet (no cross-currency debit)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+      prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, status: 'SENT', leadId: 'l1', total: 10000, number: 'INV-1', currency: 'USD' });
+      prisma.customerWallet.findUnique.mockResolvedValue({ currency: 'TRY' });
+      await expect(svc.payWithWallet(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(walletMock.debit).not.toHaveBeenCalled();
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
   });
 
   it('markPaid settles the invoice + emits invoice.paid (conditional claim)', async () => {
@@ -126,6 +139,15 @@ describe('InvoicesService', () => {
     prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, status: 'SENT', total: 2500, currency: 'TRY' });
     prisma.invoice.updateMany.mockResolvedValue({ count: 0 });
     await svc.markPaid(WS, 'inv1');
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('markPaid rejects a VOID invoice with a clear error (no silent no-op)', async () => {
+    const { BadRequestException } = require('@nestjs/common');
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, status: 'VOID', total: 2500, currency: 'TRY' });
+    await expect(svc.markPaid(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+    // never reaches the settle claim — it would have silently matched 0 rows
+    expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
     expect(outbox.append).not.toHaveBeenCalled();
   });
 
@@ -216,7 +238,7 @@ describe('InvoicesService', () => {
       prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
       prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
       prisma.invoice.updateMany.mockResolvedValue({ count: 1 });
-      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', conversationId: 'inv1', basketId: 'inv1' }) });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', currency: 'TRY', conversationId: 'inv1', basketId: 'inv1' }) });
       const ok = await svc.iyzicoCallback('tok', 'iyz-token');
       expect(ok).toBe(true);
       expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PAID', paidVia: 'iyzico' }) }));
@@ -226,6 +248,18 @@ describe('InvoicesService', () => {
       prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
       prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
       (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00', conversationId: 'inv1', basketId: 'inv1' }) });
+      const ok = await svc.iyzicoCallback('tok', 'iyz-token');
+      expect(ok).toBe(false);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('callback: a SUCCESS retrieve with a MISMATCHED currency (same numeric amount) does NOT settle', async () => {
+      // A USD invoice (total 10000 = $100.00) whose payment came back in TRY
+      // (paidPrice 100.00 → 10000 kuruş) passes the numeric amount check. Without
+      // a currency check it would settle $100 for ~$3. Parity with the Stripe path.
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'inv1', workspaceId: WS, leadId: null, total: 10000, currency: 'USD', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '100.00', currency: 'TRY', conversationId: 'inv1', basketId: 'inv1' }) });
       const ok = await svc.iyzicoCallback('tok', 'iyz-token');
       expect(ok).toBe(false);
       expect(prisma.invoice.updateMany).not.toHaveBeenCalled();

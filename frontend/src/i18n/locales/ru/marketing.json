@@ -921,7 +921,7 @@
     "logo": "Логотип",
     "uploadLogo": "Загрузить логотип",
     "uploading": "Загрузка…",
-    "logoHint": "PNG, JPEG, WEBP или SVG, до 1 МБ.",
+    "logoHint": "PNG, JPEG или WEBP, до 1 МБ.",
     "saved": "Бренд сохранён",
     "saveFailed": "Не удалось сохранить",
     "logoUploaded": "Логотип загружен",

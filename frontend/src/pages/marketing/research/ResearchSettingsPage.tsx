@@ -18,6 +18,7 @@ import {
   type ResearchProfileFormValues,
 } from './ResearchProfileForm';
 import { IngestTokensCard } from './IngestTokensCard';
+import { buildResearchPayload } from './researchProfilePayload';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -74,33 +75,11 @@ export default function ResearchSettingsPage() {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
-  const buildPayload = (values: ResearchProfileFormValues) => ({
-    name: values.name,
-    icpDescription: values.icpDescription,
-    productPitch: values.productPitch || undefined,
-    language: values.language,
-    geo:
-      values.country || values.cities
-        ? {
-            ...(values.country ? { country: values.country } : {}),
-            ...(values.cities
-              ? {
-                  cities: values.cities
-                    .split(',')
-                    .map((c) => c.trim())
-                    .filter(Boolean),
-                }
-              : {}),
-          }
-        : undefined,
-    exclusions: values.exclusions || undefined,
-  });
-
   const saveProfile = useMutation({
     mutationFn: (values: ResearchProfileFormValues) =>
       editingId
-        ? marketingApi.patch(`/research/profiles/${editingId}`, buildPayload(values))
-        : marketingApi.post('/research/profiles', buildPayload(values)),
+        ? marketingApi.patch(`/research/profiles/${editingId}`, buildResearchPayload(values))
+        : marketingApi.post('/research/profiles', buildResearchPayload(values)),
     onSuccess: () => {
       invalidateProfiles();
       setFormOpen(false);

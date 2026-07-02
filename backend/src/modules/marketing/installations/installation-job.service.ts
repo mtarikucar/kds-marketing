@@ -15,7 +15,7 @@ import {
   CreateInstallTaskDto,
   JobFilterDto,
 } from './dto/installation-job.dto';
-import { toUtcDateOnly } from './installation.util';
+import { toUtcDateOnly, upcomingWindow } from './installation.util';
 import { paginated } from '../../../common/pagination';
 
 /** Crew slot is occupied by jobs in these statuses on a day. */
@@ -328,8 +328,18 @@ export class InstallationJobService {
   /** Ops dashboard: status mix, backlog, SLA breaches, and the upcoming week. */
   async dashboard(workspaceId: string) {
     const now = new Date();
-    const weekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const slaCutoff = new Date(now.getTime() - SLA_DAYS * 24 * 60 * 60 * 1000);
+    // `scheduledDate` is a date-only (@db.Date) column stored at UTC-midnight of
+    // the picked calendar day, so bound "upcoming" by the UTC-midnight of the
+    // WORKSPACE's today — NOT `now` (a mid-day instant), which sorted today's
+    // <today>T00:00:00Z row BEFORE the lower bound and hid every job scheduled
+    // for today from the ops board until midnight. Mirrors the tasks findToday /
+    // dashboard periodBounds workspace-tz fix.
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { timezone: true },
+    });
+    const { start: todayStart, end: weekAhead } = upcomingWindow(now.getTime(), ws?.timezone || 'UTC');
 
     // groupBy is awaited standalone — inside a $transaction tuple its `having`
     // return type triggers a TS2615 circular `OR`/`AND`/`NOT` mapped-type error
@@ -347,7 +357,7 @@ export class InstallationJobService {
         where: { workspaceId, status: 'REQUESTED', requestedAt: { lt: slaCutoff } },
       }),
       this.prisma.installationJob.findMany({
-        where: { workspaceId, status: 'SCHEDULED', scheduledDate: { gte: now, lte: weekAhead } },
+        where: { workspaceId, status: 'SCHEDULED', scheduledDate: { gte: todayStart, lte: weekAhead } },
         orderBy: { scheduledDate: 'asc' },
         take: 50,
       }),

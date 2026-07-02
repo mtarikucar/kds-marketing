@@ -25,3 +25,16 @@ export function toCents(amount: number | undefined): number | undefined {
   if (amount == null || Number.isNaN(amount)) return undefined;
   return Math.round(amount * 100);
 }
+
+/**
+ * Resolve a course's edit `priceCents` for the PATCH. A cleared price
+ * (undefined) means Free — sent as `null` (the "null = free" schema value) so a
+ * paid course can actually be reverted to free; the previous code OMITTED it,
+ * leaving the old price untouched (a paid course could never become free). A
+ * real amount converts to integer cents; an explicit 0 stays 0 (a $0.00 price,
+ * distinct from Free/null).
+ */
+export function coursePriceCents(price: string | number | null | undefined): number | null {
+  if (price === undefined || price === null || price === '') return null;
+  return toCents(Number(price)) ?? null;
+}

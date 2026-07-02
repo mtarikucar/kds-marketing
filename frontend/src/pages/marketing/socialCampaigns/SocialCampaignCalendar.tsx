@@ -23,8 +23,16 @@ export interface SocialCampaignCalendarProps {
   items: SocialCampaignItem[];
 }
 
+// Stable, locale-independent bucket key from the viewer's LOCAL calendar date,
+// so items near midnight land under the correct local day (not the UTC day).
+function localDayKey(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export function SocialCampaignCalendar({ items }: SocialCampaignCalendarProps) {
-  const { t } = useTranslation('marketing');
+  const { t, i18n } = useTranslation('marketing');
 
   if (items.length === 0) {
     return (
@@ -35,9 +43,12 @@ export function SocialCampaignCalendar({ items }: SocialCampaignCalendarProps) {
     );
   }
 
+  const dayLabel = (iso: string) =>
+    new Date(iso).toLocaleDateString(i18n.language, { year: 'numeric', month: 'short', day: 'numeric' });
+
   const byDay = new Map<string, SocialCampaignItem[]>();
   for (const it of [...items].sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor))) {
-    const day = it.scheduledFor.slice(0, 10); // YYYY-MM-DD
+    const day = localDayKey(it.scheduledFor);
     const bucket = byDay.get(day) ?? [];
     bucket.push(it);
     byDay.set(day, bucket);
@@ -47,7 +58,7 @@ export function SocialCampaignCalendar({ items }: SocialCampaignCalendarProps) {
     <div className="space-y-4">
       {[...byDay.entries()].map(([day, dayItems]) => (
         <div key={day} className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground">{day}</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground">{dayLabel(dayItems[0].scheduledFor)}</h3>
           {dayItems.map((it) => (
             <Card key={it.id}>
               <CardContent className="flex items-center justify-between p-3">
