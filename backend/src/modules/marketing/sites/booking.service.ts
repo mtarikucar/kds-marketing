@@ -913,6 +913,28 @@ export class BookingService implements OnModuleInit {
       if (overlapsBlackout(blackouts, start.getTime(), end.getTime(), booking.assigneeUserId ?? null)) {
         throw new BadRequestException('That slot is unavailable');
       }
+      // Capacity check — MIRRORS book(). Without it, reschedule() enforced only
+      // the per-assignee clash below, but a CLASS booking has NO assignee (group
+      // attendee), so nothing stopped moving unlimited bookings into a full class
+      // slot (over-capacity). ROUND_ROBIN's capacity is per-member and already
+      // enforced by the assignee clash (each booking keeps its distinct member),
+      // so only the capacity-N / capacity-1 types need this slot-level count.
+      if (cal.type !== 'ROUND_ROBIN') {
+        const overlapping = await tx.booking.findMany({
+          where: {
+            workspaceId,
+            calendarId: booking.calendarId,
+            status: { in: ACTIVE_STATUSES },
+            id: { not: booking.id },
+            startAt: { lt: end },
+            endAt: { gt: start },
+          },
+          select: { id: true },
+        });
+        if (overlapping.length >= this.effectiveCapacity(cal, 0)) {
+          throw new BadRequestException('That slot is full');
+        }
+      }
       if (booking.assigneeUserId) {
         const clash = await tx.booking.findFirst({
           where: {
