@@ -43,6 +43,7 @@ import {
 } from '@/components/ui';
 
 import { buildLeadsColumns } from './leadsColumns';
+import { bulkDeleteToast } from './leadsBulkToast';
 
 type AssignmentStatus = '' | 'unassigned' | 'assigned' | 'mine';
 
@@ -162,7 +163,10 @@ export default function LeadsPage() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
       queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
-      toast.success(t('leads.bulkDelete.success', { defaultValue: '{{count}} lead(s) deleted', count: res?.deleted ?? 0 }));
+      // Surface the backend's `skippedProtected` (WON/converted leads it refuses
+      // to delete) so a partial/blocked delete is explained, not a silent no-op.
+      const { text, tone } = bulkDeleteToast(res, t);
+      (tone === 'info' ? toast.info : toast.success)(text);
       setSelected(new Set());
     },
     onError: () => toast.error(t('leads.bulkDelete.error', { defaultValue: 'Failed to delete leads' })),

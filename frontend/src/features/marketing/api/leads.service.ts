@@ -160,9 +160,14 @@ export function bulkAssignLeads(
     .then((r) => r.data);
 }
 
-/** POST /leads/bulk-delete — soft-delete many leads at once. */
-export function bulkDeleteLeads(leadIds: string[]): Promise<{ deleted: number }> {
-  return marketingApi.post<{ deleted: number }>('/leads/bulk-delete', { leadIds }).then((r) => r.data);
+/** POST /leads/bulk-delete — soft-delete many leads at once. `skippedProtected`
+ *  is how many were refused (WON / converted-tenant leads can't be deleted). */
+export function bulkDeleteLeads(
+  leadIds: string[],
+): Promise<{ deleted: number; skippedProtected: number }> {
+  return marketingApi
+    .post<{ deleted: number; skippedProtected: number }>('/leads/bulk-delete', { leadIds })
+    .then((r) => r.data);
 }
 
 /** POST /leads/bulk-enroll — queue a background enroll of many leads into a workflow. */
