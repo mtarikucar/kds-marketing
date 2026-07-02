@@ -45,3 +45,54 @@ export function bulkDeleteToast(
     }),
   };
 }
+
+export interface BulkAssignResult {
+  assigned: number;
+  /** Already assigned to the target rep (no-op). */
+  unchanged?: number;
+  /** Ids not found in the workspace (deleted/merged between select and submit).
+   *  The backend returns an id array; a number is tolerated defensively. */
+  skipped?: string[] | number;
+}
+
+/**
+ * Bulk-assign toast — sibling of {@link bulkDeleteToast}. The backend returns
+ * `{ assigned, unchanged, skipped }` but the list page showed only `assigned`,
+ * so re-assigning contacts already owned by that rep flashed a bare "0 assigned"
+ * (a confusing no-op) and a stale selection silently dropped the not-found ids.
+ * Surface both so every outcome is explained.
+ */
+export function bulkAssignToast(
+  res: BulkAssignResult | undefined,
+  t: TFn,
+): { text: string; tone: 'success' | 'info' } {
+  const assigned = res?.assigned ?? 0;
+  const unchanged = res?.unchanged ?? 0;
+  const skipped = Array.isArray(res?.skipped) ? res!.skipped.length : (res?.skipped ?? 0);
+  const leftover = unchanged + skipped;
+
+  if (assigned === 0) {
+    // Nothing changed — everything was already on that rep, or couldn't be found.
+    return {
+      tone: 'info',
+      text: t('leads.bulkAssign.noChange', {
+        defaultValue:
+          'No change — the selected contacts were already assigned to that rep, or could not be found',
+      }),
+    };
+  }
+  if (leftover > 0) {
+    return {
+      tone: 'success',
+      text: t('leads.bulkAssign.partial', {
+        defaultValue: '{{assigned}} reassigned · {{leftover}} left unchanged',
+        assigned,
+        leftover,
+      }),
+    };
+  }
+  return {
+    tone: 'success',
+    text: t('leads.bulkAssign.success', { count: assigned }),
+  };
+}

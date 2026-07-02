@@ -150,13 +150,18 @@ export function deleteTask(taskId: string): Promise<void> {
   return marketingApi.delete(`/tasks/${taskId}`).then(() => undefined);
 }
 
-/** POST /leads/bulk-assign — assign (or unassign) many leads at once. */
+/** POST /leads/bulk-assign — assign (or unassign) many leads at once. `unchanged`
+ *  were already assigned to that rep (no-op); `skipped` are ids not found in the
+ *  workspace (e.g. deleted between selection and submit). */
 export function bulkAssignLeads(
   leadIds: string[],
   assignedToId: string | null,
-): Promise<{ assigned: number }> {
+): Promise<{ assigned: number; skipped: string[]; unchanged: number }> {
   return marketingApi
-    .post<{ assigned: number }>('/leads/bulk-assign', { leadIds, assignedToId })
+    .post<{ assigned: number; skipped: string[]; unchanged: number }>('/leads/bulk-assign', {
+      leadIds,
+      assignedToId,
+    })
     .then((r) => r.data);
 }
 

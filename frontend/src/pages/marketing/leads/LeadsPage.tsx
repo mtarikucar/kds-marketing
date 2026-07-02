@@ -43,7 +43,7 @@ import {
 } from '@/components/ui';
 
 import { buildLeadsColumns } from './leadsColumns';
-import { bulkDeleteToast } from './leadsBulkToast';
+import { bulkDeleteToast, bulkAssignToast } from './leadsBulkToast';
 
 type AssignmentStatus = '' | 'unassigned' | 'assigned' | 'mine';
 
@@ -148,10 +148,12 @@ export default function LeadsPage() {
     mutationFn: (repId: string | null) =>
       bulkAssignLeads(Array.from(selected), repId ?? null),
     onSuccess: (res) => {
-      const assigned = res?.assigned ?? 0;
       queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
       queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
-      toast.success(t('leads.bulkAssign.success', { count: assigned }));
+      // Surface unchanged/not-found so a re-assign of already-owned contacts
+      // isn't a bare "0 assigned" no-op (mirrors the bulk-delete signal fix).
+      const { text, tone } = bulkAssignToast(res, t);
+      (tone === 'info' ? toast.info : toast.success)(text);
       setSelected(new Set());
     },
     onError: () => toast.error(t('leads.bulkAssign.error')),
