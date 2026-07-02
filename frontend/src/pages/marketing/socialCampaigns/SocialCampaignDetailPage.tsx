@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Spinner } from '@/components/ui/Spinner';
+import { useBreadcrumbLabel } from '@/features/marketing/hooks/useBreadcrumbLabel';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
@@ -26,6 +27,7 @@ export default function SocialCampaignDetailPage() {
     queryFn: () => getSocialCampaign(id),
     enabled: !!id,
   });
+  useBreadcrumbLabel(campaignQuery.data?.name);
   const itemsQuery = useQuery({
     queryKey: ['marketing', 'social-campaigns', id, 'items'],
     queryFn: () => listSocialCampaignItems(id),

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
+import { useBreadcrumbLabel } from '@/features/marketing/hooks/useBreadcrumbLabel';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, UserPlus, UserMinus, Users, Send } from 'lucide-react';
@@ -54,6 +55,8 @@ export default function CommunityDetailPage() {
     mode: 'onBlur',
     defaultValues: { title: '', body: '' },
   });
+
+  useBreadcrumbLabel(community?.name);
 
   if (isLoading) {
     return (

@@ -42,6 +42,7 @@ import {
   ConfirmDialog,
   Input,
 } from '@/components/ui';
+import { useBreadcrumbLabel } from '@/features/marketing/hooks/useBreadcrumbLabel';
 
 function apiError(e: unknown, fallback: string): string {
   const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
@@ -84,6 +85,9 @@ export default function CustomObjectDetailPage() {
     queryFn: () => getObject(key),
     enabled: !!key,
   });
+
+  // Show the object's name in the header breadcrumb.
+  useBreadcrumbLabel(object?.labelPlural);
 
   const { data: fields } = useQuery({
     queryKey: ['marketing', 'custom-objects', key, 'fields'],
