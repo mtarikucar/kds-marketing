@@ -104,30 +104,31 @@
   }
 }
 
-/* Custom scrollbar - Modern SaaS style */
+/* Custom scrollbar — token-driven so it follows light/dark mode (was hard-coded
+   slate, which left a jarringly light scrollbar on the dark console). */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background-color: #f1f5f9; /* slate-100 */
+  background-color: var(--surface-muted);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1; /* slate-300 */
+  background-color: var(--border-strong);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #94a3b8; /* slate-400 */
+  background-color: var(--muted-foreground);
 }
 
 /* Firefox scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 #f1f5f9;
+  scrollbar-color: var(--border-strong) var(--surface-muted);
 }
 
 /* Hide scrollbar utility */
@@ -545,36 +546,6 @@
 
 .animate-slide-up {
   animation: slide-up 0.3s ease-out forwards;
-}
-
-/* Bounce Animation for Badges */
-@keyframes badge-bounce {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.3);
-  }
-}
-
-.animate-badge-bounce {
-  animation: badge-bounce 0.3s ease-in-out;
-}
-
-/* Fly to Cart Animation */
-@keyframes fly-to-cart {
-  0% {
-    transform: scale(1) translate(0, 0);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(0.2) translate(var(--fly-x, 100px), var(--fly-y, -100px));
-    opacity: 0;
-  }
-}
-
-.animate-fly-to-cart {
-  animation: fly-to-cart 0.5s ease-in-out forwards;
 }
 
 /* Pulse Ring Animation */
