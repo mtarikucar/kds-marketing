@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useForm, Controller, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus } from 'lucide-react';
+import { Plus, Phone } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
@@ -66,6 +66,12 @@ export default function ActivityTimelineTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadId]);
 
+  // Open the activity dialog pre-set to a given type (first-class "Log call").
+  const openWith = (type: string) => {
+    form.reset({ type, title: '', description: '' });
+    setOpen(true);
+  };
+
   const submit: SubmitHandler<ActivityFormValues> = (values) => {
     onSubmit({
       type: values.type,
@@ -80,15 +86,26 @@ export default function ActivityTimelineTab({
     <Card>
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle>Activity Timeline</CardTitle>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setOpen(true)}
-          className="text-primary hover:text-primary"
-        >
-          <Plus className="h-4 w-4" /> Add Activity
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => openWith('CALL')}
+            className="text-primary hover:text-primary"
+          >
+            <Phone className="h-4 w-4" /> Log call
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => openWith('NOTE')}
+            className="text-primary hover:text-primary"
+          >
+            <Plus className="h-4 w-4" /> Add Activity
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <ActivityTimeline activities={activities || []} />
