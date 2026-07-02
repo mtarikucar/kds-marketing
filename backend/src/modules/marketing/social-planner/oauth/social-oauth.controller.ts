@@ -24,8 +24,8 @@ class StartDto {
    *  the public callback lands the user back there. Optional; default 'social'
    *  keeps existing links unchanged. */
   @IsOptional()
-  @IsIn(['social', 'channels'])
-  origin?: 'social' | 'channels';
+  @IsIn(['social', 'channels', 'account-center'])
+  origin?: 'social' | 'channels' | 'account-center';
 }
 
 class ConfirmDto {
@@ -81,7 +81,8 @@ export class SocialOAuthController {
     // signed state; peek it (best-effort) so even the error redirects go to the
     // right page. handleCallback still runs its own authoritative verify below.
     const origin = state ? verifyState(state)?.origin : undefined;
-    const path = origin === 'channels' ? 'channels' : 'social';
+    const path =
+      origin === 'channels' ? 'channels' : origin === 'account-center' ? 'accounts' : 'social';
     if (error || !code || !state) {
       return res.redirect(302, `${appUrl}/${path}?connect_error=1`);
     }

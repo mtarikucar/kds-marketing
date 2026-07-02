@@ -180,6 +180,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   { id: 'tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList, path: '/tasks' },
+  { id: 'accounts', labelKey: 'nav.accounts', label: 'Account Center', icon: Plug, path: '/accounts', managerOnly: true, tier: 'advanced' },
   {
     id: 'marketing', labelKey: 'nav.group.marketing', label: 'Marketing', icon: Megaphone, tier: 'advanced',
     children: [

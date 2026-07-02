@@ -47,6 +47,7 @@ const BillingPage              = lazy(() => import('./pages/marketing/billing'))
 // Manager-only pages
 const MarketingUsersPage       = lazy(() => import('./pages/marketing/users'));
 const TargetsPage              = lazy(() => import('./pages/marketing/targets'));
+const AccountCenterPage        = lazy(() => import('./pages/marketing/accounts/AccountCenterPage'));
 const CustomFieldsPage         = lazy(() => import('./pages/marketing/crm/customFields'));
 const TagsPage                 = lazy(() => import('./pages/marketing/crm/tags'));
 const SegmentsPage             = lazy(() => import('./pages/marketing/crm/segments'));
@@ -206,6 +207,7 @@ export default function App() {
           <Route element={<MarketingLayout />}>
             <Route path="/users"       element={<S><MarketingUsersPage /></S>} />
             <Route path="/targets"     element={<S><TargetsPage /></S>} />
+            <Route path="/accounts"    element={<S><AccountCenterPage /></S>} />
             <Route path="/settings/custom-fields" element={<S><CustomFieldsPage /></S>} />
             <Route path="/settings/pipelines" element={<S><PipelineSettingsPage /></S>} />
             <Route path="/tags" element={<S><TagsPage /></S>} />

@@ -79,6 +79,15 @@
       "modules": { "title": "Özellikleri aç/kapat", "body": "Platformun sadece bir kısmı mı lazım? Ayarlar › Modüller'e git ve kullanmadıklarını kapat — geri isteyene kadar menüden kaybolur." }
     }
   },
+  "accounts": {
+    "title": "Hesap Merkezi",
+    "subtitle": "Tüm hesaplarını tek yerden bağla ve yönet — yayın, gelen kutusu, WhatsApp ve reklamlar. Tek bir bağlantı hem pazarlamayı hem kanalları besleyebilir.",
+    "connect": "Bağla",
+    "connectAnother": "Başka bir hesap bağla",
+    "reconnect": "Yeniden bağlan",
+    "notConnected": "Bağlı değil",
+    "identityCalendar": "Kimlik, takvim ve Slack"
+  },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",
     "subtitle": "Çalışma alanın hazır. İlk birkaç dakikada değer görmenin en hızlı yolları burada.",
@@ -241,6 +250,7 @@
     "documents": "Belgeler",
     "offers": "Teklifler",
     "tasks": "Görevler",
+    "accounts": "Hesap Merkezi",
     "calendar": "Takvim",
     "commissions": "Komisyonlar",
     "reports": "Raporlar",

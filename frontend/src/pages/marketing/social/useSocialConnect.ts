@@ -30,7 +30,7 @@ export function useSocialConnect() {
    *  connect was launched from the inbox/channels page). */
   const startConnect = async (
     network: SocialNetwork,
-    opts?: { origin?: 'social' | 'channels' },
+    opts?: { origin?: 'social' | 'channels' | 'account-center' },
   ) => {
     try {
       const url = `/social/oauth/${network.toLowerCase()}/start`;

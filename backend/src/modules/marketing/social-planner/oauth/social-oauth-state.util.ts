@@ -26,9 +26,9 @@ export interface StatePayload {
    *  recover the verifier and defeat PKCE's code-interception protection. */
   cv?: string;
   /** Which page launched the connect, so the public callback lands the user back
-   *  there ('social' Planner vs 'channels' inbox). In-HMAC → cannot be tampered.
-   *  Absent = 'social' (back-compat with existing links). */
-  origin?: 'social' | 'channels';
+   *  there ('social' Planner, 'channels' inbox, or 'account-center' hub). In-HMAC
+   *  → cannot be tampered. Absent = 'social' (back-compat with existing links). */
+  origin?: 'social' | 'channels' | 'account-center';
 }
 
 function b64url(buf: Buffer): string {
@@ -40,7 +40,7 @@ function fromB64url(s: string): Buffer {
 }
 
 export function signState(
-  data: { workspaceId: string; network: string; cv?: string; origin?: 'social' | 'channels' },
+  data: { workspaceId: string; network: string; cv?: string; origin?: 'social' | 'channels' | 'account-center' },
   ttlMs: number = TTL_MS,
 ): string {
   const payload: StatePayload = {

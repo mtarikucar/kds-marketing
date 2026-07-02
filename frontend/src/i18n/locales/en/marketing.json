@@ -79,6 +79,15 @@
       "modules": { "title": "Turn features on or off", "body": "Only need part of the platform? Go to Settings › Modules and switch off what you don't use — it disappears from the menu until you want it back." }
     }
   },
+  "accounts": {
+    "title": "Account Center",
+    "subtitle": "Connect and manage every account in one place — publishing, inbox, WhatsApp and ads. One connection can power marketing and channels at once.",
+    "connect": "Connect",
+    "connectAnother": "Connect another",
+    "reconnect": "Reconnect",
+    "notConnected": "Not connected",
+    "identityCalendar": "Identity, calendar & Slack"
+  },
   "welcome": {
     "title": "Welcome to Jeeta 🎉",
     "subtitle": "Your workspace is ready. Here are the fastest ways to get value in the first few minutes.",
@@ -230,6 +239,7 @@
     "documents": "Documents",
     "offers": "Offers",
     "tasks": "Tasks",
+    "accounts": "Account Center",
     "calendar": "Calendar",
     "commissions": "Commissions",
     "reports": "Reports",

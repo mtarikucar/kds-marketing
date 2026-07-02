@@ -56,7 +56,7 @@ export class SocialOAuthService {
   start(
     workspaceId: string,
     network: string,
-    origin?: 'social' | 'channels',
+    origin?: 'social' | 'channels' | 'account-center',
   ): { authorizeUrl: string } {
     const n = this.assertNetwork(network);
     if (!isSecretBoxConfigured()) {
@@ -81,7 +81,7 @@ export class SocialOAuthService {
     network: string,
     code: string,
     state: string,
-  ): Promise<{ pendingId: string; workspaceId: string; origin?: 'social' | 'channels' }> {
+  ): Promise<{ pendingId: string; workspaceId: string; origin?: 'social' | 'channels' | 'account-center' }> {
     const n = this.assertNetwork(network);
     const payload = verifyState(state);
     if (!payload || payload.network !== n) {

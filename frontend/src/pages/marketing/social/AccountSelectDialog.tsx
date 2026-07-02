@@ -17,10 +17,10 @@ import { useSocialConnect } from './useSocialConnect';
 interface Props {
   pendingId: string | null;
   onOpenChange: (open: boolean) => void;
-  /** 'channels' launched the connect from the inbox/Channels page: pre-select the
-   *  messaging inbox for Meta (Page/IG) assets and use channel-oriented copy.
-   *  Default 'social' keeps the Social Planner flow unchanged. */
-  context?: 'social' | 'channels';
+  /** Where the connect was launched: 'channels' pre-selects only Meta assets +
+   *  pre-checks their inbox; 'account-center' selects everything AND pre-checks
+   *  messaging (all capabilities on). Default 'social' keeps the Planner flow. */
+  context?: 'social' | 'channels' | 'account-center';
   /** Called after a successful confirm — e.g. to refetch the channels list. */
   onConnected?: () => void;
 }
@@ -46,11 +46,16 @@ export function AccountSelectDialog({ pendingId, onOpenChange, context = 'social
   // visible and opt-in-able.
   useEffect(() => {
     if (!data?.assets) return;
+    const metaIds = data.assets
+      .filter((a) => a.accountType === 'PAGE' || a.accountType === 'IG_BUSINESS')
+      .map((a) => a.externalId);
     if (context === 'channels') {
-      const metaIds = data.assets
-        .filter((a) => a.accountType === 'PAGE' || a.accountType === 'IG_BUSINESS')
-        .map((a) => a.externalId);
+      // Only the messaging-eligible Meta assets, inbox pre-checked.
       setSelected(metaIds);
+      setMessaging(metaIds);
+    } else if (context === 'account-center') {
+      // Everything on: publish all assets AND enable the inbox for Meta ones.
+      setSelected(data.assets.map((a) => a.externalId));
       setMessaging(metaIds);
     } else {
       setSelected(data.assets.map((a) => a.externalId));
@@ -83,7 +88,9 @@ export function AccountSelectDialog({ pendingId, onOpenChange, context = 'social
           <DialogTitle>
             {context === 'channels'
               ? t('social.oauth.selectChannelTitle', { defaultValue: 'Connect messaging channels' })
-              : t('social.oauth.selectTitle', { defaultValue: 'Choose accounts to connect' })}
+              : context === 'account-center'
+                ? t('social.oauth.selectAllTitle', { defaultValue: 'Connect accounts' })
+                : t('social.oauth.selectTitle', { defaultValue: 'Choose accounts to connect' })}
           </DialogTitle>
           <DialogDescription>
             {context === 'channels'
@@ -91,9 +98,14 @@ export function AccountSelectDialog({ pendingId, onOpenChange, context = 'social
                   defaultValue:
                     'Pick the Facebook Pages / Instagram accounts to use as a two-way inbox. They are also added to the Social Planner.',
                 })
-              : t('social.oauth.selectBody', {
-                  defaultValue: 'Pick the pages/accounts the planner may publish to.',
-                })}
+              : context === 'account-center'
+                ? t('social.oauth.selectAllBody', {
+                    defaultValue:
+                      'Pick which accounts to connect. Facebook Pages / Instagram are used for publishing AND (with the inbox checkbox) two-way messaging.',
+                  })
+                : t('social.oauth.selectBody', {
+                    defaultValue: 'Pick the pages/accounts the planner may publish to.',
+                  })}
           </DialogDescription>
         </DialogHeader>
 
