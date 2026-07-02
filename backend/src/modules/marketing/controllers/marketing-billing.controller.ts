@@ -2,12 +2,18 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { PrismaService } from '../../../prisma/prisma.service';
+import {
+  EntitlementsService,
+  TOGGLEABLE_MODULE_KEYS,
+} from '../../billing/entitlements.service';
 import { isProspectingConfigured } from '../prospecting/prospecting.config';
 import { isSendingDomainsConfigured } from '../sending-domains/sending-domains.config';
 import { isCustomDomainsEnabled } from '../custom-domains/custom-domains.config';
@@ -36,6 +42,13 @@ export class CheckoutDto {
   provider: 'paytr' | 'stripe' | 'manual';
 }
 
+export class SetModulesDto {
+  /** The full set of module keys the workspace wants ACTIVE. */
+  @IsArray()
+  @IsString({ each: true })
+  activatedModules: string[];
+}
+
 /**
  * Workspace-facing billing surface. Reading the summary is open to every
  * member (the SPA gates features off it); spending money is OWNER-only.
@@ -44,7 +57,11 @@ export class CheckoutDto {
 @Controller('marketing/billing')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingBillingController {
-  constructor(private readonly billing: BillingService) {}
+  constructor(
+    private readonly billing: BillingService,
+    private readonly prisma: PrismaService,
+    private readonly entitlements: EntitlementsService,
+  ) {}
 
   /** Public pricing table — the register page renders it pre-auth. */
   @Get('packages')
@@ -71,6 +88,32 @@ export class MarketingBillingController {
   @MarketingRoles('OWNER')
   orders(@CurrentMarketingUser() actor: MarketingUserPayload) {
     return this.billing.orders(actor.workspaceId);
+  }
+
+  /**
+   * Set which toggleable modules are ACTIVE for this workspace (progressive
+   * disclosure). Persists only keys that are both toggleable AND entitled, then
+   * invalidates the entitlements cache so the nav + API gates update at once.
+   */
+  @Patch('modules')
+  @MarketingRoles('OWNER')
+  @RequirePermission('billing.manage')
+  async setModules(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: SetModulesDto,
+  ) {
+    const eff = await this.entitlements.getEffective(actor.workspaceId);
+    const entitled = new Set<string>(eff.entitledModules);
+    const toggleable = new Set<string>(TOGGLEABLE_MODULE_KEYS as readonly string[]);
+    const next = [...new Set(dto.activatedModules)].filter(
+      (k) => toggleable.has(k) && entitled.has(k),
+    );
+    await this.prisma.workspace.update({
+      where: { id: actor.workspaceId },
+      data: { activatedModules: next },
+    });
+    this.entitlements.invalidate(actor.workspaceId);
+    return { activatedModules: next };
   }
 
   @Post('checkout')

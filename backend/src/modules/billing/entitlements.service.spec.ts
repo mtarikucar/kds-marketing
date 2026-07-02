@@ -29,6 +29,8 @@ describe('EntitlementsService — fold semantics', () => {
       workspaceSubscription: { findUnique: jest.fn() },
       package: { findUnique: jest.fn().mockResolvedValue({ ...PKG }) },
       workspaceAddOn: { findMany: jest.fn().mockResolvedValue([]) },
+      // Module-activation lookup: default null = every entitled module active.
+      workspace: { findUnique: jest.fn().mockResolvedValue({ activatedModules: null }) },
     };
     svc = new EntitlementsService(prisma);
   });
@@ -62,6 +64,25 @@ describe('EntitlementsService — fold semantics', () => {
       maxUsers: 10,
       features: expect.objectContaining({ telephony: true, apiAccess: false }),
     });
+  });
+
+  it('activation allow-list deactivates entitled-but-unlisted modules; entitledModules still lists them', async () => {
+    prisma.workspaceSubscription.findUnique.mockResolvedValue(sub());
+    prisma.workspace.findUnique.mockResolvedValue({ activatedModules: ['advancedReports'] });
+    const e = await svc.getEffective('ws-1');
+    expect(e.features.telephony).toBe(false); // entitled but not activated → gated off
+    expect(e.features.advancedReports).toBe(true); // entitled AND activated → on
+    expect(e.entitledModules).toEqual(
+      expect.arrayContaining(['telephony', 'advancedReports']),
+    );
+  });
+
+  it('null activatedModules keeps every entitled module active (back-compat)', async () => {
+    prisma.workspaceSubscription.findUnique.mockResolvedValue(sub());
+    prisma.workspace.findUnique.mockResolvedValue({ activatedModules: null });
+    const e = await svc.getEffective('ws-1');
+    expect(e.features.telephony).toBe(true);
+    expect(e.features.advancedReports).toBe(true);
   });
 
   it('live TRIALING grants the package; an expired trial computes to zero immediately', async () => {

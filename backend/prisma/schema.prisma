@@ -43,6 +43,11 @@ model Workspace {
   /// Jsonb so additions don't need migrations.
   settings Json?
 
+  /// Progressive-disclosure allow-list of ACTIVATED module feature keys
+  /// (string[]). NULL/absent = every entitled module is active (back-compat);
+  /// when present, a toggleable module stays active only if it's also listed.
+  activatedModules Json?
+
   /// Present ONLY on a workspace wired to a core product deployment
   /// ({ type: 'KDS_CORE', appName, appUrl }). Gates the lead→tenant
   /// provisioning flow, settlement commissions and hardware-quote intake;

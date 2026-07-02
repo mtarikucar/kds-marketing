@@ -33,6 +33,15 @@ export const FEATURE_KEYS = [
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
 /**
+ * Feature keys that map to a user-facing MODULE a workspace can toggle on/off for
+ * progressive disclosure (via Workspace.activatedModules). `autoAssign` is
+ * background behaviour, not a surfaced module, so it is never toggled off here.
+ */
+export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter(
+  (k) => k !== 'autoAssign',
+);
+
+/**
  * Numeric entitlement limits beyond the three legacy columns. Stored in
  * Package.limits JSON; add-on grants fold in generically (`limit.<key>`).
  * -1 = unlimited. Tripwire-pinned against seed-packages.ts `limits` blocks.
@@ -56,6 +65,9 @@ export interface EffectiveEntitlements {
   maxUsers: number;
   maxResearchProfiles: number;
   features: Record<FeatureKey, boolean>;
+  /** Toggleable modules the plan/add-ons entitle, BEFORE per-workspace activation
+   *  is applied — lets the catalog tell "not in plan" from "deactivated". */
+  entitledModules: FeatureKey[];
   limits: Record<LimitKey, number>;
   trialEndsAt: Date | null;
   currentPeriodEnd: Date | null;
@@ -78,6 +90,7 @@ function zeroEntitlements(workspaceId: string, status: string | null): Effective
       FeatureKey,
       boolean
     >,
+    entitledModules: [],
     limits: zeroLimits(),
     trialEndsAt: null,
     currentPeriodEnd: null,
@@ -207,6 +220,29 @@ export class EntitlementsService {
       }
     }
 
+    // Toggleable modules the plan/add-ons entitle, captured BEFORE activation.
+    const entitledModules = TOGGLEABLE_MODULE_KEYS.filter((k) => features[k]);
+
+    // Progressive-disclosure module activation. If the workspace has an explicit
+    // allow-list, a toggleable module stays active only when it's BOTH entitled
+    // and activated. NULL/absent = every entitled module active (back-compat, so
+    // existing tenants are unaffected). This gates BOTH the API FeatureGuard and
+    // the SPA nav, since both read this one features map.
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { activatedModules: true },
+    });
+    const activated = Array.isArray(workspace?.activatedModules)
+      ? (workspace!.activatedModules as unknown[]).filter(
+          (m): m is string => typeof m === 'string',
+        )
+      : null;
+    if (activated) {
+      for (const k of TOGGLEABLE_MODULE_KEYS) {
+        if (!activated.includes(k)) features[k] = false;
+      }
+    }
+
     return {
       workspaceId,
       packageCode: pkg.code,
@@ -215,6 +251,7 @@ export class EntitlementsService {
       maxUsers,
       maxResearchProfiles,
       features,
+      entitledModules,
       limits,
       trialEndsAt: sub.trialEndsAt,
       currentPeriodEnd: sub.currentPeriodEnd,
