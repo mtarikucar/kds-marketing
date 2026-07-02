@@ -19,6 +19,7 @@ import type { SocialNetwork } from '../social/socialSchemas';
 import { startLinkedinAdsOAuth, startTiktokAdsOAuth } from '../../../features/marketing/api/ads.service';
 import { navigateExternal } from '../../../lib/navigateExternal';
 import { ManualChannelDialog } from './ManualChannelDialog';
+import { EmailChannelDialog } from './EmailChannelDialog';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
 import type { ChannelType } from '../channels/channelFields';
 
@@ -72,6 +73,7 @@ export default function AccountCenterPage() {
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectionGroup | null>(null);
   const [manualType, setManualType] = useState<ChannelType | null>(null);
+  const [emailOpen, setEmailOpen] = useState(false);
   const disconnect = useDisconnect();
 
   // The OAuth callback returns to /accounts?connect=<pendingId> (origin=account-center).
@@ -213,7 +215,13 @@ export default function AccountCenterPage() {
               </Button>
             ) : (
               manualChannel && (
-                <Button size="sm" variant="outline" onClick={() => setManualType(manualChannel)}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    manualChannel === 'EMAIL' ? setEmailOpen(true) : setManualType(manualChannel)
+                  }
+                >
                   <Plug className="h-4 w-4" />
                   {t('accounts.setUp', 'Set up')}
                 </Button>
@@ -262,6 +270,8 @@ export default function AccountCenterPage() {
         }}
         onCreated={onConnected}
       />
+
+      <EmailChannelDialog open={emailOpen} onOpenChange={setEmailOpen} onCreated={onConnected} />
 
       <ConfirmDialog
         open={!!disconnectTarget}

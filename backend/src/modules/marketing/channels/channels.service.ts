@@ -329,6 +329,20 @@ export class ChannelsService {
             messaging: (c.configPublic as Record<string, unknown> | null)?.messaging ?? null,
           }
         : {}),
+      // EMAIL is two-way: outbound SMTP (sealed secrets) + inbound replies parsed
+      // by the workspace's email provider POSTing to our signed inbound webhook.
+      // Surface the webhook URL to paste into the ESP, whether the platform-global
+      // signing key is set (inbound is 401-dead without it), and the inbound
+      // address the channel resolves by — so the UI can show BOTH halves' status.
+      ...(c.type === 'EMAIL'
+        ? {
+            webhookUrl: process.env.PUBLIC_BASE_URL
+              ? `${process.env.PUBLIC_BASE_URL.replace(/\/+$/, '')}/api/public/channels/email/webhook`
+              : null,
+            inboundSecretConfigured: !!process.env.EMAIL_INBOUND_SECRET,
+            inboundAddress: c.externalId,
+          }
+        : {}),
       lastVerifiedAt: c.lastVerifiedAt,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
