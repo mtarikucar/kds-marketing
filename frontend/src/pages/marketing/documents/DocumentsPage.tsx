@@ -21,7 +21,7 @@ import {
   Card,
   CardContent,
   Badge,
-  Spinner,
+  QueryStateBoundary,
   EmptyState,
   Dialog,
   DialogContent,
@@ -69,7 +69,7 @@ export default function DocumentsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
-  const { data: docs, isLoading } = useQuery({
+  const { data: docs, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'documents'],
     queryFn: listDocuments,
   });
@@ -149,13 +149,14 @@ export default function DocumentsPage() {
         }
       />
 
-      {isLoading && (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      )}
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
 
-      {!isLoading && rows.length === 0 && (
+      {!isLoading && !isError && rows.length === 0 && (
         <EmptyState
           title={t('documents.emptyTitle', 'No documents yet')}
           description={t('documents.empty', 'Draft an agreement and send it for e-signature.')}

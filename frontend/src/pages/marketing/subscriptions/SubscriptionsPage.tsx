@@ -23,7 +23,7 @@ import {
   Card,
   CardContent,
   Badge,
-  Spinner,
+  QueryStateBoundary,
   EmptyState,
   Dialog,
   DialogContent,
@@ -158,7 +158,7 @@ export default function SubscriptionsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
-  const { data: subs, isLoading } = useQuery({
+  const { data: subs, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'subscriptions'],
     queryFn: listSubscriptions,
   });
@@ -270,13 +270,14 @@ export default function SubscriptionsPage() {
         }
       />
 
-      {isLoading && (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      )}
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
 
-      {!isLoading && rows.length === 0 && (
+      {!isLoading && !isError && rows.length === 0 && (
         <EmptyState
           title={t('subscriptions.emptyTitle', 'No subscriptions yet')}
           description={t('subscriptions.empty', 'Create a recurring plan to auto-bill a customer each period.')}

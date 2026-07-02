@@ -20,7 +20,7 @@ import {
   Card,
   CardContent,
   Badge,
-  Spinner,
+  QueryStateBoundary,
   EmptyState,
   Dialog,
   DialogContent,
@@ -93,7 +93,7 @@ export default function OrderFormsPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [deleteTarget, setDeleteTarget] = useState<OrderForm | null>(null);
 
-  const { data: forms, isLoading } = useQuery({
+  const { data: forms, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'order-forms'],
     queryFn: listOrderForms,
   });
@@ -191,13 +191,14 @@ export default function OrderFormsPage() {
         </p>
       )}
 
-      {isLoading && (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      )}
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
 
-      {!isLoading && rows.length === 0 && products.length > 0 && (
+      {!isLoading && !isError && rows.length === 0 && products.length > 0 && (
         <EmptyState
           title={t('orderForms.emptyTitle', 'No order forms yet')}
           description={t('orderForms.empty', 'Create a shareable order form to sell a product online.')}

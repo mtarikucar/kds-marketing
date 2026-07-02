@@ -23,7 +23,7 @@ import {
   Card,
   CardContent,
   Badge,
-  Spinner,
+  QueryStateBoundary,
   EmptyState,
   Dialog,
   DialogContent,
@@ -174,7 +174,7 @@ export default function EstimatesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
-  const { data: estimates, isLoading } = useQuery({
+  const { data: estimates, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'estimates'],
     queryFn: listEstimates,
   });
@@ -320,84 +320,83 @@ export default function EstimatesPage() {
         }
       />
 
-      {isLoading && (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      )}
-
-      {!isLoading && rows.length === 0 && (
-        <EmptyState
-          title={t('estimates.emptyTitle', 'No estimates yet')}
-          description={t('estimates.empty', 'Create a quote and send it to a customer.')}
-          action={
-            <Button size="sm" onClick={openNew}>
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              {t('estimates.newEstimate', 'New estimate')}
-            </Button>
-          }
-        />
-      )}
-
-      {rows.length > 0 && (
-        <div className="space-y-2">
-          {rows.map((e) => (
-            <Card key={e.id}>
-              <CardContent className="p-4 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="font-medium text-foreground">{e.number}</p>
-                    <Badge tone={STATUS_TONE[e.status]} size="sm">
-                      {t(`estimates.status.${e.status}`, e.status)}
-                    </Badge>
-                    {e.convertedInvoiceId && (
-                      <Badge tone="success" size="sm">
-                        {t('estimates.invoiced', 'Invoiced')}
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      >
+        {rows.length === 0 ? (
+          <EmptyState
+            title={t('estimates.emptyTitle', 'No estimates yet')}
+            description={t('estimates.empty', 'Create a quote and send it to a customer.')}
+            action={
+              <Button size="sm" onClick={openNew}>
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                {t('estimates.newEstimate', 'New estimate')}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="space-y-2">
+            {rows.map((e) => (
+              <Card key={e.id}>
+                <CardContent className="p-4 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-foreground">{e.number}</p>
+                      <Badge tone={STATUS_TONE[e.status]} size="sm">
+                        {t(`estimates.status.${e.status}`, e.status)}
                       </Badge>
-                    )}
+                      {e.convertedInvoiceId && (
+                        <Badge tone="success" size="sm">
+                          {t('estimates.invoiced', 'Invoiced')}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-lg font-semibold text-foreground mt-0.5">
+                      {money(e.total, e.currency)}
+                    </p>
                   </div>
-                  <p className="text-lg font-semibold text-foreground mt-0.5">
-                    {money(e.total, e.currency)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(e)} title={t('common.edit', 'Edit')}>
-                    <Pencil className="w-4 h-4" aria-hidden="true" />
-                  </Button>
-                  {/* Each action's in-flight guard is scoped to THIS estimate
-                      (mutation.variables === e.id) so a click can't double-fire
-                      — important for Convert, which mints an invoice and whose
-                      second request would otherwise surface a spurious error
-                      toast after the first already succeeded. */}
-                  {(e.status === 'DRAFT' || e.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" disabled={sendMut.isPending && sendMut.variables === e.id} onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
-                      <Send className="w-4 h-4" aria-hidden="true" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button variant="ghost" size="sm" onClick={() => openEdit(e)} title={t('common.edit', 'Edit')}>
+                      <Pencil className="w-4 h-4" aria-hidden="true" />
                     </Button>
-                  )}
-                  {e.status !== 'ACCEPTED' && e.status !== 'DECLINED' && (
-                    <>
-                      <Button variant="ghost" size="sm" disabled={acceptMut.isPending && acceptMut.variables === e.id} onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
-                        <Check className="w-4 h-4 text-success" aria-hidden="true" />
+                    {/* Each action's in-flight guard is scoped to THIS estimate
+                        (mutation.variables === e.id) so a click can't double-fire
+                        — important for Convert, which mints an invoice and whose
+                        second request would otherwise surface a spurious error
+                        toast after the first already succeeded. */}
+                    {(e.status === 'DRAFT' || e.status === 'SENT') && (
+                      <Button variant="ghost" size="sm" disabled={sendMut.isPending && sendMut.variables === e.id} onClick={() => sendMut.mutate(e.id)} title={t('estimates.send', 'Send')}>
+                        <Send className="w-4 h-4" aria-hidden="true" />
                       </Button>
-                      <Button variant="ghost" size="sm" disabled={declineMut.isPending && declineMut.variables === e.id} onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
-                        <X className="w-4 h-4 text-danger" aria-hidden="true" />
+                    )}
+                    {e.status !== 'ACCEPTED' && e.status !== 'DECLINED' && (
+                      <>
+                        <Button variant="ghost" size="sm" disabled={acceptMut.isPending && acceptMut.variables === e.id} onClick={() => acceptMut.mutate(e.id)} title={t('estimates.accept', 'Accept')}>
+                          <Check className="w-4 h-4 text-success" aria-hidden="true" />
+                        </Button>
+                        <Button variant="ghost" size="sm" disabled={declineMut.isPending && declineMut.variables === e.id} onClick={() => declineMut.mutate(e.id)} title={t('estimates.decline', 'Decline')}>
+                          <X className="w-4 h-4 text-danger" aria-hidden="true" />
+                        </Button>
+                      </>
+                    )}
+                    {!e.convertedInvoiceId && (e.status === 'ACCEPTED' || e.status === 'SENT') && (
+                      <Button variant="ghost" size="sm" disabled={convertMut.isPending && convertMut.variables === e.id} onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
+                        <FileOutput className="w-4 h-4 text-primary" aria-hidden="true" />
                       </Button>
-                    </>
-                  )}
-                  {!e.convertedInvoiceId && (e.status === 'ACCEPTED' || e.status === 'SENT') && (
-                    <Button variant="ghost" size="sm" disabled={convertMut.isPending && convertMut.variables === e.id} onClick={() => convertMut.mutate(e.id)} title={t('estimates.convert', 'Convert to invoice')}>
-                      <FileOutput className="w-4 h-4 text-primary" aria-hidden="true" />
+                    )}
+                    <Button variant="ghost" size="sm" disabled={deleteMut.isPending && deleteMut.variables === e.id} onClick={() => deleteMut.mutate(e.id)}>
+                      <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
                     </Button>
-                  )}
-                  <Button variant="ghost" size="sm" disabled={deleteMut.isPending && deleteMut.variables === e.id} onClick={() => deleteMut.mutate(e.id)}>
-                    <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </QueryStateBoundary>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
