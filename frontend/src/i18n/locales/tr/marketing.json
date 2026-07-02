@@ -16,6 +16,15 @@
     "opportunity": "Yeni Fırsat",
     "company": "Yeni Şirket"
   },
+  "settingsGroup": {
+    "workspace": "Çalışma alanı",
+    "team": "Ekip ve erişim",
+    "data": "CRM verisi",
+    "integrations": "Kanallar ve entegrasyonlar",
+    "developer": "Geliştirici",
+    "compliance": "Uyumluluk",
+    "other": "Diğer"
+  },
   "leadStatus": {
     "NEW": "Yeni",
     "CONTACTED": "İletişime geçildi",

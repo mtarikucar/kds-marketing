@@ -16,6 +16,15 @@
     "opportunity": "New opportunity",
     "company": "New company"
   },
+  "settingsGroup": {
+    "workspace": "Workspace",
+    "team": "Team & access",
+    "data": "CRM data",
+    "integrations": "Channels & integrations",
+    "developer": "Developer",
+    "compliance": "Compliance",
+    "other": "Other"
+  },
   "leadStatus": {
     "NEW": "New",
     "CONTACTED": "Contacted",

@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import { NAV_HUBS } from '../navigation';
+import { useBreadcrumbStore } from '../hooks/useBreadcrumbLabel';
 
 /**
  * Route-derived breadcrumb trail (wayfinding). Reuses the navigation hub config
@@ -35,6 +36,7 @@ const ITEMS = NAV_HUBS.flatMap((h) => {
 export default function Breadcrumbs() {
   const { t } = useTranslation('marketing');
   const { pathname } = useLocation();
+  const detailLabel = useBreadcrumbStore((s) => s.detailLabel);
   const path = pathname.replace(/\/+$/, '') || '/';
 
   const match = ITEMS.filter(
@@ -51,7 +53,9 @@ export default function Breadcrumbs() {
       ? t('breadcrumb.new', 'New')
       : leaf === 'edit'
         ? t('breadcrumb.edit', 'Edit')
-        : t('breadcrumb.detail', 'Detail');
+        : // A detail route ("/leads/123"): prefer the record's name if the page
+          // supplied one, else fall back to a generic "Detail".
+          detailLabel ?? t('breadcrumb.detail', 'Detail');
 
   // Suppress a redundant "Dashboard › Dashboard" for single-page hubs.
   const showGroup = match.groupLabelKey !== match.labelKey;

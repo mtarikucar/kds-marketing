@@ -2,10 +2,38 @@ import { NavLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft } from 'lucide-react';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
-import { NAV_HUBS, visibleNav } from '../navigation';
+import { NAV_HUBS, visibleNav, type NavChild } from '../navigation';
 import { useEntitlements } from '../hooks/useEntitlements';
 import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
+
+/**
+ * Ordered sub-grouping for the Settings area, so the 17-item list reads as a few
+ * labelled clusters (everyday admin up top; developer/compliance tooling last)
+ * instead of one undifferentiated grab-bag. Paths not listed fall into "Other".
+ */
+const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
+  { key: 'workspace', label: 'Workspace', paths: ['/branding', '/brand-kit', '/targets'] },
+  { key: 'team', label: 'Team & access', paths: ['/users', '/settings/roles', '/settings/two-factor'] },
+  { key: 'data', label: 'CRM data', paths: ['/settings/custom-fields', '/research'] },
+  {
+    key: 'integrations',
+    label: 'Channels & integrations',
+    paths: [
+      '/settings/connections',
+      '/settings/telephony',
+      '/settings/voice-ai',
+      '/settings/sending-domains',
+      '/settings/custom-domains',
+    ],
+  },
+  {
+    key: 'developer',
+    label: 'Developer',
+    paths: ['/settings/api-keys', '/settings/webhooks', '/settings/inbound-webhooks'],
+  },
+  { key: 'compliance', label: 'Compliance', paths: ['/settings/compliance'] },
+];
 
 /**
  * The separate Settings area — a secondary vertical sidebar (desktop) / a
@@ -21,6 +49,19 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
 
   const hubs = visibleNav(NAV_HUBS, { isManager, has, isAgency });
   const items = hubs.find((h) => h.area === 'settings')?.children ?? [];
+
+  // Bucket the visible settings items into ordered, labelled groups.
+  const byPath = new Map(items.map((c) => [c.path, c]));
+  const grouped = SETTINGS_GROUPS.map((g) => ({
+    key: g.key,
+    label: g.label,
+    items: g.paths
+      .map((p) => byPath.get(p))
+      .filter((c): c is NavChild => !!c),
+  })).filter((g) => g.items.length > 0);
+  const known = new Set(SETTINGS_GROUPS.flatMap((g) => g.paths));
+  const other = items.filter((c) => !known.has(c.path));
+  if (other.length) grouped.push({ key: 'other', label: 'Other', items: other });
 
   const vItem = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -47,12 +88,19 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
             {t('nav.group.settings', { defaultValue: 'Settings' })}
           </h2>
         </div>
-        <nav className="min-h-0 flex-1 space-y-1 p-3">
-          {items.map((c) => (
-            <NavLink key={c.path} to={c.path} className={vItem}>
-              {c.icon && <c.icon className="h-4 w-4 shrink-0" />}
-              <span className="truncate">{t(c.labelKey, c.label)}</span>
-            </NavLink>
+        <nav className="min-h-0 flex-1 space-y-4 p-3">
+          {grouped.map((g) => (
+            <div key={g.key} className="space-y-1">
+              <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t(`settingsGroup.${g.key}`, g.label)}
+              </p>
+              {g.items.map((c) => (
+                <NavLink key={c.path} to={c.path} className={vItem}>
+                  {c.icon && <c.icon className="h-4 w-4 shrink-0" />}
+                  <span className="truncate">{t(c.labelKey, c.label)}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
       </aside>

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { ArrowLeft, Pencil, Trash2, CheckCircle2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcrumbLabel';
 import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { Spinner } from '@/components/ui/Spinner';
@@ -65,6 +66,9 @@ export default function LeadDetailPage() {
     // don't burn retries on it; let the not-found branch render.
     retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
   });
+
+  // Show the lead's name in the header breadcrumb ("Contacts › Leads › <name>").
+  useBreadcrumbLabel(lead?.businessName);
 
   // Mutations
   const statusMutation = useMutation({
