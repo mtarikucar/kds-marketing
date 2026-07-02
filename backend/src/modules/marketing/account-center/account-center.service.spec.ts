@@ -1,3 +1,4 @@
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AccountCenterService } from './account-center.service';
 
 describe('AccountCenterService', () => {
@@ -6,20 +7,24 @@ describe('AccountCenterService', () => {
   let channels: any;
   let adAccounts: any;
   let entitlements: any;
+  let socialOAuth: any;
   let svc: AccountCenterService;
 
   beforeEach(() => {
     socialPlanner = {
       listAccounts: jest.fn().mockResolvedValue([]),
       networkStatus: jest.fn().mockResolvedValue({ secretBoxConfigured: true, FACEBOOK: true }),
+      disconnectAccount: jest.fn().mockResolvedValue({}),
     };
-    channels = { list: jest.fn().mockResolvedValue([]) };
+    channels = { list: jest.fn().mockResolvedValue([]), remove: jest.fn().mockResolvedValue({}) };
     adAccounts = {
       list: jest.fn().mockResolvedValue([]),
       status: jest.fn().mockReturnValue({ META: true, TIKTOK: false, LINKEDIN: false, secretBoxConfigured: true }),
+      remove: jest.fn().mockResolvedValue({}),
     };
     entitlements = { getEffective: jest.fn().mockResolvedValue({ features: { conversationAi: true } }) };
-    svc = new AccountCenterService(socialPlanner, channels, adAccounts, entitlements);
+    socialOAuth = { start: jest.fn().mockReturnValue({ authorizeUrl: 'https://fb/auth' }) };
+    svc = new AccountCenterService(socialPlanner, channels, adAccounts, entitlements, socialOAuth);
   });
 
   const meta = (r: any) => r.providers.find((p: any) => p.provider === 'META');
@@ -82,5 +87,54 @@ describe('AccountCenterService', () => {
     socialPlanner.networkStatus.mockResolvedValue({ secretBoxConfigured: true, FACEBOOK: false });
     adAccounts.status.mockReturnValue({ META: true });
     expect(meta(await svc.getConnections(WS)).configured).toBe(true);
+  });
+
+  describe('disconnect', () => {
+    beforeEach(() => {
+      // A Page that is both a publishing account AND a messenger channel.
+      socialPlanner.listAccounts.mockResolvedValue([
+        { id: 'sa1', network: 'FACEBOOK', externalId: 'P1', displayName: 'Acme', accountType: 'PAGE', connectedVia: 'OAUTH', enabled: true },
+      ]);
+      channels.list.mockResolvedValue([
+        { id: 'ch1', type: 'MESSENGER', name: 'Acme', externalId: 'P1', status: 'ACTIVE' },
+      ]);
+    });
+
+    it('removes ALL sources of an identity by default', async () => {
+      const out = await svc.disconnect(WS, 'META:P1');
+      expect(socialPlanner.disconnectAccount).toHaveBeenCalledWith(WS, 'sa1');
+      expect(channels.remove).toHaveBeenCalledWith(WS, 'ch1');
+      expect(out.removed).toHaveLength(2);
+    });
+
+    it('capability-selective: drops only INBOX, keeps PUBLISH', async () => {
+      const out = await svc.disconnect(WS, 'META:P1', ['INBOX']);
+      expect(channels.remove).toHaveBeenCalledWith(WS, 'ch1');
+      expect(socialPlanner.disconnectAccount).not.toHaveBeenCalled();
+      expect(out.removed).toHaveLength(1);
+    });
+
+    it('collects a per-source failure in skipped without aborting', async () => {
+      channels.remove.mockRejectedValue(new Error('boom'));
+      const out = await svc.disconnect(WS, 'META:P1');
+      expect(out.removed.map((s: any) => s.model)).toEqual(['SocialAccount']);
+      expect(out.skipped).toHaveLength(1);
+      expect(out.skipped[0].reason).toContain('boom');
+    });
+
+    it('404s on an unknown identity', async () => {
+      await expect(svc.disconnect(WS, 'META:NOPE')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('reauth', () => {
+    it('returns an authorize URL routed through the identity provider network', () => {
+      expect(svc.reauth(WS, 'META:P1')).toEqual({ authorizeUrl: 'https://fb/auth' });
+      expect(socialOAuth.start).toHaveBeenCalledWith(WS, 'FACEBOOK', 'account-center');
+    });
+
+    it('rejects reauth for a non-OAuth provider', () => {
+      expect(() => svc.reauth(WS, 'SMS:x')).toThrow(BadRequestException);
+    });
   });
 });

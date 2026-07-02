@@ -3,13 +3,15 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Plug, ArrowRight, RefreshCw } from 'lucide-react';
+import { Plug, ArrowRight, RefreshCw, Unplug } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { QueryStateBoundary } from '@/components/ui';
-import { useConnections, connectionsKey } from './hooks';
+import { useConnections, useDisconnect, connectionsKey } from './hooks';
 import type { Capability, ConnectionGroup, Health, Provider, ProviderBlock } from './types';
 import { useSocialConnect } from '../social/useSocialConnect';
 import { AccountSelectDialog } from '../social/AccountSelectDialog';
@@ -63,6 +65,8 @@ export default function AccountCenterPage() {
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
+  const [disconnectTarget, setDisconnectTarget] = useState<ConnectionGroup | null>(null);
+  const disconnect = useDisconnect();
 
   // The OAuth callback returns to /accounts?connect=<pendingId> (origin=account-center).
   useEffect(() => {
@@ -128,6 +132,14 @@ export default function AccountCenterPage() {
           {t('accounts.reconnect', 'Reconnect')}
         </Button>
       )}
+      <IconButton
+        variant="ghost"
+        size="sm"
+        aria-label={t('accounts.disconnect', 'Disconnect')}
+        onClick={() => setDisconnectTarget(g)}
+      >
+        <Unplug className="h-4 w-4 text-danger" aria-hidden="true" />
+      </IconButton>
     </div>
   );
 
@@ -212,6 +224,36 @@ export default function AccountCenterPage() {
           if (!open) setPendingConnectId(null);
         }}
         onConnected={onConnected}
+      />
+
+      <ConfirmDialog
+        open={!!disconnectTarget}
+        onOpenChange={(open) => {
+          if (!open) setDisconnectTarget(null);
+        }}
+        title={t('accounts.disconnectTitle', 'Disconnect account')}
+        description={t('accounts.disconnectDesc', {
+          name: disconnectTarget?.displayName ?? '',
+          defaultValue:
+            'This removes “{{name}}” from every surface it powers here (publishing, inbox, ads). You can reconnect it any time.',
+        })}
+        confirmLabel={t('accounts.disconnect', 'Disconnect')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        tone="danger"
+        loading={disconnect.isPending}
+        onConfirm={() => {
+          if (!disconnectTarget) return;
+          disconnect.mutate(
+            { identityKey: disconnectTarget.identityKey },
+            {
+              onSuccess: () => {
+                setDisconnectTarget(null);
+                toast.success(t('accounts.disconnected', 'Account disconnected'));
+              },
+              onError: () => toast.error(t('accounts.disconnectFailed', 'Could not disconnect')),
+            },
+          );
+        }}
       />
 
       <QueryStateBoundary

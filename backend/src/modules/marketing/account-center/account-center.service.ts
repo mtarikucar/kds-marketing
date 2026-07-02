@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { SocialPlannerService } from '../social-planner/social-planner.service';
 import { ChannelsService } from '../channels/channels.service';
 import { AdAccountService } from '../ads/ad-account.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
+import { SocialOAuthService } from '../social-planner/oauth/social-oauth.service';
 
 /**
  * Account Center (hesap merkezi) — a READ-MODEL that aggregates every external
@@ -100,6 +101,16 @@ const CHANNEL_CAPABILITY: Record<string, Capability> = {
 };
 const AD_PROVIDER: Record<string, Provider> = { META: 'META', TIKTOK: 'TIKTOK', LINKEDIN: 'LINKEDIN' };
 
+/** Reauth/reconnect routes an identity back through the right social OAuth network. */
+const PROVIDER_NETWORK: Partial<Record<Provider, string>> = {
+  META: 'FACEBOOK',
+  LINKEDIN: 'LINKEDIN',
+  TIKTOK: 'TIKTOK',
+  TWITTER: 'TWITTER',
+  PINTEREST: 'PINTEREST',
+  GOOGLE: 'GMB',
+};
+
 /** The full provider catalog, in display order — always emitted (even with zero
  *  connections) so the hub is a complete "connect anything" catalog. */
 const CATALOG: { provider: Provider; displayName: string; connectMethod: 'OAUTH' | 'MANUAL' }[] = [
@@ -122,7 +133,64 @@ export class AccountCenterService {
     private readonly channels: ChannelsService,
     private readonly adAccounts: AdAccountService,
     private readonly entitlements: EntitlementsService,
+    private readonly socialOAuth: SocialOAuthService,
   ) {}
+
+  /** Re-resolve a group server-side by its identityKey (never trust client ids). */
+  private async findGroup(workspaceId: string, identityKey: string): Promise<ConnectionGroup> {
+    const model = await this.getConnections(workspaceId);
+    const group = model.providers
+      .flatMap((p) => p.connections)
+      .find((g) => g.identityKey === identityKey);
+    if (!group) throw new NotFoundException('Connection not found');
+    return group;
+  }
+
+  /**
+   * Capability-selective disconnect. Re-resolves the identity, then fans out to
+   * the owning service's per-model removal for each source (optionally filtered to
+   * the requested capabilities — so a user can drop just INBOX while keeping
+   * PUBLISH). Each removal is workspace-scoped by the underlying service; a
+   * per-source failure is collected in `skipped`, never aborting the rest.
+   */
+  async disconnect(
+    workspaceId: string,
+    identityKey: string,
+    capabilities?: Capability[],
+  ): Promise<{ removed: SourceRef[]; skipped: (SourceRef & { reason: string })[] }> {
+    const group = await this.findGroup(workspaceId, identityKey);
+    const targets = capabilities?.length
+      ? group.sources.filter((s) => capabilities.includes(s.capability))
+      : group.sources;
+
+    const removed: SourceRef[] = [];
+    const skipped: (SourceRef & { reason: string })[] = [];
+    for (const s of targets) {
+      try {
+        if (s.model === 'SocialAccount') await this.socialPlanner.disconnectAccount(workspaceId, s.id);
+        else if (s.model === 'Channel') await this.channels.remove(workspaceId, s.id);
+        else if (s.model === 'AdAccount') await this.adAccounts.remove(workspaceId, s.id);
+        removed.push(s);
+      } catch (e: any) {
+        skipped.push({ ...s, reason: String(e?.message ?? e) });
+      }
+    }
+    return { removed, skipped };
+  }
+
+  /**
+   * Reconnect/reauth: returns the same authorize URL the connect start would, for
+   * the identity's provider. The confirm step upserts on the existing unique keys,
+   * so re-auth rotates tokens in place and clears `lastError` — no new plumbing.
+   */
+  reauth(workspaceId: string, identityKey: string): { authorizeUrl: string } {
+    const provider = identityKey.split(':')[0] as Provider;
+    const network = PROVIDER_NETWORK[provider];
+    if (!network) {
+      throw new BadRequestException('Reconnect is only available for OAuth providers');
+    }
+    return this.socialOAuth.start(workspaceId, network, 'account-center');
+  }
 
   async getConnections(workspaceId: string): Promise<AccountCenterResponse> {
     const [socials, channels, ads, netStatus, adStatus, ent] = await Promise.all([
