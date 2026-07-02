@@ -86,7 +86,13 @@
     "connectAnother": "Connect another",
     "reconnect": "Reconnect",
     "notConnected": "Not connected",
-    "identityCalendar": "Identity, calendar & Slack"
+    "identityCalendar": "Identity, calendar & Slack",
+    "setUp": "Set up",
+    "setUpChannel": "Connect {{type}}",
+    "setUpChannelDesc": "Enter the details below — this connects the channel to your inbox.",
+    "channelName": "Name",
+    "channelCreated": "Channel connected",
+    "channelFailed": "Could not connect the channel"
   },
   "welcome": {
     "title": "Welcome to Jeeta 🎉",

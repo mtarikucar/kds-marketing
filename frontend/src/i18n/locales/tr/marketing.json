@@ -98,7 +98,13 @@
     "connectAnother": "Başka bir hesap bağla",
     "reconnect": "Yeniden bağlan",
     "notConnected": "Bağlı değil",
-    "identityCalendar": "Kimlik, takvim ve Slack"
+    "identityCalendar": "Kimlik, takvim ve Slack",
+    "setUp": "Kur",
+    "setUpChannel": "{{type}} bağla",
+    "setUpChannelDesc": "Aşağıdaki bilgileri gir — bu, kanalı gelen kutuna bağlar.",
+    "channelName": "Ad",
+    "channelCreated": "Kanal bağlandı",
+    "channelFailed": "Kanal bağlanamadı"
   },
   "welcome": {
     "title": "Jeeta'ya hoş geldin 🎉",

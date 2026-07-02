@@ -19,6 +19,12 @@ import { startTiktokAdsOAuth } from '../../features/marketing/api/ads.service';
 import { WhatsappSignupButton } from './WhatsappSignupButton';
 import { useSocialConnect } from './social/useSocialConnect';
 import { AccountSelectDialog } from './social/AccountSelectDialog';
+import {
+  CHANNEL_TYPES,
+  SECRET_FIELDS,
+  NEEDS_EXTERNAL_ID,
+  type ChannelType,
+} from './channels/channelFields';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -76,29 +82,9 @@ interface AgentRow {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const CHANNEL_TYPES = ['WEBCHAT', 'WHATSAPP', 'SMS', 'INSTAGRAM', 'MESSENGER', 'TIKTOK', 'LINKEDIN', 'EMAIL', 'VOICE'] as const;
-type ChannelType = (typeof CHANNEL_TYPES)[number];
-
-const SECRET_FIELDS: Record<ChannelType, string[]> = {
-  WEBCHAT: [],
-  WHATSAPP: ['accessToken', 'phoneNumberId'],
-  SMS: ['usercode', 'password', 'msgheader'],
-  INSTAGRAM: ['pageAccessToken'],
-  MESSENGER: ['pageAccessToken'],
-  TIKTOK: ['accessToken'],
-  LINKEDIN: ['accessToken'],
-  EMAIL: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'fromEmail'],
-  VOICE: ['accountSid', 'authToken'],
-};
-const NEEDS_EXTERNAL_ID: Record<string, string> = {
-  WHATSAPP: 'Phone number ID',
-  INSTAGRAM: 'Page ID',
-  MESSENGER: 'Page ID',
-  TIKTOK: 'TikTok business/creator ID',
-  LINKEDIN: 'Actor URN (urn:li:organization:… or urn:li:person:…)',
-  EMAIL: 'Inbound email address',
-  VOICE: 'Twilio phone number (E.164)',
-};
+// Channel-type field metadata (CHANNEL_TYPES / SECRET_FIELDS / NEEDS_EXTERNAL_ID)
+// now lives in ./channels/channelFields so the Account Center's inline setup
+// shares the exact same definitions — imported above.
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 

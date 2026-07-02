@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import AccountCenterPage from './AccountCenterPage';
@@ -74,5 +75,17 @@ describe('AccountCenterPage', () => {
     const connectButtons = screen.getAllByRole('button', { name: /Connect/i });
     // LinkedIn is configured:false → at least one Connect button is disabled.
     expect(connectButtons.some((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
+
+  it('sets up a manual channel (SMS) inline — no navigation away', async () => {
+    const user = userEvent.setup();
+    wrap();
+    await screen.findByText('Acme Clinic');
+    // Only the manual SMS provider shows a "Set up" button; clicking it opens the
+    // inline dialog on THIS page rather than routing to /channels.
+    await user.click(screen.getByRole('button', { name: /Set up/i }));
+    // The inline NetGSM setup dialog opens (its fields prove we didn't navigate).
+    expect(await screen.findByPlaceholderText(/NetGSM usercode/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/NetGSM password/i)).toBeInTheDocument();
   });
 });

@@ -18,6 +18,8 @@ import { AccountSelectDialog } from '../social/AccountSelectDialog';
 import type { SocialNetwork } from '../social/socialSchemas';
 import { startLinkedinAdsOAuth, startTiktokAdsOAuth } from '../../../features/marketing/api/ads.service';
 import { navigateExternal } from '../../../lib/navigateExternal';
+import { ManualChannelDialog } from './ManualChannelDialog';
+import type { ChannelType } from '../channels/channelFields';
 
 /** OAuth providers map to a social-connect network; manual ones are added on the
  *  Channels page (SMS/Email/Web chat) or Voice hub. */
@@ -29,12 +31,12 @@ const PROVIDER_NETWORK: Partial<Record<Provider, SocialNetwork>> = {
   PINTEREST: 'PINTEREST',
   GOOGLE: 'GMB',
 };
-/** Where a manual provider's connect lives. */
-const MANUAL_ROUTE: Partial<Record<Provider, string>> = {
-  SMS: '/channels',
-  EMAIL: '/channels',
-  WEBCHAT: '/channels',
-  VOICE: '/voice',
+/** Manual providers map 1:1 to a channel type set up inline (SMS/EMAIL/WEBCHAT/VOICE). */
+const MANUAL_CHANNEL: Partial<Record<Provider, ChannelType>> = {
+  SMS: 'SMS',
+  EMAIL: 'EMAIL',
+  WEBCHAT: 'WEBCHAT',
+  VOICE: 'VOICE',
 };
 
 const CAP_TONE: Record<Capability, 'info' | 'success' | 'warning' | 'neutral'> = {
@@ -68,6 +70,7 @@ export default function AccountCenterPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectionGroup | null>(null);
+  const [manualType, setManualType] = useState<ChannelType | null>(null);
   const disconnect = useDisconnect();
 
   // The OAuth callback returns to /accounts?connect=<pendingId> (origin=account-center).
@@ -164,7 +167,7 @@ export default function AccountCenterPage() {
 
   const renderProvider = (p: ProviderBlock) => {
     const network = PROVIDER_NETWORK[p.provider];
-    const manualRoute = MANUAL_ROUTE[p.provider];
+    const manualChannel = MANUAL_CHANNEL[p.provider];
     return (
       <Card key={p.provider}>
         <CardContent className="space-y-3 p-4">
@@ -200,12 +203,10 @@ export default function AccountCenterPage() {
                   : t('accounts.connect', 'Connect')}
               </Button>
             ) : (
-              manualRoute && (
-                <Button asChild size="sm" variant="outline">
-                  <Link to={manualRoute}>
-                    {t('accounts.setUp', 'Set up')}
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
+              manualChannel && (
+                <Button size="sm" variant="outline" onClick={() => setManualType(manualChannel)}>
+                  <Plug className="h-4 w-4" />
+                  {t('accounts.setUp', 'Set up')}
                 </Button>
               )
             )}
@@ -243,6 +244,14 @@ export default function AccountCenterPage() {
           if (!open) setPendingConnectId(null);
         }}
         onConnected={onConnected}
+      />
+
+      <ManualChannelDialog
+        type={manualType}
+        onOpenChange={(open) => {
+          if (!open) setManualType(null);
+        }}
+        onCreated={onConnected}
       />
 
       <ConfirmDialog
