@@ -398,6 +398,26 @@ export class OpportunitiesService {
         ...(winStage ? { stageId: winStage.id } : {}),
       },
     });
+    // Moving into the win stage is a stage change too — emit StageChanged so the
+    // "opportunity.stage_changed" workflow trigger (the workhorse) fires the SAME
+    // whether the deal is won via THIS button or dragged into the win stage via
+    // move(). Without this, a stage-entry automation silently fired only on drag.
+    if (winStage && opp.stageId !== winStage.id) {
+      void this.emit(
+        MarketingEventTypes.OpportunityStageChanged,
+        `opp-stage:${id}:${winStage.id}:${now.getTime()}`,
+        {
+          workspaceId,
+          opportunityId: id,
+          leadId: opp.leadId,
+          pipelineId: opp.pipelineId,
+          fromStageId: opp.stageId,
+          toStageId: winStage.id,
+          status: 'WON',
+          occurredAt: now.toISOString(),
+        },
+      );
+    }
     void this.emit(MarketingEventTypes.OpportunityWon, `opp-won:${id}`, {
       workspaceId,
       opportunityId: id,
@@ -431,6 +451,25 @@ export class OpportunitiesService {
         ...(lostStage ? { stageId: lostStage.id } : {}),
       },
     });
+    // Emit StageChanged when moving into the lost stage too (parity with move() +
+    // win()), so a stage-entry workflow trigger fires whether the deal was lost via
+    // this button or dragged into the lost stage.
+    if (lostStage && opp.stageId !== lostStage.id) {
+      void this.emit(
+        MarketingEventTypes.OpportunityStageChanged,
+        `opp-stage:${id}:${lostStage.id}:${now.getTime()}`,
+        {
+          workspaceId,
+          opportunityId: id,
+          leadId: opp.leadId,
+          pipelineId: opp.pipelineId,
+          fromStageId: opp.stageId,
+          toStageId: lostStage.id,
+          status: 'LOST',
+          occurredAt: now.toISOString(),
+        },
+      );
+    }
     void this.emit(MarketingEventTypes.OpportunityLost, `opp-lost:${id}`, {
       workspaceId,
       opportunityId: id,
