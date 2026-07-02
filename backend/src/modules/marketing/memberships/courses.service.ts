@@ -248,9 +248,9 @@ export class CoursesService {
   // ---- lessons ----------------------------------------------------------
 
   async addLesson(workspaceId: string, moduleId: string, dto: LessonInput) {
-    await this.assertModule(workspaceId, moduleId);
+    const m = await this.assertModule(workspaceId, moduleId);
     const position = await this.prisma.lesson.count({ where: { moduleId } });
-    return this.prisma.lesson.create({
+    const lesson = await this.prisma.lesson.create({
       data: {
         moduleId,
         title: dto.title ?? 'Untitled lesson',
@@ -264,6 +264,15 @@ export class CoursesService {
         position,
       },
     });
+    // Adding a lesson GROWS the denominator, so an ACTIVE enrollment's STORED
+    // progressPct is now stale-HIGH (done/oldTotal > done/newTotal) until the
+    // learner's next markLessonComplete happens to recompute it. Re-derive it now —
+    // the same recompute the removeLesson/removeModule paths run (the add-side that
+    // was missing). Adding a lesson only DROPS pct, so it can never wrongly graduate
+    // anyone, and COMPLETED enrollments keep their status + certificate.
+    // (addModule needs no recompute — an empty module leaves the lesson total.)
+    await this.recomputeCourseProgress(m.courseId);
+    return lesson;
   }
 
   private async assertLesson(workspaceId: string, lessonId: string) {
