@@ -104,16 +104,25 @@ export class GamificationService {
   async leaderboard(workspaceId: string, page = 1, pageSize = 20) {
     const take = Math.min(Math.max(pageSize, 1), 100);
     const skip = Math.max(page - 1, 0) * take;
-    const grouped = await this.prisma.pointsLedger.groupBy({
-      by: ['leadId'],
-      where: { workspaceId },
-      _sum: { points: true },
-      // leadId is a stable tiebreaker so paging is deterministic across requests
-      // (without it, tied point totals can duplicate or drop rows between pages).
-      orderBy: [{ _sum: { points: 'desc' } }, { leadId: 'asc' }],
+    // A soft-deleted (deletedAt) or merged-away (mergedIntoId) lead keeps its
+    // points_ledger rows, so a plain groupBy would rank a HIDDEN member on the
+    // public board (and consume a rank + page slot a real member should get).
+    // points_ledger carries a SOFT leadId (no Lead relation), so Prisma groupBy
+    // can't filter by lead.deletedAt — JOIN leads and exclude BEFORE limit/offset
+    // (post-filtering the page would leave gaps + wrong ranks). leadId is the
+    // deterministic tiebreaker (tied totals can't duplicate/drop across pages).
+    const grouped = await this.prisma.$queryRawUnsafe<Array<{ leadId: string; points: number | bigint }>>(
+      `SELECT pl."leadId" AS "leadId", SUM(pl."points")::int AS points
+         FROM points_ledger pl
+         JOIN leads l ON l.id = pl."leadId"
+        WHERE pl."workspaceId" = $1 AND l."deletedAt" IS NULL AND l."mergedIntoId" IS NULL
+        GROUP BY pl."leadId"
+        ORDER BY SUM(pl."points") DESC, pl."leadId" ASC
+        LIMIT $2 OFFSET $3`,
+      workspaceId,
       take,
       skip,
-    });
+    );
     const leadIds = grouped.map((g) => g.leadId);
     const leads = leadIds.length
       ? await this.prisma.lead.findMany({
@@ -128,7 +137,7 @@ export class GamificationService {
         rank: skip + i + 1,
         leadId: g.leadId,
         name: lead?.contactPerson || lead?.businessName || g.leadId,
-        points: g._sum.points ?? 0,
+        points: Number(g.points) || 0,
       };
     });
   }
