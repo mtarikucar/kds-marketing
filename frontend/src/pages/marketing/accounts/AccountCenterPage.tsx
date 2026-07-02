@@ -21,6 +21,7 @@ import { navigateExternal } from '../../../lib/navigateExternal';
 import { ManualChannelDialog } from './ManualChannelDialog';
 import { EmailChannelDialog } from './EmailChannelDialog';
 import { WebchatChannelDialog } from './WebchatChannelDialog';
+import { TelephonyCard } from './TelephonyCard';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
 import type { ChannelType } from '../channels/channelFields';
 
@@ -328,7 +329,10 @@ export default function AccountCenterPage() {
         onRetry={() => refetch()}
         errorMessage={t('accounts.loadError', 'Could not load your connections.')}
       >
-        <div className="grid gap-3 md:grid-cols-2">{(data?.providers ?? []).map(renderProvider)}</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {(data?.providers ?? []).map(renderProvider)}
+          <TelephonyCard />
+        </div>
       </QueryStateBoundary>
     </div>
   );

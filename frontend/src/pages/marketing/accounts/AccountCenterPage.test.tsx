@@ -83,7 +83,8 @@ describe('AccountCenterPage', () => {
     await screen.findByText('Acme Clinic');
     // Only the manual SMS provider shows a "Set up" button; clicking it opens the
     // inline dialog on THIS page rather than routing to /channels.
-    await user.click(screen.getByRole('button', { name: /Set up/i }));
+    // The first "Set up" is the SMS card (the Telephony card also has one).
+    await user.click(screen.getAllByRole('button', { name: /Set up/i })[0]);
     // The inline NetGSM setup dialog opens (its fields prove we didn't navigate).
     expect(await screen.findByPlaceholderText(/NetGSM usercode/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/NetGSM password/i)).toBeInTheDocument();
