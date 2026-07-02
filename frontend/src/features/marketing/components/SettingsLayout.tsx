@@ -21,8 +21,6 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     label: 'Channels & integrations',
     paths: [
       '/settings/connections',
-      '/settings/telephony',
-      '/settings/voice-ai',
       '/settings/sending-domains',
       '/settings/custom-domains',
     ],

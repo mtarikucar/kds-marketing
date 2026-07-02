@@ -187,7 +187,6 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
       { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
       { path: '/social-campaigns', labelKey: 'nav.socialCampaigns', label: 'Social Campaigns', icon: CalendarRange, managerOnly: true },
-      { path: '/ai/studio', labelKey: 'nav.aiStudio', label: 'AI Studio', icon: Sparkles, managerOnly: true },
       { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
       { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
       { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, feature: 'commissions', managerOnly: true },
@@ -205,6 +204,12 @@ export const NAV_HUBS: NavHub[] = [
     id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap, tier: 'advanced',
     children: [
       { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
+    ],
+  },
+  {
+    id: 'ai', labelKey: 'nav.group.ai', label: 'AI', icon: Sparkles, tier: 'advanced',
+    children: [
+      { path: '/ai/studio', labelKey: 'nav.aiStudio', label: 'AI Studio', icon: Sparkles, managerOnly: true },
       { path: '/ai/agents', labelKey: 'nav.agentStudio', label: 'AI Agents', icon: Sparkles, feature: 'agentStudio', managerOnly: true },
       { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', label: 'Knowledge', icon: BookOpen, feature: 'askAi', managerOnly: true },
     ],
@@ -222,6 +227,8 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
+      { path: '/settings/telephony', labelKey: 'nav.telephony', label: 'Phone (Netsantral)', icon: PhoneCall, feature: 'telephony', managerOnly: true },
+      { path: '/settings/voice-ai', labelKey: 'nav.voiceAiSettings', label: 'Voice AI', icon: Mic, feature: 'voiceAi', managerOnly: true },
     ],
   },
   {
@@ -271,8 +278,6 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
       { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },
       { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
-      { path: '/settings/telephony', labelKey: 'nav.telephony', label: 'Phone (Netsantral)', icon: PhoneCall, feature: 'telephony', managerOnly: true },
-      { path: '/settings/voice-ai', labelKey: 'nav.voiceAiSettings', label: 'Voice AI', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
     ],
