@@ -18,6 +18,7 @@ import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FilterBar } from '@/components/ui/FilterBar';
 import { Pagination } from '@/components/ui/Pagination';
+import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import {
   Select,
   SelectContent,
@@ -498,14 +499,11 @@ export default function OffersPage() {
       )}
 
       {/* Error state */}
-      {isError && (
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-danger/30 bg-danger-subtle p-6 text-center">
-          <p className="text-sm text-danger">Could not load offers.</p>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
-            Retry
-          </Button>
-        </div>
-      )}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('common.loadError', 'Could not load. Please try again.')}
+      />
 
       {/* Offers table */}
       {!isError && (

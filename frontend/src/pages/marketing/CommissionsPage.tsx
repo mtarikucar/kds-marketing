@@ -30,6 +30,7 @@ import {
   SelectContent,
   SelectItem,
   Input,
+  QueryStateBoundary,
 } from '../../components/ui';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -210,109 +211,107 @@ export default function CommissionsPage() {
         )}
       </FilterBar>
 
-      {/* Table */}
-      <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <THead>
-              <TR>
-                <TH>Period</TH>
-                <TH>Type</TH>
-                <TH numeric>Amount</TH>
-                <TH>Status</TH>
-                <TH className="hidden md:table-cell">Rep</TH>
-                <TH className="hidden md:table-cell">Date</TH>
-                {isManager && <TH>Actions</TH>}
-              </TR>
-            </THead>
+      {/* Error state */}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage="Could not load commissions."
+      />
 
-            {isLoading ? (
-              <TableSkeleton cols={colCount} />
-            ) : isError ? (
-              <TBody>
+      {/* Table */}
+      {!isError && (
+        <Card>
+          <CardContent className="p-0 overflow-x-auto">
+            <Table>
+              <THead>
                 <TR>
-                  <TD colSpan={colCount} className="py-12 text-center">
-                    <p className="text-sm text-danger mb-2">Could not load commissions.</p>
-                    <Button variant="outline" size="sm" onClick={() => refetch()}>
-                      Retry
-                    </Button>
-                  </TD>
+                  <TH>Period</TH>
+                  <TH>Type</TH>
+                  <TH numeric>Amount</TH>
+                  <TH>Status</TH>
+                  <TH className="hidden md:table-cell">Rep</TH>
+                  <TH className="hidden md:table-cell">Date</TH>
+                  {isManager && <TH>Actions</TH>}
                 </TR>
-              </TBody>
-            ) : items.length === 0 ? (
-              <TBody>
-                <TR>
-                  <TD colSpan={colCount} className="py-0">
-                    <EmptyState
-                      title="No commissions found"
-                      description="Adjust your filters or check back later."
-                      className="rounded-none border-0"
-                    />
-                  </TD>
-                </TR>
-              </TBody>
-            ) : (
-              <TBody>
-                {items.map((c) => (
-                  <TR
-                    key={c.id}
-                    className="cursor-pointer"
-                    onClick={() => setSelectedId(c.id)}
-                  >
-                    <TD className="font-medium text-foreground">{c.period}</TD>
-                    <TD className="text-muted-foreground">{c.type}</TD>
-                    <TD numeric className="font-medium">
-                      {formatMoney(c.amount, currency)}
+              </THead>
+
+              {isLoading ? (
+                <TableSkeleton cols={colCount} />
+              ) : items.length === 0 ? (
+                <TBody>
+                  <TR>
+                    <TD colSpan={colCount} className="py-0">
+                      <EmptyState
+                        title="No commissions found"
+                        description="Adjust your filters or check back later."
+                        className="rounded-none border-0"
+                      />
                     </TD>
-                    <TD>
-                      <Badge tone={commissionStatusTone(c.status)}>{c.status}</Badge>
-                    </TD>
-                    <TD className="hidden md:table-cell text-muted-foreground">
-                      {c.marketingUser
-                        ? `${c.marketingUser.firstName} ${c.marketingUser.lastName}`
-                        : '—'}
-                    </TD>
-                    <TD className="hidden md:table-cell text-muted-foreground text-xs">
-                      {fmtDate(c.createdAt)}
-                    </TD>
-                    {isManager && (
-                      <TD onClick={(e) => e.stopPropagation()}>
-                        <div className="flex gap-1">
-                          {c.status === 'PENDING' && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => approveMutation.mutate(c.id)}
-                              // Scope the in-flight guard to THIS commission — a
-                              // bare approveMutation.isPending spins Approve on
-                              // every other pending row while one runs.
-                              loading={approveMutation.isPending && approveMutation.variables === c.id}
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Approve
-                            </Button>
-                          )}
-                          {c.status === 'APPROVED' && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => payMutation.mutate(c.id)}
-                              loading={payMutation.isPending && payMutation.variables === c.id}
-                            >
-                              <DollarSign className="h-3.5 w-3.5" />
-                              Mark Paid
-                            </Button>
-                          )}
-                        </div>
-                      </TD>
-                    )}
                   </TR>
-                ))}
-              </TBody>
-            )}
-          </Table>
-        </CardContent>
-      </Card>
+                </TBody>
+              ) : (
+                <TBody>
+                  {items.map((c) => (
+                    <TR
+                      key={c.id}
+                      className="cursor-pointer"
+                      onClick={() => setSelectedId(c.id)}
+                    >
+                      <TD className="font-medium text-foreground">{c.period}</TD>
+                      <TD className="text-muted-foreground">{c.type}</TD>
+                      <TD numeric className="font-medium">
+                        {formatMoney(c.amount, currency)}
+                      </TD>
+                      <TD>
+                        <Badge tone={commissionStatusTone(c.status)}>{c.status}</Badge>
+                      </TD>
+                      <TD className="hidden md:table-cell text-muted-foreground">
+                        {c.marketingUser
+                          ? `${c.marketingUser.firstName} ${c.marketingUser.lastName}`
+                          : '—'}
+                      </TD>
+                      <TD className="hidden md:table-cell text-muted-foreground text-xs">
+                        {fmtDate(c.createdAt)}
+                      </TD>
+                      {isManager && (
+                        <TD onClick={(e) => e.stopPropagation()}>
+                          <div className="flex gap-1">
+                            {c.status === 'PENDING' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => approveMutation.mutate(c.id)}
+                                // Scope the in-flight guard to THIS commission — a
+                                // bare approveMutation.isPending spins Approve on
+                                // every other pending row while one runs.
+                                loading={approveMutation.isPending && approveMutation.variables === c.id}
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                Approve
+                              </Button>
+                            )}
+                            {c.status === 'APPROVED' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => payMutation.mutate(c.id)}
+                                loading={payMutation.isPending && payMutation.variables === c.id}
+                              >
+                                <DollarSign className="h-3.5 w-3.5" />
+                                Mark Paid
+                              </Button>
+                            )}
+                          </div>
+                        </TD>
+                      )}
+                    </TR>
+                  ))}
+                </TBody>
+              )}
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Detail modal */}
       <CommissionDetailModal

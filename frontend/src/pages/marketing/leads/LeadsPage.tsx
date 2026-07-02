@@ -38,8 +38,7 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
-  Card,
-  CardContent,
+  QueryStateBoundary,
 } from '@/components/ui';
 
 import { buildLeadsColumns } from './leadsColumns';
@@ -396,18 +395,12 @@ export default function LeadsPage() {
       )}
 
       {/* Error state */}
-      {isError && (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-8">
-            <p className="text-sm text-danger">
-              {t('leads.loadFailed', 'Could not load leads.')}
-            </p>
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              {t('common.retry', 'Retry')}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      <QueryStateBoundary
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('leads.loadFailed', 'Could not load leads.')}
+        retryLabel={t('common.retry', 'Retry')}
+      />
 
       {/* DataTable */}
       {!isError && (

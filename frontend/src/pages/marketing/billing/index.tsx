@@ -30,7 +30,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { CreditCard, Banknote, RefreshCw } from 'lucide-react';
+import { CreditCard, Banknote } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
 import { navigateExternal } from '@/lib/navigateExternal';
 import { useMarketingAuthStore } from '@/store/marketingAuthStore';
@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
 import { Callout } from '@/components/ui/Callout';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { QueryStateBoundary } from '@/components/ui';
 import { BillingSummaryCards } from './BillingSummaryCards';
 import { PackageMatrix } from './PackageMatrix';
 import type { PackageRow } from './PackageMatrix';
@@ -155,17 +156,12 @@ export default function BillingPage() {
       />
 
       {/* Summary fetch error */}
-      {summaryError && !summaryLoading && (
-        <Callout
-          tone="danger"
-          title={t('billing.summaryFailed', 'Could not load your billing summary.')}
-          icon={<RefreshCw className="h-4 w-4" aria-hidden />}
-        >
-          <Button variant="outline" size="sm" onClick={() => refetchSummary()}>
-            {t('common.retry', 'Retry')}
-          </Button>
-        </Callout>
-      )}
+      <QueryStateBoundary
+        isError={summaryError && !summaryLoading}
+        onRetry={() => refetchSummary()}
+        errorMessage={t('billing.summaryFailed', 'Could not load your billing summary.')}
+        retryLabel={t('common.retry', 'Retry')}
+      />
 
       {/* Current plan + usage stats */}
       <BillingSummaryCards
