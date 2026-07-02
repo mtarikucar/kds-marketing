@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -55,5 +55,22 @@ describe('MarketingHeader quick actions', () => {
     expect(screen.getByText(/New task/i)).toBeInTheDocument();
     expect(screen.getByText(/New opportunity/i)).toBeInTheDocument();
     expect(screen.getByText(/New company/i)).toBeInTheDocument();
+  });
+
+  it('renders a mobile menu button wired to onMenuClick', async () => {
+    const user = userEvent.setup();
+    const onMenuClick = vi.fn();
+    useMarketingAuthStore.setState({
+      user: MANAGER, accessToken: 't', refreshToken: 'r', isAuthenticated: true,
+    });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={makeQC()}>
+          <MarketingHeader onMenuClick={onMenuClick} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole('button', { name: /open menu/i }));
+    expect(onMenuClick).toHaveBeenCalled();
   });
 });

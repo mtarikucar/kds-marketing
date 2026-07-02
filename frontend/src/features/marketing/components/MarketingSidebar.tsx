@@ -20,7 +20,10 @@ const STORAGE_KEY = 'kds-sidebar-collapsed';
  * but the default view stays focused (~6-8 items) instead of ~15. Settings is
  * pinned at the bottom as a gear. Collapses to an icon-rail (persisted).
  */
-export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
+export default function MarketingSidebar({
+  onNavigate,
+  forceExpanded = false,
+}: { onNavigate?: () => void; forceExpanded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const { user, logout } = useMarketingAuthStore();
   const { has } = useEntitlements();
@@ -33,15 +36,18 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
   const advancedOpen = useSidebarPrefsStore((s) => s.advancedOpen);
   const setAdvancedOpen = useSidebarPrefsStore((s) => s.setAdvancedOpen);
 
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
+  const [collapsedPref, setCollapsedPref] = useState<boolean>(() => {
     try {
       return localStorage.getItem(STORAGE_KEY) === '1';
     } catch {
       return false;
     }
   });
+  // Inside the mobile drawer we always render expanded (labels visible),
+  // regardless of the persisted desktop-collapsed preference.
+  const collapsed = forceExpanded ? false : collapsedPref;
   const toggleCollapsed = () =>
-    setCollapsed((c) => {
+    setCollapsedPref((c) => {
       const next = !c;
       try {
         localStorage.setItem(STORAGE_KEY, next ? '1' : '0');
@@ -137,14 +143,16 @@ export default function MarketingSidebar({ onNavigate }: { onNavigate?: () => vo
             <span className="flex-1 truncate font-display text-base font-semibold text-foreground">
               {t('login.title')}
             </span>
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-label="Collapse sidebar"
-              className="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </button>
+            {!forceExpanded && (
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                aria-label="Collapse sidebar"
+                className="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </button>
+            )}
           </>
         )}
       </div>

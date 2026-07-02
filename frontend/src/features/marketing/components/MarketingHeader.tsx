@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Bell, Search, Plus } from 'lucide-react';
+import { Bell, Search, Plus, Menu } from 'lucide-react';
 import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
@@ -80,7 +80,7 @@ const isMac =
   /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
 const PALETTE_SHORTCUT = isMac ? '⌘K' : 'Ctrl K';
 
-export default function MarketingHeader() {
+export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const { user, logout } = useMarketingAuthStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -172,7 +172,17 @@ export default function MarketingHeader() {
   return (
     <>
       <header className="bg-surface border-b border-border px-6 py-3 flex items-center justify-between">
-        <div className="flex min-w-0 items-center gap-4">
+        <div className="flex min-w-0 items-center gap-2">
+          {onMenuClick && (
+            <IconButton
+              aria-label="Open menu"
+              variant="ghost"
+              className="lg:hidden"
+              onClick={onMenuClick}
+            >
+              <Menu className="h-5 w-5" />
+            </IconButton>
+          )}
           <Breadcrumbs />
         </div>
 
