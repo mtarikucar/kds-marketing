@@ -90,17 +90,17 @@ export default function ReferralCodeCard() {
   const amount = Number(data?.lifetimeCommissionAmount ?? 0);
 
   return (
-    <div className="rounded-2xl border border-primary-200 bg-gradient-to-r from-primary-50 to-white p-6">
+    <div className="rounded-2xl border border-primary/30 bg-gradient-to-r from-primary/5 to-surface p-6">
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 text-sm text-primary-700">
+          <div className="flex items-center gap-2 text-sm text-primary">
             <Tag className="w-4 h-4" />
             <span className="font-medium">
               {t('referral.yourCode', 'Sizin referans kodunuz')}
             </span>
           </div>
           <div className="mt-2 flex items-center gap-3">
-            <code className="rounded-lg bg-surface border border-primary-200 px-3 py-2 font-mono text-2xl font-bold tracking-wider text-primary-900">
+            <code className="rounded-lg bg-surface border border-primary/30 px-3 py-2 font-mono text-2xl font-bold tracking-wider text-primary">
               {code}
             </code>
             <button
@@ -140,7 +140,7 @@ export default function ReferralCodeCard() {
         </div>
 
         <div className="grid grid-cols-3 gap-3 lg:flex-shrink-0">
-          <div className="rounded-lg bg-surface border border-primary-100 px-4 py-3 text-center">
+          <div className="rounded-lg bg-surface border border-primary/20 px-4 py-3 text-center">
             <div className="text-2xl font-bold text-foreground">
               {data?.referralLeadCount ?? 0}
             </div>
@@ -148,16 +148,16 @@ export default function ReferralCodeCard() {
               {t('referral.statsLeads', 'Toplam Lead')}
             </div>
           </div>
-          <div className="rounded-lg bg-surface border border-primary-100 px-4 py-3 text-center">
-            <div className="text-2xl font-bold text-emerald-700">
+          <div className="rounded-lg bg-surface border border-primary/20 px-4 py-3 text-center">
+            <div className="text-2xl font-bold text-success">
               {data?.referralWonCount ?? 0}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
               {t('referral.statsWon', 'Kazanılan')}
             </div>
           </div>
-          <div className="rounded-lg bg-surface border border-primary-100 px-4 py-3 text-center">
-            <div className="text-2xl font-bold text-primary-700">
+          <div className="rounded-lg bg-surface border border-primary/20 px-4 py-3 text-center">
+            <div className="text-2xl font-bold text-primary">
               ₺{amount.toFixed(2)}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -168,7 +168,7 @@ export default function ReferralCodeCard() {
       </div>
 
       {isManager && (
-        <div className="mt-4 pt-4 border-t border-primary-100 flex items-center justify-end">
+        <div className="mt-4 pt-4 border-t border-primary/20 flex items-center justify-end">
           <button
             type="button"
             onClick={() => {
