@@ -1011,6 +1011,43 @@ model ResearchProfile {
   @@map("research_profiles")
 }
 
+/// A staged prospect-research candidate awaiting human review (the native AI
+/// Research engine's suggestions queue). On ACCEPT it flows through
+/// MarketingLeadsIngestService.ingest() to become a real Lead; on REJECT it is
+/// dismissed. painPoint/evidence/pitch are first-class here (unlike a Lead,
+/// where they'd be flattened into notes).
+model ResearchCandidate {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  profileId     String
+  agentRunId    String?
+  externalRef   String
+  businessName  String
+  city          String?
+  region        String?
+  businessType  String
+  phone         String?
+  instagram     String?
+  website       String?
+  email         String?
+  branchCount   Int?
+  currentSystem String?
+  stage         String? // GROWING | STRUGGLING | STABLE
+  priority      String    @default("MEDIUM")
+  painPoint     String    @db.Text
+  evidence      String    @db.Text
+  pitch         String    @db.Text
+  score         Float?
+  status        String    @default("PENDING") // PENDING | ACCEPTED | REJECTED
+  leadId        String? // set when accepted + ingested
+  createdAt     DateTime  @default(now())
+  decidedAt     DateTime?
+
+  @@unique([workspaceId, profileId, externalRef])
+  @@index([workspaceId, status, createdAt])
+  @@map("research_candidates")
+}
+
 /// Opt-in content-generation profile (one+ per workspace) driving the weekly
 /// content-pack routine. Mirrors ResearchProfile.
 model ContentProfile {

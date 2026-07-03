@@ -170,6 +170,10 @@ import { ResearchSpendService } from './budget/research-spend.service';
 import { FirecrawlProvider } from './research/providers/firecrawl.provider';
 import { ApifyProvider } from './research/providers/apify.provider';
 import { ResearchSourcesService } from './research/providers/research-sources.service';
+import { ResearchJobService } from './research/research-job.service';
+import { ResearchCandidateService } from './research/research-candidate.service';
+import { ResearchWorkerService } from './research/research-worker.service';
+import { ResearchRunnerService } from './research/research-runner.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
 import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { PerformanceLoopService } from './budget/performance-loop.service';
@@ -718,6 +722,10 @@ import { WalletService } from './wallet/wallet.service';
     FirecrawlProvider,
     ApifyProvider,
     ResearchSourcesService,
+    ResearchJobService,
+    ResearchCandidateService,
+    ResearchWorkerService,
+    ResearchRunnerService,
     BudgetPacerService,
     BudgetAutopilotCron,
     PerformanceLoopService,
