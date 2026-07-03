@@ -172,6 +172,8 @@ import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
+import { McpToolRegistry } from './mcp/mcp-tool-registry';
+import { McpBrokerService } from './mcp/mcp-broker.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
 import { ApprovalRequestService } from './agents/approval-request.service';
@@ -701,6 +703,8 @@ import { WalletService } from './wallet/wallet.service';
     BrandBrainService,
     TrendRemixService,
     VideoPipelineService,
+    McpToolRegistry,
+    McpBrokerService,
     VideoPersonaService,
     UnifiedCalendarService,
     ApprovalRequestService,
