@@ -47,7 +47,7 @@ function money(v: string | number | null | undefined, currency = 'TRY'): string 
  * moves without approval), and every conversation/content spend settles into it.
  * OWNER/MANAGER only (the route + backend both gate it).
  */
-export default function BudgetAutopilotPage() {
+export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -58,6 +58,7 @@ export default function BudgetAutopilotPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('budget.title', 'Budget Autopilot')}
         description={t('budget.subtitle', 'Set one growth budget — Jeeta paces it, proposes reallocations, and settles every spend into it.')}
@@ -67,6 +68,7 @@ export default function BudgetAutopilotPage() {
           </Button>
         }
       />
+      )}
 
       <QueryStateBoundary isLoading={budgetsQ.isLoading} isError={budgetsQ.isError} onRetry={() => budgetsQ.refetch()}>
         {!current ? (

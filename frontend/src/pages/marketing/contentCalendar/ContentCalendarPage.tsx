@@ -31,7 +31,7 @@ const STATUS_FALLBACK: Record<string, string> = {
  * social-campaign items, grouped by day. A read model; scheduling still happens
  * in each source tool.
  */
-export default function ContentCalendarPage() {
+export default function ContentCalendarPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const q = useQuery({ queryKey: ['content-calendar'], queryFn: () => listContentCalendar() });
 
@@ -46,10 +46,12 @@ export default function ContentCalendarPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('contentCal.title', 'Content Calendar')}
         description={t('contentCal.subtitle', 'Everything scheduled — social posts and AI campaign content — in one timeline.')}
       />
+      )}
 
       <QueryStateBoundary isLoading={q.isLoading} isError={q.isError} onRetry={() => q.refetch()}>
         {!q.data?.length ? (

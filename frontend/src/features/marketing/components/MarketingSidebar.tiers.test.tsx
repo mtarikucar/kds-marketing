@@ -44,15 +44,15 @@ describe('MarketingSidebar — progressive disclosure', () => {
     expect(screen.getByRole('link', { name: /Contacts/i })).toBeInTheDocument();
     // …the "More" disclosure exists…
     expect(screen.getByRole('button', { name: /^More$/i })).toBeInTheDocument();
-    // …and an advanced hub (Marketing) is not rendered until expanded.
-    expect(screen.queryByRole('link', { name: /^Marketing$/i })).not.toBeInTheDocument();
+    // …and an advanced hub (Growth Studio) is not rendered until expanded.
+    expect(screen.queryByRole('link', { name: /^Growth Studio$/i })).not.toBeInTheDocument();
   });
 
   it('reveals advanced hubs when "More" is expanded', async () => {
     const user = userEvent.setup();
     renderSidebar();
     await user.click(screen.getByRole('button', { name: /^More$/i }));
-    expect(screen.getByRole('link', { name: /^Marketing$/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Growth Studio$/i })).toBeInTheDocument();
   });
 
   it('surfaces a "Pinned" section for favorited hubs', () => {

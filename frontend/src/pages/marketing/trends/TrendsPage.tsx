@@ -23,18 +23,20 @@ const PLATFORM_LABEL: Record<string, string> = { TIKTOK: 'TikTok', INSTAGRAM: 'I
  * then adapt it onto your brand as a ready-to-shoot brief — always with a
  * compliance note.
  */
-export default function TrendsPage() {
+export default function TrendsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [dialogOpen, setDialogOpen] = useState(false);
   const q = useQuery({ queryKey: ['trend-templates'], queryFn: listTrends });
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('trend.title', 'Trend Remix')}
         description={t('trend.subtitle', 'Capture a trend’s format — hook, pacing, structure — and remix it onto your brand. Never a copy.')}
         actions={<Button onClick={() => setDialogOpen(true)}>{t('trend.save', 'Save a trend')}</Button>}
       />
+      )}
 
       <QueryStateBoundary isLoading={q.isLoading} isError={q.isError} onRetry={() => q.refetch()}>
         {!q.data?.length ? (

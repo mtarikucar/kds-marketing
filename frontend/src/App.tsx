@@ -36,6 +36,7 @@ const BudgetAutopilotPage      = lazy(() => import('./pages/marketing/budget/Bud
 const PersonasPage             = lazy(() => import('./pages/marketing/personas/PersonasPage'));
 const TrendsPage               = lazy(() => import('./pages/marketing/trends/TrendsPage'));
 const ContentCalendarPage      = lazy(() => import('./pages/marketing/contentCalendar/ContentCalendarPage'));
+const GrowthStudioPage         = lazy(() => import('./pages/marketing/studio/GrowthStudioPage'));
 const BrandBrainPage           = lazy(() => import('./pages/marketing/brandBrain/BrandBrainPage'));
 const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
@@ -192,10 +193,11 @@ export default function App() {
           <Route path="/reports"        element={<S><ReportsPage /></S>} />
           <Route path="/reports/ads"    element={<S><AdReportingPage /></S>} />
           <Route path="/ads"            element={<Navigate to="/reports/ads" replace />} />
-          <Route path="/budget"         element={<S><BudgetAutopilotPage /></S>} />
+          <Route path="/studio"         element={<S><GrowthStudioPage /></S>} />
+          <Route path="/budget"         element={<Navigate to="/studio?tab=budget" replace />} />
           <Route path="/personas"       element={<S><PersonasPage /></S>} />
-          <Route path="/trends"         element={<S><TrendsPage /></S>} />
-          <Route path="/content-calendar" element={<S><ContentCalendarPage /></S>} />
+          <Route path="/trends"         element={<Navigate to="/studio?tab=trends" replace />} />
+          <Route path="/content-calendar" element={<Navigate to="/studio?tab=calendar" replace />} />
           <Route path="/brand-brain"    element={<S><BrandBrainPage /></S>} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
@@ -249,7 +251,7 @@ export default function App() {
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
             <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
-            <Route path="/campaigns"   element={<S><CampaignsPage /></S>} />
+            <Route path="/campaigns"   element={<Navigate to="/studio?tab=campaigns" replace />} />
             <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />
             <Route path="/booking"     element={<S><BookingSettingsPage /></S>} />
@@ -276,8 +278,8 @@ export default function App() {
             {/* Telephony + Voice-AI setup now lives in the Account Center. */}
             <Route path="/settings/telephony"   element={<Navigate to="/accounts" replace />} />
             <Route path="/settings/voice-ai"    element={<Navigate to="/accounts" replace />} />
-            <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
-            <Route path="/social-campaigns"      element={<S><SocialCampaignsPage /></S>} />
+            <Route path="/social"      element={<Navigate to="/studio?tab=campaigns" replace />} />
+            <Route path="/social-campaigns"      element={<Navigate to="/studio?tab=campaigns" replace />} />
             <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/ai/studio"   element={<S><AiStudioPage /></S>} />

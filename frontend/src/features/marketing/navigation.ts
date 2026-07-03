@@ -183,19 +183,11 @@ export const NAV_HUBS: NavHub[] = [
   { id: 'tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList, path: '/tasks' },
   { id: 'accounts', labelKey: 'nav.accounts', label: 'Account Center', icon: Plug, path: '/accounts', managerOnly: true, tier: 'advanced' },
   {
-    id: 'marketing', labelKey: 'nav.group.marketing', label: 'Marketing', icon: Megaphone, tier: 'advanced',
-    children: [
-      { path: '/budget', labelKey: 'nav.budget', label: 'Budget Autopilot', icon: SlidersHorizontal, managerOnly: true },
-      { path: '/trends', labelKey: 'nav.trends', label: 'Trend Remix', icon: TrendingUp, managerOnly: true },
-      { path: '/content-calendar', labelKey: 'nav.contentCalendar', label: 'Content Calendar', icon: CalendarRange, managerOnly: true },
-      { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
-      { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
-      { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
-      { path: '/social-campaigns', labelKey: 'nav.socialCampaigns', label: 'Social Campaigns', icon: CalendarRange, managerOnly: true },
-      { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
-      { path: '/reviews', labelKey: 'nav.reviews', label: 'Reviews', icon: Star, feature: 'reviews', managerOnly: true },
-      { path: '/affiliates', labelKey: 'nav.affiliates', label: 'Affiliates', icon: BadgeDollarSign, feature: 'commissions', managerOnly: true },
-    ],
+    // The unified Growth Studio replaces the old Marketing hub — content
+    // calendar, campaigns (normal + social + planner), trends and ad budget are
+    // now deep-linkable tabs (`/studio?tab=…`) on one page.
+    id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles,
+    path: '/studio', managerOnly: true, tier: 'advanced',
   },
   {
     id: 'sites', labelKey: 'nav.group.sites', label: 'Sites', icon: Globe, tier: 'advanced',

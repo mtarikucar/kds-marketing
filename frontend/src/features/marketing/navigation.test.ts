@@ -20,7 +20,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
       expect.arrayContaining(['contacts', 'calendar', 'sales', 'reporting', 'settings']),
     );
     expect(ids).not.toContain('conversations');
-    expect(ids).not.toContain('marketing');
+    expect(ids).not.toContain('studio');
     expect(ids).not.toContain('sites');
     expect(ids).not.toContain('automation');
     expect(ids).not.toContain('memberships');
@@ -35,7 +35,11 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
 
   it('a manager with NO entitlements still sees the core-but-managerOnly modules', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
-    expect(childPaths(hubs, 'marketing')).toEqual(['/budget', '/trends', '/content-calendar', '/social', '/social-campaigns', '/trigger-links']);
+    // The Marketing hub is now the single-page Growth Studio (its former
+    // children are tabs at /studio?tab=…).
+    const studio = hubs.find((h) => h.id === 'studio');
+    expect(studio?.path).toBe('/studio');
+    expect(studio?.children).toBeUndefined();
     // AI is its own hub now; only the un-gated AI Studio shows without entitlements.
     expect(childPaths(hubs, 'ai')).toEqual(['/ai/studio', '/personas', '/brand-brain']);
     expect(childPaths(hubs, 'sites').sort()).toEqual(['/experiments', '/surveys']);
@@ -72,13 +76,12 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
   });
 });
 
-describe('navigation — social campaigns', () => {
-  it('exposes a Social Campaigns child under the marketing hub', () => {
-    const marketing = NAV_HUBS.find((h) => h.id === 'marketing');
-    const child = marketing?.children?.find((c) => c.path === '/social-campaigns');
-    expect(child).toBeDefined();
-    expect(child?.labelKey).toBe('nav.socialCampaigns');
-    expect(child?.managerOnly).toBe(true);
+describe('navigation — Growth Studio', () => {
+  it('replaces the Marketing hub with a single-page Growth Studio', () => {
+    expect(NAV_HUBS.find((h) => h.id === 'marketing')).toBeUndefined();
+    const studio = NAV_HUBS.find((h) => h.id === 'studio');
+    expect(studio?.path).toBe('/studio');
+    expect(studio?.managerOnly).toBe(true);
   });
 });
 
@@ -114,7 +117,7 @@ describe('splitByTier — progressive disclosure', () => {
     expect(coreIds).toEqual(
       expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reporting']),
     );
-    expect(advIds).toEqual(expect.arrayContaining(['marketing', 'memberships', 'payments']));
+    expect(advIds).toEqual(expect.arrayContaining(['studio', 'memberships', 'payments']));
     // The two tiers never overlap.
     expect(coreIds.some((id) => advIds.includes(id))).toBe(false);
   });

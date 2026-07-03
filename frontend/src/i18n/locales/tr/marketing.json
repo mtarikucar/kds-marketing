@@ -2890,5 +2890,12 @@
       "SOCIAL_POST": "Gönderi",
       "CAMPAIGN_ITEM": "Kampanya"
     }
-  }
+  },
+  "nav.studio": "Growth Studio",
+  "studio.title": "Growth Studio",
+  "studio.tab.calendar": "İçerik Takvimi",
+  "studio.tab.campaigns": "Kampanyalar",
+  "studio.tab.trends": "Trendler",
+  "studio.tab.budget": "Reklam Bütçesi",
+  "studio.tab.more": "Diğer"
 }

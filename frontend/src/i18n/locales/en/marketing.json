@@ -2372,5 +2372,12 @@
   "contentCal.title": "Content Calendar",
   "nav.brandBrain": "Brand Brain",
   "brain.title": "Brand Brain",
-  "brain.search": "Search"
+  "brain.search": "Search",
+  "nav.studio": "Growth Studio",
+  "studio.title": "Growth Studio",
+  "studio.tab.calendar": "Content Calendar",
+  "studio.tab.campaigns": "Campaigns",
+  "studio.tab.trends": "Trends",
+  "studio.tab.budget": "Ad Budget",
+  "studio.tab.more": "More"
 }
