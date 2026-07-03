@@ -3742,6 +3742,75 @@ model PacingState {
   @@map("pacing_states")
 }
 
+/// One invocation of a role-specialized marketing agent (Faz 3 multi-agent
+/// observability). Answers "why did the AI do this?": input/output, status,
+/// token/credit cost, and the parent run for agent-to-agent handoff chains.
+model AgentRun {
+  id          String        @id @default(uuid())
+  workspaceId String
+  agent       String // researcher | strategist | copywriter | video-director | publisher | analyst | optimizer | compliance
+  goal        String?       @db.Text
+  status      String        @default("RUNNING") // RUNNING | DONE | FAILED
+  input       Json?
+  output      Json?
+  error       String?       @db.Text
+  costCredits Int           @default(0)
+  tokensIn    Int           @default(0)
+  tokensOut   Int           @default(0)
+  parentRunId String? // agent-to-agent handoff chain
+  startedAt   DateTime      @default(now())
+  finishedAt  DateTime?
+  toolCalls   ToolCallLog[]
+
+  @@index([workspaceId, agent, startedAt])
+  @@index([workspaceId, status])
+  @@map("agent_runs")
+}
+
+/// A single tool call made during an AgentRun (Faz 3). Args/result/latency per
+/// call so every side effect an agent triggered is auditable.
+model ToolCallLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  runId       String
+  run         AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tool        String
+  args        Json?
+  result      Json?
+  ok          Boolean  @default(true)
+  error       String?  @db.Text
+  latencyMs   Int?
+  createdAt   DateTime @default(now())
+
+  @@index([runId, createdAt])
+  @@map("tool_call_logs")
+}
+
+/// The unified human-approval queue (Faz 3). Any high-risk action an agent (or
+/// the Budget Autopilot) wants to take above its autonomy threshold —
+/// reallocation, publish, send, ad-spend, target change — enqueues here and only
+/// executes once an OWNER/MANAGER approves. `payload` carries the action to apply.
+model ApprovalRequest {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  kind             String // BUDGET_REALLOCATION | PUBLISH | SEND | AD_SPEND | TARGET_CHANGE | CHANNEL_LAUNCH
+  status           String    @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED | APPLIED
+  summary          String    @db.Text
+  payload          Json
+  requestedByRunId String?
+  resourceType     String?
+  resourceId       String?
+  decidedById      String?
+  decidedAt        DateTime?
+  appliedAt        DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([workspaceId, status, createdAt])
+  @@map("approval_requests")
+}
+
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).
 /// A workspace user points the tool at a prospect's website; an async
 /// ScheduledJob grades the page (on-page SEO + Google PageSpeed) into `sections`

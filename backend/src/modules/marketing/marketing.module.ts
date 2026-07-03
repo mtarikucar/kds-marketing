@@ -168,6 +168,9 @@ import { ConversationSpendService } from './budget/conversation-spend.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
 import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { PerformanceLoopService } from './budget/performance-loop.service';
+import { AgentRunService } from './agents/agent-run.service';
+import { ApprovalRequestService } from './agents/approval-request.service';
+import { MarketingApprovalsController } from './controllers/marketing-approvals.controller';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
@@ -508,6 +511,7 @@ import { WalletService } from './wallet/wallet.service';
     TiktokBusinessOAuthController,
     MarketingAdRulesController,
     MarketingBudgetController,
+    MarketingApprovalsController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -688,6 +692,8 @@ import { WalletService } from './wallet/wallet.service';
     BudgetPacerService,
     BudgetAutopilotCron,
     PerformanceLoopService,
+    AgentRunService,
+    ApprovalRequestService,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
