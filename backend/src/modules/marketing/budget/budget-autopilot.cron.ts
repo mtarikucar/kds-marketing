@@ -4,6 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { BudgetPacerService } from './budget-pacer.service';
 import { BudgetAutopilotService } from './budget-autopilot.service';
+import { PerformanceLoopService } from './performance-loop.service';
 
 /**
  * Hourly Budget Autopilot tick. For every ACTIVE, non-killed growth budget it
@@ -21,6 +22,7 @@ export class BudgetAutopilotCron {
     private readonly prisma: PrismaService,
     private readonly pacer: BudgetPacerService,
     private readonly autopilot: BudgetAutopilotService,
+    private readonly performanceLoop: PerformanceLoopService,
   ) {}
 
   @Cron(CronExpression.EVERY_HOUR, { name: 'budget-autopilot-tick' })
@@ -42,6 +44,16 @@ export class BudgetAutopilotCron {
       select: { id: true, workspaceId: true },
       take: 500,
     });
+    // Refresh first-party revenue onto AdMetric once per workspace BEFORE
+    // proposing, so the allocator optimizes on CRM revenue not platform ROAS.
+    for (const workspaceId of new Set(budgets.map((b) => b.workspaceId))) {
+      try {
+        await this.performanceLoop.reconcile(workspaceId, undefined, now);
+      } catch (e) {
+        this.logger.error(`performance-loop reconcile failed for ${workspaceId}: ${(e as Error)?.message ?? e}`);
+      }
+    }
+
     let ticked = 0;
     for (const b of budgets) {
       try {
