@@ -179,6 +179,7 @@ import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
 import { ApprovalRequestService } from './agents/approval-request.service';
 import { MarketingApprovalsController } from './controllers/marketing-approvals.controller';
+import { MarketingPersonasController } from './controllers/marketing-personas.controller';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
@@ -520,6 +521,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingAdRulesController,
     MarketingBudgetController,
     MarketingApprovalsController,
+    MarketingPersonasController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,

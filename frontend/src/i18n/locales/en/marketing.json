@@ -2360,5 +2360,9 @@
   "budget.proposeNow": "Propose now (shadow)",
   "budget.approve": "Approve",
   "budget.reject": "Reject",
-  "budget.killSwitch": "Kill-switch"
+  "budget.killSwitch": "Kill-switch",
+  "nav.personas": "UGC Personas",
+  "persona.title": "UGC Personas",
+  "persona.create": "New persona",
+  "persona.plan.go": "Storyboard"
 }

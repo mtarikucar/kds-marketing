@@ -2606,5 +2606,9 @@
   "budget.proposeNow": "Şimdi öner (shadow)",
   "budget.approve": "Onayla",
   "budget.reject": "Reddet",
-  "budget.killSwitch": "Acil durdurma"
+  "budget.killSwitch": "Acil durdurma",
+  "nav.personas": "UGC Persona",
+  "persona.title": "UGC Persona",
+  "persona.create": "Yeni persona",
+  "persona.plan.go": "Storyboard"
 }
