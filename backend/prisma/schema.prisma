@@ -3648,6 +3648,78 @@ model SpendLedger {
   @@map("spend_ledgers")
 }
 
+/// The single growth budget a workspace gives the Budget Autopilot for a month
+/// (Faz 7). `totalAmount` is the hard cap the autopilot may NEVER exceed.
+/// `scope` = HOLISTIC (ads + content + conversations) or AD_ONLY. `killSwitch`
+/// halts all autonomous spend instantly. `explorationPct` is held back for
+/// learning; `targetRoas`/`targetCac` are the optimization floor.
+model GrowthBudget {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  periodKey      String // YYYY-MM
+  currency       String   @default("TRY")
+  totalAmount    Decimal  @db.Decimal(14, 2)
+  scope          String   @default("HOLISTIC") // HOLISTIC | AD_ONLY
+  status         String   @default("ACTIVE") // ACTIVE | PAUSED | KILLED
+  killSwitch     Boolean  @default(false)
+  explorationPct Int      @default(20)
+  targetRoas     Decimal? @db.Decimal(10, 4)
+  targetCac      Decimal? @db.Decimal(14, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  allocations BudgetAllocation[]
+
+  @@unique([workspaceId, periodKey])
+  @@index([status])
+  @@map("growth_budgets")
+}
+
+/// One channel/campaign slice of a GrowthBudget. `plannedAmount` is what the
+/// allocator assigned; `spentAmount` is settled from SpendLedger; `marginalRoas`
+/// is the last estimate driving reallocation. `campaignRef` '' = channel-level.
+model BudgetAllocation {
+  id            String       @id @default(uuid())
+  workspaceId   String
+  budgetId      String
+  budget        GrowthBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  channel       String // META | TIKTOK | GOOGLE | LINKEDIN | CONTENT | SMS | VOICE | WHATSAPP
+  campaignRef   String       @default("") // '' = channel-level rollup
+  plannedAmount Decimal      @default(0) @db.Decimal(14, 2)
+  spentAmount   Decimal      @default(0) @db.Decimal(14, 2)
+  marginalRoas  Decimal?     @db.Decimal(10, 4)
+  lastPacedAt   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([budgetId, channel, campaignRef])
+  @@index([workspaceId, channel])
+  @@map("budget_allocations")
+}
+
+/// Audit of every Budget Autopilot decision (generalizes AdRuleLog to the
+/// decision level). Records the before→after allocation, the marginal-ROAS/CAC
+/// snapshot that justified it, whether it ran AUTO or needed APPROVED, and the
+/// approval/reversal linkage — so "why did the AI move my money?" is answerable.
+model AutopilotRun {
+  id                String   @id @default(uuid())
+  workspaceId       String
+  budgetId          String?
+  kind              String // PACING | REALLOCATION | LAUNCH | TARGET_CHANGE
+  objective         Json? // marginal-ROAS/CAC snapshot
+  before            Json?
+  after             Json?
+  autonomy          String   @default("AUTO") // AUTO | APPROVED | SHADOW
+  approvalRequestId String?
+  approvedBy        String?
+  ok                Boolean  @default(true)
+  reversedById      String?
+  createdAt         DateTime @default(now())
+
+  @@index([workspaceId, budgetId, createdAt])
+  @@map("autopilot_runs")
+}
+
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).
 /// A workspace user points the tool at a prospect's website; an async
 /// ScheduledJob grades the page (on-page SEO + Google PageSpeed) into `sections`
