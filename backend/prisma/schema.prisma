@@ -3720,6 +3720,28 @@ model AutopilotRun {
   @@map("autopilot_runs")
 }
 
+/// Budget-pacing controller state (Budget Autopilot, Faz 7). One row per
+/// (budget, channel) — channel '' = whole-budget pacing. Persists the PID
+/// controller's integral/last-error across ticks so spend is smoothed toward
+/// the ideal curve (avoids front-loading the budget early or starving it late).
+model PacingState {
+  id                  String   @id @default(uuid())
+  workspaceId         String
+  budgetId            String
+  channel             String   @default("") // '' = whole-budget
+  spentToDate         Decimal  @default(0) @db.Decimal(14, 2)
+  idealToDate         Decimal  @default(0) @db.Decimal(14, 2)
+  pidIntegral         Decimal  @default(0) @db.Decimal(16, 6)
+  pidLastError        Decimal  @default(0) @db.Decimal(16, 6)
+  recommendedDailyCap Decimal? @db.Decimal(14, 2)
+  status              String   @default("ON_PACE") // ON_PACE | UNDERSPENDING | OVERSPENDING
+  lastPacedAt         DateTime?
+  updatedAt           DateTime @updatedAt
+
+  @@unique([budgetId, channel])
+  @@map("pacing_states")
+}
+
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).
 /// A workspace user points the tool at a prospect's website; an async
 /// ScheduledJob grades the page (on-page SEO + Google PageSpeed) into `sections`
