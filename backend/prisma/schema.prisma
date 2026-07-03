@@ -802,6 +802,10 @@ model SalesCall {
   status          String    @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
   externalCallId  String?
   durationSec     Int?
+  /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
+  /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
+  billableSeconds Int?
+  costAmount      Decimal? @db.Decimal(14, 4)
   recordingUrl    String?
   // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
   // the back of the queue (a CONNECTED call with no recording yet, or never), and
@@ -1424,6 +1428,11 @@ model Message {
   status            String  @default("SENT") // RECEIVED | SENT | DELIVERED | READ | FAILED
   error             String?
   meta              Json?
+  /// Budget Autopilot conversation-spend settlement (Faz 7). `smsSegments` is the
+  /// GSM-7/UCS-2 segment count for SMS; `costAmount` is the real per-message cost
+  /// priced from ChannelTariff, debited to SpendLedger. Null = not yet priced.
+  smsSegments       Int?
+  costAmount        Decimal? @db.Decimal(14, 4)
 
   createdAt DateTime @default(now())
 
@@ -1998,6 +2007,10 @@ model VoiceCall {
   status          String  @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
   turns           Int     @default(0)
   lastGatherToken String?
+  /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
+  /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
+  billableSeconds Int?
+  costAmount      Decimal? @db.Decimal(14, 4)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3586,6 +3599,53 @@ model AdRuleLog {
   @@index([workspaceId, ruleId])
   @@index([ruleId, entityId, action, createdAt])
   @@map("ad_rule_logs")
+}
+
+/// Unit price of a billable growth channel (Budget Autopilot, Faz 7). A NULL
+/// `workspaceId` is a platform default; a workspace row overrides it. Rows are
+/// versioned by `effectiveFrom` (keep history; resolve the latest active ≤ now),
+/// so `unitCost` prices raw counts — SMS segments, WhatsApp category×country,
+/// voice minutes, fal credits — into currency for a single growth budget.
+model ChannelTariff {
+  id            String   @id @default(uuid())
+  workspaceId   String? // null = platform default
+  channel       String // SMS | WHATSAPP | VOICE | CONTENT
+  provider      String? // netgsm | meta | fal | ...
+  unitType      String // SMS_SEGMENT | WA_MARKETING | WA_UTILITY | WA_SERVICE | VOICE_MINUTE | FAL_CREDIT
+  unitCost      Decimal  @db.Decimal(14, 4)
+  currency      String   @default("TRY")
+  country       String? // ISO-2, for WhatsApp category×country pricing
+  effectiveFrom DateTime @default(now())
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([channel, unitType, active, effectiveFrom])
+  @@index([workspaceId, channel, unitType])
+  @@map("channel_tariffs")
+}
+
+/// Append-only, tenant-scoped MONEY ledger for the Budget Autopilot (Faz 7).
+/// Every ad-budget write, message, call and content generation debits here at
+/// its real unit cost (`delta` < 0); refunds/adjusts credit (`delta` > 0).
+/// `balanceAfter` snapshots the running period spend so pacing reads are O(1).
+model SpendLedger {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  budgetId     String? // GrowthBudget period, when one is active (Faz 7)
+  channel      String // META | TIKTOK | GOOGLE | LINKEDIN | CONTENT | SMS | VOICE | WHATSAPP
+  delta        Decimal  @db.Decimal(14, 2) // signed: <0 spend, >0 refund/credit
+  unitCost     Decimal? @db.Decimal(14, 4)
+  quantity     Decimal? @db.Decimal(14, 4)
+  reason       String // AD_WRITE | SMS | VOICE | WHATSAPP | CONTENT_GEN | REFUND | ADJUST
+  ref          String? // campaign / message / call / generation id
+  balanceAfter Decimal  @db.Decimal(14, 2)
+  createdAt    DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, budgetId, channel])
+  @@index([ref])
+  @@map("spend_ledgers")
 }
 
 /// A prospecting audit (GHL parity, Epic 13 — inert until PAGESPEED_API_KEY).

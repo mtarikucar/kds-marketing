@@ -158,6 +158,8 @@ import { SitesService } from './sites/sites.service';
 import { SiteRendererService } from './sites/site-renderer.service';
 import { FormsService } from './sites/forms.service';
 import { LeadAttributionService } from './leads/lead-attribution.service';
+import { ChannelTariffService } from './wallet/channel-tariff.service';
+import { SpendLedgerService } from './wallet/spend-ledger.service';
 import { BookingService } from './sites/booking.service';
 
 // Phase F P6 — reviews / reputation.
@@ -666,6 +668,8 @@ import { WalletService } from './wallet/wallet.service';
     SiteRendererService,
     FormsService,
     LeadAttributionService,
+    ChannelTariffService,
+    SpendLedgerService,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
