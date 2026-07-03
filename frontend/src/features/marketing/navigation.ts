@@ -218,6 +218,7 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/ai/agents', labelKey: 'nav.agentStudio', label: 'AI Agents', icon: Sparkles, feature: 'agentStudio', managerOnly: true },
       { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', label: 'Knowledge', icon: BookOpen, feature: 'askAi', managerOnly: true },
       { path: '/personas', labelKey: 'nav.personas', label: 'UGC Personas', icon: Camera, managerOnly: true },
+      { path: '/brand-brain', labelKey: 'nav.brandBrain', label: 'Brand Brain', icon: BookOpen, managerOnly: true },
     ],
   },
   {

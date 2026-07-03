@@ -2369,5 +2369,8 @@
   "trend.title": "Trend Remix",
   "trend.save": "Save a trend",
   "nav.contentCalendar": "Content Calendar",
-  "contentCal.title": "Content Calendar"
+  "contentCal.title": "Content Calendar",
+  "nav.brandBrain": "Brand Brain",
+  "brain.title": "Brand Brain",
+  "brain.search": "Search"
 }

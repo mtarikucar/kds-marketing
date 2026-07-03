@@ -182,6 +182,7 @@ import { MarketingApprovalsController } from './controllers/marketing-approvals.
 import { MarketingPersonasController } from './controllers/marketing-personas.controller';
 import { MarketingTrendsController } from './controllers/marketing-trends.controller';
 import { MarketingContentCalendarController } from './controllers/marketing-content-calendar.controller';
+import { MarketingBrandBrainController } from './controllers/marketing-brand-brain.controller';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
@@ -526,6 +527,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingPersonasController,
     MarketingTrendsController,
     MarketingContentCalendarController,
+    MarketingBrandBrainController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,

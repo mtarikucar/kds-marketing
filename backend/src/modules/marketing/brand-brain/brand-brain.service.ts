@@ -41,6 +41,26 @@ const SNIPPET_LEN = 280;
 export class BrandBrainService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * (Re)chunk every ACTIVE knowledge doc for a workspace so search has content
+   * to retrieve. Chunks store no embedding yet (keyword + citation retrieval
+   * works today); an embedding provider backfills them later for semantic
+   * re-rank, with no API change. Idempotent per doc (replaces its chunks).
+   */
+  async reindexWorkspace(workspaceId: string): Promise<{ docs: number; chunks: number }> {
+    const docs = await this.prisma.knowledgeDoc.findMany({
+      where: { workspaceId, status: 'ACTIVE' },
+      select: { id: true, content: true },
+    });
+    let chunks = 0;
+    for (const d of docs) {
+      await this.prisma.knowledgeChunk.deleteMany({ where: { workspaceId, docId: d.id } });
+      const parts = splitIntoChunks(d.content ?? '');
+      chunks += await this.ingestChunks(workspaceId, d.id, parts.map((content, ord) => ({ content, ord })));
+    }
+    return { docs: docs.length, chunks };
+  }
+
   /** Store pre-computed chunks for a doc (embeddings filled by the caller). */
   async ingestChunks(workspaceId: string, docId: string, chunks: ChunkInput[]): Promise<number> {
     if (chunks.length === 0) return 0;
@@ -101,4 +121,29 @@ export class BrandBrainService {
 
 function clampInt(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, Math.floor(n)));
+}
+
+/**
+ * Split text into ~`size`-char chunks on paragraph/sentence boundaries with a
+ * small overlap, so a retrieved chunk carries enough context to cite. Pure.
+ */
+export function splitIntoChunks(text: string, size = 700, overlap = 120): string[] {
+  const clean = (text ?? '').replace(/\r\n/g, '\n').trim();
+  if (!clean) return [];
+  if (clean.length <= size) return [clean];
+  const out: string[] = [];
+  let i = 0;
+  while (i < clean.length) {
+    let end = Math.min(i + size, clean.length);
+    if (end < clean.length) {
+      // Prefer to break at a paragraph, then sentence, then whitespace.
+      const slice = clean.slice(i, end);
+      const brk = Math.max(slice.lastIndexOf('\n\n'), slice.lastIndexOf('. '), slice.lastIndexOf('\n'));
+      if (brk > size * 0.5) end = i + brk + 1;
+    }
+    out.push(clean.slice(i, end).trim());
+    if (end >= clean.length) break;
+    i = Math.max(end - overlap, i + 1);
+  }
+  return out.filter(Boolean);
 }
