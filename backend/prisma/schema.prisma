@@ -1288,6 +1288,31 @@ model KnowledgeChunk {
   @@map("knowledge_chunks")
 }
 
+/// An ABSTRACT format extracted from a trend (Faz 4) — NOT a copy of the video.
+/// Stores the reusable structure (hook pattern, scene rhythm, pacing, caption
+/// shape) plus a ToS/copy `riskScore`, so it can be remixed onto a brand rather
+/// than duplicated. This "format intelligence" framing is the compliant way to
+/// do trend→remix (the raw video is never stored or reproduced).
+model TrendTemplate {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  sourcePlatform String // TIKTOK | INSTAGRAM | YOUTUBE
+  sourceUrl      String?
+  title          String?
+  hookPattern    String?  @db.Text
+  sceneStructure Json? // [{ scene, note }]
+  pacingNote     String?  @db.Text
+  captionPattern String?  @db.Text
+  riskScore      Int      @default(0) // 0-100 ToS/copy risk
+  extractedByAi  Boolean  @default(false)
+  status         String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("trend_templates")
+}
+
 /// An AI agent persona (Agent Studio): tone/goals/guardrails + which KB docs
 /// it can cite + which channels it answers on + lead-capture + human-handoff
 /// rules + follow-up policy. Conversation AI, Content AI and Voice AI all

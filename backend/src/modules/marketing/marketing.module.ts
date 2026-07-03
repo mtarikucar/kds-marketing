@@ -170,6 +170,8 @@ import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { PerformanceLoopService } from './budget/performance-loop.service';
 import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
+import { TrendRemixService } from './trends/trend-remix.service';
+import { UnifiedCalendarService } from './trends/unified-calendar.service';
 import { ApprovalRequestService } from './agents/approval-request.service';
 import { MarketingApprovalsController } from './controllers/marketing-approvals.controller';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
@@ -695,6 +697,8 @@ import { WalletService } from './wallet/wallet.service';
     PerformanceLoopService,
     AgentRunService,
     BrandBrainService,
+    TrendRemixService,
+    UnifiedCalendarService,
     ApprovalRequestService,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
