@@ -2,13 +2,15 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { FlaskConical, PauseCircle, PlayCircle, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { FlaskConical, PauseCircle, PlayCircle, Plus, Pencil, Trash2, Play, Inbox } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Badge } from '@/components/ui/Badge';
 import { Card, CardHeader, CardContent } from '@/components/ui/Card';
+import { Callout } from '@/components/ui/Callout';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Progress } from '@/components/ui/Progress';
@@ -109,6 +111,18 @@ export default function ResearchSettingsPage() {
     onError: (e: any) => toast.error(e.response?.data?.message ?? t('research.deleteProfileFailed', 'Could not delete the profile')),
   });
 
+  // Whether the native research engine's source providers are configured.
+  const { data: status } = useQuery<{ firecrawl: boolean; apify: boolean; enabled: boolean }>({
+    queryKey: ['marketing', 'research', 'status'],
+    queryFn: () => marketingApi.get('/research/status').then((r) => r.data),
+  });
+
+  const runNow = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/research/profiles/${id}/run`),
+    onSuccess: () => toast.success(t('research.runStarted', 'Research started — new suggestions will appear shortly')),
+    onError: (e: any) => toast.error(e.response?.data?.message ?? t('research.runFailed', 'Could not start the research run')),
+  });
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const openCreate = () => {
@@ -149,12 +163,29 @@ export default function ResearchSettingsPage() {
           'Tell the nightly research agent who to find — it fills your pipeline up to your daily quota.',
         )}
         actions={
-          <Button onClick={openCreate} size="md">
-            <Plus className="h-4 w-4" />
-            {t('research.newProfile', 'New research profile')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline" size="md">
+              <Link to="/research/suggestions">
+                <Inbox className="h-4 w-4" />
+                {t('research.suggestions', 'AI suggestions')}
+              </Link>
+            </Button>
+            <Button onClick={openCreate} size="md">
+              <Plus className="h-4 w-4" />
+              {t('research.newProfile', 'New research profile')}
+            </Button>
+          </div>
         }
       />
+
+      {status && !status.enabled && (
+        <Callout tone="info" title={t('research.notConfiguredTitle', 'Research engine not connected yet')}>
+          {t(
+            'research.notConfiguredDesc',
+            'An admin needs to set the research provider keys (Firecrawl / Apify) on the server. Until then you can author ICP profiles, but no leads are found and nothing is spent.',
+          )}
+        </Callout>
+      )}
 
       {/* Quota meter */}
       <Card>
@@ -221,6 +252,17 @@ export default function ResearchSettingsPage() {
                       <PlayCircle className="h-5 w-5" />
                     )}
                   </IconButton>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => runNow.mutate(p.id)}
+                    disabled={p.status !== 'ACTIVE' || runNow.isPending}
+                    loading={runNow.isPending && runNow.variables === p.id}
+                    title={t('research.runNowHint', 'Research this profile now — results land in AI suggestions')}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    {t('research.runNow', 'Run now')}
+                  </Button>
                   <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
                     <Pencil className="h-3.5 w-3.5" />
                     {t('common.edit', 'Edit')}

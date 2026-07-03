@@ -1,10 +1,8 @@
 import { Module } from '@nestjs/common';
 import { InternalTokenGuard } from './internal-token.guard';
-import { ResearchTokenGuard } from './research-token.guard';
 import { RoutineTokenGuard } from './routine-token.guard';
 import { InternalReferralController } from './internal-referral.controller';
 import { InternalEventsController } from './internal-events.controller';
-import { InternalResearchController } from './internal-research.controller';
 import { InternalReviewsController } from './internal-reviews.controller';
 import { InternalContentController } from './internal-content.controller';
 import { InternalInsightsController } from './internal-insights.controller';
@@ -28,12 +26,11 @@ import { MarketingModule } from '../marketing/marketing.module';
   controllers: [
     InternalReferralController,
     InternalEventsController,
-    InternalResearchController,
     InternalReviewsController,
     InternalContentController,
     InternalInsightsController,
     InternalLeadScoringController,
   ],
-  providers: [InternalTokenGuard, ResearchTokenGuard, RoutineTokenGuard],
+  providers: [InternalTokenGuard, RoutineTokenGuard],
 })
 export class InternalApiModule {}
