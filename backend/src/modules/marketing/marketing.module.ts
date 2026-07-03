@@ -163,6 +163,8 @@ import { SpendLedgerService } from './wallet/spend-ledger.service';
 import { SocialPostMetricService } from './social-planner/social-post-metric.service';
 import { BudgetPerformanceSource } from './budget/budget-performance.source';
 import { BudgetAutopilotService } from './budget/budget-autopilot.service';
+import { BudgetManagementService } from './budget/budget-management.service';
+import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
 // Phase F P6 — reviews / reputation.
@@ -501,6 +503,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingAdsController,
     TiktokBusinessOAuthController,
     MarketingAdRulesController,
+    MarketingBudgetController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -676,6 +679,7 @@ import { WalletService } from './wallet/wallet.service';
     SocialPostMetricService,
     BudgetPerformanceSource,
     BudgetAutopilotService,
+    BudgetManagementService,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
