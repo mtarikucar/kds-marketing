@@ -101,6 +101,12 @@
     "identityNotifs": "Kimlik ve bildirimler (şirket)",
     "identityNotifsDesc": "Workspace tek oturum açma (SSO) ve Slack bildirimleri — tüm ekiple paylaşılır.",
     "myCalendar": "Takvim bağlantılarım",
+    "setup": {
+      "metaWebhook": "Meta webhook URL'si — Meta App paneline yapıştır",
+      "smsCallback": "NetGSM gelen (MO) URL'si — İnteraktif SMS'e yapıştır",
+      "emailWebhook": "Gelen e-posta webhook URL'si",
+      "tiktokWebhook": "TikTok webhook URL'si — TikTok for Business uygulamasına yapıştır"
+    },
     "identityCalendar": "Kimlik, takvim ve Slack",
     "setUp": "Kur",
     "setUpChannel": "{{type}} bağla",

@@ -6,11 +6,9 @@ import { toast } from 'sonner';
 import {
   MessageSquare,
   Trash2,
-  Clipboard,
   BadgeCheck,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
-import { startTiktokAdsOAuth } from '../../features/marketing/api/ads.service';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -120,10 +118,6 @@ export default function ChannelsSettingsPage() {
         e?.response?.data?.message ?? t('channels.agentSaveFailed', 'Could not update the answering agent'),
       ),
   });
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  const embedSnippet = (widgetKey: string) =>
-    `<script src="${window.location.origin}/widget.js" data-widget-key="${widgetKey}" async></script>`;
 
   return (
     <div className="space-y-6">
@@ -244,118 +238,9 @@ export default function ChannelsSettingsPage() {
                 </Select>
               </div>
 
-              {c.type === 'WEBCHAT' && c.widgetKey && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <p className="text-caption text-muted-foreground mb-1">
-                    {t('channels.embed', 'Embed snippet (paste before </body>)')}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
-                      {embedSnippet(c.widgetKey)}
-                    </code>
-                    <IconButton
-                      variant="outline"
-                      size="sm"
-                      aria-label={t('common.copy', 'Copy')}
-                      onClick={() => {
-                        navigator.clipboard.writeText(embedSnippet(c.widgetKey!));
-                        toast.success(t('common.copied', 'Copied'));
-                      }}
-                    >
-                      <Clipboard className="h-4 w-4" />
-                    </IconButton>
-                  </div>
-                </div>
-              )}
-
-              {/* NetGSM inbound (MO) callback URL — paste into the panel so customer
-                  replies reach this channel. Surfaced like the web-chat snippet. */}
-              {c.type === 'SMS' && c.callbackUrl && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <p className="text-caption text-muted-foreground mb-1">
-                    {t(
-                      'channels.netgsmCallback',
-                      'NetGSM inbound (MO) URL — paste into İnteraktif SMS → “URL Adresine Yönlendir”',
-                    )}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
-                      {c.callbackUrl}
-                    </code>
-                    <IconButton
-                      variant="outline"
-                      size="sm"
-                      aria-label={t('common.copy', 'Copy')}
-                      onClick={() => {
-                        navigator.clipboard.writeText(c.callbackUrl!);
-                        toast.success(t('common.copied', 'Copied'));
-                      }}
-                    >
-                      <Clipboard className="h-4 w-4" />
-                    </IconButton>
-                  </div>
-                </div>
-              )}
-              {c.type === 'SMS' && !c.callbackUrl && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <p className="text-caption text-muted-foreground">
-                    {t(
-                      'channels.netgsmCallbackPending',
-                      'Inbound (MO) reply URL appears here once the server has PUBLIC_BASE_URL and MARKETING_SECRET_KEY set.',
-                    )}
-                  </p>
-                </div>
-              )}
-
-              {/* Meta (WhatsApp/Messenger/Instagram) inbound + delivery receipts
-                  arrive on ONE static, signed webhook for the whole app. Surface
-                  the URL operators paste into the Meta App dashboard. */}
-              {['WHATSAPP', 'MESSENGER', 'INSTAGRAM'].includes(c.type) && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <p className="text-caption text-muted-foreground mb-1">
-                    {t(
-                      'channels.metaWebhook',
-                      'Meta webhook URL — paste into Meta App → Webhooks (one URL for all Meta channels)',
-                    )}
-                  </p>
-                  {c.webhookUrl ? (
-                    <div className="flex items-center gap-2">
-                      <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
-                        {c.webhookUrl}
-                      </code>
-                      <IconButton
-                        variant="outline"
-                        size="sm"
-                        aria-label={t('common.copy', 'Copy')}
-                        onClick={() => {
-                          navigator.clipboard.writeText(c.webhookUrl!);
-                          toast.success(t('common.copied', 'Copied'));
-                        }}
-                      >
-                        <Clipboard className="h-4 w-4" />
-                      </IconButton>
-                    </div>
-                  ) : (
-                    <p className="text-caption text-muted-foreground">
-                      {t(
-                        'channels.metaWebhookPending',
-                        'Set PUBLIC_BASE_URL on the server to reveal the webhook URL.',
-                      )}
-                    </p>
-                  )}
-                  <p className="text-caption text-muted-foreground mt-1">
-                    {c.verifyTokenConfigured
-                      ? t(
-                          'channels.metaVerifyOk',
-                          'Verify token is configured — use the META_WEBHOOK_VERIFY_TOKEN value as the Verify Token in Meta.',
-                        )
-                      : t(
-                          'channels.metaVerifyMissing',
-                          'Set META_WEBHOOK_VERIFY_TOKEN on the server, then use that value as the Verify Token in Meta.',
-                        )}
-                  </p>
-                </div>
-              )}
+              {/* Connection setup URLs (Meta webhook / NetGSM inbound / web-chat
+                  embed) moved to the Account Center — they're part of connecting,
+                  not managing. This page keeps agent assignment + verify + delete. */}
 
               {/* LinkedIn engagement (comments on OWNED org posts) is the DM
                   substitute — there is no LinkedIn DM API. It is polling-based and
@@ -381,87 +266,6 @@ export default function ChannelsSettingsPage() {
                 </div>
               )}
 
-              {/* TikTok DM: webhook URL to paste into the TikTok for Business app
-                  dashboard + OAuth shortcut to provision/refresh the DM channel
-                  (and ad accounts) in one step. Manual token field remains the
-                  fallback for operators who manage tokens directly. */}
-              {c.type === 'TIKTOK' && (
-                <div className="mt-3 pt-3 border-t border-border space-y-3">
-                  {/* Inbound webhook URL */}
-                  <div>
-                    <p className="text-caption text-muted-foreground mb-1">
-                      {t(
-                        'channels.tiktokWebhook',
-                        'TikTok webhook URL — paste into TikTok for Business App → Webhooks',
-                      )}
-                    </p>
-                    {c.webhookUrl ? (
-                      <div className="flex items-center gap-2">
-                        <code className="text-caption bg-surface-muted border border-border rounded px-2 py-1.5 flex-1 break-all">
-                          {c.webhookUrl}
-                        </code>
-                        <IconButton
-                          variant="outline"
-                          size="sm"
-                          aria-label={t('common.copy', 'Copy')}
-                          onClick={() => {
-                            navigator.clipboard.writeText(c.webhookUrl!);
-                            toast.success(t('common.copied', 'Copied'));
-                          }}
-                        >
-                          <Clipboard className="h-4 w-4" />
-                        </IconButton>
-                      </div>
-                    ) : (
-                      <p className="text-caption text-muted-foreground">
-                        {t(
-                          'channels.tiktokWebhookPending',
-                          'Set PUBLIC_BASE_URL on the server to reveal the webhook URL.',
-                        )}
-                      </p>
-                    )}
-                    {c.messaging != null && (
-                      <p className="text-caption text-muted-foreground mt-1">
-                        {c.messaging
-                          ? t('channels.tiktokMessagingOk', 'Messaging scope granted via OAuth.')
-                          : t(
-                              'channels.tiktokMessagingMissing',
-                              'Messaging scope not yet granted — reconnect via "Connect TikTok for Business" below.',
-                            )}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Connect for Business CTA */}
-                  <div className="flex items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-caption text-muted-foreground">
-                        {t(
-                          'channels.tiktokOAuthHint',
-                          'Use OAuth to provision this DM channel and ad accounts in one step. The manual token field above remains the fallback.',
-                        )}
-                      </p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="shrink-0"
-                      onClick={async () => {
-                        try {
-                          const { authorizeUrl } = await startTiktokAdsOAuth();
-                          window.location.href = authorizeUrl;
-                        } catch {
-                          toast.error(
-                            t('channels.tiktokOAuthFailed', 'Could not start TikTok OAuth — check server config.'),
-                          );
-                        }
-                      }}
-                    >
-                      {t('channels.tiktokConnect', 'Connect TikTok for Business')}
-                    </Button>
-                  </div>
-                </div>
-              )}
             </CardContent>
           </Card>
         ))}

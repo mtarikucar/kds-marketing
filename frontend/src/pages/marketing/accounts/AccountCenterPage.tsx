@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { QueryStateBoundary } from '@/components/ui';
 import { useConnections, useDisconnect, connectionsKey } from './hooks';
-import type { Capability, ConnectionGroup, Health, Provider, ProviderBlock } from './types';
+import type { Capability, ConnectionGroup, Health, Provider, ProviderBlock, SourceRef } from './types';
 import { useSocialConnect } from '../social/useSocialConnect';
 import { AccountSelectDialog } from '../social/AccountSelectDialog';
 import type { SocialNetwork } from '../social/socialSchemas';
@@ -24,6 +24,7 @@ import { WebchatChannelDialog } from './WebchatChannelDialog';
 import { TelephonyCard } from './TelephonyCard';
 import { VoiceAiCard } from './VoiceAiCard';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
+import { CopyField } from './CopyField';
 // Company (workspace-level) identity + notifications — reused from the (now
 // personal-only) Settings › Connections page.
 import { SsoTab } from '../settings/connections/SsoTab';
@@ -136,45 +137,75 @@ export default function AccountCenterPage() {
       defaultValue: { PUBLISH: 'Publishing', INBOX: 'Inbox', ADS: 'Ads', WHATSAPP: 'WhatsApp', CALLS: 'Calls' }[c],
     });
 
-  const renderGroup = (provider: Provider, g: ConnectionGroup) => (
-    <div
-      key={g.identityKey}
-      className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2"
-    >
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{g.displayName}</span>
-      {g.capabilities.map((c) => (
-        <Badge key={c} tone={CAP_TONE[c]} size="sm">
-          {capLabel(c)}
-        </Badge>
-      ))}
-      {g.health !== 'HEALTHY' && (
-        <Badge tone={HEALTH_TONE[g.health]} size="sm">
-          {t(`accounts.health.${g.health}`, {
-            defaultValue: {
-              REAUTH_REQUIRED: 'Reconnect needed',
-              DISABLED: 'Disabled',
-              PARTIAL: 'Partial',
-              HEALTHY: '',
-            }[g.health],
-          })}
-        </Badge>
-      )}
-      {g.health === 'REAUTH_REQUIRED' && PROVIDER_NETWORK[provider] && (
-        <Button variant="outline" size="sm" onClick={() => reconnect(provider, g)}>
-          <RefreshCw className="h-3.5 w-3.5" />
-          {t('accounts.reconnect', 'Reconnect')}
-        </Button>
-      )}
-      <IconButton
-        variant="ghost"
-        size="sm"
-        aria-label={t('accounts.disconnect', 'Disconnect')}
-        onClick={() => setDisconnectTarget(g)}
-      >
-        <Unplug className="h-4 w-4 text-danger" aria-hidden="true" />
-      </IconButton>
-    </div>
-  );
+  const embedFor = (widgetKey: string) =>
+    `<script src="${window.location.origin}/widget.js" data-widget-key="${widgetKey}" async></script>`;
+
+  const SETUP_LABEL: Record<NonNullable<SourceRef['setupKind']>, string> = {
+    META_WEBHOOK: t('accounts.setup.metaWebhook', 'Meta webhook URL — paste into the Meta App dashboard'),
+    SMS_CALLBACK: t('accounts.setup.smsCallback', 'NetGSM inbound (MO) URL — paste into İnteraktif SMS'),
+    EMAIL_WEBHOOK: t('accounts.setup.emailWebhook', 'Inbound email webhook URL'),
+    TIKTOK_WEBHOOK: t('accounts.setup.tiktokWebhook', 'TikTok webhook URL — paste into the TikTok for Business app'),
+  };
+
+  const renderGroup = (provider: Provider, g: ConnectionGroup) => {
+    // "Paste this to finish connecting" URLs (Meta webhook / NetGSM inbound / email
+    // inbound / web-chat embed) live here now, not on the channels page.
+    const setups = g.sources.filter((s) => s.setupUrl || s.widgetKey);
+    return (
+      <div key={g.identityKey} className="space-y-2 rounded-lg border border-border px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{g.displayName}</span>
+          {g.capabilities.map((c) => (
+            <Badge key={c} tone={CAP_TONE[c]} size="sm">
+              {capLabel(c)}
+            </Badge>
+          ))}
+          {g.health !== 'HEALTHY' && (
+            <Badge tone={HEALTH_TONE[g.health]} size="sm">
+              {t(`accounts.health.${g.health}`, {
+                defaultValue: {
+                  REAUTH_REQUIRED: 'Reconnect needed',
+                  DISABLED: 'Disabled',
+                  PARTIAL: 'Partial',
+                  HEALTHY: '',
+                }[g.health],
+              })}
+            </Badge>
+          )}
+          {g.health === 'REAUTH_REQUIRED' && PROVIDER_NETWORK[provider] && (
+            <Button variant="outline" size="sm" onClick={() => reconnect(provider, g)}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('accounts.reconnect', 'Reconnect')}
+            </Button>
+          )}
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label={t('accounts.disconnect', 'Disconnect')}
+            onClick={() => setDisconnectTarget(g)}
+          >
+            <Unplug className="h-4 w-4 text-danger" aria-hidden="true" />
+          </IconButton>
+        </div>
+        {setups.length > 0 && (
+          <div className="space-y-1.5 border-t border-border pt-2">
+            {setups.map((s) =>
+              s.setupUrl ? (
+                <CopyField key={s.id} label={s.setupKind ? SETUP_LABEL[s.setupKind] : undefined} value={s.setupUrl} />
+              ) : s.widgetKey ? (
+                <CopyField
+                  key={s.id}
+                  label={t('accounts.webchat.embedLabel', 'Paste this just before </body> on every page')}
+                  value={embedFor(s.widgetKey)}
+                  multiline
+                />
+              ) : null,
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderProvider = (p: ProviderBlock) => {
     const network = PROVIDER_NETWORK[p.provider];

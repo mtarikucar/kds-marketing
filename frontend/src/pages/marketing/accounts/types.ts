@@ -17,6 +17,11 @@ export interface SourceRef {
   model: string;
   id: string;
   status: string;
+  /** Setup URL to paste into the provider (Meta webhook / NetGSM inbound / email). */
+  setupUrl?: string | null;
+  setupKind?: 'META_WEBHOOK' | 'SMS_CALLBACK' | 'EMAIL_WEBHOOK' | 'TIKTOK_WEBHOOK';
+  /** WEBCHAT — the embed <script> is built from this widget key. */
+  widgetKey?: string | null;
 }
 export interface ConnectionGroup {
   identityKey: string;

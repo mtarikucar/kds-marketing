@@ -38,6 +38,14 @@ export interface SourceRef {
   model: 'SocialAccount' | 'Channel' | 'AdAccount';
   id: string;
   status: string;
+  /** For messaging channels: the setup URL to paste into the provider dashboard
+   *  (Meta webhook / NetGSM inbound / email inbound) — surfaced HERE (where you
+   *  connect) rather than on the channels page. setupKind lets the SPA localize
+   *  the label. */
+  setupUrl?: string | null;
+  setupKind?: 'META_WEBHOOK' | 'SMS_CALLBACK' | 'EMAIL_WEBHOOK' | 'TIKTOK_WEBHOOK';
+  /** WEBCHAT only — the SPA builds the embed <script> snippet from this. */
+  widgetKey?: string | null;
 }
 
 export interface ConnectionGroup {
@@ -252,7 +260,25 @@ export class AccountCenterService {
       const oauthish = provider === 'META' || provider === 'LINKEDIN' || provider === 'TIKTOK';
       const g = ensure(provider, c.externalId ?? null, c.id, c.name, oauthish ? 'OAUTH' : 'MANUAL');
       addCap(g, cap);
-      g.sources.push({ capability: cap, model: 'Channel', id: c.id, status: c.status });
+      const src: SourceRef = { capability: cap, model: 'Channel', id: c.id, status: c.status };
+      // Surface the "paste this to finish connecting" URL here (it's a connection
+      // step, not channel management). channels.list() masks these per type.
+      if (c.type === 'MESSENGER' || c.type === 'INSTAGRAM' || c.type === 'WHATSAPP') {
+        src.setupUrl = c.webhookUrl ?? null;
+        src.setupKind = 'META_WEBHOOK';
+      } else if (c.type === 'SMS') {
+        src.setupUrl = c.callbackUrl ?? null;
+        src.setupKind = 'SMS_CALLBACK';
+      } else if (c.type === 'EMAIL') {
+        src.setupUrl = c.webhookUrl ?? null;
+        src.setupKind = 'EMAIL_WEBHOOK';
+      } else if (c.type === 'TIKTOK') {
+        src.setupUrl = c.webhookUrl ?? null;
+        src.setupKind = 'TIKTOK_WEBHOOK';
+      } else if (c.type === 'WEBCHAT') {
+        src.widgetKey = c.widgetKey ?? null;
+      }
+      g.sources.push(src);
       if (c.status === 'DISABLED' && g.health === 'HEALTHY') g.health = 'DISABLED';
     }
 
