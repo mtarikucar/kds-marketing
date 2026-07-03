@@ -1313,6 +1313,27 @@ model TrendTemplate {
   @@map("trend_templates")
 }
 
+/// A reusable UGC persona / AI spokesperson (Faz 2). The `referenceImageUrls` +
+/// `lockedSeed` are what keep the same face/outfit/identity consistent across
+/// every shot of every campaign (Seedance 2.0 @reference / Higgsfield Soul ID).
+/// Only synthetic or owned/consented likenesses — enforced by the compliance
+/// agent, not this table.
+model VideoPersona {
+  id                 String   @id @default(uuid())
+  workspaceId        String
+  name               String
+  description        String?  @db.Text
+  referenceImageUrls String[]
+  lockedSeed         Int?
+  voiceId            String? // ElevenLabs voice id (env-gated use)
+  status             String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@map("video_personas")
+}
+
 /// An AI agent persona (Agent Studio): tone/goals/guardrails + which KB docs
 /// it can cite + which channels it answers on + lead-capture + human-handoff
 /// rules + follow-up policy. Conversation AI, Content AI and Voice AI all

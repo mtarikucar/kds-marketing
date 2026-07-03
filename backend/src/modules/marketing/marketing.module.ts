@@ -171,6 +171,8 @@ import { PerformanceLoopService } from './budget/performance-loop.service';
 import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
 import { TrendRemixService } from './trends/trend-remix.service';
+import { VideoPipelineService } from './video/video-pipeline.service';
+import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
 import { ApprovalRequestService } from './agents/approval-request.service';
 import { MarketingApprovalsController } from './controllers/marketing-approvals.controller';
@@ -698,6 +700,8 @@ import { WalletService } from './wallet/wallet.service';
     AgentRunService,
     BrandBrainService,
     TrendRemixService,
+    VideoPipelineService,
+    VideoPersonaService,
     UnifiedCalendarService,
     ApprovalRequestService,
     BookingService,
