@@ -2364,5 +2364,8 @@
   "nav.personas": "UGC Personas",
   "persona.title": "UGC Personas",
   "persona.create": "New persona",
-  "persona.plan.go": "Storyboard"
+  "persona.plan.go": "Storyboard",
+  "nav.trends": "Trend Remix",
+  "trend.title": "Trend Remix",
+  "trend.save": "Save a trend"
 }

@@ -59,6 +59,7 @@ import {
   Percent,
   Ticket,
   CalendarRange,
+  TrendingUp,
 } from 'lucide-react';
 
 /**
@@ -185,6 +186,7 @@ export const NAV_HUBS: NavHub[] = [
     id: 'marketing', labelKey: 'nav.group.marketing', label: 'Marketing', icon: Megaphone, tier: 'advanced',
     children: [
       { path: '/budget', labelKey: 'nav.budget', label: 'Budget Autopilot', icon: SlidersHorizontal, managerOnly: true },
+      { path: '/trends', labelKey: 'nav.trends', label: 'Trend Remix', icon: TrendingUp, managerOnly: true },
       { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
       { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
       { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },

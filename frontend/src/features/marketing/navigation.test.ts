@@ -35,7 +35,7 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
 
   it('a manager with NO entitlements still sees the core-but-managerOnly modules', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
-    expect(childPaths(hubs, 'marketing')).toEqual(['/budget', '/social', '/social-campaigns', '/trigger-links']);
+    expect(childPaths(hubs, 'marketing')).toEqual(['/budget', '/trends', '/social', '/social-campaigns', '/trigger-links']);
     // AI is its own hub now; only the un-gated AI Studio shows without entitlements.
     expect(childPaths(hubs, 'ai')).toEqual(['/ai/studio', '/personas']);
     expect(childPaths(hubs, 'sites').sort()).toEqual(['/experiments', '/surveys']);
