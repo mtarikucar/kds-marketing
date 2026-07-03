@@ -35,6 +35,7 @@ const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
 const BudgetAutopilotPage      = lazy(() => import('./pages/marketing/budget/BudgetAutopilotPage'));
 const PersonasPage             = lazy(() => import('./pages/marketing/personas/PersonasPage'));
 const TrendsPage               = lazy(() => import('./pages/marketing/trends/TrendsPage'));
+const ContentCalendarPage      = lazy(() => import('./pages/marketing/contentCalendar/ContentCalendarPage'));
 const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
@@ -193,6 +194,7 @@ export default function App() {
           <Route path="/budget"         element={<S><BudgetAutopilotPage /></S>} />
           <Route path="/personas"       element={<S><PersonasPage /></S>} />
           <Route path="/trends"         element={<S><TrendsPage /></S>} />
+          <Route path="/content-calendar" element={<S><ContentCalendarPage /></S>} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           <Route path="/calls"          element={<S><CallsPage /></S>} />

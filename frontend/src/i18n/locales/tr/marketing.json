@@ -2613,5 +2613,7 @@
   "persona.plan.go": "Storyboard",
   "nav.trends": "Trend Remix",
   "trend.title": "Trend Remix",
-  "trend.save": "Trend kaydet"
+  "trend.save": "Trend kaydet",
+  "nav.contentCalendar": "İçerik Takvimi",
+  "contentCal.title": "İçerik Takvimi"
 }

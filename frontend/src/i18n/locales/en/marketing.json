@@ -2367,5 +2367,7 @@
   "persona.plan.go": "Storyboard",
   "nav.trends": "Trend Remix",
   "trend.title": "Trend Remix",
-  "trend.save": "Save a trend"
+  "trend.save": "Save a trend",
+  "nav.contentCalendar": "Content Calendar",
+  "contentCal.title": "Content Calendar"
 }

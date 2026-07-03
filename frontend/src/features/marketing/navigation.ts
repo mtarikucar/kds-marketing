@@ -187,6 +187,7 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/budget', labelKey: 'nav.budget', label: 'Budget Autopilot', icon: SlidersHorizontal, managerOnly: true },
       { path: '/trends', labelKey: 'nav.trends', label: 'Trend Remix', icon: TrendingUp, managerOnly: true },
+      { path: '/content-calendar', labelKey: 'nav.contentCalendar', label: 'Content Calendar', icon: CalendarRange, managerOnly: true },
       { path: '/campaigns', labelKey: 'nav.campaigns', label: 'Campaigns', icon: Megaphone, feature: 'campaigns', managerOnly: true },
       { path: '/email-templates', labelKey: 'nav.emailTemplates', label: 'Email Templates', icon: Mail, feature: 'campaigns', managerOnly: true },
       { path: '/social', labelKey: 'nav.social', label: 'Social Planner', icon: Share2, managerOnly: true },
