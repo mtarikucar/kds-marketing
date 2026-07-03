@@ -1261,9 +1261,31 @@ model KnowledgeDoc {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  chunks KnowledgeChunk[]
+
   @@index([workspaceId, status])
   @@index([searchVector], type: Gin)
   @@map("knowledge_docs")
+}
+
+/// A retrievable chunk of a KnowledgeDoc for the Brand Brain (Faz 1). `embedding`
+/// is a plain double-precision array (no DB extension required — pgvector is the
+/// scale-up path). Hybrid retrieval prefilters by full-text on the parent doc,
+/// then re-ranks candidates by cosine similarity against the query embedding,
+/// returning citations back to the source doc.
+model KnowledgeChunk {
+  id          String       @id @default(uuid())
+  workspaceId String
+  docId       String
+  doc         KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  ord         Int          @default(0)
+  content     String       @db.Text
+  embedding   Float[] // double precision[]; empty until an embedding provider is configured
+  tokens      Int?
+  createdAt   DateTime     @default(now())
+
+  @@index([workspaceId, docId, ord])
+  @@map("knowledge_chunks")
 }
 
 /// An AI agent persona (Agent Studio): tone/goals/guardrails + which KB docs
