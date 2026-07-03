@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { AffiliateService } from '../services/affiliate.service';
+import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 
@@ -21,9 +22,15 @@ export class FormsService {
     private readonly outbox: OutboxService,
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly affiliates: AffiliateService,
+    private readonly leadAttribution: LeadAttributionService,
   ) {}
 
-  async submit(formId: string, data: Record<string, string>, affRef?: string): Promise<{ redirectUrl: string | null }> {
+  async submit(
+    formId: string,
+    data: Record<string, string>,
+    affRef?: string,
+    ctx?: { url?: string | null; referrer?: string | null },
+  ): Promise<{ redirectUrl: string | null }> {
     // Defensive backstop (independent of the controller): cap the untrusted
     // dynamic-field map to ≤50 fields, key ≤100 chars, value ≤2000 chars.
     const capped: Record<string, string> = {};
@@ -108,6 +115,16 @@ export class FormsService {
             payload: { workspaceId, leadId: lead.id, source: 'WEBSITE', occurredAt: new Date().toISOString() },
           },
           tx as any,
+        );
+        // First-touch attribution for the NEW lead, in the SAME tx so it's as
+        // durable as the lead. Best-effort — never blocks capture (the service
+        // swallows its own errors).
+        await this.leadAttribution.capture(
+          workspaceId,
+          lead.id,
+          { url: ctx?.url, referrer: ctx?.referrer, fields: data },
+          {},
+          tx,
         );
         leadId = lead.id;
         created = true;

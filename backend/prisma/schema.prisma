@@ -219,6 +219,7 @@ model Lead {
   offers      LeadOffer[]
   commissions Commission[]    @relation("CommissionLead")
   tags        LeadTag[]
+  attribution LeadAttribution?
 
   // v3.0.1 round-4 — hardware "Teklif Al" leads (source=HARDWARE_QUOTE)
   // capture (a) the requesting tenant via soft-FK string and (b) a
@@ -283,6 +284,45 @@ model Lead {
   @@index([workspaceId, emailNormalized])
   @@index([mergedIntoId])
   @@map("leads")
+}
+
+/// First-touch marketing attribution for a Lead (1:1), captured at ingest from
+/// an inbound conversation, a site form, or an ad click. Soft (no-FK) content
+/// references so a deleted post/campaign/ad never blocks a lead. The Faz 5/7
+/// Performance Loop joins spend↔content↔revenue through these keys.
+model LeadAttribution {
+  id          String @id @default(uuid())
+  workspaceId String
+  leadId      String @unique
+  lead        Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  // Marketing params captured verbatim from the landing URL / referral payload.
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmContent  String?
+  utmTerm     String?
+  // Platform click identifiers.
+  clickId     String?
+  clickIdType String? // FBCLID | GCLID | TTCLID | LICLID | OTHER
+  // Click-to-WhatsApp referral (Meta CTWA) — ties a WA conversation to its ad.
+  ctwaClid    String?
+  landingUrl  String? @db.Text
+  referrerUrl String? @db.Text
+  // Soft content / campaign / ad references (no FK — content may be deleted).
+  sourceSocialPostId     String?
+  sourceCampaignItemId   String?
+  sourceSocialCampaignId String?
+  sourceAdCampaignId     String?
+  sourceAdCreativeId     String?
+  raw       Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, sourceSocialPostId])
+  @@index([workspaceId, sourceAdCampaignId])
+  @@index([workspaceId, ctwaClid])
+  @@index([workspaceId, clickId])
+  @@map("lead_attributions")
 }
 
 /// Epic A1 — workspace-scoped typed custom-field definitions. Values live in
@@ -2961,9 +3001,40 @@ model SocialPostTarget {
   externalPostId  String?
   error           String?
 
+  metrics SocialPostMetric[]
+
   @@index([workspaceId, postId])
   @@index([workspaceId, status])
   @@map("social_post_targets")
+}
+
+/// Organic performance of a published social post, pulled back per network per
+/// UTC day (idempotent upsert on targetId+date — a re-pull never duplicates).
+/// The organic mirror of AdMetric: the Performance Loop reads these to attribute
+/// reach/engagement/leads to a specific piece of content. Provider-reported
+/// counts; `leads` is Jeeta-side first-party (joined via LeadAttribution).
+model SocialPostMetric {
+  id          String           @id @default(uuid())
+  workspaceId String
+  targetId    String
+  target      SocialPostTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  date        DateTime         @db.Date // UTC day
+  impressions Int              @default(0)
+  reach       Int              @default(0)
+  engagements Int              @default(0)
+  likes       Int              @default(0)
+  comments    Int              @default(0)
+  shares      Int              @default(0)
+  saves       Int              @default(0)
+  clicks      Int              @default(0)
+  videoViews  Int              @default(0)
+  leads       Int              @default(0)
+  raw         Json?
+  pulledAt    DateTime         @default(now())
+
+  @@unique([targetId, date])
+  @@index([workspaceId, date])
+  @@map("social_post_metrics")
 }
 
 /// One Brand Kit per workspace — logo, palette, tone, 3–5 reference images,
@@ -3452,6 +3523,11 @@ model AdMetric {
   impressions Int       @default(0)
   clicks      Int       @default(0)
   leads       Int       @default(0)
+  /// Faz 5/7 Performance Loop: revenue & conversion value pulled from the
+  /// provider (or reconciled from CRM won-revenue); roas = revenue / spend.
+  revenue         Decimal  @default(0) @db.Decimal(14, 2)
+  conversionValue Decimal  @default(0) @db.Decimal(14, 2)
+  roas            Decimal? @db.Decimal(10, 4)
   rawMetrics  Json?
   pulledAt    DateTime  @default(now())
 

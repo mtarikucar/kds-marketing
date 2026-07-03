@@ -52,9 +52,13 @@ export class PublicSiteController {
       if (typeof k !== 'string' || k.length > 100) continue;
       safe[k] = String(v).slice(0, 2000);
     }
+    // First-touch attribution signals: the hosting page (Referer) carries the
+    // UTM/click-id query; a hidden landing_url/page_url field wins if present.
+    const referer = typeof req.headers.referer === 'string' ? req.headers.referer : undefined;
+    const attributionCtx = { url: safe.landing_url || safe.page_url || referer, referrer: referer };
     let redirectUrl: string | null = null;
     try {
-      ({ redirectUrl } = await this.forms.submit(formId, safe, readCookie(req, AFF_REF_COOKIE)));
+      ({ redirectUrl } = await this.forms.submit(formId, safe, readCookie(req, AFF_REF_COOKIE), attributionCtx));
     } catch {
       res.status(404).type('html').send('<h1>Form not found</h1>');
       return;
