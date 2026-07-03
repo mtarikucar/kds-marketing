@@ -269,7 +269,7 @@ export default function OpportunitiesPage() {
       />
 
       {/* Pipeline selector + total */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Select
           value={activePipelineId ?? ''}
           onValueChange={(v) => setPipelineId(v)}
@@ -327,13 +327,13 @@ export default function OpportunitiesPage() {
               const pct = forecast.rawTotal > 0 ? Math.round((s.weightedValue / forecast.weightedTotal || 0) * 100) : 0;
               return (
                 <div key={s.stageId} className="flex items-center gap-3 text-sm">
-                  <div className="w-40 shrink-0 truncate">
+                  <div className="w-24 shrink-0 sm:w-40 truncate">
                     {s.name} <span className="text-muted-foreground">· {s.probability}%</span>
                   </div>
                   <div className="flex-1 h-2 rounded-full bg-surface-muted overflow-hidden">
                     <div className="h-full bg-primary" style={{ width: `${Math.max(2, pct)}%` }} />
                   </div>
-                  <div className="w-40 shrink-0 text-right tabular-nums">
+                  <div className="w-24 shrink-0 sm:w-40 text-right tabular-nums">
                     {fmtForecast(s.weightedValue)}
                     <span className="text-muted-foreground"> / {fmtForecast(s.rawValue)} · {s.count}</span>
                   </div>

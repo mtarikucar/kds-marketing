@@ -192,7 +192,7 @@ export default function AutomationBuilderPage() {
         onSave={() => save.mutate()}
         onToggleStatus={() => toggleStatus.mutate()}
       />
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <BuilderSettingsRail
           triggerType={state.triggerType}
           onTriggerChange={(triggerType) => patchState({ triggerType })}
@@ -214,7 +214,7 @@ export default function AutomationBuilderPage() {
             onSelect={setSelected}
           />
         </div>
-        <div className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">
+        <div className="w-full shrink-0 overflow-y-auto border-t border-border p-3 md:w-80 md:border-l md:border-t-0">
           <StepPropertyPanel
             index={selected}
             step={selectedStep}

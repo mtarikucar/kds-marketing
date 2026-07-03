@@ -432,8 +432,8 @@ export default function EstimatesPage() {
             {/* Line items */}
             <div className="space-y-2">
               {form.items.map((it, i) => (
-                <div key={i} className="flex items-end gap-2">
-                  <Labeled label={i === 0 ? t('estimates.item', 'Item') : ''} className="flex-1">
+                <div key={i} className="flex flex-wrap items-end gap-2">
+                  <Labeled label={i === 0 ? t('estimates.item', 'Item') : ''} className="basis-full sm:flex-1">
                     <Input
                       disabled={!isDraft}
                       value={it.description}

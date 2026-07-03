@@ -207,7 +207,7 @@ function CompanyDetailDialog({ companyId, onClose, onDelete }: { companyId: stri
               </DialogDescription>
             </DialogHeader>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Stat icon={<Users className="h-3.5 w-3.5" />} label={t('companies.contacts', 'Contacts')} value={company.contactCount} />
               <Stat icon={<Target className="h-3.5 w-3.5" />} label={t('companies.openDeals', 'Open deals')} value={company.openOpportunities} />
               <Stat icon={<MessagesSquare className="h-3.5 w-3.5" />} label={t('companies.conversations', 'Conversations')} value={company.conversationCount} />

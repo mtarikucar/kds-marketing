@@ -41,8 +41,11 @@ export const DialogContent = forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100vh-2rem)] w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto',
-        'rounded-xl border border-border bg-surface-raised p-6 shadow-xl',
+        // w-[calc(100%-2rem)] keeps a 1rem gutter on every side on small screens
+        // (plain w-full made dialogs touch both edges on mobile); max-w-lg caps it
+        // on desktop. p-6 → p-4 on mobile so narrow phones aren't all padding.
+        'fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto',
+        'rounded-xl border border-border bg-surface-raised p-4 shadow-xl sm:p-6',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',

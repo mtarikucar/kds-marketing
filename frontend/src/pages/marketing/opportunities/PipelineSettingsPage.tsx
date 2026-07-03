@@ -290,7 +290,7 @@ function StageRow({
   const dirty = name !== stage.name || prob !== String(stage.probability);
 
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-surface px-2 py-1.5">
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-2 py-1.5">
       <div className="flex flex-col">
         <button
           type="button"

@@ -415,8 +415,8 @@ export default function SubscriptionsPage() {
 
             <div className="space-y-2">
               {form.items.map((it, i) => (
-                <div key={i} className="flex items-end gap-2">
-                  <Labeled label={i === 0 ? t('subscriptions.item', 'Item') : ''} className="flex-1">
+                <div key={i} className="flex flex-wrap items-end gap-2">
+                  <Labeled label={i === 0 ? t('subscriptions.item', 'Item') : ''} className="basis-full sm:flex-1">
                     <Input
                       value={it.description}
                       onChange={(e) => setForm((f) => { const items = [...f.items]; items[i] = { ...items[i], description: e.target.value }; return { ...f, items }; })}

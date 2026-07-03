@@ -31,13 +31,13 @@ export function BuilderTopBar({
   const isActive = status === 'ACTIVE';
 
   return (
-    <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-surface/95 px-4 py-2.5 backdrop-blur">
+    <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-border bg-surface/95 px-4 py-2.5 backdrop-blur sm:gap-3">
       <IconButton variant="ghost" size="sm" aria-label={t('common.back', 'Back')} onClick={onBack}>
         <ArrowLeft className="h-5 w-5" />
       </IconButton>
       <Input
         aria-label={t('automations.name', 'Name')}
-        className="max-w-sm font-medium"
+        className="min-w-0 flex-1 font-medium md:max-w-sm md:flex-none"
         placeholder={t('automations.namePlaceholder', 'Automation name')}
         value={name}
         onChange={(e) => onNameChange(e.target.value)}

@@ -246,12 +246,19 @@ function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
   const name = `${rep.firstName ?? ''} ${rep.lastName ?? ''}`.trim() || rep.email;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2">
-      <span className="min-w-[8rem] flex-1 truncate text-sm text-foreground">{name}</span>
-      <Input className="w-32" placeholder={t('accounts.tel.phone', 'Phone')} value={phone} onChange={(e) => setPhone(e.target.value)} />
-      <Input className="w-20" placeholder={t('accounts.tel.dahili', 'Dahili')} value={dahili} onChange={(e) => setDahili(e.target.value)} />
-      <Input className="w-28" type="password" placeholder={t('accounts.tel.sip', 'SIP pass')} value={sipPassword} onChange={(e) => setSipPassword(e.target.value)} />
-      <Button size="sm" variant="outline" onClick={() => save.mutate()} loading={save.isPending}>{t('common.save', 'Save')}</Button>
+    <div className="space-y-2 rounded-lg border border-border p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{name}</span>
+        <Button size="sm" variant="outline" className="shrink-0" onClick={() => save.mutate()} loading={save.isPending}>
+          {t('common.save', 'Save')}
+        </Button>
+      </div>
+      {/* Inputs wrap/fill on mobile instead of overflowing a fixed-width row. */}
+      <div className="flex flex-wrap gap-2">
+        <Input className="min-w-0 flex-1 basis-32" placeholder={t('accounts.tel.phone', 'Phone')} value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <Input className="w-20 shrink-0" placeholder={t('accounts.tel.dahili', 'Dahili')} value={dahili} onChange={(e) => setDahili(e.target.value)} />
+        <Input className="min-w-0 flex-1 basis-28" type="password" placeholder={t('accounts.tel.sip', 'SIP pass')} value={sipPassword} onChange={(e) => setSipPassword(e.target.value)} />
+      </div>
     </div>
   );
 }

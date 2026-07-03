@@ -231,7 +231,7 @@ export default function InboxPage() {
 
       <div className="flex-1 min-h-0 flex gap-0 sm:gap-4">
         {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
-        <div className={selectedId ? 'hidden sm:flex' : 'flex'}>
+        <div className={selectedId ? 'hidden sm:flex' : 'flex w-full sm:w-auto'}>
           <ConversationList
             conversations={conversations}
             isLoading={conversationsLoading}

@@ -31,7 +31,7 @@ export function BuilderSettingsRail({
   const { t } = useTranslation('marketing');
 
   return (
-    <div className="w-72 shrink-0 space-y-4 overflow-y-auto border-r border-border p-3">
+    <div className="w-full shrink-0 space-y-4 overflow-y-auto border-b border-border p-3 md:w-72 md:border-b-0 md:border-r">
       {/* AI assist */}
       <Callout tone="info">
         <div className="mb-1.5 flex items-center gap-1 text-sm font-medium">
