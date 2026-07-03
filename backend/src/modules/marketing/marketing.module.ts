@@ -174,6 +174,7 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
+import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
 import { ApprovalRequestService } from './agents/approval-request.service';
@@ -705,6 +706,7 @@ import { WalletService } from './wallet/wallet.service';
     VideoPipelineService,
     McpToolRegistry,
     McpBrokerService,
+    AdWriteCapabilityService,
     VideoPersonaService,
     UnifiedCalendarService,
     ApprovalRequestService,
