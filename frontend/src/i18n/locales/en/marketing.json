@@ -2383,5 +2383,18 @@
   "contentCal.weeklyPlan": "Generate weekly plan",
   "weekly.title": "Weekly plan",
   "weekly.approve": "Approve",
-  "weekly.budget.title": "Budget analysis (this week)"
+  "weekly.budget.title": "Budget analysis (this week)",
+  "weekly.type.SOCIAL_POST": "Social post",
+  "weekly.type.CONTENT_IDEA": "Content idea",
+  "weekly.type.CAMPAIGN": "Campaign",
+  "weekly.type.TREND_REMIX": "Trend remix",
+  "weekly.status.APPROVED": "Approved",
+  "weekly.status.DISCARDED": "Discarded",
+  "weekly.status.DRAFT": "Draft",
+  "weekly.status.SCHEDULED": "Scheduled",
+  "budget.status.ACTIVE": "Active",
+  "budget.status.PAUSED": "Paused",
+  "budget.status.KILLED": "Killed",
+  "budget.kind.BUDGET_REALLOCATION": "Budget reallocation",
+  "budget.runKind.REALLOCATION": "Reallocation"
 }
