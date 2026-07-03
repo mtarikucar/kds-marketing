@@ -2379,5 +2379,9 @@
   "studio.tab.campaigns": "Campaigns",
   "studio.tab.trends": "Trends",
   "studio.tab.budget": "Ad Budget",
-  "studio.tab.more": "More"
+  "studio.tab.more": "More",
+  "contentCal.weeklyPlan": "Generate weekly plan",
+  "weekly.title": "Weekly plan",
+  "weekly.approve": "Approve",
+  "weekly.budget.title": "Budget analysis (this week)"
 }

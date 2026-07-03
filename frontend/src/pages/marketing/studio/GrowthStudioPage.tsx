@@ -6,7 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { RouteFallback } from '../../../components/RouteFallback';
 
 // Lazy so a tab's code only loads when opened (each was its own route before).
-const ContentCalendarPage = lazy(() => import('../contentCalendar/ContentCalendarPage'));
+const StudioCalendarTab = lazy(() => import('./StudioCalendarTab'));
 const BudgetAutopilotPage = lazy(() => import('../budget/BudgetAutopilotPage'));
 const TrendsPage = lazy(() => import('../trends/TrendsPage'));
 const CampaignsPage = lazy(() => import('../CampaignsPage'));
@@ -58,7 +58,7 @@ export default function GrowthStudioPage() {
         </TabsList>
 
         <TabsContent value="calendar" className="pt-5">
-          <Lazy><ContentCalendarPage embedded /></Lazy>
+          <Lazy><StudioCalendarTab /></Lazy>
         </TabsContent>
         <TabsContent value="campaigns" className="pt-5">
           <CampaignsTab />

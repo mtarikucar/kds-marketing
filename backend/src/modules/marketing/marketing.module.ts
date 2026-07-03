@@ -184,6 +184,8 @@ import { MarketingPersonasController } from './controllers/marketing-personas.co
 import { MarketingTrendsController } from './controllers/marketing-trends.controller';
 import { MarketingContentCalendarController } from './controllers/marketing-content-calendar.controller';
 import { MarketingBrandBrainController } from './controllers/marketing-brand-brain.controller';
+import { WeeklyPlannerService } from './studio/weekly-planner.service';
+import { MarketingWeeklyPlanController } from './controllers/marketing-weekly-plan.controller';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
@@ -529,6 +531,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingTrendsController,
     MarketingContentCalendarController,
     MarketingBrandBrainController,
+    MarketingWeeklyPlanController,
     MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
@@ -719,6 +722,7 @@ import { WalletService } from './wallet/wallet.service';
     AdWriteCapabilityService,
     VideoPersonaService,
     UnifiedCalendarService,
+    WeeklyPlannerService,
     ApprovalRequestService,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,

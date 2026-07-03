@@ -1334,6 +1334,49 @@ model VideoPersona {
   @@map("video_personas")
 }
 
+/// A one-click generated week of marketing (Faz C, Growth Studio). Holds the
+/// budget analysis for the week (`budgetBreakdown`: ad-spend / content-gen /
+/// conversations vs the weekly slice of the monthly growth budget). One plan per
+/// (workspace, week). Items are DRAFTs until the user approves them.
+model WeeklyPlan {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  weekStart       DateTime         @db.Date // Monday (UTC)
+  status          String           @default("DRAFT") // DRAFT | ACTIVE | ARCHIVED
+  budgetTotal     Decimal?         @db.Decimal(14, 2) // weekly budget slice
+  budgetBreakdown Json? // { weeklyBudget, adSpend, contentGen, conversations, total, overBudget }
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  items           WeeklyPlanItem[]
+
+  @@unique([workspaceId, weekStart])
+  @@index([workspaceId, status])
+  @@map("weekly_plans")
+}
+
+/// One draft piece of a WeeklyPlan — a social post, content idea, campaign, or
+/// trend remix on a given day, with its estimated cost. Approved items flow into
+/// scheduled content; `refId` links the materialized post once scheduled.
+model WeeklyPlanItem {
+  id          String     @id @default(uuid())
+  workspaceId String
+  planId      String
+  plan        WeeklyPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  day         DateTime   @db.Date
+  type        String // SOCIAL_POST | CONTENT_IDEA | CAMPAIGN | TREND_REMIX
+  channel     String? // FACEBOOK | INSTAGRAM | LINKEDIN | EMAIL | SMS | …
+  title       String
+  draft       String?    @db.Text
+  estCost     Decimal    @default(0) @db.Decimal(14, 2)
+  status      String     @default("DRAFT") // DRAFT | APPROVED | DISCARDED | SCHEDULED
+  refId       String? // materialized social post id, once scheduled
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([workspaceId, planId, day])
+  @@map("weekly_plan_items")
+}
+
 /// An AI agent persona (Agent Studio): tone/goals/guardrails + which KB docs
 /// it can cite + which channels it answers on + lead-capture + human-handoff
 /// rules + follow-up policy. Conversation AI, Content AI and Voice AI all

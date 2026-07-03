@@ -5,6 +5,7 @@ function makePrisma(posts: any[], items: any[]) {
     prisma: {
       socialPost: { findMany: jest.fn().mockResolvedValue(posts) },
       socialCampaignItem: { findMany: jest.fn().mockResolvedValue(items) },
+      weeklyPlanItem: { findMany: jest.fn().mockResolvedValue([]) },
     } as any,
   };
 }

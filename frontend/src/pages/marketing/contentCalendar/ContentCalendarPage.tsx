@@ -17,9 +17,10 @@ const dayKey = (d: Date | string) => {
 };
 const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-const TYPE_STYLE: Record<CalendarItemType, { dot: string; tone: 'info' | 'primary'; icon: typeof Share2 }> = {
+const TYPE_STYLE: Record<CalendarItemType, { dot: string; tone: 'info' | 'primary' | 'warning'; icon: typeof Share2 }> = {
   SOCIAL_POST: { dot: 'bg-info', tone: 'info', icon: Share2 },
   CAMPAIGN_ITEM: { dot: 'bg-primary', tone: 'primary', icon: CalendarRange },
+  WEEKLY_PLAN: { dot: 'bg-warning', tone: 'warning', icon: Sparkles },
 };
 const typeStyle = (t: CalendarItemType) => TYPE_STYLE[t] ?? { dot: 'bg-muted-foreground', tone: 'info' as const, icon: CalendarDays };
 
@@ -138,6 +139,7 @@ export default function ContentCalendarPage({ embedded, onGenerateWeeklyPlan }: 
       <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
         <LegendDot className="bg-info" label={t('contentCal.type.SOCIAL_POST', 'Social post')} />
         <LegendDot className="bg-primary" label={t('contentCal.type.CAMPAIGN_ITEM', 'Campaign content')} />
+        <LegendDot className="bg-warning" label={t('contentCal.type.WEEKLY_PLAN', 'Weekly-plan draft')} />
       </div>
 
       {selected && (

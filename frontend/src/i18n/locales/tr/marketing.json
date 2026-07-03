@@ -2897,5 +2897,9 @@
   "studio.tab.campaigns": "Kampanyalar",
   "studio.tab.trends": "Trendler",
   "studio.tab.budget": "Reklam Bütçesi",
-  "studio.tab.more": "Diğer"
+  "studio.tab.more": "Diğer",
+  "contentCal.weeklyPlan": "Haftalık plan oluştur",
+  "weekly.title": "Haftalık plan",
+  "weekly.approve": "Onayla",
+  "weekly.budget.title": "Bütçe analizi (bu hafta)"
 }

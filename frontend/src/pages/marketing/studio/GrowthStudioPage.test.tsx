@@ -6,7 +6,7 @@ import GrowthStudioPage from './GrowthStudioPage';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, o?: string) => (typeof o === 'string' ? o : k) }) }));
 // Stub the heavy tab pages so the shell renders in isolation.
 const stub = { default: () => null };
-vi.mock('../contentCalendar/ContentCalendarPage', () => stub);
+vi.mock('./StudioCalendarTab', () => stub);
 vi.mock('../budget/BudgetAutopilotPage', () => stub);
 vi.mock('../trends/TrendsPage', () => stub);
 vi.mock('../CampaignsPage', () => stub);
