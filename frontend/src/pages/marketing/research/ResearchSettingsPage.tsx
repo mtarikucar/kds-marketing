@@ -30,7 +30,8 @@ interface ResearchProfile {
   status: 'ACTIVE' | 'PAUSED';
   icpDescription: string;
   productPitch?: string | null;
-  geo?: { country?: string; cities?: string[] } | null;
+  geo?: { country?: string; regions?: string[]; cities?: string[] } | null;
+  businessTypes?: string[] | null;
   language: string;
   exclusions?: string | null;
   lastRunAt?: string | null;
@@ -139,7 +140,9 @@ export default function ResearchSettingsPage() {
       productPitch: p.productPitch ?? '',
       language: p.language,
       country: p.geo?.country ?? '',
+      regions: (p.geo?.regions ?? []).join(', '),
       cities: (p.geo?.cities ?? []).join(', '),
+      businessTypes: (p.businessTypes ?? []).join(', '),
       exclusions: p.exclusions ?? '',
     });
     setFormOpen(true);

@@ -1360,7 +1360,10 @@
     "acceptFailed": "Kabul edilemedi",
     "rejected": "Yok sayıldı",
     "rejectFailed": "Yok sayılamadı",
-    "selectOne": "{{name}} seç"
+    "selectOne": "{{name}} seç",
+    "regions": "Bölgeler (virgülle)",
+    "businessTypes": "İşletme türleri (virgülle, opsiyonel)",
+    "businessTypesHint": "Kesin filtre — örn. CAFE, RESTAURANT, SALON. ICP metnine bırakmak için boş bırak."
   },
   "billing": {
     "title": "Faturalama ve Paketler",

@@ -30,7 +30,9 @@ export const researchProfileSchema = z.object({
   productPitch: z.string().max(1000).optional(),
   language: z.string().min(1),
   country: z.string().max(10).optional(),
+  regions: z.string().max(500).optional(),
   cities: z.string().max(500).optional(),
+  businessTypes: z.string().max(500).optional(),
   exclusions: z.string().max(1000).optional(),
 });
 
@@ -42,7 +44,9 @@ export const RESEARCH_PROFILE_DEFAULTS: ResearchProfileFormValues = {
   productPitch: '',
   language: 'en',
   country: '',
+  regions: '',
   cities: '',
+  businessTypes: '',
   exclusions: '',
 };
 
@@ -183,33 +187,32 @@ export function ResearchProfileForm({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Field label={t('research.country', 'Country')} error={errors.country?.message}>
               {({ id, describedBy, invalid }) => (
-                <Input
-                  id={id}
-                  aria-describedby={describedBy}
-                  aria-invalid={invalid}
-                  placeholder="TR"
-                  {...register('country')}
-                />
+                <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="TR" {...register('country')} />
               )}
             </Field>
 
-            <div className="sm:col-span-2">
-              <Field
-                label={t('research.cities', 'Cities (comma separated)')}
-                error={errors.cities?.message}
-              >
-                {({ id, describedBy, invalid }) => (
-                  <Input
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid}
-                    placeholder="Istanbul, Ankara, Izmir"
-                    {...register('cities')}
-                  />
-                )}
-              </Field>
-            </div>
+            <Field label={t('research.regions', 'Regions (comma separated)')} error={errors.regions?.message}>
+              {({ id, describedBy, invalid }) => (
+                <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="Marmara, Ege" {...register('regions')} />
+              )}
+            </Field>
+
+            <Field label={t('research.cities', 'Cities (comma separated)')} error={errors.cities?.message}>
+              {({ id, describedBy, invalid }) => (
+                <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="Istanbul, Ankara, Izmir" {...register('cities')} />
+              )}
+            </Field>
           </div>
+
+          <Field
+            label={t('research.businessTypes', 'Business types (comma separated, optional)')}
+            error={errors.businessTypes?.message}
+            hint={t('research.businessTypesHint', 'Hard filter — e.g. CAFE, RESTAURANT, SALON. Leave blank to let the ICP text decide.')}
+          >
+            {({ id, describedBy, invalid }) => (
+              <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="CAFE, RESTAURANT, BAKERY" {...register('businessTypes')} />
+            )}
+          </Field>
 
           <Field
             label={t('research.pitch', 'Pitch angle (optional)')}

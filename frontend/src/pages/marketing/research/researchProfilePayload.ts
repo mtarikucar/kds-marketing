@@ -12,24 +12,31 @@ import type { ResearchProfileFormValues } from './ResearchProfileForm';
  * null / Prisma.JsonNull. On CREATE null is equivalent to the old undefined
  * (the service coerces both to null/JsonNull), so this is safe for both paths.
  */
+const splitList = (s?: string) => (s ? s.split(',').map((x) => x.trim()).filter(Boolean) : []);
+
 export function buildResearchPayload(values: ResearchProfileFormValues) {
   const country = values.country?.trim() ?? '';
-  const cities = values.cities
-    ? values.cities.split(',').map((c) => c.trim()).filter(Boolean)
-    : [];
+  const cities = splitList(values.cities);
+  const regions = splitList(values.regions);
   const geo =
-    country || cities.length
+    country || cities.length || regions.length
       ? {
           ...(country ? { country } : {}),
+          ...(regions.length ? { regions } : {}),
           ...(cities.length ? { cities } : {}),
         }
       : null;
+  // UPPER_SNAKE the business-type taxonomy hints (matches the DTO validator).
+  const businessTypes = splitList(values.businessTypes).map((b) =>
+    b.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, ''),
+  ).filter(Boolean);
   return {
     name: values.name,
     icpDescription: values.icpDescription,
     productPitch: values.productPitch?.trim() || null,
     language: values.language,
     geo,
+    businessTypes,
     exclusions: values.exclusions?.trim() || null,
   };
 }
