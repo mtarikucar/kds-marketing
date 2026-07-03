@@ -122,3 +122,52 @@ describe('SocialCampaignsService — lifecycle + plan confirm', () => {
     await expect(svc.get(WS, 'nope')).rejects.toBeInstanceOf(NotFoundException);
   });
 });
+
+describe('SocialCampaignsService — editable modes after activation', () => {
+  it('allows a mode-only PATCH on an ACTIVE campaign (no item mid-generation)', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ status: 'ACTIVE' }));
+    prisma.socialCampaignItem.count.mockResolvedValueOnce(0);
+    prisma.socialCampaign.update.mockResolvedValueOnce(makeCampaign({ status: 'ACTIVE', automationMode: 'FULL_AUTO' }));
+
+    await svc.update(WS, 'c-1', { automationMode: 'FULL_AUTO' });
+
+    expect(prisma.socialCampaignItem.count).toHaveBeenCalledWith({
+      where: { socialCampaignId: 'c-1', status: 'GENERATING' },
+    });
+    expect(prisma.socialCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'c-1' },
+      data: expect.objectContaining({ automationMode: 'FULL_AUTO' }),
+    }));
+  });
+
+  it('rejects a mode-only PATCH on ACTIVE when an item is GENERATING', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ status: 'ACTIVE' }));
+    prisma.socialCampaignItem.count.mockResolvedValueOnce(1);
+
+    await expect(svc.update(WS, 'c-1', { planningMode: 'AI_FULL' }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.socialCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mode-only PATCH on a COMPLETED campaign', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ status: 'COMPLETED' }));
+
+    await expect(svc.update(WS, 'c-1', { automationMode: 'SEMI_AUTO' }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.socialCampaignItem.count).not.toHaveBeenCalled();
+    expect(prisma.socialCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a non-mode field PATCH on an ACTIVE campaign', async () => {
+    const { svc, prisma } = build();
+    prisma.socialCampaign.findFirst.mockResolvedValueOnce(makeCampaign({ status: 'ACTIVE' }));
+
+    await expect(svc.update(WS, 'c-1', { name: 'Renamed', automationMode: 'FULL_AUTO' }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.socialCampaignItem.count).not.toHaveBeenCalled();
+    expect(prisma.socialCampaign.update).not.toHaveBeenCalled();
+  });
+});

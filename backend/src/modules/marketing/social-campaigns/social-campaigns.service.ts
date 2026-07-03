@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Injectable, NotFoundException, OnModuleInit,
+  BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, SocialCampaignItemStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -53,6 +53,8 @@ export interface CreateSocialCampaignInput {
 
 @Injectable()
 export class SocialCampaignsService implements OnModuleInit {
+  private readonly logger = new Logger(SocialCampaignsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduledJobs: ScheduledJobService,
@@ -112,9 +114,36 @@ export class SocialCampaignsService implements OnModuleInit {
 
   async update(workspaceId: string, id: string, patch: Partial<CreateSocialCampaignInput>) {
     const c = await this.getOwned(workspaceId, id);
-    if (c.status !== 'DRAFT') {
+
+    // A "mode-only" patch touches ONLY automationMode and/or planningMode. Those
+    // are safe to retune after activation (they change how FUTURE items are
+    // handled); every other field still requires a DRAFT campaign so an in-flight
+    // schedule/cadence/target set can't shift under a running campaign.
+    const MODE_FIELDS = ['automationMode', 'planningMode'];
+    const touched = Object.entries(patch)
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => k);
+    const modeOnly = touched.length > 0 && touched.every((k) => MODE_FIELDS.includes(k));
+
+    if (modeOnly) {
+      if (['COMPLETED', 'CANCELLED'].includes(c.status)) {
+        throw new BadRequestException('Cannot change modes of a completed/cancelled campaign');
+      }
+      // ACTIVE | PAUSED | DRAFT are all fine to retune — but never mid-generation:
+      // an item claimed PLANNED→GENERATING has already picked its automation branch,
+      // so flipping modes now would desync it. Make the user pause first.
+      if (c.status === 'ACTIVE') {
+        const generating = await this.prisma.socialCampaignItem.count({
+          where: { socialCampaignId: id, status: SocialCampaignItemStatus.GENERATING },
+        });
+        if (generating > 0) {
+          throw new BadRequestException('A post is mid-generation — pause the campaign before changing modes');
+        }
+      }
+    } else if (c.status !== 'DRAFT') {
       throw new BadRequestException('Only DRAFT campaigns can be edited');
     }
+
     return this.prisma.socialCampaign.update({
       where: { id },
       data: {
@@ -412,18 +441,30 @@ export class SocialCampaignsService implements OnModuleInit {
         ? ((brandKit as any).referenceImages as any[]).map((r) => r?.url).filter(Boolean) : [];
       const kinds = c.mediaKinds.length ? c.mediaKinds : ['IMAGE'];
       const assetIds: string[] = [];
-      for (const kind of kinds) {
-        const isVideo = kind === 'VIDEO';
-        const { assetId } = await this.mediaGen.requestGeneration(workspaceId, {
-          type: isVideo ? 'VIDEO' : 'IMAGE',
-          prompt: `${item.topic ?? c.theme ?? c.name}. ${copy.body}`.slice(0, 1500),
-          model: (isVideo ? c.defaultVideoModel : c.defaultImageModel) ?? undefined,
-          referenceImageUrls: refImages,
-          socialCampaignId: c.id,
-          campaignItemId: item.id,
-          createdById: c.createdById,
-        });
-        assetIds.push(assetId);
+      try {
+        for (const kind of kinds) {
+          const isVideo = kind === 'VIDEO';
+          const { assetId } = await this.mediaGen.requestGeneration(workspaceId, {
+            type: isVideo ? 'VIDEO' : 'IMAGE',
+            prompt: `${item.topic ?? c.theme ?? c.name}. ${copy.body}`.slice(0, 1500),
+            model: (isVideo ? c.defaultVideoModel : c.defaultImageModel) ?? undefined,
+            referenceImageUrls: refImages,
+            socialCampaignId: c.id,
+            campaignItemId: item.id,
+            createdById: c.createdById,
+          });
+          assetIds.push(assetId);
+        }
+      } catch (e) {
+        // If AI media generation is not configured (no FAL_KEY) the provider throws
+        // MEDIA_GEN_NOT_CONFIGURED. Ship the post TEXT-ONLY rather than failing the
+        // whole campaign item (which is why "campaign posts had no photo"). Any
+        // other error is a real failure and still aborts the item.
+        if (e instanceof ServiceUnavailableException) {
+          this.logger.warn(`media generation unavailable for campaign ${c.id} — creating a text-only post (set FAL_KEY to enable AI images)`);
+        } else {
+          throw e;
+        }
       }
 
       const hashtags = Array.isArray((brandKit as any)?.defaultHashtags)

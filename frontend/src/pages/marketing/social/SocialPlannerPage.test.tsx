@@ -90,9 +90,10 @@ describe('SocialPlannerPage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
-  it('renders the posts/accounts view toggle', () => {
+  it('shows posts only — the accounts tab moved to the Account Center', () => {
     render(<SocialPlannerPage />, { wrapper });
-    expect(screen.getByRole('group', { name: /social planner view/i })).toBeInTheDocument();
+    // No posts/accounts view toggle any more.
+    expect(screen.queryByRole('group', { name: /social planner view/i })).toBeNull();
   });
 
   it('opens the composer pre-seeded with media handed off from AI Studio', async () => {

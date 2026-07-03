@@ -2443,7 +2443,11 @@
     "mediaFailedInline": "Görsel oluşturulamadı — yeniden oluşturmazsan bu gönderi görselsiz yayınlanacak.",
     "generateFailed": "Oluşturma başarısız oldu.",
     "itemsError": "Kampanya içeriği yüklenemedi",
-    "itemsErrorHint": "Gönderiler yüklenirken bir hata oluştu. Bu, yayındaki kampanyanı etkilemez — tekrar dene."
+    "itemsErrorHint": "Gönderiler yüklenirken bir hata oluştu. Bu, yayındaki kampanyanı etkilemez — tekrar dene.",
+    "modesUpdated": "Modlar güncellendi",
+    "modesUpdateFailed": "Modlar güncellenemedi",
+    "modesTitle": "Modlar",
+    "modesHint": "Sonraki gönderilerin nasıl işleneceğini değiştir. Bir gönderi üretim aşamasındaysa kampanyayı duraklat."
   },
   "landing": {
     "a11y": {

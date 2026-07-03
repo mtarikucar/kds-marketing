@@ -159,14 +159,27 @@ export class SitesService {
       const res = await this.anthropic.complete({
         system: DRAFT_GUIDE,
         messages: [{ role: 'user', content: prompt.slice(0, 2000) }],
-        maxTokens: 2000,
+        // 2000 was too small — a 3-6 block page with pricing/faq easily exceeds it,
+        // truncating the JSON so it fails to parse (or lands empty). Give it room.
+        maxTokens: 4000,
         tier: tierFor('funnel.draft'),
       });
-      const start = res.text.indexOf('{');
-      const end = res.text.lastIndexOf('}');
-      if (start === -1 || end === -1) throw new BadRequestException('AI returned no JSON');
-      const json = JSON.parse(res.text.slice(start, end + 1));
-      if (!Array.isArray(json.blocks)) throw new BadRequestException('AI draft missing blocks');
+      // Tolerate ```json fences / prose around the object.
+      const cleaned = res.text.replace(/```json/gi, '').replace(/```/g, '');
+      const start = cleaned.indexOf('{');
+      const end = cleaned.lastIndexOf('}');
+      if (start === -1 || end === -1) throw new BadRequestException('AI returned no JSON — please try again');
+      let json: { title?: unknown; blocks?: unknown };
+      try {
+        json = JSON.parse(cleaned.slice(start, end + 1));
+      } catch {
+        throw new BadRequestException('AI draft was cut off — try a shorter prompt or run it again');
+      }
+      if (!Array.isArray(json.blocks) || json.blocks.length === 0) {
+        // Never hand back an empty page silently — that's the "sites come out
+        // empty" symptom. Make the caller retry instead.
+        throw new BadRequestException('AI returned an empty page — please try again');
+      }
       return { title: String(json.title ?? 'Landing page'), blocks: json.blocks };
     } catch (e) {
       await this.credits.refund(workspaceId, creditCost('funnel.draft'));

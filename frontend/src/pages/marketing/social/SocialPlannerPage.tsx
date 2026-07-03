@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -10,9 +10,6 @@ import {
   Trash2,
   Send,
   Megaphone,
-  Link2,
-  Unlink,
-  AlertTriangle,
 } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
@@ -28,10 +25,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Badge } from '@/components/ui/Badge';
-import { Card } from '@/components/ui/Card';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
   DropdownMenu,
@@ -41,17 +36,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu';
 
-type View = 'posts' | 'accounts';
-
 export default function SocialPlannerPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
 
-  const [view, setView] = useState<View>('posts');
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingPost, setEditingPost] = useState<SocialPost | null>(null);
   const [deletePost, setDeletePost] = useState<SocialPost | null>(null);
-  const [disconnectAccount, setDisconnectAccount] = useState<SocialAccount | null>(null);
   // post pending a schedule confirmation (carries the picked ISO time)
   const [publishTarget, setPublishTarget] = useState<SocialPost | null>(null);
   // Media handed off from AI Studio, captured into local state so it survives the
@@ -99,23 +90,6 @@ export default function SocialPlannerPage() {
 
   const invalidatePosts = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'social', 'posts'] });
-  const invalidateAccounts = () =>
-    queryClient.invalidateQueries({ queryKey: ['marketing', 'social', 'accounts'] });
-
-  const disconnectMutation = useMutation({
-    mutationFn: (accountId: string) =>
-      marketingApi.delete(`/social-planner/accounts/${accountId}`),
-    onSuccess: () => {
-      invalidateAccounts();
-      setDisconnectAccount(null);
-      toast.success(t('social.toast.disconnected', { defaultValue: 'Account disconnected' }));
-    },
-    onError: () => {
-      toast.error(
-        t('social.toast.disconnectFailed', { defaultValue: 'Failed to disconnect account' }),
-      );
-    },
-  });
 
   // Composer save: create (then optionally schedule) or update an existing draft.
   const composerMutation = useMutation({
@@ -337,77 +311,38 @@ export default function SocialPlannerPage() {
           defaultValue: 'Compose, schedule and publish posts across your social networks.',
         })}
         actions={
-          view === 'posts' ? (
-            <Button onClick={openCreate} disabled={noAccounts}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {t('social.newPost', { defaultValue: 'New post' })}
-            </Button>
-          ) : undefined
+          <Button onClick={openCreate} disabled={noAccounts}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            {t('social.newPost', { defaultValue: 'New post' })}
+          </Button>
         }
       />
 
-      <SegmentedControl<View>
-        aria-label={t('social.viewToggle', { defaultValue: 'Social planner view' })}
-        value={view}
-        onChange={setView}
-        options={[
-          { value: 'posts', label: t('social.tabs.posts', { defaultValue: 'Posts' }) },
-          { value: 'accounts', label: t('social.tabs.accounts', { defaultValue: 'Accounts' }) },
-        ]}
-      />
-
-      {view === 'posts' ? (
-        <DataTable
-          columns={postColumns}
-          data={posts}
-          isLoading={postsLoading}
-          loadingRowCount={5}
-          emptyState={
-            <EmptyState
-              icon={<Megaphone className="h-10 w-10" />}
-              title={t('social.empty.title', { defaultValue: 'No posts yet' })}
-              description={
-                noAccounts
-                  ? t('social.empty.connectFirst', {
-                      defaultValue: 'Connect a social account, then compose your first post.',
-                    })
-                  : t('social.empty.hint', { defaultValue: 'Compose your first social post.' })
-              }
-              action={
-                <Button onClick={openCreate} variant="outline" disabled={noAccounts}>
-                  <Plus className="h-4 w-4" aria-hidden="true" />
-                  {t('social.newPost', { defaultValue: 'New post' })}
-                </Button>
-              }
-            />
-          }
-        />
-      ) : (
-        <div className="space-y-4">
-          {/* Connecting/reconnecting company accounts now lives in the Account Center. */}
-          <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground">
-              {t('social.accounts.manageNote', {
-                defaultValue:
-                  'These are the accounts your posts publish to. Connect or reconnect them in the Account Center.',
-              })}
-            </p>
-            <Button asChild variant="outline" className="shrink-0">
-              <Link to="/accounts">
-                <Link2 className="h-4 w-4" aria-hidden="true" />
-                {t('social.accounts.manageCta', {
-                  defaultValue: 'Manage account connections in the Account Center',
-                })}
-              </Link>
-            </Button>
-          </Card>
-          <AccountsView
-            accounts={accounts}
-            isLoading={accountsLoading}
-            onDisconnect={setDisconnectAccount}
+      <DataTable
+        columns={postColumns}
+        data={posts}
+        isLoading={postsLoading}
+        loadingRowCount={5}
+        emptyState={
+          <EmptyState
+            icon={<Megaphone className="h-10 w-10" />}
+            title={t('social.empty.title', { defaultValue: 'No posts yet' })}
+            description={
+              noAccounts
+                ? t('social.empty.connectFirst', {
+                    defaultValue: 'Connect a social account, then compose your first post.',
+                  })
+                : t('social.empty.hint', { defaultValue: 'Compose your first social post.' })
+            }
+            action={
+              <Button onClick={openCreate} variant="outline" disabled={noAccounts}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {t('social.newPost', { defaultValue: 'New post' })}
+              </Button>
+            }
           />
-        </div>
-      )}
+        }
+      />
 
       {/* Composer */}
       <PostComposerDialog
@@ -448,117 +383,6 @@ export default function SocialPlannerPage() {
         onConfirm={() => deletePost && deleteMutation.mutate(deletePost.id)}
         loading={deleteMutation.isPending}
       />
-
-      {/* Disconnect account confirm */}
-      <ConfirmDialog
-        open={!!disconnectAccount}
-        onOpenChange={(open) => { if (!open) setDisconnectAccount(null); }}
-        title={t('social.confirm.disconnectTitle', { defaultValue: 'Disconnect account' })}
-        description={t('social.confirm.disconnectBody', {
-          defaultValue: 'The planner will no longer be able to publish to this account.',
-        })}
-        confirmLabel={t('social.action.disconnect', { defaultValue: 'Disconnect' })}
-        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
-        tone="danger"
-        onConfirm={() => disconnectAccount && disconnectMutation.mutate(disconnectAccount.id)}
-        loading={disconnectMutation.isPending}
-      />
-    </div>
-  );
-}
-
-// ── Accounts view ─────────────────────────────────────────────────────────────
-
-interface AccountsViewProps {
-  accounts: SocialAccount[];
-  isLoading: boolean;
-  onDisconnect: (account: SocialAccount) => void;
-}
-
-function AccountsView({ accounts, isLoading, onDisconnect }: AccountsViewProps) {
-  const { t } = useTranslation('marketing');
-
-  if (isLoading) {
-    return (
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {[0, 1, 2].map((i) => (
-          <Card key={i} className="h-24 animate-pulse bg-surface-muted" />
-        ))}
-      </div>
-    );
-  }
-
-  if (accounts.length === 0) {
-    return (
-      <EmptyState
-        icon={<Link2 className="h-10 w-10" />}
-        title={t('social.accounts.empty', { defaultValue: 'No connected accounts' })}
-        description={t('social.accounts.emptyHint', {
-          defaultValue: 'Connect a Facebook, Instagram or LinkedIn account to start publishing.',
-        })}
-        action={
-          <Button asChild variant="outline">
-            <Link to="/accounts">
-              <Link2 className="h-4 w-4" aria-hidden="true" />
-              {t('social.accounts.manageCta', {
-                defaultValue: 'Manage account connections in the Account Center',
-              })}
-            </Link>
-          </Button>
-        }
-      />
-    );
-  }
-
-  return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {accounts.map((acc) => {
-        const meta = NETWORK_META[acc.network];
-        const Icon = meta.icon;
-        const needsReauth = acc.lastError === 'reauth_required';
-        const expired = (acc.tokenExpiresAt && new Date(acc.tokenExpiresAt) < new Date()) || needsReauth;
-        return (
-          <Card key={acc.id} className="flex items-start gap-3 p-4">
-            <span className="rounded-lg bg-surface-muted p-2 text-muted-foreground" aria-hidden="true">
-              <Icon className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground">{acc.displayName}</p>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                <Badge tone={meta.tone} size="sm">{meta.label}</Badge>
-                {!acc.enabled && (
-                  <Badge tone="neutral" size="sm">
-                    {t('social.accounts.disabled', { defaultValue: 'Disabled' })}
-                  </Badge>
-                )}
-                {expired && (
-                  <Badge tone="danger" size="sm">
-                    <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                    {t('social.accounts.expired', { defaultValue: 'Token expired' })}
-                  </Badge>
-                )}
-              </div>
-              {/* Token is already masked by the backend — display verbatim, never raw. */}
-              <p className="mt-1.5 font-mono text-micro text-muted-foreground">{acc.accessToken}</p>
-              {needsReauth && (
-                <p className="mt-2 text-micro text-muted-foreground">
-                  {t('social.accounts.reconnectHint', {
-                    defaultValue: 'Reconnect this account in the Account Center.',
-                  })}
-                </p>
-              )}
-            </div>
-            <IconButton
-              variant="ghost"
-              size="sm"
-              aria-label={t('social.action.disconnect', { defaultValue: 'Disconnect' })}
-              onClick={() => onDisconnect(acc)}
-            >
-              <Unlink className="h-4 w-4" aria-hidden="true" />
-            </IconButton>
-          </Card>
-        );
-      })}
     </div>
   );
 }
