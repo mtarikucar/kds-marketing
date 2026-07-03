@@ -166,6 +166,7 @@ import { BudgetAutopilotService } from './budget/budget-autopilot.service';
 import { BudgetManagementService } from './budget/budget-management.service';
 import { ConversationSpendService } from './budget/conversation-spend.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
+import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
@@ -684,6 +685,7 @@ import { WalletService } from './wallet/wallet.service';
     BudgetManagementService,
     ConversationSpendService,
     BudgetPacerService,
+    BudgetAutopilotCron,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
