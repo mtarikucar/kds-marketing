@@ -116,7 +116,6 @@
     "channelFailed": "Kanal bağlanamadı",
     "connectedCount": "{{count}} bağlı",
     "disconnect": "Bağlantıyı kes",
-    "reconnect": "Yeniden bağlan",
     "email": {
       "title": "E-posta bağla",
       "desc": "E-posta iki yönlüdür: SMTP sunucundan gönder, sağlayıcının gelen webhook'uyla yanıtları al.",
@@ -1453,7 +1452,6 @@
     "metaConnectHint": "Önce bir yönetici Meta (Facebook) uygulama kimlik bilgilerini eklemeli",
     "type": "Tür",
     "name": "Ad",
-    "agent": "Yanıtlayan ajan",
     "noAgent": "— yok (yalnızca manuel) —",
     "webchatHint": "Kimlik bilgisi gerekmez — kaydettikten sonra herkese açık gömme kodu oluşturulur.",
     "saved": "Kanal kaydedildi",
@@ -2599,5 +2597,14 @@
     "notes": "Notlar (isteğe bağlı)",
     "reserve": "Randevuyu onayla",
     "failed": "Bu slot ayrılamadı. Lütfen başka bir tane seçin."
-  }
+  },
+  "nav.budget": "Bütçe Otopilotu",
+  "budget.title": "Bütçe Otopilotu",
+  "budget.subtitle": "Tek bir büyüme bütçesi belirleyin — Jeeta onu pace'ler, yeniden dağıtım önerir ve her harcamayı buna işler.",
+  "budget.create": "Bütçe oluştur",
+  "budget.edit": "Bütçeyi düzenle",
+  "budget.proposeNow": "Şimdi öner (shadow)",
+  "budget.approve": "Onayla",
+  "budget.reject": "Reddet",
+  "budget.killSwitch": "Acil durdurma"
 }

@@ -73,10 +73,22 @@
     "done": "Got it",
     "progress": "{{step}} of {{total}}",
     "steps": {
-      "palette": { "title": "Jump anywhere with ⌘K", "body": "Press Cmd/Ctrl+K on any page to search and jump to any screen, or run a quick action — no hunting through menus." },
-      "focus": { "title": "A focused menu", "body": "The sidebar shows your everyday hubs; the rest lives under \"More\". Hover any item and tap the star to pin your favourites to the top." },
-      "create": { "title": "Create from anywhere", "body": "The \"+ Create\" button in the top bar starts a lead, task, opportunity or company from wherever you are." },
-      "modules": { "title": "Turn features on or off", "body": "Only need part of the platform? Go to Settings › Modules and switch off what you don't use — it disappears from the menu until you want it back." }
+      "palette": {
+        "title": "Jump anywhere with ⌘K",
+        "body": "Press Cmd/Ctrl+K on any page to search and jump to any screen, or run a quick action — no hunting through menus."
+      },
+      "focus": {
+        "title": "A focused menu",
+        "body": "The sidebar shows your everyday hubs; the rest lives under \"More\". Hover any item and tap the star to pin your favourites to the top."
+      },
+      "create": {
+        "title": "Create from anywhere",
+        "body": "The \"+ Create\" button in the top bar starts a lead, task, opportunity or company from wherever you are."
+      },
+      "modules": {
+        "title": "Turn features on or off",
+        "body": "Only need part of the platform? Go to Settings › Modules and switch off what you don't use — it disappears from the menu until you want it back."
+      }
     }
   },
   "accounts": {
@@ -98,9 +110,18 @@
     "title": "Welcome to Jeeta 🎉",
     "subtitle": "Your workspace is ready. Here are the fastest ways to get value in the first few minutes.",
     "later": "Explore on my own",
-    "import": { "title": "Import your contacts", "desc": "Bring your existing leads in so your pipeline isn't empty." },
-    "invite": { "title": "Invite your team", "desc": "Add teammates so work can be assigned and tracked." },
-    "modules": { "title": "Choose your modules", "desc": "Turn on only what you need — keep the console focused." }
+    "import": {
+      "title": "Import your contacts",
+      "desc": "Bring your existing leads in so your pipeline isn't empty."
+    },
+    "invite": {
+      "title": "Invite your team",
+      "desc": "Add teammates so work can be assigned and tracked."
+    },
+    "modules": {
+      "title": "Choose your modules",
+      "desc": "Turn on only what you need — keep the console focused."
+    }
   },
   "modules": {
     "title": "Modules",
@@ -2156,7 +2177,7 @@
       "titleLead": "All your marketing,",
       "titleAccent": "one panel.",
       "subtitle": "From lead to sale, campaign to automation, inbox to analytics — Jeeta runs your whole growth engine in one place.",
-        "audience": "Built for SMBs, sales teams & agencies.",
+      "audience": "Built for SMBs, sales teams & agencies.",
       "ctaPrimary": "Get started free",
       "ctaSecondary": "Explore features",
       "trust": "No credit card · Set up in minutes · GDPR/KVKK compliant"
@@ -2330,5 +2351,14 @@
     "notes": "Notes (optional)",
     "reserve": "Confirm booking",
     "failed": "Could not reserve that slot. Please pick another."
-  }
+  },
+  "nav.budget": "Budget Autopilot",
+  "budget.title": "Budget Autopilot",
+  "budget.subtitle": "Set one growth budget — Jeeta paces it, proposes reallocations, and settles every spend into it.",
+  "budget.create": "Create budget",
+  "budget.edit": "Edit budget",
+  "budget.proposeNow": "Propose now (shadow)",
+  "budget.approve": "Approve",
+  "budget.reject": "Reject",
+  "budget.killSwitch": "Kill-switch"
 }
