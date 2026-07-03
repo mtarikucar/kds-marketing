@@ -3,12 +3,14 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { BudgetPerformanceSource } from './budget-performance.source';
 import { allocate, AllocationPlan } from './marginal-allocator.util';
+import { ApprovalRequestService } from '../agents/approval-request.service';
 
 export interface ProposeResult {
   runId: string;
   status: 'PROPOSED' | 'SKIPPED';
   reason?: string;
   plan?: AllocationPlan;
+  approvalId?: string;
 }
 
 /**
@@ -27,6 +29,7 @@ export class BudgetAutopilotService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly perf: BudgetPerformanceSource,
+    private readonly approvals: ApprovalRequestService,
   ) {}
 
   async propose(workspaceId: string, budgetId: string, now: Date = new Date()): Promise<ProposeResult> {
@@ -59,7 +62,23 @@ export class BudgetAutopilotService {
     const after = plan.allocations.map((a) => ({ channel: a.channel, campaignRef: a.campaignRef, budget: a.after, deltaPct: a.deltaPct, reason: a.reason }));
 
     const run = await this.record(workspaceId, budgetId, { objective, before }, { after }, 'PROPOSED');
-    return { runId: run.id, status: 'PROPOSED', plan };
+
+    // A material (non-noop) reallocation enqueues a human approval — the bridge
+    // to execution. Nothing moves until an OWNER/MANAGER approves; the executor
+    // (credential-gated live ad-write) applies the payload on approval.
+    let approvalId: string | undefined;
+    if (!plan.noop) {
+      const moved = plan.allocations.filter((a) => Math.abs(a.after - a.before) >= 0.01);
+      const req = await this.approvals.enqueue(workspaceId, {
+        kind: 'BUDGET_REALLOCATION',
+        summary: `Reallocate ${moved.length} channel(s) within budget pool ${plan.pool}`,
+        payload: { budgetId, runId: run.id, after },
+        resourceType: 'growth_budget',
+        resourceId: budgetId,
+      });
+      approvalId = req.id;
+    }
+    return { runId: run.id, status: 'PROPOSED', plan, approvalId };
   }
 
   private record(
