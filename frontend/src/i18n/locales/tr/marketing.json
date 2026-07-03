@@ -301,6 +301,40 @@
     "MANAGER": "Yönetici",
     "REP": "Satış Temsilcisi"
   },
+  "snippets": {
+    "title": "Hazır Yanıtlar",
+    "subtitle": "Ekibinizin gelen kutusunda /kısayol yazarak eklediği tekrar kullanılabilir yanıtlar.",
+    "new": "Yeni snippet",
+    "shared": "Paylaşılan",
+    "private": "Özel",
+    "empty": {
+      "title": "Henüz snippet yok",
+      "description": "Sık kullandığınız yanıtları snippet olarak kaydedin, gelen kutusunda /kısayol ile hızlıca ekleyin."
+    },
+    "form": {
+      "newTitle": "Yeni snippet",
+      "editTitle": "Snippet düzenle",
+      "subtitle": "Ajanlar bunu composer'da /kısayol yazarak ekler.",
+      "shortcut": "Kısayol",
+      "titleLabel": "Başlık",
+      "body": "Mesaj",
+      "shared": "Tüm ekiple paylaş",
+      "aiFill": "AI ile doldur",
+      "aiDone": "AI taslağı hazır",
+      "aiFailed": "AI dolduramadı",
+      "aiNeedTitle": "Önce bir başlık yazın — AI yanıtı ona göre oluşturur"
+    },
+    "toast": {
+      "saved": "Snippet kaydedildi",
+      "failed": "Kaydedilemedi",
+      "deleted": "Snippet silindi",
+      "deleteFailed": "Silinemedi"
+    },
+    "confirm": {
+      "deleteTitle": "Snippet'i sil",
+      "deleteBody": "Bu snippet'i kalıcı olarak siler."
+    }
+  },
   "nav": {
     "pinned": "Sabitlenenler",
     "more": "Daha fazla",

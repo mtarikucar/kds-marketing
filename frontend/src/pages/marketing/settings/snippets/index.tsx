@@ -5,7 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, MessageSquareText, Users, Lock } from 'lucide-react';
+import { Plus, Pencil, Trash2, MessageSquareText, Users, Lock, Sparkles } from 'lucide-react';
+import marketingApi from '../../../../features/marketing/api/marketingApi';
 import {
   listSnippets,
   createSnippet,
@@ -98,6 +99,36 @@ export default function SnippetsPage() {
     onError: (e) => toast.error(apiError(e, t('snippets.toast.deleteFailed', { defaultValue: 'Failed to delete' }))),
   });
 
+  // "AI ile doldur" — drafts the reply body from the title using the shared
+  // content-AI composer (POST /ai/compose). Canned replies are short, so we ask
+  // for the concise 'sms' style; the model answers in the workspace language.
+  const compose = useMutation({
+    mutationFn: (goal: string) =>
+      marketingApi
+        .post('/ai/compose', {
+          kind: 'sms',
+          goal: `A reusable canned reply an agent inserts into a live customer conversation. Topic/intent: ${goal}`,
+        })
+        .then((r) => r.data as { body?: string }),
+    onSuccess: (data) => {
+      if (data.body) {
+        form.setValue('body', data.body, { shouldValidate: true, shouldDirty: true });
+        toast.success(t('snippets.form.aiDone', { defaultValue: 'AI draft ready' }));
+      }
+    },
+    onError: (e) => toast.error(apiError(e, t('snippets.form.aiFailed', { defaultValue: 'AI could not fill this in' }))),
+  });
+
+  const handleAiFill = () => {
+    const goal = form.getValues('title').trim();
+    if (!goal) {
+      toast.error(t('snippets.form.aiNeedTitle', { defaultValue: 'Add a title first — the AI drafts the reply from it' }));
+      form.setFocus('title');
+      return;
+    }
+    compose.mutate(goal);
+  };
+
   const fieldErr = (m?: string) => (m ? t([`validation.${m}`, m], { defaultValue: m }) : undefined);
   const errors = form.formState.errors;
   const handleSubmit: SubmitHandler<FormValues> = (v) => save.mutate(v);
@@ -189,7 +220,22 @@ export default function SnippetsPage() {
             </Field>
             <Field label={t('snippets.form.body', { defaultValue: 'Message' })} error={fieldErr(errors.body?.message)} required>
               {({ id, describedBy, invalid }) => (
-                <Textarea id={id} rows={5} aria-describedby={describedBy} aria-invalid={invalid} {...form.register('body')} />
+                <div className="space-y-1.5">
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleAiFill}
+                      loading={compose.isPending}
+                      disabled={compose.isPending}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                      {t('snippets.form.aiFill', { defaultValue: 'Fill with AI' })}
+                    </Button>
+                  </div>
+                  <Textarea id={id} rows={5} aria-describedby={describedBy} aria-invalid={invalid} {...form.register('body')} />
+                </div>
               )}
             </Field>
             <label className="flex items-center justify-between gap-3 text-sm">
