@@ -1,8 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { useForm, useWatch, Controller } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -11,20 +8,9 @@ import {
   Trash2,
   Clipboard,
   BadgeCheck,
-  Plus,
-  Facebook,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { startTiktokAdsOAuth } from '../../features/marketing/api/ads.service';
-import { WhatsappSignupButton } from './WhatsappSignupButton';
-import { useSocialConnect } from './social/useSocialConnect';
-import { AccountSelectDialog } from './social/AccountSelectDialog';
-import {
-  CHANNEL_TYPES,
-  SECRET_FIELDS,
-  NEEDS_EXTERNAL_ID,
-  type ChannelType,
-} from './channels/channelFields';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -32,16 +18,6 @@ import { Badge } from '@/components/ui/Badge';
 import { Card, CardContent } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { Field } from '@/components/ui/Field';
-import { Input } from '@/components/ui/Input';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/Dialog';
 import {
   Select,
   SelectContent,
@@ -80,23 +56,6 @@ interface AgentRow {
   name: string;
 }
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-// Channel-type field metadata (CHANNEL_TYPES / SECRET_FIELDS / NEEDS_EXTERNAL_ID)
-// now lives in ./channels/channelFields so the Account Center's inline setup
-// shares the exact same definitions — imported above.
-
-// ── Schema ───────────────────────────────────────────────────────────────────
-
-const channelSchema = z.object({
-  type: z.enum(CHANNEL_TYPES),
-  name: z.string().min(1).max(120),
-  agentProfileId: z.string().optional(),
-  externalId: z.string().optional(),
-  secrets: z.record(z.string()).optional(),
-});
-type ChannelFormValues = z.infer<typeof channelSchema>;
-
 // ── Channel status badge ──────────────────────────────────────────────────────
 
 function statusTone(status: string) {
@@ -106,11 +65,13 @@ function statusTone(status: string) {
 }
 
 // ── Main page ────────────────────────────────────────────────────────────────
+// This page MANAGES existing channels (answering agent / verify / delete /
+// embed & callback URLs). Connecting a new channel now lives in the unified
+// Account Center (/accounts) — the single place to wire up company integrations.
 
 export default function ChannelsSettingsPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
-  const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ChannelRow | null>(null);
 
   // ── Queries ──────────────────────────────────────────────────────────────
@@ -125,73 +86,7 @@ export default function ChannelsSettingsPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'channels'] });
 
-  // ── OAuth connect (Messenger + Instagram DM via the shared Meta grant) ──────
-  // Reuses the Social Planner's Meta OAuth: one Facebook grant enumerates the
-  // user's Pages + linked IG business accounts, and the pick dialog turns the
-  // chosen ones into messaging Channels (and Social publishing accounts). Gated
-  // on the platform Meta app being configured (same status the Social page uses).
-  const { startConnect } = useSocialConnect();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
-  const { data: socialStatus } = useQuery<Record<string, boolean>>({
-    queryKey: ['marketing', 'social', 'status'],
-    queryFn: () => marketingApi.get('/social-planner/status').then((r) => r.data),
-  });
-  const fbConnectable = !!socialStatus?.FACEBOOK;
-
-  // The OAuth callback returns to /channels?connect=<pendingId> (success) or
-  // ?connect_error=1 (failure). Pick it up once, open the account picker, strip it.
-  useEffect(() => {
-    const connectId = searchParams.get('connect');
-    const connectErr = searchParams.get('connect_error');
-    if (connectId) {
-      setPendingConnectId(connectId);
-      searchParams.delete('connect');
-      setSearchParams(searchParams, { replace: true });
-    } else if (connectErr) {
-      toast.error(
-        t('social.oauth.callbackError', {
-          defaultValue: 'Connection failed or was cancelled. Please try again.',
-        }),
-      );
-      searchParams.delete('connect_error');
-      setSearchParams(searchParams, { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Form ─────────────────────────────────────────────────────────────────
-  const form = useForm<ChannelFormValues>({
-    resolver: zodResolver(channelSchema),
-    defaultValues: { type: 'WEBCHAT', name: '', agentProfileId: '', externalId: '', secrets: {} },
-  });
-  const selectedType = useWatch({ control: form.control, name: 'type' }) as ChannelType;
-
-  const openForm = () => {
-    form.reset({ type: 'WEBCHAT', name: '', agentProfileId: '', externalId: '', secrets: {} });
-    setFormOpen(true);
-  };
-
   // ── Mutations ─────────────────────────────────────────────────────────────
-  const create = useMutation({
-    mutationFn: (values: ChannelFormValues) =>
-      marketingApi.post('/channels', {
-        type: values.type,
-        name: values.name,
-        agentProfileId: values.agentProfileId || undefined,
-        externalId: values.externalId || undefined,
-        secrets:
-          values.secrets && Object.keys(values.secrets).length ? values.secrets : undefined,
-      }),
-    onSuccess: () => {
-      invalidate();
-      setFormOpen(false);
-      toast.success(t('channels.saved', 'Channel saved'));
-    },
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message ?? t('channels.saveFailed', 'Save failed')),
-  });
-
   const remove = useMutation({
     mutationFn: (id: string) => marketingApi.delete(`/channels/${id}`),
     onSuccess: () => {
@@ -214,12 +109,21 @@ export default function ChannelsSettingsPage() {
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFail', 'Verification failed — check credentials')),
   });
 
+  // Answering-agent picker (which AI answers on this channel) — the one piece of
+  // "setup" that stays here since it's ongoing management, not connecting.
+  const setAgent = useMutation({
+    mutationFn: ({ id, agentProfileId }: { id: string; agentProfileId: string | null }) =>
+      marketingApi.patch(`/channels/${id}`, { agentProfileId }),
+    onSuccess: () => invalidate(),
+    onError: (e: any) =>
+      toast.error(
+        e?.response?.data?.message ?? t('channels.agentSaveFailed', 'Could not update the answering agent'),
+      ),
+  });
+
   // ── Helpers ───────────────────────────────────────────────────────────────
   const embedSnippet = (widgetKey: string) =>
     `<script src="${window.location.origin}/widget.js" data-widget-key="${widgetKey}" async></script>`;
-
-  const secretFields = SECRET_FIELDS[selectedType] ?? [];
-  const externalIdLabel = NEEDS_EXTERNAL_ID[selectedType];
 
   return (
     <div className="space-y-6">
@@ -227,198 +131,16 @@ export default function ChannelsSettingsPage() {
         title={t('channels.title', 'Channels')}
         description={t(
           'channels.subtitle',
-          'Connect where your customers message you — web chat, WhatsApp, SMS, Instagram, Messenger. Pick which AI agent answers on each.',
+          'Manage the channels your customers message you on — pick which AI agent answers, verify credentials, and grab embed & webhook URLs. Connect new channels in the Account Center.',
         )}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="md"
-              disabled={!fbConnectable}
-              title={
-                fbConnectable
-                  ? undefined
-                  : t('channels.metaConnectHint', {
-                      defaultValue: 'An admin must add the Meta (Facebook) app credentials first',
-                    })
-              }
-              onClick={() => startConnect('FACEBOOK', { origin: 'channels' })}
-            >
-              <Facebook className="h-4 w-4" />
-              {t('channels.metaConnect', 'Connect Messenger & Instagram')}
-            </Button>
-            <WhatsappSignupButton />
-            <Button onClick={openForm} size="md">
-              <Plus className="h-4 w-4" />
-              {t('channels.new', 'Connect a channel')}
-            </Button>
-          </div>
+          <Button asChild variant="outline" size="md">
+            <Link to="/accounts">
+              {t('channels.connectInAccountCenter', 'Connect a channel in the Account Center')}
+            </Link>
+          </Button>
         }
       />
-
-      {/* Post-OAuth account picker: turns the granted Pages / IG accounts into
-          messaging Channels (messaging pre-checked since we came from here). */}
-      <AccountSelectDialog
-        context="channels"
-        pendingId={pendingConnectId}
-        onOpenChange={(open) => {
-          if (!open) setPendingConnectId(null);
-        }}
-        onConnected={invalidate}
-      />
-
-      {/* ── Create dialog ─────────────────────────────────────────────────── */}
-      <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{t('channels.new', 'Connect a channel')}</DialogTitle>
-            <DialogDescription>
-              {t('channels.formHint', 'Fill in the credentials your provider requires.')}
-            </DialogDescription>
-          </DialogHeader>
-
-          <form
-            onSubmit={form.handleSubmit((v) => create.mutate(v))}
-            className="space-y-4"
-          >
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Type */}
-              <Field label={t('channels.type', 'Type')}>
-                {({ id }) => (
-                  <Controller
-                    control={form.control}
-                    name="type"
-                    render={({ field }) => (
-                      <Select
-                        value={field.value}
-                        onValueChange={(v) => {
-                          field.onChange(v);
-                          form.setValue('secrets', {});
-                          form.setValue('externalId', '');
-                        }}
-                      >
-                        <SelectTrigger id={id}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {CHANNEL_TYPES.map((ty) => (
-                            <SelectItem key={ty} value={ty}>
-                              {ty}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                )}
-              </Field>
-
-              {/* Name */}
-              <Field
-                label={t('channels.name', 'Name')}
-                error={form.formState.errors.name?.message}
-                required
-              >
-                {({ id, invalid }) => (
-                  <Input
-                    id={id}
-                    aria-invalid={invalid}
-                    placeholder="Support line"
-                    maxLength={120}
-                    {...form.register('name')}
-                  />
-                )}
-              </Field>
-
-              {/* Answering agent */}
-              <Field label={t('channels.agent', 'Answering agent')}>
-                {({ id }) => (
-                  <Controller
-                    control={form.control}
-                    name="agentProfileId"
-                    render={({ field }) => (
-                      <Select
-                        value={field.value || '__none__'}
-                        onValueChange={(v) => field.onChange(v === '__none__' ? '' : v)}
-                      >
-                        <SelectTrigger id={id}>
-                          <SelectValue
-                            placeholder={t('channels.noAgent', '— none (manual only) —')}
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">
-                            {t('channels.noAgent', '— none (manual only) —')}
-                          </SelectItem>
-                          {(agents ?? []).map((a) => (
-                            <SelectItem key={a.id} value={a.id}>
-                              {a.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                )}
-              </Field>
-            </div>
-
-            {/* External ID */}
-            {externalIdLabel && (
-              <Field label={externalIdLabel}>
-                {({ id }) => (
-                  <Input
-                    id={id}
-                    placeholder={externalIdLabel}
-                    {...form.register('externalId')}
-                  />
-                )}
-              </Field>
-            )}
-
-            {/* Secret fields */}
-            {secretFields.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {secretFields.map((key) => (
-                  <Field key={key} label={key}>
-                    {({ id }) => (
-                      <Input
-                        id={id}
-                        type="password"
-                        placeholder="••••••••"
-                        autoComplete="off"
-                        {...form.register(`secrets.${key}`)}
-                      />
-                    )}
-                  </Field>
-                ))}
-              </div>
-            )}
-
-            {selectedType === 'WEBCHAT' && (
-              <p className="text-caption text-muted-foreground">
-                {t(
-                  'channels.webchatHint',
-                  'No credentials needed — a public embed snippet is generated after you save.',
-                )}
-              </p>
-            )}
-
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setFormOpen(false)}
-              >
-                {t('common.cancel', 'Cancel')}
-              </Button>
-              <Button type="submit" loading={create.isPending} disabled={create.isPending}>
-                {t('common.save', 'Save')}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* ── Delete confirm ─────────────────────────────────────────────────── */}
       <ConfirmDialog
@@ -488,6 +210,38 @@ export default function ChannelsSettingsPage() {
                     <Trash2 className="h-4 w-4" />
                   </IconButton>
                 </div>
+              </div>
+
+              {/* Answering agent — which AI (if any) auto-replies on this channel. */}
+              <div className="mt-3 pt-3 border-t border-border flex flex-wrap items-center gap-2">
+                <span className="text-caption text-muted-foreground">
+                  {t('channels.agent', 'Answering agent')}
+                </span>
+                <Select
+                  value={c.agentProfileId ?? '__none__'}
+                  onValueChange={(v) =>
+                    setAgent.mutate({
+                      id: c.id,
+                      agentProfileId: v === '__none__' ? null : v,
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-64 max-w-full">
+                    <SelectValue
+                      placeholder={t('channels.noAgent', '— none (manual only) —')}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      {t('channels.noAgent', '— none (manual only) —')}
+                    </SelectItem>
+                    {(agents ?? []).map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {c.type === 'WEBCHAT' && c.widgetKey && (
@@ -718,12 +472,13 @@ export default function ChannelsSettingsPage() {
             title={t('channels.emptyTitle', 'No channels yet')}
             description={t(
               'channels.empty',
-              'No channels yet — connect one so customers can message you.',
+              'No channels yet — connect one in the Account Center so customers can message you.',
             )}
             action={
-              <Button onClick={openForm}>
-                <Plus className="h-4 w-4" />
-                {t('channels.new', 'Connect a channel')}
+              <Button asChild variant="outline">
+                <Link to="/accounts">
+                  {t('channels.connectInAccountCenter', 'Connect a channel in the Account Center')}
+                </Link>
               </Button>
             }
           />

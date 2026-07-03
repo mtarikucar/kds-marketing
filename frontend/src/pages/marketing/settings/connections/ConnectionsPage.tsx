@@ -3,12 +3,10 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { KeyRound, CalendarDays, CalendarClock, Slack as SlackIcon } from 'lucide-react';
+import { CalendarDays, CalendarClock } from 'lucide-react';
 import { PageHeader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui';
-import { SsoTab } from './SsoTab';
 import { GoogleCalendarTab } from './GoogleCalendarTab';
 import { OutlookCalendarTab } from './OutlookCalendarTab';
-import { SlackTab } from './SlackTab';
 import { googleCalendarKey, outlookCalendarKey } from './hooks';
 
 /**
@@ -81,13 +79,13 @@ function outlookErrorFallback(reason: string): string {
 }
 
 /**
- * Connections settings — the workspace's outbound integrations in one place:
- *  - Single sign-on (OIDC) via the per-workspace SSO controller,
+ * My connections — the signed-in user's PERSONAL calendar integrations:
  *  - Google Calendar two-way sync via the env-gated google-calendar controller,
- *  - Slack notifications via the incoming-webhook slack controller.
+ *  - Outlook Calendar two-way sync via the outlook-calendar controller.
  *
- * Manager-only (the routes are OWNER/MANAGER-gated server-side). Secrets are
- * sealed at rest and never displayed — the UI only shows presence flags.
+ * These are per-user connections (your own calendar). Workspace/company-level
+ * integrations (SSO, Slack, social, channels, ads, telephony, …) now live in
+ * the unified Account Center at /accounts.
  *
  * The Google OAuth callback 302s the browser back here with `?gcal=connected`
  * or `?gcal=error&reason=<step>`; we surface a toast, refresh the status query,
@@ -101,7 +99,7 @@ export default function ConnectionsPage() {
   const gcalResult = searchParams.get('gcal');
   const outlookResult = searchParams.get('outlook');
   const [tab, setTab] = useState(
-    gcalResult ? 'google-calendar' : outlookResult ? 'outlook-calendar' : 'sso',
+    outlookResult ? 'outlook-calendar' : 'google-calendar',
   );
   const handled = useRef(false);
 
@@ -137,18 +135,14 @@ export default function ConnectionsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={t('connections.title', { defaultValue: 'Connections' })}
-        description={t('connections.subtitle', {
-          defaultValue: 'Connect single sign-on, Google Calendar and Slack to your workspace.',
+        title={t('connections.myTitle', { defaultValue: 'My connections' })}
+        description={t('connections.mySubtitle', {
+          defaultValue: 'Your personal calendar connections.',
         })}
       />
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="sso">
-            <KeyRound className="me-2 h-4 w-4" aria-hidden="true" />
-            {t('connections.tabs.sso', { defaultValue: 'Single sign-on' })}
-          </TabsTrigger>
           <TabsTrigger value="google-calendar">
             <CalendarDays className="me-2 h-4 w-4" aria-hidden="true" />
             {t('connections.tabs.googleCalendar', { defaultValue: 'Google Calendar' })}
@@ -157,23 +151,13 @@ export default function ConnectionsPage() {
             <CalendarClock className="me-2 h-4 w-4" aria-hidden="true" />
             {t('connections.tabs.outlookCalendar', { defaultValue: 'Outlook' })}
           </TabsTrigger>
-          <TabsTrigger value="slack">
-            <SlackIcon className="me-2 h-4 w-4" aria-hidden="true" />
-            {t('connections.tabs.slack', { defaultValue: 'Slack' })}
-          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sso">
-          <SsoTab />
-        </TabsContent>
         <TabsContent value="google-calendar">
           <GoogleCalendarTab />
         </TabsContent>
         <TabsContent value="outlook-calendar">
           <OutlookCalendarTab />
-        </TabsContent>
-        <TabsContent value="slack">
-          <SlackTab />
         </TabsContent>
       </Tabs>
     </div>

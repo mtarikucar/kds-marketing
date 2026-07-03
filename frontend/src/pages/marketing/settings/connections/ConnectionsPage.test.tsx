@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -63,18 +62,11 @@ describe('ConnectionsPage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
-  it('opens the SSO create dialog and validates empty required fields', async () => {
+  // SSO + Slack moved to the Account Center (they're workspace/company-level); this
+  // page is now personal — only the user's own Google/Outlook calendar.
+  it('defaults to a personal calendar tab (no SSO/Slack here)', () => {
     render(<ConnectionsPage />, { wrapper });
-    // The SSO tab is active by default; open its create dialog.
-    const newBtn = screen.getAllByRole('button', { name: /new sso connection/i })[0];
-    await userEvent.click(newBtn);
-    expect(await screen.findByRole('heading', { level: 2 })).toBeInTheDocument();
-    // Submit with empty issuer/clientId → validation errors (role=alert) appear.
-    const candidates = screen.getAllByRole('button', { name: /new sso connection|save/i });
-    const saveBtn = candidates[candidates.length - 1];
-    await userEvent.click(saveBtn);
-    const alerts = await screen.findAllByRole('alert');
-    expect(alerts.length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /new sso connection/i })).toBeNull();
   });
 
   it('shows a success toast when the Google callback returns ?gcal=connected', async () => {

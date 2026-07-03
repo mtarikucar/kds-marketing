@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -16,18 +16,14 @@ import {
 } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
-import type { SocialAccount, SocialPost, NetworkStatus } from './types';
+import type { SocialAccount, SocialPost } from './types';
 import {
   NETWORK_META,
   POST_STATUS_TONE,
   TARGET_STATUS_TONE,
 } from './networks';
 import { PostComposerDialog, type PostComposerSubmit } from './PostComposerDialog';
-import { ConnectAccountDialog } from './ConnectAccountDialog';
-import { OAuthConnectButtons } from './OAuthConnectButtons';
-import { AccountSelectDialog } from './AccountSelectDialog';
-import { useSocialConnect } from './useSocialConnect';
-import type { ConnectAccountFormValues, MediaItemValue } from './socialSchemas';
+import type { MediaItemValue } from './socialSchemas';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -50,14 +46,10 @@ type View = 'posts' | 'accounts';
 export default function SocialPlannerPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
-  const { startConnect } = useSocialConnect();
 
-  const [searchParams, setSearchParams] = useSearchParams();
   const [view, setView] = useState<View>('posts');
-  const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingPost, setEditingPost] = useState<SocialPost | null>(null);
-  const [connectOpen, setConnectOpen] = useState(false);
   const [deletePost, setDeletePost] = useState<SocialPost | null>(null);
   const [disconnectAccount, setDisconnectAccount] = useState<SocialAccount | null>(null);
   // post pending a schedule confirmation (carries the picked ISO time)
@@ -65,30 +57,6 @@ export default function SocialPlannerPage() {
   // Media handed off from AI Studio, captured into local state so it survives the
   // router state-clear below and stays stable while the composer is open.
   const [seededMedia, setSeededMedia] = useState<MediaItemValue[] | undefined>(undefined);
-
-  // ── OAuth return handling ────────────────────────────────────────────────────
-  // The OAuth callback redirects back to /social?connect=<pendingId> (success)
-  // or ?connect_error=1 (failure). Pick up the param once, open the account
-  // selector, and strip it from the URL.
-  useEffect(() => {
-    const connectId = searchParams.get('connect');
-    const connectErr = searchParams.get('connect_error');
-    if (connectId) {
-      setPendingConnectId(connectId);
-      setView('accounts');
-      searchParams.delete('connect');
-      setSearchParams(searchParams, { replace: true });
-    } else if (connectErr) {
-      toast.error(
-        t('social.oauth.callbackError', {
-          defaultValue: 'Connection failed or was cancelled. Please try again.',
-        }),
-      );
-      searchParams.delete('connect_error');
-      setSearchParams(searchParams, { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // ── AI Studio hand-off ───────────────────────────────────────────────────────
   // The Studio's "Add to post" navigates here with { seedMedia } in router state.
@@ -113,12 +81,6 @@ export default function SocialPlannerPage() {
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
-  const { data: status } = useQuery({
-    queryKey: ['marketing', 'social', 'status'],
-    queryFn: () =>
-      marketingApi.get('/social-planner/status').then((r) => r.data as NetworkStatus),
-  });
-
   const { data: accountsData, isLoading: accountsLoading } = useQuery({
     queryKey: ['marketing', 'social', 'accounts'],
     queryFn: () =>
@@ -139,19 +101,6 @@ export default function SocialPlannerPage() {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'social', 'posts'] });
   const invalidateAccounts = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'social', 'accounts'] });
-
-  const connectMutation = useMutation({
-    mutationFn: (payload: ConnectAccountFormValues) =>
-      marketingApi.post('/social-planner/accounts', payload),
-    onSuccess: () => {
-      invalidateAccounts();
-      setConnectOpen(false);
-      toast.success(t('social.toast.connected', { defaultValue: 'Account connected' }));
-    },
-    onError: () => {
-      toast.error(t('social.toast.connectFailed', { defaultValue: 'Failed to connect account' }));
-    },
-  });
 
   const disconnectMutation = useMutation({
     mutationFn: (accountId: string) =>
@@ -393,15 +342,7 @@ export default function SocialPlannerPage() {
               <Plus className="h-4 w-4" aria-hidden="true" />
               {t('social.newPost', { defaultValue: 'New post' })}
             </Button>
-          ) : (
-            <Button
-              onClick={() => setConnectOpen(true)}
-              disabled={status ? !status.secretBoxConfigured : false}
-            >
-              <Link2 className="h-4 w-4" aria-hidden="true" />
-              {t('social.connectAccount', { defaultValue: 'Connect account' })}
-            </Button>
-          )
+          ) : undefined
         }
       />
 
@@ -443,15 +384,27 @@ export default function SocialPlannerPage() {
         />
       ) : (
         <div className="space-y-4">
-          {/* One-click OAuth connect — primary path; the manual dialog stays as fallback. */}
-          <OAuthConnectButtons status={status} />
+          {/* Connecting/reconnecting company accounts now lives in the Account Center. */}
+          <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">
+              {t('social.accounts.manageNote', {
+                defaultValue:
+                  'These are the accounts your posts publish to. Connect or reconnect them in the Account Center.',
+              })}
+            </p>
+            <Button asChild variant="outline" className="shrink-0">
+              <Link to="/accounts">
+                <Link2 className="h-4 w-4" aria-hidden="true" />
+                {t('social.accounts.manageCta', {
+                  defaultValue: 'Manage account connections in the Account Center',
+                })}
+              </Link>
+            </Button>
+          </Card>
           <AccountsView
             accounts={accounts}
             isLoading={accountsLoading}
-            onConnect={() => setConnectOpen(true)}
             onDisconnect={setDisconnectAccount}
-            onReconnect={(acc) => startConnect(acc.network)}
-            canConnect={status ? status.secretBoxConfigured : true}
           />
         </div>
       )}
@@ -465,21 +418,6 @@ export default function SocialPlannerPage() {
         seedMedia={editingPost ? undefined : seededMedia}
         onSubmit={(values) => composerMutation.mutate(values)}
         isPending={composerMutation.isPending}
-      />
-
-      {/* OAuth account selection (after the provider callback returns) */}
-      <AccountSelectDialog
-        pendingId={pendingConnectId}
-        onOpenChange={(open) => { if (!open) setPendingConnectId(null); }}
-      />
-
-      {/* Connect account (manual fallback) */}
-      <ConnectAccountDialog
-        open={connectOpen}
-        onOpenChange={setConnectOpen}
-        onSubmit={(values) => connectMutation.mutate(values)}
-        isPending={connectMutation.isPending}
-        secretBoxConfigured={status ? status.secretBoxConfigured : true}
       />
 
       {/* Publish-now confirm */}
@@ -534,13 +472,10 @@ export default function SocialPlannerPage() {
 interface AccountsViewProps {
   accounts: SocialAccount[];
   isLoading: boolean;
-  onConnect: () => void;
   onDisconnect: (account: SocialAccount) => void;
-  onReconnect: (account: SocialAccount) => void;
-  canConnect: boolean;
 }
 
-function AccountsView({ accounts, isLoading, onConnect, onDisconnect, onReconnect, canConnect }: AccountsViewProps) {
+function AccountsView({ accounts, isLoading, onDisconnect }: AccountsViewProps) {
   const { t } = useTranslation('marketing');
 
   if (isLoading) {
@@ -562,9 +497,13 @@ function AccountsView({ accounts, isLoading, onConnect, onDisconnect, onReconnec
           defaultValue: 'Connect a Facebook, Instagram or LinkedIn account to start publishing.',
         })}
         action={
-          <Button onClick={onConnect} variant="outline" disabled={!canConnect}>
-            <Link2 className="h-4 w-4" aria-hidden="true" />
-            {t('social.connectAccount', { defaultValue: 'Connect account' })}
+          <Button asChild variant="outline">
+            <Link to="/accounts">
+              <Link2 className="h-4 w-4" aria-hidden="true" />
+              {t('social.accounts.manageCta', {
+                defaultValue: 'Manage account connections in the Account Center',
+              })}
+            </Link>
           </Button>
         }
       />
@@ -602,15 +541,11 @@ function AccountsView({ accounts, isLoading, onConnect, onDisconnect, onReconnec
               {/* Token is already masked by the backend — display verbatim, never raw. */}
               <p className="mt-1.5 font-mono text-micro text-muted-foreground">{acc.accessToken}</p>
               {needsReauth && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => onReconnect(acc)}
-                >
-                  <Link2 className="h-4 w-4" aria-hidden="true" />
-                  {t('social.action.reconnect', { defaultValue: 'Reconnect' })}
-                </Button>
+                <p className="mt-2 text-micro text-muted-foreground">
+                  {t('social.accounts.reconnectHint', {
+                    defaultValue: 'Reconnect this account in the Account Center.',
+                  })}
+                </p>
               )}
             </div>
             <IconButton

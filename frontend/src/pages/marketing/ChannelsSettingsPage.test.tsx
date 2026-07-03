@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import ChannelsSettingsPage from './ChannelsSettingsPage';
@@ -44,15 +43,12 @@ describe('ChannelsSettingsPage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
-  // Regression: opening the create dialog renders the "answering agent" Select,
-  // whose placeholder option used value="" — which modern Radix Select throws on
-  // ("Select.Item must have a value prop that is not an empty string"), crashing
-  // the whole page. Opening the dialog must NOT throw.
-  it('opens the create channel dialog without crashing (no empty-value Select.Item)', async () => {
+  // Connecting a channel now lives in the Account Center; this page is
+  // management-only, so it links there instead of opening an inline create dialog.
+  it('links to the Account Center to connect a channel', async () => {
     render(<ChannelsSettingsPage />, { wrapper });
-    const btns = screen.getAllByRole('button', { name: /connect a channel|channels\.new/i });
-    await userEvent.click(btns[0]);
-    expect(await screen.findByRole('heading', { level: 2 })).toBeInTheDocument();
+    const links = await screen.findAllByRole('link', { name: /account center/i });
+    expect(links[0]).toHaveAttribute('href', '/accounts');
   });
 
   it('renders the LinkedIn dormant status when engagement is not granted', async () => {
@@ -77,50 +73,19 @@ describe('ChannelsSettingsPage', () => {
     expect(await screen.findByText(/Community Management access is approved/i)).toBeInTheDocument();
   });
 
-  it('disables the Meta connect button until the Facebook app is configured', async () => {
-    // Default status mock returns [] → no FACEBOOK flag → button stays disabled.
-    render(<ChannelsSettingsPage />, { wrapper });
-    const btn = await screen.findByRole('button', { name: /Connect Messenger & Instagram/i });
-    expect(btn).toBeDisabled();
-  });
-
-  it('starts the Meta OAuth with origin=channels when the app is configured', async () => {
+  it('shows per-channel management (Verify) for an existing channel', async () => {
     const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
     marketingApi.get.mockImplementation((url: string) =>
-      url.includes('/social-planner/status')
-        ? Promise.resolve({ data: { FACEBOOK: true } })
-        : Promise.resolve({ data: [] }),
-    );
-    marketingApi.post.mockResolvedValue({ data: { authorizeUrl: 'https://facebook.com/authorize' } });
-    render(<ChannelsSettingsPage />, { wrapper });
-    const btn = await screen.findByRole('button', { name: /Connect Messenger & Instagram/i });
-    await waitFor(() => expect(btn).toBeEnabled());
-    await userEvent.click(btn);
-    expect(marketingApi.post).toHaveBeenCalledWith('/social/oauth/facebook/start', { origin: 'channels' });
-  });
-
-  it('opens the account picker on return from OAuth (?connect=)', async () => {
-    const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
-    marketingApi.get.mockImplementation((url: string) =>
-      url.includes('/social/oauth/pending/')
+      url === '/channels'
         ? Promise.resolve({
-            data: {
-              network: 'FACEBOOK',
-              assets: [{ externalId: 'P1', displayName: 'Acme', accountType: 'PAGE' }],
-            },
+            data: [
+              { id: 'ch1', type: 'SMS', name: 'SMS line', status: 'ACTIVE', configuredSecrets: ['usercode'], configPublic: {}, agentProfileId: null },
+            ],
           })
         : Promise.resolve({ data: [] }),
     );
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/channels?connect=pend1']}>
-          <ChannelsSettingsPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    // The channel-context picker uses its own title + lists the granted Page.
-    expect(await screen.findByText(/Connect messaging channels/i)).toBeInTheDocument();
-    expect(await screen.findByText('Acme')).toBeInTheDocument();
+    render(<ChannelsSettingsPage />, { wrapper });
+    expect(await screen.findByText('SMS line')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /verify/i })).toBeInTheDocument();
   });
 });

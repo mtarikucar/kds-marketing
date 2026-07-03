@@ -24,6 +24,10 @@ import { WebchatChannelDialog } from './WebchatChannelDialog';
 import { TelephonyCard } from './TelephonyCard';
 import { VoiceAiCard } from './VoiceAiCard';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
+// Company (workspace-level) identity + notifications — reused from the (now
+// personal-only) Settings › Connections page.
+import { SsoTab } from '../settings/connections/SsoTab';
+import { SlackTab } from '../settings/connections/SlackTab';
 import type { ChannelType } from '../channels/channelFields';
 
 /** OAuth providers map to a social-connect network; manual ones are added on the
@@ -255,7 +259,7 @@ export default function AccountCenterPage() {
         actions={
           <Button asChild variant="outline" size="md">
             <Link to="/settings/connections">
-              {t('accounts.identityCalendar', 'Identity, calendar & Slack')}
+              {t('accounts.myCalendar', 'My calendar connections')}
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
@@ -336,6 +340,21 @@ export default function AccountCenterPage() {
           <VoiceAiCard />
         </div>
       </QueryStateBoundary>
+
+      {/* Company (workspace-level) identity + notifications. Personal calendar
+          connections live in Settings › My connections. */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">
+            {t('accounts.identityNotifs', 'Identity & notifications (company)')}
+          </h2>
+          <p className="text-caption text-muted-foreground">
+            {t('accounts.identityNotifsDesc', 'Workspace single sign-on and Slack notifications — shared across your whole team.')}
+          </p>
+        </div>
+        <SsoTab />
+        <SlackTab />
+      </section>
     </div>
   );
 }
