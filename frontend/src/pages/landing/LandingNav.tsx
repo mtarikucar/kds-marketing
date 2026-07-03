@@ -47,7 +47,7 @@ export default function LandingNav({
       className={cn(
         'fixed inset-x-0 top-0 z-50 transition-all duration-300 ease-standard',
         solidBar
-          ? 'border-b border-slate-200/80 bg-white/85 backdrop-blur-md'
+          ? 'border-b border-slate-200/80 bg-white/95 sm:bg-white/85 sm:backdrop-blur-md'
           : 'border-b border-transparent bg-transparent',
       )}
     >

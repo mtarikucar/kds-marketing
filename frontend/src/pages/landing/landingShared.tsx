@@ -82,7 +82,10 @@ export function Reveal({
       ref={ref}
       style={{ transitionDelay: shown ? `${delay}ms` : '0ms' }}
       className={cn(
-        'transition-all duration-700 ease-standard will-change-transform motion-reduce:transition-none',
+        // transition only transform+opacity (not `all`), and NO permanent
+        // will-change — dozens of reveal blocks each holding a compositor layer
+        // exhausts iOS Safari's GPU memory and causes scroll jank.
+        'transition-[transform,opacity] duration-700 ease-standard motion-reduce:transition-none',
         shown ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0',
         className,
       )}
@@ -113,7 +116,7 @@ const VARIANTS: Record<Variant, string> = {
   primary:
     'bg-primary-600 text-white shadow-lg shadow-primary-600/30 hover:bg-primary-700 hover:shadow-primary-600/40 hover:-translate-y-0.5',
   glass:
-    'bg-white/10 text-white ring-1 ring-inset ring-white/15 backdrop-blur-sm hover:bg-white/15 hover:-translate-y-0.5',
+    'bg-white/10 text-white ring-1 ring-inset ring-white/15 sm:backdrop-blur-sm hover:bg-white/15 hover:-translate-y-0.5',
   light:
     'bg-white text-slate-900 ring-1 ring-inset ring-slate-200 shadow-sm hover:bg-slate-50 hover:-translate-y-0.5',
   ghostDark: 'text-slate-200 hover:bg-white/10 hover:text-white',

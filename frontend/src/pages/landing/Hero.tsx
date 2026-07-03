@@ -24,10 +24,19 @@ export default function Hero() {
       <div aria-hidden className="pointer-events-none absolute inset-0">
         {/* base vertical gradient */}
         <div className="absolute inset-0 bg-gradient-to-b from-[#0a0e1f] via-[#0b1024] to-[#0d1430]" />
-        {/* indigo glow top-left */}
-        <div className="absolute -left-40 -top-40 h-[36rem] w-[36rem] rounded-full bg-primary-600/25 blur-[120px]" />
-        {/* violet glow right */}
-        <div className="absolute -right-32 top-10 h-[32rem] w-[32rem] rounded-full bg-violet-600/20 blur-[120px]" />
+        {/* Soft indigo + violet glows. Rendered as radial GRADIENTS, not
+            `filter: blur()` on solid circles — large blur radii (blur-[120px])
+            repaint catastrophically slowly on iOS Safari and were the main cause
+            of the landing-page jank on iPhone. Gradients give the same look for a
+            fraction of the GPU cost. */}
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              'radial-gradient(40rem 40rem at 6% -8%, rgba(79,70,229,0.30), transparent 62%),' +
+              'radial-gradient(34rem 34rem at 96% 10%, rgba(124,58,237,0.24), transparent 62%)',
+          }}
+        />
         {/* fine grid, fading out toward the bottom */}
         <div
           className="absolute inset-0 opacity-[0.18] [mask-image:radial-gradient(ellipse_at_top,black,transparent_72%)]"
@@ -113,7 +122,7 @@ export default function Hero() {
         {/* Stat strip */}
         <div className="mt-16 grid grid-cols-2 gap-px overflow-hidden rounded-2xl bg-white/10 ring-1 ring-white/10 sm:grid-cols-4">
           {stats.map((s) => (
-            <div key={s.label} className="bg-[#0b1024]/60 px-5 py-5 text-center backdrop-blur-sm sm:py-6">
+            <div key={s.label} className="bg-[#0b1024]/75 px-5 py-5 text-center sm:bg-[#0b1024]/60 sm:py-6 sm:backdrop-blur-sm">
               <div className="font-display text-2xl font-bold text-white sm:text-3xl">{s.value}</div>
               <div className="mt-1 text-xs font-medium text-slate-400">{s.label}</div>
             </div>

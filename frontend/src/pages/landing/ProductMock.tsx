@@ -38,8 +38,12 @@ export default function ProductMock() {
 
   return (
     <div className="relative">
-      {/* Glow behind the window */}
-      <div aria-hidden className="absolute -inset-6 -z-10 rounded-[2rem] bg-primary-500/20 blur-3xl" />
+      {/* Glow behind the window — radial gradient, not filter:blur (iOS Safari perf). */}
+      <div
+        aria-hidden
+        className="absolute -inset-6 -z-10 rounded-[2rem]"
+        style={{ background: 'radial-gradient(closest-side, rgba(99,102,241,0.22), transparent)' }}
+      />
 
       <div className="overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/10">
         {/* Title bar */}
