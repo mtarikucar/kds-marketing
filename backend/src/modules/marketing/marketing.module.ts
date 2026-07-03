@@ -164,6 +164,7 @@ import { SocialPostMetricService } from './social-planner/social-post-metric.ser
 import { BudgetPerformanceSource } from './budget/budget-performance.source';
 import { BudgetAutopilotService } from './budget/budget-autopilot.service';
 import { BudgetManagementService } from './budget/budget-management.service';
+import { ConversationSpendService } from './budget/conversation-spend.service';
 import { MarketingBudgetController } from './controllers/marketing-budget.controller';
 import { BookingService } from './sites/booking.service';
 
@@ -680,6 +681,7 @@ import { WalletService } from './wallet/wallet.service';
     BudgetPerformanceSource,
     BudgetAutopilotService,
     BudgetManagementService,
+    ConversationSpendService,
     BookingService,
     // Phase F P6 — reviews/reputation: request → rating-gate → public/private,
     // AI reply drafts (wired into the send_review_request workflow action).
