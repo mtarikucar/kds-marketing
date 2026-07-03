@@ -228,8 +228,8 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
-      { path: '/settings/telephony', labelKey: 'nav.telephony', label: 'Phone (Netsantral)', icon: PhoneCall, feature: 'telephony', managerOnly: true },
-      { path: '/settings/voice-ai', labelKey: 'nav.voiceAiSettings', label: 'Voice AI', icon: Mic, feature: 'voiceAi', managerOnly: true },
+      // Phone (Netsantral) + Voice AI connection setup moved into the Account
+      // Center (/accounts) — their standalone pages are gone (redirect there).
     ],
   },
   {

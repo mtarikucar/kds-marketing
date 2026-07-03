@@ -105,8 +105,6 @@ const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'
 const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
 const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
-const TelephonySettingsPage    = lazy(() => import('./pages/marketing/TelephonySettingsPage'));
-const VoiceAiSettingsPage      = lazy(() => import('./pages/marketing/settings/voiceAi'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
 const PlatformLoginPage          = lazy(() => import('./pages/platform/PlatformLoginPage'));
@@ -265,8 +263,9 @@ export default function App() {
             <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />
             <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
-            <Route path="/settings/telephony"   element={<S><TelephonySettingsPage /></S>} />
-            <Route path="/settings/voice-ai"    element={<S><VoiceAiSettingsPage /></S>} />
+            {/* Telephony + Voice-AI setup now lives in the Account Center. */}
+            <Route path="/settings/telephony"   element={<Navigate to="/accounts" replace />} />
+            <Route path="/settings/voice-ai"    element={<Navigate to="/accounts" replace />} />
             <Route path="/social"      element={<S><SocialPlannerPage /></S>} />
             <Route path="/social-campaigns"      element={<S><SocialCampaignsPage /></S>} />
             <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
