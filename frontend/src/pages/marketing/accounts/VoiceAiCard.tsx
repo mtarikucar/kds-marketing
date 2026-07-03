@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Mic, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { Skeleton } from '@/components/ui/Skeleton';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { CopyField } from './CopyField';
 
@@ -19,7 +20,7 @@ interface VoiceAiStatus {
  */
 export function VoiceAiCard() {
   const { t } = useTranslation('marketing');
-  const { data } = useQuery<VoiceAiStatus>({
+  const { data, isLoading, isError } = useQuery<VoiceAiStatus>({
     queryKey: ['marketing', 'voice-ai', 'status'],
     queryFn: () => marketingApi.get('/voice-ai/status').then((r) => r.data),
   });
@@ -27,16 +28,18 @@ export function VoiceAiCard() {
   const caps = data?.capabilities;
   const anyOn = !!(caps?.bridge || caps?.netgsmIvr);
 
-  const flag = (on: boolean | undefined) =>
-    on ? (
+  const flag = (on: boolean | undefined) => {
+    if (isLoading) return <Skeleton className="h-4 w-20" />;
+    return on ? (
       <span className="flex items-center gap-1 text-caption text-success">
-        <CheckCircle2 className="h-3.5 w-3.5" /> {t('accounts.voice.on', 'Ready')}
+        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> {t('accounts.voice.on', 'Ready')}
       </span>
     ) : (
       <span className="flex items-center gap-1 text-caption text-warning">
-        <AlertTriangle className="h-3.5 w-3.5" /> {t('accounts.voice.needsEnv', 'Needs server key')}
+        <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> {t('accounts.voice.needsEnv', 'Needs server key')}
       </span>
     );
+  };
 
   return (
     <Card>
@@ -53,10 +56,20 @@ export function VoiceAiCard() {
               </p>
             </div>
           </div>
-          <Badge tone={anyOn ? 'success' : 'neutral'} size="sm">
-            {anyOn ? t('accounts.voice.available', 'Available') : t('accounts.notConnected', 'Not connected')}
-          </Badge>
+          {isLoading ? (
+            <Skeleton className="h-5 w-20 rounded-full" />
+          ) : (
+            <Badge tone={anyOn ? 'success' : 'neutral'} size="sm">
+              {anyOn ? t('accounts.voice.available', 'Available') : t('accounts.notConnected', 'Not connected')}
+            </Badge>
+          )}
         </div>
+
+        {isError && (
+          <p className="text-caption text-muted-foreground">
+            {t('accounts.voice.statusError', "Couldn't load status")}
+          </p>
+        )}
 
         <p className="text-caption text-muted-foreground">
           {t('accounts.voice.explain', 'Point an ElevenLabs / VAPI / Retell voice agent at the bridge URL below as its “Custom LLM”, or route NetGSM calls to the IVR. Your AI agent’s persona + knowledge drive the replies.')}
@@ -86,7 +99,7 @@ export function VoiceAiCard() {
           )}
         </div>
 
-        {!anyOn && (
+        {!isLoading && !isError && !anyOn && (
           <p className="text-caption text-muted-foreground">
             {t('accounts.voice.opsNote', 'An admin must set VOICE_AI_BRIDGE_SECRET (and, for calls, provision the NetGSM SIP-trunk / AI add-on) before these go live.')}
           </p>

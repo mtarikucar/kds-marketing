@@ -18,6 +18,14 @@ const TYPE_META: Record<CalendarItem['type'], { icon: typeof Share2; toneKey: st
   CAMPAIGN_ITEM: { icon: CalendarRange, toneKey: 'primary' },
 };
 
+const STATUS_FALLBACK: Record<string, string> = {
+  SCHEDULED: 'Scheduled',
+  DRAFT: 'Draft',
+  PUBLISHED: 'Published',
+  QUEUED: 'Queued',
+  FAILED: 'Failed',
+};
+
 /**
  * Unified content calendar (Faz 4) — one agenda across social posts + AI
  * social-campaign items, grouped by day. A read model; scheduling still happens
@@ -68,7 +76,9 @@ export default function ContentCalendarPage() {
                           <Badge tone={meta.toneKey as 'info' | 'primary'}>
                             {t(`contentCal.type.${item.type}`, item.type === 'SOCIAL_POST' ? 'Post' : 'Campaign')}
                           </Badge>
-                          <Badge tone="neutral">{item.status}</Badge>
+                          <Badge tone="neutral">
+                            {t(`contentCal.status.${item.status}`, STATUS_FALLBACK[item.status] ?? item.status)}
+                          </Badge>
                         </CardContent>
                       </Card>
                     );

@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Field } from '@/components/ui/Field';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
   SECRET_FIELDS,
@@ -96,23 +97,44 @@ export function ManualChannelDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          <Input
-            placeholder={t('accounts.channelName', 'Name')}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
+          <Field label={t('accounts.channelName', 'Name')} required>
+            {({ id }) => (
+              <Input
+                id={id}
+                placeholder={t('accounts.channelName', 'Name')}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            )}
+          </Field>
           {extLabel && (
-            <Input placeholder={extLabel} value={externalId} onChange={(e) => setExternalId(e.target.value)} />
+            <Field label={extLabel} required>
+              {({ id }) => (
+                <Input
+                  id={id}
+                  placeholder={extLabel}
+                  value={externalId}
+                  onChange={(e) => setExternalId(e.target.value)}
+                />
+              )}
+            </Field>
           )}
-          {secretKeys.map((k) => (
-            <Input
-              key={k}
-              type={SECRET_MASKED.has(k) ? 'password' : 'text'}
-              placeholder={SECRET_LABELS[k] ?? k}
-              value={secrets[k] ?? ''}
-              onChange={(e) => setSecrets((s) => ({ ...s, [k]: e.target.value }))}
-            />
-          ))}
+          {secretKeys.map((k) => {
+            const label = SECRET_LABELS[k] ?? k;
+            return (
+              <Field key={k} label={label} required>
+                {({ id }) => (
+                  <Input
+                    id={id}
+                    type={SECRET_MASKED.has(k) ? 'password' : 'text'}
+                    placeholder={label}
+                    value={secrets[k] ?? ''}
+                    onChange={(e) => setSecrets((s) => ({ ...s, [k]: e.target.value }))}
+                  />
+                )}
+              </Field>
+            );
+          })}
         </div>
 
         <DialogFooter>

@@ -13,6 +13,8 @@ import { Callout } from '@/components/ui/Callout';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
 import {
   listGrowthBudgets,
@@ -95,6 +97,7 @@ export default function BudgetAutopilotPage() {
 function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
 
   const detailQ = useQuery({ queryKey: ['growth-budget', summary.id], queryFn: () => getGrowthBudget(summary.id) });
   const budget = detailQ.data ?? summary;
@@ -108,9 +111,14 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
 
   const kill = useMutation({
     mutationFn: (on: boolean) => setBudgetKillSwitch(budget.id, on),
-    onSuccess: () => {
+    onSuccess: (_data, on) => {
       qc.invalidateQueries({ queryKey: ['growth-budget', budget.id] });
       qc.invalidateQueries({ queryKey: ['growth-budgets'] });
+      toast.success(
+        on
+          ? t('budget.killOnToast', 'Kill-switch on — all autonomy paused')
+          : t('budget.killOffToast', 'Kill-switch off — autonomy resumed'),
+      );
     },
     onError: () => toast.error(t('budget.killError', 'Could not update the kill-switch')),
   });
@@ -118,53 +126,85 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
   const statusTone: Record<string, 'success' | 'warning' | 'danger'> = { ACTIVE: 'success', PAUSED: 'warning', KILLED: 'danger' };
 
   return (
-    <div className="space-y-6">
-      {budget.killSwitch && (
-        <Callout tone="danger" title={t('budget.killedTitle', 'Kill-switch is ON')} icon={<ShieldAlert className="h-4 w-4" />}>
-          {t('budget.killedDesc', 'All autonomous activity is halted. No proposals or spend until you turn it off.')}
-        </Callout>
-      )}
+    <>
+      <QueryStateBoundary isLoading={detailQ.isLoading} isError={detailQ.isError} onRetry={() => detailQ.refetch()}>
+        <div className="space-y-6">
+          {budget.killSwitch && (
+            <Callout tone="danger" title={t('budget.killedTitle', 'Kill-switch is ON')} icon={<ShieldAlert className="h-4 w-4" />}>
+              {t('budget.killedDesc', 'All autonomous activity is halted. No proposals or spend until you turn it off.')}
+            </Callout>
+          )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label={t('budget.stat.total', 'Monthly budget')} value={money(total, currency)} icon={<Wallet className="h-4 w-4" />} />
-        <StatCard label={t('budget.stat.spent', 'Spent so far')} value={money(spent, currency)} icon={<Gauge className="h-4 w-4" />} delta={{ direction: spentPct > 90 ? 'up' : 'flat', value: `${spentPct}%` }} />
-        <StatCard label={t('budget.stat.reserve', 'Exploration reserve')} value={`${budget.explorationPct}%`} icon={<PiggyBank className="h-4 w-4" />} />
-        <StatCard label={t('budget.stat.scope', 'Scope')} value={budget.scope === 'AD_ONLY' ? t('budget.scope.adOnly', 'Ads only') : t('budget.scope.holistic', 'Holistic')} />
-      </div>
-
-      <Card>
-        <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">{budget.periodKey}</span>
-            <Badge tone={statusTone[budget.status] ?? 'neutral'}>{t(`budget.status.${budget.status}`, budget.status)}</Badge>
-            {budget.targetRoas && <Badge tone="neutral">{t('budget.targetRoas', 'Target ROAS')} {num(budget.targetRoas)}x</Badge>}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard label={t('budget.stat.total', 'Monthly budget')} value={money(total, currency)} icon={<Wallet className="h-4 w-4" />} />
+            <StatCard label={t('budget.stat.spent', 'Spent so far')} value={money(spent, currency)} icon={<Gauge className="h-4 w-4" />} delta={{ direction: spentPct > 90 ? 'up' : 'flat', value: `${spentPct}%` }} />
+            <div title={t('budget.stat.reserveTip', 'Share of the budget held back for learning — never spent on proven channels.')}>
+              <StatCard label={t('budget.stat.reserve', 'Exploration reserve')} value={`${budget.explorationPct}%`} icon={<PiggyBank className="h-4 w-4" />} />
+            </div>
+            <div title={t('budget.stat.scopeTip', 'Holistic paces every channel and conversation into the budget; Ads only limits the autopilot to paid ad spend.')}>
+              <StatCard label={t('budget.stat.scope', 'Scope')} value={budget.scope === 'AD_ONLY' ? t('budget.scope.adOnly', 'Ads only') : t('budget.scope.holistic', 'Holistic')} />
+            </div>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <ShieldAlert className={`h-4 w-4 ${budget.killSwitch ? 'text-danger' : 'text-muted-foreground'}`} />
-            {t('budget.killSwitch', 'Kill-switch')}
-            <Switch checked={budget.killSwitch} disabled={kill.isPending} onCheckedChange={(v) => kill.mutate(v)} aria-label={t('budget.killSwitch', 'Kill-switch')} />
-          </label>
-        </CardContent>
-      </Card>
 
-      <Tabs defaultValue="allocation">
-        <TabsList>
-          <TabsTrigger value="allocation">{t('budget.tab.allocation', 'Allocation')}</TabsTrigger>
-          <TabsTrigger value="approvals">{t('budget.tab.approvals', 'Approvals')}</TabsTrigger>
-          <TabsTrigger value="history">{t('budget.tab.history', 'History')}</TabsTrigger>
-        </TabsList>
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-muted-foreground">{budget.periodKey}</span>
+                <Badge tone={statusTone[budget.status] ?? 'neutral'}>{t(`budget.status.${budget.status}`, budget.status)}</Badge>
+                {budget.targetRoas && (
+                  <Badge tone="neutral" title={t('budget.targetRoasTip', 'Return on ad spend the autopilot aims for; channels below it aren’t funded from the proven pool.')}>
+                    {t('budget.targetRoas', 'Target ROAS')} {num(budget.targetRoas)}x
+                  </Badge>
+                )}
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <ShieldAlert className={`h-4 w-4 ${budget.killSwitch ? 'text-danger' : 'text-muted-foreground'}`} aria-hidden="true" />
+                {t('budget.killSwitch', 'Kill-switch')}
+                <Switch
+                  checked={budget.killSwitch}
+                  disabled={kill.isPending}
+                  onCheckedChange={(v) => (v ? setKillConfirmOpen(true) : kill.mutate(false))}
+                  aria-label={t('budget.killSwitch', 'Kill-switch')}
+                />
+              </label>
+            </CardContent>
+          </Card>
 
-        <TabsContent value="allocation" className="pt-4">
-          <AllocationTab budget={budget} allocations={allocations} planned={planned} />
-        </TabsContent>
-        <TabsContent value="approvals" className="pt-4">
-          <ApprovalsTab />
-        </TabsContent>
-        <TabsContent value="history" className="pt-4">
-          <HistoryTab budgetId={budget.id} />
-        </TabsContent>
-      </Tabs>
-    </div>
+          <Tabs defaultValue="allocation">
+            <TabsList>
+              <TabsTrigger value="allocation">{t('budget.tab.allocation', 'Allocation')}</TabsTrigger>
+              <TabsTrigger value="approvals">{t('budget.tab.approvals', 'Approvals')}</TabsTrigger>
+              <TabsTrigger value="history">{t('budget.tab.history', 'History')}</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="allocation" className="pt-4">
+              <AllocationTab budget={budget} allocations={allocations} planned={planned} />
+            </TabsContent>
+            <TabsContent value="approvals" className="pt-4">
+              <ApprovalsTab />
+            </TabsContent>
+            <TabsContent value="history" className="pt-4">
+              <HistoryTab budgetId={budget.id} />
+            </TabsContent>
+          </Tabs>
+        </div>
+      </QueryStateBoundary>
+
+      <ConfirmDialog
+        open={killConfirmOpen}
+        onOpenChange={setKillConfirmOpen}
+        tone="danger"
+        title={t('budget.killConfirm.title', 'Turn on the kill-switch?')}
+        description={t('budget.killConfirm.desc', 'This halts all autonomous activity — no proposals or spend until you turn it back off.')}
+        confirmLabel={t('budget.killConfirm.confirm', 'Turn on kill-switch')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        loading={kill.isPending}
+        onConfirm={() => {
+          kill.mutate(true);
+          setKillConfirmOpen(false);
+        }}
+      />
+    </>
   );
 }
 
@@ -200,8 +240,13 @@ function AllocationTab({ budget, allocations, planned }: { budget: GrowthBudget;
             planned: money(planned, currency), total: money(budget.totalAmount, currency), n: allocations?.length ?? 0,
           })}
         </p>
-        <Button variant="secondary" onClick={() => propose.mutate()} disabled={propose.isPending || budget.killSwitch}>
-          <Sparkles className="mr-1.5 h-4 w-4" />
+        <Button
+          variant="secondary"
+          onClick={() => propose.mutate()}
+          disabled={propose.isPending || budget.killSwitch}
+          title={t('budget.proposeNowTip', 'Runs a simulation only — proposes reallocations for your approval. No money moves.')}
+        >
+          <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />
           {propose.isPending ? t('budget.proposing', 'Proposing…') : t('budget.proposeNow', 'Propose now (shadow)')}
         </Button>
       </div>
@@ -214,33 +259,35 @@ function AllocationTab({ budget, allocations, planned }: { budget: GrowthBudget;
         />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-left text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2.5 font-medium">{t('budget.col.channel', 'Channel')}</th>
-                <th className="px-4 py-2.5 text-right font-medium">{t('budget.col.planned', 'Planned')}</th>
-                <th className="px-4 py-2.5 text-right font-medium">{t('budget.col.spent', 'Spent')}</th>
-                <th className="px-4 py-2.5 text-right font-medium">{t('budget.col.mroas', 'Marginal ROAS')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
+          <Table>
+            <THead>
+              <TR>
+                <TH>{t('budget.col.channel', 'Channel')}</TH>
+                <TH numeric>{t('budget.col.planned', 'Planned')}</TH>
+                <TH numeric>{t('budget.col.spent', 'Spent')}</TH>
+                <TH numeric title={t('budget.col.mroasTip', 'Marginal ROAS — revenue returned per extra 1 TRY spent on this channel right now.')}>
+                  {t('budget.col.mroas', 'Marginal ROAS')}
+                </TH>
+              </TR>
+            </THead>
+            <TBody>
               {allocations.map((a) => (
-                <tr key={a.id}>
-                  <td className="px-4 py-2.5 font-medium">{CHANNEL_LABEL[a.channel] ?? a.channel}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">{money(a.plannedAmount, currency)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{money(a.spentAmount, currency)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">{a.marginalRoas ? `${num(a.marginalRoas).toFixed(2)}x` : '—'}</td>
-                </tr>
+                <TR key={a.id}>
+                  <TD className="font-medium">{CHANNEL_LABEL[a.channel] ?? a.channel}</TD>
+                  <TD numeric>{money(a.plannedAmount, currency)}</TD>
+                  <TD numeric className="text-muted-foreground">{money(a.spentAmount, currency)}</TD>
+                  <TD numeric>{a.marginalRoas ? `${num(a.marginalRoas).toFixed(2)}x` : '—'}</TD>
+                </TR>
               ))}
-            </tbody>
-          </table>
+            </TBody>
+          </Table>
         </div>
       )}
 
       {proposal?.plan && !proposal.plan.noop && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{t('budget.proposal.title', 'Shadow proposal')}</CardTitle>
+            <CardTitle className="text-base">{t('budget.proposal.title', 'Proposed reallocation (simulation)')}</CardTitle>
             <CardDescription>
               {t('budget.proposal.desc', 'Pool {{pool}} · reserve {{reserve}} held for learning. Enqueued for your approval — nothing moved.', {
                 pool: money(proposal.plan.pool, currency), reserve: money(proposal.plan.reserve, currency),
@@ -270,6 +317,7 @@ function ApprovalsTab() {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['pending-approvals'], queryFn: listPendingApprovals });
+  const [confirmItem, setConfirmItem] = useState<{ id: string; kind: string } | null>(null);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['pending-approvals'] });
   // Approving a budget reallocation immediately applies it: the approval IS the
@@ -290,9 +338,13 @@ function ApprovalsTab() {
       } else {
         toast.success(t('budget.approved', 'Approved'));
       }
+      setConfirmItem(null);
       invalidate();
     },
-    onError: () => toast.error(t('budget.decisionError', 'Could not record your decision')),
+    onError: () => {
+      setConfirmItem(null);
+      toast.error(t('budget.decisionError', 'Could not record your decision'));
+    },
   });
   const reject = useMutation({
     mutationFn: rejectRequest,
@@ -301,35 +353,53 @@ function ApprovalsTab() {
   });
 
   return (
-    <QueryStateBoundary isLoading={q.isLoading} isError={q.isError} onRetry={() => q.refetch()}>
-      {!q.data?.length ? (
-        <EmptyState icon={<Check className="h-5 w-5" />} title={t('budget.noApprovals.title', 'Nothing waiting')} description={t('budget.noApprovals.desc', 'Autopilot proposals and other high-risk actions land here for your sign-off.')} />
-      ) : (
-        <div className="space-y-2">
-          {q.data.map((r) => (
-            <Card key={r.id}>
-              <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3.5">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Badge tone="info">{t(`budget.kind.${r.kind}`, r.kind)}</Badge>
-                    <span className="text-xs text-muted-foreground">{fmtDateTime(r.createdAt)}</span>
+    <>
+      <QueryStateBoundary isLoading={q.isLoading} isError={q.isError} onRetry={() => q.refetch()}>
+        {!q.data?.length ? (
+          <EmptyState icon={<Check className="h-5 w-5" />} title={t('budget.noApprovals.title', 'Nothing waiting')} description={t('budget.noApprovals.desc', 'Autopilot proposals and other high-risk actions land here for your sign-off.')} />
+        ) : (
+          <div className="space-y-2">
+            {q.data.map((r) => (
+              <Card key={r.id}>
+                <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Badge tone="info">{t(`budget.kind.${r.kind}`, r.kind)}</Badge>
+                      <span className="text-xs text-muted-foreground">{fmtDateTime(r.createdAt)}</span>
+                    </div>
+                    <p className="mt-1 truncate text-sm">{r.summary}</p>
                   </div>
-                  <p className="mt-1 truncate text-sm">{r.summary}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
-                    <X className="mr-1 h-4 w-4" />{t('budget.reject', 'Reject')}
-                  </Button>
-                  <Button size="sm" onClick={() => approve.mutate({ id: r.id, kind: r.kind })} disabled={approve.isPending}>
-                    <Check className="mr-1 h-4 w-4" />{t('budget.approve', 'Approve')}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-    </QueryStateBoundary>
+                  <div className="flex items-center gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
+                      <X className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.reject', 'Reject')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => (r.kind === 'BUDGET_REALLOCATION' ? setConfirmItem({ id: r.id, kind: r.kind }) : approve.mutate({ id: r.id, kind: r.kind }))}
+                      disabled={approve.isPending}
+                    >
+                      <Check className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.approve', 'Approve')}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </QueryStateBoundary>
+
+      <ConfirmDialog
+        open={confirmItem !== null}
+        onOpenChange={(o) => { if (!o) setConfirmItem(null); }}
+        tone="danger"
+        title={t('budget.approveConfirm.title', 'Push this reallocation live?')}
+        description={t('budget.approveConfirm.desc', 'Approving commits the plan and pushes the new budget live to the ad platform where connected — real spend moves and there’s no undo.')}
+        confirmLabel={t('budget.approveConfirm.confirm', 'Approve & push live')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        loading={approve.isPending}
+        onConfirm={() => { if (confirmItem) approve.mutate(confirmItem); }}
+      />
+    </>
   );
 }
 

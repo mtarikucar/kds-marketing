@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { Skeleton } from '@/components/ui/Skeleton';
 import {
   Dialog,
   DialogContent,
@@ -48,7 +49,7 @@ export function TelephonyCard() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
 
-  const { data: cfg } = useQuery<TelephonyConfigView | null>({
+  const { data: cfg, isLoading, isError } = useQuery<TelephonyConfigView | null>({
     queryKey: telephonyKey,
     queryFn: () => marketingApi.get('/telephony/config').then((r) => r.data),
   });
@@ -58,11 +59,13 @@ export function TelephonyCard() {
   const connected = !!cfg && cfg.status === 'ACTIVE' && hasCreds && !!cfg.trunk;
   const webphoneReady = !!cfg?.wssUrl && !!cfg?.sipDomain;
 
-  const badge = !cfg
-    ? { tone: 'neutral' as const, label: t('accounts.notConnected', 'Not connected') }
-    : connected
-      ? { tone: 'success' as const, label: t('accounts.tel.connected', 'Connected') }
-      : { tone: 'warning' as const, label: t('accounts.tel.incomplete', 'Incomplete') };
+  const badge = isError
+    ? { tone: 'danger' as const, label: t('accounts.loadError', "Couldn't load") }
+    : !cfg
+      ? { tone: 'neutral' as const, label: t('accounts.notConnected', 'Not connected') }
+      : connected
+        ? { tone: 'success' as const, label: t('accounts.tel.connected', 'Connected') }
+        : { tone: 'warning' as const, label: t('accounts.tel.incomplete', 'Incomplete') };
 
   return (
     <Card>
@@ -87,7 +90,11 @@ export function TelephonyCard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge tone={badge.tone} size="sm">{badge.label}</Badge>
+            {isLoading ? (
+              <Skeleton className="h-5 w-20 rounded-full" />
+            ) : (
+              <Badge tone={badge.tone} size="sm">{badge.label}</Badge>
+            )}
             <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
               <Phone className="h-4 w-4" />
               {connected ? t('accounts.tel.manage', 'Manage') : t('accounts.setUp', 'Set up')}
@@ -177,23 +184,25 @@ function TelephonyDialog({
           <section className="space-y-2">
             <p className="text-sm font-medium text-foreground">{t('accounts.tel.workspace', 'Workspace credentials')}</p>
             <Input
+              aria-label={t('accounts.tel.username', 'NetGSM username (abone no)')}
               placeholder={hasUser ? t('accounts.tel.usernameSet', 'NetGSM username (saved — leave blank to keep)') : t('accounts.tel.username', 'NetGSM username (abone no)')}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
             <Input
               type="password"
+              aria-label={t('accounts.tel.password', 'API sub-user password')}
               placeholder={hasPass ? t('accounts.tel.passwordSet', 'API password (saved — leave blank to keep)') : t('accounts.tel.password', 'API sub-user password')}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <Input placeholder={t('accounts.tel.trunk', 'Outbound trunk / caller-id (0850…)')} value={trunk} onChange={(e) => setTrunk(e.target.value)} />
+            <Input aria-label={t('accounts.tel.trunk', 'Outbound trunk / caller-id (0850…)')} placeholder={t('accounts.tel.trunk', 'Outbound trunk / caller-id (0850…)')} value={trunk} onChange={(e) => setTrunk(e.target.value)} />
           </section>
 
           <section className="space-y-2">
             <p className="text-sm font-medium text-foreground">{t('accounts.tel.webphone', 'In-browser webphone (optional)')}</p>
-            <Input placeholder="wss://sip5.netsantral.com:8089/ws" value={wssUrl} onChange={(e) => setWssUrl(e.target.value)} />
-            <Input placeholder="sip5.netsantral.com" value={sipDomain} onChange={(e) => setSipDomain(e.target.value)} />
+            <Input aria-label={t('accounts.tel.wssUrl', 'WebRTC WSS URL')} placeholder="wss://sip5.netsantral.com:8089/ws" value={wssUrl} onChange={(e) => setWssUrl(e.target.value)} />
+            <Input aria-label={t('accounts.tel.sipDomain', 'SIP domain')} placeholder="sip5.netsantral.com" value={sipDomain} onChange={(e) => setSipDomain(e.target.value)} />
           </section>
 
           <div className="flex gap-2">
@@ -255,9 +264,9 @@ function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
       </div>
       {/* Inputs wrap/fill on mobile instead of overflowing a fixed-width row. */}
       <div className="flex flex-wrap gap-2">
-        <Input className="min-w-0 flex-1 basis-32" placeholder={t('accounts.tel.phone', 'Phone')} value={phone} onChange={(e) => setPhone(e.target.value)} />
-        <Input className="w-20 shrink-0" placeholder={t('accounts.tel.dahili', 'Dahili')} value={dahili} onChange={(e) => setDahili(e.target.value)} />
-        <Input className="min-w-0 flex-1 basis-28" type="password" placeholder={t('accounts.tel.sip', 'SIP pass')} value={sipPassword} onChange={(e) => setSipPassword(e.target.value)} />
+        <Input className="min-w-0 flex-1 basis-32" aria-label={t('accounts.tel.phoneFor', { defaultValue: 'Phone for {{name}}', name })} placeholder={t('accounts.tel.phone', 'Phone')} value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <Input className="w-20 shrink-0" aria-label={t('accounts.tel.dahiliFor', { defaultValue: 'Dahili for {{name}}', name })} placeholder={t('accounts.tel.dahili', 'Dahili')} value={dahili} onChange={(e) => setDahili(e.target.value)} />
+        <Input className="min-w-0 flex-1 basis-28" type="password" aria-label={t('accounts.tel.sipFor', { defaultValue: 'SIP password for {{name}}', name })} placeholder={t('accounts.tel.sip', 'SIP pass')} value={sipPassword} onChange={(e) => setSipPassword(e.target.value)} />
       </div>
     </div>
   );

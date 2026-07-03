@@ -16,6 +16,8 @@ import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/Dialog';
 import { listTrends, saveTrend, remixTrend, type RemixBrief, type TrendPlatform } from '../../../features/marketing/api/trends.service';
 
+const PLATFORM_LABEL: Record<string, string> = { TIKTOK: 'TikTok', INSTAGRAM: 'Instagram', YOUTUBE: 'YouTube' };
+
 /**
  * Trend → Remix console (Faz 4). Save a trend's ABSTRACT format (never a copy),
  * then adapt it onto your brand as a ready-to-shoot brief — always with a
@@ -48,8 +50,11 @@ export default function TrendsPage() {
               <Card key={tpl.id}>
                 <CardContent className="space-y-2 py-4">
                   <div className="flex items-center justify-between">
-                    <Badge tone="info">{tpl.sourcePlatform}</Badge>
-                    <Badge tone={tpl.riskScore >= 60 ? 'danger' : tpl.riskScore >= 30 ? 'warning' : 'success'}>
+                    <Badge tone="info">{PLATFORM_LABEL[tpl.sourcePlatform] ?? tpl.sourcePlatform}</Badge>
+                    <Badge
+                      tone={tpl.riskScore >= 60 ? 'danger' : tpl.riskScore >= 30 ? 'warning' : 'success'}
+                      title={t('trend.riskTip', 'Copyright / Terms-of-Service risk of reusing this format (0–100). Higher = riskier.')}
+                    >
                       {t('trend.risk', 'risk {{n}}', { n: tpl.riskScore })}
                     </Badge>
                   </div>
@@ -94,42 +99,57 @@ function RemixPanel({ templates }: { templates: { id: string; title: string | nu
         <CardDescription>{t('trend.remix.desc', 'Adapt the abstract format onto your brand — free, no generation credits.')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="w-48 space-y-1.5">
-            <Label>{t('trend.remix.template', 'Trend')}</Label>
+        <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
+          <div className="w-full space-y-1.5 sm:w-48">
+            <Label htmlFor="remix-trend">{t('trend.remix.template', 'Trend')}</Label>
             <Select value={templateId} onValueChange={setTemplateId}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="remix-trend"><SelectValue /></SelectTrigger>
               <SelectContent>{templates.map((tpl) => <SelectItem key={tpl.id} value={tpl.id}>{tpl.title || tpl.id.slice(0, 6)}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div className="w-40 space-y-1.5">
+          <div className="w-full space-y-1.5 sm:w-40">
             <Label htmlFor="brand-name">{t('trend.remix.brand', 'Brand')}</Label>
             <Input id="brand-name" value={brandName} onChange={(e) => setBrandName(e.target.value)} placeholder="Clinic" />
           </div>
-          <div className="min-w-[160px] flex-1 space-y-1.5">
+          <div className="w-full space-y-1.5 sm:min-w-[160px] sm:flex-1">
             <Label htmlFor="brand-product">{t('trend.remix.product', 'Product')}</Label>
             <Input id="brand-product" value={product} onChange={(e) => setProduct(e.target.value)} placeholder={t('trend.remix.productPh', 'e.g. dental implants')} />
           </div>
-          <Button onClick={() => gen.mutate()} disabled={!templateId || !brandName.trim() || gen.isPending}>
-            <Sparkles className="mr-1.5 h-4 w-4" />{gen.isPending ? t('trend.remixing', 'Remixing…') : t('trend.remix.go', 'Remix')}
+          <Button className="w-full sm:w-auto" onClick={() => gen.mutate()} disabled={!templateId || !brandName.trim() || gen.isPending}>
+            <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />{gen.isPending ? t('trend.remixing', 'Remixing…') : t('trend.remix.go', 'Remix')}
           </Button>
         </div>
+
+        {gen.isError && !gen.isPending && (
+          <Callout
+            tone="danger"
+            title={t('trend.remixError', 'Could not build the remix brief')}
+            icon={<ShieldAlert className="h-4 w-4" />}
+          >
+            <div className="flex flex-col gap-2">
+              <p>{t('trend.remixErrorDesc', 'Something went wrong while adapting this format. Please try again.')}</p>
+              <Button variant="secondary" size="sm" className="w-fit" onClick={() => gen.mutate()}>
+                {t('common.retry', 'Retry')}
+              </Button>
+            </div>
+          </Callout>
+        )}
 
         {brief && (
           <div className="space-y-3">
             <div>
-              <p className="text-xs uppercase text-muted-foreground">{t('trend.remix.hook', 'Hook')}</p>
+              <p className="text-micro uppercase text-muted-foreground">{t('trend.remix.hook', 'Hook')}</p>
               <p className="text-sm font-medium">{brief.hook}</p>
             </div>
             <div className="space-y-1.5">
               {brief.scenes.map((s, i) => (
-                <div key={i} className="rounded-md bg-muted/30 px-3 py-2 text-sm">
+                <div key={i} className="rounded-md bg-surface-muted px-3 py-2 text-sm">
                   <span className="font-medium">{s.scene}</span> · <span className="text-muted-foreground">{s.direction}</span>
                 </div>
               ))}
             </div>
             <div>
-              <p className="text-xs uppercase text-muted-foreground">{t('trend.remix.caption', 'Caption')}</p>
+              <p className="text-micro uppercase text-muted-foreground">{t('trend.remix.caption', 'Caption')}</p>
               <p className="text-sm">{brief.captionDraft}</p>
             </div>
             <Callout tone={brief.complianceNote.startsWith('HIGH') ? 'danger' : 'info'} title={t('trend.remix.compliance', 'Compliance')} icon={<ShieldAlert className="h-4 w-4" />}>
@@ -171,11 +191,11 @@ function SaveTrendDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
-            <Label>{t('trend.field.platform', 'Platform')}</Label>
+            <Label htmlFor="tr-platform">{t('trend.field.platform', 'Platform')}</Label>
             <Select value={platform} onValueChange={(v) => setPlatform(v as TrendPlatform)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="tr-platform"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(['TIKTOK', 'INSTAGRAM', 'YOUTUBE'] as TrendPlatform[]).map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                {(['TIKTOK', 'INSTAGRAM', 'YOUTUBE'] as TrendPlatform[]).map((p) => <SelectItem key={p} value={p}>{PLATFORM_LABEL[p] ?? p}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

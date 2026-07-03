@@ -21,7 +21,7 @@ import {
   Badge,
   Card,
   EmptyState,
-  Skeleton,
+  QueryStateBoundary,
   ConfirmDialog,
   Field,
   Input,
@@ -55,7 +55,7 @@ export default function SnippetsPage() {
   const [editing, setEditing] = useState<MessageSnippet | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MessageSnippet | null>(null);
 
-  const { data, isLoading } = useQuery({ queryKey: ['marketing', 'snippets'], queryFn: listSnippets });
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['marketing', 'snippets'], queryFn: listSnippets });
   const snippets: MessageSnippet[] = Array.isArray(data) ? data : [];
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'snippets'] });
 
@@ -134,7 +134,7 @@ export default function SnippetsPage() {
   const handleSubmit: SubmitHandler<FormValues> = (v) => save.mutate(v);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <PageHeader
         title={t('snippets.title', { defaultValue: 'Canned Responses' })}
         description={t('snippets.subtitle', {
@@ -148,52 +148,58 @@ export default function SnippetsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-40" />
-      ) : snippets.length === 0 ? (
-        <EmptyState
-          icon={<MessageSquareText className="h-10 w-10" />}
-          title={t('snippets.empty.title', { defaultValue: 'No snippets yet' })}
-          description={t('snippets.empty.description', {
-            defaultValue: 'Create canned responses to reply faster in the inbox.',
-          })}
-          action={
-            <Button onClick={openCreate} variant="outline">
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {t('snippets.new', { defaultValue: 'New snippet' })}
-            </Button>
-          }
-        />
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {snippets.map((s) => (
-            <Card key={s.id} className="flex flex-col gap-2 p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">{s.title}</p>
-                  <p className="truncate font-mono text-micro text-primary">/{s.shortcut}</p>
+      <QueryStateBoundary
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        errorMessage={t('snippets.error', { defaultValue: 'Could not load snippets. Please try again.' })}
+        retryLabel={t('common.retry', { defaultValue: 'Retry' })}
+      >
+        {snippets.length === 0 ? (
+          <EmptyState
+            icon={<MessageSquareText className="h-10 w-10" />}
+            title={t('snippets.empty.title', { defaultValue: 'No snippets yet' })}
+            description={t('snippets.empty.description', {
+              defaultValue: 'Create canned responses to reply faster in the inbox.',
+            })}
+            action={
+              <Button onClick={openCreate} variant="outline">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {t('snippets.new', { defaultValue: 'New snippet' })}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {snippets.map((s) => (
+              <Card key={s.id} className="flex flex-col gap-2 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{s.title}</p>
+                    <p className="truncate font-mono text-micro text-primary">/{s.shortcut}</p>
+                  </div>
+                  <Badge tone="neutral" size="sm">
+                    {s.ownerId === null ? (
+                      <><Users className="h-3 w-3" aria-hidden="true" /> {t('snippets.shared', { defaultValue: 'Shared' })}</>
+                    ) : (
+                      <><Lock className="h-3 w-3" aria-hidden="true" /> {t('snippets.private', { defaultValue: 'Private' })}</>
+                    )}
+                  </Badge>
                 </div>
-                <Badge tone="neutral" size="sm">
-                  {s.ownerId === null ? (
-                    <><Users className="h-3 w-3" aria-hidden="true" /> {t('snippets.shared', { defaultValue: 'Shared' })}</>
-                  ) : (
-                    <><Lock className="h-3 w-3" aria-hidden="true" /> {t('snippets.private', { defaultValue: 'Private' })}</>
-                  )}
-                </Badge>
-              </div>
-              <p className="line-clamp-3 text-micro text-muted-foreground">{s.body}</p>
-              <div className="mt-auto flex items-center justify-end gap-1 pt-1">
-                <IconButton variant="ghost" size="sm" aria-label={t('common.edit', { defaultValue: 'Edit' })} onClick={() => openEdit(s)}>
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                </IconButton>
-                <IconButton variant="ghost" size="sm" aria-label={t('common.delete', { defaultValue: 'Delete' })} onClick={() => setDeleteTarget(s)}>
-                  <Trash2 className="h-4 w-4 text-danger" aria-hidden="true" />
-                </IconButton>
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
+                <p className="line-clamp-3 text-micro text-muted-foreground">{s.body}</p>
+                <div className="mt-auto flex items-center justify-end gap-1 pt-1">
+                  <IconButton variant="ghost" size="sm" aria-label={t('common.edit', { defaultValue: 'Edit' })} onClick={() => openEdit(s)}>
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                  </IconButton>
+                  <IconButton variant="ghost" size="sm" aria-label={t('common.delete', { defaultValue: 'Delete' })} onClick={() => setDeleteTarget(s)}>
+                    <Trash2 className="h-4 w-4 text-danger" aria-hidden="true" />
+                  </IconButton>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </QueryStateBoundary>
 
       <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setEditing(null); }}>
         <DialogContent className="max-w-lg">

@@ -16,6 +16,17 @@ import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/Dialog';
 import { listPersonas, createPersona, planShots, type ShotPlan, type VideoModel } from '../../../features/marketing/api/personas.service';
 
+/** Human labels for the raw video-model identifiers. */
+const MODEL_LABEL: Record<VideoModel, string> = {
+  seedance: 'Seedance',
+  veo: 'Veo 3',
+  kling: 'Kling',
+  higgsfield: 'Higgsfield',
+};
+
+/** Sentinel for "no persona" so the Radix Select can offer a clearable option. */
+const NONE = '__none__';
+
 /**
  * UGC persona library + shot-plan preview (Faz 2). A persona keeps the same
  * face/outfit consistent across every shot; the preview shows exactly how the
@@ -46,14 +57,14 @@ export default function PersonasPage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {q.data.map((p) => (
               <Card key={p.id}>
-                <CardContent className="space-y-2 py-4">
+                <CardContent className="space-y-2 p-4">
                   <div className="flex items-center justify-between">
                     <span className="font-medium">{p.name}</span>
-                    {p.lockedSeed != null && <Badge tone="neutral"><Hash className="mr-1 h-3 w-3" />{p.lockedSeed}</Badge>}
+                    {p.lockedSeed != null && <Badge tone="neutral"><Hash className="mr-1 h-3 w-3" aria-hidden="true" />{p.lockedSeed}</Badge>}
                   </div>
                   {p.description && <p className="line-clamp-2 text-sm text-muted-foreground">{p.description}</p>}
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <ImageIcon className="h-3.5 w-3.5" />
+                    <ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />
                     {t('persona.refCount', '{{n}} reference image(s)', { n: p.referenceImageUrls.length })}
                   </div>
                 </CardContent>
@@ -73,12 +84,12 @@ export default function PersonasPage() {
 function ShotPlanPreview({ personas }: { personas: { id: string; name: string }[] }) {
   const { t } = useTranslation('marketing');
   const [product, setProduct] = useState('');
-  const [personaId, setPersonaId] = useState<string>('');
+  const [personaId, setPersonaId] = useState<string>(NONE);
   const [model, setModel] = useState<VideoModel>('seedance');
   const [plan, setPlan] = useState<ShotPlan | null>(null);
 
   const gen = useMutation({
-    mutationFn: () => planShots({ brief: { product }, model, ...(personaId ? { personaId } : {}) }),
+    mutationFn: () => planShots({ brief: { product }, model, ...(personaId !== NONE ? { personaId } : {}) }),
     onSuccess: setPlan,
     onError: () => toast.error(t('persona.planError', 'Could not build the shot plan')),
   });
@@ -90,37 +101,47 @@ function ShotPlanPreview({ personas }: { personas: { id: string; name: string }[
         <CardDescription>{t('persona.plan.desc', 'Storyboard a video from a product + persona — free, no generation credits used.')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[200px] flex-1 space-y-1.5">
+        <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
+          <div className="w-full space-y-1.5 sm:min-w-[200px] sm:flex-1">
             <Label htmlFor="plan-product">{t('persona.plan.product', 'Product / offer')}</Label>
             <Input id="plan-product" value={product} onChange={(e) => setProduct(e.target.value)} placeholder={t('persona.plan.productPh', 'e.g. dental implants')} />
           </div>
-          <div className="w-40 space-y-1.5">
-            <Label>{t('persona.plan.persona', 'Persona')}</Label>
+          <div className="w-full space-y-1.5 sm:w-40">
+            <Label htmlFor="plan-persona">{t('persona.plan.persona', 'Persona')}</Label>
             <Select value={personaId} onValueChange={setPersonaId}>
-              <SelectTrigger><SelectValue placeholder={t('persona.plan.none', 'None')} /></SelectTrigger>
+              <SelectTrigger id="plan-persona"><SelectValue placeholder={t('persona.plan.none', 'None')} /></SelectTrigger>
               <SelectContent>
+                <SelectItem value={NONE}>{t('persona.plan.none', 'None')}</SelectItem>
                 {personas.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-          <div className="w-36 space-y-1.5">
-            <Label>{t('persona.plan.model', 'Model')}</Label>
+          <div className="w-full space-y-1.5 sm:w-36">
+            <Label htmlFor="plan-model">{t('persona.plan.model', 'Model')}</Label>
             <Select value={model} onValueChange={(v) => setModel(v as VideoModel)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="plan-model"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(['seedance', 'veo', 'kling', 'higgsfield'] as VideoModel[]).map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                {(['seedance', 'veo', 'kling', 'higgsfield'] as VideoModel[]).map((m) => <SelectItem key={m} value={m}>{MODEL_LABEL[m]}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={() => gen.mutate()} disabled={!product.trim() || gen.isPending}>
-            <Sparkles className="mr-1.5 h-4 w-4" />{gen.isPending ? t('persona.planning', 'Planning…') : t('persona.plan.go', 'Storyboard')}
+          <Button className="w-full sm:w-auto" onClick={() => gen.mutate()} disabled={!product.trim() || gen.isPending}>
+            <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />{gen.isPending ? t('persona.planning', 'Planning…') : t('persona.plan.go', 'Storyboard')}
           </Button>
         </div>
 
+        {gen.isError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
+            <p className="text-sm text-muted-foreground">{t('persona.planError', 'Could not build the shot plan')}</p>
+            <Button variant="secondary" size="sm" onClick={() => gen.mutate()} disabled={gen.isPending}>
+              {t('common.tryAgain', 'Try again')}
+            </Button>
+          </div>
+        )}
+
         {plan && (
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">{t('persona.plan.result', '{{n}} shots · {{d}}s · model {{m}}', { n: plan.shots.length, d: plan.durationSec, m: plan.model })}</p>
+            <p className="text-sm text-muted-foreground">{t('persona.plan.result', '{{n}} shots · {{d}}s · model {{m}}', { n: plan.shots.length, d: plan.durationSec, m: MODEL_LABEL[plan.model] })}</p>
             {plan.shots.map((s) => (
               <div key={s.ord} className="rounded-md border border-border p-3">
                 <div className="flex items-center justify-between">
@@ -129,7 +150,7 @@ function ShotPlanPreview({ personas }: { personas: { id: string; name: string }[
                 </div>
                 <p className="mt-1 text-sm italic text-muted-foreground">“{s.voiceover}”</p>
                 <p className="mt-1 text-xs text-muted-foreground">{s.prompt}</p>
-                {s.reference && <Badge tone="success" className="mt-2"><Hash className="mr-1 h-3 w-3" />{t('persona.plan.locked', 'identity-locked')}</Badge>}
+                {s.reference && <Badge tone="success" className="mt-2"><Hash className="mr-1 h-3 w-3" aria-hidden="true" />{t('persona.plan.locked', 'identity-locked')}</Badge>}
               </div>
             ))}
           </div>

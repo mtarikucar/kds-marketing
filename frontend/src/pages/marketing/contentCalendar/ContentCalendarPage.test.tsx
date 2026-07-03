@@ -26,6 +26,6 @@ describe('ContentCalendarPage', () => {
     ]);
     renderPage();
     expect(await screen.findByText('Hello reel')).toBeInTheDocument();
-    expect(screen.getByText('SCHEDULED')).toBeInTheDocument();
+    expect(screen.getByText('Scheduled')).toBeInTheDocument();
   });
 });

@@ -27,6 +27,6 @@ describe('TrendsPage', () => {
     (svc.listTrends as any).mockResolvedValue([{ id: 't1', sourcePlatform: 'TIKTOK', sourceUrl: null, title: 'Price hook', hookPattern: null, pacingNote: null, captionPattern: null, riskScore: 80, status: 'ACTIVE', createdAt: '' }]);
     renderPage();
     expect((await screen.findAllByText('Price hook')).length).toBeGreaterThan(0);
-    expect(screen.getByText('TIKTOK')).toBeInTheDocument();
+    expect(screen.getByText('TikTok')).toBeInTheDocument();
   });
 });

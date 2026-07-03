@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Copy, Check } from 'lucide-react';
+import { IconButton } from '@/components/ui';
 
 /** A read-only value (webhook URL, embed snippet, bridge URL) with copy-to-clipboard. */
 export function CopyField({
@@ -36,14 +37,19 @@ export function CopyField({
         >
           {value}
         </code>
-        <button
-          type="button"
+        <IconButton
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
           onClick={copy}
-          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-surface hover:text-foreground"
           aria-label={t('common.copy', 'Copy')}
         >
-          {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-        </button>
+          {copied ? (
+            <Check className="h-4 w-4 text-success" aria-hidden="true" />
+          ) : (
+            <Copy className="h-4 w-4" aria-hidden="true" />
+          )}
+        </IconButton>
       </div>
     </div>
   );

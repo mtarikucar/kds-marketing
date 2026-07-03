@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Callout } from '@/components/ui/Callout';
 import { searchBrandBrain, reindexBrandBrain, type Citation } from '../../../features/marketing/api/brandBrain.service';
 
 /**
@@ -61,11 +62,40 @@ export default function BrandBrainPage() {
         </Button>
       </div>
 
-      {results === null ? (
+      {reindex.isError && (
+        <Callout
+          tone="danger"
+          title={t('brain.reindexError.title', 'Reindex failed')}
+        >
+          <div className="flex flex-col gap-2">
+            <p>{t('brain.reindexError.desc', 'We couldn’t rebuild the search index. Your existing docs are unaffected — please try again.')}</p>
+            <div>
+              <Button size="sm" variant="secondary" onClick={() => reindex.mutate()} disabled={reindex.isPending}>
+                <RefreshCw className={`mr-1.5 h-4 w-4 ${reindex.isPending ? 'animate-spin' : ''}`} aria-hidden="true" />
+                {t('common.retry', 'Try again')}
+              </Button>
+            </div>
+          </div>
+        </Callout>
+      )}
+
+      {search.isError ? (
+        <EmptyState
+          icon={<Search className="h-6 w-6" />}
+          title={t('brain.searchError.title', 'Search failed')}
+          description={t('brain.searchError.desc', 'Something went wrong running that search. Please try again.')}
+          action={
+            <Button onClick={() => search.mutate()} disabled={search.isPending}>
+              <Search className="mr-1.5 h-4 w-4" aria-hidden="true" />
+              {t('common.retry', 'Try again')}
+            </Button>
+          }
+        />
+      ) : results === null ? (
         <EmptyState
           icon={<BrainCircuit className="h-6 w-6" />}
           title={t('brain.start.title', 'Ask your Brand Brain')}
-          description={t('brain.start.desc', 'Every answer is grounded in your knowledge docs and cites its source. Reindex after adding docs so they’re searchable.')}
+          description={t('brain.start.desc', 'Every answer is grounded in your knowledge docs and cites its source. Search is keyword-based until an admin configures an embedding provider for smarter, meaning-based matches. Reindex after adding docs so they’re searchable.')}
         />
       ) : results.length === 0 ? (
         <EmptyState
@@ -80,10 +110,18 @@ export default function BrandBrainPage() {
               <CardContent className="space-y-1.5 py-3.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1.5 text-sm font-medium">
-                    <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                    <FileText className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                     {c.docTitle || t('brain.untitled', 'Untitled source')}
                   </span>
-                  {c.score > 0 && <Badge tone="neutral">{c.score.toFixed(2)}</Badge>}
+                  {c.score > 0 && (
+                    <Badge
+                      tone="neutral"
+                      title={t('brain.scoreTip', 'Relevance score — how closely this passage matches your query')}
+                      aria-label={t('brain.scoreAria', 'Relevance {{n}}', { n: c.score.toFixed(2) })}
+                    >
+                      {c.score.toFixed(2)}
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-muted-foreground">{c.snippet}</p>
               </CardContent>

@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/Select';
+import { Skeleton } from '@/components/ui/Skeleton';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { CopyField } from './CopyField';
 
@@ -42,7 +43,7 @@ export function WebchatChannelDialog({
   const [greeting, setGreeting] = useState('');
   const [created, setCreated] = useState<{ id: string; widgetKey: string | null } | null>(null);
 
-  const { data: agents } = useQuery<{ id: string; name: string }[]>({
+  const { data: agents, isLoading: agentsLoading, isError: agentsError } = useQuery<{ id: string; name: string }[]>({
     queryKey: ['marketing', 'ai', 'agents'],
     queryFn: () => marketingApi.get('/ai/agents').then((r) => r.data),
     enabled: open,
@@ -92,30 +93,45 @@ export function WebchatChannelDialog({
 
         {!created ? (
           <div className="space-y-3">
-            <Input placeholder={t('accounts.webchat.name', 'Widget name (shown in the header)')} value={name} onChange={(e) => setName(e.target.value)} />
+            <Input
+              placeholder={t('accounts.webchat.name', 'Widget name (shown in the header)')}
+              aria-label={t('accounts.webchat.name', 'Widget name (shown in the header)')}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">{t('accounts.webchat.agent', 'Answering AI agent')}</label>
+              <label htmlFor="webchat-agent" className="text-sm font-medium text-foreground">{t('accounts.webchat.agent', 'Answering AI agent')}</label>
               <Select value={agentId} onValueChange={setAgentId}>
-                <SelectTrigger>
+                <SelectTrigger id="webchat-agent">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NONE}>{t('accounts.webchat.noAgent', '— none (manual inbox only) —')}</SelectItem>
+                  {agentsLoading && (
+                    <div className="px-2 py-1.5">
+                      <Skeleton className="h-4 w-32" />
+                    </div>
+                  )}
                   {agents?.map((a) => (
                     <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {agentId === NONE && (
+              {agentsError && (
+                <p className="text-caption text-danger">
+                  {t('accounts.webchat.agentsError', "Couldn't load agents — the list may be incomplete.")}
+                </p>
+              )}
+              {agentId === NONE && !agentsLoading && (
                 <p className="flex items-center gap-1.5 text-caption text-warning">
-                  <AlertTriangle className="h-3.5 w-3.5" />
+                  <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('accounts.webchat.noAgentWarn', 'Without an agent, messages land in your inbox but nobody auto-replies.')}
                 </p>
               )}
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">{t('accounts.webchat.greeting', 'Greeting (optional)')}</label>
-              <Textarea rows={2} value={greeting} onChange={(e) => setGreeting(e.target.value)} placeholder={t('accounts.webchat.greetingPh', 'Hi! How can we help?')} />
+              <label htmlFor="webchat-greeting" className="text-sm font-medium text-foreground">{t('accounts.webchat.greeting', 'Greeting (optional)')}</label>
+              <Textarea id="webchat-greeting" rows={2} value={greeting} onChange={(e) => setGreeting(e.target.value)} placeholder={t('accounts.webchat.greetingPh', 'Hi! How can we help?')} />
             </div>
           </div>
         ) : (

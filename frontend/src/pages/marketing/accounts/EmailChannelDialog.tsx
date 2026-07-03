@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Field } from '@/components/ui/Field';
+import { Callout } from '@/components/ui/Callout';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { CopyField } from './CopyField';
 
@@ -109,31 +111,59 @@ export function EmailChannelDialog({
 
         {!created ? (
           <div className="space-y-4">
-            <section className="space-y-2">
+            <section className="space-y-3">
               <p className="text-sm font-medium text-foreground">{t('accounts.email.sending', 'Sending (SMTP)')}</p>
-              <Input placeholder={t('accounts.channelName', 'Name')} value={form.name} onChange={(e) => set('name', e.target.value)} />
+              <Field label={t('accounts.channelName', 'Name')}>
+                {({ id }) => (
+                  <Input id={id} value={form.name} onChange={(e) => set('name', e.target.value)} />
+                )}
+              </Field>
               <div className="flex gap-2">
-                <Input className="flex-1" placeholder={t('accounts.email.smtpHost', 'SMTP host')} value={form.smtpHost} onChange={(e) => set('smtpHost', e.target.value)} />
-                <Input className="w-24" placeholder={t('accounts.email.smtpPort', 'Port')} value={form.smtpPort} onChange={(e) => set('smtpPort', e.target.value)} />
+                <Field label={t('accounts.email.smtpHost', 'SMTP host')} className="flex-1">
+                  {({ id }) => (
+                    <Input id={id} value={form.smtpHost} onChange={(e) => set('smtpHost', e.target.value)} />
+                  )}
+                </Field>
+                <Field label={t('accounts.email.smtpPort', 'Port')} className="w-24">
+                  {({ id }) => (
+                    <Input id={id} value={form.smtpPort} onChange={(e) => set('smtpPort', e.target.value)} />
+                  )}
+                </Field>
               </div>
-              <Input placeholder={t('accounts.email.smtpUser', 'SMTP username')} value={form.smtpUser} onChange={(e) => set('smtpUser', e.target.value)} />
-              <Input type="password" placeholder={t('accounts.email.smtpPass', 'SMTP password')} value={form.smtpPass} onChange={(e) => set('smtpPass', e.target.value)} />
-              <Input type="email" placeholder={t('accounts.email.fromEmail', 'From email (optional)')} value={form.fromEmail} onChange={(e) => set('fromEmail', e.target.value)} />
+              <Field label={t('accounts.email.smtpUser', 'SMTP username')}>
+                {({ id }) => (
+                  <Input id={id} value={form.smtpUser} onChange={(e) => set('smtpUser', e.target.value)} />
+                )}
+              </Field>
+              <Field label={t('accounts.email.smtpPass', 'SMTP password')}>
+                {({ id }) => (
+                  <Input id={id} type="password" value={form.smtpPass} onChange={(e) => set('smtpPass', e.target.value)} />
+                )}
+              </Field>
+              <Field label={t('accounts.email.fromEmail', 'From email (optional)')}>
+                {({ id }) => (
+                  <Input id={id} type="email" value={form.fromEmail} onChange={(e) => set('fromEmail', e.target.value)} />
+                )}
+              </Field>
             </section>
 
-            <section className="space-y-2">
+            <section className="space-y-3">
               <p className="text-sm font-medium text-foreground">{t('accounts.email.receiving', 'Receiving replies')}</p>
-              <Input type="email" placeholder={t('accounts.email.inboundAddress', 'Inbound address (the one your provider parses)')} value={form.inboundAddress} onChange={(e) => set('inboundAddress', e.target.value)} />
-              <p className="text-caption text-muted-foreground">
-                {t('accounts.email.receivingHint', 'This is the address whose inbound mail your provider (Mailgun/SendGrid/Postmark…) forwards to us. The webhook URL to paste there appears after you save.')}
-              </p>
+              <Field
+                label={t('accounts.email.inboundAddress', 'Inbound address (the one your provider parses)')}
+                hint={t('accounts.email.receivingHint', 'This is the address whose inbound mail your provider (Mailgun/SendGrid/Postmark…) forwards to us. The webhook URL to paste there appears after you save.')}
+              >
+                {({ id, describedBy }) => (
+                  <Input id={id} type="email" aria-describedby={describedBy} value={form.inboundAddress} onChange={(e) => set('inboundAddress', e.target.value)} />
+                )}
+              </Field>
             </section>
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 p-2 text-sm text-foreground">
-              <CheckCircle2 className="h-4 w-4 text-success" /> {t('accounts.email.sendingDone', 'Sending is configured.')}
-            </div>
+            <Callout tone="success" icon={<CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />}>
+              {t('accounts.email.sendingDone', 'Sending is configured.')}
+            </Callout>
             {created.webhookUrl && (
               <CopyField
                 label={t('accounts.email.webhookLabel', 'Inbound webhook URL — paste this into your email provider’s inbound-parse route')}
@@ -148,14 +178,18 @@ export function EmailChannelDialog({
                   ? t('accounts.email.inboundNoAddr', 'Inbound signing key is set, but no inbound address was configured — replies can’t be matched to this channel.')
                   : t('accounts.email.inboundOn', 'Inbound signing key is configured — replies will flow.');
               return (
-                <div
-                  className={`flex items-center gap-2 rounded-lg border p-2 text-sm ${
-                    ready ? 'border-success/30 bg-success/10 text-foreground' : 'border-warning/30 bg-warning/10 text-foreground'
-                  }`}
+                <Callout
+                  tone={ready ? 'success' : 'warning'}
+                  icon={
+                    ready ? (
+                      <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-warning" aria-hidden="true" />
+                    )
+                  }
                 >
-                  {ready ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
                   {msg}
-                </div>
+                </Callout>
               );
             })()}
             <Button variant="outline" size="sm" onClick={() => verify.mutate(created.id)} loading={verify.isPending}>

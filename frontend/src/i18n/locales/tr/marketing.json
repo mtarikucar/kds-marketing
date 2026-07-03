@@ -124,7 +124,19 @@
       "webhookLabel": "Gelen webhook URL'si — e-posta sağlayıcının gelen-ayrıştırma rotasına yapıştır",
       "inboundOn": "Gelen imza anahtarı ayarlı — yanıtlar akacak.",
       "inboundOff": "Gelen henüz aktif değil — bir yönetici sunucuda EMAIL_INBOUND_SECRET ayarlamalı.",
-      "testSmtp": "SMTP bağlantısını test et"
+      "testSmtp": "SMTP bağlantısını test et",
+      "sendingSaved": "Gönderim kuruldu — şimdi almayı tamamlayın",
+      "smtpFailed": "SMTP kontrolü başarısız oldu",
+      "smtpOk": "SMTP doğrulandı",
+      "smtpHost": "SMTP sunucusu",
+      "smtpPort": "Port",
+      "smtpUser": "SMTP kullanıcı adı",
+      "smtpPass": "SMTP parolası",
+      "fromEmail": "Gönderen e-posta (isteğe bağlı)",
+      "inboundAddress": "Gelen adres (sağlayıcınızın ayrıştırdığı adres)",
+      "receivingHint": "Bu, gelen postasını sağlayıcınızın (Mailgun/SendGrid/Postmark…) bize ilettiği adrestir. Oraya yapıştıracağınız webhook URL'si, kaydettikten sonra görünür.",
+      "sendingDone": "Gönderim yapılandırıldı.",
+      "inboundNoAddr": "Gelen imzalama anahtarı ayarlı, ancak hiçbir gelen adres yapılandırılmadı — yanıtlar bu kanalla eşleştirilemez."
     },
     "webchat": {
       "title": "Web sohbet",
@@ -134,7 +146,11 @@
       "noAgentWarn": "Ajan olmadan mesajlar gelen kutusuna düşer ama kimse otomatik yanıtlamaz.",
       "greeting": "Karşılama (opsiyonel)",
       "embedLabel": "Her sayfada </body> etiketinden hemen önce yapıştır",
-      "preview": "Widget'ı önizle →"
+      "preview": "Widget'ı önizle →",
+      "created": "Web sohbeti oluşturuldu",
+      "name": "Widget adı (başlıkta gösterilir)",
+      "greetingPh": "Merhaba! Size nasıl yardımcı olabiliriz?",
+      "ready": "Web sohbetiniz hazır. Sitenize ekleyin:"
     },
     "tel": {
       "title": "Telefon (Netsantral)",
@@ -148,7 +164,26 @@
       "webphone": "Tarayıcı içi web telefon (opsiyonel)",
       "reps": "Kim arayabilir",
       "repsHint": "Her temsilciye kendi telefonu (köprü arama — hemen çalışır) ve/veya dahili + SIP parolası (web telefon) ver.",
-      "test": "Kimlik bilgilerini doğrula"
+      "test": "Kimlik bilgilerini doğrula",
+      "saved": "Telefon sistemi kaydedildi",
+      "saveFailed": "Kaydedilemedi",
+      "testOk": "Kimlik bilgileri NetGSM ile doğrulandı",
+      "testFailed": "Doğrulama başarısız oldu — kimlik bilgilerini kontrol edin",
+      "dialogDesc": "NetGSM Netsantral API kimlik bilgilerinizi ve 0850 trunk'ını girin. Tarayıcı içi webphone için WebRTC URL'lerini ekleyin ve aşağıda her temsilciye bir telefon veya dahili tanımlayın.",
+      "username": "NetGSM kullanıcı adı (abone no)",
+      "usernameSet": "NetGSM kullanıcı adı (kaydedildi — korumak için boş bırakın)",
+      "password": "API alt kullanıcı parolası",
+      "passwordSet": "API parolası (kaydedildi — korumak için boş bırakın)",
+      "trunk": "Giden trunk / arayan kimliği (0850…)",
+      "wssUrl": "WebRTC WSS URL'si",
+      "sipDomain": "SIP alan adı",
+      "repSaved": "Temsilci güncellendi",
+      "phone": "Telefon",
+      "dahili": "Dahili",
+      "sip": "SIP parolası",
+      "phoneFor": "{{name}} için telefon",
+      "dahiliFor": "{{name}} için dahili",
+      "sipFor": "{{name}} için SIP parolası"
     },
     "voice": {
       "title": "AI Sesli",
@@ -156,7 +191,12 @@
       "available": "Kullanılabilir",
       "explain": "Aşağıdaki köprü URL'sini bir ElevenLabs / VAPI / Retell sesli ajanına \"Custom LLM\" olarak ver ya da NetGSM çağrılarını IVR'a yönlendir. AI ajanının kişiliği + bilgisi yanıtları sürer.",
       "bridge": "AI ses köprüsü (ElevenLabs / VAPI / Retell)",
-      "ivr": "NetGSM IVR"
+      "ivr": "NetGSM IVR",
+      "on": "Hazır",
+      "needsEnv": "Sunucu anahtarı gerekli",
+      "bridgeUrl": "Custom-LLM köprü URL'si ({channelId} yerine Ses kanalınızın id'sini yazın)",
+      "ivrUrl": "NetGSM IVR webhook URL'si",
+      "opsNote": "Bunlar devreye girmeden önce bir yöneticinin VOICE_AI_BRIDGE_SECRET değerini ayarlaması (ve aramalar için NetGSM SIP-trunk / AI eklentisini sağlaması) gerekir."
     }
   },
   "welcome": {
@@ -332,7 +372,8 @@
     "confirm": {
       "deleteTitle": "Snippet'i sil",
       "deleteBody": "Bu snippet'i kalıcı olarak siler."
-    }
+    },
+    "error": "Snippet'ler yüklenemedi. Lütfen tekrar deneyin."
   },
   "nav": {
     "pinned": "Sabitlenenler",
@@ -474,7 +515,8 @@
     "copyFailed": "Kopyalanamadı",
     "done": "Tamam",
     "saving": "Kaydediliyor…",
-    "retry": "Tekrar dene"
+    "retry": "Tekrar dene",
+    "tryAgain": "Tekrar dene"
   },
   "validation": {
     "required": "Zorunlu",
@@ -2640,7 +2682,9 @@
       "total": "Aylık bütçe",
       "spent": "Şu ana kadar harcanan",
       "reserve": "Keşif rezervi",
-      "scope": "Kapsam"
+      "scope": "Kapsam",
+      "reserveTip": "Bütçenin öğrenme için ayrılan payı — kanıtlanmış kanallarda asla harcanmaz.",
+      "scopeTip": "Bütünsel mod her kanalı ve görüşmeyi bütçeye göre yönetir; Reklamlar modu ise otopilotu yalnızca ücretli reklam harcamasıyla sınırlar."
     },
     "scope": {
       "adOnly": "Yalnızca reklam",
@@ -2675,7 +2719,8 @@
       "channel": "Kanal",
       "planned": "Planlanan",
       "spent": "Harcanan",
-      "mroas": "Marjinal ROAS"
+      "mroas": "Marjinal ROAS",
+      "mroasTip": "Marjinal ROAS — şu anda bu kanala harcanan her ek 1 TRY için dönen gelir."
     },
     "proposal": {
       "title": "Gölge öneri",
@@ -2717,7 +2762,21 @@
       "mmmHint": "Kanal başına azalan-getiri eğrileri uydurur ve marjinal getiriyi eşitler."
     },
     "appliedLive": "Onaylandı ve reklam platformuna canlı gönderildi",
-    "appliedPlan": "Onaylandı ve plana işlendi (canlı göndermek için bir reklam platformu bağlayın)"
+    "appliedPlan": "Onaylandı ve plana işlendi (canlı göndermek için bir reklam platformu bağlayın)",
+    "killOnToast": "Acil durdurma açık — tüm otonomi duraklatıldı",
+    "killOffToast": "Acil durdurma kapalı — otonomi yeniden başladı",
+    "targetRoasTip": "Otopilotun hedeflediği reklam harcaması getirisi (ROAS); bunun altındaki kanallar kanıtlanmış havuzdan fonlanmaz.",
+    "killConfirm": {
+      "title": "Acil durdurma açılsın mı?",
+      "desc": "Bu, tüm otonom faaliyeti durdurur — tekrar açana kadar hiçbir öneri veya harcama yapılmaz.",
+      "confirm": "Acil durdurmayı aç"
+    },
+    "proposeNowTip": "Yalnızca bir simülasyon çalıştırır — onayınız için yeniden dağıtım önerir. Hiçbir para hareketi olmaz.",
+    "approveConfirm": {
+      "title": "Bu yeniden dağıtım devreye alınsın mı?",
+      "desc": "Onaylamak planı işler ve bağlı olan yerlerde yeni bütçeyi reklam platformunda canlıya alır — gerçek harcama hareket eder ve geri alınamaz.",
+      "confirm": "Onayla ve canlıya al"
+    }
   },
   "persona": {
     "title": "UGC Personaları",
@@ -2794,7 +2853,9 @@
       "hook": "Kanca kalıbı",
       "hookPh": "[ürün] çok mu pahalı sanıyorsunuz?",
       "risk": "Kopya/Kullanım Koşulları riski (0–100)"
-    }
+    },
+    "riskTip": "Bu formatı yeniden kullanmanın telif hakkı / Hizmet Şartları riski (0–100). Yüksek = daha riskli.",
+    "remixErrorDesc": "Bu format uyarlanırken bir sorun oluştu. Lütfen tekrar deneyin."
   },
   "brain": {
     "searchError": "Arama başarısız oldu",
@@ -2814,7 +2875,9 @@
       "title": "Eşleşme yok",
       "desc": "Bilgi tabanınızda eşleşen bir şey bulunamadı. Farklı kelimeler deneyin ya da daha fazla belge ekleyip yeniden indeksleyin."
     },
-    "untitled": "Başlıksız kaynak"
+    "untitled": "Başlıksız kaynak",
+    "scoreTip": "İlgililik puanı — bu bölümün sorgunuzla ne kadar örtüştüğü",
+    "scoreAria": "İlgililik {{n}}"
   },
   "contentCal": {
     "title": "İçerik Takvimi",
