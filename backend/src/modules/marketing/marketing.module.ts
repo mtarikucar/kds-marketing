@@ -166,6 +166,10 @@ import { BudgetAutopilotService } from './budget/budget-autopilot.service';
 import { BudgetExecutorService } from './budget/budget-executor.service';
 import { BudgetManagementService } from './budget/budget-management.service';
 import { ConversationSpendService } from './budget/conversation-spend.service';
+import { ResearchSpendService } from './budget/research-spend.service';
+import { FirecrawlProvider } from './research/providers/firecrawl.provider';
+import { ApifyProvider } from './research/providers/apify.provider';
+import { ResearchSourcesService } from './research/providers/research-sources.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
 import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { PerformanceLoopService } from './budget/performance-loop.service';
@@ -710,6 +714,10 @@ import { WalletService } from './wallet/wallet.service';
     BudgetExecutorService,
     BudgetManagementService,
     ConversationSpendService,
+    ResearchSpendService,
+    FirecrawlProvider,
+    ApifyProvider,
+    ResearchSourcesService,
     BudgetPacerService,
     BudgetAutopilotCron,
     PerformanceLoopService,

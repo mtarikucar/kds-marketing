@@ -20,6 +20,11 @@ export const AI_CREDIT_COSTS = {
   // the reserve; these are the registered floor + tripwire-pinned cost decision.
   'media.image.generate': { credits: 3, tier: 'default' as AiModelTier },
   'media.video.generate': { credits: 15, tier: 'default' as AiModelTier },
+  // AI Research engine — one prospect-research agent run (multi-step Opus tool-loop
+  // over firecrawl/apify sources). The reserve is a per-run ceiling; the loop's
+  // hard caps bound actual spend. firecrawl/apify money is metered separately via
+  // the RESEARCH SpendLedger channel.
+  'research.qualify': { credits: 3, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

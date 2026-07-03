@@ -15,7 +15,8 @@ export type SpendChannel =
   | 'CONTENT'
   | 'SMS'
   | 'VOICE'
-  | 'WHATSAPP';
+  | 'WHATSAPP'
+  | 'RESEARCH';
 
 export type SpendReason =
   | 'AD_WRITE'
@@ -23,6 +24,7 @@ export type SpendReason =
   | 'VOICE'
   | 'WHATSAPP'
   | 'CONTENT_GEN'
+  | 'RESEARCH'
   | 'REFUND'
   | 'ADJUST';
 

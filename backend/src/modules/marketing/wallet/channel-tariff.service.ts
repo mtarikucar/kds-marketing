@@ -2,14 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 
-export type TariffChannel = 'SMS' | 'WHATSAPP' | 'VOICE' | 'CONTENT';
+export type TariffChannel = 'SMS' | 'WHATSAPP' | 'VOICE' | 'CONTENT' | 'RESEARCH';
 export type TariffUnitType =
   | 'SMS_SEGMENT'
   | 'WA_MARKETING'
   | 'WA_UTILITY'
   | 'WA_SERVICE'
   | 'VOICE_MINUTE'
-  | 'FAL_CREDIT';
+  | 'FAL_CREDIT'
+  | 'FIRECRAWL_PAGE'
+  | 'APIFY_RUN'
+  | 'RESEARCH_LEAD';
 
 export interface ResolvedTariff {
   unitCost: Prisma.Decimal;
