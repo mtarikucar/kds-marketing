@@ -22,6 +22,7 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { BudgetManagementService } from '../budget/budget-management.service';
 import { BudgetAutopilotService } from '../budget/budget-autopilot.service';
+import { BudgetExecutorService } from '../budget/budget-executor.service';
 
 const CHANNELS = ['META', 'TIKTOK', 'GOOGLE', 'LINKEDIN', 'CONTENT', 'SMS', 'VOICE', 'WHATSAPP'];
 
@@ -31,6 +32,7 @@ class UpsertBudgetDto {
   @IsOptional() @IsString() @MaxLength(8) currency?: string;
   @IsOptional() @IsIn(['HOLISTIC', 'AD_ONLY']) scope?: 'HOLISTIC' | 'AD_ONLY';
   @IsOptional() @IsInt() @Min(0) @Max(90) explorationPct?: number;
+  @IsOptional() @IsIn(['MARGINAL', 'BANDIT', 'MMM']) allocatorStage?: 'MARGINAL' | 'BANDIT' | 'MMM';
   @IsOptional() @IsNumber() @Min(0) targetRoas?: number;
   @IsOptional() @IsNumber() @Min(0) targetCac?: number;
 }
@@ -62,6 +64,7 @@ export class MarketingBudgetController {
   constructor(
     private readonly budgets: BudgetManagementService,
     private readonly autopilot: BudgetAutopilotService,
+    private readonly executor: BudgetExecutorService,
   ) {}
 
   @Get()
@@ -120,5 +123,16 @@ export class MarketingBudgetController {
   @RequirePermission('reports.read')
   runs(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.budgets.listRuns(a.workspaceId, id);
+  }
+
+  // Apply an APPROVED budget reallocation: commit it to the internal plan and
+  // push a live daily-budget change to any write-capable ad platform (Meta,
+  // cred-gated). Nothing moves money without credentials + this explicit approval.
+  @Post('reallocations/:approvalId/apply')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'growth_budget.reallocation.apply', resourceType: 'approval_request', resourceIdParam: 'approvalId' })
+  applyReallocation(@CurrentMarketingUser() a: MarketingUserPayload, @Param('approvalId') approvalId: string) {
+    return this.executor.apply(a.workspaceId, approvalId, a.id);
   }
 }

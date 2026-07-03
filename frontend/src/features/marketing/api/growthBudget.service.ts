@@ -8,6 +8,7 @@
 import marketingApi from './marketingApi';
 
 export type BudgetScope = 'HOLISTIC' | 'AD_ONLY';
+export type AllocatorStage = 'MARGINAL' | 'BANDIT' | 'MMM';
 export type BudgetStatus = 'ACTIVE' | 'PAUSED' | 'KILLED';
 export type SpendChannel = 'META' | 'TIKTOK' | 'GOOGLE' | 'LINKEDIN' | 'CONTENT' | 'SMS' | 'VOICE' | 'WHATSAPP';
 
@@ -31,6 +32,7 @@ export interface GrowthBudget {
   status: BudgetStatus;
   killSwitch: boolean;
   explorationPct: number;
+  allocatorStage: AllocatorStage;
   targetRoas: string | null;
   targetCac: string | null;
   createdAt: string;
@@ -44,6 +46,7 @@ export interface UpsertBudgetPayload {
   currency?: string;
   scope?: BudgetScope;
   explorationPct?: number;
+  allocatorStage?: AllocatorStage;
   targetRoas?: number;
   targetCac?: number;
 }
@@ -110,6 +113,20 @@ export const getGrowthBudget = (id: string) =>
 
 export const upsertGrowthBudget = (payload: UpsertBudgetPayload) =>
   marketingApi.post<GrowthBudget>('/budget', payload).then((r) => r.data);
+
+export interface ApplyReallocationResult {
+  status: 'APPLIED' | 'NO_LIVE_WRITE' | 'ALREADY_APPLIED';
+  runId?: string;
+  applied: number;
+  skipped: number;
+}
+
+/** Apply an APPROVED budget reallocation: commit it to the plan + push live to
+ *  any write-capable ad platform (Meta, cred-gated). */
+export const applyReallocation = (approvalId: string) =>
+  marketingApi
+    .post<ApplyReallocationResult>(`/budget/reallocations/${approvalId}/apply`)
+    .then((r) => r.data);
 
 export const setBudgetKillSwitch = (id: string, on: boolean) =>
   marketingApi.patch<GrowthBudget>(`/budget/${id}/kill`, { on }).then((r) => r.data);

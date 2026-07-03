@@ -2,7 +2,9 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { BudgetPerformanceSource } from './budget-performance.source';
-import { allocate, AllocationPlan } from './marginal-allocator.util';
+import { allocate as allocateMarginal, AllocationPlan } from './marginal-allocator.util';
+import { allocateBandit } from './bandit-allocator.util';
+import { allocate as allocateMmm } from './mmm-allocator.util';
 import { ApprovalRequestService } from '../agents/approval-request.service';
 
 export interface ProposeResult {
@@ -45,12 +47,21 @@ export class BudgetAutopilotService {
     }
 
     const perf = await this.perf.collect(workspaceId, budget.allocations, now);
-    const plan = allocate(perf, {
+    const params = {
       totalBudget: budget.totalAmount.toNumber(),
       explorationPct: budget.explorationPct,
       maxStepPct: 20,
       targetRoas: budget.targetRoas ? budget.targetRoas.toNumber() : undefined,
-    });
+    };
+    // Stage selector (Faz 7): Stage-1 marginal-ROAS (default), Stage-2 Thompson
+    // bandit (explores under uncertainty), Stage-3 MMM-lite (diminishing-returns
+    // water-fill). All share the same guardrailed AllocationPlan contract.
+    const plan: AllocationPlan =
+      budget.allocatorStage === 'BANDIT'
+        ? allocateBandit(perf, params)
+        : budget.allocatorStage === 'MMM'
+          ? allocateMmm(perf, params)
+          : allocateMarginal(perf, params);
 
     const objective = {
       totalBudget: plan.totalBudget,

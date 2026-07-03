@@ -436,7 +436,12 @@
     "agencySnapshots": "Ajans Anlık Görüntüleri",
     "ivr": "Sesli Menü (IVR)",
     "help": "Yardım",
-    "appointments": "Randevular"
+    "appointments": "Randevular",
+    "budget": "Bütçe Otopilotu",
+    "trends": "Trend Remix",
+    "contentCalendar": "İçerik Takvimi",
+    "personas": "UGC Personaları",
+    "brandBrain": "Marka Beyni"
   },
   "common": {
     "save": "Kaydet",
@@ -2618,5 +2623,209 @@
   "contentCal.title": "İçerik Takvimi",
   "nav.brandBrain": "Brand Brain",
   "brain.title": "Brand Brain",
-  "brain.search": "Ara"
+  "brain.search": "Ara",
+  "budget": {
+    "title": "Bütçe Otopilotu",
+    "subtitle": "Tek bir büyüme bütçesi belirleyin — Jeeta bütçeyi dengeler, yeniden dağıtım önerir ve her harcamayı bu bütçeye işler.",
+    "edit": "Bütçeyi düzenle",
+    "create": "Bütçe oluştur",
+    "empty": {
+      "title": "Henüz büyüme bütçesi yok",
+      "desc": "Otopilota aylık bir bütçe tanımlayın; harcamayı dengeler, kanallar arası yeniden dağıtım önerir ve her görüşmeyi bu bütçeye dahil eder — onayınız olmadan hiçbir şey değişmez."
+    },
+    "killError": "Acil durdurma anahtarı güncellenemedi",
+    "killedTitle": "Acil durdurma anahtarı AÇIK",
+    "killedDesc": "Tüm otonom etkinlikler durduruldu. Kapatana kadar hiçbir öneri veya harcama yapılmaz.",
+    "stat": {
+      "total": "Aylık bütçe",
+      "spent": "Şu ana kadar harcanan",
+      "reserve": "Keşif rezervi",
+      "scope": "Kapsam"
+    },
+    "scope": {
+      "adOnly": "Yalnızca reklam",
+      "holistic": "Bütünsel",
+      "holisticHint": "Reklamlar + içerik + görüşmeler bu bütçeden karşılanır.",
+      "adOnlyHint": "Yalnızca ücretli reklam harcaması yönetilir; içerik ve görüşmeler hariç tutulur."
+    },
+    "status": {
+      "ACTIVE": "AKTİF",
+      "PAUSED": "DURAKLATILDI",
+      "KILLED": "DURDURULDU"
+    },
+    "targetRoas": "Hedef ROAS",
+    "killSwitch": "Acil durdurma",
+    "tab": {
+      "allocation": "Dağıtım",
+      "approvals": "Onaylar",
+      "history": "Geçmiş"
+    },
+    "proposeSkipped": "Atlandı: {{reason}}",
+    "proposeNoop": "Şu an için değişiklik önerilmiyor",
+    "proposeDone": "Gölge öneri hazır — Onaylar bölümünden inceleyin",
+    "proposeError": "Öneri çalıştırılamadı",
+    "plannedOf": "{{total}} bütçenin {{planned}} kadarı {{n}} kanala dağıtıldı",
+    "proposing": "Öneriliyor…",
+    "proposeNow": "Şimdi öner (gölge)",
+    "noAlloc": {
+      "title": "Henüz kanal dağıtımı yok",
+      "desc": "Bir kanal ve başlangıç tutarı ekleyin, ardından otopilotun dağılımı nasıl yeniden dengeleyeceğini görmek için gölge öneri çalıştırın."
+    },
+    "col": {
+      "channel": "Kanal",
+      "planned": "Planlanan",
+      "spent": "Harcanan",
+      "mroas": "Marjinal ROAS"
+    },
+    "proposal": {
+      "title": "Gölge öneri",
+      "desc": "Havuz {{pool}} · öğrenme için {{reserve}} rezervde tutuldu. Onayınıza sunuldu — hiçbir şey aktarılmadı."
+    },
+    "approved": "Onaylandı",
+    "decisionError": "Kararınız kaydedilemedi",
+    "rejected": "Reddedildi",
+    "noApprovals": {
+      "title": "Bekleyen bir şey yok",
+      "desc": "Otopilot önerileri ve diğer yüksek riskli işlemler onayınız için buraya düşer."
+    },
+    "reject": "Reddet",
+    "approve": "Onayla",
+    "noRuns": {
+      "title": "Henüz çalışma yok",
+      "desc": "Her otopilot adımı ve önerisi burada kaydedilir — \"yapay zeka bunu neden yaptı?\" sorusunun tam kaydı."
+    },
+    "saved": "Bütçe kaydedildi",
+    "saveError": "Bütçe kaydedilemedi",
+    "dialog": {
+      "desc": "Tek bir aylık büyüme bütçesi. Bu, otopilotun asla aşamayacağı kesin bir üst sınırdır."
+    },
+    "field": {
+      "total": "Aylık bütçe (TRY)",
+      "scope": "Kapsam",
+      "exploration": "Keşif rezervi",
+      "explorationHint": "Öğrenme için ayrılan pay; kanıtlanmış kanallara asla harcanmaz.",
+      "targetRoas": "Hedef ROAS (isteğe bağlı)",
+      "targetRoasHint": "Bu reklam harcaması getirisi (ROAS) tabanının altındaki kanallar kanıtlanmış havuzdan fonlanmaz.",
+      "stage": "Dağıtım stratejisi"
+    },
+    "stage": {
+      "marginal": "Marjinal ROAS",
+      "bandit": "Bandit",
+      "mmm": "MMM-lite",
+      "marginalHint": "Bütçeyi en güçlü sonraki dolara kaydırır. En iyi varsayılan.",
+      "banditHint": "Belirsizlik altında keşif yapar — yalnızca kanıtlanmışları değil, daha iyi olabilecek kanalları da fonlar.",
+      "mmmHint": "Kanal başına azalan-getiri eğrileri uydurur ve marjinal getiriyi eşitler."
+    },
+    "appliedLive": "Onaylandı ve reklam platformuna canlı gönderildi",
+    "appliedPlan": "Onaylandı ve plana işlendi (canlı göndermek için bir reklam platformu bağlayın)"
+  },
+  "persona": {
+    "title": "UGC Personaları",
+    "subtitle": "Yeniden kullanılabilir yapay zeka sözcüleri — her kampanyanın her karesinde aynı yüz ve kıyafet.",
+    "create": "Yeni persona",
+    "empty": {
+      "title": "Henüz persona yok",
+      "desc": "Birkaç referans görsel ve sabitlenmiş bir seed ile persona oluşturun. Video hattı bunu yeniden kullanır, böylece sözcünüz kareden kareye asla değişmez."
+    },
+    "refCount": "{{n}} referans görsel",
+    "planError": "Çekim planı oluşturulamadı",
+    "plan": {
+      "title": "Çekim planı önizlemesi",
+      "desc": "Bir ürün + persona ile video storyboard'u oluşturun — ücretsiz, üretim kredisi harcanmaz.",
+      "product": "Ürün / teklif",
+      "productPh": "örn. diş implantları",
+      "persona": "Persona",
+      "none": "Yok",
+      "model": "Model",
+      "go": "Storyboard oluştur",
+      "result": "{{n}} çekim · {{d}}sn · model {{m}}",
+      "locked": "kimlik sabitli"
+    },
+    "planning": "Planlanıyor…",
+    "saved": "Persona oluşturuldu",
+    "saveError": "Persona oluşturulamadı",
+    "dialog": {
+      "desc": "Yalnızca yapay veya izin alınmış benzerlikler kullanın."
+    },
+    "field": {
+      "name": "Ad",
+      "desc": "Açıklama",
+      "descPh": "Sıcak, profesyonel diş hekimi sözcü",
+      "refs": "Referans görsel URL'leri",
+      "refsPh": "Her satıra bir URL (en fazla 9)",
+      "seed": "Sabit seed (isteğe bağlı)"
+    }
+  },
+  "trend": {
+    "title": "Trend Remix",
+    "subtitle": "Bir trendin formatını yakalayın — kanca, tempo, yapı — ve markanıza uyarlayın. Asla birebir kopya değil.",
+    "save": "Trend kaydet",
+    "empty": {
+      "title": "Henüz yakalanmış trend yok",
+      "desc": "Trend olan bir video bağlantısı yapıştırın ve formatını (kanca, tempo) tanımlayın. Jeeta videoyu değil yalnızca soyut yapıyı saklar, böylece markanıza uyarlayabilirsiniz."
+    },
+    "risk": "risk {{n}}",
+    "untitled": "Başlıksız format",
+    "source": "kaynak",
+    "remixError": "Remix brief'i oluşturulamadı",
+    "remix": {
+      "title": "Markanıza uyarlayın",
+      "desc": "Soyut formatı markanıza uyarlayın — ücretsiz, üretim kredisi harcanmaz.",
+      "template": "Trend",
+      "brand": "Marka",
+      "product": "Ürün",
+      "productPh": "örn. diş implantları",
+      "go": "Uyarla",
+      "hook": "Kanca",
+      "caption": "Açıklama metni",
+      "compliance": "Uyumluluk"
+    },
+    "remixing": "Uyarlanıyor…",
+    "saved": "Trend kaydedildi",
+    "saveError": "Trend kaydedilemedi",
+    "dialog": {
+      "desc": "Yalnızca soyut formatı saklarız, kaynak videoyu asla."
+    },
+    "field": {
+      "platform": "Platform",
+      "url": "Kaynak bağlantısı",
+      "title": "Başlık",
+      "titlePh": "örn. Fiyat itirazı kancası",
+      "hook": "Kanca kalıbı",
+      "hookPh": "[ürün] çok mu pahalı sanıyorsunuz?",
+      "risk": "Kopya/Kullanım Koşulları riski (0–100)"
+    }
+  },
+  "brain": {
+    "searchError": "Arama başarısız oldu",
+    "reindexed": "{{docs}} belge {{chunks}} parçaya yeniden indekslendi",
+    "reindexError": "Yeniden indeksleme başarısız oldu",
+    "title": "Marka Beyni",
+    "subtitle": "Kendi bilgi tabanınızdan, kaynaklı ve dayanaklı yanıtlar — asla uydurma değil.",
+    "reindex": "Yeniden indeksle",
+    "placeholder": "Markanız, tekliflerimiz veya geçmiş kampanyalar hakkında sorun…",
+    "searching": "Aranıyor…",
+    "search": "Ara",
+    "start": {
+      "title": "Marka Beyni'nize sorun",
+      "desc": "Her yanıt bilgi belgelerinize dayanır ve kaynağını gösterir. Belge ekledikten sonra aranabilir olmaları için yeniden indeksleyin."
+    },
+    "noResults": {
+      "title": "Eşleşme yok",
+      "desc": "Bilgi tabanınızda eşleşen bir şey bulunamadı. Farklı kelimeler deneyin ya da daha fazla belge ekleyip yeniden indeksleyin."
+    },
+    "untitled": "Başlıksız kaynak"
+  },
+  "contentCal": {
+    "title": "İçerik Takvimi",
+    "subtitle": "Planlanan her şey — sosyal gönderiler ve yapay zeka kampanya içerikleri — tek bir zaman çizelgesinde.",
+    "empty": {
+      "title": "Planlanmış bir şey yok",
+      "desc": "Planlanan sosyal gönderiler ve yapay zeka kampanya öğeleri burada tek bir ajanda olarak görünür."
+    },
+    "type": {
+      "SOCIAL_POST": "Gönderi",
+      "CAMPAIGN_ITEM": "Kampanya"
+    }
+  }
 }

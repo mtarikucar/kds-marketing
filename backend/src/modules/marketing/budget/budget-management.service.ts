@@ -8,6 +8,7 @@ export interface UpsertBudgetInput {
   currency?: string;
   scope?: 'HOLISTIC' | 'AD_ONLY';
   explorationPct?: number;
+  allocatorStage?: 'MARGINAL' | 'BANDIT' | 'MMM';
   targetRoas?: number | null;
   targetCac?: number | null;
 }
@@ -41,12 +42,15 @@ export class BudgetManagementService {
     if (input.scope && !SCOPES.includes(input.scope)) throw new BadRequestException('invalid scope');
     const explorationPct = input.explorationPct ?? 20;
     if (explorationPct < 0 || explorationPct > 90) throw new BadRequestException('explorationPct must be 0–90');
+    const allocatorStage = input.allocatorStage ?? 'MARGINAL';
+    if (!['MARGINAL', 'BANDIT', 'MMM'].includes(allocatorStage)) throw new BadRequestException('invalid allocatorStage');
 
     const data = {
       totalAmount: new Prisma.Decimal(input.totalAmount),
       currency: input.currency ?? 'TRY',
       scope: input.scope ?? 'HOLISTIC',
       explorationPct,
+      allocatorStage,
       targetRoas: input.targetRoas != null ? new Prisma.Decimal(input.targetRoas) : null,
       targetCac: input.targetCac != null ? new Prisma.Decimal(input.targetCac) : null,
     };

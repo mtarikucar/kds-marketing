@@ -3731,6 +3731,7 @@ model GrowthBudget {
   status         String   @default("ACTIVE") // ACTIVE | PAUSED | KILLED
   killSwitch     Boolean  @default(false)
   explorationPct Int      @default(20)
+  allocatorStage String   @default("MARGINAL") // MARGINAL | BANDIT | MMM — which allocator the autopilot uses
   targetRoas     Decimal? @db.Decimal(10, 4)
   targetCac      Decimal? @db.Decimal(14, 2)
   createdAt      DateTime @default(now())

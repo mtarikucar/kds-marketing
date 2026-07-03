@@ -22,6 +22,7 @@ import {
   listAutopilotRuns,
   listPendingApprovals,
   approveRequest,
+  applyReallocation,
   rejectRequest,
   type GrowthBudget,
   type ProposeResult,
@@ -271,9 +272,26 @@ function ApprovalsTab() {
   const q = useQuery({ queryKey: ['pending-approvals'], queryFn: listPendingApprovals });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['pending-approvals'] });
+  // Approving a budget reallocation immediately applies it: the approval IS the
+  // authorization. apply() commits the plan and pushes live ONLY where an ad
+  // platform is credential-write-capable — otherwise it stays a plan-only change.
   const approve = useMutation({
-    mutationFn: approveRequest,
-    onSuccess: () => { toast.success(t('budget.approved', 'Approved')); invalidate(); },
+    mutationFn: async (r: { id: string; kind: string }) => {
+      await approveRequest(r.id);
+      return r.kind === 'BUDGET_REALLOCATION' ? applyReallocation(r.id) : null;
+    },
+    onSuccess: (applied) => {
+      if (applied) {
+        toast.success(
+          applied.status === 'APPLIED'
+            ? t('budget.appliedLive', { defaultValue: 'Approved & pushed live to the ad platform' })
+            : t('budget.appliedPlan', { defaultValue: 'Approved & committed to the plan (connect an ad platform to push it live)' }),
+        );
+      } else {
+        toast.success(t('budget.approved', 'Approved'));
+      }
+      invalidate();
+    },
     onError: () => toast.error(t('budget.decisionError', 'Could not record your decision')),
   });
   const reject = useMutation({
@@ -302,7 +320,7 @@ function ApprovalsTab() {
                   <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
                     <X className="mr-1 h-4 w-4" />{t('budget.reject', 'Reject')}
                   </Button>
-                  <Button size="sm" onClick={() => approve.mutate(r.id)} disabled={approve.isPending}>
+                  <Button size="sm" onClick={() => approve.mutate({ id: r.id, kind: r.kind })} disabled={approve.isPending}>
                     <Check className="mr-1 h-4 w-4" />{t('budget.approve', 'Approve')}
                   </Button>
                 </div>

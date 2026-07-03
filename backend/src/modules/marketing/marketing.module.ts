@@ -163,6 +163,7 @@ import { SpendLedgerService } from './wallet/spend-ledger.service';
 import { SocialPostMetricService } from './social-planner/social-post-metric.service';
 import { BudgetPerformanceSource } from './budget/budget-performance.source';
 import { BudgetAutopilotService } from './budget/budget-autopilot.service';
+import { BudgetExecutorService } from './budget/budget-executor.service';
 import { BudgetManagementService } from './budget/budget-management.service';
 import { ConversationSpendService } from './budget/conversation-spend.service';
 import { BudgetPacerService } from './budget/budget-pacer.service';
@@ -703,6 +704,7 @@ import { WalletService } from './wallet/wallet.service';
     SocialPostMetricService,
     BudgetPerformanceSource,
     BudgetAutopilotService,
+    BudgetExecutorService,
     BudgetManagementService,
     ConversationSpendService,
     BudgetPacerService,
