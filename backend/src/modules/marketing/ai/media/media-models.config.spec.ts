@@ -11,7 +11,7 @@ describe('media-models config', () => {
   it('registers the spec default image + video models', () => {
     expect(getMediaModel(DEFAULT_IMAGE_MODEL)?.type).toBe('IMAGE');
     expect(getMediaModel(DEFAULT_VIDEO_MODEL)?.type).toBe('VIDEO');
-    expect(MEDIA_MODELS['fal-ai/bytedance/seedance/v1/pro'].type).toBe('VIDEO');
+    expect(MEDIA_MODELS['fal-ai/bytedance/seedance/v1/pro/text-to-video'].type).toBe('VIDEO');
   });
 
   it('estimates image credits as a flat per-image cost', () => {
