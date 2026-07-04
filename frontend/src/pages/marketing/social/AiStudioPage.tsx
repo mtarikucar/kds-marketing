@@ -39,11 +39,11 @@ import type { MediaItemValue } from './socialSchemas';
 const ASPECT_RATIOS = ['1:1', '9:16', '16:9', '4:5'] as const;
 const IMAGE_MODELS = [
   { value: 'fal-ai/qwen-image', labelKey: 'aiStudio.modelLabel.draftImage', fallback: 'Draft image' },
-  { value: 'fal-ai/bytedance/seedream/v4', labelKey: 'aiStudio.modelLabel.finalImage', fallback: 'Final image' },
+  { value: 'fal-ai/bytedance/seedream/v4/text-to-image', labelKey: 'aiStudio.modelLabel.finalImage', fallback: 'Final image' },
 ];
 const VIDEO_MODELS = [
-  { value: 'fal-ai/kling-video/v2.1/standard', labelKey: 'aiStudio.modelLabel.cheapVideo', fallback: 'Standard video' },
-  { value: 'fal-ai/bytedance/seedance/v1/pro', labelKey: 'aiStudio.modelLabel.premiumVideo', fallback: 'Premium video' },
+  { value: 'fal-ai/bytedance/seedance/v1/lite/text-to-video', labelKey: 'aiStudio.modelLabel.cheapVideo', fallback: 'Standard video' },
+  { value: 'fal-ai/bytedance/seedance/v1/pro/text-to-video', labelKey: 'aiStudio.modelLabel.premiumVideo', fallback: 'Premium video' },
   { value: 'fal-ai/veo3/fast', labelKey: 'aiStudio.modelLabel.videoAudio', fallback: 'Video + audio' },
 ];
 const MAX_VIDEO_SEC = 10;
