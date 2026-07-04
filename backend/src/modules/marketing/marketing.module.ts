@@ -160,6 +160,7 @@ import { FormsService } from './sites/forms.service';
 import { LeadAttributionService } from './leads/lead-attribution.service';
 import { ChannelTariffService } from './wallet/channel-tariff.service';
 import { SpendLedgerService } from './wallet/spend-ledger.service';
+import { GrowthWalletService } from './wallet/growth-wallet.service';
 import { SocialPostMetricService } from './social-planner/social-post-metric.service';
 import { BudgetPerformanceSource } from './budget/budget-performance.source';
 import { BudgetAutopilotService } from './budget/budget-autopilot.service';
@@ -712,6 +713,7 @@ import { WalletService } from './wallet/wallet.service';
     LeadAttributionService,
     ChannelTariffService,
     SpendLedgerService,
+    GrowthWalletService,
     SocialPostMetricService,
     BudgetPerformanceSource,
     BudgetAutopilotService,

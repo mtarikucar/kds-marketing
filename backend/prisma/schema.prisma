@@ -3796,6 +3796,46 @@ model SpendLedger {
   @@map("spend_ledgers")
 }
 
+/// Prepaid growth credit (Growth Autopilot). ONE wallet per workspace; the
+/// balance is the credit the autonomous engine may still commit. Cached
+/// `balance` is mutated ONLY together with an append-only ledger entry, and a
+/// debit uses a conditional updateMany (balance >= amount) so it is race-safe
+/// and can NEVER go negative (fail-closed). Distinct from CustomerWallet
+/// (end-customer store credit) — do not conflate.
+model GrowthWallet {
+  id          String   @id @default(uuid())
+  workspaceId String   @unique
+  balance     Decimal  @default(0) @db.Decimal(14, 2)
+  currency    String   @default("TRY")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries GrowthWalletLedgerEntry[]
+
+  @@map("growth_wallets")
+}
+
+/// Append-only audit trail for GrowthWallet. `ref` is globally unique so money
+/// movements are idempotent: a replayed top-up webhook (`order:{id}`) or a
+/// re-run ad-spend mirror (`admetric:{campaign}:{day}`) credits/debits ONCE.
+/// kind: TOPUP | ENGINE_SPEND | AD_GOVERNOR (non-cash ad bookkeeping) |
+/// REFUND | ADJUST.
+model GrowthWalletLedgerEntry {
+  id           String       @id @default(uuid())
+  workspaceId  String
+  walletId     String
+  wallet       GrowthWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  delta        Decimal      @db.Decimal(14, 2) // signed: >0 credit, <0 debit
+  balanceAfter Decimal      @db.Decimal(14, 2)
+  kind         String // TOPUP | ENGINE_SPEND | AD_GOVERNOR | REFUND | ADJUST
+  ref          String?      @unique
+  note         String?
+  createdAt    DateTime     @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@map("growth_wallet_ledger_entries")
+}
+
 /// The single growth budget a workspace gives the Budget Autopilot for a month
 /// (Faz 7). `totalAmount` is the hard cap the autopilot may NEVER exceed.
 /// `scope` = HOLISTIC (ads + content + conversations) or AD_ONLY. `killSwitch`
@@ -3812,6 +3852,10 @@ model GrowthBudget {
   killSwitch     Boolean  @default(false)
   explorationPct Int      @default(20)
   allocatorStage String   @default("MARGINAL") // MARGINAL | BANDIT | MMM — which allocator the autopilot uses
+  /// Autonomy lane (Growth Autopilot): SHADOW = record proposals only;
+  /// ASSISTED = propose + human approval queue (the pre-autopilot default);
+  /// AUTONOMOUS = propose → auto-apply under machine guardrails, no approvals.
+  autonomyLevel  String   @default("ASSISTED") // SHADOW | ASSISTED | AUTONOMOUS
   targetRoas     Decimal? @db.Decimal(10, 4)
   targetCac      Decimal? @db.Decimal(14, 2)
   createdAt      DateTime @default(now())
