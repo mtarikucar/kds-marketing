@@ -161,6 +161,10 @@ import { LeadAttributionService } from './leads/lead-attribution.service';
 import { ChannelTariffService } from './wallet/channel-tariff.service';
 import { SpendLedgerService } from './wallet/spend-ledger.service';
 import { GrowthWalletService } from './wallet/growth-wallet.service';
+import { AdSpendMirrorService } from './budget/ad-spend-mirror.service';
+import { BudgetAnomalyService } from './budget/budget-anomaly.service';
+import { BudgetQuickstartService } from './budget/budget-quickstart.service';
+import { BudgetActivityService } from './budget/budget-activity.service';
 import { SocialPostMetricService } from './social-planner/social-post-metric.service';
 import { BudgetPerformanceSource } from './budget/budget-performance.source';
 import { BudgetAutopilotService } from './budget/budget-autopilot.service';
@@ -714,6 +718,10 @@ import { WalletService } from './wallet/wallet.service';
     ChannelTariffService,
     SpendLedgerService,
     GrowthWalletService,
+    AdSpendMirrorService,
+    BudgetAnomalyService,
+    BudgetQuickstartService,
+    BudgetActivityService,
     SocialPostMetricService,
     BudgetPerformanceSource,
     BudgetAutopilotService,

@@ -62,3 +62,36 @@ describe('BudgetManagementService', () => {
     expect(prisma.growthBudget.update).not.toHaveBeenCalled();
   });
 });
+
+describe('BudgetManagementService.setAutonomyLevel (spec D6)', () => {
+  function deps(budget: any = { id: 'b1', workspaceId: 'ws1' }) {
+    const prisma = {
+      growthBudget: {
+        findFirst: jest.fn().mockResolvedValue(budget),
+        update: jest.fn(async ({ data }: any) => ({ id: 'b1', ...data })),
+      },
+    } as any;
+    return { prisma };
+  }
+  afterEach(() => { delete process.env.GROWTH_AUTOPILOT_AUTONOMY; });
+
+  it('arms AUTONOMOUS only when the env flag is on', async () => {
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+    await expect(svc.setAutonomyLevel('ws1', 'b1', 'AUTONOMOUS')).rejects.toThrow();
+    process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+    const r = await svc.setAutonomyLevel('ws1', 'b1', 'AUTONOMOUS');
+    expect(r.autonomyLevel).toBe('AUTONOMOUS');
+    expect(prisma.growthBudget.update).toHaveBeenCalledWith({ where: { id: 'b1' }, data: { autonomyLevel: 'AUTONOMOUS' } });
+  });
+
+  it('rejects unknown levels and disarming stays available without the flag', async () => {
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+    await expect(svc.setAutonomyLevel('ws1', 'b1', 'YOLO')).rejects.toThrow();
+    const r = await svc.setAutonomyLevel('ws1', 'b1', 'ASSISTED');
+    expect(r.autonomyLevel).toBe('ASSISTED');
+  });
+});
