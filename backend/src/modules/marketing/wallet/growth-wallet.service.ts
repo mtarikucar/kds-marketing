@@ -99,6 +99,7 @@ export class GrowthWalletService {
           create: { workspaceId, currency: movement.currency ?? 'TRY' },
           update: {},
         });
+        this.assertCurrencyMatches(w.currency, movement.currency);
         const balance = new Prisma.Decimal(w.balance ?? 0);
         let taken = balance.lt(amount) ? balance : amount;
         if (taken.gt(0)) {
@@ -174,6 +175,7 @@ export class GrowthWalletService {
           create: { workspaceId, currency: movement.currency ?? 'TRY' },
           update: {},
         });
+        this.assertCurrencyMatches(w.currency, movement.currency);
         if (sign < 0) {
           // Conditional decrement — the race-safe never-negative arbiter.
           const res = await tx.growthWallet.updateMany({
@@ -209,6 +211,22 @@ export class GrowthWalletService {
         return this.replayResult(workspaceId);
       }
       throw e;
+    }
+  }
+
+  /**
+   * No-FX invariant (audit A2): the wallet stores ONE currency and there is no
+   * conversion anywhere in the system, so a movement declaring a different
+   * currency must be rejected — crediting a TRY amount onto a USD wallet at
+   * face value would mint ~33x spendable value (and the inverse under-credits).
+   * A movement that omits `currency` is taken to be in the wallet's currency.
+   * Runs inside the movement transaction, so nothing is written on mismatch.
+   */
+  private assertCurrencyMatches(walletCurrency: string, movementCurrency?: string): void {
+    if (movementCurrency && movementCurrency !== walletCurrency) {
+      throw new BadRequestException(
+        `Growth wallet currency mismatch: wallet is ${walletCurrency}, movement is ${movementCurrency}`,
+      );
     }
   }
 

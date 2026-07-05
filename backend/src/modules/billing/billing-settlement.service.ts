@@ -96,10 +96,12 @@ export class BillingSettlementService implements OnModuleInit {
 
     try {
       await this.grantEntitlement(order);
+      await this.markGranted(order.id);
     } catch (e) {
       // The order IS paid — never roll the flip back. Log loudly; the
       // platform console shows succeeded-but-ungranted orders for ops, and
-      // reconcileUngrantedOrders() re-grants them out of band.
+      // reconcileUngrantedOrders() re-grants them out of band. grantedAt stays
+      // NULL so the sweep's window (audit A1) is guaranteed to reach this row.
       this.logger.error(
         `entitlement grant failed for paid order ${order.id}: ${(e as Error)?.message}`,
       );
@@ -107,6 +109,19 @@ export class BillingSettlementService implements OnModuleInit {
 
     this.entitlements.invalidate(order.workspaceId);
     return { settled: true };
+  }
+
+  /**
+   * Stamp the grant-success marker (audit A1). updateMany (not update) so a
+   * concurrently-deleted row can't throw and undo a grant that DID land; the
+   * stamp itself is best-effort — a missed stamp only means one extra probe
+   * on the next sweep, never a lost grant.
+   */
+  private async markGranted(orderId: string): Promise<void> {
+    await this.prisma.paymentOrder.updateMany({
+      where: { id: orderId },
+      data: { grantedAt: new Date() },
+    });
   }
 
   /**
@@ -187,9 +202,15 @@ export class BillingSettlementService implements OnModuleInit {
    * advisory-locked for single-replica safety.
    */
   async reconcileUngrantedOrders(limit = 100): Promise<number> {
+    // grantedAt: null is the window fix (audit A1): without it the blind
+    // `take: limit` window pinned to the oldest-`limit` SUCCEEDED orders —
+    // all long-granted in steady state — and a recent failed grant was never
+    // re-examined. Filtering on the marker keeps the window on genuinely
+    // ungranted rows, so it always advances.
     const candidates = await this.prisma.paymentOrder.findMany({
       where: {
         status: 'SUCCEEDED',
+        grantedAt: null,
         type: { in: ['SUBSCRIPTION', 'UPGRADE', 'RENEWAL'] },
       },
       orderBy: { succeededAt: 'asc' },
@@ -202,10 +223,16 @@ export class BillingSettlementService implements OnModuleInit {
         where: { workspaceId: order.workspaceId },
         select: { id: true },
       });
-      if (existing) continue; // already granted — nothing to recover
+      if (existing) {
+        // Already granted (e.g. pre-marker order): stamp it so it leaves the
+        // window instead of being re-probed on every sweep forever.
+        await this.markGranted(order.id);
+        continue;
+      }
 
       try {
         await this.grantEntitlement(order);
+        await this.markGranted(order.id);
         this.entitlements.invalidate(order.workspaceId);
         regranted++;
         this.logger.warn(
@@ -224,7 +251,7 @@ export class BillingSettlementService implements OnModuleInit {
     // order ref — re-credit it. Safe to auto-sweep (unlike ADDON) because the
     // credit is idempotent by the unique ref.
     const topups = await this.prisma.paymentOrder.findMany({
-      where: { status: 'SUCCEEDED', type: 'WALLET_TOPUP' },
+      where: { status: 'SUCCEEDED', grantedAt: null, type: 'WALLET_TOPUP' },
       orderBy: { succeededAt: 'asc' },
       take: limit,
     });
@@ -233,10 +260,14 @@ export class BillingSettlementService implements OnModuleInit {
         where: { ref: `order:${order.id}` },
         select: { id: true },
       });
-      if (landed) continue; // credit already applied
+      if (landed) {
+        await this.markGranted(order.id); // credit already applied — evict from the window
+        continue;
+      }
 
       try {
         await this.grantEntitlement(order);
+        await this.markGranted(order.id);
         this.entitlements.invalidate(order.workspaceId);
         regranted++;
         this.logger.warn(

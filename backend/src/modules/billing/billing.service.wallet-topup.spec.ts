@@ -20,6 +20,9 @@ function makeSvc() {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(async ({ data }: any) => ({ id: 'topup-new', ...data })),
     },
+    growthWallet: {
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
   };
   const entitlements: any = { getEffective: jest.fn() };
   const config: any = { get: jest.fn().mockReturnValue('https://app.test') };
@@ -127,5 +130,27 @@ describe('BillingService.walletTopup', () => {
     provider.supports.mockReturnValue(false);
     await expect(svc.walletTopup('ws-1', { amount: 100, provider: 'paytr' }, CTX))
       .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // Audit A2 (checkout-side guard): the wallet has NO FX, so a top-up in a
+  // different currency than the existing wallet must be rejected BEFORE the
+  // customer pays — rejecting only at settlement would take their money and
+  // then refuse the credit.
+  it('rejects a top-up whose currency differs from the existing wallet currency (pre-payment)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.growthWallet.findUnique.mockResolvedValue({ currency: 'USD' });
+
+    await expect(
+      svc.walletTopup('ws-1', { amount: 100, provider: 'paytr', currency: 'TRY' }, CTX),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.paymentOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('allows any supported currency when no wallet exists yet (first top-up sets it)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.growthWallet.findUnique.mockResolvedValue(null);
+
+    const out = await svc.walletTopup('ws-1', { amount: 100, provider: 'paytr', currency: 'USD' }, CTX);
+    expect(out.orderId).toBe('topup-new');
   });
 });

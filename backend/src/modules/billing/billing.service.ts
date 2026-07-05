@@ -337,6 +337,19 @@ export class BillingService {
     const currency =
       input.currency ?? (workspace.defaultCurrency === 'TRY' ? 'TRY' : 'USD');
 
+    // No-FX invariant (audit A2), checkout-side: the growth wallet stores ONE
+    // currency and settlement refuses a mismatched credit — so refuse the
+    // mismatch HERE, before the customer pays, never after.
+    const wallet = await this.prisma.growthWallet.findUnique({
+      where: { workspaceId },
+      select: { currency: true },
+    });
+    if (wallet && wallet.currency !== currency) {
+      throw new BadRequestException(
+        `Top-up currency ${currency} does not match your growth wallet currency ${wallet.currency}`,
+      );
+    }
+
     const provider = this.providers.find((p) => p.id === input.provider);
     if (!provider || !provider.isConfigured()) {
       throw new ServiceUnavailableException(

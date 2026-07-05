@@ -276,4 +276,53 @@ describe('GrowthWalletService', () => {
       await expect(svc.debitUpTo('ws1', { amount: -3, kind: 'AD_GOVERNOR' })).rejects.toThrow();
     });
   });
+
+  // Audit A2: the wallet has NO FX — a movement in a different currency than
+  // the wallet's must be rejected, never credited/debited at face value (a
+  // "TRY" top-up landing on a USD wallet would mint ~33x spendable value).
+  describe('currency mismatch guard (no-FX invariant)', () => {
+    it('rejects a credit whose currency differs from the existing wallet currency — nothing moves', async () => {
+      const { prisma, wallets, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP', currency: 'USD' });
+
+      await expect(
+        svc.credit('ws1', { amount: 500, kind: 'TOPUP', ref: 'order:o2', currency: 'TRY' }),
+      ).rejects.toThrow(/currency/i);
+      expect(wallets.get('ws1').balance.toString()).toBe('100');
+      expect(entries.filter((e) => e.ref === 'order:o2')).toHaveLength(0);
+    });
+
+    it('rejects a debit whose currency differs from the wallet currency', async () => {
+      const { prisma, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP', currency: 'USD' });
+
+      await expect(
+        svc.debit('ws1', { amount: 10, kind: 'ENGINE_SPEND', currency: 'TRY' }),
+      ).rejects.toThrow(/currency/i);
+      expect(wallets.get('ws1').balance.toString()).toBe('100');
+    });
+
+    it('rejects a mismatched debitUpTo (governor) the same way', async () => {
+      const { prisma, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP', currency: 'USD' });
+
+      await expect(
+        svc.debitUpTo('ws1', { amount: 10, kind: 'AD_GOVERNOR', currency: 'TRY' }),
+      ).rejects.toThrow(/currency/i);
+      expect(wallets.get('ws1').balance.toString()).toBe('100');
+    });
+
+    it('accepts a matching currency and a movement that omits currency entirely', async () => {
+      const { prisma, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP', currency: 'USD' });
+
+      await svc.credit('ws1', { amount: 50, kind: 'TOPUP', currency: 'USD' });
+      await svc.credit('ws1', { amount: 25, kind: 'REFUND' }); // currency omitted → wallet's own
+      expect(wallets.get('ws1').balance.toString()).toBe('175');
+    });
+  });
 });

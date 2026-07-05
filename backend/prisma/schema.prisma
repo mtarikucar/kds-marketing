@@ -1240,6 +1240,11 @@ model PaymentOrder {
   raw            Json?
   approvedById   String? // PlatformOperator.id (manual path)
   succeededAt    DateTime?
+  /// Stamped when the entitlement/wallet grant SUCCEEDS (audit A1). Makes
+  /// paid-but-ungranted queryable: the reconcile sweep filters grantedAt=null
+  /// so its window always holds genuinely ungranted rows and can never go
+  /// blind past the oldest `limit` orders.
+  grantedAt      DateTime?
   failedAt       DateTime?
   failureReason  String?
 
@@ -1248,6 +1253,7 @@ model PaymentOrder {
 
   @@index([workspaceId, status])
   @@index([status, createdAt])
+  @@index([status, grantedAt])
   @@map("payment_orders")
 }
 

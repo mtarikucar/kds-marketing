@@ -212,6 +212,73 @@ describe('BillingSettlementService — idempotent settlement', () => {
     });
   });
 
+  // Audit A1: the sweep window (`take: limit`, succeededAt asc) went blind once
+  // >limit lifetime SUCCEEDED orders existed — a recent failed grant was born
+  // OUTSIDE the window and never re-examined. The fix makes ungranted-ness
+  // queryable: a `grantedAt` marker set on grant success, and both sweep
+  // queries filter `grantedAt: null` so the window always holds genuinely
+  // ungranted rows and advances.
+  describe('grantedAt marker (audit A1 — sweep-window blindness)', () => {
+    const grantMarks = () =>
+      prisma.paymentOrder.updateMany.mock.calls.filter(
+        (c: any[]) => c[0]?.data?.grantedAt instanceof Date,
+      );
+
+    it('settleSuccess stamps grantedAt after a successful grant', async () => {
+      await svc.settleSuccess('order-1');
+      const marks = grantMarks();
+      expect(marks).toHaveLength(1);
+      expect(marks[0][0].where).toMatchObject({ id: 'order-1' });
+    });
+
+    it('settleSuccess does NOT stamp grantedAt when the grant throws', async () => {
+      prisma.workspaceSubscription.upsert.mockRejectedValue(new Error('db down'));
+      await svc.settleSuccess('order-1');
+      expect(grantMarks()).toHaveLength(0);
+    });
+
+    it('both reconcile queries filter grantedAt: null (the window fix)', async () => {
+      await svc.reconcileUngrantedOrders();
+      const wheres = prisma.paymentOrder.findMany.mock.calls.map((c: any[]) => c[0].where);
+      expect(wheres).toHaveLength(2);
+      for (const where of wheres) expect(where).toMatchObject({ grantedAt: null });
+    });
+
+    it('reconcile stamps grantedAt on a successful re-grant', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+
+      await svc.reconcileUngrantedOrders();
+
+      const marks = grantMarks();
+      expect(marks).toHaveLength(1);
+      expect(marks[0][0].where).toMatchObject({ id: 'order-1' });
+    });
+
+    it('reconcile stamps grantedAt when the probe shows the grant already landed (self-heal eviction)', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
+      prisma.workspaceSubscription.findUnique.mockResolvedValue({ id: 'sub-1' });
+
+      const regranted = await svc.reconcileUngrantedOrders();
+
+      expect(regranted).toBe(0); // nothing re-granted…
+      expect(grantMarks()).toHaveLength(1); // …but the row leaves the window
+    });
+
+    it('reconcile does NOT stamp grantedAt when the re-grant throws (stays in the window)', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+      prisma.workspaceSubscription.upsert.mockRejectedValue(new Error('db down'));
+
+      await svc.reconcileUngrantedOrders();
+
+      expect(grantMarks()).toHaveLength(0);
+    });
+  });
+
   it('settleFailure flips only PENDING/AWAITING_TRANSFER rows', async () => {
     prisma.paymentOrder.updateMany.mockResolvedValue({ count: 1 });
     const res = await svc.settleFailure('order-1', 'card declined');
