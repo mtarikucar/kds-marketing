@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Copy, Link as LinkIcon, RefreshCw, Tag } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 interface ReferralStats {
   referralCode: string | null;
@@ -24,7 +25,7 @@ interface ReferralStats {
  *
  * Regenerate is manager-only, hidden for REP. Rotation
  * intentionally bricks any in-flight cookies pointing at the old
- * code; the confirm() dialog spells that out.
+ * code; the confirm dialog spells that out.
  */
 export default function ReferralCodeCard() {
   const { t } = useTranslation('marketing');
@@ -44,14 +45,15 @@ export default function ReferralCodeCard() {
       queryClient.invalidateQueries({
         queryKey: ['marketing', 'dashboard', 'referral-stats'],
       });
-      toast.success(t('referral.regenerated', 'Kodunuz yenilendi'));
+      toast.success(t('referral.regenerated', 'Your referral code was regenerated'));
     },
     onError: () => {
-      toast.error(t('referral.regenerateFailed', 'Yenileme başarısız'));
+      toast.error(t('referral.regenerateFailed', 'Could not regenerate the code'));
     },
   });
 
   const [copyHint, setCopyHint] = useState<string | null>(null);
+  const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
 
   const code = data?.referralCode ?? null;
   const shareLink = code
@@ -171,26 +173,33 @@ export default function ReferralCodeCard() {
         <div className="mt-4 pt-4 border-t border-primary/20 flex items-center justify-end">
           <button
             type="button"
-            onClick={() => {
-              if (
-                window.confirm(
-                  t(
-                    'referral.regenerateConfirm',
-                    'Eski kod artık çalışmayacak ve paylaştığınız linkler kırılacak. Devam edilsin mi?',
-                  ),
-                )
-              ) {
-                regenerate.mutate();
-              }
-            }}
+            onClick={() => setRegenConfirmOpen(true)}
             disabled={regenerate.isPending}
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            {t('referral.regenerate', 'Kodumu yenile')}
+            {t('referral.regenerate', 'Regenerate my code')}
           </button>
         </div>
       )}
+
+      <ConfirmDialog
+        open={regenConfirmOpen}
+        onOpenChange={setRegenConfirmOpen}
+        tone="danger"
+        title={t('referral.regenerateConfirm.title', 'Regenerate your referral code?')}
+        description={t(
+          'referral.regenerateConfirm.desc',
+          'The old code stops working and any links you have already shared will break.',
+        )}
+        confirmLabel={t('referral.regenerateConfirm.confirm', 'Regenerate')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        loading={regenerate.isPending}
+        onConfirm={() => {
+          setRegenConfirmOpen(false);
+          regenerate.mutate();
+        }}
+      />
     </div>
   );
 }

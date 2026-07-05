@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { cn } from '@/components/ui/cn';
 import { taskSchema, type TaskFormValues } from '../../../features/marketing/schemas';
 import { TaskType } from '../../../features/marketing/types';
@@ -61,6 +62,7 @@ export default function TasksTab({
 }: TasksTabProps) {
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskSchema),
@@ -178,9 +180,7 @@ export default function TasksTab({
                       size="sm"
                       aria-label="Delete task"
                       className="text-muted-foreground hover:text-danger"
-                      onClick={() => {
-                        if (window.confirm('Delete this task?')) onDelete(task.id);
-                      }}
+                      onClick={() => setConfirmDeleteId(task.id)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </IconButton>
@@ -303,6 +303,20 @@ export default function TasksTab({
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteId(null); }}
+        tone="danger"
+        title={t('tasks.deleteConfirm.title', 'Delete this task?')}
+        description={t('tasks.deleteConfirm.desc', 'The task is removed from this lead. This cannot be undone.')}
+        confirmLabel={t('common.delete', 'Delete')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        onConfirm={() => {
+          if (confirmDeleteId) onDelete(confirmDeleteId);
+          setConfirmDeleteId(null);
+        }}
+      />
     </Card>
   );
 }

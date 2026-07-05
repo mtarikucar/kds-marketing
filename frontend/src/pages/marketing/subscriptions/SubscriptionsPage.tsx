@@ -36,6 +36,7 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  ConfirmDialog,
 } from '@/components/ui';
 
 const STATUS_TONE: Record<SubscriptionStatus, 'success' | 'warning' | 'neutral'> = {
@@ -157,6 +158,7 @@ export default function SubscriptionsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string } | null>(null);
 
   const { data: subs, isLoading, isError, refetch } = useQuery({
     queryKey: ['marketing', 'subscriptions'],
@@ -335,22 +337,11 @@ export default function SubscriptionsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        // Cancelling is irreversible (no un-cancel path; the
-                        // backend refuses to edit a CANCELLED plan), so confirm
-                        // before stopping a customer's recurring billing.
-                        if (
-                          window.confirm(
-                            t('subscriptions.cancelConfirm', {
-                              defaultValue:
-                                'Cancel "{{name}}"? This stops its recurring billing and cannot be undone.',
-                              name: s.name,
-                            }),
-                          )
-                        ) {
-                          cancelMut.mutate(s.id);
-                        }
-                      }}
+                      // Cancelling is irreversible (no un-cancel path; the
+                      // backend refuses to edit a CANCELLED plan), so confirm
+                      // via the design-system dialog before stopping a
+                      // customer's recurring billing.
+                      onClick={() => setCancelTarget({ id: s.id, name: s.name })}
                       title={t('subscriptions.cancel', 'Cancel')}
                     >
                       <Ban className="w-4 h-4 text-danger" aria-hidden="true" />
@@ -460,6 +451,24 @@ export default function SubscriptionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => { if (!open) setCancelTarget(null); }}
+        tone="danger"
+        title={t('subscriptions.cancelConfirm.title', { defaultValue: 'Cancel this subscription?' })}
+        description={t('subscriptions.cancelConfirm.desc', {
+          defaultValue: 'Cancelling "{{name}}" stops its recurring billing and cannot be undone.',
+          name: cancelTarget?.name ?? '',
+        })}
+        confirmLabel={t('subscriptions.cancelConfirm.confirm', { defaultValue: 'Cancel subscription' })}
+        cancelLabel={t('subscriptions.cancelConfirm.keep', { defaultValue: 'Keep' })}
+        loading={cancelMut.isPending}
+        onConfirm={() => {
+          if (cancelTarget) cancelMut.mutate(cancelTarget.id);
+          setCancelTarget(null);
+        }}
+      />
     </div>
   );
 }

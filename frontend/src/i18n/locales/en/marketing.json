@@ -511,7 +511,18 @@
     "emptyUnassigned": "No unassigned leads — everything is being followed up.",
     "emptyManager": "No leads yet. Add one via \"New Lead\" up top, or wait for the AI Research routine to import some.",
     "loadError": "Couldn't load leads. Try again.",
-    "rowCount": "{{count}} leads"
+    "rowCount": "{{count}} leads",
+    "bulkDelete": {
+      "title": "Delete the selected leads?",
+      "desc": "{{count}} lead(s) and their timelines are removed from your workspace. This cannot be undone.",
+      "button": "Delete"
+    },
+    "bulkEnroll": {
+      "confirmTitle": "Enroll the selected leads?",
+      "confirmDesc": "Enrolling {{count}} lead(s) into \"{{name}}\" may start sending automated messages.",
+      "confirmButton": "Enroll",
+      "label": "Enroll in workflow"
+    }
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -588,7 +599,11 @@
     "sentOffer": "Offer sent",
     "statusUpdated": "Status updated",
     "convertSuccess": "Lead converted — tenant {{name}} created",
-    "convertError": "Couldn't convert the lead"
+    "convertError": "Couldn't convert the lead",
+    "deleteConfirm": {
+      "title": "Delete this lead?",
+      "desc": "The lead and its timeline are removed from your workspace. This cannot be undone."
+    }
   },
   "createLead": {
     "titleNew": "New lead",
@@ -692,6 +707,12 @@
       "WEEK": "Weekly",
       "MONTH": "Monthly",
       "YEAR": "Yearly"
+    },
+    "cancelConfirm": {
+      "title": "Cancel this subscription?",
+      "desc": "Cancelling \"{{name}}\" stops its recurring billing and cannot be undone.",
+      "confirm": "Cancel subscription",
+      "keep": "Keep"
     }
   },
   "products": {
@@ -855,6 +876,15 @@
       "reject": "Reject",
       "edit": "Edit",
       "delete": "Delete"
+    },
+    "sendConfirm": {
+      "title": "Send this offer?",
+      "desc": "The price quote is transmitted to the customer and cannot be unsent.",
+      "confirm": "Send"
+    },
+    "deleteConfirm": {
+      "title": "Delete this offer?",
+      "desc": "The offer is removed from this lead. This cannot be undone."
     }
   },
   "tasks": {
@@ -886,6 +916,10 @@
       "today6pm": "Today 6:00 PM",
       "tomorrow9am": "Tomorrow 9:00 AM",
       "nextWeek": "+1 week"
+    },
+    "deleteConfirm": {
+      "title": "Delete this task?",
+      "desc": "The task is removed from this lead. This cannot be undone."
     }
   },
   "calendar": {
@@ -1284,9 +1318,13 @@
     "noCode": "You don't have a referral code yet. Ask your manager to allocate one.",
     "hint": "You earn commission on subscription sales made with this link/code (first sale + renewals + upgrades).",
     "regenerate": "Regenerate my code",
-    "regenerateConfirm": "The old code will stop working and shared links will break. Continue?",
-    "regenerated": "Your code was regenerated",
-    "regenerateFailed": "Regeneration failed",
+    "regenerateConfirm": {
+      "title": "Regenerate your referral code?",
+      "desc": "The old code stops working and any links you have already shared will break.",
+      "confirm": "Regenerate"
+    },
+    "regenerated": "Your referral code was regenerated",
+    "regenerateFailed": "Could not regenerate the code",
     "statsLeads": "Total leads",
     "statsWon": "Won",
     "statsCommission": "Total commission"
@@ -1438,7 +1476,11 @@
     "invalidJson": "Invalid JSON.",
     "jsonNeedsType": "Must be a JSON object with a \"type\" field.",
     "invalidFiltersJson": "Filters must be a JSON array.",
-    "unsavedConfirm": "Discard unsaved changes?",
+    "unsavedConfirm": {
+      "title": "Discard unsaved changes?",
+      "desc": "Your edits to this workflow will be lost.",
+      "confirm": "Discard"
+    },
     "subject": "Subject",
     "body": "Message",
     "prompt": "Prompt",

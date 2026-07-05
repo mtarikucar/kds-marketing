@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -5,6 +6,7 @@ import { toast } from 'sonner';
 import { ArrowLeft, Pencil, Trash2, CheckCircle2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcrumbLabel';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { Spinner } from '@/components/ui/Spinner';
@@ -37,7 +39,7 @@ export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { i18n } = useTranslation('marketing');
+  const { t, i18n } = useTranslation('marketing');
   // Locale-aware date formatting: `toLocaleDateString()` with no arg
   // uses the runtime locale, which on a Turkish admin's browser is
   // usually `en-US` from the OS-level default. Threading i18n.language
@@ -154,6 +156,7 @@ export default function LeadDetailPage() {
     onError: (err: any) => toast.error(err?.response?.data?.message || 'Failed to convert lead'),
   });
 
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const deleteMutation = useMutation({
     mutationFn: () => deleteLead(id!),
     onSuccess: () => {
@@ -231,15 +234,28 @@ export default function LeadDetailPage() {
                 variant="outline"
                 size="sm"
                 className="border-danger/40 text-danger hover:bg-danger-subtle"
-                onClick={() => {
-                  if (window.confirm('Delete this lead?')) deleteMutation.mutate();
-                }}
+                onClick={() => setDeleteConfirmOpen(true)}
               >
                 <Trash2 className="h-4 w-4" /> Delete
               </Button>
             )}
           </div>
         }
+      />
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        tone="danger"
+        title={t('leadDetail.deleteConfirm.title', 'Delete this lead?')}
+        description={t('leadDetail.deleteConfirm.desc', 'The lead and its timeline are removed from your workspace. This cannot be undone.')}
+        confirmLabel={t('common.delete', 'Delete')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        loading={deleteMutation.isPending}
+        onConfirm={() => {
+          setDeleteConfirmOpen(false);
+          deleteMutation.mutate();
+        }}
       />
 
       <Link
