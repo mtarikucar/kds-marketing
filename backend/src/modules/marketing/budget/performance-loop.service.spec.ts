@@ -5,6 +5,9 @@ const D = (n: number) => new Prisma.Decimal(n);
 
 function makePrisma(opts: {
   wonOpps?: any[];
+  invoices?: any[];
+  offers?: any[];
+  estimates?: any[];
   attributions?: any[];
   anchor?: any;
   existing?: any;
@@ -12,6 +15,9 @@ function makePrisma(opts: {
   const upsert = jest.fn().mockResolvedValue({});
   const prisma = {
     opportunity: { findMany: jest.fn().mockResolvedValue(opts.wonOpps ?? []) },
+    invoice: { findMany: jest.fn().mockResolvedValue(opts.invoices ?? []) },
+    leadOffer: { findMany: jest.fn().mockResolvedValue(opts.offers ?? []) },
+    estimate: { findMany: jest.fn().mockResolvedValue(opts.estimates ?? []) },
     leadAttribution: { findMany: jest.fn().mockResolvedValue(opts.attributions ?? []) },
     adMetric: {
       findFirst: jest.fn().mockResolvedValue(opts.anchor ?? null),
@@ -55,6 +61,21 @@ describe('PerformanceLoopService', () => {
     });
     expect(arg.update.revenue.toString()).toBe('1500');
     expect(arg.update.roas.toString()).toBe('5'); // 1500 / 300
+  });
+
+  it('attributes PAID-invoice revenue for a lead with no opportunity (source-agnostic loop, D9)', async () => {
+    const { prisma, upsert } = makePrisma({
+      invoices: [{ leadId: 'L1', total: 150000, paidAt: new Date('2026-07-03T10:00:00Z') }], // 1500 major
+      attributions: [{ leadId: 'L1', sourceAdCampaignId: 'camp-9' }],
+      anchor: { adAccountId: 'acc-1' },
+      existing: { spend: D(300) },
+    });
+    const svc = new PerformanceLoopService(prisma);
+    const r = await svc.reconcile('ws1');
+    expect(r.attributed).toBe(1);
+    expect(r.revenueAttributed).toBe(1500);
+    const arg = upsert.mock.calls[0][0];
+    expect(arg.update.revenue.toString()).toBe('1500');
   });
 
   it('skips a campaign that has never been pulled (no anchor AdMetric)', async () => {

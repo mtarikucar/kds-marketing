@@ -6,6 +6,10 @@ import { allocate as allocateMarginal, AllocationPlan } from './marginal-allocat
 import { allocateBandit } from './bandit-allocator.util';
 import { allocate as allocateMmm } from './mmm-allocator.util';
 import { ApprovalRequestService } from '../agents/approval-request.service';
+import { BudgetExecutorService } from './budget-executor.service';
+import { GrowthWalletService } from '../wallet/growth-wallet.service';
+import { SpendLedgerService } from '../wallet/spend-ledger.service';
+import { growthAutopilotAutonomyEnabled } from './growth-autonomy.flag';
 
 export interface ProposeResult {
   runId: string;
@@ -13,16 +17,30 @@ export interface ProposeResult {
   reason?: string;
   plan?: AllocationPlan;
   approvalId?: string;
+  /** True when the AUTONOMOUS lane applied this plan (no approval involved). */
+  autoApplied?: boolean;
+}
+
+const DEFAULT_APPLY_COOLDOWN_HOURS = 6;
+
+function applyCooldownHours(): number {
+  const raw = Number(process.env.GROWTH_AUTOPILOT_APPLY_COOLDOWN_HOURS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_APPLY_COOLDOWN_HOURS;
 }
 
 /**
- * Budget Autopilot orchestrator — SHADOW stage (Faz 7, the design's safe first
- * step). It reads a workspace's GrowthBudget + allocations, gathers the
- * performance signal, runs the Stage-1 marginal-ROAS allocator, and records the
- * proposed reallocation as an AutopilotRun with autonomy='SHADOW'. It NEVER
- * writes to an ad platform or moves real money — the whole point is to build
- * trust with a dry-run before autonomy (and threshold-gated approval) is turned
- * on in a later slice. A killed/paused budget is skipped.
+ * Budget Autopilot orchestrator (Growth Autopilot spec D5/D6/D8). Reads a
+ * workspace's GrowthBudget + allocations, gathers the performance signal, runs
+ * the stage-selected allocator, records the proposal as an AutopilotRun, and
+ * then branches on the budget's autonomy lane:
+ *   - SHADOW      → record only (observation mode, no approvals, no writes)
+ *   - ASSISTED    → record + enqueue a human approval (the pre-autopilot flow)
+ *   - AUTONOMOUS  → record + auto-apply via the executor under MACHINE
+ *                   guardrails (env flag + ACTIVE + kill-switch re-check +
+ *                   apply cooldown). NO ApprovalRequest is ever created.
+ * In the AUTONOMOUS lane the allocator pool is bounded by funded credit
+ * (min(cap, netSpent + wallet balance)) so the engine can never plan beyond
+ * the money the user actually loaded. A killed/paused budget is skipped.
  */
 @Injectable()
 export class BudgetAutopilotService {
@@ -32,6 +50,9 @@ export class BudgetAutopilotService {
     private readonly prisma: PrismaService,
     private readonly perf: BudgetPerformanceSource,
     private readonly approvals: ApprovalRequestService,
+    private readonly executor: BudgetExecutorService,
+    private readonly wallet: GrowthWalletService,
+    private readonly ledger: SpendLedgerService,
   ) {}
 
   async propose(workspaceId: string, budgetId: string, now: Date = new Date()): Promise<ProposeResult> {
@@ -46,9 +67,24 @@ export class BudgetAutopilotService {
       return { runId: run.id, status: 'SKIPPED', reason: budget.killSwitch ? 'kill-switch' : `status-${budget.status}` };
     }
 
+    const level = (budget as { autonomyLevel?: string }).autonomyLevel ?? 'ASSISTED';
+    const autonomous = level === 'AUTONOMOUS' && growthAutopilotAutonomyEnabled();
+
+    // D5 — funded-credit bound. Only the armed autonomous lane consults the
+    // wallet; SHADOW/ASSISTED keep the user cap exactly as before (no behavior
+    // change while the feature ships dark).
+    let totalBudget = budget.totalAmount.toNumber();
+    if (autonomous) {
+      const [balance, netSpent] = await Promise.all([
+        this.wallet.balance(workspaceId),
+        this.ledger.netSpent(workspaceId, budgetId),
+      ]);
+      totalBudget = Math.min(totalBudget, netSpent.toNumber() + balance.toNumber());
+    }
+
     const perf = await this.perf.collect(workspaceId, budget.allocations, now);
     const params = {
-      totalBudget: budget.totalAmount.toNumber(),
+      totalBudget,
       explorationPct: budget.explorationPct,
       maxStepPct: 20,
       targetRoas: budget.targetRoas ? budget.targetRoas.toNumber() : undefined,
@@ -74,22 +110,56 @@ export class BudgetAutopilotService {
 
     const run = await this.record(workspaceId, budgetId, { objective, before }, { after }, 'PROPOSED');
 
-    // A material (non-noop) reallocation enqueues a human approval — the bridge
-    // to execution. Nothing moves until an OWNER/MANAGER approves; the executor
-    // (credential-gated live ad-write) applies the payload on approval.
-    let approvalId: string | undefined;
-    if (!plan.noop) {
-      const moved = plan.allocations.filter((a) => Math.abs(a.after - a.before) >= 0.01);
-      const req = await this.approvals.enqueue(workspaceId, {
-        kind: 'BUDGET_REALLOCATION',
-        summary: `Reallocate ${moved.length} channel(s) within budget pool ${plan.pool}`,
-        payload: { budgetId, runId: run.id, after },
-        resourceType: 'growth_budget',
-        resourceId: budgetId,
-      });
-      approvalId = req.id;
+    if (plan.noop) return { runId: run.id, status: 'PROPOSED', plan };
+
+    if (autonomous) {
+      // AUTONOMOUS lane: machine guardrails replace the human gate. The apply
+      // cooldown (D8) caps reallocation velocity — combined with the
+      // allocator's maxStepPct this bounds worst-case movement per channel.
+      const cooldownMs = applyCooldownHours() * 3_600_000;
+      const recentAuto = cooldownMs > 0
+        ? await this.prisma.autopilotRun.findFirst({
+            where: {
+              workspaceId,
+              budgetId,
+              autonomy: 'AUTO',
+              ok: true,
+              createdAt: { gte: new Date(now.getTime() - cooldownMs) },
+            },
+            select: { id: true },
+          })
+        : null;
+      if (recentAuto) {
+        return { runId: run.id, status: 'PROPOSED', plan, autoApplied: false };
+      }
+      try {
+        await this.executor.applyAutonomous(workspaceId, budgetId, after, run.id);
+        return { runId: run.id, status: 'PROPOSED', plan, autoApplied: true };
+      } catch (e) {
+        // The proposal record stands; the apply gate refused (e.g. kill-switch
+        // flipped mid-tick) or the write failed. Never falls back to a human
+        // prompt — the next tick simply re-evaluates.
+        this.logger.warn(`autonomous apply skipped for budget ${budgetId}: ${(e as Error)?.message ?? e}`);
+        return { runId: run.id, status: 'PROPOSED', plan, autoApplied: false };
+      }
     }
-    return { runId: run.id, status: 'PROPOSED', plan, approvalId };
+
+    if (level === 'SHADOW') {
+      // Pure observation: record the would-be move, touch nothing else.
+      return { runId: run.id, status: 'PROPOSED', plan };
+    }
+
+    // ASSISTED (default, and AUTONOMOUS while the env flag is off): a material
+    // reallocation enqueues a human approval — the pre-autopilot bridge to
+    // execution. Nothing moves until an OWNER/MANAGER approves.
+    const req = await this.approvals.enqueue(workspaceId, {
+      kind: 'BUDGET_REALLOCATION',
+      summary: `Reallocate ${plan.allocations.filter((a) => Math.abs(a.after - a.before) >= 0.01).length} channel(s) within budget pool ${plan.pool}`,
+      payload: { budgetId, runId: run.id, after },
+      resourceType: 'growth_budget',
+      resourceId: budgetId,
+    });
+    return { runId: run.id, status: 'PROPOSED', plan, approvalId: req.id };
   }
 
   private record(

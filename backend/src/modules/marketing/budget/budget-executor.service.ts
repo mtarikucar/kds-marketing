@@ -4,6 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ApprovalRequestService } from '../agents/approval-request.service';
 import { AdWriteCapabilityService } from '../ads/ad-write-capability.service';
 import { AdManagementService } from '../ads/ad-management.service';
+import { growthAutopilotAutonomyEnabled } from './growth-autonomy.flag';
 
 interface AfterAllocation {
   channel: string;
@@ -73,6 +74,95 @@ export class BudgetExecutorService {
     if (!budget) throw new NotFoundException('Growth budget not found');
     if (budget.killSwitch || budget.status !== 'ACTIVE') throw new BadRequestException('Budget is not active');
 
+    const { results, applied, skipped } = await this.commitAndPush(workspaceId, budgetId, after);
+
+    const run = await this.prisma.autopilotRun.create({
+      data: {
+        workspaceId,
+        budgetId,
+        kind: 'REALLOCATION',
+        autonomy: 'APPROVED',
+        approvalRequestId: approvalId,
+        approvedBy: userId,
+        objective: Prisma.JsonNull,
+        before: Prisma.JsonNull,
+        after: results as unknown as Prisma.InputJsonValue,
+        ok: true,
+      },
+      select: { id: true },
+    });
+
+    // The decision is committed to the internal plan regardless of live write, so
+    // the approval transitions to APPLIED. status distinguishes whether a real
+    // ad-platform push happened.
+    await this.approvals.markApplied(workspaceId, approvalId);
+    if (applied === 0) {
+      this.logger.log(`Budget reallocation ${approvalId} committed to plan; no live ad-platform write (no capability/creds).`);
+    }
+    return { status: applied > 0 ? 'APPLIED' : 'NO_LIVE_WRITE', runId: run.id, applied, skipped, results };
+  }
+
+  /**
+   * AUTONOMOUS lane (Growth Autopilot spec D6/D8): applies an allocation plan
+   * under MACHINE guardrails instead of a human approval. Gates re-verified
+   * HERE at apply time — env flag armed, budget ACTIVE, kill-switch off,
+   * budget explicitly armed AUTONOMOUS. Touches NOTHING in the approval
+   * queue; the AutopilotRun (autonomy='AUTO') is the audit record. The live
+   * ad-platform push keeps the exact same credential gate as the approved
+   * path (commitAndPush).
+   */
+  async applyAutonomous(
+    workspaceId: string,
+    budgetId: string,
+    after: AfterAllocation[],
+    proposalRunId?: string,
+  ): Promise<ApplyResult> {
+    if (!growthAutopilotAutonomyEnabled()) {
+      throw new BadRequestException('Autonomous budget execution is not enabled');
+    }
+    if (!Array.isArray(after) || after.length === 0) {
+      throw new BadRequestException('Plan has no allocations');
+    }
+    const budget = await this.prisma.growthBudget.findFirst({ where: { id: budgetId, workspaceId } });
+    if (!budget) throw new NotFoundException('Growth budget not found');
+    if (budget.killSwitch || budget.status !== 'ACTIVE') {
+      throw new BadRequestException('Budget is not active');
+    }
+    if ((budget as { autonomyLevel?: string }).autonomyLevel !== 'AUTONOMOUS') {
+      throw new BadRequestException('Budget is not armed for autonomous execution');
+    }
+
+    const { results, applied, skipped } = await this.commitAndPush(workspaceId, budgetId, after);
+
+    const run = await this.prisma.autopilotRun.create({
+      data: {
+        workspaceId,
+        budgetId,
+        kind: 'REALLOCATION',
+        autonomy: 'AUTO',
+        objective: (proposalRunId ? { proposalRunId } : Prisma.JsonNull) as Prisma.InputJsonValue,
+        before: Prisma.JsonNull,
+        after: results as unknown as Prisma.InputJsonValue,
+        ok: true,
+      },
+      select: { id: true },
+    });
+
+    if (applied === 0) {
+      this.logger.log(`Autonomous reallocation for budget ${budgetId} committed to plan; no live ad-platform write (no capability/creds).`);
+    }
+    return { status: applied > 0 ? 'APPLIED' : 'NO_LIVE_WRITE', runId: run.id, applied, skipped, results };
+  }
+
+  /**
+   * The shared per-channel commit + credential-gated live-write loop — the
+   * money-safety core both lanes (APPROVED and AUTO) run through unchanged.
+   */
+  private async commitAndPush(
+    workspaceId: string,
+    budgetId: string,
+    after: AfterAllocation[],
+  ): Promise<{ results: ChannelResult[]; applied: number; skipped: number }> {
     // Resolve a Meta ad account once (only when Meta is cred-write-capable).
     const metaAccount = this.capability.canWriteBudget('META')
       ? await this.prisma.adAccount.findFirst({ where: { workspaceId, provider: 'META' }, select: { id: true } })
@@ -119,31 +209,6 @@ export class BudgetExecutorService {
     }
 
     const applied = results.filter((r) => r.applied).length;
-    const skipped = results.length - applied;
-
-    const run = await this.prisma.autopilotRun.create({
-      data: {
-        workspaceId,
-        budgetId,
-        kind: 'REALLOCATION',
-        autonomy: 'APPROVED',
-        approvalRequestId: approvalId,
-        approvedBy: userId,
-        objective: Prisma.JsonNull,
-        before: Prisma.JsonNull,
-        after: results as unknown as Prisma.InputJsonValue,
-        ok: true,
-      },
-      select: { id: true },
-    });
-
-    // The decision is committed to the internal plan regardless of live write, so
-    // the approval transitions to APPLIED. status distinguishes whether a real
-    // ad-platform push happened.
-    await this.approvals.markApplied(workspaceId, approvalId);
-    if (applied === 0) {
-      this.logger.log(`Budget reallocation ${approvalId} committed to plan; no live ad-platform write (no capability/creds).`);
-    }
-    return { status: applied > 0 ? 'APPLIED' : 'NO_LIVE_WRITE', runId: run.id, applied, skipped, results };
+    return { results, applied, skipped: results.length - applied };
   }
 }
