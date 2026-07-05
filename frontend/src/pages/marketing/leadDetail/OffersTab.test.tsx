@@ -4,6 +4,17 @@ import { describe, it, expect, vi } from 'vitest';
 import OffersTab from './OffersTab';
 import type { LeadOffer } from '../../../features/marketing/types';
 
+// Render inline defaultValues so the ConfirmDialog labels ("Send offer",
+// "Cancel", "Delete") are queryable instead of raw catalog keys.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string | string[], opts?: { defaultValue?: string } | string) =>
+      (typeof opts === 'string' ? opts : opts?.defaultValue) ??
+      (Array.isArray(key) ? key[key.length - 1] : key),
+    i18n: { language: 'en' },
+  }),
+}));
+
 /**
  * OffersTab regression guards:
  *  - the price/discount/trial cells used the `{value && <JSX>}` idiom; since
@@ -69,28 +80,56 @@ describe('OffersTab — offer currency', () => {
   });
 });
 
-describe('OffersTab — send confirmation', () => {
-  afterEach(() => vi.restoreAllMocks());
-
+describe('OffersTab — send confirmation (ConfirmDialog, not window.confirm)', () => {
   it('does not send the offer when the confirmation is dismissed', async () => {
     const onSend = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderTab([offer({ status: 'DRAFT' })], { onSend });
 
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
 
-    expect(window.confirm).toHaveBeenCalledTimes(1);
+    // The row click opens the design-system ConfirmDialog; nothing fires yet.
+    expect(onSend).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
     expect(onSend).not.toHaveBeenCalled();
   });
 
   it('sends the offer when the confirmation is accepted', async () => {
     const onSend = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderTab([offer({ status: 'DRAFT' })], { onSend });
 
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
 
     expect(onSend).toHaveBeenCalledWith('o1');
+  });
+});
+
+describe('OffersTab — delete confirmation (ConfirmDialog, not window.confirm)', () => {
+  it('deletes only after the destructive confirm is accepted', async () => {
+    const onDelete = vi.fn();
+    renderTab([offer({ status: 'DRAFT' })], { onDelete });
+
+    await userEvent.click(screen.getByRole('button', { name: /delete/i }));
+    expect(onDelete).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(onDelete).toHaveBeenCalledWith('o1');
+  });
+
+  it('does not delete when the confirmation is dismissed', async () => {
+    const onDelete = vi.fn();
+    renderTab([offer({ status: 'DRAFT' })], { onDelete });
+
+    await userEvent.click(screen.getByRole('button', { name: /delete/i }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(onDelete).not.toHaveBeenCalled();
   });
 });
 

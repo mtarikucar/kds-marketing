@@ -14,6 +14,7 @@ describe('ConversationIngressService', () => {
   let autoAssigner: { pickAssignee: jest.Mock };
   let outbox: { append: jest.Mock };
   let stream: { push: jest.Mock };
+  let leadAttribution: { capture: jest.Mock };
   let svc: ConversationIngressService;
 
   const inbound: InboundMessage = {
@@ -48,7 +49,14 @@ describe('ConversationIngressService', () => {
     autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
     outbox = { append: jest.fn().mockResolvedValue('evt') };
     stream = { push: jest.fn() };
-    svc = new ConversationIngressService(prisma as any, autoAssigner as any, outbox as any, stream as any);
+    leadAttribution = { capture: jest.fn().mockResolvedValue(undefined) };
+    svc = new ConversationIngressService(
+      prisma as any,
+      autoAssigner as any,
+      outbox as any,
+      stream as any,
+      leadAttribution as any,
+    );
   });
 
   it('first-touch: creates a workspace-scoped lead, identity, conversation, message + emits events', async () => {
@@ -114,6 +122,46 @@ describe('ConversationIngressService', () => {
     expect(received[0].payload.text).toHaveLength(8000);
     // SSE fan-out body is capped.
     expect(stream.push.mock.calls[0][1].payload.body).toHaveLength(8000);
+  });
+
+  it('D10b: a first-touch CTWA ad referral captures attribution (ctwaClid + ad source) inside the tx', async () => {
+    const withReferral: InboundMessage = {
+      ...inbound,
+      referral: { sourceId: '1209', ctwaClid: 'CTWA-1', sourceUrl: 'https://fb.me/x', sourceType: 'ad' },
+    };
+    await svc.ingest(channel, withReferral);
+    expect(leadAttribution.capture).toHaveBeenCalledTimes(1);
+    const [ws, leadId, input, source, tx] = leadAttribution.capture.mock.calls[0];
+    expect(ws).toBe(WS);
+    expect(leadId).toBe('lead-1');
+    expect(input).toMatchObject({ ctwaClid: 'CTWA-1', url: 'https://fb.me/x' });
+    expect(source).toMatchObject({ sourceAdCampaignId: '1209' });
+    expect(tx).toBe(prisma); // enrolled in the ingest transaction
+  });
+
+  it('a non-ad referral does NOT map its source id onto sourceAdCampaignId', async () => {
+    const withPostReferral: InboundMessage = {
+      ...inbound,
+      referral: { sourceId: 'fb-post-1', ctwaClid: null, sourceUrl: null, sourceType: 'post' },
+    };
+    await svc.ingest(channel, withPostReferral);
+    expect(leadAttribution.capture).toHaveBeenCalledTimes(1);
+    expect(leadAttribution.capture.mock.calls[0][3]).toEqual({});
+  });
+
+  it('no referral → no attribution capture call', async () => {
+    await svc.ingest(channel, inbound);
+    expect(leadAttribution.capture).not.toHaveBeenCalled();
+  });
+
+  it('a referral on a KNOWN identity does not re-capture (first-touch only)', async () => {
+    prisma.contactIdentity.findUnique.mockResolvedValue({ id: 'ci-2', leadId: 'lead-2' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-2' });
+    await svc.ingest(channel, {
+      ...inbound,
+      referral: { sourceId: '1209', ctwaClid: 'CTWA-1', sourceUrl: null, sourceType: 'ad' },
+    });
+    expect(leadAttribution.capture).not.toHaveBeenCalled();
   });
 
   it('known identity reuses the lead + its open conversation (no new lead)', async () => {

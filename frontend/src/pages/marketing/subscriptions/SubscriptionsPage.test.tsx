@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import SubscriptionsPage, {
@@ -93,30 +93,33 @@ describe('SubscriptionsPage', () => {
   });
 
   // Cancelling a subscription is irreversible (no un-cancel path); it must be
-  // confirmed, like the other destructive actions in the app.
+  // confirmed via the design-system ConfirmDialog (not window.confirm), like
+  // the other destructive actions in the app.
   it('does NOT cancel when the confirmation is dismissed', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(<SubscriptionsPage />, { wrapper });
     await screen.findByText('Gold membership');
 
     fireEvent.click(screen.getByTitle('Cancel'));
 
-    expect(window.confirm).toHaveBeenCalledTimes(1);
+    // The click opens a ConfirmDialog; nothing fires yet.
     expect(post).not.toHaveBeenCalledWith('/subscriptions/s1/cancel');
-    vi.restoreAllMocks();
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep' }));
+
+    expect(post).not.toHaveBeenCalledWith('/subscriptions/s1/cancel');
   });
 
   it('cancels when the confirmation is accepted', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<SubscriptionsPage />, { wrapper });
     await screen.findByText('Gold membership');
 
     fireEvent.click(screen.getByTitle('Cancel'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel subscription' }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/subscriptions/s1/cancel'),
     );
-    vi.restoreAllMocks();
   });
 });
 

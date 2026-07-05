@@ -72,6 +72,43 @@ function queryOf(url?: string | null): Record<string, string> {
   return out;
 }
 
+/** Build the [hidden-fields, landing-URL query, referrer query] lookups —
+ *  the shared precedence order for every param extraction. */
+function buildLookups(input: AttributionInput): Array<Record<string, string>> {
+  const fields: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input.fields ?? {})) {
+    const cv = clean(v);
+    if (cv) fields[k.toLowerCase()] = cv;
+  }
+  return [fields, queryOf(input.url), queryOf(input.referrer)];
+}
+
+/** First hit across the lookups (field wins, then URL query, then referrer). */
+function pickFrom(lookups: Array<Record<string, string>>, ...keys: string[]): string | undefined {
+  for (const src of lookups) {
+    for (const key of keys) {
+      const hit = src[key];
+      if (hit) return hit.slice(0, MAX_LEN);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract arbitrary (lowercased) params from the same signals + precedence
+ * parseAttribution uses. Used by the deterministic campaign resolver for our
+ * own link-decorator params (jg_cid / jg_pid). Absent keys are omitted.
+ */
+export function pickParams(input: AttributionInput, keys: string[]): Record<string, string> {
+  const lookups = buildLookups(input);
+  const out: Record<string, string> = {};
+  for (const key of keys) {
+    const hit = pickFrom(lookups, key.toLowerCase());
+    if (hit) out[key] = hit;
+  }
+  return out;
+}
+
 /**
  * Extract first-touch attribution from the available signals. Precedence for
  * each value: explicit hidden field → landing-URL query → referrer query.
@@ -79,24 +116,8 @@ function queryOf(url?: string | null): Record<string, string> {
  * writing an empty row).
  */
 export function parseAttribution(input: AttributionInput): ParsedAttribution | null {
-  const fields: Record<string, string> = {};
-  for (const [k, v] of Object.entries(input.fields ?? {})) {
-    const cv = clean(v);
-    if (cv) fields[k.toLowerCase()] = cv;
-  }
-  const urlQ = queryOf(input.url);
-  const refQ = queryOf(input.referrer);
-
-  // Field wins, then landing-URL query, then referrer query.
-  const pick = (...keys: string[]): string | undefined => {
-    for (const src of [fields, urlQ, refQ]) {
-      for (const key of keys) {
-        const hit = src[key];
-        if (hit) return hit.slice(0, MAX_LEN);
-      }
-    }
-    return undefined;
-  };
+  const lookups = buildLookups(input);
+  const pick = (...keys: string[]): string | undefined => pickFrom(lookups, ...keys);
 
   const out: ParsedAttribution = {};
   out.utmSource = pick('utm_source', 'utmsource');

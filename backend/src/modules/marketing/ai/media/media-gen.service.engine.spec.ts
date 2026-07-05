@@ -1,0 +1,202 @@
+import { Prisma } from '@prisma/client';
+import { MediaGenService } from './media-gen.service';
+import { DEFAULT_IMAGE_MODEL } from './media-models.config';
+
+const WS = 'ws-1';
+const FLAG = 'GROWTH_AUTOPILOT_AUTONOMY';
+
+// Default image model = $0.03 (media-models.config priceUsd)
+const IMG_USD = 0.03;
+
+function makeSvc(opts: { budget?: unknown; walletEntry?: unknown; asset?: unknown } = {}) {
+  const prisma: any = {
+    generatedAsset: {
+      count: jest.fn().mockResolvedValue(0),
+      create: jest.fn().mockResolvedValue({ id: 'asset-1' }),
+      update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUnique: jest.fn().mockResolvedValue(opts.asset ?? null),
+      findFirst: jest.fn().mockResolvedValue(opts.asset ?? null),
+      delete: jest.fn().mockResolvedValue({}),
+    },
+    growthBudget: { findFirst: jest.fn().mockResolvedValue(opts.budget ?? null) },
+    growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(opts.walletEntry ?? null) },
+  };
+  const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined), chargeOverage: jest.fn().mockResolvedValue(undefined) };
+  const provider = { name: 'fal', isConfigured: jest.fn().mockReturnValue(true), submit: jest.fn().mockResolvedValue({ providerRequestId: 'req-9' }), getResult: jest.fn() };
+  const jobs = { schedule: jest.fn().mockResolvedValue('job-1') };
+  const r2 = { isConfigured: jest.fn().mockReturnValue(true), upload: jest.fn(), deleteKeys: jest.fn().mockResolvedValue(undefined) };
+  const runner = { registerHandler: jest.fn() };
+  const wallet = {
+    debit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }),
+    credit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }),
+  };
+  const svc = new MediaGenService(prisma, credits as any, provider as any, jobs as any, r2 as any, runner as any, wallet as any);
+  return { svc, prisma, credits, provider, jobs, wallet };
+}
+
+const ENGINE_DTO = { type: 'IMAGE' as const, prompt: 'a cat', createdById: 'u1', socialCampaignId: 'c1', campaignItemId: 'ci-1' };
+
+describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
+  let prevFlag: string | undefined;
+  beforeEach(() => { prevFlag = process.env[FLAG]; process.env[FLAG] = '1'; });
+  afterEach(() => {
+    if (prevFlag === undefined) delete process.env[FLAG];
+    else process.env[FLAG] = prevFlag;
+  });
+
+  describe('requestGeneration pre-debit', () => {
+    it('pre-debits the wallet (ENGINE_SPEND, mediagen:{assetId}) BEFORE the provider submit', async () => {
+      const { svc, provider, wallet } = makeSvc({ budget: { id: 'b1' } });
+      await svc.requestGeneration(WS, ENGINE_DTO);
+      expect(wallet.debit).toHaveBeenCalledWith(WS, expect.objectContaining({
+        kind: 'ENGINE_SPEND', ref: 'mediagen:asset-1', amount: IMG_USD,
+      }));
+      expect(wallet.debit.mock.invocationCallOrder[0]).toBeLessThan(provider.submit.mock.invocationCallOrder[0]);
+    });
+
+    it('resolves the current-period ACTIVE armed-AUTONOMOUS budget workspace-scoped', async () => {
+      const { svc, prisma } = makeSvc({ budget: { id: 'b1' } });
+      await svc.requestGeneration(WS, ENGINE_DTO);
+      expect(prisma.growthBudget.findFirst).toHaveBeenCalledWith({
+        where: {
+          workspaceId: WS,
+          periodKey: new Date().toISOString().slice(0, 7),
+          status: 'ACTIVE',
+          autonomyLevel: 'AUTONOMOUS',
+        },
+        select: { id: true },
+      });
+    });
+
+    it('rejects the ENGINE generation fail-closed when the wallet is insufficient (no submit, credits refunded, no phantom wallet refund)', async () => {
+      const { svc, prisma, credits, provider, wallet } = makeSvc({ budget: { id: 'b1' } });
+      wallet.debit.mockRejectedValue(new Error('Insufficient growth credit'));
+      await expect(svc.requestGeneration(WS, ENGINE_DTO)).rejects.toThrow('Insufficient growth credit');
+      expect(provider.submit).not.toHaveBeenCalled();
+      // terminalized + credit reservation refunded via the conditional claim
+      expect(prisma.generatedAsset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'FAILED' }),
+      }));
+      expect(credits.refund).toHaveBeenCalledWith(WS, 3);
+      // the failed debit wrote NO wallet ledger entry → no refund credit
+      expect(wallet.credit).not.toHaveBeenCalled();
+    });
+
+    it('refunds the wallet pre-debit when provider.submit throws after a successful debit', async () => {
+      const { svc, provider, wallet } = makeSvc({
+        budget: { id: 'b1' },
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-0.03') },
+      });
+      provider.submit.mockRejectedValue(new Error('fal 500'));
+      await expect(svc.requestGeneration(WS, ENGINE_DTO)).rejects.toThrow('fal 500');
+      expect(wallet.credit).toHaveBeenCalledTimes(1);
+      const [ws, movement] = wallet.credit.mock.calls[0];
+      expect(ws).toBe(WS);
+      expect(movement.kind).toBe('REFUND');
+      expect(movement.ref).toBe('mediagen-refund:asset-1');
+      expect(movement.amount.toString()).toBe('0.03');
+    });
+
+    it('does NOT query the budget or debit the wallet for a manual generation (no campaignItemId)', async () => {
+      const { svc, prisma, provider, wallet } = makeSvc({ budget: { id: 'b1' } });
+      await svc.requestGeneration(WS, { type: 'IMAGE', prompt: 'a cat', createdById: 'u1' });
+      expect(prisma.growthBudget.findFirst).not.toHaveBeenCalled();
+      expect(wallet.debit).not.toHaveBeenCalled();
+      expect(provider.submit).toHaveBeenCalled();
+    });
+
+    it('does NOT debit the wallet when no armed-AUTONOMOUS budget exists (engine dto, budget null)', async () => {
+      const { svc, provider, wallet } = makeSvc({ budget: null });
+      await svc.requestGeneration(WS, ENGINE_DTO);
+      expect(wallet.debit).not.toHaveBeenCalled();
+      expect(provider.submit).toHaveBeenCalled();
+    });
+
+    it('does NOT query the budget when the env flag is off', async () => {
+      delete process.env[FLAG];
+      const { svc, prisma, wallet } = makeSvc({ budget: { id: 'b1' } });
+      await svc.requestGeneration(WS, ENGINE_DTO);
+      expect(prisma.growthBudget.findFirst).not.toHaveBeenCalled();
+      expect(wallet.debit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('finalize refunds', () => {
+    const ENGINE_ASSET = {
+      id: 'asset-1', workspaceId: WS, status: 'GENERATING', model: DEFAULT_IMAGE_MODEL,
+      costCreditsReserved: 3, params: { campaignItemId: 'ci-1' }, type: 'IMAGE',
+    };
+
+    it('FAILED → refunds the wallet pre-debit (kind REFUND, ref mediagen-refund:{assetId}) even with the flag off', async () => {
+      delete process.env[FLAG]; // a debit already taken must refund regardless of current arming
+      const { svc, credits, wallet } = makeSvc({
+        asset: ENGINE_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-0.03') },
+      });
+      await svc.finalizeAsset('asset-1', { status: 'FAILED', error: 'boom' });
+      expect(credits.refund).toHaveBeenCalledWith(WS, 3);
+      expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({
+        kind: 'REFUND', ref: 'mediagen-refund:asset-1',
+      }));
+      expect(wallet.credit.mock.calls[0][1].amount.toString()).toBe('0.03');
+    });
+
+    it('BLOCKED → refunds the wallet pre-debit', async () => {
+      const { svc, wallet } = makeSvc({
+        asset: ENGINE_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-0.03') },
+      });
+      await svc.finalizeAsset('asset-1', { status: 'BLOCKED', error: 'NSFW' });
+      expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({ ref: 'mediagen-refund:asset-1' }));
+    });
+
+    it('FAILED engine asset with NO wallet debit entry → no wallet refund', async () => {
+      const { svc, credits, wallet } = makeSvc({ asset: ENGINE_ASSET, walletEntry: null });
+      await svc.finalizeAsset('asset-1', { status: 'FAILED', error: 'boom' });
+      expect(credits.refund).toHaveBeenCalled();
+      expect(wallet.credit).not.toHaveBeenCalled();
+    });
+
+    it('FAILED manual asset (no campaignItemId) → never looks up or credits the wallet', async () => {
+      const { svc, prisma, wallet } = makeSvc({ asset: { ...ENGINE_ASSET, params: {} } });
+      await svc.finalizeAsset('asset-1', { status: 'FAILED', error: 'boom' });
+      expect(prisma.growthWalletLedgerEntry.findUnique).not.toHaveBeenCalled();
+      expect(wallet.credit).not.toHaveBeenCalled();
+    });
+
+    it('does not refund the wallet when the terminal claim is lost (count 0)', async () => {
+      const { svc, prisma, wallet } = makeSvc({
+        asset: ENGINE_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-0.03') },
+      });
+      prisma.generatedAsset.updateMany.mockResolvedValue({ count: 0 });
+      await svc.finalizeAsset('asset-1', { status: 'FAILED', error: 'boom' });
+      expect(wallet.credit).not.toHaveBeenCalled();
+    });
+
+    it('ignores a wallet ledger entry from another workspace', async () => {
+      const { svc, wallet } = makeSvc({
+        asset: ENGINE_ASSET,
+        walletEntry: { workspaceId: 'ws-OTHER', delta: new Prisma.Decimal('-0.03') },
+      });
+      await svc.finalizeAsset('asset-1', { status: 'FAILED', error: 'boom' });
+      expect(wallet.credit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAsset refund', () => {
+    it('refunds the wallet pre-debit when a non-terminal engine asset is deleted', async () => {
+      const asset = {
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING', model: DEFAULT_IMAGE_MODEL,
+        costCreditsReserved: 3, params: { campaignItemId: 'ci-1' }, r2Key: null, thumbnailR2Key: null,
+      };
+      const { svc, wallet } = makeSvc({
+        asset,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-0.03') },
+      });
+      await svc.deleteAsset(WS, 'asset-1');
+      expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({ ref: 'mediagen-refund:asset-1' }));
+    });
+  });
+});

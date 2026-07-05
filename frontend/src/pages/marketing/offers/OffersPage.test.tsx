@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -89,7 +89,8 @@ describe('OffersPage', () => {
   });
 
   // Regression: sending an offer transmits a price quote to the customer and is
-  // irreversible, so it must be confirmed — matching the lead-detail Offers tab.
+  // irreversible, so it must be confirmed via the design-system ConfirmDialog
+  // (not window.confirm) — matching the lead-detail Offers tab.
   describe('send confirmation', () => {
     beforeEach(() => {
       get.mockImplementation((url: string) =>
@@ -98,29 +99,33 @@ describe('OffersPage', () => {
           : Promise.resolve(EMPTY),
       );
     });
-    afterEach(() => vi.restoreAllMocks());
 
     it('does NOT send when the confirmation is dismissed', async () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
       render(<OffersPage />, { wrapper });
 
       await screen.findByText('Acme');
       await userEvent.click(screen.getByRole('button', { name: 'common.actions' }));
       await userEvent.click(await screen.findByText('offers.actions.send'));
 
-      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      // The menu action opens a ConfirmDialog; nothing fires yet.
+      expect(post).not.toHaveBeenCalledWith('/offers/o1/send');
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'common.cancel' }));
+
       expect(post).not.toHaveBeenCalledWith('/offers/o1/send');
     });
 
     it('sends when the confirmation is accepted', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       render(<OffersPage />, { wrapper });
 
       await screen.findByText('Acme');
       await userEvent.click(screen.getByRole('button', { name: 'common.actions' }));
       await userEvent.click(await screen.findByText('offers.actions.send'));
 
-      expect(post).toHaveBeenCalledWith('/offers/o1/send');
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+      await waitFor(() => expect(post).toHaveBeenCalledWith('/offers/o1/send'));
     });
   });
 
@@ -144,9 +149,7 @@ describe('OffersPage', () => {
       );
       // Send never resolves → the mutation stays pending after the click.
       post.mockImplementation(() => new Promise(() => {}));
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
     });
-    afterEach(() => vi.restoreAllMocks());
 
     it("sending one offer does not disable another offer's Send action", async () => {
       const user = userEvent.setup();
@@ -159,7 +162,12 @@ describe('OffersPage', () => {
       // Send the first offer → leaves sendMutation pending (post never resolves).
       await user.click(triggers[0]);
       await user.click(await screen.findByText('offers.actions.send'));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Send' }));
       expect(post).toHaveBeenCalledWith('/offers/o1/send');
+      // The confirm dialog closes on confirm (fire-and-forget, like the old
+      // window.confirm) so the rest of the list stays reachable.
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
       // Open the SECOND offer's menu while o1's send is still in flight.
       await user.click(screen.getAllByRole('button', { name: 'common.actions' })[1]);

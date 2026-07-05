@@ -81,6 +81,70 @@ describe('pullMetaInsights', () => {
     expect(rows[0].leads).toBe(4);
   });
 
+  it('requests the revenue fields (action_values + purchase_roas) from the provider', async () => {
+    mockSafeFetch.mockResolvedValue(res(true, 200, { data: [] }));
+    await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    const url = mockSafeFetch.mock.calls[0][0] as string;
+    expect(url).toContain('action_values');
+    expect(url).toContain('purchase_roas');
+  });
+
+  it('maps the deduplicated omni_purchase action value to conversionValue', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(true, 200, {
+        data: [{
+          date_start: '2026-06-01', campaign_id: 'c1', spend: '10', impressions: '1', clicks: '1',
+          action_values: [
+            { action_type: 'omni_purchase', value: '150.50' },
+            // pixel purchase overlaps omni — must NOT be double-counted
+            { action_type: 'offsite_conversion.fb_pixel_purchase', value: '150.50' },
+          ],
+        }],
+      }),
+    );
+    const rows = await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    expect(rows[0].conversionValue).toBe(150.5);
+  });
+
+  it('sums the distinct pixel + onsite purchase values when omni_purchase is absent', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(true, 200, {
+        data: [{
+          date_start: '2026-06-01', campaign_id: 'c1', spend: '10', impressions: '1', clicks: '1',
+          action_values: [
+            { action_type: 'offsite_conversion.fb_pixel_purchase', value: '100' },
+            { action_type: 'onsite_conversion.purchase', value: '20' },
+          ],
+        }],
+      }),
+    );
+    const rows = await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    expect(rows[0].conversionValue).toBe(120);
+  });
+
+  it('derives conversionValue from purchase_roas × spend when action_values is absent', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(true, 200, {
+        data: [{
+          date_start: '2026-06-01', campaign_id: 'c1', spend: '50', impressions: '1', clicks: '1',
+          purchase_roas: [{ action_type: 'omni_purchase', value: '3.0' }],
+        }],
+      }),
+    );
+    const rows = await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    expect(rows[0].conversionValue).toBe(150);
+  });
+
+  it('reports conversionValue 0 when the row carries no purchase signal', async () => {
+    mockSafeFetch.mockResolvedValue(
+      res(true, 200, {
+        data: [{ date_start: '2026-06-01', campaign_id: 'c1', spend: '5', impressions: '1', clicks: '1' }],
+      }),
+    );
+    const rows = await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');
+    expect(rows[0].conversionValue).toBe(0);
+  });
+
   it('prefixes a bare account id with act_', async () => {
     mockSafeFetch.mockResolvedValue(res(true, 200, { data: [] }));
     await pullMetaInsights('tok', '42', '2026-06-01', '2026-06-02');

@@ -8,6 +8,7 @@ describe('OrderFormsService', () => {
   let autoAssigner: { pickAssignee: jest.Mock };
   let products: { get: jest.Mock };
   let invoices: { create: jest.Mock; send: jest.Mock };
+  let leadAttribution: { capture: jest.Mock };
   let svc: OrderFormsService;
   const WS = 'ws-1';
 
@@ -24,6 +25,7 @@ describe('OrderFormsService', () => {
       validate: jest.fn().mockResolvedValue({ couponId: 'c1', code: 'X', amountOff: 0 }),
       redeem: jest.fn().mockResolvedValue({ couponId: 'c1', code: 'X', amountOff: 0 }),
     };
+    leadAttribution = { capture: jest.fn().mockResolvedValue(undefined) };
     svc = new OrderFormsService(
       prisma as any,
       outbox as any,
@@ -31,6 +33,7 @@ describe('OrderFormsService', () => {
       products as any,
       invoices as any,
       coupons as any,
+      leadAttribution as any,
     );
     (prisma.$transaction as any).mockImplementation(async (arg: any) =>
       typeof arg === 'function' ? arg(prisma) : Promise.all(arg),
@@ -185,6 +188,38 @@ describe('OrderFormsService', () => {
       expect(invoices.create).not.toHaveBeenCalled(); // reused, not re-minted
       expect(invoices.send).toHaveBeenCalledWith(WS, 'inv-prev');
       expect(res.redirectUrl).toBe('https://x/api/public/i/in_tok');
+    });
+
+    it('captures first-touch attribution for a NEW lead in the SAME tx (url + referrer)', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue(null);
+      prisma.lead.create.mockResolvedValue({ id: 'lead-1' } as any);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {
+        ip: '203.0.113.1',
+        url: 'https://shop.co/o/x?utm_campaign=c1',
+        referrer: 'https://facebook.com',
+      });
+
+      expect(leadAttribution.capture).toHaveBeenCalledTimes(1);
+      const [ws, leadId, input, , tx] = leadAttribution.capture.mock.calls[0];
+      expect(ws).toBe(WS);
+      expect(leadId).toBe('lead-1');
+      expect(input).toMatchObject({ url: 'https://shop.co/o/x?utm_campaign=c1', referrer: 'https://facebook.com' });
+      expect(tx).toBe(prisma); // same tx client as the lead create
+    });
+
+    it('does NOT capture attribution for a deduped existing lead (first-touch preserved)', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-existing', status: 'NEW' } as any);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {
+        url: 'https://shop.co/o/x?utm_campaign=c1',
+      });
+
+      expect(leadAttribution.capture).not.toHaveBeenCalled();
     });
 
     it('enforces a required phone', async () => {

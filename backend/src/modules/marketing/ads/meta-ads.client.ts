@@ -31,6 +31,36 @@ function leadCount(actions: any[]): number {
   return specific > 0 ? specific : sum((t) => t === 'lead');
 }
 
+/**
+ * Source-specific purchase action types that do NOT overlap with each other —
+ * same dedup principle as SPECIFIC_LEAD_TYPES: Meta's `omni_purchase` already
+ * aggregates (and deduplicates) the pixel + onsite values, so it is preferred;
+ * only when it is absent do we sum the distinct specific types.
+ */
+const SPECIFIC_PURCHASE_TYPES = new Set([
+  'offsite_conversion.fb_pixel_purchase',
+  'onsite_conversion.purchase',
+]);
+
+/**
+ * Provider-reported purchase value for a row (Growth Autopilot D10 cold-start
+ * revenue). Order: deduplicated `omni_purchase` action value → sum of the
+ * distinct specific purchase values → `purchase_roas` × spend → 0.
+ */
+function purchaseValue(d: any): number {
+  const values: any[] = Array.isArray(d?.action_values) ? d.action_values : [];
+  const omni = values.find((a) => String(a?.action_type ?? '') === 'omni_purchase');
+  if (omni) return Number(omni?.value || 0);
+  const specific = values
+    .filter((a) => SPECIFIC_PURCHASE_TYPES.has(String(a?.action_type ?? '')))
+    .reduce((s: number, a: any) => s + Number(a?.value || 0), 0);
+  if (specific > 0) return specific;
+  const roasArr: any[] = Array.isArray(d?.purchase_roas) ? d.purchase_roas : [];
+  const roas = roasArr.find((r) => String(r?.action_type ?? '') === 'omni_purchase') ?? roasArr[0];
+  if (roas) return Number(roas?.value || 0) * Number(d?.spend || 0);
+  return 0;
+}
+
 function parseMetaRow(d: any, fallbackDate: string): AdMetricRow {
   const leads = leadCount(Array.isArray(d?.actions) ? d.actions : []);
   return {
@@ -40,6 +70,7 @@ function parseMetaRow(d: any, fallbackDate: string): AdMetricRow {
     impressions: Number(d?.impressions || 0),
     clicks: Number(d?.clicks || 0),
     leads,
+    conversionValue: purchaseValue(d),
     raw: d,
   };
 }
@@ -66,7 +97,7 @@ export async function pullMetaInsights(
     accessToken: token,
     method: 'GET',
     query: {
-      fields: 'spend,impressions,clicks,actions,campaign_id,date_start',
+      fields: 'spend,impressions,clicks,actions,action_values,purchase_roas,campaign_id,date_start',
       level: 'campaign',
       time_increment: '1',
       time_range: JSON.stringify({ since, until }),

@@ -20,6 +20,7 @@ function makePrisma() {
     adMetric: {
       findMany: jest.fn(),
       upsert: jest.fn(),
+      updateMany: jest.fn(),
     },
   };
 }
@@ -41,6 +42,7 @@ describe('AdAccountService', () => {
     prisma.adAccount.upsert.mockResolvedValue({});
     prisma.adAccount.delete.mockResolvedValue({});
     prisma.adMetric.upsert.mockResolvedValue({});
+    prisma.adMetric.updateMany.mockResolvedValue({ count: 0 });
   });
 
   describe('connect', () => {
@@ -295,6 +297,55 @@ describe('AdAccountService', () => {
       const upd = prisma.adAccount.update.mock.calls[0][0] as any;
       expect(upd.data.lastError).toBeNull();
       expect(upd.data.lastPulledAt).toBeInstanceOf(Date);
+    });
+
+    it('writes provider conversionValue ALWAYS and backfills revenue only while it is 0 (CRM wins)', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+        { date: '2026-06-01', campaignId: 'c1', spend: 10, impressions: 100, clicks: 5, leads: 1, conversionValue: 25.5 },
+      ]);
+
+      await svc.pullAccount(account, '2026-06-01', '2026-06-03');
+
+      const up = prisma.adMetric.upsert.mock.calls[0][0] as any;
+      expect(String(up.create.conversionValue)).toBe('25.5');
+      expect(String(up.update.conversionValue)).toBe('25.5');
+      // revenue is NEVER unconditionally written by the pull …
+      expect(up.create.revenue).toBeUndefined();
+      expect(up.update.revenue).toBeUndefined();
+      // … it is backfilled via a guarded updateMany that only matches revenue=0
+      expect(prisma.adMetric.updateMany).toHaveBeenCalledTimes(1);
+      const um = prisma.adMetric.updateMany.mock.calls[0][0] as any;
+      expect(um.where).toEqual({
+        workspaceId: WS,
+        adAccountId: 'a1',
+        date: new Date('2026-06-01T00:00:00.000Z'),
+        campaignId: 'c1',
+        revenue: 0,
+      });
+      expect(String(um.data.revenue)).toBe('25.5');
+    });
+
+    it('skips the revenue backfill when the provider reports no purchase value', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+        { date: '2026-06-01', campaignId: 'c1', spend: 10, impressions: 100, clicks: 5, leads: 1, conversionValue: 0 },
+      ]);
+      await svc.pullAccount(account, '2026-06-01', '2026-06-03');
+      expect(prisma.adMetric.updateMany).not.toHaveBeenCalled();
+      // conversionValue 0 still mirrors the provider on the update path
+      expect(String((prisma.adMetric.upsert.mock.calls[0][0] as any).update.conversionValue)).toBe('0');
+    });
+
+    it('leaves conversionValue untouched for a provider row that does not carry it (no CRM clobber)', async () => {
+      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockResolvedValue([
+        { date: '2026-06-01', campaignId: 'c9', spend: 8, impressions: 500, clicks: 25, leads: 4 },
+      ]);
+      await svc.pullAccount({ ...account, provider: 'TIKTOK', externalAdId: 'adv_9' }, '2026-06-01', '2026-06-03');
+      const up = prisma.adMetric.upsert.mock.calls[0][0] as any;
+      expect(up.update.conversionValue).toBeUndefined();
+      expect(prisma.adMetric.updateMany).not.toHaveBeenCalled();
     });
 
     it('dispatches to the TikTok client for a TikTok account', async () => {

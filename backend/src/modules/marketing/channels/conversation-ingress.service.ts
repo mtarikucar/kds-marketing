@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
+import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
 import { ConversationStreamService } from './conversation-stream.service';
@@ -53,6 +54,7 @@ export class ConversationIngressService {
     private readonly autoAssigner: LeadAutoAssignerService,
     private readonly outbox: OutboxService,
     private readonly stream: ConversationStreamService,
+    private readonly leadAttribution: LeadAttributionService,
   ) {}
 
   private async resolveSentinel(workspaceId: string): Promise<string | null> {
@@ -192,6 +194,24 @@ export class ConversationIngressService {
           leadId: lead.id,
         },
       });
+      // First-touch attribution (D10b): a CTWA/CTM ad referral on the FIRST
+      // message ties this conversation-born lead to the sourcing ad. Only an
+      // ad-typed referral maps its source id; capture() is best-effort and
+      // first-touch-idempotent, enrolled in this tx.
+      if (inbound.referral) {
+        const r = inbound.referral;
+        const isAd = /^ads?$/i.test(String(r.sourceType ?? ''));
+        await this.leadAttribution.capture(
+          workspaceId,
+          lead.id,
+          {
+            ...(r.ctwaClid ? { ctwaClid: r.ctwaClid } : {}),
+            ...(r.sourceUrl ? { url: r.sourceUrl } : {}),
+          },
+          isAd && r.sourceId ? { sourceAdCampaignId: r.sourceId } : {},
+          tx,
+        );
+      }
       if (sentinelId) {
         await tx.leadActivity.create({
           data: {

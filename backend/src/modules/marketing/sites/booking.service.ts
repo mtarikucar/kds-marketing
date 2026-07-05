@@ -8,6 +8,7 @@ import {
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
@@ -119,6 +120,7 @@ export class BookingService implements OnModuleInit {
     private readonly runner: ScheduledJobRunnerService,
     private readonly googleSync: GoogleCalendarSyncService,
     private readonly outlookSync: OutlookCalendarSyncService,
+    private readonly leadAttribution: LeadAttributionService,
   ) {}
 
   onModuleInit(): void {
@@ -497,7 +499,7 @@ export class BookingService implements OnModuleInit {
   /** Public: book a slot. */
   async book(
     workspaceId: string, calId: string,
-    dto: { start: string; name: string; email?: string; phone?: string; notes?: string; attendeeTimezone?: string },
+    dto: { start: string; name: string; email?: string; phone?: string; notes?: string; attendeeTimezone?: string; landingUrl?: string; referrerUrl?: string },
   ) {
     const cal = await this.prisma.bookingCalendar.findFirst({ where: { id: calId, workspaceId, active: true } });
     if (!cal) throw new NotFoundException('Calendar not found');
@@ -701,6 +703,21 @@ export class BookingService implements OnModuleInit {
           },
         });
         leadId = lead.id;
+        // First-touch attribution (D10): tie a NEW booking-born lead to the
+        // page it booked from. Existing (deduped) leads keep their original
+        // first touch. Best-effort; enrolled in this tx.
+        if (dto.landingUrl || dto.referrerUrl) {
+          await this.leadAttribution.capture(
+            workspaceId,
+            lead.id,
+            {
+              ...(dto.landingUrl ? { url: dto.landingUrl } : {}),
+              ...(dto.referrerUrl ? { referrer: dto.referrerUrl } : {}),
+            },
+            {},
+            tx,
+          );
+        }
       }
       // A calendar that requires approval holds the slot as PENDING (which still
       // counts against capacity) until a manager confirms; otherwise CONFIRMED.

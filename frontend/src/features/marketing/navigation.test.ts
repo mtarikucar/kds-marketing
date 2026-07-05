@@ -117,9 +117,19 @@ describe('splitByTier — progressive disclosure', () => {
     expect(coreIds).toEqual(
       expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reporting']),
     );
-    expect(advIds).toEqual(expect.arrayContaining(['studio', 'memberships', 'payments']));
+    expect(advIds).toEqual(expect.arrayContaining(['memberships', 'payments']));
     // The two tiers never overlap.
     expect(coreIds.some((id) => advIds.includes(id))).toBe(false);
+  });
+
+  it('promotes Growth Studio out of "More" (core tier) while keeping it manager-only', () => {
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
+    const { core, advanced } = splitByTier(hubs);
+    expect(core.map((h) => h.id)).toContain('studio');
+    expect(advanced.map((h) => h.id)).not.toContain('studio');
+    // Non-managers still never see it (visibleNav drops it before tiering).
+    const repHubs = visibleNav(NAV_HUBS, { isManager: false, has: entitle() });
+    expect(repHubs.map((h) => h.id)).not.toContain('studio');
   });
 
   it('excludes the settings-area hub from both tiers', () => {

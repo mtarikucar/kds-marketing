@@ -216,6 +216,11 @@ export class AdAccountService {
       for (const row of rows) {
         const date = new Date(`${row.date}T00:00:00.000Z`);
         if (Number.isNaN(date.getTime())) continue;
+        // Providers that don't report purchase value (TikTok/LinkedIn today)
+        // must not clobber an existing conversionValue — only mirror it when
+        // the row actually carries the field.
+        const hasCv = row.conversionValue != null;
+        const conversionValue = new Prisma.Decimal(row.conversionValue ?? 0);
         await this.prisma.adMetric.upsert({
           where: {
             adAccountId_date_campaignId: { adAccountId: account.id, date, campaignId: row.campaignId },
@@ -229,6 +234,7 @@ export class AdAccountService {
             impressions: row.impressions,
             clicks: row.clicks,
             leads: row.leads,
+            ...(hasCv ? { conversionValue } : {}),
             rawMetrics: row.raw as Prisma.InputJsonValue,
           },
           update: {
@@ -236,10 +242,27 @@ export class AdAccountService {
             impressions: row.impressions,
             clicks: row.clicks,
             leads: row.leads,
+            ...(hasCv ? { conversionValue } : {}),
             rawMetrics: row.raw as Prisma.InputJsonValue,
             pulledAt: new Date(),
           },
         });
+        // Cold-start revenue (D10): provider-reported purchase value backfills
+        // AdMetric.revenue ONLY while it is still 0 — first-party CRM revenue
+        // (the performance loop's recompute) always wins over platform
+        // self-attribution, so a guarded updateMany, never a blind write.
+        if (conversionValue.gt(0)) {
+          await this.prisma.adMetric.updateMany({
+            where: {
+              workspaceId: account.workspaceId,
+              adAccountId: account.id,
+              date,
+              campaignId: row.campaignId,
+              revenue: 0,
+            },
+            data: { revenue: conversionValue },
+          });
+        }
       }
       await this.prisma.adAccount.update({
         where: { id: account.id },

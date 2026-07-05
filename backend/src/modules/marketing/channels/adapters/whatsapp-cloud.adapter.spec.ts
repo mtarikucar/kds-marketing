@@ -62,6 +62,59 @@ describe('WhatsappCloudAdapter.send', () => {
   });
 });
 
+describe('WhatsappCloudAdapter.parseInbound', () => {
+  const msg = (extra: any = {}) => ({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              contacts: [{ wa_id: '90555', profile: { name: 'Ayşe' } }],
+              messages: [{ from: '90555', id: 'wamid.1', text: { body: 'merhaba' }, ...extra }],
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  it('parses a plain text message (no referral field)', () => {
+    const { a } = adapter();
+    const inb = a.parseInbound(cfg(), msg());
+    expect(inb).toHaveLength(1);
+    expect(inb[0]).toMatchObject({ externalUserId: '90555', kind: 'WA', externalMessageId: 'wamid.1', text: 'merhaba' });
+    expect(inb[0].referral).toBeUndefined();
+  });
+
+  it('extracts the CTWA referral (ctwa_clid + source_id + source_url) when the ad click carried one', () => {
+    const { a } = adapter();
+    const inb = a.parseInbound(
+      cfg(),
+      msg({
+        referral: {
+          source_url: 'https://fb.me/xyz?utm_campaign=c1',
+          source_type: 'ad',
+          source_id: '1201234567890',
+          ctwa_clid: 'CTWA-CLICK-1',
+          headline: 'Buy now',
+        },
+      }),
+    );
+    expect(inb[0].referral).toEqual({
+      sourceId: '1201234567890',
+      ctwaClid: 'CTWA-CLICK-1',
+      sourceUrl: 'https://fb.me/xyz?utm_campaign=c1',
+      sourceType: 'ad',
+    });
+  });
+
+  it('ignores a referral object that carries neither a source id nor a ctwa_clid', () => {
+    const { a } = adapter();
+    const inb = a.parseInbound(cfg(), msg({ referral: { headline: 'x' } }));
+    expect(inb[0].referral).toBeUndefined();
+  });
+});
+
 describe('WhatsappCloudAdapter.parseStatusUpdates', () => {
   it('maps WA statuses to StatusUpdate[]', () => {
     const { a } = adapter();

@@ -6,6 +6,7 @@ import {
   ParsedAttribution,
   parseAttribution,
 } from './attribution-capture.util';
+import { resolveAttributionRefs } from './ad-campaign-resolver';
 
 /** Soft content/campaign/ad references, resolved by the caller when known. */
 export interface AttributionSource {
@@ -41,11 +42,22 @@ export class LeadAttributionService {
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
     const parsed = parseAttribution(input);
-    const src = this.cleanSource(source);
+    let src = this.cleanSource(source);
+    const db = tx ?? this.prisma;
+    // D10a/D10c: deterministically resolve the soft refs the caller couldn't
+    // supply (explicit jg_cid, AdMetric-verified utm_campaign, social jg_pid).
+    // Caller-known refs always win. Best-effort — a resolver failure only
+    // costs the ref, never the attribution row or the lead.
+    try {
+      const resolved = await resolveAttributionRefs(db, workspaceId, input, parsed, src);
+      src = { ...resolved, ...src };
+    } catch (err) {
+      this.logger.warn(`attribution ref resolution failed for lead ${leadId}: ${String((err as Error)?.message ?? err)}`);
+    }
     // Nothing to record — neither click/UTM signal nor a known content source.
     if (!parsed && Object.keys(src).length === 0) return;
     try {
-      await this.write(workspaceId, leadId, parsed, src, input, tx ?? this.prisma);
+      await this.write(workspaceId, leadId, parsed, src, input, db);
     } catch (err) {
       this.logger.warn(`lead attribution capture failed for lead ${leadId}: ${String((err as Error)?.message ?? err)}`);
     }

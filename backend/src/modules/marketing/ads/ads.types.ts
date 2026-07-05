@@ -6,6 +6,8 @@ export interface AdMetricRow {
   impressions: number;
   clicks: number;
   leads: number;
+  /** Provider-reported purchase value (deduplicated), 0 when absent (D10 cold-start). */
+  conversionValue?: number;
   raw?: unknown;
 }
 

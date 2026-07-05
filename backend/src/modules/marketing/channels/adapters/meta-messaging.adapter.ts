@@ -84,11 +84,25 @@ function parseMetaMessaging(body: unknown, kind: ContactKind): InboundMessage[] 
       // Skip echoes (our own sends) and non-text events (delivery/read receipts
       // are handled by parseStatusUpdates, not here).
       if (!senderId || ev?.message?.is_echo || typeof text !== 'string') continue;
+      // Click-to-Messenger/Instagram ad referral (D10b): an ads-sourced thread
+      // carries `referral` (ad_id + referer_uri + source). Only surface it when
+      // it actually identifies a source.
+      const ref = ev?.referral ?? ev?.postback?.referral;
+      const referral =
+        ref && (ref.ad_id || ref.source_id)
+          ? {
+              sourceId: ref.ad_id != null ? String(ref.ad_id) : ref.source_id != null ? String(ref.source_id) : null,
+              ctwaClid: ref.ctwa_clid != null ? String(ref.ctwa_clid) : null,
+              sourceUrl: ref.referer_uri != null ? String(ref.referer_uri) : ref.source_url != null ? String(ref.source_url) : null,
+              sourceType: ref.source != null ? String(ref.source) : ref.type != null ? String(ref.type) : null,
+            }
+          : undefined;
       out.push({
         externalUserId: String(senderId),
         kind,
         externalMessageId: ev?.message?.mid ?? null,
         text,
+        ...(referral ? { referral } : {}),
         raw: ev,
       });
     }
