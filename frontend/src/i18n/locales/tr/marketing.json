@@ -3105,5 +3105,51 @@
   "budget.status.PAUSED": "Duraklatıldı",
   "budget.status.KILLED": "Durduruldu",
   "budget.kind.BUDGET_REALLOCATION": "Bütçe yeniden dağıtımı",
-  "budget.runKind.REALLOCATION": "Yeniden dağıtım"
+  "budget.runKind.REALLOCATION": "Yeniden dağıtım",
+  "autopilot": {
+    "title": "Büyüme Otopiloti",
+    "subtitle": "Kredi yükle, limitlerini bir kez ayarla, aç — motor krediyi sana en çok satış getirecek yerde harcar ve yaptığı her şeyi kaydeder.",
+    "enableCta": "Otopiloti Etkinleştir",
+    "empty": {
+      "desc": "Tek tık her şeyi kurar: kredi cüzdanın, aylık bütçen ve bağlı her kanal için tahsisler — gerisini motor devralır."
+    },
+    "hero": {
+      "multiple": "Büyüme Çarpanı",
+      "loaded": "Yüklenen kredi",
+      "spent": "Harcanan kredi",
+      "balance": "Kredi bakiyesi"
+    },
+    "switch": "Otopilot",
+    "pause": "Duraklat",
+    "resume": "Devam et",
+    "topup": "Kredi yükle",
+    "tab": {
+      "activity": "Aktivite"
+    },
+    "mode1": "Reklam harcaması bağlı reklam hesabın üzerinden Meta/TikTok tarafından faturalandırılır; kredin motorun taahhüt edebileceği tutarı belirler.",
+    "flagOffTitle": "Otonom mod kullanılamıyor",
+    "flagOff": "Otonom mod bu platformda henüz etkin değil — platform yöneticinize danışın.",
+    "armedToast": "Otopilot devrede — motor artık kendi kendine optimize ediyor. Sana hiçbir şey sorulmayacak; istediğin an duraklatabilirsin.",
+    "disarmedToast": "Otopilot kapatıldı — öneriler artık onayını bekleyecek.",
+    "armError": "Otonomi seviyesi değiştirilemedi",
+    "pausedToast": "Motor duraklatıldı — sen devam ettirene kadar hiçbir şey hareket etmez",
+    "resumedToast": "Motor devam ediyor",
+    "statusError": "Motor durumu değiştirilemedi",
+    "topupStarted": "Kredi yükleme ödemesi açıldı — ödeme sonrası kredi hesabına geçer.",
+    "topupError": "Kredi yükleme başlatılamadı",
+    "activity": {
+      "emptyTitle": "Henüz aktivite yok",
+      "emptyDesc": "Motorun aldığı her karar, yaptığı her harcama ve kredi hareketi burada sade bir dille kaydedilir.",
+      "run": "Otopilot bütçeyi yeniden dengeledi",
+      "runNoop": "Otopilot bütçeyi inceledi — değişiklik gerekmedi",
+      "failed": "Başarısız",
+      "spend": "Motor harcaması",
+      "spendCredit": "Harcama iade edildi"
+    }
+  },
+  "studio": {
+    "tab": {
+      "autopilot": "Otopilot"
+    }
+  }
 }

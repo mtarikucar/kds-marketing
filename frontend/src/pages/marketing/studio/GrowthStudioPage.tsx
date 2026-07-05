@@ -1,9 +1,12 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Sparkles } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { Button } from '@/components/ui/Button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { RouteFallback } from '../../../components/RouteFallback';
+import { EnableAutopilotWizard } from '../budget/EnableAutopilotWizard';
 
 // Lazy so a tab's code only loads when opened (each was its own route before).
 const StudioCalendarTab = lazy(() => import('./StudioCalendarTab'));
@@ -20,24 +23,30 @@ const AffiliatePortalPage = lazy(() => import('../affiliate-portal/AffiliatePort
 const TABS = ['calendar', 'campaigns', 'trends', 'budget', 'more'] as const;
 type StudioTab = (typeof TABS)[number];
 
+const CAMPAIGN_SUBS = ['standard', 'social', 'planner'] as const;
+const MORE_SUBS = ['email', 'triggerLinks', 'reviews', 'affiliates'] as const;
+
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }
 
 /**
- * Growth Studio — the single unified marketing surface. Replaces the old
- * Marketing hub sub-nav: content calendar, campaigns (normal + social + planner),
- * trends, and the ad budget all live here as deep-linkable tabs (`?tab=`), so the
- * whole social/content/budget workflow is one page.
+ * Growth Studio — the single unified marketing surface. Content calendar,
+ * campaigns (normal + social + planner), trends and the Autopilot all live
+ * here as deep-linkable tabs: `?tab=` for the page level and `?sub=` for the
+ * nested groups, so EVERY view survives refresh/back and can be shared.
+ * The header carries the product's one-click promise: Enable Autopilot.
  */
 export default function GrowthStudioPage() {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
+  const [wizardOpen, setWizardOpen] = useState(false);
   const raw = params.get('tab');
   const tab: StudioTab = (TABS as readonly string[]).includes(raw ?? '') ? (raw as StudioTab) : 'calendar';
 
   const setTab = (v: string) => setParams((p) => {
     p.set('tab', v);
+    p.delete('sub'); // a page-level switch resets the nested selection
     return p;
   }, { replace: true });
 
@@ -46,6 +55,12 @@ export default function GrowthStudioPage() {
       <PageHeader
         title={t('studio.title', 'Growth Studio')}
         description={t('studio.subtitle', 'Plan, create, schedule and budget your marketing — all in one place.')}
+        actions={
+          <Button onClick={() => setWizardOpen(true)}>
+            <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            {t('autopilot.enableCta', 'Enable Autopilot')}
+          </Button>
+        }
       />
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -53,7 +68,7 @@ export default function GrowthStudioPage() {
           <TabsTrigger value="calendar">{t('studio.tab.calendar', 'Content Calendar')}</TabsTrigger>
           <TabsTrigger value="campaigns">{t('studio.tab.campaigns', 'Campaigns')}</TabsTrigger>
           <TabsTrigger value="trends">{t('studio.tab.trends', 'Trends')}</TabsTrigger>
-          <TabsTrigger value="budget">{t('studio.tab.budget', 'Ad Budget')}</TabsTrigger>
+          <TabsTrigger value="budget">{t('studio.tab.autopilot', 'Autopilot')}</TabsTrigger>
           <TabsTrigger value="more">{t('studio.tab.more', 'More')}</TabsTrigger>
         </TabsList>
 
@@ -73,15 +88,30 @@ export default function GrowthStudioPage() {
           <MoreTab />
         </TabsContent>
       </Tabs>
+
+      <EnableAutopilotWizard open={wizardOpen} onOpenChange={setWizardOpen} onProvisioned={() => setTab('budget')} />
     </div>
   );
+}
+
+/** URL-synced nested tab state (`?sub=`) — deep-linkable, back-button-safe. */
+function useSubTab<T extends readonly string[]>(subs: T, fallback: T[number]): [T[number], (v: string) => void] {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('sub');
+  const sub = (subs as readonly string[]).includes(raw ?? '') ? (raw as T[number]) : fallback;
+  const setSub = (v: string) => setParams((p) => {
+    p.set('sub', v);
+    return p;
+  }, { replace: true });
+  return [sub, setSub];
 }
 
 /** Campaigns tab — normal campaigns + AI social campaigns + the social planner. */
 function CampaignsTab() {
   const { t } = useTranslation('marketing');
+  const [sub, setSub] = useSubTab(CAMPAIGN_SUBS, 'standard');
   return (
-    <Tabs defaultValue="standard">
+    <Tabs value={sub} onValueChange={setSub}>
       <TabsList>
         <TabsTrigger value="standard">{t('studio.camp.standard', 'Campaigns')}</TabsTrigger>
         <TabsTrigger value="social">{t('studio.camp.social', 'Social Campaigns')}</TabsTrigger>
@@ -97,8 +127,9 @@ function CampaignsTab() {
 /** Everything else the old Marketing hub carried, kept reachable. */
 function MoreTab() {
   const { t } = useTranslation('marketing');
+  const [sub, setSub] = useSubTab(MORE_SUBS, 'email');
   return (
-    <Tabs defaultValue="email">
+    <Tabs value={sub} onValueChange={setSub}>
       <TabsList>
         <TabsTrigger value="email">{t('studio.more.email', 'Email Templates')}</TabsTrigger>
         <TabsTrigger value="triggerLinks">{t('studio.more.triggerLinks', 'Trigger Links')}</TabsTrigger>

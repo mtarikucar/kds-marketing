@@ -2396,5 +2396,51 @@
   "budget.status.PAUSED": "Paused",
   "budget.status.KILLED": "Killed",
   "budget.kind.BUDGET_REALLOCATION": "Budget reallocation",
-  "budget.runKind.REALLOCATION": "Reallocation"
+  "budget.runKind.REALLOCATION": "Reallocation",
+  "autopilot": {
+    "title": "Growth Autopilot",
+    "subtitle": "Load credit, set your caps once, flip it on — the engine spends it where it makes you the most sales, and logs everything it does.",
+    "enableCta": "Enable Autopilot",
+    "empty": {
+      "desc": "One click sets up everything: your credit wallet, a monthly budget and allocations for every channel you have connected — then the engine takes it from there."
+    },
+    "hero": {
+      "multiple": "Growth Multiple",
+      "loaded": "Credit loaded",
+      "spent": "Credit spent",
+      "balance": "Credit balance"
+    },
+    "switch": "Autopilot",
+    "pause": "Pause",
+    "resume": "Resume",
+    "topup": "Top up",
+    "tab": {
+      "activity": "Activity"
+    },
+    "mode1": "Ad spend is billed by Meta/TikTok on your connected ad account; your credit governs how much the engine commits.",
+    "flagOffTitle": "Autonomous mode unavailable",
+    "flagOff": "Autonomous mode is not enabled on this platform yet — ask your platform admin.",
+    "armedToast": "Autopilot armed — the engine now optimizes on its own. You will never be asked; pause any time.",
+    "disarmedToast": "Autopilot disarmed — proposals now wait for your approval.",
+    "armError": "Could not change the autonomy level",
+    "pausedToast": "Engine paused — nothing moves until you resume",
+    "resumedToast": "Engine resumed",
+    "statusError": "Could not change the engine status",
+    "topupStarted": "Top-up checkout opened — credit lands after payment.",
+    "topupError": "Could not start the top-up",
+    "activity": {
+      "emptyTitle": "No activity yet",
+      "emptyDesc": "Every decision, spend and credit movement the engine makes will be logged here in plain language.",
+      "run": "Autopilot rebalanced the budget",
+      "runNoop": "Autopilot reviewed the budget — no change needed",
+      "failed": "Failed",
+      "spend": "Engine spend",
+      "spendCredit": "Spend credited back"
+    }
+  },
+  "studio": {
+    "tab": {
+      "autopilot": "Autopilot"
+    }
+  }
 }

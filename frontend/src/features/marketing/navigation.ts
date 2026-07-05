@@ -184,10 +184,12 @@ export const NAV_HUBS: NavHub[] = [
   { id: 'accounts', labelKey: 'nav.accounts', label: 'Account Center', icon: Plug, path: '/accounts', managerOnly: true, tier: 'advanced' },
   {
     // The unified Growth Studio replaces the old Marketing hub — content
-    // calendar, campaigns (normal + social + planner), trends and ad budget are
-    // now deep-linkable tabs (`/studio?tab=…`) on one page.
+    // calendar, campaigns (normal + social + planner), trends and the Autopilot
+    // are deep-linkable tabs (`/studio?tab=…&sub=…`) on one page. CORE tier:
+    // this is the product's flagship surface — it must never hide behind
+    // "More" (spec Part B #2). Managers only (it governs real spend).
     id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles,
-    path: '/studio', managerOnly: true, tier: 'advanced',
+    path: '/studio', managerOnly: true, tier: 'core',
   },
   {
     id: 'sites', labelKey: 'nav.group.sites', label: 'Sites', icon: Globe, tier: 'advanced',
