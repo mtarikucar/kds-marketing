@@ -67,7 +67,7 @@ function statusTone(status: string) {
 // embed & callback URLs). Connecting a new channel now lives in the unified
 // Account Center (/accounts) — the single place to wire up company integrations.
 
-export default function ChannelsSettingsPage() {
+export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<ChannelRow | null>(null);
@@ -121,6 +121,7 @@ export default function ChannelsSettingsPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('channels.title', 'Channels')}
         description={t(
@@ -135,6 +136,19 @@ export default function ChannelsSettingsPage() {
           </Button>
         }
       />
+      )}
+
+      {/* Embedded (Inbox tab): the header is the host's, so the connect CTA
+          moves into a small toolbar row — the action must never be lost. */}
+      {embedded && (channels ?? []).length > 0 && (
+        <div className="flex justify-end">
+          <Button asChild variant="outline" size="md">
+            <Link to="/accounts">
+              {t('channels.connectInAccountCenter', 'Connect a channel in the Account Center')}
+            </Link>
+          </Button>
+        </div>
+      )}
 
       {/* ── Delete confirm ─────────────────────────────────────────────────── */}
       <ConfirmDialog

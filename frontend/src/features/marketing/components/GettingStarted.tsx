@@ -68,9 +68,9 @@ export default function GettingStarted() {
   });
 
   const steps = [
-    { id: 'agent', to: '/ai/agents', done: (agents.data?.length ?? 0) > 0 },
-    { id: 'knowledge', to: '/ai/knowledge', done: (docs.data?.length ?? 0) > 0 },
-    { id: 'channel', to: '/channels', done: (channels.data?.length ?? 0) > 0 },
+    { id: 'agent', to: '/inbox?tab=agents', done: (agents.data?.length ?? 0) > 0 },
+    { id: 'knowledge', to: '/inbox?tab=knowledge', done: (docs.data?.length ?? 0) > 0 },
+    { id: 'channel', to: '/inbox?tab=channels', done: (channels.data?.length ?? 0) > 0 },
     { id: 'leads', to: '/leads', done: (leads.data?.meta?.total ?? 0) > 0 },
     // "Invite your team" — done once there's more than just the owner.
     { id: 'team', to: '/users', done: (team.data?.length ?? 0) > 1 },

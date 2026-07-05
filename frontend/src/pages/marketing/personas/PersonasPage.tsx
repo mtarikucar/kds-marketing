@@ -32,18 +32,26 @@ const NONE = '__none__';
  * face/outfit consistent across every shot; the preview shows exactly how the
  * autopilot would storyboard a video before any (credit-costing) generation.
  */
-export default function PersonasPage() {
+export default function PersonasPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [dialogOpen, setDialogOpen] = useState(false);
   const q = useQuery({ queryKey: ['video-personas'], queryFn: listPersonas });
 
   return (
     <div className="space-y-6">
+      {!embedded ? (
       <PageHeader
         title={t('persona.title', 'UGC Personas')}
         description={t('persona.subtitle', 'Reusable AI spokespeople — the same face and outfit across every shot of every campaign.')}
         actions={<Button onClick={() => setDialogOpen(true)}>{t('persona.create', 'New persona')}</Button>}
       />
+      ) : (
+        // Embedded (Growth Studio tab): the host owns the page header, but the
+        // primary action must stay reachable — keep it as a small toolbar row.
+        <div className="flex justify-end">
+          <Button onClick={() => setDialogOpen(true)}>{t('persona.create', 'New persona')}</Button>
+        </div>
+      )}
 
       <QueryStateBoundary isLoading={q.isLoading} isError={q.isError} onRetry={() => q.refetch()}>
         {!q.data?.length ? (

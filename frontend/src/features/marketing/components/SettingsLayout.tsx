@@ -8,29 +8,40 @@ import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
 
 /**
- * Ordered sub-grouping for the Settings area, so the 17-item list reads as a few
- * labelled clusters (everyday admin up top; developer/compliance tooling last)
- * instead of one undifferentiated grab-bag. Paths not listed fall into "Other".
+ * Ordered sub-grouping for the Settings area — FOUR labelled clusters (2026-07
+ * IA simplification), so the list reads as everyday admin up top and
+ * developer/compliance tooling last instead of one undifferentiated grab-bag.
+ * Brand is ONE page now (kit + brain are tabs inside /branding) and the
+ * Account Center is THE connections surface. Paths not listed fall into
+ * "Other".
  */
 const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
-  { key: 'workspace', label: 'Workspace', paths: ['/branding', '/brand-kit', '/settings/modules', '/targets'] },
-  { key: 'team', label: 'Team & access', paths: ['/users', '/settings/roles', '/settings/two-factor'] },
-  { key: 'data', label: 'CRM data', paths: ['/settings/custom-fields', '/research'] },
   {
-    key: 'integrations',
-    label: 'Channels & integrations',
-    paths: [
-      '/settings/connections',
-      '/settings/sending-domains',
-      '/settings/custom-domains',
-    ],
+    key: 'workspace',
+    label: 'Workspace',
+    paths: ['/branding', '/users', '/settings/roles', '/targets', '/settings/modules'],
+  },
+  {
+    key: 'data',
+    label: 'Data',
+    paths: ['/settings/custom-fields', '/custom-objects', '/research'],
+  },
+  {
+    key: 'connections',
+    label: 'Connections & domains',
+    paths: ['/accounts', '/settings/sending-domains', '/settings/custom-domains'],
   },
   {
     key: 'developer',
-    label: 'Developer',
-    paths: ['/settings/api-keys', '/settings/webhooks', '/settings/inbound-webhooks'],
+    label: 'Developer & security',
+    paths: [
+      '/settings/api-keys',
+      '/settings/webhooks',
+      '/settings/inbound-webhooks',
+      '/settings/compliance',
+      '/settings/two-factor',
+    ],
   },
-  { key: 'compliance', label: 'Compliance', paths: ['/settings/compliance'] },
 ];
 
 /**

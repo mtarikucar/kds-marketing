@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -13,7 +14,12 @@ import {
   type Product,
 } from '../../../features/marketing/api/products.service';
 import {
-  ListPageShell,
+  PageHeader,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+  QueryStateBoundary,
   Button,
   Card,
   CardContent,
@@ -33,6 +39,18 @@ import {
   SelectItem,
   ConfirmDialog,
 } from '@/components/ui';
+import { RouteFallback } from '../../../components/RouteFallback';
+
+// Lazy so a tab's code only loads when opened (each was its own route before).
+const TaxRatesPage = lazy(() => import('../settings/taxRates'));
+const CouponsPage = lazy(() => import('../settings/coupons'));
+
+const TABS = ['products', 'tax-rates', 'coupons'] as const;
+type ProductsTab = (typeof TABS)[number];
+
+function Lazy({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
 
 /** Surface the API's own message (e.g. the product-delete 409) when present. */
 function errMessage(e: unknown, fallback: string): string {
@@ -95,11 +113,65 @@ function Labeled({
 }
 
 /**
+ * Products hub — the catalog plus the two pricing settings it depends on
+ * (tax rates, coupons) folded in as deep-linkable `?tab=` tabs, so everything
+ * about "what you sell and how it's priced" lives on one page.
+ */
+export default function ProductsPage() {
+  const { t } = useTranslation('marketing');
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: ProductsTab = (TABS as readonly string[]).includes(raw ?? '')
+    ? (raw as ProductsTab)
+    : 'products';
+
+  const setTab = (v: string) =>
+    setParams(
+      (p) => {
+        p.set('tab', v);
+        return p;
+      },
+      { replace: true },
+    );
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title={t('products.title', 'Products')}
+        description={t('products.subtitle', 'Reusable priced items you sell.')}
+      />
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="products">{t('products.tab.products', 'Products')}</TabsTrigger>
+          <TabsTrigger value="tax-rates">{t('products.tab.taxRates', 'Tax Rates')}</TabsTrigger>
+          <TabsTrigger value="coupons">{t('products.tab.coupons', 'Coupons')}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="products" className="pt-5">
+          <ProductsCatalogTab />
+        </TabsContent>
+        <TabsContent value="tax-rates" className="pt-5">
+          <Lazy>
+            <TaxRatesPage embedded />
+          </Lazy>
+        </TabsContent>
+        <TabsContent value="coupons" className="pt-5">
+          <Lazy>
+            <CouponsPage embedded />
+          </Lazy>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+/**
  * Products catalog (GoHighLevel parity, MANAGER). Reusable priced items the
  * workspace sells. Create/edit one-time or recurring products, archive (soft
  * retire) or delete. Backend enforces leads.manage; the route is manager-gated.
  */
-export default function ProductsPage() {
+function ProductsCatalogTab() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -186,92 +258,94 @@ export default function ProductsPage() {
 
   return (
     <>
-      <ListPageShell
-        title={t('products.title', 'Products')}
-        description={t('products.subtitle', 'Reusable priced items you sell.')}
-        actions={
+      <div className="space-y-4">
+        {/* The hub header above the tabs owns title/description; the primary
+            action stays reachable here as a small toolbar row. */}
+        <div className="flex justify-end">
           <Button size="md" onClick={openNew}>
             <Plus className="w-4 h-4" aria-hidden="true" />
             {t('products.newProduct', 'New product')}
           </Button>
-        }
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={() => refetch()}
-        errorMessage={t('products.loadError', 'Could not load products.')}
-        isEmpty={products.length === 0}
-        emptyState={
-          <EmptyState
-            title={t('products.emptyTitle', 'No products yet')}
-            description={t('products.empty', 'Create products to reuse on invoices and deals.')}
-            action={
-              <Button size="sm" onClick={openNew}>
-                <Plus className="w-4 h-4" aria-hidden="true" />
-                {t('products.newProduct', 'New product')}
-              </Button>
-            }
-          />
-        }
-      >
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {products.map((p) => (
-            <Card key={p.id} className={p.active ? '' : 'opacity-60'}>
-              <CardContent className="p-4 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Package className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
-                    <p className="font-medium text-foreground truncate">{p.name}</p>
-                  </div>
-                  <Badge tone={p.billingType === 'RECURRING' ? 'info' : 'neutral'} size="sm">
-                    {p.billingType === 'RECURRING'
-                      ? t(`products.interval.${p.interval}`, p.interval ?? '')
-                      : t('products.oneTime', 'One-time')}
-                  </Badge>
-                </div>
-                <p className="text-lg font-semibold text-foreground">
-                  {money(p.price, p.currency)}
-                  {p.taxRate != null && Number(p.taxRate) > 0 && (
-                    <span className="text-caption text-muted-foreground ml-1">
-                      +{Number(p.taxRate)}% {t('products.tax', 'tax')}
-                    </span>
-                  )}
-                </p>
-                {p.description && (
-                  <p className="text-caption text-muted-foreground line-clamp-2">{p.description}</p>
-                )}
-                <div className="flex items-center gap-1 pt-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={t('products.edit', 'Edit product')}
-                    onClick={() => openEdit(p)}
-                  >
-                    <Pencil className="w-4 h-4" aria-hidden="true" />
-                  </Button>
-                  {p.active && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={t('products.archive', 'Archive product')}
-                      onClick={() => archiveMutation.mutate(p.id)}
-                    >
-                      <Archive className="w-4 h-4" aria-hidden="true" />
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={t('products.delete', 'Delete product')}
-                    onClick={() => setDeleteTarget(p)}
-                  >
-                    <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
         </div>
-      </ListPageShell>
+        <QueryStateBoundary
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={() => refetch()}
+          errorMessage={t('products.loadError', 'Could not load products.')}
+        >
+          {products.length === 0 ? (
+            <EmptyState
+              title={t('products.emptyTitle', 'No products yet')}
+              description={t('products.empty', 'Create products to reuse on invoices and deals.')}
+              action={
+                <Button size="sm" onClick={openNew}>
+                  <Plus className="w-4 h-4" aria-hidden="true" />
+                  {t('products.newProduct', 'New product')}
+                </Button>
+              }
+            />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {products.map((p) => (
+                <Card key={p.id} className={p.active ? '' : 'opacity-60'}>
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Package className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
+                        <p className="font-medium text-foreground truncate">{p.name}</p>
+                      </div>
+                      <Badge tone={p.billingType === 'RECURRING' ? 'info' : 'neutral'} size="sm">
+                        {p.billingType === 'RECURRING'
+                          ? t(`products.interval.${p.interval}`, p.interval ?? '')
+                          : t('products.oneTime', 'One-time')}
+                      </Badge>
+                    </div>
+                    <p className="text-lg font-semibold text-foreground">
+                      {money(p.price, p.currency)}
+                      {p.taxRate != null && Number(p.taxRate) > 0 && (
+                        <span className="text-caption text-muted-foreground ml-1">
+                          +{Number(p.taxRate)}% {t('products.tax', 'tax')}
+                        </span>
+                      )}
+                    </p>
+                    {p.description && (
+                      <p className="text-caption text-muted-foreground line-clamp-2">{p.description}</p>
+                    )}
+                    <div className="flex items-center gap-1 pt-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={t('products.edit', 'Edit product')}
+                        onClick={() => openEdit(p)}
+                      >
+                        <Pencil className="w-4 h-4" aria-hidden="true" />
+                      </Button>
+                      {p.active && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('products.archive', 'Archive product')}
+                          onClick={() => archiveMutation.mutate(p.id)}
+                        >
+                          <Archive className="w-4 h-4" aria-hidden="true" />
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={t('products.delete', 'Delete product')}
+                        onClick={() => setDeleteTarget(p)}
+                      >
+                        <Trash2 className="w-4 h-4 text-danger" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </QueryStateBoundary>
+      </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>

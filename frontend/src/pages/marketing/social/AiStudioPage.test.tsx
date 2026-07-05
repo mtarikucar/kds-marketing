@@ -117,11 +117,13 @@ describe('AiStudioPage', () => {
     expect(vi.mocked(mediaService.getGeneration).mock.calls.length).toBe(1);
   });
 
-  it('"Add to post" on a READY asset navigates to /social with seedMedia state', async () => {
+  it('"Add to post" on a READY asset navigates straight to the Studio planner with seedMedia state', async () => {
     render(<AiStudioPage />, { wrapper });
     const addBtn = await screen.findByRole('button', { name: /add to post/i });
     await userEvent.click(addBtn);
-    expect(navigate).toHaveBeenCalledWith('/social', {
+    // Direct to the planner INSIDE Growth Studio — the legacy /social redirect
+    // hop would drop location.state and lose the seeded media.
+    expect(navigate).toHaveBeenCalledWith('/studio?tab=campaigns&sub=planner', {
       state: { seedMedia: [{ url: 'https://r2/img.png', key: 'social/ws/img.png', mime: 'image/png' }] },
     });
   });

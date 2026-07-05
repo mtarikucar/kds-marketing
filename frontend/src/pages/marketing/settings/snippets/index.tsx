@@ -48,7 +48,7 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-export default function SnippetsPage() {
+export default function SnippetsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -135,6 +135,7 @@ export default function SnippetsPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('snippets.title', { defaultValue: 'Canned Responses' })}
         description={t('snippets.subtitle', {
@@ -147,6 +148,18 @@ export default function SnippetsPage() {
           </Button>
         }
       />
+      )}
+
+      {/* Embedded (Inbox tab): no page header, so the create CTA moves into a
+          toolbar row (the empty state below carries its own when there's none). */}
+      {embedded && snippets.length > 0 && (
+        <div className="flex justify-end">
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            {t('snippets.new', { defaultValue: 'New snippet' })}
+          </Button>
+        </div>
+      )}
 
       <QueryStateBoundary
         isLoading={isLoading}

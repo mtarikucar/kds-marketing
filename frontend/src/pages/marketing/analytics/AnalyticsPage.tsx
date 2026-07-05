@@ -247,7 +247,7 @@ const ATTRIBUTION_OPTIONS: { value: AttributionModel; label: string }[] = [
   { value: 'linear', label: 'Linear' },
 ];
 
-export default function AnalyticsPage() {
+export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {}) {
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
@@ -333,10 +333,12 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title="Analytics"
         description="Funnel, source breakdown, rep performance and multi-touch attribution."
       />
+      )}
 
       {/* Date range — shared across all tabs */}
       <DateRangePicker value={dateRange} onChange={setDateRange} />

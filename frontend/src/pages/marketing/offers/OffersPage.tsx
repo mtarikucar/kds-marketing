@@ -54,7 +54,7 @@ const OFFER_STATUSES = ['DRAFT', 'SENT', 'ACCEPTED', 'REJECTED', 'EXPIRED'] as c
 
 // ── Component ─────────────────────────────────────────────────────────────
 
-export default function OffersPage() {
+export default function OffersPage({ embedded }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
   const [searchParams] = useSearchParams();
@@ -407,7 +407,8 @@ export default function OffersPage() {
 
   return (
     <div className="space-y-5">
-      {/* Page header */}
+      {/* Page header (the hosting page renders its own when embedded) */}
+      {!embedded && (
       <PageHeader
         title={t('offers.title')}
         description={t('offers.subtitle')}
@@ -418,9 +419,20 @@ export default function OffersPage() {
           </Button>
         }
       />
+      )}
 
-      {/* Filter row */}
-      <FilterBar>
+      {/* Filter row — when embedded the header is gone, so the create CTA
+          relocates to the filter bar's right slot (never lose a button). */}
+      <FilterBar
+        right={
+          embedded ? (
+            <Button size="sm" onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('offers.createButton')}
+            </Button>
+          ) : undefined
+        }
+      >
         {/* Status filter */}
         <Select
           value={status || '__ALL__'}

@@ -74,7 +74,7 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
         : pending > 0
           ? { to: '/tasks', label: t('dashboard.hero.reviewTasks', 'Review your tasks') }
           : offers > 0
-            ? { to: '/offers?status=SENT', label: t('dashboard.hero.reviewOffers', 'Review open offers') }
+            ? { to: '/documents?tab=offers&status=SENT', label: t('dashboard.hero.reviewOffers', 'Review open offers') }
             : { to: '/leads', label: t('dashboard.hero.goToLeads', 'Go to your leads') };
 
   const greeting = firstName

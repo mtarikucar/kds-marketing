@@ -1,4 +1,5 @@
-import { useRef, useEffect } from 'react';
+import { lazy, Suspense, useRef, useEffect, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -20,8 +21,66 @@ import {
   Input,
   Button,
 } from '@/components/ui';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { RouteFallback } from '../../components/RouteFallback';
 
-// ── Schema ───────────────────────────────────────────────────────────────────
+// Lazy so a tab's code only loads when opened (each was its own route before).
+const BrandKitPage = lazy(() => import('./BrandKitPage'));
+const BrandBrainPage = lazy(() => import('./brandBrain/BrandBrainPage'));
+
+const TABS = ['business', 'kit', 'brain'] as const;
+type BrandTab = (typeof TABS)[number];
+
+function Lazy({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
+
+/**
+ * Brand — the single unified brand surface. Business identity (customer-facing
+ * branding), the visual Brand Kit and the Brand Brain knowledge base live here
+ * as deep-linkable tabs (`?tab=`), so every view survives refresh/back and can
+ * be shared.
+ */
+export default function BrandingSettingsPage() {
+  const { t } = useTranslation('marketing');
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: BrandTab = (TABS as readonly string[]).includes(raw ?? '') ? (raw as BrandTab) : 'business';
+
+  const setTab = (v: string) => setParams((p) => {
+    p.set('tab', v);
+    return p;
+  }, { replace: true });
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title={t('brand.title', 'Brand')}
+        description={t('brand.subtitle', 'Your business identity, visual kit and AI brand voice — one place.')}
+      />
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="business">{t('brand.tab.business', 'Business')}</TabsTrigger>
+          <TabsTrigger value="kit">{t('brand.tab.kit', 'Brand Kit')}</TabsTrigger>
+          <TabsTrigger value="brain">{t('brand.tab.brain', 'Brand Brain')}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="business" className="pt-5">
+          <BusinessTab />
+        </TabsContent>
+        <TabsContent value="kit" className="pt-5">
+          <Lazy><BrandKitPage embedded /></Lazy>
+        </TabsContent>
+        <TabsContent value="brain" className="pt-5">
+          <Lazy><BrandBrainPage embedded /></Lazy>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ── Business tab (the original Branding settings body) ──────────────────────
 
 const brandingSchema = z.object({
   brandName: z.string().max(120).optional(),
@@ -38,9 +97,7 @@ interface Branding {
   logoUrl: string | null;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-
-export default function BrandingSettingsPage() {
+function BusinessTab() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -119,14 +176,6 @@ export default function BrandingSettingsPage() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <PageHeader
-        title={t('branding.title', 'Branding')}
-        description={t(
-          'branding.subtitle',
-          'Your brand on the customer-facing surfaces — funnel pages and the web-chat widget.',
-        )}
-      />
-
       <form onSubmit={handleSubmit(onSubmit)} noValidate>
         <Card>
           <CardHeader>

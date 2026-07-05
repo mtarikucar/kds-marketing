@@ -63,7 +63,7 @@ export const schema = z
   });
 type FormValues = z.infer<typeof schema>;
 
-export default function CouponsPage() {
+export default function CouponsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -138,16 +138,27 @@ export default function CouponsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('coupons.title', { defaultValue: 'Coupons' })}
-        description={t('coupons.subtitle', { defaultValue: 'Discount codes applied at checkout on order forms and invoices.' })}
-        actions={
+      {!embedded ? (
+        <PageHeader
+          title={t('coupons.title', { defaultValue: 'Coupons' })}
+          description={t('coupons.subtitle', { defaultValue: 'Discount codes applied at checkout on order forms and invoices.' })}
+          actions={
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('coupons.new', { defaultValue: 'New coupon' })}
+            </Button>
+          }
+        />
+      ) : (
+        // Embedded (Products tab): the host owns the page header, but the
+        // primary action must stay reachable — keep it as a small toolbar row.
+        <div className="flex justify-end">
           <Button onClick={openCreate}>
             <Plus className="h-4 w-4" aria-hidden="true" />
             {t('coupons.new', { defaultValue: 'New coupon' })}
           </Button>
-        }
-      />
+        </div>
+      )}
 
       {isLoading ? (
         <Skeleton className="h-32" />

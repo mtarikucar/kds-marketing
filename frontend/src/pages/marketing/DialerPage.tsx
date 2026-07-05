@@ -21,8 +21,11 @@ function apiErr(e: any, fallback: string): string {
 /**
  * Preview dialer (Epic 11b) — build a queue from a lead filter, then dial leads
  * one at a time (single-line click-to-dial), logging each outcome to auto-advance.
+ *
+ * `embedded` — rendered inside another page's tab (Calls); skips the own
+ * PageHeader but keeps the End-session action in a toolbar row.
  */
-export default function DialerPage() {
+export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [session, setSession] = useState<DialSession | null>(null);
   const [status, setStatus] = useState('');
@@ -77,7 +80,9 @@ export default function DialerPage() {
   if (!session) {
     return (
       <div className="space-y-6">
-        <PageHeader title={t('dialer.title', { defaultValue: 'Power Dialer' })} description={t('dialer.subtitle', { defaultValue: 'Queue up leads and dial them one after another.' })} />
+        {!embedded && (
+          <PageHeader title={t('dialer.title', { defaultValue: 'Power Dialer' })} description={t('dialer.subtitle', { defaultValue: 'Queue up leads and dial them one after another.' })} />
+        )}
         <Card className="max-w-lg">
           <CardContent className="space-y-4 p-5">
             <Field label={t('dialer.filterStatus', { defaultValue: 'Status (optional)' })}>
@@ -110,12 +115,20 @@ export default function DialerPage() {
   // e.g. click Skip while Dial is pending, orphaning the live call on the line.
   const busy = dial.isPending || log.isPending || skip.isPending || cancel.isPending;
 
+  // The End-session action must stay reachable even without the PageHeader.
+  const endSessionBtn = (
+    <Button variant="outline" size="sm" onClick={() => cancel.mutate()}>
+      <X className="h-4 w-4" />{t('dialer.end', { defaultValue: 'End session' })}
+    </Button>
+  );
+
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t('dialer.title', { defaultValue: 'Power Dialer' })}
-        actions={<Button variant="outline" size="sm" onClick={() => cancel.mutate()}><X className="h-4 w-4" />{t('dialer.end', { defaultValue: 'End session' })}</Button>}
-      />
+      {embedded ? (
+        <div className="flex max-w-xl justify-end">{endSessionBtn}</div>
+      ) : (
+        <PageHeader title={t('dialer.title', { defaultValue: 'Power Dialer' })} actions={endSessionBtn} />
+      )}
 
       <Card className="max-w-xl">
         <CardContent className="p-5">

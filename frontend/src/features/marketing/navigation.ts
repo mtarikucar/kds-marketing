@@ -9,8 +9,6 @@ import {
   DollarSign,
   Wrench,
   Phone,
-  LineChart,
-  PieChart,
   Flag,
   Target,
   FlaskConical,
@@ -20,11 +18,9 @@ import {
   Inbox,
   MessagesSquare,
   Zap,
-  Megaphone,
   Mail,
   Globe,
   CalendarDays,
-  Star,
   Mic,
   Banknote,
   Palette,
@@ -44,38 +40,36 @@ import {
   KeyRound,
   Webhook,
   Plug,
-  Share2,
   ListTree,
   ShieldCheck,
-  Lock,
   Scale,
-  BadgeDollarSign,
   Settings,
-  PhoneCall,
-  MousePointerClick,
   Database,
-  MessageSquareText,
   Link2,
-  Percent,
-  Ticket,
-  CalendarRange,
-  TrendingUp,
 } from 'lucide-react';
 
 /**
- * Single source of truth for the workspace console's navigation — a **two-level
- * GoHighLevel-style hub model**.
+ * Single source of truth for the workspace console's navigation.
  *
- * The flat ~47-item menu (Growth had 16, Settings 15) was overwhelming and
- * undiscoverable. Instead the primary sidebar is a lean list of HUBS; each hub
- * groups a few related pages shown as a secondary sub-nav, and Settings is a
- * separate area. Every page/route URL is unchanged — only the grouping changed.
+ * 2026-07 IA simplification (user-driven): the previous 16-hub / ~70-page tree
+ * still read as "everything piled up", so related pages were MERGED into
+ * single tabbed surfaces and the tree cut to 9 core + 5 advanced hubs:
+ *   - Reports: 4 pages → ONE /reports with tabs
+ *   - Sales documents: Offers + Estimates + Documents → ONE /documents hub
+ *   - Dialer folded into /calls; Tax Rates + Coupons folded into /products
+ *   - Conversations hub dissolved — /inbox hosts Channels / Canned Responses /
+ *     AI Agents / Knowledge as tabs
+ *   - The AI hub is GONE: content tools live in Growth Studio's Create tab,
+ *     conversation AI lives in the Inbox, brand voice lives in the Brand page
+ *   - Brand: Branding + Brand Kit + Brand Brain → ONE /branding with tabs
+ *   - Account Center absorbed Settings→Connections (one connections surface)
+ * Old standalone routes were removed (clean cut), so every destination has
+ * exactly one home.
  *
  * Gating is per-child (and per-hub): `managerOnly` items show only to
  * OWNER/MANAGER; `feature` items only when the workspace is entitled
  * (see {@link useEntitlements}); the Agency hub only renders for an AGENCY
- * workspace. Empty hubs (all children gated out) drop from the menu, so a
- * core-only workspace still sees a focused set.
+ * workspace. Empty hubs (all children gated out) drop from the menu.
  */
 
 /** Entitlement keys the backend's EntitlementsService exposes (subset used in nav). */
@@ -140,22 +134,32 @@ export interface NavHub {
 export const NAV_HUBS: NavHub[] = [
   { id: 'dashboard', labelKey: 'nav.dashboard', label: 'Dashboard', icon: Home, path: '/dashboard' },
   {
-    id: 'conversations', labelKey: 'nav.group.conversations', label: 'Conversations', icon: MessagesSquare,
-    children: [
-      { path: '/inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox, feature: 'conversationAi' },
-      { path: '/snippets', labelKey: 'nav.snippets', label: 'Canned Responses', icon: MessageSquareText, feature: 'conversationAi', managerOnly: true },
-      { path: '/channels', labelKey: 'nav.channels', label: 'Channels', icon: MessagesSquare, feature: 'conversationAi', managerOnly: true },
-    ],
+    // Single-page hub: channels / canned responses / AI agents / knowledge are
+    // tabs INSIDE the inbox now (`/inbox?tab=…`), not sibling pages.
+    id: 'inbox', labelKey: 'nav.inbox', label: 'Inbox', icon: Inbox,
+    path: '/inbox', feature: 'conversationAi',
   },
   {
     id: 'contacts', labelKey: 'nav.group.contacts', label: 'Contacts', icon: Users,
     children: [
       { path: '/leads', labelKey: 'nav.leads', label: 'Leads', icon: Users },
       { path: '/companies', labelKey: 'nav.companies', label: 'Companies', icon: Building2 },
-      { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database, managerOnly: true },
       { path: '/segments', labelKey: 'nav.segments', label: 'Segments', icon: Filter, managerOnly: true },
       { path: '/tags', labelKey: 'nav.tags', label: 'Tags', icon: Tag, managerOnly: true },
       { path: '/import', labelKey: 'nav.import', label: 'Import', icon: FileUp, managerOnly: true },
+    ],
+  },
+  {
+    id: 'sales', labelKey: 'nav.group.sales', label: 'Sales', icon: DollarSign,
+    children: [
+      { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Pipeline', icon: Target },
+      // Offers + Estimates + Documents merged into one tabbed hub.
+      { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
+      // Power Dialer is a tab inside Calls now.
+      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
+      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },
+      { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
+      { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
     ],
   },
   {
@@ -166,30 +170,39 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/appointments', labelKey: 'nav.appointments', label: 'Appointments', icon: CalendarDays, feature: 'funnels', managerOnly: true },
     ],
   },
-  {
-    id: 'sales', labelKey: 'nav.group.sales', label: 'Sales', icon: DollarSign,
-    children: [
-      { path: '/opportunities', labelKey: 'nav.opportunities', label: 'Opportunities', icon: Target },
-      { path: '/estimates', labelKey: 'nav.estimates', label: 'Estimates', icon: Receipt },
-      { path: '/documents', labelKey: 'nav.documents', label: 'Documents', icon: FileText },
-      { path: '/offers', labelKey: 'nav.offers', label: 'Offers', icon: FileText },
-      { path: '/calls', labelKey: 'nav.calls', label: 'Calls', icon: Phone, feature: 'telephony' },
-      { path: '/dialer', labelKey: 'nav.dialer', label: 'Power Dialer', icon: PhoneCall, feature: 'telephony' },
-      { path: '/prospecting', labelKey: 'nav.prospecting', label: 'Prospecting', icon: Globe, feature: 'prospecting' },
-      { path: '/commissions', labelKey: 'nav.commissions', label: 'Commissions', icon: DollarSign, feature: 'commissions' },
-      { path: '/installations', labelKey: 'nav.installations', label: 'Installations', icon: Wrench, feature: 'installations' },
-    ],
-  },
   { id: 'tasks', labelKey: 'nav.tasks', label: 'Tasks', icon: ClipboardList, path: '/tasks' },
-  { id: 'accounts', labelKey: 'nav.accounts', label: 'Account Center', icon: Plug, path: '/accounts', managerOnly: true, tier: 'advanced' },
   {
-    // The unified Growth Studio replaces the old Marketing hub — content
-    // calendar, campaigns (normal + social + planner), trends and the Autopilot
-    // are deep-linkable tabs (`/studio?tab=…&sub=…`) on one page. CORE tier:
-    // this is the product's flagship surface — it must never hide behind
-    // "More" (spec Part B #2). Managers only (it governs real spend).
+    // The unified Growth Studio — content calendar, Create (AI content +
+    // personas), campaigns (normal + social + planner), trends and the
+    // Autopilot as deep-linkable tabs (`/studio?tab=…&sub=…`) on one page.
+    // CORE tier: the product's flagship surface. Managers only (real spend).
     id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles,
     path: '/studio', managerOnly: true, tier: 'core',
+  },
+  {
+    // Single-page hub: Ads / Performance / Analytics are tabs inside /reports.
+    id: 'reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3, path: '/reports',
+  },
+  { id: 'help', labelKey: 'nav.help', label: 'Help', icon: BookOpen, path: '/help' },
+
+  // ——— advanced (behind "More") ———
+  {
+    id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap, tier: 'advanced',
+    children: [
+      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
+      { path: '/trigger-links', labelKey: 'nav.triggerLinks', label: 'Trigger Links', icon: Link2, managerOnly: true },
+    ],
+  },
+  {
+    id: 'payments', labelKey: 'nav.group.payments', label: 'Payments', icon: Banknote, tier: 'advanced',
+    children: [
+      // Tax Rates + Coupons are tabs inside Products now.
+      { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
+      { path: '/subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions', icon: Repeat, managerOnly: true },
+      { path: '/order-forms', labelKey: 'nav.orderForms', label: 'Order forms', icon: ShoppingCart, managerOnly: true },
+      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
+      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
+    ],
   },
   {
     id: 'sites', labelKey: 'nav.group.sites', label: 'Sites', icon: Globe, tier: 'advanced',
@@ -197,22 +210,6 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
       { path: '/surveys', labelKey: 'nav.surveys', label: 'Surveys', icon: ClipboardList, managerOnly: true },
       { path: '/experiments', labelKey: 'nav.experiments', label: 'A/B Experiments', icon: FlaskConical, managerOnly: true },
-    ],
-  },
-  {
-    id: 'automation', labelKey: 'nav.group.automation', label: 'Automation', icon: Zap, tier: 'advanced',
-    children: [
-      { path: '/automations', labelKey: 'nav.automations', label: 'Workflows', icon: Zap, feature: 'workflows', managerOnly: true },
-    ],
-  },
-  {
-    id: 'ai', labelKey: 'nav.group.ai', label: 'AI', icon: Sparkles, tier: 'advanced',
-    children: [
-      { path: '/ai/studio', labelKey: 'nav.aiStudio', label: 'AI Studio', icon: Sparkles, managerOnly: true },
-      { path: '/ai/agents', labelKey: 'nav.agentStudio', label: 'AI Agents', icon: Sparkles, feature: 'agentStudio', managerOnly: true },
-      { path: '/ai/knowledge', labelKey: 'nav.knowledgeBase', label: 'Knowledge', icon: BookOpen, feature: 'askAi', managerOnly: true },
-      { path: '/personas', labelKey: 'nav.personas', label: 'UGC Personas', icon: Camera, managerOnly: true },
-      { path: '/brand-brain', labelKey: 'nav.brandBrain', label: 'Brand Brain', icon: BookOpen, managerOnly: true },
     ],
   },
   {
@@ -228,32 +225,8 @@ export const NAV_HUBS: NavHub[] = [
     children: [
       { path: '/voice', labelKey: 'nav.voice', label: 'Voice', icon: Mic, feature: 'voiceAi', managerOnly: true },
       { path: '/voice/ivr', labelKey: 'nav.ivr', label: 'Phone Tree', icon: ListTree, feature: 'voiceAi', managerOnly: true },
-      // Phone (Netsantral) + Voice AI connection setup moved into the Account
-      // Center (/accounts) — their standalone pages are gone (redirect there).
     ],
   },
-  {
-    id: 'reporting', labelKey: 'nav.group.reporting', label: 'Reporting', icon: PieChart,
-    children: [
-      { path: '/reports', labelKey: 'nav.reports', label: 'Reports', icon: BarChart3 },
-      { path: '/reports/ads', labelKey: 'nav.adReporting', label: 'Ads', icon: MousePointerClick },
-      { path: '/reports/performance', labelKey: 'nav.performance', label: 'Performance', icon: LineChart },
-      { path: '/reports/analytics', labelKey: 'nav.analytics', label: 'Analytics', icon: PieChart, managerOnly: true },
-    ],
-  },
-  {
-    id: 'payments', labelKey: 'nav.group.payments', label: 'Payments', icon: Banknote, tier: 'advanced',
-    children: [
-      { path: '/products', labelKey: 'nav.products', label: 'Products', icon: Package, managerOnly: true },
-      { path: '/subscriptions', labelKey: 'nav.subscriptions', label: 'Subscriptions', icon: Repeat, managerOnly: true },
-      { path: '/order-forms', labelKey: 'nav.orderForms', label: 'Order forms', icon: ShoppingCart, managerOnly: true },
-      { path: '/invoices', labelKey: 'nav.invoices', label: 'Invoices', icon: Banknote, feature: 'invoicing', managerOnly: true },
-      { path: '/tax-rates', labelKey: 'nav.taxRates', label: 'Tax Rates', icon: Percent, managerOnly: true },
-      { path: '/coupons', labelKey: 'nav.coupons', label: 'Coupons', icon: Ticket, managerOnly: true },
-      { path: '/billing', labelKey: 'nav.billing', label: 'Billing', icon: CreditCard, managerOnly: true },
-    ],
-  },
-  { id: 'help', labelKey: 'nav.help', label: 'Help', icon: BookOpen, path: '/help' },
   {
     id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true, tier: 'advanced',
     children: [
@@ -265,22 +238,26 @@ export const NAV_HUBS: NavHub[] = [
   {
     id: 'settings', labelKey: 'nav.group.settings', label: 'Settings', icon: Settings, area: 'settings',
     children: [
-      { path: '/branding', labelKey: 'nav.branding', label: 'Business & Branding', icon: Palette, managerOnly: true },
-      { path: '/brand-kit', labelKey: 'nav.brandKit', label: 'Brand Kit', icon: Palette, managerOnly: true },
-      { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
+      // Workspace
+      { path: '/branding', labelKey: 'nav.brand', label: 'Brand', icon: Palette, managerOnly: true },
       { path: '/users', labelKey: 'nav.users', label: 'Team', icon: Users, managerOnly: true },
-      { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: Lock, managerOnly: true },
+      { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: ShieldCheck, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
+      { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
+      // Data
       { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
-      { path: '/settings/connections', labelKey: 'nav.connections', label: 'Connections', icon: Plug, managerOnly: true },
+      { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database, managerOnly: true },
+      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
+      // Connections & domains (Account Center absorbed Settings→Connections)
+      { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },
+      { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },
+      { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
+      // Developer & security
       { path: '/settings/api-keys', labelKey: 'nav.apiKeys', label: 'API Keys', icon: KeyRound, managerOnly: true },
       { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/inbound-webhooks', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },
-      { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },
-      { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
       { path: '/settings/two-factor', labelKey: 'nav.twoFactor', label: 'Two-factor auth', icon: ShieldCheck },
-      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
     ],
   },
 ];

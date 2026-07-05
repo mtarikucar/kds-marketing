@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 
 // ── Eager (layout / guard) imports ────────────────────────────────────────────
 import { MarketingLayout, MarketingProtectedRoute } from './features/marketing/components';
@@ -25,19 +25,13 @@ const CreateLeadPage           = lazy(() => import('./pages/marketing/CreateLead
 const LeadDetailPage           = lazy(() => import('./pages/marketing/leadDetail/LeadDetailPage'));
 const TasksPage                = lazy(() => import('./pages/marketing/tasks/TasksPage'));
 const CalendarPage             = lazy(() => import('./pages/marketing/calendar/CalendarPage'));
-const OffersPage               = lazy(() => import('./pages/marketing/offers/OffersPage'));
 const OpportunitiesPage        = lazy(() => import('./pages/marketing/opportunities/OpportunitiesPage'));
 const PipelineSettingsPage     = lazy(() => import('./pages/marketing/opportunities/PipelineSettingsPage'));
-const EstimatesPage            = lazy(() => import('./pages/marketing/estimates/EstimatesPage'));
-const DocumentsPage            = lazy(() => import('./pages/marketing/documents/DocumentsPage'));
+// Offers + Estimates + Documents are TABS of the Documents hub now.
+const DocumentsHubPage         = lazy(() => import('./pages/marketing/documents/DocumentsHubPage'));
+// Ads / Performance / Analytics are TABS inside ReportsPage now.
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
-const AdReportingPage          = lazy(() => import('./pages/marketing/ads'));
-const BudgetAutopilotPage      = lazy(() => import('./pages/marketing/budget/BudgetAutopilotPage'));
-const PersonasPage             = lazy(() => import('./pages/marketing/personas/PersonasPage'));
-const TrendsPage               = lazy(() => import('./pages/marketing/trends/TrendsPage'));
-const ContentCalendarPage      = lazy(() => import('./pages/marketing/contentCalendar/ContentCalendarPage'));
 const GrowthStudioPage         = lazy(() => import('./pages/marketing/studio/GrowthStudioPage'));
-const BrandBrainPage           = lazy(() => import('./pages/marketing/brandBrain/BrandBrainPage'));
 const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
@@ -45,10 +39,9 @@ const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTempl
 const CustomObjectDetailPage   = lazy(() => import('./pages/marketing/customObjects/CustomObjectDetailPage'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
+// The Power Dialer is a TAB inside CallsPage now.
 const CallsPage                = lazy(() => import('./pages/marketing/CallsPage'));
-const DialerPage               = lazy(() => import('./pages/marketing/DialerPage'));
 const ProspectingPage          = lazy(() => import('./pages/marketing/ProspectingPage'));
-const PerformancePage          = lazy(() => import('./pages/marketing/PerformancePage'));
 const BillingPage              = lazy(() => import('./pages/marketing/billing'));
 // Manager-only pages
 const MarketingUsersPage       = lazy(() => import('./pages/marketing/users'));
@@ -68,18 +61,13 @@ const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/Sna
 const AgencyRebillingPage      = lazy(() => import('./pages/marketing/agency/RebillingPage'));
 const ResearchSettingsPage     = lazy(() => import('./pages/marketing/research/ResearchSettingsPage'));
 const ResearchSuggestionsPage  = lazy(() => import('./pages/marketing/research/ResearchSuggestionsPage'));
-const AgentStudioPage          = lazy(() => import('./pages/marketing/AgentStudioPage'));
-const KnowledgeBasePage        = lazy(() => import('./pages/marketing/KnowledgeBasePage'));
-const ChannelsSettingsPage     = lazy(() => import('./pages/marketing/ChannelsSettingsPage'));
-const SnippetsPage             = lazy(() => import('./pages/marketing/settings/snippets'));
+// Channels / Canned Responses / AI Agents / Knowledge are TABS of /inbox now.
 const SendingDomainsPage       = lazy(() => import('./pages/marketing/settings/SendingDomainsPage'));
 const CustomDomainsPage        = lazy(() => import('./pages/marketing/settings/CustomDomainsPage'));
 const TriggerLinksPage         = lazy(() => import('./pages/marketing/triggerLinks'));
-const TaxRatesPage             = lazy(() => import('./pages/marketing/settings/taxRates'));
-const CouponsPage              = lazy(() => import('./pages/marketing/settings/coupons'));
+// Tax Rates + Coupons are TABS of /products now.
 const AutomationsPage          = lazy(() => import('./pages/marketing/AutomationsPage'));
 const AutomationBuilderPage    = lazy(() => import('./pages/marketing/automations/AutomationBuilderPage'));
-const CampaignsPage            = lazy(() => import('./pages/marketing/CampaignsPage'));
 const SitesPage                = lazy(() => import('./pages/marketing/SitesPage'));
 const BookingSettingsPage      = lazy(() => import('./pages/marketing/BookingSettingsPage'));
 const AppointmentsPage         = lazy(() => import('./pages/marketing/appointments/AppointmentsPage'));
@@ -92,19 +80,17 @@ const SubscriptionsPage        = lazy(() => import('./pages/marketing/subscripti
 const OrderFormsPage           = lazy(() => import('./pages/marketing/orderForms/OrderFormsPage'));
 const BrandingSettingsPage     = lazy(() => import('./pages/marketing/BrandingSettingsPage'));
 const ImportWizardPage         = lazy(() => import('./pages/marketing/imports'));
-const AnalyticsPage            = lazy(() => import('./pages/marketing/analytics/AnalyticsPage'));
 // GHL-parity settings/tools UIs
 const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/apiKeys'));
 const ModulesPage              = lazy(() => import('./pages/marketing/settings/modules'));
 const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
 const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
-const ConnectionsPage          = lazy(() => import('./pages/marketing/settings/connections'));
+// Settings→Connections is the Integrations TAB of the Account Center now.
 const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
 const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
 const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
-const SocialPlannerPage        = lazy(() => import('./pages/marketing/social'));
-const AiStudioPage             = lazy(() => import('./pages/marketing/social/AiStudioPage'));
-const BrandKitPage             = lazy(() => import('./pages/marketing/BrandKitPage'));
+// AI Studio + UGC Personas live in Growth Studio's Create tab; Brand Kit and
+// Brand Brain are tabs of the ONE Brand page (/branding).
 const SocialCampaignsPage      = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignsPage'));
 const SocialCampaignBuilder    = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignBuilder'));
 const SocialCampaignDetailPage = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignDetailPage'));
@@ -133,6 +119,19 @@ function S({ children }: { children: React.ReactNode }) {
 function CatchAllRedirect() {
   const isAuthenticated = useMarketingAuthStore((s) => s.isAuthenticated);
   return <Navigate to={isAuthenticated ? '/dashboard' : '/'} replace />;
+}
+
+/**
+ * Redirect that PRESERVES the current query string and force-sets extras.
+ * Needed where a BACKEND OAuth callback 302s the browser to a legacy path with
+ * result params (e.g. /ads?connect=… → /reports?tab=ads&connect=…) — a plain
+ * <Navigate to> would drop them and the post-OAuth dialog would never open.
+ */
+function RedirectMergingParams({ to, set }: { to: string; set: Record<string, string> }) {
+  const [params] = useSearchParams();
+  const merged = new URLSearchParams(params);
+  for (const [k, v] of Object.entries(set)) merged.set(k, v);
+  return <Navigate to={`${to}?${merged.toString()}`} replace />;
 }
 
 /**
@@ -187,26 +186,24 @@ export default function App() {
           <Route path="/companies" element={<S><CompaniesPage /></S>} />
           <Route path="/tasks"          element={<S><TasksPage /></S>} />
           <Route path="/calendar"       element={<S><CalendarPage /></S>} />
-          <Route path="/offers"         element={<S><OffersPage /></S>} />
           <Route path="/opportunities"  element={<S><OpportunitiesPage /></S>} />
-          <Route path="/estimates"      element={<S><EstimatesPage /></S>} />
-          <Route path="/documents"      element={<S><DocumentsPage /></S>} />
+          {/* Offers | Estimates | Documents — ONE hub, tabs at ?tab= */}
+          <Route path="/documents"      element={<S><DocumentsHubPage /></S>} />
+          {/* Overview | Ads | Performance | Analytics — ONE page, tabs at ?tab= */}
           <Route path="/reports"        element={<S><ReportsPage /></S>} />
-          <Route path="/reports/ads"    element={<S><AdReportingPage /></S>} />
-          <Route path="/ads"            element={<Navigate to="/reports/ads" replace />} />
+          {/* Backend ads-OAuth callbacks 302 to /ads?connect=… — params must survive. */}
+          <Route path="/ads"            element={<RedirectMergingParams to="/reports" set={{ tab: 'ads' }} />} />
+          <Route path="/performance"    element={<RedirectMergingParams to="/reports" set={{ tab: 'performance' }} />} />
+          <Route path="/analytics"      element={<RedirectMergingParams to="/reports" set={{ tab: 'analytics' }} />} />
           <Route path="/studio"         element={<S><GrowthStudioPage /></S>} />
           <Route path="/budget"         element={<Navigate to="/studio?tab=budget" replace />} />
-          <Route path="/personas"       element={<S><PersonasPage /></S>} />
           <Route path="/trends"         element={<Navigate to="/studio?tab=trends" replace />} />
           <Route path="/content-calendar" element={<Navigate to="/studio?tab=calendar" replace />} />
-          <Route path="/brand-brain"    element={<S><BrandBrainPage /></S>} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
+          {/* Calls | Power Dialer — ONE page, tabs at ?tab= */}
           <Route path="/calls"          element={<S><CallsPage /></S>} />
-          <Route path="/dialer"         element={<S><DialerPage /></S>} />
           <Route path="/prospecting"    element={<S><ProspectingPage /></S>} />
-          <Route path="/reports/performance" element={<S><PerformancePage /></S>} />
-          <Route path="/performance"    element={<Navigate to="/reports/performance" replace />} />
           <Route path="/billing"        element={<S><BillingPage /></S>} />
           {/* In-app help center (connection guides) — available to everyone. */}
           <Route path="/help"           element={<S><HelpPage /></S>} />
@@ -239,17 +236,10 @@ export default function App() {
             <Route path="/agency/rebilling"  element={<S><AgencyRebillingPage /></S>} />
             <Route path="/research"    element={<S><ResearchSettingsPage /></S>} />
             <Route path="/research/suggestions" element={<S><ResearchSuggestionsPage /></S>} />
-            <Route path="/ai/agents"   element={<S><AgentStudioPage /></S>} />
-            <Route path="/ai/knowledge" element={<S><KnowledgeBasePage /></S>} />
-            <Route path="/channels"    element={<S><ChannelsSettingsPage /></S>} />
-            <Route path="/snippets" element={<S><SnippetsPage /></S>} />
-            <Route path="/settings/snippets" element={<Navigate to="/snippets" replace />} />
+            {/* Channels / Canned Responses / AI Agents / Knowledge → /inbox?tab=… */}
             <Route path="/settings/sending-domains" element={<S><SendingDomainsPage /></S>} />
             <Route path="/settings/custom-domains" element={<S><CustomDomainsPage /></S>} />
-            <Route path="/tax-rates" element={<S><TaxRatesPage /></S>} />
-            <Route path="/settings/tax-rates" element={<Navigate to="/tax-rates" replace />} />
-            <Route path="/coupons" element={<S><CouponsPage /></S>} />
-            <Route path="/settings/coupons" element={<Navigate to="/coupons" replace />} />
+            {/* Tax Rates + Coupons → /products?tab=… */}
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
             <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
@@ -264,17 +254,16 @@ export default function App() {
             <Route path="/products"    element={<S><ProductsPage /></S>} />
             <Route path="/subscriptions" element={<S><SubscriptionsPage /></S>} />
             <Route path="/order-forms"   element={<S><OrderFormsPage /></S>} />
+            {/* Business | Brand Kit | Brand Brain — ONE Brand page, tabs at ?tab= */}
             <Route path="/branding"    element={<S><BrandingSettingsPage /></S>} />
-            <Route path="/brand-kit"   element={<S><BrandKitPage /></S>} />
-            {/* Analytics dashboards (Epic G) — funnel, source/biz-type, rep-perf, attribution */}
-            <Route path="/reports/analytics" element={<S><AnalyticsPage /></S>} />
-            <Route path="/analytics"   element={<Navigate to="/reports/analytics" replace />} />
             {/* GHL-parity settings/tools UIs (manager-gated; server-side OWNER/MANAGER). */}
             <Route path="/settings/api-keys"    element={<S><ApiKeysPage /></S>} />
             <Route path="/settings/modules"     element={<S><ModulesPage /></S>} />
             <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
             <Route path="/settings/inbound-webhooks" element={<S><InboundWebhooksPage /></S>} />
-            <Route path="/settings/connections" element={<S><ConnectionsPage /></S>} />
+            {/* Backend calendar-OAuth callbacks 302 to /settings/connections?gcal=… —
+                params must survive into the Account Center's Integrations tab. */}
+            <Route path="/settings/connections" element={<RedirectMergingParams to="/accounts" set={{ tab: 'integrations' }} />} />
             <Route path="/settings/roles"       element={<S><RolesPage /></S>} />
             <Route path="/settings/compliance"  element={<S><CompliancePage /></S>} />
             {/* Telephony + Voice-AI setup now lives in the Account Center. */}
@@ -284,7 +273,6 @@ export default function App() {
             <Route path="/social-campaigns"      element={<Navigate to="/studio?tab=campaigns" replace />} />
             <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
-            <Route path="/ai/studio"   element={<S><AiStudioPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />
             <Route path="/custom-objects/:key" element={<S><CustomObjectDetailPage /></S>} />

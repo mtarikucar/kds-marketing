@@ -17,7 +17,7 @@ import { searchBrandBrain, reindexBrandBrain, type Citation } from '../../../fea
  * in your sources, each with a citation back to the doc. Keyword + citation
  * today; semantic re-rank lights up once an embedding provider is configured.
  */
-export default function BrandBrainPage() {
+export default function BrandBrainPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Citation[] | null>(null);
@@ -34,20 +34,27 @@ export default function BrandBrainPage() {
     onError: () => toast.error(t('brain.reindexError', 'Reindex failed')),
   });
 
-  const submit = () => query.trim() && search.mutate();
+  // Mirrors the button's isPending guard so Enter can't double-fire the search.
+  const submit = () => query.trim() && !search.isPending && search.mutate();
+
+  // The header's only action — when embedded (no PageHeader) it moves into the
+  // search toolbar row so the button is never lost.
+  const reindexButton = (
+    <Button variant="secondary" onClick={() => reindex.mutate()} disabled={reindex.isPending}>
+      <RefreshCw className={`mr-1.5 h-4 w-4 ${reindex.isPending ? 'animate-spin' : ''}`} />
+      {t('brain.reindex', 'Reindex')}
+    </Button>
+  );
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('brain.title', 'Brand Brain')}
         description={t('brain.subtitle', 'Grounded, cited answers from your own knowledge base — never made up.')}
-        actions={
-          <Button variant="secondary" onClick={() => reindex.mutate()} disabled={reindex.isPending}>
-            <RefreshCw className={`mr-1.5 h-4 w-4 ${reindex.isPending ? 'animate-spin' : ''}`} />
-            {t('brain.reindex', 'Reindex')}
-          </Button>
-        }
+        actions={reindexButton}
       />
+      )}
 
       <div className="flex gap-2">
         <Input
@@ -60,6 +67,7 @@ export default function BrandBrainPage() {
         <Button onClick={submit} disabled={!query.trim() || search.isPending}>
           <Search className="mr-1.5 h-4 w-4" />{search.isPending ? t('brain.searching', 'Searching…') : t('brain.search', 'Search')}
         </Button>
+        {embedded && reindexButton}
       </div>
 
       {reindex.isError && (

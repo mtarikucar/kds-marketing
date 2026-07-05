@@ -13,8 +13,9 @@ vi.mock('../trends/TrendsPage', () => stub);
 vi.mock('../CampaignsPage', () => stub);
 vi.mock('../socialCampaigns/SocialCampaignsPage', () => stub);
 vi.mock('../social', () => stub);
+vi.mock('../social/AiStudioPage', () => stub);
+vi.mock('../personas/PersonasPage', () => stub);
 vi.mock('../emailTemplates', () => stub);
-vi.mock('../triggerLinks', () => stub);
 vi.mock('../ReviewsPage', () => stub);
 vi.mock('../affiliate-portal/AffiliatePortalPage', () => stub);
 // The wizard dialog has its own tests; here only its mount matters.
@@ -27,9 +28,9 @@ function renderAt(path: string) {
 }
 
 describe('GrowthStudioPage', () => {
-  it('renders the five unified tabs', () => {
+  it('renders the six unified tabs', () => {
     renderAt('/studio');
-    for (const label of ['Content Calendar', 'Campaigns', 'Trends', 'Autopilot', 'More']) {
+    for (const label of ['Content Calendar', 'Create', 'Campaigns', 'Trends', 'Autopilot', 'More']) {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     }
   });
@@ -47,6 +48,25 @@ describe('GrowthStudioPage', () => {
   it('honors the nested ?sub= deep link inside More', () => {
     renderAt('/studio?tab=more&sub=reviews');
     expect(screen.getByRole('tab', { name: 'Reviews' })).toHaveAttribute('data-state', 'active');
+  });
+
+  it('honors the nested ?sub= deep link inside Create (personas selected)', () => {
+    renderAt('/studio?tab=create&sub=personas');
+    expect(screen.getByRole('tab', { name: 'Create' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'UGC Personas' })).toHaveAttribute('data-state', 'active');
+  });
+
+  it('defaults the Create tab to the AI Studio sub-tab', () => {
+    renderAt('/studio?tab=create');
+    expect(screen.getByRole('tab', { name: 'AI Studio' })).toHaveAttribute('data-state', 'active');
+  });
+
+  it('no longer offers Trigger Links under More (moved to the Automation hub)', () => {
+    renderAt('/studio?tab=more');
+    expect(screen.queryByRole('tab', { name: 'Trigger Links' })).not.toBeInTheDocument();
+    for (const label of ['Email Templates', 'Reviews', 'Affiliates']) {
+      expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
+    }
   });
 
   it('writes ?sub= to the URL when a nested tab is clicked (deep-linkable)', async () => {

@@ -37,10 +37,13 @@ describe('SettingsLayout — sub-grouping', () => {
     await i18n.changeLanguage('en');
   });
 
-  it('renders labelled setting groups instead of one flat list', () => {
+  it('renders the FOUR labelled setting groups instead of one flat list', () => {
     renderSettings();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
-    expect(screen.getByText('Team & access')).toBeInTheDocument();
-    expect(screen.getByText('Developer')).toBeInTheDocument();
+    expect(screen.getByText('Data')).toBeInTheDocument();
+    expect(screen.getByText('Connections & domains')).toBeInTheDocument();
+    expect(screen.getByText('Developer & security')).toBeInTheDocument();
+    // No leftover ungrouped bucket: every settings child belongs to a group.
+    expect(screen.queryByText('Other')).not.toBeInTheDocument();
   });
 });

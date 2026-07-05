@@ -50,6 +50,12 @@
       "funnelDesc": "Dönüşüm hunisi verileri lead'ler aşamalardan geçtikçe görünür.",
       "perfTitle": "Performans verisi yok",
       "perfDesc": "Temsilci performans verileri hedefler belirlendikçe görünür."
+    },
+    "tab": {
+      "overview": "Genel Bakış",
+      "ads": "Reklamlar",
+      "performance": "Performans",
+      "analytics": "Analitik"
     }
   },
   "performance": {
@@ -197,6 +203,10 @@
       "bridgeUrl": "Custom-LLM köprü URL'si ({channelId} yerine Ses kanalınızın id'sini yazın)",
       "ivrUrl": "NetGSM IVR webhook URL'si",
       "opsNote": "Bunlar devreye girmeden önce bir yöneticinin VOICE_AI_BRIDGE_SECRET değerini ayarlaması (ve aramalar için NetGSM SIP-trunk / AI eklentisini sağlaması) gerekir."
+    },
+    "tab": {
+      "accounts": "Hesaplar",
+      "integrations": "Entegrasyonlar"
     }
   },
   "welcome": {
@@ -244,13 +254,14 @@
     }
   },
   "settingsGroup": {
-    "workspace": "Çalışma alanı",
+    "workspace": "Çalışma Alanı",
     "team": "Ekip ve erişim",
-    "data": "CRM verisi",
+    "data": "Veri",
     "integrations": "Kanallar ve entegrasyonlar",
-    "developer": "Geliştirici",
+    "developer": "Geliştirici ve güvenlik",
     "compliance": "Uyumluluk",
-    "other": "Diğer"
+    "other": "Diğer",
+    "connections": "Bağlantılar ve alan adları"
   },
   "leadStatus": {
     "NEW": "Yeni",
@@ -400,18 +411,18 @@
     },
     "dashboard": "Gösterge Paneli",
     "leads": "Lead'ler",
-    "opportunities": "Fırsatlar",
+    "opportunities": "Satış Hattı",
     "estimates": "Teklif Belgeleri",
     "documents": "Belgeler",
     "offers": "Teklifler",
     "tasks": "Görevler",
-    "accounts": "Hesap Merkezi",
+    "accounts": "Bağlantılar",
     "calendar": "Takvim",
     "commissions": "Komisyonlar",
     "reports": "Raporlar",
     "adReporting": "Reklamlar",
     "customObjects": "Özel Nesneler",
-    "triggerLinks": "Tetikleyici Bağlantılar",
+    "triggerLinks": "Tetik Linkleri",
     "installations": "Kurulumlar",
     "calls": "Aramalar",
     "performance": "Performans",
@@ -482,7 +493,8 @@
     "trends": "Trend Remix",
     "contentCalendar": "İçerik Takvimi",
     "personas": "UGC Personaları",
-    "brandBrain": "Marka Beyni"
+    "brandBrain": "Marka Beyni",
+    "brand": "Marka"
   },
   "common": {
     "save": "Kaydet",
@@ -887,6 +899,11 @@
     "interval": {
       "MONTH": "Aylık",
       "YEAR": "Yıllık"
+    },
+    "tab": {
+      "products": "Ürünler",
+      "taxRates": "Vergi Oranları",
+      "coupons": "Kuponlar"
     }
   },
   "documents": {
@@ -1554,7 +1571,14 @@
     "title": "Gelen Kutusu",
     "subtitle": "Tüm müşteri konuşmaları tek yerde.",
     "emptyHint": "Bir kanal bağlanıp müşteriler sana yazdığında konuşmalar burada görünür.",
-    "connectChannel": "Kanal bağla"
+    "connectChannel": "Kanal bağla",
+    "tab": {
+      "inbox": "Gelen Kutusu",
+      "channels": "Kanallar",
+      "snippets": "Hazır Yanıtlar",
+      "agents": "AI Ajanları",
+      "knowledge": "Bilgi Bankası"
+    }
   },
   "channels": {
     "title": "Kanallar",
@@ -3191,7 +3215,36 @@
   },
   "studio": {
     "tab": {
-      "autopilot": "Otopilot"
+      "autopilot": "Otopilot",
+      "create": "Üret"
+    },
+    "create": {
+      "studio": "AI Stüdyo",
+      "personas": "UGC Personalar"
+    }
+  },
+  "documentsHub": {
+    "title": "Belgeler",
+    "subtitle": "Teklifler, fiyat teklifleri ve e-imza sözleşmeleri — tüm satış evrakların tek yerde.",
+    "tab": {
+      "offers": "Teklifler",
+      "estimates": "Fiyat Teklifleri",
+      "files": "Belgeler"
+    }
+  },
+  "brand": {
+    "title": "Marka",
+    "subtitle": "İşletme kimliğin, görsel kitin ve AI marka sesin — tek yerde.",
+    "tab": {
+      "business": "İşletme",
+      "kit": "Marka Kiti",
+      "brain": "Marka Beyni"
+    }
+  },
+  "calls": {
+    "tab": {
+      "calls": "Aramalar",
+      "dialer": "Güçlü Arayıcı"
     }
   }
 }

@@ -133,7 +133,7 @@ export function ConversationList({
               action={
                 isManager ? (
                   <Link
-                    to="/channels"
+                    to="/inbox?tab=channels"
                     className="text-xs font-medium text-primary hover:underline"
                   >
                     {t('inbox.connectChannel')}

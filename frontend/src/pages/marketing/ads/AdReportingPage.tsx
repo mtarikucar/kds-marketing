@@ -77,7 +77,7 @@ function pct(n: number): string {
   return `${n.toFixed(2)}%`;
 }
 
-export default function AdReportingPage() {
+export default function AdReportingPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const user = useMarketingAuthStore((s) => s.user);
@@ -247,54 +247,62 @@ export default function AdReportingPage() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
+  // Header actions — when embedded (hosted in the Reports tabs) there is no
+  // PageHeader, so the same connect actions render as a toolbar row instead.
+  const connectActions = isManager ? (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        onClick={() => void startLinkedinConnect()}
+        disabled={!status?.LINKEDIN}
+        title={
+          status?.LINKEDIN
+            ? undefined
+            : t('ads.oauth.linkedinNotConfigured', {
+                defaultValue: 'An admin must add LinkedIn ads app credentials first',
+              })
+        }
+        variant="outline"
+      >
+        {t('ads.oauth.linkedinConnect', { defaultValue: 'Connect LinkedIn' })}
+      </Button>
+      <Button
+        onClick={() => void startTikTokConnect()}
+        disabled={!status?.TIKTOK}
+        title={
+          status?.TIKTOK
+            ? undefined
+            : t('ads.oauth.tiktokNotConfigured', {
+                defaultValue: 'An admin must add TikTok Business app credentials first',
+              })
+        }
+        variant="outline"
+      >
+        {t('ads.oauth.tiktokConnect', {
+          defaultValue: 'Connect TikTok for Business',
+        })}
+      </Button>
+      <Button onClick={() => setConnectOpen(true)} disabled={!canConnect} variant="outline">
+        <Link2 className="h-4 w-4" aria-hidden="true" />
+        {t('ads.connectAccount', { defaultValue: 'Connect account' })}
+      </Button>
+    </div>
+  ) : undefined;
+
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('ads.title', { defaultValue: 'Ads' })}
-        description={t('ads.subtitle', {
-          defaultValue: 'Track Meta and TikTok ad performance, manage campaigns and auto-scale.',
-        })}
-        actions={
-          isManager ? (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => void startLinkedinConnect()}
-                disabled={!status?.LINKEDIN}
-                title={
-                  status?.LINKEDIN
-                    ? undefined
-                    : t('ads.oauth.linkedinNotConfigured', {
-                        defaultValue: 'An admin must add LinkedIn ads app credentials first',
-                      })
-                }
-                variant="outline"
-              >
-                {t('ads.oauth.linkedinConnect', { defaultValue: 'Connect LinkedIn' })}
-              </Button>
-              <Button
-                onClick={() => void startTikTokConnect()}
-                disabled={!status?.TIKTOK}
-                title={
-                  status?.TIKTOK
-                    ? undefined
-                    : t('ads.oauth.tiktokNotConfigured', {
-                        defaultValue: 'An admin must add TikTok Business app credentials first',
-                      })
-                }
-                variant="outline"
-              >
-                {t('ads.oauth.tiktokConnect', {
-                  defaultValue: 'Connect TikTok for Business',
-                })}
-              </Button>
-              <Button onClick={() => setConnectOpen(true)} disabled={!canConnect} variant="outline">
-                <Link2 className="h-4 w-4" aria-hidden="true" />
-                {t('ads.connectAccount', { defaultValue: 'Connect account' })}
-              </Button>
-            </div>
-          ) : undefined
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('ads.title', { defaultValue: 'Ads' })}
+          description={t('ads.subtitle', {
+            defaultValue: 'Track Meta and TikTok ad performance, manage campaigns and auto-scale.',
+          })}
+          actions={connectActions}
+        />
+      )}
+
+      {embedded && connectActions && (
+        <div className="flex flex-wrap justify-end gap-2">{connectActions}</div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SegmentedControl<View>

@@ -1,14 +1,30 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { PageHeader } from '@/components/ui';
+import { PageHeader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { API_URL } from '../../../lib/env';
+import { RouteFallback } from '../../../components/RouteFallback';
 import { ConversationList } from './ConversationList';
 import { ThreadPane } from './ThreadPane';
 import { LeadContextPane } from './LeadContextPane';
+
+// Lazy so a config tab's code only loads when opened — the inbox tab (the
+// default, real-time surface) must never pay for the config pages' bundles.
+const ChannelsSettingsPage = lazy(() => import('../ChannelsSettingsPage'));
+const SnippetsPage = lazy(() => import('../settings/snippets'));
+const AgentStudioPage = lazy(() => import('../AgentStudioPage'));
+const KnowledgeBasePage = lazy(() => import('../KnowledgeBasePage'));
+
+const TABS = ['inbox', 'channels', 'snippets', 'agents', 'knowledge'] as const;
+type InboxTab = (typeof TABS)[number];
+
+function Lazy({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
 
 interface ConversationRow {
   id: string;
@@ -41,6 +57,23 @@ export default function InboxPage() {
   const queryClient = useQueryClient();
   const { accessToken, user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+
+  // ── URL-synced top tabs (?tab=) ────────────────────────────────────────────
+  // inbox (default) + the 4 conversation-domain config surfaces. The config
+  // tabs are manager-only: hidden from the bar AND deep links fall back to the
+  // inbox for reps. All inbox state/queries/SSE live in THIS component, so
+  // switching tabs never tears down the real-time stream or the open thread.
+  const [params, setParams] = useSearchParams();
+  const rawTab = params.get('tab');
+  const requested: InboxTab = (TABS as readonly string[]).includes(rawTab ?? '')
+    ? (rawTab as InboxTab)
+    : 'inbox';
+  const tab: InboxTab = isManager ? requested : 'inbox';
+  const setTab = (v: string) =>
+    setParams((p) => {
+      p.set('tab', v);
+      return p;
+    }, { replace: true });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -229,56 +262,89 @@ export default function InboxPage() {
         description={t('inbox.subtitle')}
       />
 
-      <div className="flex-1 min-h-0 flex gap-0 sm:gap-4">
-        {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
-        <div className={selectedId ? 'hidden sm:flex' : 'flex w-full sm:w-auto'}>
-          <ConversationList
-            conversations={conversations}
-            isLoading={conversationsLoading}
-            isError={conversationsError}
-            selectedId={selectedId}
-            statusFilter={statusFilter}
-            isManager={isManager}
-            onSelect={(id) => setSelectedId(id)}
-            onStatusFilter={setStatusFilter}
-            onRetry={() => refetchConversations()}
-          />
-        </div>
-
-        {/* Pane 2 — thread + composer (full-width on phone when a conversation is open) */}
-        <div
-          className={`${
-            selectedId ? 'flex' : 'hidden sm:flex'
-          } w-full sm:w-auto sm:flex-1 min-w-0`}
-        >
-          <ThreadPane
-            convo={convo}
-            lead={lead}
-            channel={thread?.channel}
-            messages={messages}
-            draft={draft}
-            isSending={reply.isPending}
-            isTogglingAi={toggleAi.isPending}
-            isClosing={closeConvo.isPending}
-            onDraftChange={setDraft}
-            onSend={() => draft.trim() && reply.mutate(draft.trim())}
-            onToggleAi={() => convo && toggleAi.mutate(!convo.aiPaused)}
-            onClose={() => closeConvo.mutate()}
-            onBack={handleBack}
-            onShowContext={() => setShowContext(true)}
-          />
-        </div>
-
-        {/* Pane 3 — lead context: inline at lg+, sheet below lg */}
-        <LeadContextPane lead={lead} />
-        {showContext && (
-          <LeadContextPane
-            lead={lead}
-            asSheet
-            onClose={() => setShowContext(false)}
-          />
+      <Tabs value={tab} onValueChange={setTab} className="flex-1 min-h-0 flex flex-col">
+        {/* The config tabs are manager-only; reps get the plain inbox (no bar). */}
+        {isManager && (
+          <TabsList className="shrink-0">
+            <TabsTrigger value="inbox">{t('inbox.tab.inbox', 'Inbox')}</TabsTrigger>
+            <TabsTrigger value="channels">{t('inbox.tab.channels', 'Channels')}</TabsTrigger>
+            <TabsTrigger value="snippets">{t('inbox.tab.snippets', 'Canned Responses')}</TabsTrigger>
+            <TabsTrigger value="agents">{t('inbox.tab.agents', 'AI Agents')}</TabsTrigger>
+            <TabsTrigger value="knowledge">{t('inbox.tab.knowledge', 'Knowledge')}</TabsTrigger>
+          </TabsList>
         )}
-      </div>
+
+        {/* Inbox — the pre-existing 3-pane layout, byte-for-byte. Its state,
+            queries and the SSE stream live in the page component above, so the
+            real-time behavior is identical whether or not the bar is shown. */}
+        <TabsContent
+          value="inbox"
+          className={`flex-1 min-h-0 flex gap-0 sm:gap-4 ${isManager ? 'mt-4' : 'mt-0'}`}
+        >
+          {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
+          <div className={selectedId ? 'hidden sm:flex' : 'flex w-full sm:w-auto'}>
+            <ConversationList
+              conversations={conversations}
+              isLoading={conversationsLoading}
+              isError={conversationsError}
+              selectedId={selectedId}
+              statusFilter={statusFilter}
+              isManager={isManager}
+              onSelect={(id) => setSelectedId(id)}
+              onStatusFilter={setStatusFilter}
+              onRetry={() => refetchConversations()}
+            />
+          </div>
+
+          {/* Pane 2 — thread + composer (full-width on phone when a conversation is open) */}
+          <div
+            className={`${
+              selectedId ? 'flex' : 'hidden sm:flex'
+            } w-full sm:w-auto sm:flex-1 min-w-0`}
+          >
+            <ThreadPane
+              convo={convo}
+              lead={lead}
+              channel={thread?.channel}
+              messages={messages}
+              draft={draft}
+              isSending={reply.isPending}
+              isTogglingAi={toggleAi.isPending}
+              isClosing={closeConvo.isPending}
+              onDraftChange={setDraft}
+              onSend={() => draft.trim() && reply.mutate(draft.trim())}
+              onToggleAi={() => convo && toggleAi.mutate(!convo.aiPaused)}
+              onClose={() => closeConvo.mutate()}
+              onBack={handleBack}
+              onShowContext={() => setShowContext(true)}
+            />
+          </div>
+
+          {/* Pane 3 — lead context: inline at lg+, sheet below lg */}
+          <LeadContextPane lead={lead} />
+          {showContext && (
+            <LeadContextPane
+              lead={lead}
+              asSheet
+              onClose={() => setShowContext(false)}
+            />
+          )}
+        </TabsContent>
+
+        {/* Config tabs — manager-only, lazy, scroll independently of the shell. */}
+        <TabsContent value="channels" className="flex-1 min-h-0 overflow-y-auto">
+          <Lazy><ChannelsSettingsPage embedded /></Lazy>
+        </TabsContent>
+        <TabsContent value="snippets" className="flex-1 min-h-0 overflow-y-auto">
+          <Lazy><SnippetsPage embedded /></Lazy>
+        </TabsContent>
+        <TabsContent value="agents" className="flex-1 min-h-0 overflow-y-auto">
+          <Lazy><AgentStudioPage embedded /></Lazy>
+        </TabsContent>
+        <TabsContent value="knowledge" className="flex-1 min-h-0 overflow-y-auto">
+          <Lazy><KnowledgeBasePage embedded /></Lazy>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
