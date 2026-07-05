@@ -168,7 +168,7 @@ function Labeled({
  * the customer, mark accepted/declined, and convert an accepted estimate into an
  * invoice. Reps manage their own quotes (leads.write); the backend scopes data.
  */
-export default function EstimatesPage() {
+export default function EstimatesPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -309,6 +309,7 @@ export default function EstimatesPage() {
 
   return (
     <div className="space-y-4">
+      {!embedded && (
       <PageHeader
         title={t('estimates.title', 'Estimates')}
         description={t('estimates.subtitle', 'Quotes you send to customers.')}
@@ -319,6 +320,18 @@ export default function EstimatesPage() {
           </Button>
         }
       />
+      )}
+
+      {/* Embedded in a hub tab: the header (and its CTA) is skipped, so the
+          create action relocates to a small toolbar row — never lose a button. */}
+      {embedded && (
+        <div className="flex justify-end">
+          <Button size="sm" onClick={openNew}>
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            {t('estimates.newEstimate', 'New estimate')}
+          </Button>
+        </div>
+      )}
 
       <QueryStateBoundary
         isLoading={isLoading}

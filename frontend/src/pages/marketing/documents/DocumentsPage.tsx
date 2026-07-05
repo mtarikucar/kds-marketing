@@ -63,7 +63,7 @@ function Labeled({ label, children }: { label: string; children: React.ReactNode
  * The signer page is server-rendered at /api/public/d/:token (no React route).
  * Reps can draft; send/void/delete are manager-gated server-side.
  */
-export default function DocumentsPage() {
+export default function DocumentsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -138,6 +138,7 @@ export default function DocumentsPage() {
 
   return (
     <div className="space-y-4">
+      {!embedded && (
       <PageHeader
         title={t('documents.title', 'Documents')}
         description={t('documents.subtitle', 'Agreements you send for e-signature.')}
@@ -148,6 +149,18 @@ export default function DocumentsPage() {
           </Button>
         }
       />
+      )}
+
+      {/* Embedded in a hub tab: the header (and its CTA) is skipped, so the
+          create action relocates to a small toolbar row — never lose a button. */}
+      {embedded && (
+        <div className="flex justify-end">
+          <Button size="sm" onClick={openNew}>
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            {t('documents.newDocument', 'New document')}
+          </Button>
+        </div>
+      )}
 
       <QueryStateBoundary
         isLoading={isLoading}

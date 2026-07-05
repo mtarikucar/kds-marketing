@@ -98,7 +98,7 @@ export default function NeedsAttention({
     items.push({
       id: 'offers',
       count: offers,
-      to: '/offers?status=SENT',
+      to: '/documents?tab=offers&status=SENT',
       label: t('needsAttention.openOffers'),
       tone: 'primary',
       icon: <FileText className="w-5 h-5" />,

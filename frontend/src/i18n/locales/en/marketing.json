@@ -50,6 +50,12 @@
       "funnelDesc": "Conversion funnel data will appear once leads move through stages.",
       "perfTitle": "No performance data",
       "perfDesc": "Rep performance data will appear once targets are set."
+    },
+    "tab": {
+      "overview": "Overview",
+      "ads": "Ads",
+      "performance": "Performance",
+      "analytics": "Analytics"
     }
   },
   "performance": {
@@ -104,7 +110,11 @@
     "setUpChannelDesc": "Enter the details below — this connects the channel to your inbox.",
     "channelName": "Name",
     "channelCreated": "Channel connected",
-    "channelFailed": "Could not connect the channel"
+    "channelFailed": "Could not connect the channel",
+    "tab": {
+      "accounts": "Accounts",
+      "integrations": "Integrations"
+    }
   },
   "welcome": {
     "title": "Welcome to Jeeta 🎉",
@@ -153,11 +163,12 @@
   "settingsGroup": {
     "workspace": "Workspace",
     "team": "Team & access",
-    "data": "CRM data",
+    "data": "Data",
     "integrations": "Channels & integrations",
-    "developer": "Developer",
+    "developer": "Developer & security",
     "compliance": "Compliance",
-    "other": "Other"
+    "other": "Other",
+    "connections": "Connections & domains"
   },
   "leadStatus": {
     "NEW": "New",
@@ -261,12 +272,12 @@
     },
     "dashboard": "Dashboard",
     "leads": "Leads",
-    "opportunities": "Opportunities",
+    "opportunities": "Pipeline",
     "estimates": "Estimates",
     "documents": "Documents",
     "offers": "Offers",
     "tasks": "Tasks",
-    "accounts": "Account Center",
+    "accounts": "Connections",
     "calendar": "Calendar",
     "commissions": "Commissions",
     "reports": "Reports",
@@ -338,7 +349,8 @@
     "agencySnapshots": "Agency Snapshots",
     "ivr": "IVR Menus",
     "help": "Help",
-    "appointments": "Appointments"
+    "appointments": "Appointments",
+    "brand": "Brand"
   },
   "common": {
     "save": "Save",
@@ -741,6 +753,11 @@
     "interval": {
       "MONTH": "Monthly",
       "YEAR": "Yearly"
+    },
+    "tab": {
+      "products": "Products",
+      "taxRates": "Tax Rates",
+      "coupons": "Coupons"
     }
   },
   "documents": {
@@ -1394,7 +1411,14 @@
     "title": "Inbox",
     "subtitle": "Every customer conversation in one place.",
     "emptyHint": "Conversations appear here once a channel is connected and customers message you.",
-    "connectChannel": "Connect a channel"
+    "connectChannel": "Connect a channel",
+    "tab": {
+      "inbox": "Inbox",
+      "channels": "Channels",
+      "snippets": "Canned Responses",
+      "agents": "AI Agents",
+      "knowledge": "Knowledge"
+    }
   },
   "channels": {
     "title": "Channels",
@@ -2482,7 +2506,36 @@
   },
   "studio": {
     "tab": {
-      "autopilot": "Autopilot"
+      "autopilot": "Autopilot",
+      "create": "Create"
+    },
+    "create": {
+      "studio": "AI Studio",
+      "personas": "UGC Personas"
+    }
+  },
+  "documentsHub": {
+    "title": "Documents",
+    "subtitle": "Offers, estimates and e-signature agreements — all your sales paperwork in one place.",
+    "tab": {
+      "offers": "Offers",
+      "estimates": "Estimates",
+      "files": "Documents"
+    }
+  },
+  "brand": {
+    "title": "Brand",
+    "subtitle": "Your business identity, visual kit and AI brand voice — one place.",
+    "tab": {
+      "business": "Business",
+      "kit": "Brand Kit",
+      "brain": "Brand Brain"
+    }
+  },
+  "calls": {
+    "tab": {
+      "calls": "Calls",
+      "dialer": "Power Dialer"
     }
   }
 }

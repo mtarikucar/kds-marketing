@@ -25,7 +25,7 @@ import {
   type BrandKit,
 } from '../../features/marketing/api/brandKit.service';
 
-export default function BrandKitPage() {
+export default function BrandKitPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const logoRef = useRef<HTMLInputElement>(null);
@@ -111,10 +111,12 @@ export default function BrandKitPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('brandKit.title', 'Brand Kit')}
         description={t('brandKit.subtitle', 'Logo, palette, tone and references reused across AI generations.')}
       />
+      )}
 
       <Card>
         <CardHeader>

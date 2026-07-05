@@ -26,6 +26,15 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// Stub the embedded (lazy) tab pages so the hub shell renders in isolation;
+// echo the `embedded` prop so the tests can assert it is passed.
+vi.mock('../settings/taxRates', () => ({
+  default: ({ embedded }: { embedded?: boolean }) => <div>tax-rates-stub:{String(!!embedded)}</div>,
+}));
+vi.mock('../settings/coupons', () => ({
+  default: ({ embedded }: { embedded?: boolean }) => <div>coupons-stub:{String(!!embedded)}</div>,
+}));
+
 const PRODUCTS = {
   data: [
     {
@@ -50,6 +59,18 @@ function wrapper({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={qc}>
       <MemoryRouter>{children}</MemoryRouter>
     </QueryClientProvider>
+  );
+}
+
+/** Mount the page at a concrete URL so `?tab=` deep links can be exercised. */
+function renderAt(path: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[path]}>
+        <ProductsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -82,6 +103,42 @@ describe('ProductsPage', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
     await waitFor(() => expect(del).toHaveBeenCalledWith('/products/p1'));
+  });
+
+  it('renders the three hub tabs with the catalog selected by default', async () => {
+    renderAt('/products');
+    for (const label of ['Products', 'Tax Rates', 'Coupons']) {
+      expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('tab', { name: 'Products' })).toHaveAttribute('data-state', 'active');
+    // The catalog body (not a stub) is what the default tab shows.
+    expect(await screen.findByText('Pro plan')).toBeInTheDocument();
+  });
+
+  it('honors the ?tab=tax-rates deep link (embedded Tax Rates page mounted)', async () => {
+    renderAt('/products?tab=tax-rates');
+    expect(screen.getByRole('tab', { name: 'Tax Rates' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByText('tax-rates-stub:true')).toBeInTheDocument();
+    expect(screen.queryByText('coupons-stub:true')).not.toBeInTheDocument();
+  });
+
+  it('honors the ?tab=coupons deep link (embedded Coupons page mounted)', async () => {
+    renderAt('/products?tab=coupons');
+    expect(screen.getByRole('tab', { name: 'Coupons' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByText('coupons-stub:true')).toBeInTheDocument();
+  });
+
+  it('falls back to the catalog tab on an unknown ?tab= value', () => {
+    renderAt('/products?tab=bogus');
+    expect(screen.getByRole('tab', { name: 'Products' })).toHaveAttribute('data-state', 'active');
+  });
+
+  it('switches tabs on click and keeps the New product action reachable on the catalog tab', async () => {
+    renderAt('/products');
+    expect(await screen.findByRole('button', { name: /new product/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Coupons' }));
+    expect(await screen.findByText('coupons-stub:true')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Coupons' })).toHaveAttribute('data-state', 'active');
   });
 
   it('persists a cleared description/SKU on edit (sends "" not undefined so the blank sticks)', async () => {

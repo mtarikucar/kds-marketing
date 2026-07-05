@@ -45,7 +45,7 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-export default function TaxRatesPage() {
+export default function TaxRatesPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -100,18 +100,29 @@ export default function TaxRatesPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('taxRates.title', { defaultValue: 'Tax Rates' })}
-        description={t('taxRates.subtitle', {
-          defaultValue: 'Reusable rates (e.g. KDV %20) applied to invoice and estimate lines.',
-        })}
-        actions={
+      {!embedded ? (
+        <PageHeader
+          title={t('taxRates.title', { defaultValue: 'Tax Rates' })}
+          description={t('taxRates.subtitle', {
+            defaultValue: 'Reusable rates (e.g. KDV %20) applied to invoice and estimate lines.',
+          })}
+          actions={
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('taxRates.new', { defaultValue: 'New rate' })}
+            </Button>
+          }
+        />
+      ) : (
+        // Embedded (Products tab): the host owns the page header, but the
+        // primary action must stay reachable — keep it as a small toolbar row.
+        <div className="flex justify-end">
           <Button onClick={openCreate}>
             <Plus className="h-4 w-4" aria-hidden="true" />
             {t('taxRates.new', { defaultValue: 'New rate' })}
           </Button>
-        }
-      />
+        </div>
+      )}
 
       {isLoading ? (
         <Skeleton className="h-32" />

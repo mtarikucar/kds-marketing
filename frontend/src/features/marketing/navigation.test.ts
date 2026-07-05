@@ -17,9 +17,11 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(ids).toContain('dashboard');
     expect(ids).toContain('tasks');
     expect(ids).toEqual(
-      expect.arrayContaining(['contacts', 'calendar', 'sales', 'reporting', 'settings']),
+      expect.arrayContaining(['contacts', 'calendar', 'sales', 'reports', 'settings']),
     );
-    expect(ids).not.toContain('conversations');
+    // Dissolved / advanced hubs never show for a core-only REP.
+    expect(ids).not.toContain('conversations'); // dissolved into /inbox
+    expect(ids).not.toContain('ai'); // dispersed (Studio / Inbox / Brand)
     expect(ids).not.toContain('studio');
     expect(ids).not.toContain('sites');
     expect(ids).not.toContain('automation');
@@ -28,37 +30,41 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(ids).not.toContain('payments');
     expect(ids).not.toContain('agency');
     expect(childPaths(hubs, 'contacts')).toEqual(['/leads', '/companies']);
-    expect(childPaths(hubs, 'sales')).toEqual(['/opportunities', '/estimates', '/documents', '/offers']);
-    expect(childPaths(hubs, 'reporting')).toEqual(['/reports', '/reports/ads', '/reports/performance']);
+    // Sales is the MERGED set: Pipeline + one Documents hub (offers/estimates/files tabs).
+    expect(childPaths(hubs, 'sales')).toEqual(['/opportunities', '/documents']);
+    // Reports is a single-page hub now (ads/performance/analytics are tabs).
+    const reports = hubs.find((h) => h.id === 'reports');
+    expect(reports?.path).toBe('/reports');
+    expect(reports?.children).toBeUndefined();
     expect(childPaths(hubs, 'settings')).toEqual(['/settings/two-factor']);
   });
 
   it('a manager with NO entitlements still sees the core-but-managerOnly modules', () => {
     const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
-    // The Marketing hub is now the single-page Growth Studio (its former
-    // children are tabs at /studio?tab=…).
+    // Growth Studio stays a single page (children are tabs at /studio?tab=…).
     const studio = hubs.find((h) => h.id === 'studio');
     expect(studio?.path).toBe('/studio');
     expect(studio?.children).toBeUndefined();
-    // AI is its own hub now; only the un-gated AI Studio shows without entitlements.
-    expect(childPaths(hubs, 'ai')).toEqual(['/ai/studio', '/personas', '/brand-brain']);
+    // The AI hub is GONE — its tools live inside Studio, Inbox and Brand.
+    expect(hubs.find((h) => h.id === 'ai')).toBeUndefined();
     expect(childPaths(hubs, 'sites').sort()).toEqual(['/experiments', '/surveys']);
     expect(childPaths(hubs, 'memberships').sort()).toEqual([
       '/memberships/communities',
       '/memberships/courses',
       '/memberships/leaderboard',
     ]);
+    // Automation now also carries Trigger Links (moved out of Studio→More).
+    expect(childPaths(hubs, 'automation')).toEqual(['/trigger-links']);
   });
 
-  it('reveals exactly the entitled modules, nothing more', () => {
-    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle('conversationAi') });
-    expect(childPaths(hubs, 'conversations').sort()).toEqual(['/channels', '/inbox', '/snippets']);
-    expect(hubs.find((h) => h.id === 'voice')).toBeUndefined();
-  });
+  it('the Inbox is a single-page hub gated by conversationAi (channels/snippets/agents/knowledge are tabs inside)', () => {
+    const withAi = visibleNav(NAV_HUBS, { isManager: true, has: entitle('conversationAi') });
+    const inbox = withAi.find((h) => h.id === 'inbox');
+    expect(inbox?.path).toBe('/inbox');
+    expect(inbox?.children).toBeUndefined();
 
-  it('hides managerOnly children from a REP even when the feature is entitled', () => {
-    const hubs = visibleNav(NAV_HUBS, { isManager: false, has: entitle('conversationAi') });
-    expect(childPaths(hubs, 'conversations')).toEqual(['/inbox']);
+    const withoutAi = visibleNav(NAV_HUBS, { isManager: true, has: entitle() });
+    expect(withoutAi.find((h) => h.id === 'inbox')).toBeUndefined();
   });
 
   it('hides the Agency hub for a non-agency workspace (Epic D)', () => {
@@ -76,12 +82,44 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
   });
 });
 
-describe('navigation — Growth Studio', () => {
-  it('replaces the Marketing hub with a single-page Growth Studio', () => {
-    expect(NAV_HUBS.find((h) => h.id === 'marketing')).toBeUndefined();
-    const studio = NAV_HUBS.find((h) => h.id === 'studio');
-    expect(studio?.path).toBe('/studio');
-    expect(studio?.managerOnly).toBe(true);
+describe('navigation — merged destinations have exactly one home (clean cut)', () => {
+  const allPaths = NAV_HUBS.flatMap((h) => [
+    ...(h.path ? [h.path] : []),
+    ...(h.children?.map((c) => c.path) ?? []),
+  ]);
+
+  it('never references a deleted standalone route', () => {
+    for (const dead of [
+      '/channels', '/snippets', '/offers', '/estimates', '/dialer',
+      '/reports/ads', '/reports/performance', '/reports/analytics',
+      '/ai/studio', '/ai/agents', '/ai/knowledge', '/personas', '/brand-brain',
+      '/brand-kit', '/settings/connections', '/tax-rates', '/coupons',
+    ]) {
+      expect(allPaths).not.toContain(dead);
+    }
+  });
+
+  it('keeps the tree lean: at most 12 top-level hubs and no hub over 6 children', () => {
+    expect(NAV_HUBS.length).toBeLessThanOrEqual(16); // incl. settings + agency-gated
+    const mainHubs = NAV_HUBS.filter((h) => (h.area ?? 'main') === 'main');
+    expect(mainHubs.length).toBeLessThanOrEqual(15);
+    for (const h of mainHubs) {
+      expect((h.children?.length ?? 0)).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('the Account Center is the ONE connections surface (settings child)', () => {
+    const settings = NAV_HUBS.find((h) => h.id === 'settings');
+    const paths = settings?.children?.map((c) => c.path) ?? [];
+    expect(paths).toContain('/accounts');
+    expect(NAV_HUBS.find((h) => h.id === 'accounts')).toBeUndefined(); // no standalone hub
+  });
+
+  it('Brand is ONE settings page (kit + brain merged into /branding)', () => {
+    const settings = NAV_HUBS.find((h) => h.id === 'settings');
+    const paths = settings?.children?.map((c) => c.path) ?? [];
+    expect(paths).toContain('/branding');
+    expect(paths).not.toContain('/brand-kit');
   });
 });
 
@@ -89,6 +127,8 @@ describe('findActiveHub — path → owning hub', () => {
   it('resolves single-page hubs', () => {
     expect(findActiveHub(NAV_HUBS, '/dashboard')?.id).toBe('dashboard');
     expect(findActiveHub(NAV_HUBS, '/tasks')?.id).toBe('tasks');
+    expect(findActiveHub(NAV_HUBS, '/inbox')?.id).toBe('inbox');
+    expect(findActiveHub(NAV_HUBS, '/reports')?.id).toBe('reports');
   });
 
   it('resolves a child path to its hub (not by URL prefix)', () => {
@@ -96,6 +136,10 @@ describe('findActiveHub — path → owning hub', () => {
     expect(findActiveHub(NAV_HUBS, '/segments')?.id).toBe('contacts');
     expect(findActiveHub(NAV_HUBS, '/settings/custom-fields')?.id).toBe('settings');
     expect(findActiveHub(NAV_HUBS, '/voice/ivr')?.id).toBe('voice');
+    expect(findActiveHub(NAV_HUBS, '/documents')?.id).toBe('sales');
+    expect(findActiveHub(NAV_HUBS, '/trigger-links')?.id).toBe('automation');
+    expect(findActiveHub(NAV_HUBS, '/custom-objects')?.id).toBe('settings');
+    expect(findActiveHub(NAV_HUBS, '/accounts')?.id).toBe('settings');
   });
 
   it('resolves a detail route to its list hub via longest prefix', () => {
@@ -115,9 +159,11 @@ describe('splitByTier — progressive disclosure', () => {
     const coreIds = core.map((h) => h.id);
     const advIds = advanced.map((h) => h.id);
     expect(coreIds).toEqual(
-      expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reporting']),
+      expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reports', 'studio']),
     );
-    expect(advIds).toEqual(expect.arrayContaining(['memberships', 'payments']));
+    expect(advIds).toEqual(
+      expect.arrayContaining(['memberships', 'payments', 'sites', 'automation']),
+    );
     // The two tiers never overlap.
     expect(coreIds.some((id) => advIds.includes(id))).toBe(false);
   });

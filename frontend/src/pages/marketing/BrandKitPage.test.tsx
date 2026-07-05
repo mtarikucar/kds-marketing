@@ -43,6 +43,13 @@ describe('BrandKitPage', () => {
     expect(screen.getByDisplayValue('Book now')).toBeInTheDocument();
   });
 
+  it('embedded: skips its own page header (host page owns the header)', async () => {
+    render(<BrandKitPage embedded />, { wrapper });
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+    // The body still renders normally.
+    expect(await screen.findByDisplayValue('friendly')).toBeInTheDocument();
+  });
+
   it('keeps unsaved edits when the query refetches (e.g. after a logo/reference upload)', async () => {
     // First load returns the kit; a later refetch returns a kit that differs only
     // in referenceImages (as an upload would) so react-query yields a fresh object.

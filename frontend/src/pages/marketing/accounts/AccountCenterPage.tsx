@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Plug, ArrowRight, RefreshCw, Unplug } from 'lucide-react';
+import { Plug, RefreshCw, Unplug } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -11,6 +11,8 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { QueryStateBoundary } from '@/components/ui';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { RouteFallback } from '../../../components/RouteFallback';
 import { useConnections, useDisconnect, connectionsKey } from './hooks';
 import type { Capability, ConnectionGroup, Health, Provider, ProviderBlock, SourceRef } from './types';
 import { useSocialConnect } from '../social/useSocialConnect';
@@ -30,6 +32,13 @@ import { CopyField } from './CopyField';
 import { SsoTab } from '../settings/connections/SsoTab';
 import { SlackTab } from '../settings/connections/SlackTab';
 import type { ChannelType } from '../channels/channelFields';
+
+// Personal Google/Outlook calendar connections, absorbed here as the
+// Integrations tab. Lazy so its code loads only when the tab is opened.
+const ConnectionsPage = lazy(() => import('../settings/connections/ConnectionsPage'));
+
+const TABS = ['accounts', 'integrations'] as const;
+type AccountsTab = (typeof TABS)[number];
 
 /** OAuth providers map to a social-connect network; manual ones are added on the
  *  Channels page (SMS/Email/Web chat) or Voice hub. */
@@ -78,6 +87,17 @@ export default function AccountCenterPage() {
   const { startConnect } = useSocialConnect();
 
   const [searchParams, setSearchParams] = useSearchParams();
+  // URL-synced top tab (`?tab=`): deep-linkable + refresh/back-safe.
+  const rawTab = searchParams.get('tab');
+  const tab: AccountsTab = (TABS as readonly string[]).includes(rawTab ?? '') ? (rawTab as AccountsTab) : 'accounts';
+  const setTab = (v: string) =>
+    setSearchParams(
+      (p) => {
+        p.set('tab', v);
+        return p;
+      },
+      { replace: true },
+    );
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<ConnectionGroup | null>(null);
   const [manualType, setManualType] = useState<ChannelType | null>(null);
@@ -287,14 +307,6 @@ export default function AccountCenterPage() {
           'accounts.subtitle',
           'Connect and manage every account in one place — publishing, inbox, WhatsApp and ads. One connection can power marketing and channels at once.',
         )}
-        actions={
-          <Button asChild variant="outline" size="md">
-            <Link to="/settings/connections">
-              {t('accounts.myCalendar', 'My calendar connections')}
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </Button>
-        }
       />
 
       <AccountSelectDialog
@@ -359,33 +371,60 @@ export default function AccountCenterPage() {
         }}
       />
 
-      <QueryStateBoundary
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={() => refetch()}
-        errorMessage={t('accounts.loadError', 'Could not load your connections.')}
-      >
-        <div className="grid gap-3 md:grid-cols-2">
-          {(data?.providers ?? []).map(renderProvider)}
-          <TelephonyCard />
-          <VoiceAiCard />
-        </div>
-      </QueryStateBoundary>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="accounts">{t('accounts.tab.accounts', 'Accounts')}</TabsTrigger>
+          <TabsTrigger value="integrations">{t('accounts.tab.integrations', 'Integrations')}</TabsTrigger>
+        </TabsList>
 
-      {/* Company (workspace-level) identity + notifications. Personal calendar
-          connections live in Settings › My connections. */}
-      <section className="space-y-3">
-        <div>
-          <h2 className="text-base font-semibold text-foreground">
-            {t('accounts.identityNotifs', 'Identity & notifications (company)')}
-          </h2>
-          <p className="text-caption text-muted-foreground">
-            {t('accounts.identityNotifsDesc', 'Workspace single sign-on and Slack notifications — shared across your whole team.')}
-          </p>
-        </div>
-        <SsoTab />
-        <SlackTab />
-      </section>
+        {/* Social / messaging / ads OAuth + manual channels + telephony. */}
+        <TabsContent value="accounts" className="pt-2">
+          <QueryStateBoundary
+            isLoading={isLoading}
+            isError={isError}
+            onRetry={() => refetch()}
+            errorMessage={t('accounts.loadError', 'Could not load your connections.')}
+          >
+            <div className="grid gap-3 md:grid-cols-2">
+              {(data?.providers ?? []).map(renderProvider)}
+              <TelephonyCard />
+              <VoiceAiCard />
+            </div>
+          </QueryStateBoundary>
+        </TabsContent>
+
+        {/* Integrations — personal Google/Outlook calendars (the absorbed
+            Settings › Connections page) + company SSO/Slack. */}
+        <TabsContent value="integrations" className="space-y-6 pt-2">
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                {t('accounts.myCalendar', 'My calendar connections')}
+              </h2>
+              <p className="text-caption text-muted-foreground">
+                {t('connections.mySubtitle', 'Your personal calendar connections.')}
+              </p>
+            </div>
+            <Suspense fallback={<RouteFallback />}>
+              <ConnectionsPage embedded />
+            </Suspense>
+          </section>
+
+          {/* Company (workspace-level) identity + notifications. */}
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                {t('accounts.identityNotifs', 'Identity & notifications (company)')}
+              </h2>
+              <p className="text-caption text-muted-foreground">
+                {t('accounts.identityNotifsDesc', 'Workspace single sign-on and Slack notifications — shared across your whole team.')}
+              </p>
+            </div>
+            <SsoTab />
+            <SlackTab />
+          </section>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

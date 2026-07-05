@@ -1,11 +1,13 @@
-import { Fragment, useState } from 'react';
+import { Fragment, lazy, Suspense, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Phone, PlayCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import { ClickToDialButton } from '../../features/marketing/components';
 import CallAnalysisPanel from './calls/CallAnalysisPanel';
+import { RouteFallback } from '../../components/RouteFallback';
 import { CallStatus, CALL_STATUS_LABELS } from '../../features/marketing/types';
 import type { SalesCall, PaginatedResponse, MarketingUserInfo } from '../../features/marketing/types';
 import { fmtDateTime, fmtDuration } from '../../features/marketing/utils/format';
@@ -32,7 +34,17 @@ import {
   Pagination,
   Button,
   QueryStateBoundary,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
 } from '../../components/ui';
+
+// Lazy so the dialer's code only loads when its tab is opened.
+const DialerPage = lazy(() => import('./DialerPage'));
+
+const TABS = ['calls', 'dialer'] as const;
+type CallsPageTab = (typeof TABS)[number];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -72,7 +84,50 @@ function TableSkeleton({ cols, rows = 8 }: { cols: number; rows?: number }) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
+/**
+ * Calls hub — the call log plus the Power Dialer as URL-synced (`?tab=`)
+ * deep-linkable tabs, so both views survive refresh/back and can be shared.
+ */
 export default function CallsPage() {
+  const { t } = useTranslation('marketing');
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: CallsPageTab = (TABS as readonly string[]).includes(raw ?? '') ? (raw as CallsPageTab) : 'calls';
+  const setTab = (v: string) => setParams((p) => {
+    p.set('tab', v);
+    return p;
+  }, { replace: true });
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Sales Calls"
+        description="Single company line — one active call at a time. Your softphone opens via the tel: link; log the outcome when the call ends."
+        actions={<ClickToDialButton />}
+      />
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="calls">{t('calls.tab.calls', 'Calls')}</TabsTrigger>
+          <TabsTrigger value="dialer">{t('calls.tab.dialer', 'Power Dialer')}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="calls" className="pt-5">
+          <CallsTab />
+        </TabsContent>
+        <TabsContent value="dialer" className="pt-5">
+          <Suspense fallback={<RouteFallback />}>
+            <DialerPage embedded />
+          </Suspense>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ─── Calls tab (the original call log) ───────────────────────────────────────
+
+function CallsTab() {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
@@ -126,12 +181,6 @@ export default function CallsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Sales Calls"
-        description="Single company line — one active call at a time. Your softphone opens via the tel: link; log the outcome when the call ends."
-        actions={<ClickToDialButton />}
-      />
-
       {/* ── Filters ── */}
       <FilterBar>
         <Select

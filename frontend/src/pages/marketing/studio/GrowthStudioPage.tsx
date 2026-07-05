@@ -15,16 +15,18 @@ const TrendsPage = lazy(() => import('../trends/TrendsPage'));
 const CampaignsPage = lazy(() => import('../CampaignsPage'));
 const SocialCampaignsPage = lazy(() => import('../socialCampaigns/SocialCampaignsPage'));
 const SocialPlannerPage = lazy(() => import('../social'));
+const AiStudioPage = lazy(() => import('../social/AiStudioPage'));
+const PersonasPage = lazy(() => import('../personas/PersonasPage'));
 const EmailTemplatesPage = lazy(() => import('../emailTemplates'));
-const TriggerLinksPage = lazy(() => import('../triggerLinks'));
 const ReviewsPage = lazy(() => import('../ReviewsPage'));
 const AffiliatePortalPage = lazy(() => import('../affiliate-portal/AffiliatePortalPage'));
 
-const TABS = ['calendar', 'campaigns', 'trends', 'budget', 'more'] as const;
+const TABS = ['calendar', 'create', 'campaigns', 'trends', 'budget', 'more'] as const;
 type StudioTab = (typeof TABS)[number];
 
+const CREATE_SUBS = ['studio', 'personas'] as const;
 const CAMPAIGN_SUBS = ['standard', 'social', 'planner'] as const;
-const MORE_SUBS = ['email', 'triggerLinks', 'reviews', 'affiliates'] as const;
+const MORE_SUBS = ['email', 'reviews', 'affiliates'] as const;
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
@@ -66,6 +68,7 @@ export default function GrowthStudioPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="calendar">{t('studio.tab.calendar', 'Content Calendar')}</TabsTrigger>
+          <TabsTrigger value="create">{t('studio.tab.create', 'Create')}</TabsTrigger>
           <TabsTrigger value="campaigns">{t('studio.tab.campaigns', 'Campaigns')}</TabsTrigger>
           <TabsTrigger value="trends">{t('studio.tab.trends', 'Trends')}</TabsTrigger>
           <TabsTrigger value="budget">{t('studio.tab.autopilot', 'Autopilot')}</TabsTrigger>
@@ -74,6 +77,9 @@ export default function GrowthStudioPage() {
 
         <TabsContent value="calendar" className="pt-5">
           <Lazy><StudioCalendarTab /></Lazy>
+        </TabsContent>
+        <TabsContent value="create" className="pt-5">
+          <CreateTab />
         </TabsContent>
         <TabsContent value="campaigns" className="pt-5">
           <CampaignsTab />
@@ -106,6 +112,22 @@ function useSubTab<T extends readonly string[]>(subs: T, fallback: T[number]): [
   return [sub, setSub];
 }
 
+/** Create tab — the AI content tools: media generation + reusable UGC personas. */
+function CreateTab() {
+  const { t } = useTranslation('marketing');
+  const [sub, setSub] = useSubTab(CREATE_SUBS, 'studio');
+  return (
+    <Tabs value={sub} onValueChange={setSub}>
+      <TabsList>
+        <TabsTrigger value="studio">{t('studio.create.studio', 'AI Studio')}</TabsTrigger>
+        <TabsTrigger value="personas">{t('studio.create.personas', 'UGC Personas')}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="studio" className="pt-4"><Lazy><AiStudioPage embedded /></Lazy></TabsContent>
+      <TabsContent value="personas" className="pt-4"><Lazy><PersonasPage embedded /></Lazy></TabsContent>
+    </Tabs>
+  );
+}
+
 /** Campaigns tab — normal campaigns + AI social campaigns + the social planner. */
 function CampaignsTab() {
   const { t } = useTranslation('marketing');
@@ -132,12 +154,10 @@ function MoreTab() {
     <Tabs value={sub} onValueChange={setSub}>
       <TabsList>
         <TabsTrigger value="email">{t('studio.more.email', 'Email Templates')}</TabsTrigger>
-        <TabsTrigger value="triggerLinks">{t('studio.more.triggerLinks', 'Trigger Links')}</TabsTrigger>
         <TabsTrigger value="reviews">{t('studio.more.reviews', 'Reviews')}</TabsTrigger>
         <TabsTrigger value="affiliates">{t('studio.more.affiliates', 'Affiliates')}</TabsTrigger>
       </TabsList>
       <TabsContent value="email" className="pt-4"><Lazy><EmailTemplatesPage /></Lazy></TabsContent>
-      <TabsContent value="triggerLinks" className="pt-4"><Lazy><TriggerLinksPage /></Lazy></TabsContent>
       <TabsContent value="reviews" className="pt-4"><Lazy><ReviewsPage /></Lazy></TabsContent>
       <TabsContent value="affiliates" className="pt-4"><Lazy><AffiliatePortalPage /></Lazy></TabsContent>
     </Tabs>

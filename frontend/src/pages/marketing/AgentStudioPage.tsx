@@ -100,7 +100,7 @@ const LANGUAGES = [
  * P1 ships the config surface; the engine that answers on channels lands in
  * P2. Manager+ surface, gated on the `agentStudio` feature.
  */
-export default function AgentStudioPage() {
+export default function AgentStudioPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
@@ -216,6 +216,7 @@ export default function AgentStudioPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('agents.title', 'Agent Studio')}
         description={t(
@@ -229,6 +230,18 @@ export default function AgentStudioPage() {
           </Button>
         }
       />
+      )}
+
+      {/* Embedded (Inbox tab): no page header, so the create CTA moves into a
+          toolbar row (the empty state below carries its own when there's none). */}
+      {embedded && (agents ?? []).length > 0 && (
+        <div className="flex justify-end">
+          <Button onClick={openCreate} size="md">
+            <Plus className="h-4 w-4" />
+            {t('agents.new', 'New agent')}
+          </Button>
+        </div>
+      )}
 
       {/* Agent list */}
       <div className="space-y-3">

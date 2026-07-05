@@ -51,7 +51,7 @@ const STATUS_TONE: Record<GeneratedAsset['status'], 'neutral' | 'success' | 'dan
   QUEUED: 'neutral', GENERATING: 'warning', READY: 'success', FAILED: 'danger', BLOCKED: 'danger',
 };
 
-export default function AiStudioPage() {
+export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -136,7 +136,9 @@ export default function AiStudioPage() {
   const addToPost = (a: GeneratedAsset) => {
     if (!a.url) return;
     const media: MediaItemValue = { url: a.url, key: a.r2Key ?? undefined, mime: a.mime ?? undefined };
-    navigate('/social', { state: { seedMedia: [media] } });
+    // Straight to the planner INSIDE Growth Studio — the legacy /social
+    // redirect would drop location.state and lose the seeded media.
+    navigate('/studio?tab=campaigns&sub=planner', { state: { seedMedia: [media] } });
   };
 
   const onType = (next: GeneratedAssetType) => {
@@ -146,10 +148,12 @@ export default function AiStudioPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('aiStudio.title', 'AI Content Studio')}
         description={t('aiStudio.subtitle', 'Generate images and video for your social posts.')}
       />
+      )}
 
       {/* Generation panel */}
       <Card>

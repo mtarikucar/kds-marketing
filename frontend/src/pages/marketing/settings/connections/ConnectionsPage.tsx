@@ -90,8 +90,11 @@ function outlookErrorFallback(reason: string): string {
  * The Google OAuth callback 302s the browser back here with `?gcal=connected`
  * or `?gcal=error&reason=<step>`; we surface a toast, refresh the status query,
  * focus the Google tab, and strip the params so a refresh doesn't re-fire.
+ *
+ * `embedded` — the page is hosted inside the Account Center's Integrations tab,
+ * so it skips its own <PageHeader> (the host provides the heading/context).
  */
-export default function ConnectionsPage() {
+export default function ConnectionsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
@@ -134,12 +137,14 @@ export default function ConnectionsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={t('connections.myTitle', { defaultValue: 'My connections' })}
-        description={t('connections.mySubtitle', {
-          defaultValue: 'Your personal calendar connections.',
-        })}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t('connections.myTitle', { defaultValue: 'My connections' })}
+          description={t('connections.mySubtitle', {
+            defaultValue: 'Your personal calendar connections.',
+          })}
+        />
+      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>

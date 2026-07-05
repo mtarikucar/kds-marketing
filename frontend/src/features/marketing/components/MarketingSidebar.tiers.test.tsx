@@ -44,10 +44,10 @@ describe('MarketingSidebar — progressive disclosure', () => {
     expect(screen.getByRole('link', { name: /Contacts/i })).toBeInTheDocument();
     // …the "More" disclosure exists…
     expect(screen.getByRole('button', { name: /^More$/i })).toBeInTheDocument();
-    // …and an advanced hub (Account Center) is not rendered until expanded.
-    // (Growth Studio is now CORE — the product's flagship surface — so it must
+    // …and an advanced hub (Payments) is not rendered until expanded.
+    // (Growth Studio is CORE — the product's flagship surface — so it must
     // NOT hide behind More; that promotion is asserted in navigation.test.ts.)
-    expect(screen.queryByRole('link', { name: /^Account Center$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^Payments$/i })).not.toBeInTheDocument();
     // Growth Studio, being core, is always directly visible.
     expect(screen.getByRole('link', { name: /^Growth Studio$/i })).toBeInTheDocument();
   });
@@ -56,7 +56,7 @@ describe('MarketingSidebar — progressive disclosure', () => {
     const user = userEvent.setup();
     renderSidebar();
     await user.click(screen.getByRole('button', { name: /^More$/i }));
-    expect(screen.getByRole('link', { name: /^Account Center$/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Payments$/i })).toBeInTheDocument();
   });
 
   it('surfaces a "Pinned" section for favorited hubs', () => {

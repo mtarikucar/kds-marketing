@@ -71,7 +71,7 @@ const LANGUAGES = [
  * FAQs, hours). Full-text searched at answer time. Manager+ surface, gated on
  * the `agentStudio` feature.
  */
-export default function KnowledgeBasePage() {
+export default function KnowledgeBasePage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
 
@@ -160,6 +160,7 @@ export default function KnowledgeBasePage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('knowledge.title', 'Knowledge Base')}
         description={t(
@@ -173,6 +174,18 @@ export default function KnowledgeBasePage() {
           </Button>
         }
       />
+      )}
+
+      {/* Embedded (Inbox tab): no page header, so the create CTA moves into a
+          toolbar row (the empty state below carries its own when there's none). */}
+      {embedded && (docs ?? []).length > 0 && (
+        <div className="flex justify-end">
+          <Button onClick={openCreate} size="md">
+            <Plus className="h-4 w-4" />
+            {t('knowledge.new', 'New document')}
+          </Button>
+        </div>
+      )}
 
       {/* Document list */}
       <div className="space-y-3">

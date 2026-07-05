@@ -16,12 +16,22 @@ vi.mock('../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: () => ({ user: { workspaceId: 'ws-1', role: 'OWNER', id: 'u-1' } }),
 }));
 
-function wrapper({ children }: { children: React.ReactNode }) {
+// t(key, 'English default') → the default, so tab labels are assertable.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (k: string, o?: unknown) => (typeof o === 'string' ? o : k), i18n: { language: 'en' } }),
+}));
+
+// Stub the lazy-embedded dialer so the host shell renders in isolation.
+vi.mock('./DialerPage', () => ({ default: () => <div>dialer-stub</div> }));
+
+function renderAt(path = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return (
+  return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>{children}</MemoryRouter>
-    </QueryClientProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <CallsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -37,7 +47,7 @@ describe('CallsPage repro', () => {
   });
 
   it('mounts without crashing (empty)', async () => {
-    render(<CallsPage />, { wrapper });
+    renderAt();
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
@@ -64,7 +74,26 @@ describe('CallsPage repro', () => {
         return Promise.resolve({ data: [{ id: 'u-1', firstName: 'A', lastName: 'B', role: 'REP' }] });
       return Promise.resolve({ data: {} });
     });
-    render(<CallsPage />, { wrapper });
+    renderAt();
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('renders the Calls and Power Dialer tabs (calls active by default)', async () => {
+    renderAt();
+    expect(screen.getByRole('tab', { name: 'Calls' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'Power Dialer' })).toHaveAttribute('data-state', 'inactive');
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('honors the ?tab=dialer deep link (dialer tab selected, dialer body shown)', async () => {
+    renderAt('/?tab=dialer');
+    expect(screen.getByRole('tab', { name: 'Power Dialer' })).toHaveAttribute('data-state', 'active');
+    // Lazy-loaded, so wait for the stubbed dialer body to appear.
+    expect(await screen.findByText('dialer-stub')).toBeInTheDocument();
+  });
+
+  it('falls back to the calls tab on an unknown ?tab= value', () => {
+    renderAt('/?tab=nope');
+    expect(screen.getByRole('tab', { name: 'Calls' })).toHaveAttribute('data-state', 'active');
   });
 });

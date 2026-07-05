@@ -109,7 +109,7 @@ function TableSkeleton({ cols, rows = 4 }: { cols: number; rows?: number }) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-export default function PerformancePage() {
+export default function PerformancePage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
@@ -141,10 +141,12 @@ export default function PerformancePage() {
 
   return (
     <div className="space-y-6">
+      {!embedded && (
       <PageHeader
         title={t('performance.title')}
         description={isManager ? t('performance.subtitleManager') : t('performance.subtitleRep')}
       />
+      )}
 
       {/* ── Filters ── */}
       <Card>

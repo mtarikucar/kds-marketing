@@ -62,6 +62,15 @@ describe('ConnectionsPage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
+  // Hosted inside the Account Center's Integrations tab: the host supplies the
+  // heading, so the page must skip its own <PageHeader> — but keep its tabs.
+  it('embedded: skips its own page header but still renders the calendar tabs', () => {
+    render(<ConnectionsPage embedded />, { wrapper });
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.getByRole('tab', { name: /google calendar/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /outlook/i })).toBeInTheDocument();
+  });
+
   // SSO + Slack moved to the Account Center (they're workspace/company-level); this
   // page is now personal — only the user's own Google/Outlook calendar.
   it('defaults to a personal calendar tab (no SSO/Slack here)', () => {
