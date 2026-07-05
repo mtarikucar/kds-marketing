@@ -1,6 +1,7 @@
 import { Check, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { localeMap } from '@/i18n/localeMap';
+import { isLocaleOffered } from '@/i18n/localeCompleteness';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -9,11 +10,17 @@ import {
 } from './DropdownMenu';
 import { IconButton } from './IconButton';
 
-/** Ordered list of the 5 supported locales with their display names. */
-const LOCALES = (['en', 'ar', 'ru', 'tr', 'uz'] as const).map((code) => ({
-  code,
-  label: localeMap[code]?.nativeName ?? code,
-}));
+/**
+ * Supported locales with their native display names, filtered to those whose
+ * catalog is complete enough to offer (see localeCompleteness). Half-translated
+ * locales stay hidden until their translations catch up.
+ */
+const LOCALES = (['en', 'ar', 'ru', 'tr', 'uz'] as const)
+  .filter((code) => isLocaleOffered(code))
+  .map((code) => ({
+    code,
+    label: localeMap[code]?.nativeName ?? code,
+  }));
 
 export function LanguageSwitcher() {
   const { i18n } = useTranslation();
