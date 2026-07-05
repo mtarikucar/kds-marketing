@@ -38,9 +38,13 @@ function applyCooldownHours(): number {
  *   - AUTONOMOUS  → record + auto-apply via the executor under MACHINE
  *                   guardrails (env flag + ACTIVE + kill-switch re-check +
  *                   apply cooldown). NO ApprovalRequest is ever created.
- * In the AUTONOMOUS lane the allocator pool is bounded by funded credit
- * (min(cap, netSpent + wallet balance)) so the engine can never plan beyond
- * the money the user actually loaded. A killed/paused budget is skipped.
+ * In the AUTONOMOUS lane the allocator pool is bounded by funded credit —
+ * min(cap, governorDebited + wallet balance), an identity that equals the
+ * credit actually loaded (audit B1) — and the lane is period-locked to the
+ * budget whose periodKey is the current month (audit B2), so the engine can
+ * never plan beyond the money the user actually loaded nor double-count the
+ * workspace-shared wallet across co-active budgets. A killed/paused budget is
+ * skipped.
  */
 @Injectable()
 export class BudgetAutopilotService {
@@ -68,18 +72,31 @@ export class BudgetAutopilotService {
     }
 
     const level = (budget as { autonomyLevel?: string }).autonomyLevel ?? 'ASSISTED';
-    const autonomous = level === 'AUTONOMOUS' && growthAutopilotAutonomyEnabled();
+    // Period lock (audit B2): the workspace-shared wallet must fund only ONE
+    // autonomous budget — the CURRENT period's. A stale-period budget left
+    // ACTIVE would independently count the full shared balance and multiply
+    // the committed pool; it falls to the ASSISTED human gate instead.
+    const currentPeriod = now.toISOString().slice(0, 7);
+    const autonomous =
+      level === 'AUTONOMOUS' &&
+      growthAutopilotAutonomyEnabled() &&
+      budget.periodKey === currentPeriod;
 
-    // D5 — funded-credit bound. Only the armed autonomous lane consults the
-    // wallet; SHADOW/ASSISTED keep the user cap exactly as before (no behavior
-    // change while the feature ships dark).
+    // D5 — funded-credit bound (audit B1). Only the armed autonomous lane
+    // consults the wallet; SHADOW/ASSISTED keep the user cap exactly as before
+    // (no behavior change while the feature ships dark). The "spent" term is
+    // governorDebited — what the wallet ACTUALLY funded (clamped at the
+    // balance floor) — so governorDebited + balance == credit loaded holds
+    // exactly and the pool can never exceed the money the user put in. Raw
+    // ledger netSpent keeps climbing with real ad spend after the wallet
+    // floors at 0 and would self-reinforcingly ratchet the ceiling to the cap.
     let totalBudget = budget.totalAmount.toNumber();
     if (autonomous) {
-      const [balance, netSpent] = await Promise.all([
+      const [balance, funded] = await Promise.all([
         this.wallet.balance(workspaceId),
-        this.ledger.netSpent(workspaceId, budgetId),
+        this.wallet.governorDebited(workspaceId),
       ]);
-      totalBudget = Math.min(totalBudget, netSpent.toNumber() + balance.toNumber());
+      totalBudget = Math.min(totalBudget, funded.toNumber() + balance.toNumber());
     }
 
     const perf = await this.perf.collect(workspaceId, budget.allocations, now);

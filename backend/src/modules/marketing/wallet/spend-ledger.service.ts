@@ -50,6 +50,11 @@ export interface DedupLedgerResult extends LedgerResult {
   replayed: boolean;
 }
 
+export interface CumulativeLedgerResult extends DedupLedgerResult {
+  /** The delta actually appended this call (0 when replayed / revised down). */
+  applied: Prisma.Decimal;
+}
+
 /**
  * Append-only, tenant-scoped money ledger for the Budget Autopilot. Mirrors the
  * ai-credits reserve pattern: a per-(workspace,budget) advisory xact-lock
@@ -95,6 +100,70 @@ export class SpendLedgerService {
       const row = await this.append(tx, workspaceId, budgetId, entry, amount.negated());
       return { ...row, replayed: false };
     });
+  }
+
+  /**
+   * Mirror a GROWING day-cumulative into the ledger (audit B3). AdMetric.spend
+   * is one day-cumulative row overwritten by every hourly pull, so day-keyed
+   * first-write-wins (debitOnce) froze the FIRST intraday snapshot and dropped
+   * all later accrual. This instead appends only the delta above what the
+   * partition already holds under the ref prefix — refs are unique per
+   * cumulative snapshot (`{prefix}:c{cumulative}`), legacy exact-`{prefix}`
+   * rows from the debitOnce era count toward the mirrored total, and a
+   * revised-DOWN cumulative never credits back (the spend already happened).
+   * All inside the same advisory-locked transaction as every other append.
+   */
+  async debitToCumulative(
+    workspaceId: string,
+    entry: Omit<SpendEntry, 'amount' | 'ref'>,
+    refPrefix: string,
+    cumulative: number | Prisma.Decimal,
+  ): Promise<CumulativeLedgerResult> {
+    if (!refPrefix) throw new BadRequestException('debitToCumulative requires a ref prefix');
+    const target = new Prisma.Decimal(cumulative).abs();
+    const budgetId = entry.budgetId ?? null;
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPartition(tx, workspaceId, budgetId);
+      const prior = await tx.spendLedger.findMany({
+        where: {
+          workspaceId,
+          budgetId,
+          OR: [{ ref: refPrefix }, { ref: { startsWith: `${refPrefix}:c` } }],
+        },
+        select: { delta: true },
+      });
+      const mirrored = prior.reduce(
+        (sum, r) => sum.add(new Prisma.Decimal(r.delta).negated()),
+        new Prisma.Decimal(0),
+      );
+      const inc = target.minus(mirrored);
+      if (inc.lte(0)) {
+        const balanceAfter = await this.balanceInTx(tx, workspaceId, budgetId);
+        return { id: '', balanceAfter, replayed: true, applied: new Prisma.Decimal(0) };
+      }
+      const row = await this.append(
+        tx,
+        workspaceId,
+        budgetId,
+        { ...entry, amount: inc, ref: `${refPrefix}:c${target.toString()}` },
+        inc.negated(),
+      );
+      return { ...row, replayed: false, applied: inc };
+    });
+  }
+
+  private async balanceInTx(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    budgetId: string | null,
+  ): Promise<Prisma.Decimal> {
+    const last = await tx.spendLedger.findFirst({
+      where: { workspaceId, budgetId },
+      orderBy: { createdAt: 'desc' },
+      select: { balanceAfter: true },
+    });
+    return last?.balanceAfter ?? new Prisma.Decimal(0);
   }
 
   private async record(workspaceId: string, entry: SpendEntry, sign: 1 | -1): Promise<LedgerResult> {

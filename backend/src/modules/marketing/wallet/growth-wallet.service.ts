@@ -63,6 +63,23 @@ export class GrowthWalletService {
     return wallet?.balance ?? new Prisma.Decimal(0);
   }
 
+  /**
+   * Cumulative AD_GOVERNOR total actually taken from the wallet (≥ 0). This is
+   * the identity-preserving "spent" term for the autonomous pool bound (audit
+   * B1): because governor debits are clamped at the balance floor,
+   * governorDebited + balance can never exceed the credit actually loaded —
+   * unlike raw SpendLedger netSpent, which keeps climbing with real ad spend
+   * after the wallet floors at 0 and would ratchet the ceiling toward the cap.
+   */
+  async governorDebited(workspaceId: string): Promise<Prisma.Decimal> {
+    const agg = await this.prisma.growthWalletLedgerEntry.aggregate({
+      where: { workspaceId, kind: 'AD_GOVERNOR' },
+      _sum: { delta: true },
+    });
+    const sum = agg._sum.delta ?? new Prisma.Decimal(0);
+    return new Prisma.Decimal(sum).negated(); // debits are negative deltas
+  }
+
   /** Add credit (top-up / refund / adjust). Creates the wallet on first use. */
   credit(workspaceId: string, movement: GrowthWalletMovement): Promise<GrowthWalletResult> {
     return this.move(workspaceId, movement, +1);
@@ -135,6 +152,94 @@ export class GrowthWalletService {
       if (ref && (e as { code?: string })?.code === 'P2002') {
         const existing = await this.prisma.growthWalletLedgerEntry.findUnique({ where: { ref } });
         return this.replayUpToResult(workspaceId, amount, existing);
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Governor debit tracking a GROWING day-cumulative (audit B3+B4). The
+   * ad-spend day row is overwritten by every hourly pull, so the governor must
+   * take only what it has not yet taken under the ref prefix — derived from
+   * the wallet's OWN ledger, so a debit missed by a crash between the
+   * spend-ledger commit and the wallet write self-heals on the next tick
+   * (fixing the permanent divergence of the replay-gated design). Refs are
+   * `{prefix}:c{cumulative}`; legacy exact-`{prefix}` entries count toward the
+   * taken total; still clamped ≥ 0 with the shortfall reported, never thrown.
+   */
+  async debitUpToCumulative(
+    workspaceId: string,
+    movement: Omit<GrowthWalletMovement, 'amount' | 'ref'>,
+    refPrefix: string,
+    cumulative: number | Prisma.Decimal,
+  ): Promise<GrowthWalletDebitUpToResult> {
+    if (!refPrefix) throw new BadRequestException('debitUpToCumulative requires a ref prefix');
+    const target = new Prisma.Decimal(cumulative).abs().toDecimalPlaces(2);
+
+    try {
+      const { wallet, debited, shortfall } = await this.prisma.$transaction(async (tx) => {
+        const w = await tx.growthWallet.upsert({
+          where: { workspaceId },
+          create: { workspaceId, currency: movement.currency ?? 'TRY' },
+          update: {},
+        });
+        this.assertCurrencyMatches(w.currency, movement.currency);
+
+        const prior = await tx.growthWalletLedgerEntry.findMany({
+          where: {
+            workspaceId,
+            OR: [{ ref: refPrefix }, { ref: { startsWith: `${refPrefix}:c` } }],
+          },
+          select: { delta: true },
+        });
+        const alreadyTaken = prior.reduce(
+          (sum, e) => sum.add(new Prisma.Decimal(e.delta).negated()),
+          new Prisma.Decimal(0),
+        );
+        const inc = target.minus(alreadyTaken);
+        if (inc.lte(0)) {
+          return { wallet: w, debited: null as Prisma.Decimal | null, shortfall: new Prisma.Decimal(0) };
+        }
+
+        const balance = new Prisma.Decimal(w.balance ?? 0);
+        let taken = balance.lt(inc) ? balance : inc;
+        if (taken.gt(0)) {
+          const res = await tx.growthWallet.updateMany({
+            where: { id: w.id, workspaceId, balance: { gte: taken } },
+            data: { balance: { increment: taken.negated() } },
+          });
+          if (res.count === 0) taken = new Prisma.Decimal(0);
+        }
+        const fresh = await tx.growthWallet.findUnique({ where: { workspaceId } });
+        const short = inc.minus(taken);
+        const shortNote = short.gt(0)
+          ? `governor shortfall: cumulative ${target.toFixed(2)}, taken so far ${alreadyTaken.add(taken).toFixed(2)}`
+          : null;
+        const note = [movement.note, shortNote].filter(Boolean).join(' | ') || null;
+        await tx.growthWalletLedgerEntry.create({
+          data: {
+            workspaceId,
+            walletId: w.id,
+            delta: taken.isZero() ? new Prisma.Decimal(0) : taken.negated(),
+            balanceAfter: fresh!.balance,
+            kind: movement.kind,
+            ref: `${refPrefix}:c${target.toString()}`,
+            note,
+          },
+        });
+        return { wallet: fresh!, debited: taken, shortfall: short };
+      });
+      if (debited === null) {
+        // Cumulative already fully mirrored — a replay, nothing moved.
+        return { wallet, replayed: true, debited: new Prisma.Decimal(0), shortfall: new Prisma.Decimal(0) };
+      }
+      return { wallet, replayed: false, debited, shortfall };
+    } catch (e) {
+      // Same-snapshot race: another tick already wrote `{prefix}:c{target}` —
+      // its write covered this cumulative; report the replay.
+      if ((e as { code?: string })?.code === 'P2002') {
+        const base = await this.replayResult(workspaceId);
+        return { ...base, debited: new Prisma.Decimal(0), shortfall: new Prisma.Decimal(0) };
       }
       throw e;
     }

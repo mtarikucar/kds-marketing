@@ -69,6 +69,7 @@ describe('BudgetManagementService.setAutonomyLevel (spec D6)', () => {
       growthBudget: {
         findFirst: jest.fn().mockResolvedValue(budget),
         update: jest.fn(async ({ data }: any) => ({ id: 'b1', ...data })),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
     } as any;
     return { prisma };
@@ -93,5 +94,33 @@ describe('BudgetManagementService.setAutonomyLevel (spec D6)', () => {
     await expect(svc.setAutonomyLevel('ws1', 'b1', 'YOLO')).rejects.toThrow();
     const r = await svc.setAutonomyLevel('ws1', 'b1', 'ASSISTED');
     expect(r.autonomyLevel).toBe('ASSISTED');
+  });
+
+  // Audit B2: the growth wallet is workspace-shared, so TWO armed budgets each
+  // count the FULL balance and together commit ~2x the loaded credit. Arming
+  // one budget must therefore disarm every other AUTONOMOUS budget in the
+  // workspace (single-armed-budget invariant).
+  it('arming AUTONOMOUS disarms every OTHER autonomous budget in the workspace', async () => {
+    process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+
+    await svc.setAutonomyLevel('ws1', 'b1', 'AUTONOMOUS');
+
+    expect(prisma.growthBudget.updateMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws1', id: { not: 'b1' }, autonomyLevel: 'AUTONOMOUS' },
+      data: { autonomyLevel: 'ASSISTED' },
+    });
+  });
+
+  it('disarming (ASSISTED/SHADOW) never touches sibling budgets', async () => {
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+
+    await svc.setAutonomyLevel('ws1', 'b1', 'ASSISTED');
+
+    expect(prisma.growthBudget.updateMany).not.toHaveBeenCalled();
   });
 });

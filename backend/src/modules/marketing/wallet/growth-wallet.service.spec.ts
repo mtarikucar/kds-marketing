@@ -54,6 +54,18 @@ function makePrisma() {
       findUnique: jest.fn(async ({ where }: any) =>
         entries.find((e) => e.ref === where.ref) ?? null,
       ),
+      findMany: jest.fn(async ({ where }: any) => {
+        const match = (e: any) => {
+          if (where.workspaceId && e.workspaceId !== where.workspaceId) return false;
+          if (!where.OR) return true;
+          return where.OR.some((cond: any) =>
+            typeof cond.ref === 'object' && cond.ref?.startsWith !== undefined
+              ? typeof e.ref === 'string' && e.ref.startsWith(cond.ref.startsWith)
+              : e.ref === cond.ref,
+          );
+        };
+        return entries.filter(match).map((e) => ({ delta: e.delta }));
+      }),
       create: jest.fn(async ({ data }: any) => {
         if (data.ref != null && entries.some((e) => e.ref === data.ref)) {
           const err: any = new Error('Unique constraint failed on ref');
@@ -83,7 +95,10 @@ function makePrisma() {
       }
     }),
     growthWallet: { findUnique: tx.growthWallet.findUnique },
-    growthWalletLedgerEntry: { findUnique: tx.growthWalletLedgerEntry.findUnique },
+    growthWalletLedgerEntry: {
+      findUnique: tx.growthWalletLedgerEntry.findUnique,
+      findMany: tx.growthWalletLedgerEntry.findMany,
+    },
   } as any;
 
   return { prisma, tx, wallets, entries };
@@ -274,6 +289,78 @@ describe('GrowthWalletService', () => {
       const svc = new GrowthWalletService(prisma);
       await expect(svc.debitUpTo('ws1', { amount: 0, kind: 'AD_GOVERNOR' })).rejects.toThrow();
       await expect(svc.debitUpTo('ws1', { amount: -3, kind: 'AD_GOVERNOR' })).rejects.toThrow();
+    });
+  });
+
+  // Audit B3+B4 (governor side): the ad-spend day-cumulative grows every hour,
+  // so the governor debit must be debit-to-cumulative too — each call debits
+  // only what the ledger has not yet taken under the ref prefix, clamped to
+  // the balance. Crucially it derives from the WALLET's own ledger, so a
+  // governor debit missed by a crash self-heals on the next tick.
+  describe('debitUpToCumulative (governor mirror of a growing day-cumulative)', () => {
+    const PREFIX = 'adgov:c1:2026-07-04';
+    const MOVE = { kind: 'AD_GOVERNOR' as const };
+
+    it('debits the full first cumulative, then only the accrual on a later higher one', async () => {
+      const { prisma, wallets, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 500, kind: 'TOPUP' });
+
+      const first = await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 12);
+      expect(first.debited.toString()).toBe('12');
+      expect(wallets.get('ws1').balance.toString()).toBe('488');
+
+      const second = await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 200);
+      expect(second.debited.toString()).toBe('188');
+      expect(wallets.get('ws1').balance.toString()).toBe('300');
+      expect(entries.filter((e) => e.ref?.startsWith(`${PREFIX}:c`))).toHaveLength(2);
+    });
+
+    it('an unchanged cumulative is a replay — nothing debited, no new entry', async () => {
+      const { prisma, wallets, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 500, kind: 'TOPUP' });
+      await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 40);
+
+      const replay = await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 40);
+      expect(replay.replayed).toBe(true);
+      expect(replay.debited.toString()).toBe('0');
+      expect(wallets.get('ws1').balance.toString()).toBe('460');
+      expect(entries.filter((e) => e.ref?.startsWith(PREFIX))).toHaveLength(1);
+    });
+
+    it('clamps to the balance (never negative) and reports the shortfall', async () => {
+      const { prisma, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 30, kind: 'TOPUP' });
+
+      const r = await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 100);
+      expect(r.debited.toString()).toBe('30');
+      expect(r.shortfall.toString()).toBe('70');
+      expect(wallets.get('ws1').balance.toString()).toBe('0');
+    });
+
+    it('a governor debit missed by a crash self-heals: the next tick takes the whole gap', async () => {
+      const { prisma, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 500, kind: 'TOPUP' });
+      // Tick 1 never reached the wallet (crash after the spend-ledger commit) —
+      // so the wallet has NO entry under the prefix. Tick 2 sees cumulative 200
+      // and takes all of it, not just the tick-2 accrual.
+      const r = await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 200);
+      expect(r.debited.toString()).toBe('200');
+      expect(wallets.get('ws1').balance.toString()).toBe('300');
+    });
+
+    it('a legacy exact-ref entry (old debitUpTo, no :c suffix) counts toward the taken total', async () => {
+      const { prisma, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 500, kind: 'TOPUP' });
+      await svc.debitUpTo('ws1', { amount: 30, kind: 'AD_GOVERNOR', ref: PREFIX });
+
+      const r = await svc.debitUpToCumulative('ws1', MOVE, PREFIX, 50);
+      expect(r.debited.toString()).toBe('20'); // 50 − 30 already taken
+      expect(wallets.get('ws1').balance.toString()).toBe('450');
     });
   });
 

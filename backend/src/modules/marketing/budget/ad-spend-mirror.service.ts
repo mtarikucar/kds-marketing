@@ -25,13 +25,17 @@ const AD_PROVIDER_CHANNELS = new Set(['META', 'TIKTOK', 'GOOGLE', 'LINKEDIN']);
  * Ad-spend mirror (Growth Autopilot spec D3, Mode-1 "governor"). The platform
  * does not pay ad networks — the customer's own ad account does — but the
  * engine's pacing and the credit governor still need REAL ad spend in the
- * ledger. Each tick this mirrors engine-scoped AdMetric.spend into idempotent
- * AD_SPEND SpendLedger entries (ref admetric:{campaign|acct}:{day}) and, for
- * armed AUTONOMOUS budgets, debits the wallet with the clearly-labeled
- * non-cash AD_GOVERNOR counterpart — so loaded credit truly bounds what the
- * engine commits. Scope = the budget's own allocations: a concrete campaignRef
- * mirrors that campaign; a channel-level rollup ('' ref) mirrors the
- * account-level rows of that channel's connected ad accounts.
+ * ledger. AdMetric.spend is a GROWING day-cumulative (overwritten by every
+ * hourly pull), so both writes are delta-to-cumulative (audit B3): the ledger
+ * appends only the accrual above what it already mirrored under
+ * admetric:{campaign|acct}:{day}, and, for armed AUTONOMOUS budgets, the
+ * wallet governor catches up to the same cumulative under adgov:{scope}:{day}.
+ * The governor write is NOT gated on the ledger's replay flag (audit B4): it
+ * derives from the wallet's own ledger, so a crash between the two commits
+ * self-heals on the next tick instead of diverging forever. Scope = the
+ * budget's own allocations: a concrete campaignRef mirrors that campaign; a
+ * channel-level rollup ('' ref) mirrors the account-level rows of that
+ * channel's connected ad accounts.
  */
 @Injectable()
 export class AdSpendMirrorService {
@@ -64,28 +68,34 @@ export class AdSpendMirrorService {
         const scope = row.campaignId && row.campaignId !== ''
           ? row.campaignId
           : `acct:${row.adAccountId}`;
-        const ref = `admetric:${scope}:${day}`;
 
-        const res = await this.ledger.debitOnce(workspaceId, {
-          channel: alloc.channel as SpendChannel,
-          amount: row.spend,
-          reason: 'AD_SPEND',
-          ref,
-          budgetId: budget.id,
-        });
-        if (res.replayed) continue; // already mirrored — never double-count
-        mirrored++;
+        // Delta-to-cumulative (audit B3): row.spend is the day's cumulative;
+        // only the accrual above what's already mirrored is appended.
+        const res = await this.ledger.debitToCumulative(
+          workspaceId,
+          {
+            channel: alloc.channel as SpendChannel,
+            reason: 'AD_SPEND',
+            budgetId: budget.id,
+          },
+          `admetric:${scope}:${day}`,
+          row.spend,
+        );
+        if (res.applied.gt(0)) mirrored++;
 
         if (governed) {
           // Non-cash governor bookkeeping: clamped, never throws on shortfall
           // (the pool math collapses to 0 anyway when credit runs out).
-          await this.wallet.debitUpTo(workspaceId, {
-            amount: row.spend,
-            kind: 'AD_GOVERNOR',
-            ref: `adgov:${scope}:${day}`,
-            note: `ad spend mirror ${alloc.channel} ${day}`,
-          });
-          governorDebits++;
+          // Deliberately NOT gated on the ledger's replay flag (audit B4): the
+          // governor catches up to the cumulative from its OWN ledger, so a
+          // crash between the two writes self-heals here on the next tick.
+          const g = await this.wallet.debitUpToCumulative(
+            workspaceId,
+            { kind: 'AD_GOVERNOR', note: `ad spend mirror ${alloc.channel} ${day}` },
+            `adgov:${scope}:${day}`,
+            row.spend,
+          );
+          if (g.debited.gt(0)) governorDebits++;
         }
       }
     }

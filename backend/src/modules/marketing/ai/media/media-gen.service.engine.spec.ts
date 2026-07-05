@@ -199,4 +199,45 @@ describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
       expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({ ref: 'mediagen-refund:asset-1' }));
     });
   });
+
+  // Audit B5: the orphan sweep reaps abandoned generations and refunds AI
+  // credits — but its findMany omitted `params`, so refundEngineWalletDebit
+  // saw undefined, judged the asset non-engine, and the real-cash ENGINE_SPEND
+  // pre-debit was silently kept (permanent money loss: the row goes terminal,
+  // so no later path can refund it either).
+  describe('sweepOrphanAssets engine refund (audit B5)', () => {
+    it('reaping an abandoned engine generation refunds the wallet pre-debit too', async () => {
+      const stuck = {
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING',
+        costCreditsReserved: 3, params: { campaignItemId: 'ci-1' },
+      };
+      const { svc, prisma, credits, wallet } = makeSvc({
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-0.03') },
+      });
+      prisma.generatedAsset.findMany = jest.fn(async ({ where }: any) =>
+        where.status?.in ? [stuck] : []); // stuck pass sees the orphan; retention pass sees none
+
+      await svc.sweepOrphanAssets();
+
+      expect(credits.refund).toHaveBeenCalledWith(WS, 3);
+      expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({
+        kind: 'REFUND', ref: 'mediagen-refund:asset-1',
+      }));
+    });
+
+    it('reaping an abandoned MANUAL generation never touches the wallet', async () => {
+      const stuck = {
+        id: 'asset-2', workspaceId: WS, status: 'QUEUED',
+        costCreditsReserved: 3, params: {},
+      };
+      const { svc, prisma, wallet } = makeSvc({});
+      prisma.generatedAsset.findMany = jest.fn(async ({ where }: any) =>
+        where.status?.in ? [stuck] : []);
+
+      await svc.sweepOrphanAssets();
+
+      expect(wallet.credit).not.toHaveBeenCalled();
+      expect(prisma.growthWalletLedgerEntry.findUnique).not.toHaveBeenCalled();
+    });
+  });
 });

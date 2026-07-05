@@ -14,7 +14,10 @@ function makeDeps(budget: any) {
   const enqueue = jest.fn().mockResolvedValue({ id: 'appr-1' });
   const approvals = { enqueue } as any;
   const executor = { applyAutonomous: jest.fn().mockResolvedValue({ status: 'APPLIED', applied: 1, skipped: 0, results: [] }) } as any;
-  const wallet = { balance: jest.fn().mockResolvedValue(D(0)) } as any;
+  const wallet = {
+    balance: jest.fn().mockResolvedValue(D(0)),
+    governorDebited: jest.fn().mockResolvedValue(D(0)),
+  } as any;
   const ledger = { netSpent: jest.fn().mockResolvedValue(D(0)) } as any;
   return { prisma, perf, approvals, enqueue, create, executor, wallet, ledger };
 }
@@ -102,9 +105,10 @@ describe('BudgetAutopilotService — autonomy lanes (spec D5/D6/D8)', () => {
     { channel: 'META', campaignRef: '', currentBudget: 100, spend: 100, revenue: 400 },
     { channel: 'GOOGLE', campaignRef: '', currentBudget: 100, spend: 100, revenue: 150 },
   ];
+  const PERIOD = new Date().toISOString().slice(0, 7); // the CURRENT month
   const budget = (over: any = {}) => ({
     id: 'b1', workspaceId: 'ws1', status: 'ACTIVE', killSwitch: false,
-    totalAmount: D(200), explorationPct: 0, targetRoas: null,
+    totalAmount: D(200), explorationPct: 0, targetRoas: null, periodKey: PERIOD,
     allocations: baseAllocs, autonomyLevel: 'ASSISTED', ...over,
   });
 
@@ -125,10 +129,14 @@ describe('BudgetAutopilotService — autonomy lanes (spec D5/D6/D8)', () => {
     const d = makeDeps(budget({ autonomyLevel: 'AUTONOMOUS' }));
     d.perf.collect.mockResolvedValue(PERF);
     d.wallet.balance.mockResolvedValue(D(30));
-    d.ledger.netSpent.mockResolvedValue(D(20));
+    d.wallet.governorDebited.mockResolvedValue(D(20));
     const r = await makeSvc(d).propose('ws1', 'b1');
 
-    // D5: effective pool = min(totalAmount 200, netSpent 20 + balance 30) = 50.
+    // D5 (audit B1): effective pool = min(cap 200, governorDebited 20 + balance 30)
+    // = 50. The spent term is what the wallet ACTUALLY funded (clamped), so
+    // governorDebited + balance == loaded-credit holds exactly — unlike raw
+    // ledger netSpent, which keeps climbing past the funded envelope once the
+    // wallet floors at 0 and would ratchet the ceiling toward the cap.
     expect(r.plan!.totalBudget).toBe(50);
     expect(d.enqueue).not.toHaveBeenCalled();
     expect(d.executor.applyAutonomous).toHaveBeenCalledTimes(1);
@@ -149,6 +157,32 @@ describe('BudgetAutopilotService — autonomy lanes (spec D5/D6/D8)', () => {
     expect(r.status).toBe('PROPOSED');
     expect(d.executor.applyAutonomous).not.toHaveBeenCalled();
     expect(d.enqueue).not.toHaveBeenCalled(); // still no human gate in the autonomous lane
+  });
+
+  it('B1: an overspend past the funded credit can NOT ratchet the ceiling (wallet floored at 0)', async () => {
+    process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+    const d = makeDeps(budget({ autonomyLevel: 'AUTONOMOUS' }));
+    d.perf.collect.mockResolvedValue(PERF);
+    // Real ad spend ran to 200 but the wallet only ever funded 30 (loaded=30):
+    d.wallet.balance.mockResolvedValue(D(0));
+    d.wallet.governorDebited.mockResolvedValue(D(30));
+    d.ledger.netSpent.mockResolvedValue(D(200)); // must be IGNORED
+    const r = await makeSvc(d).propose('ws1', 'b1');
+
+    expect(r.plan!.totalBudget).toBe(30); // pinned to loaded credit, not spend
+  });
+
+  it('B2: a STALE-period AUTONOMOUS budget never auto-applies (falls to the human gate)', async () => {
+    process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+    const d = makeDeps(budget({ autonomyLevel: 'AUTONOMOUS', periodKey: '2020-01' }));
+    d.perf.collect.mockResolvedValue(PERF);
+    d.wallet.balance.mockResolvedValue(D(1000));
+    const r = await makeSvc(d).propose('ws1', 'b1');
+
+    expect(d.executor.applyAutonomous).not.toHaveBeenCalled();
+    expect(d.wallet.balance).not.toHaveBeenCalled(); // stale lane never consults the wallet
+    expect(d.enqueue).toHaveBeenCalledTimes(1); // human approval instead
+    expect(r.approvalId).toBe('appr-1');
   });
 
   it('AUTONOMOUS with the flag OFF ships dark — behaves exactly like ASSISTED', async () => {

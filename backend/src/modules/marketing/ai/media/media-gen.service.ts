@@ -444,11 +444,15 @@ export class MediaGenService implements OnModuleInit {
     const stuckCutoff = new Date(now - MAX_GEN_AGE_MS);
     const stuck = await this.prisma.generatedAsset.findMany({
       where: { status: { in: ['QUEUED', 'GENERATING'] }, createdAt: { lt: stuckCutoff } },
-      select: { id: true, workspaceId: true, costCreditsReserved: true },
+      // `params` must ride along (audit B5): failTerminal needs it to see the
+      // engine marker and refund the real-cash ENGINE_SPEND wallet pre-debit —
+      // without it the reap kept the customer's money on every abandoned
+      // engine generation.
+      select: { id: true, workspaceId: true, costCreditsReserved: true, params: true },
     });
     for (const s of stuck) {
       await this.failTerminal(
-        { id: s.id, workspaceId: s.workspaceId },
+        { id: s.id, workspaceId: s.workspaceId, params: s.params },
         'generation abandoned (timeout sweep)', s.costCreditsReserved ?? 0,
       );
     }
