@@ -21,6 +21,13 @@ export interface GrowthWalletResult {
   replayed: boolean;
 }
 
+export interface GrowthWalletDebitUpToResult extends GrowthWalletResult {
+  /** What was actually debited (≤ the requested amount, ≥ 0). */
+  debited: Prisma.Decimal;
+  /** requested − debited (> 0 when the balance could not cover the request). */
+  shortfall: Prisma.Decimal;
+}
+
 /** Fail-closed guard: the growth wallet can NEVER go negative. */
 export class InsufficientGrowthCreditError extends BadRequestException {
   constructor(message = 'Insufficient growth credit') {
@@ -64,6 +71,82 @@ export class GrowthWalletService {
   /** Draw down credit. Fail-closed: throws InsufficientGrowthCreditError. */
   debit(workspaceId: string, movement: GrowthWalletMovement): Promise<GrowthWalletResult> {
     return this.move(workspaceId, movement, -1);
+  }
+
+  /**
+   * Clamped governor debit (spec D3): debits min(balance, amount) and NEVER
+   * throws on a shortfall — the ad-spend mirror is bookkeeping, so a partial
+   * (or even 0-delta) ledger entry is always written under the ref to keep
+   * replays idempotent. A shortfall is recorded in the note. The balance still
+   * can never go negative (same conditional-updateMany arbiter as `debit`).
+   */
+  async debitUpTo(workspaceId: string, movement: GrowthWalletMovement): Promise<GrowthWalletDebitUpToResult> {
+    const amount = new Prisma.Decimal(movement.amount).toDecimalPlaces(2);
+    if (!amount.isFinite() || amount.lte(0)) {
+      throw new BadRequestException('Invalid growth wallet amount');
+    }
+    const ref = movement.ref ?? null;
+
+    if (ref) {
+      const existing = await this.prisma.growthWalletLedgerEntry.findUnique({ where: { ref } });
+      if (existing) return this.replayUpToResult(workspaceId, amount, existing);
+    }
+
+    try {
+      const { wallet, debited } = await this.prisma.$transaction(async (tx) => {
+        const w = await tx.growthWallet.upsert({
+          where: { workspaceId },
+          create: { workspaceId, currency: movement.currency ?? 'TRY' },
+          update: {},
+        });
+        const balance = new Prisma.Decimal(w.balance ?? 0);
+        let taken = balance.lt(amount) ? balance : amount;
+        if (taken.gt(0)) {
+          const res = await tx.growthWallet.updateMany({
+            where: { id: w.id, workspaceId, balance: { gte: taken } },
+            data: { balance: { increment: taken.negated() } },
+          });
+          // Raced to a lower balance between read and decrement: fall back to a
+          // 0-delta anchor entry (never negative, ref still consumed).
+          if (res.count === 0) taken = new Prisma.Decimal(0);
+        }
+        const fresh = await tx.growthWallet.findUnique({ where: { workspaceId } });
+        const short = amount.minus(taken);
+        const shortNote = short.gt(0)
+          ? `governor shortfall: requested ${amount.toFixed(2)}, debited ${taken.toFixed(2)}`
+          : null;
+        const note = [movement.note, shortNote].filter(Boolean).join(' | ') || null;
+        await tx.growthWalletLedgerEntry.create({
+          data: {
+            workspaceId,
+            walletId: w.id,
+            delta: taken.isZero() ? new Prisma.Decimal(0) : taken.negated(),
+            balanceAfter: fresh!.balance,
+            kind: movement.kind,
+            ref,
+            note,
+          },
+        });
+        return { wallet: fresh!, debited: taken };
+      });
+      return { wallet, replayed: false, debited, shortfall: amount.minus(debited) };
+    } catch (e) {
+      if (ref && (e as { code?: string })?.code === 'P2002') {
+        const existing = await this.prisma.growthWalletLedgerEntry.findUnique({ where: { ref } });
+        return this.replayUpToResult(workspaceId, amount, existing);
+      }
+      throw e;
+    }
+  }
+
+  private async replayUpToResult(
+    workspaceId: string,
+    amount: Prisma.Decimal,
+    existing: { delta: Prisma.Decimal } | null,
+  ): Promise<GrowthWalletDebitUpToResult> {
+    const base = await this.replayResult(workspaceId);
+    const debited = existing ? new Prisma.Decimal(existing.delta).negated() : new Prisma.Decimal(0);
+    return { ...base, debited, shortfall: amount.minus(debited) };
   }
 
   private async move(

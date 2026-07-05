@@ -12,9 +12,14 @@ function makePrisma() {
     spendLedger: {
       findFirst: jest.fn(async ({ where }: any) => {
         const match = rows
-          .filter((r) => r.workspaceId === where.workspaceId && r.budgetId === where.budgetId)
+          .filter(
+            (r) =>
+              r.workspaceId === where.workspaceId &&
+              r.budgetId === where.budgetId &&
+              (where.ref === undefined || r.ref === where.ref),
+          )
           .sort((a, b) => b._seq - a._seq)[0];
-        return match ? { balanceAfter: match.balanceAfter } : null;
+        return match ? { id: match.id, balanceAfter: match.balanceAfter } : null;
       }),
       create: jest.fn(async ({ data }: any) => {
         const row = { ...data, id: `row-${++seq}`, _seq: seq };
@@ -72,5 +77,48 @@ describe('SpendLedgerService', () => {
     const { prisma } = makePrisma();
     const svc = new SpendLedgerService(prisma);
     expect((await svc.netSpent('ws-empty')).toString()).toBe('0');
+  });
+
+  describe('debitOnce (ref-deduped debit for mirrored ad spend)', () => {
+    it('records the first debit and replays the same ref without double-recording', async () => {
+      const { prisma, rows, tx } = makePrisma();
+      const svc = new SpendLedgerService(prisma);
+
+      const first = await svc.debitOnce('ws1', {
+        channel: 'META', amount: 120, reason: 'AD_SPEND', ref: 'admetric:c1:2026-07-04', budgetId: 'b1',
+      });
+      expect(first.replayed).toBe(false);
+      expect(first.balanceAfter.toString()).toBe('-120');
+
+      const replay = await svc.debitOnce('ws1', {
+        channel: 'META', amount: 120, reason: 'AD_SPEND', ref: 'admetric:c1:2026-07-04', budgetId: 'b1',
+      });
+      expect(replay.replayed).toBe(true);
+      expect(replay.id).toBe(first.id);
+      expect(replay.balanceAfter.toString()).toBe('-120'); // nothing moved twice
+      expect(rows.filter((r) => r.ref === 'admetric:c1:2026-07-04')).toHaveLength(1);
+      // dedup happens INSIDE the advisory-locked txn (lock taken both times)
+      expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(2);
+    });
+
+    it('requires a ref', async () => {
+      const { prisma } = makePrisma();
+      const svc = new SpendLedgerService(prisma);
+      await expect(
+        svc.debitOnce('ws1', { channel: 'META', amount: 10, reason: 'AD_SPEND' }),
+      ).rejects.toThrow(/ref/);
+    });
+
+    it('dedups within the (workspace, budget) partition only', async () => {
+      const { prisma, rows } = makePrisma();
+      const svc = new SpendLedgerService(prisma);
+      await svc.debitOnce('ws1', { channel: 'META', amount: 10, reason: 'AD_SPEND', ref: 'r1', budgetId: 'b1' });
+      // Same ref, different budget partition and different workspace: both record.
+      const other = await svc.debitOnce('ws1', { channel: 'META', amount: 10, reason: 'AD_SPEND', ref: 'r1', budgetId: 'b2' });
+      const otherWs = await svc.debitOnce('ws2', { channel: 'META', amount: 10, reason: 'AD_SPEND', ref: 'r1', budgetId: 'b1' });
+      expect(other.replayed).toBe(false);
+      expect(otherWs.replayed).toBe(false);
+      expect(rows.filter((r) => r.ref === 'r1')).toHaveLength(3);
+    });
   });
 });

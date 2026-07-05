@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 
@@ -20,6 +20,7 @@ export type SpendChannel =
 
 export type SpendReason =
   | 'AD_WRITE'
+  | 'AD_SPEND' // daily AdMetric mirror (Growth Autopilot D3)
   | 'SMS'
   | 'VOICE'
   | 'WHATSAPP'
@@ -44,6 +45,11 @@ export interface LedgerResult {
   balanceAfter: Prisma.Decimal;
 }
 
+export interface DedupLedgerResult extends LedgerResult {
+  /** True when the ref had already been recorded in this partition — no new row. */
+  replayed: boolean;
+}
+
 /**
  * Append-only, tenant-scoped money ledger for the Budget Autopilot. Mirrors the
  * ai-credits reserve pattern: a per-(workspace,budget) advisory xact-lock
@@ -65,39 +71,81 @@ export class SpendLedgerService {
     return this.record(workspaceId, { ...entry, reason: 'REFUND' }, +1);
   }
 
+  /**
+   * Ref-deduped debit (Growth Autopilot D3 ad-spend mirror). Inside the SAME
+   * advisory-locked transaction as a normal debit: if an entry with this ref
+   * already exists in the (workspace, budget) partition it is returned with
+   * `replayed: true` and NOTHING is recorded — so a re-run of the daily mirror
+   * can never double-count a (campaign, day)'s spend.
+   */
+  async debitOnce(workspaceId: string, entry: SpendEntry): Promise<DedupLedgerResult> {
+    const ref = entry.ref;
+    if (!ref) throw new BadRequestException('debitOnce requires an idempotency ref');
+    const amount = new Prisma.Decimal(entry.amount).abs();
+    const budgetId = entry.budgetId ?? null;
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPartition(tx, workspaceId, budgetId);
+      const existing = await tx.spendLedger.findFirst({
+        where: { workspaceId, budgetId, ref },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, balanceAfter: true },
+      });
+      if (existing) return { id: existing.id, balanceAfter: existing.balanceAfter, replayed: true };
+      const row = await this.append(tx, workspaceId, budgetId, entry, amount.negated());
+      return { ...row, replayed: false };
+    });
+  }
+
   private async record(workspaceId: string, entry: SpendEntry, sign: 1 | -1): Promise<LedgerResult> {
     const amount = new Prisma.Decimal(entry.amount).abs();
     const delta = sign < 0 ? amount.negated() : amount;
     const budgetId = entry.budgetId ?? null;
-    const lockKey = `spend-ledger:${workspaceId}:${budgetId ?? 'none'}`;
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRawUnsafe(
-        `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey(lockKey)}))::text AS locked`,
-      );
-      const last = await tx.spendLedger.findFirst({
-        where: { workspaceId, budgetId },
-        orderBy: { createdAt: 'desc' },
-        select: { balanceAfter: true },
-      });
-      const prev = last?.balanceAfter ?? new Prisma.Decimal(0);
-      const balanceAfter = prev.add(delta);
-      const row = await tx.spendLedger.create({
-        data: {
-          workspaceId,
-          budgetId,
-          channel: entry.channel,
-          delta,
-          reason: entry.reason,
-          ref: entry.ref ?? null,
-          unitCost: entry.unitCost != null ? new Prisma.Decimal(entry.unitCost) : null,
-          quantity: entry.quantity != null ? new Prisma.Decimal(entry.quantity) : null,
-          balanceAfter,
-        },
-        select: { id: true, balanceAfter: true },
-      });
-      return { id: row.id, balanceAfter: row.balanceAfter };
+      await this.lockPartition(tx, workspaceId, budgetId);
+      return this.append(tx, workspaceId, budgetId, entry, delta);
     });
+  }
+
+  /** Take the per-(workspace,budget) advisory xact-lock that serializes appends. */
+  private async lockPartition(tx: Prisma.TransactionClient, workspaceId: string, budgetId: string | null): Promise<void> {
+    const lockKey = `spend-ledger:${workspaceId}:${budgetId ?? 'none'}`;
+    await tx.$queryRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey(lockKey)}))::text AS locked`,
+    );
+  }
+
+  /** Append one signed entry, carrying the running balance forward. Lock must be held. */
+  private async append(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    budgetId: string | null,
+    entry: SpendEntry,
+    delta: Prisma.Decimal,
+  ): Promise<LedgerResult> {
+    const last = await tx.spendLedger.findFirst({
+      where: { workspaceId, budgetId },
+      orderBy: { createdAt: 'desc' },
+      select: { balanceAfter: true },
+    });
+    const prev = last?.balanceAfter ?? new Prisma.Decimal(0);
+    const balanceAfter = prev.add(delta);
+    const row = await tx.spendLedger.create({
+      data: {
+        workspaceId,
+        budgetId,
+        channel: entry.channel,
+        delta,
+        reason: entry.reason,
+        ref: entry.ref ?? null,
+        unitCost: entry.unitCost != null ? new Prisma.Decimal(entry.unitCost) : null,
+        quantity: entry.quantity != null ? new Prisma.Decimal(entry.quantity) : null,
+        balanceAfter,
+      },
+      select: { id: true, balanceAfter: true },
+    });
+    return { id: row.id, balanceAfter: row.balanceAfter };
   }
 
   /** Cumulative signed balance for a (workspace, budget) partition. */

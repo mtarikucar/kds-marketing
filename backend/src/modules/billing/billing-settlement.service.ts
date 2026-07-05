@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../common/scheduling/advisory-lock';
 import { EntitlementsService } from './entitlements.service';
+import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
 
 const ADDON_GRANTS: Record<string, Record<string, number>> = {
   quota_boost_10: { 'limit.dailyLeadQuota': 10 },
@@ -29,6 +30,7 @@ export class BillingSettlementService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly entitlements: EntitlementsService,
+    private readonly growthWallet: GrowthWalletService,
   ) {}
 
   /**
@@ -116,17 +118,29 @@ export class BillingSettlementService implements OnModuleInit {
    * re-flipping an already-SUCCEEDED order.
    */
   private async grantEntitlement(order: {
+    id: string;
     type: string;
     workspaceId: string;
     packageId: string | null;
     billingCycle: string | null;
+    amount: unknown;
     currency: string;
     provider: string;
     providerRef: string | null;
     addOnCode: string | null;
     quantity: number;
   }) {
-    if (order.type === 'ADDON') {
+    if (order.type === 'WALLET_TOPUP') {
+      // Growth Autopilot spec D2: a paid top-up credits the growth wallet.
+      // Idempotent by the ledger's unique ref, so webhook replays and the
+      // reconcile sweep can safely re-run this grant.
+      await this.growthWallet.credit(order.workspaceId, {
+        amount: order.amount as number,
+        kind: 'TOPUP',
+        ref: `order:${order.id}`,
+        currency: order.currency,
+      });
+    } else if (order.type === 'ADDON') {
       await this.grantAddOn(order);
     } else {
       await this.activateSubscription(order);
@@ -201,6 +215,36 @@ export class BillingSettlementService implements OnModuleInit {
         // One bad order must not abort the rest of the sweep.
         this.logger.error(
           `reconcile: re-grant failed for order ${order.id}: ${(e as Error)?.message}`,
+        );
+      }
+    }
+
+    // WALLET_TOPUP recovery (Growth Autopilot spec D2): a paid top-up whose
+    // wallet credit failed after the flip has NO ledger entry under its
+    // order ref — re-credit it. Safe to auto-sweep (unlike ADDON) because the
+    // credit is idempotent by the unique ref.
+    const topups = await this.prisma.paymentOrder.findMany({
+      where: { status: 'SUCCEEDED', type: 'WALLET_TOPUP' },
+      orderBy: { succeededAt: 'asc' },
+      take: limit,
+    });
+    for (const order of topups) {
+      const landed = await this.prisma.growthWalletLedgerEntry.findUnique({
+        where: { ref: `order:${order.id}` },
+        select: { id: true },
+      });
+      if (landed) continue; // credit already applied
+
+      try {
+        await this.grantEntitlement(order);
+        this.entitlements.invalidate(order.workspaceId);
+        regranted++;
+        this.logger.warn(
+          `reconcile: re-credited uncredited SUCCEEDED top-up ${order.id} for workspace ${order.workspaceId}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `reconcile: top-up re-credit failed for order ${order.id}: ${(e as Error)?.message}`,
         );
       }
     }

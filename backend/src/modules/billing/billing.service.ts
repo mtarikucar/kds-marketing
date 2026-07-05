@@ -25,6 +25,17 @@ export interface CheckoutInput {
   provider: 'paytr' | 'stripe' | 'manual';
 }
 
+export interface WalletTopupInput {
+  /** Major units in the order currency. */
+  amount: number;
+  provider: 'paytr' | 'stripe' | 'manual';
+  currency?: string;
+}
+
+/** Growth-wallet top-up bounds (major units) — sanity rails, not pricing. */
+export const WALLET_TOPUP_MIN = 1;
+export const WALLET_TOPUP_MAX = 1_000_000;
+
 /** A checkout retry (double-click / auto-retry of POST /checkout) within this
  *  window reuses the existing PENDING order instead of minting a duplicate order
  *  + PSP handle. The schema's `idempotencyKey @unique` was meant to "collapse
@@ -281,6 +292,89 @@ export class BillingService {
           },
         }));
     }
+
+    const returnUrl =
+      this.configService.get<string>('FRONTEND_URL') ?? 'http://localhost:5173';
+    const handle = await provider.createCheckout(order, {
+      buyerEmail: ctx.buyerEmail,
+      buyerIp: ctx.buyerIp,
+      returnUrl: `${returnUrl.replace(/\/+$/, '')}/billing`,
+    });
+
+    return { orderId: order.id, handle };
+  }
+
+  /**
+   * Growth-wallet top-up checkout (Growth Autopilot spec D2). Mints an
+   * amount-based WALLET_TOPUP PaymentOrder (no package) through the SAME
+   * provider-handle + rolling-window dedup discipline as checkout(). The
+   * wallet is credited ONLY at settlement (BillingSettlementService), so a
+   * minted-but-unpaid handle never moves credit.
+   */
+  async walletTopup(
+    workspaceId: string,
+    input: WalletTopupInput,
+    ctx: { buyerEmail: string; buyerIp: string },
+  ): Promise<{ orderId: string; handle: CheckoutHandle }> {
+    const amountNum = Number(input.amount);
+    if (
+      !Number.isFinite(amountNum) ||
+      amountNum < WALLET_TOPUP_MIN ||
+      amountNum > WALLET_TOPUP_MAX
+    ) {
+      throw new BadRequestException(
+        `Top-up amount must be between ${WALLET_TOPUP_MIN} and ${WALLET_TOPUP_MAX}`,
+      );
+    }
+
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { defaultCurrency: true, status: true },
+    });
+    if (!workspace || workspace.status !== 'ACTIVE') {
+      throw new NotFoundException('Workspace not found');
+    }
+    const currency =
+      input.currency ?? (workspace.defaultCurrency === 'TRY' ? 'TRY' : 'USD');
+
+    const provider = this.providers.find((p) => p.id === input.provider);
+    if (!provider || !provider.isConfigured()) {
+      throw new ServiceUnavailableException(
+        `Payment provider ${input.provider} is not available`,
+      );
+    }
+    if (!provider.supports(currency)) {
+      throw new BadRequestException(
+        `${input.provider} does not support ${currency}`,
+      );
+    }
+
+    const amount = new Prisma.Decimal(amountNum).toDecimalPlaces(2);
+    // Same retry-dedup as checkout(): a double-click within the window reuses
+    // the PENDING order for the SAME intent (amount + currency + provider).
+    const order =
+      (await this.prisma.paymentOrder.findFirst({
+        where: {
+          workspaceId,
+          status: 'PENDING',
+          type: 'WALLET_TOPUP',
+          amount,
+          currency,
+          provider: provider.id,
+          createdAt: { gte: new Date(Date.now() - CHECKOUT_DEDUP_MS) },
+        },
+        orderBy: { createdAt: 'desc' },
+      })) ??
+      (await this.prisma.paymentOrder.create({
+        data: {
+          workspaceId,
+          type: 'WALLET_TOPUP',
+          amount,
+          currency,
+          provider: provider.id,
+          idempotencyKey: randomUUID(),
+        },
+      }));
 
     const returnUrl =
       this.configService.get<string>('FRONTEND_URL') ?? 'http://localhost:5173';

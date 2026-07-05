@@ -192,4 +192,88 @@ describe('GrowthWalletService', () => {
     expect((await svc.balance('ws1')).toString()).toBe('500');
     expect((await svc.balance('ws2')).toString()).toBe('0');
   });
+
+  describe('debitUpTo (clamped governor debit — never throws on shortfall)', () => {
+    it('debits the full amount when the balance covers it', async () => {
+      const { prisma, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP' });
+
+      const r = await svc.debitUpTo('ws1', { amount: 40, kind: 'AD_GOVERNOR', ref: 'adgov:c1:2026-07-05' });
+
+      expect(r.replayed).toBe(false);
+      expect(r.debited.toString()).toBe('40');
+      expect(r.shortfall.toString()).toBe('0');
+      expect(r.wallet.balance.toString()).toBe('60');
+      const row = entries.find((e) => e.ref === 'adgov:c1:2026-07-05');
+      expect(row.delta.toString()).toBe('-40');
+      expect(row.kind).toBe('AD_GOVERNOR');
+    });
+
+    it('clamps to the remaining balance and records a shortfall note instead of throwing', async () => {
+      const { prisma, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 25, kind: 'TOPUP' });
+
+      const r = await svc.debitUpTo('ws1', { amount: 40, kind: 'AD_GOVERNOR', ref: 'adgov:c1:2026-07-06' });
+
+      expect(r.debited.toString()).toBe('25');
+      expect(r.shortfall.toString()).toBe('15');
+      expect(r.wallet.balance.toString()).toBe('0');
+      const row = entries.find((e) => e.ref === 'adgov:c1:2026-07-06');
+      expect(row.delta.toString()).toBe('-25');
+      expect(row.note).toContain('shortfall');
+    });
+
+    it('records a 0-delta entry with the ref at zero balance (keeps replays idempotent)', async () => {
+      const { prisma, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+
+      const r = await svc.debitUpTo('ws1', { amount: 10, kind: 'AD_GOVERNOR', ref: 'adgov:c1:2026-07-07' });
+
+      expect(r.debited.toString()).toBe('0');
+      expect(r.shortfall.toString()).toBe('10');
+      expect(r.wallet.balance.toString()).toBe('0');
+      const row = entries.find((e) => e.ref === 'adgov:c1:2026-07-07');
+      expect(row).toBeDefined();
+      expect(row.delta.toString()).toBe('0');
+    });
+
+    it('is idempotent by ref: a replay moves nothing (even after a top-up)', async () => {
+      const { prisma, entries } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 30, kind: 'TOPUP' });
+      await svc.debitUpTo('ws1', { amount: 50, kind: 'AD_GOVERNOR', ref: 'adgov:c1:2026-07-08' }); // clamps to 30
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP', ref: 'order:o2' });
+
+      const replay = await svc.debitUpTo('ws1', { amount: 50, kind: 'AD_GOVERNOR', ref: 'adgov:c1:2026-07-08' });
+
+      expect(replay.replayed).toBe(true);
+      expect(replay.debited.toString()).toBe('30'); // what the original movement debited
+      expect(replay.wallet.balance.toString()).toBe('100'); // untouched by the replay
+      expect(entries.filter((e) => e.ref === 'adgov:c1:2026-07-08')).toHaveLength(1);
+    });
+
+    it('resolves a concurrent same-ref race (P2002) as a replay with the wallet debited once', async () => {
+      const { prisma, entries, wallets } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await svc.credit('ws1', { amount: 100, kind: 'TOPUP' });
+      await svc.debitUpTo('ws1', { amount: 40, kind: 'AD_GOVERNOR', ref: 'adgov:r:2026-07-05' });
+
+      const spyFind = prisma.growthWalletLedgerEntry.findUnique as jest.Mock;
+      spyFind.mockResolvedValueOnce(null); // pre-check misses (race window)
+      const r = await svc.debitUpTo('ws1', { amount: 40, kind: 'AD_GOVERNOR', ref: 'adgov:r:2026-07-05' });
+
+      expect(r.replayed).toBe(true);
+      expect(wallets.get('ws1').balance.toString()).toBe('60'); // debited ONCE
+      expect(entries.filter((e) => e.ref === 'adgov:r:2026-07-05')).toHaveLength(1);
+    });
+
+    it('rejects non-positive amounts', async () => {
+      const { prisma } = makePrisma();
+      const svc = new GrowthWalletService(prisma);
+      await expect(svc.debitUpTo('ws1', { amount: 0, kind: 'AD_GOVERNOR' })).rejects.toThrow();
+      await expect(svc.debitUpTo('ws1', { amount: -3, kind: 'AD_GOVERNOR' })).rejects.toThrow();
+    });
+  });
 });
