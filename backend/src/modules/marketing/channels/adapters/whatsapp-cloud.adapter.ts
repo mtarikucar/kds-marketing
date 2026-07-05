@@ -126,12 +126,26 @@ export class WhatsappCloudAdapter implements ChannelAdapter, OnModuleInit {
             m?.interactive?.list_reply?.title ??
             m?.interactive?.button_reply?.title ??
             '';
+          // Click-to-WhatsApp ad referral (D10b): the FIRST message from a CTWA
+          // click carries `referral` (source_id = ad id, ctwa_clid, source_url).
+          // Only surface it when it actually identifies a source.
+          const ref = m?.referral;
+          const referral =
+            ref && (ref.source_id || ref.ctwa_clid)
+              ? {
+                  sourceId: ref.source_id != null ? String(ref.source_id) : null,
+                  ctwaClid: ref.ctwa_clid != null ? String(ref.ctwa_clid) : null,
+                  sourceUrl: ref.source_url != null ? String(ref.source_url) : null,
+                  sourceType: ref.source_type != null ? String(ref.source_type) : null,
+                }
+              : undefined;
           out.push({
             externalUserId: String(m.from),
             kind: 'WA',
             externalMessageId: m?.id ?? null,
             text: String(text),
             displayName: nameByWaId.get(m.from) || null,
+            ...(referral ? { referral } : {}),
             raw: m,
           });
         }

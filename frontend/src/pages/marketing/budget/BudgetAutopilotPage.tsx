@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Wallet, Gauge, PiggyBank, ShieldAlert, Sparkles, Check, X, Play } from 'lucide-react';
+import { Wallet, Gauge, PiggyBank, ShieldAlert, Sparkles, Check, X, Play, Pause as PauseIcon, TrendingUp, CreditCard } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -20,52 +20,65 @@ import {
   listGrowthBudgets,
   getGrowthBudget,
   setBudgetKillSwitch,
+  setBudgetStatus,
+  setAutonomyLevel,
   proposeBudget,
   listAutopilotRuns,
   listPendingApprovals,
   approveRequest,
   applyReallocation,
   rejectRequest,
+  getWalletState,
+  listBudgetActivity,
+  walletTopup,
   type GrowthBudget,
   type ProposeResult,
 } from '../../../features/marketing/api/growthBudget.service';
 import { BudgetDialog } from './BudgetDialog';
-
-const num = (s: string | number | null | undefined) => (s == null ? 0 : typeof s === 'number' ? s : parseFloat(s) || 0);
-
-function money(v: string | number | null | undefined, currency = 'TRY'): string {
-  try {
-    return new Intl.NumberFormat('tr-TR', { style: 'currency', currency, maximumFractionDigits: 0 }).format(num(v));
-  } catch {
-    return `${num(v).toFixed(0)} ${currency}`;
-  }
-}
+import { EnableAutopilotWizard } from './EnableAutopilotWizard';
+import { ActivityFeed } from './ActivityFeed';
+import { money, num, deriveGrowthMultiple, pickLatestObjective, pickTopupProvider } from './autopilotMath';
 
 /**
- * Budget Autopilot console (Faz 7). The workspace sets ONE growth budget; the
- * autopilot paces it, proposes cross-channel reallocations (shadow — no money
- * moves without approval), and every conversation/content spend settles into it.
- * OWNER/MANAGER only (the route + backend both gate it).
+ * Growth Autopilot console (spec G). ONE control surface: load credit, set the
+ * cap + goal once, flip the Autopilot switch — then watch the Activity Log.
+ * The only interrupts are Pause and the kill-switch; an ASSISTED budget keeps
+ * the classic approval queue, an armed AUTONOMOUS budget never asks.
  */
 export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const budgetsQ = useQuery({ queryKey: ['growth-budgets'], queryFn: listGrowthBudgets });
   const budgets = budgetsQ.data ?? [];
   const current = budgets[0]; // most recent period first (backend orders desc)
 
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['growth-budgets'] });
+    qc.invalidateQueries({ queryKey: ['growth-wallet'] });
+  };
+
   return (
     <div className="space-y-6">
       {!embedded && (
       <PageHeader
-        title={t('budget.title', 'Budget Autopilot')}
-        description={t('budget.subtitle', 'Set one growth budget — Jeeta paces it, proposes reallocations, and settles every spend into it.')}
+        title={t('autopilot.title', 'Growth Autopilot')}
+        description={t('autopilot.subtitle', 'Load credit, set your caps once, flip it on — the engine spends it where it makes you the most sales, and logs everything it does.')}
         actions={
-          <Button onClick={() => setDialogOpen(true)}>
-            {current ? t('budget.edit', 'Edit budget') : t('budget.create', 'Create budget')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setDialogOpen(true)}>
+              {current ? t('budget.edit', 'Edit budget') : t('budget.create', 'Create budget')}
+            </Button>
+            {/* With no budget the empty state carries the single CTA — never two. */}
+            {current && (
+              <Button onClick={() => setWizardOpen(true)}>
+                <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                {t('autopilot.enableCta', 'Enable Autopilot')}
+              </Button>
+            )}
+          </div>
         }
       />
       )}
@@ -73,10 +86,10 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
       <QueryStateBoundary isLoading={budgetsQ.isLoading} isError={budgetsQ.isError} onRetry={() => budgetsQ.refetch()}>
         {!current ? (
           <EmptyState
-            icon={<Wallet className="h-6 w-6" />}
+            icon={<Sparkles className="h-6 w-6" />}
             title={t('budget.empty.title', 'No growth budget yet')}
-            description={t('budget.empty.desc', 'Give the autopilot a monthly budget and it will pace spend, propose cross-channel reallocations, and price every conversation into it — nothing moves without your approval.')}
-            action={<Button onClick={() => setDialogOpen(true)}>{t('budget.create', 'Create budget')}</Button>}
+            description={t('autopilot.empty.desc', 'One click sets up everything: your credit wallet, a monthly budget and allocations for every channel you have connected — then the engine takes it from there.')}
+            action={<Button onClick={() => setWizardOpen(true)}>{t('autopilot.enableCta', 'Enable Autopilot')}</Button>}
           />
         ) : (
           <BudgetDetail budget={current} />
@@ -89,9 +102,10 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
         budget={current}
         onSaved={() => {
           setDialogOpen(false);
-          qc.invalidateQueries({ queryKey: ['growth-budgets'] });
+          refresh();
         }}
       />
+      <EnableAutopilotWizard open={wizardOpen} onOpenChange={setWizardOpen} onProvisioned={refresh} />
     </div>
   );
 }
@@ -100,22 +114,39 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [flagBlocked, setFlagBlocked] = useState(false);
 
   const detailQ = useQuery({ queryKey: ['growth-budget', summary.id], queryFn: () => getGrowthBudget(summary.id) });
   const budget = detailQ.data ?? summary;
   const allocations = budget.allocations ?? [];
   const currency = budget.currency;
 
+  const walletQ = useQuery({ queryKey: ['growth-wallet'], queryFn: getWalletState });
+  const activityQ = useQuery({ queryKey: ['budget-activity', budget.id], queryFn: () => listBudgetActivity(budget.id) });
+
   const planned = useMemo(() => allocations.reduce((s, a) => s + num(a.plannedAmount), 0), [allocations]);
   const spent = useMemo(() => allocations.reduce((s, a) => s + num(a.spentAmount), 0), [allocations]);
   const total = num(budget.totalAmount);
   const spentPct = total > 0 ? Math.min(100, Math.round((spent / total) * 100)) : 0;
 
+  // Hero "Growth Multiple" (spec D15): attributed revenue ÷ engine spend,
+  // derived from each channel's latest CRM-reconciled avgRoas snapshot.
+  const growth = useMemo(
+    () => deriveGrowthMultiple(allocations, pickLatestObjective(activityQ.data)),
+    [allocations, activityQ.data],
+  );
+  const walletBalance = num(walletQ.data?.balance);
+  const armed = budget.autonomyLevel === 'AUTONOMOUS';
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['growth-budget', budget.id] });
+    qc.invalidateQueries({ queryKey: ['growth-budgets'] });
+  };
+
   const kill = useMutation({
     mutationFn: (on: boolean) => setBudgetKillSwitch(budget.id, on),
     onSuccess: (_data, on) => {
-      qc.invalidateQueries({ queryKey: ['growth-budget', budget.id] });
-      qc.invalidateQueries({ queryKey: ['growth-budgets'] });
+      invalidate();
       toast.success(
         on
           ? t('budget.killOnToast', 'Kill-switch on — all autonomy paused')
@@ -123,6 +154,50 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
       );
     },
     onError: () => toast.error(t('budget.killError', 'Could not update the kill-switch')),
+  });
+
+  const pauseResume = useMutation({
+    mutationFn: (status: 'ACTIVE' | 'PAUSED') => setBudgetStatus(budget.id, status),
+    onSuccess: (_d, status) => {
+      invalidate();
+      toast.success(
+        status === 'PAUSED'
+          ? t('autopilot.pausedToast', 'Engine paused — nothing moves until you resume')
+          : t('autopilot.resumedToast', 'Engine resumed'),
+      );
+    },
+    onError: () => toast.error(t('autopilot.statusError', 'Could not change the engine status')),
+  });
+
+  const arm = useMutation({
+    mutationFn: (level: 'AUTONOMOUS' | 'ASSISTED') => setAutonomyLevel(budget.id, level),
+    onSuccess: (_d, level) => {
+      invalidate();
+      toast.success(
+        level === 'AUTONOMOUS'
+          ? t('autopilot.armedToast', 'Autopilot armed — the engine now optimizes on its own. You will never be asked; pause any time.')
+          : t('autopilot.disarmedToast', 'Autopilot disarmed — proposals now wait for your approval.'),
+      );
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '';
+      if (/not enabled/i.test(msg)) {
+        setFlagBlocked(true);
+      } else {
+        toast.error(t('autopilot.armError', 'Could not change the autonomy level'));
+      }
+    },
+  });
+
+  const topup = useMutation({
+    mutationFn: (amount: number) =>
+      walletTopup({ amount, provider: pickTopupProvider(walletQ.data?.currency ?? currency) }),
+    onSuccess: ({ handle }) => {
+      const url = (handle as { url?: string; iframeUrl?: string }).url ?? (handle as { iframeUrl?: string }).iframeUrl;
+      if (url) window.open(url, '_blank', 'noopener');
+      toast.success(t('autopilot.topupStarted', 'Top-up checkout opened — credit lands after payment.'));
+    },
+    onError: () => toast.error(t('autopilot.topupError', 'Could not start the top-up')),
   });
 
   const statusTone: Record<string, 'success' | 'warning' | 'danger'> = { ACTIVE: 'success', PAUSED: 'warning', KILLED: 'danger' };
@@ -137,9 +212,84 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
             </Callout>
           )}
 
+          {/* Hero strip (spec D15): the one number that proves the engine works. */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label={t('autopilot.hero.multiple', 'Growth Multiple')}
+              value={growth.multiple != null ? `${growth.multiple.toFixed(2)}×` : '—'}
+              icon={<TrendingUp className="h-4 w-4" />}
+            />
+            <StatCard label={t('autopilot.hero.loaded', 'Credit loaded')} value={money(walletBalance + growth.spend, currency)} icon={<CreditCard className="h-4 w-4" />} />
+            <StatCard label={t('autopilot.hero.spent', 'Credit spent')} value={money(growth.spend, currency)} icon={<Gauge className="h-4 w-4" />} delta={{ direction: spentPct > 90 ? 'up' : 'flat', value: `${spentPct}%` }} />
+            <StatCard label={t('autopilot.hero.balance', 'Credit balance')} value={money(walletBalance, currency)} icon={<Wallet className="h-4 w-4" />} />
+          </div>
+
+          {/* THE control row: one switch, two interrupts — the user is never asked anything else. */}
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Sparkles className={`h-4 w-4 ${armed ? 'text-primary' : 'text-muted-foreground'}`} aria-hidden="true" />
+                  {t('autopilot.switch', 'Autopilot')}
+                  <Switch
+                    checked={armed}
+                    disabled={arm.isPending || flagBlocked || budget.killSwitch}
+                    onCheckedChange={(v) => arm.mutate(v ? 'AUTONOMOUS' : 'ASSISTED')}
+                    aria-label={t('autopilot.switch', 'Autopilot')}
+                  />
+                </label>
+                <Badge tone={statusTone[budget.status] ?? 'neutral'}>{t(`budget.status.${budget.status}`, budget.status)}</Badge>
+                <span className="text-sm text-muted-foreground">{budget.periodKey}</span>
+                {budget.targetRoas && (
+                  <Badge tone="neutral">{t('budget.targetRoas', 'Target ROAS')} {num(budget.targetRoas)}x</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => topup.mutate(Math.max(100, Math.round(total / 3)))}
+                  disabled={topup.isPending || walletQ.isLoading}
+                >
+                  <CreditCard className="mr-1 h-4 w-4" aria-hidden="true" />{t('autopilot.topup', 'Top up')}
+                </Button>
+                {budget.status === 'PAUSED' ? (
+                  <Button size="sm" onClick={() => pauseResume.mutate('ACTIVE')} disabled={pauseResume.isPending}>
+                    <Play className="mr-1 h-4 w-4" aria-hidden="true" />{t('autopilot.resume', 'Resume')}
+                  </Button>
+                ) : (
+                  <Button variant="secondary" size="sm" onClick={() => pauseResume.mutate('PAUSED')} disabled={pauseResume.isPending}>
+                    <PauseIcon className="mr-1 h-4 w-4" aria-hidden="true" />{t('autopilot.pause', 'Pause')}
+                  </Button>
+                )}
+                <label className="flex items-center gap-2 text-sm">
+                  <ShieldAlert className={`h-4 w-4 ${budget.killSwitch ? 'text-danger' : 'text-muted-foreground'}`} aria-hidden="true" />
+                  {t('budget.killSwitch', 'Kill-switch')}
+                  <Switch
+                    checked={budget.killSwitch}
+                    disabled={kill.isPending}
+                    onCheckedChange={(v) => (v ? setKillConfirmOpen(true) : kill.mutate(false))}
+                    aria-label={t('budget.killSwitch', 'Kill-switch')}
+                  />
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+
+          {flagBlocked && (
+            <Callout tone="warning" title={t('autopilot.flagOffTitle', 'Autonomous mode unavailable')}>
+              {t('autopilot.flagOff', 'Autonomous mode is not enabled on this platform yet — ask your platform admin.')}
+            </Callout>
+          )}
+
+          {/* Mode-1 honesty (spec D3 / guardrail 7): never imply the platform pays the ad network. */}
+          <p className="text-xs text-muted-foreground">
+            {t('autopilot.mode1', 'Ad spend is billed by Meta/TikTok on your connected ad account; your credit governs how much the engine commits.')}
+          </p>
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard label={t('budget.stat.total', 'Monthly budget')} value={money(total, currency)} icon={<Wallet className="h-4 w-4" />} />
-            <StatCard label={t('budget.stat.spent', 'Spent so far')} value={money(spent, currency)} icon={<Gauge className="h-4 w-4" />} delta={{ direction: spentPct > 90 ? 'up' : 'flat', value: `${spentPct}%` }} />
+            <StatCard label={t('budget.stat.spent', 'Spent so far')} value={money(spent, currency)} icon={<Gauge className="h-4 w-4" />} />
             <div title={t('budget.stat.reserveTip', 'Share of the budget held back for learning — never spent on proven channels.')}>
               <StatCard label={t('budget.stat.reserve', 'Exploration reserve')} value={`${budget.explorationPct}%`} icon={<PiggyBank className="h-4 w-4" />} />
             </div>
@@ -148,43 +298,27 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
             </div>
           </div>
 
-          <Card>
-            <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-muted-foreground">{budget.periodKey}</span>
-                <Badge tone={statusTone[budget.status] ?? 'neutral'}>{t(`budget.status.${budget.status}`, budget.status)}</Badge>
-                {budget.targetRoas && (
-                  <Badge tone="neutral" title={t('budget.targetRoasTip', 'Return on ad spend the autopilot aims for; channels below it aren’t funded from the proven pool.')}>
-                    {t('budget.targetRoas', 'Target ROAS')} {num(budget.targetRoas)}x
-                  </Badge>
-                )}
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <ShieldAlert className={`h-4 w-4 ${budget.killSwitch ? 'text-danger' : 'text-muted-foreground'}`} aria-hidden="true" />
-                {t('budget.killSwitch', 'Kill-switch')}
-                <Switch
-                  checked={budget.killSwitch}
-                  disabled={kill.isPending}
-                  onCheckedChange={(v) => (v ? setKillConfirmOpen(true) : kill.mutate(false))}
-                  aria-label={t('budget.killSwitch', 'Kill-switch')}
-                />
-              </label>
-            </CardContent>
-          </Card>
-
           <Tabs defaultValue="allocation">
             <TabsList>
               <TabsTrigger value="allocation">{t('budget.tab.allocation', 'Allocation')}</TabsTrigger>
-              <TabsTrigger value="approvals">{t('budget.tab.approvals', 'Approvals')}</TabsTrigger>
+              <TabsTrigger value="activity">{t('autopilot.tab.activity', 'Activity')}</TabsTrigger>
+              {!armed && <TabsTrigger value="approvals">{t('budget.tab.approvals', 'Approvals')}</TabsTrigger>}
               <TabsTrigger value="history">{t('budget.tab.history', 'History')}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="allocation" className="pt-4">
               <AllocationTab budget={budget} allocations={allocations} planned={planned} />
             </TabsContent>
-            <TabsContent value="approvals" className="pt-4">
-              <ApprovalsTab />
+            <TabsContent value="activity" className="pt-4">
+              <QueryStateBoundary isLoading={activityQ.isLoading} isError={activityQ.isError} onRetry={() => activityQ.refetch()}>
+                <ActivityFeed items={activityQ.data ?? []} currency={currency} />
+              </QueryStateBoundary>
             </TabsContent>
+            {!armed && (
+              <TabsContent value="approvals" className="pt-4">
+                <ApprovalsTab />
+              </TabsContent>
+            )}
             <TabsContent value="history" className="pt-4">
               <HistoryTab budgetId={budget.id} />
             </TabsContent>

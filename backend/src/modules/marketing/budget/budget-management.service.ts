@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AUTONOMY_LEVELS, growthAutopilotAutonomyEnabled } from './growth-autonomy.flag';
 
 export interface UpsertBudgetInput {
   periodKey: string; // YYYY-MM
@@ -84,6 +85,30 @@ export class BudgetManagementService {
     if (!STATUSES.includes(status)) throw new BadRequestException('invalid status');
     await this.assertOwned(workspaceId, id);
     return this.prisma.growthBudget.update({ where: { id }, data: { status } });
+  }
+
+  /**
+   * Switch the autonomy lane (Growth Autopilot spec D6). Arming AUTONOMOUS is
+   * the user's ONE explicit opt-in and requires the platform env flag; while
+   * the flag is off the lane cannot be armed anywhere (ships dark).
+   * Single-armed-budget invariant (audit B2): the growth wallet is
+   * workspace-shared, so two armed budgets would EACH count the full balance
+   * in their funded-credit bound and together commit ~2x the loaded credit —
+   * arming one budget disarms every other AUTONOMOUS budget in the workspace.
+   */
+  async setAutonomyLevel(workspaceId: string, id: string, level: string) {
+    if (!AUTONOMY_LEVELS.includes(level as never)) throw new BadRequestException('invalid autonomy level');
+    if (level === 'AUTONOMOUS' && !growthAutopilotAutonomyEnabled()) {
+      throw new BadRequestException('Autonomous mode is not enabled on this platform');
+    }
+    await this.assertOwned(workspaceId, id);
+    if (level === 'AUTONOMOUS') {
+      await this.prisma.growthBudget.updateMany({
+        where: { workspaceId, id: { not: id }, autonomyLevel: 'AUTONOMOUS' },
+        data: { autonomyLevel: 'ASSISTED' },
+      });
+    }
+    return this.prisma.growthBudget.update({ where: { id }, data: { autonomyLevel: level } });
   }
 
   /** Create/update one channel allocation (unique per budget+channel+campaign). */

@@ -18,6 +18,7 @@ describe('BookingService', () => {
   let googleSync: any;
   let outlookSync: any;
   let scheduledJobs: any;
+  let leadAttribution: { capture: jest.Mock };
 
   function calendar(extra: any = {}) {
     // maxAdvanceDays is generous so the fixed far-future fixture day isn't
@@ -60,7 +61,8 @@ describe('BookingService', () => {
       pushBooking: jest.fn().mockResolvedValue(null),
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
-    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any);
+    leadAttribution = { capture: jest.fn().mockResolvedValue(undefined) };
+    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any, leadAttribution as any);
   });
 
   it('slices the availability window into slots', async () => {
@@ -130,6 +132,37 @@ describe('BookingService', () => {
 
   it('refuses a past slot', async () => {
     await expect(svc.book(WS, 'c1', { start: '2000-01-01T09:00:00.000Z', name: 'Ada' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('captures first-touch attribution for a NEW booking lead in the SAME tx (landing url + referrer)', async () => {
+    prisma.booking.findFirst.mockResolvedValue(null);
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+    await svc.book(WS, 'c1', {
+      start: '2027-06-14T09:00:00.000Z',
+      name: 'Ada',
+      email: 'ada@x.com',
+      landingUrl: 'https://x.co/book?utm_campaign=c1',
+      referrerUrl: 'https://instagram.com',
+    });
+    expect(leadAttribution.capture).toHaveBeenCalledTimes(1);
+    const [ws, leadId, input, , tx] = leadAttribution.capture.mock.calls[0];
+    expect(ws).toBe(WS);
+    expect(leadId).toBe('lead-1');
+    expect(input).toMatchObject({ url: 'https://x.co/book?utm_campaign=c1', referrer: 'https://instagram.com' });
+    expect(tx).toBe(prisma);
+  });
+
+  it('does NOT capture attribution when the booking links an EXISTING lead (first-touch preserved)', async () => {
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-existing' });
+    prisma.booking.findFirst.mockResolvedValue(null);
+    prisma.booking.create.mockResolvedValue({ id: 'b1', startAt: new Date('2027-06-14T09:00:00.000Z'), token: 'bk', email: null });
+    await svc.book(WS, 'c1', {
+      start: '2027-06-14T09:00:00.000Z',
+      name: 'Ada',
+      email: 'ada@x.com',
+      landingUrl: 'https://x.co/book?utm_campaign=c1',
+    });
+    expect(leadAttribution.capture).not.toHaveBeenCalled();
   });
 
   it('lead dedup excludes merged AND soft-deleted leads', async () => {

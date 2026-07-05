@@ -39,6 +39,7 @@ import {
   SelectContent,
   SelectItem,
   QueryStateBoundary,
+  ConfirmDialog,
 } from '@/components/ui';
 
 import { buildLeadsColumns } from './leadsColumns';
@@ -94,6 +95,7 @@ export default function LeadsPage() {
     : undefined;
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // Sync URL when assignmentStatus changes so deep-links stay current.
   useEffect(() => {
@@ -390,11 +392,7 @@ export default function LeadsPage() {
           onBulkAssign={(repId) => bulkAssign.mutate(repId)}
           onClear={() => setSelected(new Set())}
           pending={bulkAssign.isPending || bulkDelete.isPending || bulkEnroll.isPending}
-          onBulkDelete={() => {
-            if (window.confirm(t('leads.bulkDelete.confirm', { defaultValue: 'Delete the selected leads?' }))) {
-              bulkDelete.mutate();
-            }
-          }}
+          onBulkDelete={() => setBulkDeleteConfirmOpen(true)}
           workflows={workflows}
           onEnroll={(workflowId) => bulkEnroll.mutate(workflowId)}
         />
@@ -453,6 +451,24 @@ export default function LeadsPage() {
           />
         </div>
       )}
+
+      <ConfirmDialog
+        open={bulkDeleteConfirmOpen}
+        onOpenChange={setBulkDeleteConfirmOpen}
+        tone="danger"
+        title={t('leads.bulkDelete.title', { defaultValue: 'Delete the selected leads?' })}
+        description={t('leads.bulkDelete.desc', {
+          defaultValue: '{{count}} lead(s) and their timelines are removed from your workspace. This cannot be undone.',
+          count: selected.size,
+        })}
+        confirmLabel={t('leads.bulkDelete.button', { defaultValue: 'Delete' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        loading={bulkDelete.isPending}
+        onConfirm={() => {
+          setBulkDeleteConfirmOpen(false);
+          bulkDelete.mutate();
+        }}
+      />
     </div>
   );
 }

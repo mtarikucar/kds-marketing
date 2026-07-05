@@ -12,6 +12,7 @@ import { fromWorkflowDto, fromTemplate, toSavePayload } from './workflowPayload'
 import { appendStep, deleteStepAt, moveStepAt } from './stepOps';
 import { DEFAULT_BUILDER_STATE, type BuilderState, type WorkflowDto, type WorkflowTemplate } from './automationTypes';
 import type { AnyStep, DslGoal } from './workflowGraph';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 /**
  * Full-page workflow builder (replaces the old modal). `/automations/new`
@@ -34,6 +35,7 @@ export default function AutomationBuilderPage() {
   const [aiPrompt, setAiPrompt] = useState('');
   const [existingStatus, setExistingStatus] = useState('');
   const [existingGoal, setExistingGoal] = useState<DslGoal | null>(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   const patchState = (patch: Partial<BuilderState>) => {
@@ -174,7 +176,10 @@ export default function AutomationBuilderPage() {
   };
 
   const onBack = () => {
-    if (dirty && !window.confirm(t('automations.unsavedConfirm', 'Discard unsaved changes?'))) return;
+    if (dirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
     navigate('/automations');
   };
 
@@ -227,6 +232,20 @@ export default function AutomationBuilderPage() {
           />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={discardConfirmOpen}
+        onOpenChange={setDiscardConfirmOpen}
+        tone="danger"
+        title={t('automations.unsavedConfirm.title', 'Discard unsaved changes?')}
+        description={t('automations.unsavedConfirm.desc', 'Your edits to this workflow will be lost.')}
+        confirmLabel={t('automations.unsavedConfirm.confirm', 'Discard')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        onConfirm={() => {
+          setDiscardConfirmOpen(false);
+          navigate('/automations');
+        }}
+      />
     </div>
   );
 }

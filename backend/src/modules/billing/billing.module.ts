@@ -8,6 +8,10 @@ import { PaytrProvider } from './payments/paytr.provider';
 import { StripeProvider } from './payments/stripe.provider';
 import { BillingWebhooksController } from './payments/webhooks.controller';
 import { BILLING_PAYMENT_PROVIDERS } from './payments/payment-provider.port';
+// Growth-wallet top-up settlement (spec D2). Deliberately ALSO registered in
+// the marketing module: the service is stateless + prisma-only, so per-module
+// instances are the accepted pattern here (avoids a circular module import).
+import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
 
 /**
  * Billing bounded context: packages → entitlements (the one source every
@@ -23,6 +27,7 @@ import { BILLING_PAYMENT_PROVIDERS } from './payments/payment-provider.port';
     BillingService,
     BillingSettlementService,
     BillingSchedulerService,
+    GrowthWalletService,
     ManualTransferProvider,
     PaytrProvider,
     StripeProvider,

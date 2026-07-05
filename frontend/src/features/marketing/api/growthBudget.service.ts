@@ -10,6 +10,7 @@ import marketingApi from './marketingApi';
 export type BudgetScope = 'HOLISTIC' | 'AD_ONLY';
 export type AllocatorStage = 'MARGINAL' | 'BANDIT' | 'MMM';
 export type BudgetStatus = 'ACTIVE' | 'PAUSED' | 'KILLED';
+export type AutonomyLevel = 'SHADOW' | 'ASSISTED' | 'AUTONOMOUS';
 export type SpendChannel = 'META' | 'TIKTOK' | 'GOOGLE' | 'LINKEDIN' | 'CONTENT' | 'SMS' | 'VOICE' | 'WHATSAPP';
 
 export interface BudgetAllocation {
@@ -33,6 +34,8 @@ export interface GrowthBudget {
   killSwitch: boolean;
   explorationPct: number;
   allocatorStage: AllocatorStage;
+  /** Autonomy lane (spec D6). Existing rows default to ASSISTED. */
+  autonomyLevel: AutonomyLevel;
   targetRoas: string | null;
   targetCac: string | null;
   createdAt: string;
@@ -142,6 +145,77 @@ export const proposeBudget = (id: string) =>
 
 export const listAutopilotRuns = (id: string) =>
   marketingApi.get<AutopilotRun[]>(`/budget/${id}/runs`).then((r) => r.data);
+
+// ── Growth Autopilot (wallet + autonomy + activity, spec D12/D14) ─────────────
+
+/** Growth-credit wallet snapshot. `balance` is a Decimal serialized as string. */
+export interface GrowthWalletState {
+  workspaceId: string;
+  balance: string;
+  currency: string;
+  /** False = zero-balance shell (never topped up). */
+  exists: boolean;
+}
+
+export type ActivityType = 'RUN' | 'SPEND' | 'WALLET';
+
+/** One Activity Log entry — the client localizes the plain-language "why". */
+export interface ActivityItem {
+  ts: string;
+  type: ActivityType;
+  data: Record<string, unknown>;
+}
+
+export interface QuickStartPayload {
+  /** Monthly cap (major units). Defaults server-side to the wallet balance. */
+  amount?: number;
+  targetRoas?: number;
+  targetCac?: number;
+  /** Arm the AUTONOMOUS lane (env-flag-gated; the user's ONE opt-in). */
+  arm?: boolean;
+}
+
+/** Everything one quick-start call provisioned — the wizard renders this. */
+export interface QuickStartManifest {
+  wallet: { balance: string; currency: string; exists: boolean };
+  budget: { id: string; periodKey: string; totalAmount: string; autonomyLevel: string; status: string };
+  channels: string[];
+  allocations: Array<{ channel: string; plannedAmount: string }>;
+  armed: boolean;
+  contentCampaign: null;
+}
+
+/** What the SPA does after a top-up checkout: iframe (PayTR), redirect (Stripe), or bank instructions. */
+export type CheckoutHandle =
+  | { kind: 'iframe'; token: string; iframeUrl: string }
+  | { kind: 'redirect'; url: string }
+  | {
+      kind: 'bank_transfer';
+      instructions: { iban: string; accountName: string; amountFormatted: string; reference: string };
+    };
+
+export interface WalletTopupPayload {
+  amount: number;
+  provider: 'paytr' | 'stripe' | 'manual';
+  currency?: string;
+}
+
+export const getWalletState = () =>
+  marketingApi.get<GrowthWalletState>('/budget/wallet').then((r) => r.data);
+
+export const quickStart = (payload: QuickStartPayload) =>
+  marketingApi.post<QuickStartManifest>('/budget/quick-start', payload).then((r) => r.data);
+
+export const listBudgetActivity = (id: string) =>
+  marketingApi.get<ActivityItem[]>(`/budget/${id}/activity`).then((r) => r.data);
+
+export const setAutonomyLevel = (id: string, level: AutonomyLevel) =>
+  marketingApi.patch<GrowthBudget>(`/budget/${id}/autonomy`, { level }).then((r) => r.data);
+
+export const walletTopup = (payload: WalletTopupPayload) =>
+  marketingApi
+    .post<{ orderId: string; handle: CheckoutHandle }>('/billing/wallet-topup', payload)
+    .then((r) => r.data);
 
 // ── Approvals ─────────────────────────────────────────────────────────────────
 export const listPendingApprovals = () =>

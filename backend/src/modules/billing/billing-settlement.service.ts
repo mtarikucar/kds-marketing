@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../common/scheduling/advisory-lock';
 import { EntitlementsService } from './entitlements.service';
+import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
 
 const ADDON_GRANTS: Record<string, Record<string, number>> = {
   quota_boost_10: { 'limit.dailyLeadQuota': 10 },
@@ -29,6 +30,7 @@ export class BillingSettlementService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly entitlements: EntitlementsService,
+    private readonly growthWallet: GrowthWalletService,
   ) {}
 
   /**
@@ -94,10 +96,12 @@ export class BillingSettlementService implements OnModuleInit {
 
     try {
       await this.grantEntitlement(order);
+      await this.markGranted(order.id);
     } catch (e) {
       // The order IS paid — never roll the flip back. Log loudly; the
       // platform console shows succeeded-but-ungranted orders for ops, and
-      // reconcileUngrantedOrders() re-grants them out of band.
+      // reconcileUngrantedOrders() re-grants them out of band. grantedAt stays
+      // NULL so the sweep's window (audit A1) is guaranteed to reach this row.
       this.logger.error(
         `entitlement grant failed for paid order ${order.id}: ${(e as Error)?.message}`,
       );
@@ -105,6 +109,19 @@ export class BillingSettlementService implements OnModuleInit {
 
     this.entitlements.invalidate(order.workspaceId);
     return { settled: true };
+  }
+
+  /**
+   * Stamp the grant-success marker (audit A1). updateMany (not update) so a
+   * concurrently-deleted row can't throw and undo a grant that DID land; the
+   * stamp itself is best-effort — a missed stamp only means one extra probe
+   * on the next sweep, never a lost grant.
+   */
+  private async markGranted(orderId: string): Promise<void> {
+    await this.prisma.paymentOrder.updateMany({
+      where: { id: orderId },
+      data: { grantedAt: new Date() },
+    });
   }
 
   /**
@@ -116,17 +133,29 @@ export class BillingSettlementService implements OnModuleInit {
    * re-flipping an already-SUCCEEDED order.
    */
   private async grantEntitlement(order: {
+    id: string;
     type: string;
     workspaceId: string;
     packageId: string | null;
     billingCycle: string | null;
+    amount: unknown;
     currency: string;
     provider: string;
     providerRef: string | null;
     addOnCode: string | null;
     quantity: number;
   }) {
-    if (order.type === 'ADDON') {
+    if (order.type === 'WALLET_TOPUP') {
+      // Growth Autopilot spec D2: a paid top-up credits the growth wallet.
+      // Idempotent by the ledger's unique ref, so webhook replays and the
+      // reconcile sweep can safely re-run this grant.
+      await this.growthWallet.credit(order.workspaceId, {
+        amount: order.amount as number,
+        kind: 'TOPUP',
+        ref: `order:${order.id}`,
+        currency: order.currency,
+      });
+    } else if (order.type === 'ADDON') {
       await this.grantAddOn(order);
     } else {
       await this.activateSubscription(order);
@@ -173,9 +202,15 @@ export class BillingSettlementService implements OnModuleInit {
    * advisory-locked for single-replica safety.
    */
   async reconcileUngrantedOrders(limit = 100): Promise<number> {
+    // grantedAt: null is the window fix (audit A1): without it the blind
+    // `take: limit` window pinned to the oldest-`limit` SUCCEEDED orders —
+    // all long-granted in steady state — and a recent failed grant was never
+    // re-examined. Filtering on the marker keeps the window on genuinely
+    // ungranted rows, so it always advances.
     const candidates = await this.prisma.paymentOrder.findMany({
       where: {
         status: 'SUCCEEDED',
+        grantedAt: null,
         type: { in: ['SUBSCRIPTION', 'UPGRADE', 'RENEWAL'] },
       },
       orderBy: { succeededAt: 'asc' },
@@ -188,10 +223,16 @@ export class BillingSettlementService implements OnModuleInit {
         where: { workspaceId: order.workspaceId },
         select: { id: true },
       });
-      if (existing) continue; // already granted — nothing to recover
+      if (existing) {
+        // Already granted (e.g. pre-marker order): stamp it so it leaves the
+        // window instead of being re-probed on every sweep forever.
+        await this.markGranted(order.id);
+        continue;
+      }
 
       try {
         await this.grantEntitlement(order);
+        await this.markGranted(order.id);
         this.entitlements.invalidate(order.workspaceId);
         regranted++;
         this.logger.warn(
@@ -201,6 +242,40 @@ export class BillingSettlementService implements OnModuleInit {
         // One bad order must not abort the rest of the sweep.
         this.logger.error(
           `reconcile: re-grant failed for order ${order.id}: ${(e as Error)?.message}`,
+        );
+      }
+    }
+
+    // WALLET_TOPUP recovery (Growth Autopilot spec D2): a paid top-up whose
+    // wallet credit failed after the flip has NO ledger entry under its
+    // order ref — re-credit it. Safe to auto-sweep (unlike ADDON) because the
+    // credit is idempotent by the unique ref.
+    const topups = await this.prisma.paymentOrder.findMany({
+      where: { status: 'SUCCEEDED', grantedAt: null, type: 'WALLET_TOPUP' },
+      orderBy: { succeededAt: 'asc' },
+      take: limit,
+    });
+    for (const order of topups) {
+      const landed = await this.prisma.growthWalletLedgerEntry.findUnique({
+        where: { ref: `order:${order.id}` },
+        select: { id: true },
+      });
+      if (landed) {
+        await this.markGranted(order.id); // credit already applied — evict from the window
+        continue;
+      }
+
+      try {
+        await this.grantEntitlement(order);
+        await this.markGranted(order.id);
+        this.entitlements.invalidate(order.workspaceId);
+        regranted++;
+        this.logger.warn(
+          `reconcile: re-credited uncredited SUCCEEDED top-up ${order.id} for workspace ${order.workspaceId}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `reconcile: top-up re-credit failed for order ${order.id}: ${(e as Error)?.message}`,
         );
       }
     }

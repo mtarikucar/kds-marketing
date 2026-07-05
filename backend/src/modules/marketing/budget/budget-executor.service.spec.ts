@@ -113,3 +113,70 @@ describe('BudgetExecutorService', () => {
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe('BudgetExecutorService.applyAutonomous (Growth Autopilot spec D6/D8)', () => {
+  const WS = 'ws1';
+  const AFTER = [{ channel: 'META', campaignRef: 'c1', budget: 120 }];
+
+  function makeAuto(overrides: { budget?: any; canWrite?: (p: string) => boolean; metaAccount?: any } = {}) {
+    const prisma = {
+      approvalRequest: { findFirst: jest.fn() },
+      growthBudget: { findFirst: jest.fn().mockResolvedValue(overrides.budget ?? null) },
+      adAccount: { findFirst: jest.fn().mockResolvedValue(overrides.metaAccount ?? null) },
+      budgetAllocation: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      autopilotRun: { create: jest.fn().mockResolvedValue({ id: 'run-auto' }) },
+    };
+    const approvals = { markApplied: jest.fn(), enqueue: jest.fn() };
+    const capability = { canWriteBudget: jest.fn((p: string) => (overrides.canWrite ? overrides.canWrite(p) : false)) };
+    const ads = { setDailyBudget: jest.fn().mockResolvedValue({}) };
+    const svc = new BudgetExecutorService(prisma as any, approvals as any, capability as any, ads as any);
+    return { svc, prisma, approvals, capability, ads };
+  }
+
+  const autonomousBudget = { id: 'b1', workspaceId: WS, status: 'ACTIVE', killSwitch: false, autonomyLevel: 'AUTONOMOUS' };
+
+  beforeEach(() => { process.env.GROWTH_AUTOPILOT_AUTONOMY = '1'; });
+  afterEach(() => { delete process.env.GROWTH_AUTOPILOT_AUTONOMY; });
+
+  it('commits the plan, pushes cred-gated live writes and records an AUTO run — with ZERO approval interaction', async () => {
+    const { svc, prisma, approvals, ads } = makeAuto({
+      budget: autonomousBudget,
+      canWrite: (p) => p === 'META',
+      metaAccount: { id: 'acc-1' },
+    });
+
+    const r = await svc.applyAutonomous(WS, 'b1', AFTER, 'shadow-run-1');
+
+    expect(r.status).toBe('APPLIED');
+    expect(prisma.budgetAllocation.updateMany).toHaveBeenCalledTimes(1);
+    expect(ads.setDailyBudget).toHaveBeenCalledWith(WS, 'acc-1', 'c1', 120);
+    const run = prisma.autopilotRun.create.mock.calls[0][0].data;
+    expect(run).toMatchObject({ workspaceId: WS, budgetId: 'b1', autonomy: 'AUTO' });
+    // The machine gate REPLACES the human gate: no approval row read, created or applied.
+    expect(prisma.approvalRequest.findFirst).not.toHaveBeenCalled();
+    expect(approvals.enqueue).not.toHaveBeenCalled();
+    expect(approvals.markApplied).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the env flag is off (ships dark) — nothing committed', async () => {
+    delete process.env.GROWTH_AUTOPILOT_AUTONOMY;
+    const { svc, prisma } = makeAuto({ budget: autonomousBudget });
+    await expect(svc.applyAutonomous(WS, 'b1', AFTER, 'r1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.budgetAllocation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('re-checks killSwitch/status AT APPLY TIME — a killed budget never applies', async () => {
+    const { svc, prisma, ads } = makeAuto({ budget: { ...autonomousBudget, killSwitch: true } });
+    await expect(svc.applyAutonomous(WS, 'b1', AFTER, 'r1')).rejects.toBeInstanceOf(BadRequestException);
+    const paused = makeAuto({ budget: { ...autonomousBudget, status: 'PAUSED' } });
+    await expect(paused.svc.applyAutonomous(WS, 'b1', AFTER, 'r1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.budgetAllocation.updateMany).not.toHaveBeenCalled();
+    expect(ads.setDailyBudget).not.toHaveBeenCalled();
+  });
+
+  it('refuses a budget that is not armed AUTONOMOUS', async () => {
+    const { svc, prisma } = makeAuto({ budget: { ...autonomousBudget, autonomyLevel: 'ASSISTED' } });
+    await expect(svc.applyAutonomous(WS, 'b1', AFTER, 'r1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.budgetAllocation.updateMany).not.toHaveBeenCalled();
+  });
+});

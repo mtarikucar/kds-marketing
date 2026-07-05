@@ -1,4 +1,4 @@
-import { parseAttribution } from './attribution-capture.util';
+import { parseAttribution, pickParams } from './attribution-capture.util';
 
 describe('parseAttribution', () => {
   it('returns null when no attribution signal is present', () => {
@@ -52,5 +52,35 @@ describe('parseAttribution', () => {
     expect(() => parseAttribution({ url: '::::not a url::::?utm_source=x' })).not.toThrow();
     // a value after ? is still parseable as a query even with a junk scheme
     expect(parseAttribution({ url: 'garbage?utm_source=x' })).toMatchObject({ utmSource: 'x' });
+  });
+});
+
+describe('pickParams', () => {
+  it('extracts arbitrary params from the landing-URL query', () => {
+    expect(pickParams({ url: 'https://x.co/lp?jg_cid=camp-42&jg_pid=post-7' }, ['jg_cid', 'jg_pid'])).toEqual({
+      jg_cid: 'camp-42',
+      jg_pid: 'post-7',
+    });
+  });
+
+  it('applies the same precedence as parseAttribution: field > URL > referrer', () => {
+    const r = pickParams(
+      {
+        fields: { jg_cid: 'field-c' },
+        url: 'https://x.co?jg_cid=url-c',
+        referrer: 'https://y.co?jg_cid=ref-c&jg_pid=ref-p',
+      },
+      ['jg_cid', 'jg_pid'],
+    );
+    expect(r).toEqual({ jg_cid: 'field-c', jg_pid: 'ref-p' });
+  });
+
+  it('omits absent keys and never throws on malformed input', () => {
+    expect(pickParams({ url: 'https://x.co/lp' }, ['jg_cid'])).toEqual({});
+    expect(() => pickParams({ url: '::::junk::::?jg_cid=a' }, ['jg_cid'])).not.toThrow();
+  });
+
+  it('is case-insensitive on param keys', () => {
+    expect(pickParams({ url: 'https://x.co?JG_CID=C1' }, ['jg_cid'])).toEqual({ jg_cid: 'C1' });
   });
 });

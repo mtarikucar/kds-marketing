@@ -102,7 +102,10 @@ describe('marketing decoupling — split readiness (architecture fitness)', () =
           !entry.name.endsWith('.spec.ts') &&
           !entry.name.endsWith('.d.ts')
         ) {
-          if (allowPath.test(full)) continue;
+          // Normalize to forward slashes so the exemption also matches on
+          // Windows (path.join emits backslashes there, which made EVERY
+          // marketing file look non-exempt and fail this guard locally).
+          if (allowPath.test(full.split(path.sep).join('/'))) continue;
           if (forbidden.test(fs.readFileSync(full, 'utf8'))) {
             offenders.push(path.relative(BACKEND_ROOT, full));
           }

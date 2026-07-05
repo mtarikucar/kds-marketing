@@ -70,6 +70,7 @@ export default function OffersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingOffer, setEditingOffer] = useState<LeadOffer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LeadOffer | null>(null);
+  const [sendTarget, setSendTarget] = useState<LeadOffer | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────
 
@@ -343,21 +344,11 @@ export default function OffersPage() {
                 {offer.status === 'DRAFT' && (
                   <>
                     <DropdownMenuItem
-                      onClick={() => {
-                        // Sending transmits the price quote to the customer and
-                        // can't be unsent — confirm first (matches the lead-detail
-                        // Offers tab, so the same action is guarded everywhere).
-                        if (
-                          window.confirm(
-                            t('offers.confirmSend', {
-                              defaultValue:
-                                'Send this offer to the customer? This cannot be undone.',
-                            }),
-                          )
-                        ) {
-                          sendMutation.mutate(offer.id);
-                        }
-                      }}
+                      // Sending transmits the price quote to the customer and
+                      // can't be unsent — confirm via the design-system dialog
+                      // (matches the lead-detail Offers tab, so the same action
+                      // is guarded the same way everywhere).
+                      onClick={() => setSendTarget(offer)}
                       // Scope the in-flight guard to THIS offer — a bare
                       // sendMutation.isPending disables Send on every other
                       // offer's menu while one send is running.
@@ -565,6 +556,24 @@ export default function OffersPage() {
         tone="danger"
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         loading={deleteMutation.isPending}
+      />
+
+      <ConfirmDialog
+        open={!!sendTarget}
+        onOpenChange={(open) => {
+          if (!open) setSendTarget(null);
+        }}
+        title={t('offers.sendConfirm.title', { defaultValue: 'Send this offer?' })}
+        description={t('offers.sendConfirm.desc', {
+          defaultValue: 'The price quote is transmitted to the customer and cannot be unsent.',
+        })}
+        confirmLabel={t('offers.sendConfirm.confirm', { defaultValue: 'Send' })}
+        cancelLabel={t('common.cancel')}
+        onConfirm={() => {
+          if (sendTarget) sendMutation.mutate(sendTarget.id);
+          setSendTarget(null);
+        }}
+        loading={sendMutation.isPending}
       />
     </div>
   );

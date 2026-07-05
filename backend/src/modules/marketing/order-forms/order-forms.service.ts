@@ -7,6 +7,7 @@ import {
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { ProductsService } from '../products/products.service';
@@ -49,6 +50,7 @@ export class OrderFormsService {
     private readonly products: ProductsService,
     private readonly invoices: InvoicesService,
     private readonly coupons: CouponsService,
+    private readonly leadAttribution: LeadAttributionService,
   ) {}
 
   // ─── Manager CRUD (workspace-scoped) ────────────────────────────────────────
@@ -219,7 +221,7 @@ export class OrderFormsService {
   async submit(
     token: string,
     body: PublicOrderSubmitDto,
-    audit: { ip?: string; userAgent?: string },
+    audit: { ip?: string; userAgent?: string; url?: string; referrer?: string },
   ): Promise<{ redirectUrl: string }> {
     const form = await this.prisma.orderForm.findUnique({ where: { publicToken: token } });
     if (!form || !form.active) throw new NotFoundException('Order form not found');
@@ -286,6 +288,19 @@ export class OrderFormsService {
           ...(autoOwner ? { assignedToId: autoOwner } : {}),
         },
       });
+      // First-touch attribution (D10): tie a NEW order-form lead to the page
+      // URL/referrer it converted from (UTM/click ids resolved inside capture).
+      // Best-effort by contract; enrolled in this tx. Deduped existing leads
+      // keep their original first touch.
+      if (audit.url || audit.referrer) {
+        await this.leadAttribution.capture(
+          workspaceId,
+          lead.id,
+          { ...(audit.url ? { url: audit.url } : {}), ...(audit.referrer ? { referrer: audit.referrer } : {}) },
+          {},
+          tx,
+        );
+      }
       await this.outbox.append(
         {
           type: MarketingEventTypes.LeadCreated,

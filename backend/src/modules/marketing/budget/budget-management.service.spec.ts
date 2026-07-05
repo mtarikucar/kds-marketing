@@ -62,3 +62,65 @@ describe('BudgetManagementService', () => {
     expect(prisma.growthBudget.update).not.toHaveBeenCalled();
   });
 });
+
+describe('BudgetManagementService.setAutonomyLevel (spec D6)', () => {
+  function deps(budget: any = { id: 'b1', workspaceId: 'ws1' }) {
+    const prisma = {
+      growthBudget: {
+        findFirst: jest.fn().mockResolvedValue(budget),
+        update: jest.fn(async ({ data }: any) => ({ id: 'b1', ...data })),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    } as any;
+    return { prisma };
+  }
+  afterEach(() => { delete process.env.GROWTH_AUTOPILOT_AUTONOMY; });
+
+  it('arms AUTONOMOUS only when the env flag is on', async () => {
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+    await expect(svc.setAutonomyLevel('ws1', 'b1', 'AUTONOMOUS')).rejects.toThrow();
+    process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+    const r = await svc.setAutonomyLevel('ws1', 'b1', 'AUTONOMOUS');
+    expect(r.autonomyLevel).toBe('AUTONOMOUS');
+    expect(prisma.growthBudget.update).toHaveBeenCalledWith({ where: { id: 'b1' }, data: { autonomyLevel: 'AUTONOMOUS' } });
+  });
+
+  it('rejects unknown levels and disarming stays available without the flag', async () => {
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+    await expect(svc.setAutonomyLevel('ws1', 'b1', 'YOLO')).rejects.toThrow();
+    const r = await svc.setAutonomyLevel('ws1', 'b1', 'ASSISTED');
+    expect(r.autonomyLevel).toBe('ASSISTED');
+  });
+
+  // Audit B2: the growth wallet is workspace-shared, so TWO armed budgets each
+  // count the FULL balance and together commit ~2x the loaded credit. Arming
+  // one budget must therefore disarm every other AUTONOMOUS budget in the
+  // workspace (single-armed-budget invariant).
+  it('arming AUTONOMOUS disarms every OTHER autonomous budget in the workspace', async () => {
+    process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+
+    await svc.setAutonomyLevel('ws1', 'b1', 'AUTONOMOUS');
+
+    expect(prisma.growthBudget.updateMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws1', id: { not: 'b1' }, autonomyLevel: 'AUTONOMOUS' },
+      data: { autonomyLevel: 'ASSISTED' },
+    });
+  });
+
+  it('disarming (ASSISTED/SHADOW) never touches sibling budgets', async () => {
+    const { prisma } = deps();
+    const { BudgetManagementService } = require('./budget-management.service');
+    const svc = new BudgetManagementService(prisma);
+
+    await svc.setAutonomyLevel('ws1', 'b1', 'ASSISTED');
+
+    expect(prisma.growthBudget.updateMany).not.toHaveBeenCalled();
+  });
+});

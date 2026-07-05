@@ -657,7 +657,18 @@
     "emptyUnassigned": "Atanmamış lead yok — hepsi takipte.",
     "emptyManager": "Henüz lead yok. Sağ üstteki \"Yeni Lead\" ile ekleyin veya AI Research routine tarafından oluşturulmasını bekleyin.",
     "loadError": "Lead'ler yüklenemedi. Tekrar dene.",
-    "rowCount": "{{count}} lead"
+    "rowCount": "{{count}} lead",
+    "bulkDelete": {
+      "title": "Seçili müşteri adayları silinsin mi?",
+      "desc": "{{count}} müşteri adayı ve zaman çizelgeleri çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz.",
+      "button": "Sil"
+    },
+    "bulkEnroll": {
+      "confirmTitle": "Seçili müşteri adayları eklensin mi?",
+      "confirmDesc": "{{count}} müşteri adayını \"{{name}}\" akışına eklemek otomatik mesajlar göndermeye başlayabilir.",
+      "confirmButton": "Ekle",
+      "label": "İş akışına ekle"
+    }
   },
   "leadDetail": {
     "back": "Lead'lere dön",
@@ -734,7 +745,11 @@
     "sentOffer": "Teklif gönderildi",
     "statusUpdated": "Durum güncellendi",
     "convertSuccess": "Lead dönüştürüldü — {{name}} tenant'ı oluşturuldu",
-    "convertError": "Lead dönüştürülemedi"
+    "convertError": "Lead dönüştürülemedi",
+    "deleteConfirm": {
+      "title": "Bu müşteri adayı silinsin mi?",
+      "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
+    }
   },
   "createLead": {
     "titleNew": "Yeni lead",
@@ -838,6 +853,12 @@
       "WEEK": "Haftalık",
       "MONTH": "Aylık",
       "YEAR": "Yıllık"
+    },
+    "cancelConfirm": {
+      "title": "Bu abonelik iptal edilsin mi?",
+      "desc": "\"{{name}}\" iptal edilirse yinelenen faturalandırma durur ve bu işlem geri alınamaz.",
+      "confirm": "Aboneliği iptal et",
+      "keep": "Vazgeç"
     }
   },
   "products": {
@@ -1001,6 +1022,15 @@
       "reject": "Reddet",
       "edit": "Düzenle",
       "delete": "Sil"
+    },
+    "sendConfirm": {
+      "title": "Bu teklif gönderilsin mi?",
+      "desc": "Fiyat teklifi müşteriye iletilir ve geri alınamaz.",
+      "confirm": "Gönder"
+    },
+    "deleteConfirm": {
+      "title": "Bu teklif silinsin mi?",
+      "desc": "Teklif bu müşteri adayından kaldırılır. Bu işlem geri alınamaz."
     }
   },
   "tasks": {
@@ -1032,6 +1062,10 @@
       "today6pm": "Bugün 18:00",
       "tomorrow9am": "Yarın 09:00",
       "nextWeek": "+1 hafta"
+    },
+    "deleteConfirm": {
+      "title": "Bu görev silinsin mi?",
+      "desc": "Görev bu müşteri adayından kaldırılır. Bu işlem geri alınamaz."
     }
   },
   "calendar": {
@@ -1444,9 +1478,13 @@
     "noCode": "Henüz bir referans kodunuz yok. Yöneticinizden bir kod tahsis etmesini isteyin.",
     "hint": "Bu link/kod ile yapılan abonelik satışlarından komisyon kazanırsınız (ilk satış + yenilemeler + yükseltmeler).",
     "regenerate": "Kodumu yenile",
-    "regenerateConfirm": "Eski kod artık çalışmayacak ve paylaştığınız linkler kırılacak. Devam edilsin mi?",
-    "regenerated": "Kodunuz yenilendi",
-    "regenerateFailed": "Yenileme başarısız",
+    "regenerateConfirm": {
+      "title": "Referans kodunuz yenilensin mi?",
+      "desc": "Eski kod çalışmayı durdurur ve daha önce paylaştığınız bağlantılar kırılır.",
+      "confirm": "Yenile"
+    },
+    "regenerated": "Referans kodunuz yenilendi",
+    "regenerateFailed": "Kod yenilenemedi",
     "statsLeads": "Toplam Lead",
     "statsWon": "Kazanılan",
     "statsCommission": "Toplam Komisyon"
@@ -1599,7 +1637,11 @@
     "invalidJson": "Geçersiz JSON.",
     "jsonNeedsType": "\"type\" alanı olan bir JSON nesnesi olmalı.",
     "invalidFiltersJson": "Filtreler bir JSON dizisi olmalı.",
-    "unsavedConfirm": "Kaydedilmemiş değişiklikler atılsın mı?",
+    "unsavedConfirm": {
+      "title": "Kaydedilmemiş değişiklikler atılsın mı?",
+      "desc": "Bu iş akışındaki düzenlemeleriniz kaybolacak.",
+      "confirm": "At"
+    },
     "subject": "Konu",
     "body": "Mesaj",
     "prompt": "İstem",
@@ -3105,5 +3147,51 @@
   "budget.status.PAUSED": "Duraklatıldı",
   "budget.status.KILLED": "Durduruldu",
   "budget.kind.BUDGET_REALLOCATION": "Bütçe yeniden dağıtımı",
-  "budget.runKind.REALLOCATION": "Yeniden dağıtım"
+  "budget.runKind.REALLOCATION": "Yeniden dağıtım",
+  "autopilot": {
+    "title": "Büyüme Otopiloti",
+    "subtitle": "Kredi yükle, limitlerini bir kez ayarla, aç — motor krediyi sana en çok satış getirecek yerde harcar ve yaptığı her şeyi kaydeder.",
+    "enableCta": "Otopiloti Etkinleştir",
+    "empty": {
+      "desc": "Tek tık her şeyi kurar: kredi cüzdanın, aylık bütçen ve bağlı her kanal için tahsisler — gerisini motor devralır."
+    },
+    "hero": {
+      "multiple": "Büyüme Çarpanı",
+      "loaded": "Yüklenen kredi",
+      "spent": "Harcanan kredi",
+      "balance": "Kredi bakiyesi"
+    },
+    "switch": "Otopilot",
+    "pause": "Duraklat",
+    "resume": "Devam et",
+    "topup": "Kredi yükle",
+    "tab": {
+      "activity": "Aktivite"
+    },
+    "mode1": "Reklam harcaması bağlı reklam hesabın üzerinden Meta/TikTok tarafından faturalandırılır; kredin motorun taahhüt edebileceği tutarı belirler.",
+    "flagOffTitle": "Otonom mod kullanılamıyor",
+    "flagOff": "Otonom mod bu platformda henüz etkin değil — platform yöneticinize danışın.",
+    "armedToast": "Otopilot devrede — motor artık kendi kendine optimize ediyor. Sana hiçbir şey sorulmayacak; istediğin an duraklatabilirsin.",
+    "disarmedToast": "Otopilot kapatıldı — öneriler artık onayını bekleyecek.",
+    "armError": "Otonomi seviyesi değiştirilemedi",
+    "pausedToast": "Motor duraklatıldı — sen devam ettirene kadar hiçbir şey hareket etmez",
+    "resumedToast": "Motor devam ediyor",
+    "statusError": "Motor durumu değiştirilemedi",
+    "topupStarted": "Kredi yükleme ödemesi açıldı — ödeme sonrası kredi hesabına geçer.",
+    "topupError": "Kredi yükleme başlatılamadı",
+    "activity": {
+      "emptyTitle": "Henüz aktivite yok",
+      "emptyDesc": "Motorun aldığı her karar, yaptığı her harcama ve kredi hareketi burada sade bir dille kaydedilir.",
+      "run": "Otopilot bütçeyi yeniden dengeledi",
+      "runNoop": "Otopilot bütçeyi inceledi — değişiklik gerekmedi",
+      "failed": "Başarısız",
+      "spend": "Motor harcaması",
+      "spendCredit": "Harcama iade edildi"
+    }
+  },
+  "studio": {
+    "tab": {
+      "autopilot": "Otopilot"
+    }
+  }
 }

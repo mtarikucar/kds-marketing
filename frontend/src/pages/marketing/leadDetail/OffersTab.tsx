@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { offerSchema, type OfferFormValues } from '../../../features/marketing/schemas';
 import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 import type { LeadOffer } from '../../../features/marketing/types';
@@ -54,6 +55,8 @@ export default function OffersTab({
 }: OffersTabProps) {
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
+  const [confirmSendId, setConfirmSendId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const form = useForm<OfferFormValues>({
     resolver: zodResolver(offerSchema),
@@ -178,13 +181,7 @@ export default function OffersTab({
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => {
-                        // Sending transmits the price quote to the customer and
-                        // can't be unsent — confirm first, like the delete below.
-                        if (window.confirm('Send this offer to the customer?')) {
-                          onSend(offer.id);
-                        }
-                      }}
+                      onClick={() => setConfirmSendId(offer.id)}
                     >
                       <Send className="h-3.5 w-3.5" /> Send
                     </Button>
@@ -193,9 +190,7 @@ export default function OffersTab({
                       size="sm"
                       variant="outline"
                       className="border-danger/40 text-danger hover:bg-danger-subtle"
-                      onClick={() => {
-                        if (window.confirm('Delete this offer?')) onDelete(offer.id);
-                      }}
+                      onClick={() => setConfirmDeleteId(offer.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Delete
                     </Button>
@@ -286,6 +281,33 @@ export default function OffersTab({
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmSendId !== null}
+        onOpenChange={(o) => { if (!o) setConfirmSendId(null); }}
+        title={t('offers.sendConfirm.title', 'Send this offer to the customer?')}
+        description={t('offers.sendConfirm.desc', 'The price quote is transmitted to the customer and cannot be unsent.')}
+        confirmLabel={t('offers.sendConfirm.confirm', 'Send')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        onConfirm={() => {
+          if (confirmSendId) onSend(confirmSendId);
+          setConfirmSendId(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteId(null); }}
+        tone="danger"
+        title={t('offers.deleteConfirm.title', 'Delete this offer?')}
+        description={t('offers.deleteConfirm.desc', 'The offer is removed from this lead. This cannot be undone.')}
+        confirmLabel={t('common.delete', 'Delete')}
+        cancelLabel={t('common.cancel', 'Cancel')}
+        onConfirm={() => {
+          if (confirmDeleteId) onDelete(confirmDeleteId);
+          setConfirmDeleteId(null);
+        }}
+      />
     </Card>
   );
 }

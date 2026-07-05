@@ -27,6 +27,20 @@ export type ChannelCapability =
 /** How an external identity maps to a ContactIdentity.kind. */
 export type ContactKind = 'PHONE' | 'WA' | 'PSID' | 'IGSID' | 'WEBCHAT' | 'TIKTOKID' | 'EMAIL' | 'LINKEDIN';
 
+/** Ad/post referral context a provider attaches to an inbound message (Meta
+ *  click-to-WhatsApp / click-to-Messenger). Soft provider ids — consumed by
+ *  first-touch lead attribution (D10b) at conversation ingress. */
+export interface InboundReferral {
+  /** Provider referral source id (Meta ads referrals carry the AD id here). */
+  sourceId?: string | null;
+  /** Meta click-to-WhatsApp click id (`ctwa_clid`). */
+  ctwaClid?: string | null;
+  /** The URL the click came from (WA `source_url` / Messenger `referer_uri`). */
+  sourceUrl?: string | null;
+  /** Provider-declared referral type (`ad` | `post` | `ADS` | …). */
+  sourceType?: string | null;
+}
+
 /** A normalized inbound message, transport-agnostic. */
 export interface InboundMessage {
   /** Provider-side sender identity (E.164 / wa-id / psid / igsid / visitorId). */
@@ -37,6 +51,8 @@ export interface InboundMessage {
   text: string;
   /** Display name the provider supplied, if any (used to name a new lead). */
   displayName?: string | null;
+  /** Ad/post referral the provider attached (CTWA / CTM), when present. */
+  referral?: InboundReferral | null;
   /** Raw provider payload, stored on Message.meta for audit/debug. */
   raw?: unknown;
 }

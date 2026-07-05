@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import LeadsPage from './LeadsPage';
 
 const listLeads = vi.fn();
+const bulkDeleteLeads = vi.fn();
 vi.mock('../../../features/marketing/api/leads.service', () => ({
   listLeads: (...a: unknown[]) => listLeads(...a),
   bulkAssignLeads: vi.fn(),
-  bulkDeleteLeads: vi.fn(),
+  bulkDeleteLeads: (...a: unknown[]) => bulkDeleteLeads(...a),
   bulkEnrollLeads: vi.fn(),
   exportLeadsCsv: vi.fn(),
 }));
@@ -80,5 +81,47 @@ describe('LeadsPage — server-side sorting', () => {
       expect(last.sortBy).toBe('businessName');
       expect(last.sortOrder).toBe('asc');
     });
+  });
+});
+
+// Bulk delete is destructive and must be gated by the design-system
+// ConfirmDialog (not window.confirm), firing only on the explicit confirm.
+describe('LeadsPage — bulk delete confirmation', () => {
+  beforeEach(() => {
+    listLeads.mockReset();
+    listLeads.mockResolvedValue(PAGE);
+    bulkDeleteLeads.mockReset();
+    bulkDeleteLeads.mockResolvedValue({ deleted: 1 });
+  });
+
+  it('opens a confirm dialog and only deletes after the destructive confirm', async () => {
+    const user = userEvent.setup();
+    render(<LeadsPage />, { wrapper });
+    await screen.findByText('Acme');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select row' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    // The toolbar click opens the ConfirmDialog; nothing is deleted yet.
+    expect(bulkDeleteLeads).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(bulkDeleteLeads).toHaveBeenCalledWith(['l1']));
+  });
+
+  it('does not delete when the confirmation is dismissed', async () => {
+    const user = userEvent.setup();
+    render(<LeadsPage />, { wrapper });
+    await screen.findByText('Acme');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select row' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(bulkDeleteLeads).not.toHaveBeenCalled();
   });
 });

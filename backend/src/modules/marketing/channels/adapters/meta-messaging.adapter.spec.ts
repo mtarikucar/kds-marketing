@@ -57,6 +57,37 @@ describe('MessengerAdapter parse + health', () => {
     ]);
   });
 
+  it('parseInbound extracts the ads referral (click-to-Messenger) attached to a message event', () => {
+    const a = new MessengerAdapter(reg() as any);
+    const inb = a.parseInbound(cfg(), {
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: 'u1' },
+              message: { mid: 'm1', text: 'hey' },
+              referral: { ref: 'x', source: 'ADS', type: 'OPEN_THREAD', ad_id: 'ad-77', referer_uri: 'https://fb.com/ad' },
+            },
+          ],
+        },
+      ],
+    });
+    expect(inb[0].referral).toEqual({
+      sourceId: 'ad-77',
+      ctwaClid: null,
+      sourceUrl: 'https://fb.com/ad',
+      sourceType: 'ADS',
+    });
+  });
+
+  it('parseInbound leaves referral undefined for an organic message', () => {
+    const a = new MessengerAdapter(reg() as any);
+    const inb = a.parseInbound(cfg(), {
+      entry: [{ messaging: [{ sender: { id: 'u1' }, message: { mid: 'm1', text: 'hey' } }] }],
+    });
+    expect(inb[0].referral).toBeUndefined();
+  });
+
   it('parseStatusUpdates maps delivery mids to DELIVERED', () => {
     const a = new MessengerAdapter(reg() as any);
     const st = a.parseStatusUpdates(cfg(), { entry: [{ messaging: [{ delivery: { mids: ['m1', 'm2'] } }] }] });

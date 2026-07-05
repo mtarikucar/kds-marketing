@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { BillingSettlementService } from './billing-settlement.service';
 
 /**
@@ -6,6 +7,7 @@ import { BillingSettlementService } from './billing-settlement.service';
  *   - success-after-failure is refused
  *   - the updateMany flip is the race arbiter (count 0 → no grant)
  *   - paid-but-grant-failed orders stay SUCCEEDED (never rolled back)
+ *   - WALLET_TOPUP orders credit the growth wallet (idempotent by ledger ref)
  */
 describe('BillingSettlementService — idempotent settlement', () => {
   const ORDER = {
@@ -24,6 +26,7 @@ describe('BillingSettlementService — idempotent settlement', () => {
 
   let prisma: any;
   let entitlements: { invalidate: jest.Mock };
+  let growthWallet: { credit: jest.Mock };
   let svc: BillingSettlementService;
 
   beforeEach(() => {
@@ -40,9 +43,11 @@ describe('BillingSettlementService — idempotent settlement', () => {
         update: jest.fn(),
       },
       workspaceAddOn: { create: jest.fn().mockResolvedValue({}) },
+      growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     entitlements = { invalidate: jest.fn() };
-    svc = new BillingSettlementService(prisma, entitlements as any);
+    growthWallet = { credit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }) };
+    svc = new BillingSettlementService(prisma, entitlements as any, growthWallet as any);
   });
 
   it('activates the subscription and invalidates entitlements on first success', async () => {
@@ -120,9 +125,10 @@ describe('BillingSettlementService — idempotent settlement', () => {
   });
 
   it('reconcileUngrantedOrders re-grants a SUCCEEDED subscription order whose workspace lacks a subscription', async () => {
-    prisma.paymentOrder.findMany.mockResolvedValue([
-      { ...ORDER, status: 'SUCCEEDED' },
-    ]);
+    // The sweep now issues one findMany per family (subscription vs WALLET_TOPUP) —
+    // answer per-where so the topup pass sees nothing here.
+    prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+      where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
     // No subscription on the workspace → this order is genuinely ungranted.
     prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
 
@@ -139,15 +145,138 @@ describe('BillingSettlementService — idempotent settlement', () => {
   });
 
   it('reconcileUngrantedOrders skips orders whose workspace already has a subscription', async () => {
-    prisma.paymentOrder.findMany.mockResolvedValue([
-      { ...ORDER, status: 'SUCCEEDED' },
-    ]);
+    prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+      where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
     prisma.workspaceSubscription.findUnique.mockResolvedValue({ id: 'sub-1' });
 
     const regranted = await svc.reconcileUngrantedOrders();
 
     expect(regranted).toBe(0);
     expect(prisma.workspaceSubscription.upsert).not.toHaveBeenCalled();
+  });
+
+  describe('WALLET_TOPUP (growth wallet, spec D2)', () => {
+    const TOPUP = {
+      ...ORDER,
+      id: 'topup-1',
+      type: 'WALLET_TOPUP',
+      packageId: null,
+      amount: new Prisma.Decimal('500'),
+      currency: 'TRY',
+    };
+
+    it('settleSuccess credits the growth wallet by order ref and never touches subscriptions', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue({ ...TOPUP });
+
+      const res = await svc.settleSuccess('topup-1');
+
+      expect(res.settled).toBe(true);
+      expect(growthWallet.credit).toHaveBeenCalledTimes(1);
+      const [ws, movement] = growthWallet.credit.mock.calls[0];
+      expect(ws).toBe('ws-1');
+      expect(movement).toMatchObject({ kind: 'TOPUP', ref: 'order:topup-1', currency: 'TRY' });
+      expect(movement.amount.toString()).toBe('500');
+      // A topup must NOT fall through to the subscription branch (it would
+      // throw 'subscription order without packageId').
+      expect(prisma.workspaceSubscription.upsert).not.toHaveBeenCalled();
+      expect(prisma.workspaceAddOn.create).not.toHaveBeenCalled();
+      expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+    });
+
+    it('reconcile sweep re-credits a SUCCEEDED topup with no matching wallet ledger ref', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type === 'WALLET_TOPUP' ? [{ ...TOPUP, status: 'SUCCEEDED' }] : []);
+      prisma.growthWalletLedgerEntry.findUnique.mockResolvedValue(null); // credit never landed
+
+      const regranted = await svc.reconcileUngrantedOrders();
+
+      expect(regranted).toBe(1);
+      expect(prisma.growthWalletLedgerEntry.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { ref: 'order:topup-1' } }),
+      );
+      expect(growthWallet.credit).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ kind: 'TOPUP', ref: 'order:topup-1' }),
+      );
+    });
+
+    it('reconcile sweep skips a topup whose wallet credit already landed (ledger ref exists)', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type === 'WALLET_TOPUP' ? [{ ...TOPUP, status: 'SUCCEEDED' }] : []);
+      prisma.growthWalletLedgerEntry.findUnique.mockResolvedValue({ id: 'entry-1' });
+
+      const regranted = await svc.reconcileUngrantedOrders();
+
+      expect(regranted).toBe(0);
+      expect(growthWallet.credit).not.toHaveBeenCalled();
+    });
+  });
+
+  // Audit A1: the sweep window (`take: limit`, succeededAt asc) went blind once
+  // >limit lifetime SUCCEEDED orders existed — a recent failed grant was born
+  // OUTSIDE the window and never re-examined. The fix makes ungranted-ness
+  // queryable: a `grantedAt` marker set on grant success, and both sweep
+  // queries filter `grantedAt: null` so the window always holds genuinely
+  // ungranted rows and advances.
+  describe('grantedAt marker (audit A1 — sweep-window blindness)', () => {
+    const grantMarks = () =>
+      prisma.paymentOrder.updateMany.mock.calls.filter(
+        (c: any[]) => c[0]?.data?.grantedAt instanceof Date,
+      );
+
+    it('settleSuccess stamps grantedAt after a successful grant', async () => {
+      await svc.settleSuccess('order-1');
+      const marks = grantMarks();
+      expect(marks).toHaveLength(1);
+      expect(marks[0][0].where).toMatchObject({ id: 'order-1' });
+    });
+
+    it('settleSuccess does NOT stamp grantedAt when the grant throws', async () => {
+      prisma.workspaceSubscription.upsert.mockRejectedValue(new Error('db down'));
+      await svc.settleSuccess('order-1');
+      expect(grantMarks()).toHaveLength(0);
+    });
+
+    it('both reconcile queries filter grantedAt: null (the window fix)', async () => {
+      await svc.reconcileUngrantedOrders();
+      const wheres = prisma.paymentOrder.findMany.mock.calls.map((c: any[]) => c[0].where);
+      expect(wheres).toHaveLength(2);
+      for (const where of wheres) expect(where).toMatchObject({ grantedAt: null });
+    });
+
+    it('reconcile stamps grantedAt on a successful re-grant', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+
+      await svc.reconcileUngrantedOrders();
+
+      const marks = grantMarks();
+      expect(marks).toHaveLength(1);
+      expect(marks[0][0].where).toMatchObject({ id: 'order-1' });
+    });
+
+    it('reconcile stamps grantedAt when the probe shows the grant already landed (self-heal eviction)', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
+      prisma.workspaceSubscription.findUnique.mockResolvedValue({ id: 'sub-1' });
+
+      const regranted = await svc.reconcileUngrantedOrders();
+
+      expect(regranted).toBe(0); // nothing re-granted…
+      expect(grantMarks()).toHaveLength(1); // …but the row leaves the window
+    });
+
+    it('reconcile does NOT stamp grantedAt when the re-grant throws (stays in the window)', async () => {
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
+      prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+      prisma.workspaceSubscription.upsert.mockRejectedValue(new Error('db down'));
+
+      await svc.reconcileUngrantedOrders();
+
+      expect(grantMarks()).toHaveLength(0);
+    });
   });
 
   it('settleFailure flips only PENDING/AWAITING_TRANSFER rows', async () => {

@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { collectRevenueEvents } from './revenue-events.util';
 
 export interface ReconcileResult {
+  /** Revenue events in the window (all sources, post per-lead precedence). */
   wonOpportunities: number;
   attributed: number;
   campaignDaysUpdated: number;
@@ -30,29 +32,30 @@ export class PerformanceLoopService {
   async reconcile(workspaceId: string, windowDays = PerformanceLoopService.DEFAULT_WINDOW_DAYS, now: Date = new Date()): Promise<ReconcileResult> {
     const since = new Date(now.getTime() - windowDays * 86_400_000);
 
-    const wonOpps = await this.prisma.opportunity.findMany({
-      where: { workspaceId, status: 'WON', wonAt: { gte: since }, leadId: { not: null } },
-      select: { leadId: true, value: true, wonAt: true },
-    });
-    if (wonOpps.length === 0) return { wonOpportunities: 0, attributed: 0, campaignDaysUpdated: 0, revenueAttributed: 0 };
+    // Unified sale signal (spec D9): WON opportunities, PAID invoices, ACCEPTED
+    // offers and ACCEPTED estimates — with per-lead precedence so one deal
+    // recorded several ways is only counted once. A workspace that sells via
+    // invoices/order-forms (no Opportunity ever) now feeds the loop too.
+    const events = await collectRevenueEvents(this.prisma, workspaceId, since);
+    if (events.length === 0) return { wonOpportunities: 0, attributed: 0, campaignDaysUpdated: 0, revenueAttributed: 0 };
 
-    const leadIds = [...new Set(wonOpps.map((o) => o.leadId!).filter(Boolean))];
+    const leadIds = [...new Set(events.map((e) => e.leadId))];
     const attributions = await this.prisma.leadAttribution.findMany({
       where: { workspaceId, leadId: { in: leadIds }, sourceAdCampaignId: { not: null } },
       select: { leadId: true, sourceAdCampaignId: true },
     });
     const leadToCampaign = new Map(attributions.map((a) => [a.leadId, a.sourceAdCampaignId!]));
 
-    // Sum won value per (campaign, UTC won-day).
+    // Sum revenue per (campaign, UTC event-day).
     const byCampaignDay = new Map<string, { campaignId: string; day: Date; revenue: number }>();
     let attributed = 0;
-    for (const o of wonOpps) {
-      const campaignId = leadToCampaign.get(o.leadId!);
-      if (!campaignId || !o.wonAt) continue;
-      const day = utcDay(o.wonAt);
+    for (const ev of events) {
+      const campaignId = leadToCampaign.get(ev.leadId);
+      if (!campaignId) continue;
+      const day = utcDay(ev.at);
       const key = `${campaignId}|${day.toISOString()}`;
       const entry = byCampaignDay.get(key) ?? { campaignId, day, revenue: 0 };
-      entry.revenue += toNum(o.value);
+      entry.revenue += toNum(ev.value);
       byCampaignDay.set(key, entry);
       attributed++;
     }
@@ -69,7 +72,7 @@ export class PerformanceLoopService {
     if (campaignDaysUpdated > 0) {
       this.logger.log(`performance-loop: attributed ${revenueAttributed.toFixed(2)} revenue across ${campaignDaysUpdated} campaign-day(s) for ${workspaceId}`);
     }
-    return { wonOpportunities: wonOpps.length, attributed, campaignDaysUpdated, revenueAttributed };
+    return { wonOpportunities: events.length, attributed, campaignDaysUpdated, revenueAttributed };
   }
 
   /**

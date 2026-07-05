@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Users, X, Search, Trash2 } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { MarketingUserInfo } from '../types';
 
 interface RepRow extends MarketingUserInfo {
@@ -39,6 +40,7 @@ export default function BulkActionToolbar({
   const { t } = useTranslation('marketing');
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [pendingEnroll, setPendingEnroll] = useState<{ id: string; name: string } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -168,19 +170,11 @@ export default function BulkActionToolbar({
               e.target.value = '';
               if (!workflowId) return;
               // Enrolling fans out automated outbound messages to every
-              // selected lead — confirm first (the same guard the delete
-              // action gets) so a stray dropdown change can't mass-message
-              // real customers.
+              // selected lead — confirm via the design-system dialog (the
+              // same guard the delete action gets) so a stray dropdown change
+              // can't mass-message real customers.
               const wf = workflows.find((w) => w.id === workflowId);
-              const ok = window.confirm(
-                t('leads.bulkEnroll.confirm', {
-                  defaultValue:
-                    'Enroll {{count}} lead(s) into "{{name}}"? This may start sending automated messages.',
-                  count: selectedCount,
-                  name: wf?.name ?? '',
-                }),
-              );
-              if (ok) onEnroll(workflowId);
+              setPendingEnroll({ id: workflowId, name: wf?.name ?? '' });
             }}
             className="px-2 py-1.5 border border-border-strong rounded-lg text-sm bg-surface text-foreground disabled:opacity-50"
             aria-label={t('leads.bulkEnroll.label', 'Enroll in workflow')}
@@ -215,6 +209,23 @@ export default function BulkActionToolbar({
           {t('leads.bulkAssign.cancel')}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={pendingEnroll !== null}
+        onOpenChange={(o) => { if (!o) setPendingEnroll(null); }}
+        title={t('leads.bulkEnroll.confirmTitle', { defaultValue: 'Enroll the selected leads?' })}
+        description={t('leads.bulkEnroll.confirmDesc', {
+          defaultValue: 'Enrolling {{count}} lead(s) into "{{name}}" may start sending automated messages.',
+          count: selectedCount,
+          name: pendingEnroll?.name ?? '',
+        })}
+        confirmLabel={t('leads.bulkEnroll.confirmButton', { defaultValue: 'Enroll' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        onConfirm={() => {
+          if (pendingEnroll && onEnroll) onEnroll(pendingEnroll.id);
+          setPendingEnroll(null);
+        }}
+      />
     </div>
   );
 }

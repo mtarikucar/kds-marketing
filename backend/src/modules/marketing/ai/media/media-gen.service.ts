@@ -10,6 +10,8 @@ import {
   ScheduledJobRunnerService, JobRescheduleDirective,
 } from '../../scheduling/scheduled-job-runner.service';
 import { R2StorageService } from '../../social-planner/r2-storage.service';
+import { GrowthWalletService } from '../../wallet/growth-wallet.service';
+import { growthAutopilotAutonomyEnabled } from '../../budget/growth-autonomy.flag';
 import {
   MediaProvider, MEDIA_PROVIDER, MediaGenResult,
 } from '../providers/media-provider.interface';
@@ -36,6 +38,12 @@ const MAX_GEN_AGE_MS = Number(process.env.MEDIA_GEN_MAX_AGE_MS ?? 60 * 60 * 1000
 // OOM or hang the single-replica scheduled-job worker.
 const DOWNLOAD_TIMEOUT_MS = Number(process.env.MEDIA_GEN_DOWNLOAD_TIMEOUT_MS ?? 60_000);
 const MAX_DOWNLOAD_BYTES = Number(process.env.MEDIA_GEN_MAX_DOWNLOAD_BYTES ?? 250 * 1024 * 1024);
+
+/** Engine context (Growth Autopilot D4): the generation belongs to a
+ *  social-campaign pipeline item — i.e. the ENGINE requested it, not a user. */
+function isEngineAsset(params: unknown): boolean {
+  return Boolean((params as { campaignItemId?: unknown } | null | undefined)?.campaignItemId);
+}
 
 /** Block SSRF to internal targets: reject loopback/private/link-local hosts. */
 function isBlockedDownloadHost(host: string): boolean {
@@ -83,6 +91,7 @@ export class MediaGenService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly r2: R2StorageService,
     private readonly runner: ScheduledJobRunnerService,
+    private readonly wallet: GrowthWalletService,
   ) {}
 
   onModuleInit(): void {
@@ -123,6 +132,12 @@ export class MediaGenService implements OnModuleInit {
     const model = dto.model ?? (dto.type === 'VIDEO' ? DEFAULT_VIDEO_MODEL : DEFAULT_IMAGE_MODEL);
     const durationSec = dto.type === 'VIDEO' ? Math.min(dto.durationSec ?? 5, MAX_VIDEO_SEC) : undefined;
     const estimate = estimateMediaCredits(model, durationSec);
+    const estimateUsd = estimateMediaUsd(model, durationSec);
+    // Growth Autopilot D4: an ENGINE generation (campaign-item linkage) under the
+    // workspace's current-period armed-AUTONOMOUS budget pre-debits the growth
+    // wallet with the USD estimate BEFORE the provider is engaged — fail-closed,
+    // so an empty wallet rejects engine work. Manual generations are untouched.
+    const engineBudget = dto.campaignItemId ? await this.resolveArmedBudget(workspaceId) : null;
 
     await this.credits.reserve(workspaceId, estimate);
 
@@ -151,12 +166,24 @@ export class MediaGenService implements OnModuleInit {
           params,
           durationSec: durationSec ?? null,
           costCreditsReserved: estimate,
-          costUsd: new Prisma.Decimal(estimateMediaUsd(model, durationSec)),
+          costUsd: new Prisma.Decimal(estimateUsd),
           socialCampaignId: dto.socialCampaignId ?? null,
           createdById: dto.createdById,
         },
         select: { id: true },
       });
+
+      if (engineBudget && estimateUsd > 0) {
+        // Fail-closed pre-debit (real cash drawdown). An insufficient wallet
+        // throws here — the catch below terminalizes the asset and refunds the
+        // credit reservation; the wallet itself was never touched (atomic).
+        await this.wallet.debit(workspaceId, {
+          amount: estimateUsd,
+          kind: 'ENGINE_SPEND',
+          ref: `mediagen:${asset.id}`,
+          note: `engine media generation ${model} (budget ${engineBudget.id})`,
+        });
+      }
 
       const { providerRequestId } = await this.provider.submit({
         type: dto.type,
@@ -189,7 +216,11 @@ export class MediaGenService implements OnModuleInit {
         // FAILED; if that update was swallowed (or the worker crashed between the
         // two), the row stayed QUEUED and the orphan sweep later reaped it and
         // refunded the SAME reservation a second time — over-crediting the meter.
-        await this.failTerminal({ id: asset.id, workspaceId }, String(e?.message ?? e).slice(0, 500), estimate);
+        // params carries the engine hint so a wallet pre-debit is refunded too.
+        await this.failTerminal(
+          { id: asset.id, workspaceId, params: { campaignItemId: dto.campaignItemId ?? null } },
+          String(e?.message ?? e).slice(0, 500), estimate,
+        );
       } else {
         // create() itself threw — the reservation exists but no asset row does,
         // so the sweep can't reap it; refund directly (no double-refund possible).
@@ -204,7 +235,7 @@ export class MediaGenService implements OnModuleInit {
   async pollGeneration(assetId: string, _workspaceId: string): Promise<void | JobRescheduleDirective> {
     const asset = await this.prisma.generatedAsset.findUnique({
       where: { id: assetId },
-      select: { status: true, model: true, providerRequestId: true, createdAt: true, workspaceId: true, costCreditsReserved: true },
+      select: { status: true, model: true, providerRequestId: true, createdAt: true, workspaceId: true, costCreditsReserved: true, params: true },
     });
     if (!asset || isTerminalAssetStatus(asset.status) || !asset.providerRequestId) return;
     // Bound the polling loop: the runner resets attempts=0 on every reschedule, so
@@ -214,7 +245,7 @@ export class MediaGenService implements OnModuleInit {
     // getResult so a throwing status endpoint is bounded too.)
     if (Date.now() - asset.createdAt.getTime() > MAX_GEN_AGE_MS) {
       await this.failTerminal(
-        { id: assetId, workspaceId: asset.workspaceId },
+        { id: assetId, workspaceId: asset.workspaceId, params: asset.params },
         'generation timed out', asset.costCreditsReserved ?? 0,
       );
       return;
@@ -272,15 +303,76 @@ export class MediaGenService implements OnModuleInit {
       where: { id: assetId, status: { notIn: TERMINAL } },
       data: { status, error: result.error ?? null },
     });
-    if (claim.count === 1) await this.credits.refund(asset.workspaceId, reserved);
+    if (claim.count === 1) {
+      await this.credits.refund(asset.workspaceId, reserved);
+      await this.refundEngineWalletDebit(asset.workspaceId, assetId, asset.params);
+    }
   }
 
-  private async failTerminal(asset: { id: string; workspaceId: string }, error: string, reserved: number): Promise<void> {
+  private async failTerminal(
+    asset: { id: string; workspaceId: string; params?: unknown },
+    error: string,
+    reserved: number,
+  ): Promise<void> {
     const claim = await this.prisma.generatedAsset.updateMany({
       where: { id: asset.id, status: { notIn: TERMINAL } },
       data: { status: 'FAILED', error },
     });
-    if (claim.count === 1) await this.credits.refund(asset.workspaceId, reserved);
+    if (claim.count === 1) {
+      await this.credits.refund(asset.workspaceId, reserved);
+      await this.refundEngineWalletDebit(asset.workspaceId, asset.id, asset.params);
+    }
+  }
+
+  /**
+   * Growth Autopilot D4: resolve the budget that makes an engine generation
+   * wallet-funded — the workspace's CURRENT-period, ACTIVE, armed-AUTONOMOUS
+   * GrowthBudget. Only consulted when the env flag is armed; manual
+   * generations never reach here.
+   */
+  private async resolveArmedBudget(workspaceId: string): Promise<{ id: string } | null> {
+    if (!growthAutopilotAutonomyEnabled()) return null;
+    return this.prisma.growthBudget.findFirst({
+      where: {
+        workspaceId,
+        periodKey: new Date().toISOString().slice(0, 7),
+        status: 'ACTIVE',
+        autonomyLevel: 'AUTONOMOUS',
+      },
+      select: { id: true },
+    });
+  }
+
+  /**
+   * Refund an engine generation's wallet pre-debit (D4). Looks up the actual
+   * debit under its deterministic ref — if the debit never landed (fail-closed
+   * rejection) there is nothing to refund, and a cross-workspace ledger row is
+   * never honored. The refund credit is itself ref-idempotent
+   * (mediagen-refund:{assetId}), so double-invocation cannot double-credit.
+   * Deliberately NOT flag-gated: a debit that was taken while armed must be
+   * refundable even after the flag is turned off.
+   */
+  private async refundEngineWalletDebit(workspaceId: string, assetId: string, params: unknown): Promise<void> {
+    if (!isEngineAsset(params)) return;
+    try {
+      const entry = await this.prisma.growthWalletLedgerEntry.findUnique({
+        where: { ref: `mediagen:${assetId}` },
+        select: { workspaceId: true, delta: true },
+      });
+      if (!entry || entry.workspaceId !== workspaceId) return;
+      const debited = new Prisma.Decimal(entry.delta).negated();
+      if (debited.lte(0)) return;
+      await this.wallet.credit(workspaceId, {
+        amount: debited,
+        kind: 'REFUND',
+        ref: `mediagen-refund:${assetId}`,
+        note: 'engine media generation refund',
+      });
+    } catch (e) {
+      // Best-effort: a refund failure must not mask the terminalization; the
+      // ledger ref stays claimable by a later retry of the same terminal path.
+      this.logger.warn(`engine wallet refund failed for asset ${assetId}: ${String((e as Error)?.message ?? e)}`);
+    }
   }
 
   private async reconcile(workspaceId: string, reserved: number, actual: number): Promise<void> {
@@ -352,11 +444,15 @@ export class MediaGenService implements OnModuleInit {
     const stuckCutoff = new Date(now - MAX_GEN_AGE_MS);
     const stuck = await this.prisma.generatedAsset.findMany({
       where: { status: { in: ['QUEUED', 'GENERATING'] }, createdAt: { lt: stuckCutoff } },
-      select: { id: true, workspaceId: true, costCreditsReserved: true },
+      // `params` must ride along (audit B5): failTerminal needs it to see the
+      // engine marker and refund the real-cash ENGINE_SPEND wallet pre-debit —
+      // without it the reap kept the customer's money on every abandoned
+      // engine generation.
+      select: { id: true, workspaceId: true, costCreditsReserved: true, params: true },
     });
     for (const s of stuck) {
       await this.failTerminal(
-        { id: s.id, workspaceId: s.workspaceId },
+        { id: s.id, workspaceId: s.workspaceId, params: s.params },
         'generation abandoned (timeout sweep)', s.costCreditsReserved ?? 0,
       );
     }
@@ -422,7 +518,10 @@ export class MediaGenService implements OnModuleInit {
         where: { id, status: { notIn: TERMINAL } },
         data: { status: 'FAILED', error: 'deleted by user' },
       });
-      if (claim.count === 1) await this.credits.refund(workspaceId, a.costCreditsReserved ?? 0);
+      if (claim.count === 1) {
+        await this.credits.refund(workspaceId, a.costCreditsReserved ?? 0);
+        await this.refundEngineWalletDebit(workspaceId, id, (a as { params?: unknown }).params);
+      }
     }
     await this.r2.deleteKeys([a.r2Key, a.thumbnailR2Key].filter(Boolean) as string[]);
     await this.prisma.generatedAsset.delete({ where: { id } });

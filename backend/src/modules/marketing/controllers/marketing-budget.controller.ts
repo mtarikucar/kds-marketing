@@ -23,6 +23,10 @@ import { Audit } from '../../audit/audit.decorator';
 import { BudgetManagementService } from '../budget/budget-management.service';
 import { BudgetAutopilotService } from '../budget/budget-autopilot.service';
 import { BudgetExecutorService } from '../budget/budget-executor.service';
+import { BudgetQuickstartService } from '../budget/budget-quickstart.service';
+import { BudgetActivityService } from '../budget/budget-activity.service';
+import { GrowthWalletService } from '../wallet/growth-wallet.service';
+import { AUTONOMY_LEVELS } from '../budget/growth-autonomy.flag';
 
 const CHANNELS = ['META', 'TIKTOK', 'GOOGLE', 'LINKEDIN', 'CONTENT', 'SMS', 'VOICE', 'WHATSAPP'];
 
@@ -39,6 +43,17 @@ class UpsertBudgetDto {
 
 class KillSwitchDto {
   @IsBoolean() on: boolean;
+}
+
+class QuickStartDto {
+  @IsOptional() @IsNumber() @Min(1) amount?: number;
+  @IsOptional() @IsNumber() @Min(0) targetRoas?: number;
+  @IsOptional() @IsNumber() @Min(0) targetCac?: number;
+  @IsOptional() @IsBoolean() arm?: boolean;
+}
+
+class AutonomyDto {
+  @IsIn(AUTONOMY_LEVELS as unknown as string[]) level: string;
 }
 
 class StatusDto {
@@ -65,7 +80,28 @@ export class MarketingBudgetController {
     private readonly budgets: BudgetManagementService,
     private readonly autopilot: BudgetAutopilotService,
     private readonly executor: BudgetExecutorService,
+    private readonly quickstart: BudgetQuickstartService,
+    private readonly activityFeed: BudgetActivityService,
+    private readonly wallet: GrowthWalletService,
   ) {}
+
+  /** Growth-credit wallet snapshot (balance + currency). */
+  @Get('wallet')
+  @RequirePermission('reports.read')
+  walletState(@CurrentMarketingUser() a: MarketingUserPayload) {
+    return this.wallet.get(a.workspaceId);
+  }
+
+  // One-click Autopilot provisioning (spec D12): wallet + current-period
+  // budget + connected-channel allocations (+ optional AUTONOMOUS arming,
+  // env-flag-gated) in a single audited call.
+  @Post('quick-start')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'growth_budget.quick_start', resourceType: 'growth_budget', captureBody: ['amount', 'arm'] })
+  quickStart(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: QuickStartDto) {
+    return this.quickstart.quickStart(a.workspaceId, dto);
+  }
 
   @Get()
   @RequirePermission('reports.read')
@@ -123,6 +159,23 @@ export class MarketingBudgetController {
   @RequirePermission('reports.read')
   runs(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.budgets.listRuns(a.workspaceId, id);
+  }
+
+  /** Activity Log (spec D14) — the autonomous lane's trust surface. */
+  @Get(':id/activity')
+  @RequirePermission('reports.read')
+  activity(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.activityFeed.activity(a.workspaceId, id);
+  }
+
+  // Arm/disarm the autonomy lane (spec D6). Arming AUTONOMOUS additionally
+  // requires the platform env flag — enforced in the service.
+  @Patch(':id/autonomy')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'growth_budget.autonomy', resourceType: 'growth_budget', resourceIdParam: 'id', captureBody: ['level'] })
+  autonomy(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: AutonomyDto) {
+    return this.budgets.setAutonomyLevel(a.workspaceId, id, dto.level);
   }
 
   // Apply an APPROVED budget reallocation: commit it to the internal plan and

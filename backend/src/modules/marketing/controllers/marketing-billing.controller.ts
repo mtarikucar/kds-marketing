@@ -8,7 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
   EntitlementsService,
@@ -47,6 +47,19 @@ export class SetModulesDto {
   @IsArray()
   @IsString({ each: true })
   activatedModules: string[];
+}
+
+export class WalletTopupDto {
+  @IsNumber()
+  @Min(1)
+  @Max(1_000_000)
+  amount: number;
+
+  @IsIn(['paytr', 'stripe', 'manual'])
+  provider: 'paytr' | 'stripe' | 'manual';
+
+  @IsOptional() @IsIn(['TRY', 'USD'])
+  currency?: string;
 }
 
 /**
@@ -125,6 +138,21 @@ export class MarketingBillingController {
     @Req() req: Request,
   ) {
     return this.billing.checkout(actor.workspaceId, dto, {
+      buyerEmail: actor.email,
+      buyerIp: getClientIp(req) ?? '127.0.0.1',
+    });
+  }
+
+  /** Growth-wallet top-up (spec D2) — same money guards as checkout. */
+  @Post('wallet-topup')
+  @MarketingRoles('OWNER')
+  @RequirePermission('billing.manage')
+  walletTopup(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: WalletTopupDto,
+    @Req() req: Request,
+  ) {
+    return this.billing.walletTopup(actor.workspaceId, dto, {
       buyerEmail: actor.email,
       buyerIp: getClientIp(req) ?? '127.0.0.1',
     });
