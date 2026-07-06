@@ -12,9 +12,6 @@ import { Badge } from '@/components/ui/Badge';
 import { Callout } from '@/components/ui/Callout';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
-import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
-} from '@/components/ui/Select';
 import { SocialCampaignCalendar } from './SocialCampaignCalendar';
 import { ApprovalQueue } from './ApprovalQueue';
 import { CampaignStatusHero } from './CampaignStatusHero';
@@ -26,14 +23,8 @@ import {
   listSocialCampaignItems,
   reviewSocialCampaignItem,
   setCampaignLifecycle,
-  updateSocialCampaign,
   type SocialCampaignStatus,
-  type SocialCampaignAutomationMode,
-  type SocialCampaignPlanningMode,
 } from '../../../features/marketing/api/socialCampaigns.service';
-
-const AUTOMATION_MODES: SocialCampaignAutomationMode[] = ['APPROVAL', 'SEMI_AUTO', 'FULL_AUTO'];
-const PLANNING_MODES: SocialCampaignPlanningMode[] = ['AI_PROPOSE', 'AI_FULL', 'USER_TOPICS'];
 
 const STATUS_TONE = {
   DRAFT: 'neutral',
@@ -99,17 +90,6 @@ export default function SocialCampaignDetailPage() {
     onError: () => toast.error(t('socialCampaign.planConfirmFailed', 'Action failed')),
   });
 
-  // Retune automation/planning modes AFTER creation. The backend allows a
-  // mode-only PATCH while DRAFT/ACTIVE/PAUSED (rejecting completed/cancelled and
-  // mid-generation) — surface its BadRequest message verbatim on error.
-  const modes = useMutation({
-    mutationFn: (payload: { automationMode?: SocialCampaignAutomationMode; planningMode?: SocialCampaignPlanningMode }) =>
-      updateSocialCampaign(id, payload),
-    onSuccess: () => { invalidate(); toast.success(t('socialCampaign.modesUpdated', 'Modes updated')); },
-    onError: (err: any) =>
-      toast.error(err?.response?.data?.message || t('socialCampaign.modesUpdateFailed', 'Could not update modes')),
-  });
-
   if (campaignQuery.isLoading || !campaignQuery.data) return <Spinner />;
   const c = campaignQuery.data;
   const items = itemsQuery.data ?? [];
@@ -173,51 +153,19 @@ export default function SocialCampaignDetailPage() {
 
           <PipelineStats state={state} />
 
-          {/* Modes: automation + planning are editable after creation (mode-only PATCH). */}
-          {c.status !== 'COMPLETED' && c.status !== 'CANCELLED' && (
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <h3 className="text-sm font-medium">{t('socialCampaign.modesTitle', 'Modes')}</h3>
-              <p className="mt-0.5 text-caption text-muted-foreground">
-                {t('socialCampaign.modesHint', 'Change how future posts are handled. Pause the campaign if a post is mid-generation.')}
-              </p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1">
-                  <span className="text-caption font-medium text-muted-foreground">{t('socialCampaign.f.automation', 'Automation')}</span>
-                  <Select
-                    value={c.automationMode}
-                    disabled={modes.isPending}
-                    onValueChange={(v) => modes.mutate({ automationMode: v as SocialCampaignAutomationMode })}
-                  >
-                    <SelectTrigger aria-label={t('socialCampaign.f.automation', 'Automation')}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {AUTOMATION_MODES.map((m) => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-caption font-medium text-muted-foreground">{t('socialCampaign.f.planning', 'Planning')}</span>
-                  <Select
-                    value={c.planningMode}
-                    disabled={modes.isPending}
-                    onValueChange={(v) => modes.mutate({ planningMode: v as SocialCampaignPlanningMode })}
-                  >
-                    <SelectTrigger aria-label={t('socialCampaign.f.planning', 'Planning')}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PLANNING_MODES.map((m) => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </label>
-              </div>
+          {/* Modes are READ-ONLY (2026-07): the Growth Autopilot's one switch
+              drives how automatic a campaign is — there is no per-campaign mode
+              editing anymore. Engine-provisioned campaigns run FULL_AUTO. */}
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <h3 className="text-sm font-medium">{t('socialCampaign.modesTitle', 'Modes')}</h3>
+            <p className="mt-0.5 text-caption text-muted-foreground">
+              {t('socialCampaign.modesReadonlyHint', 'How automatic this campaign is — set by the Growth Autopilot.')}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge tone="neutral">{t('socialCampaign.f.automation', 'Automation')}: {c.automationMode}</Badge>
+              <Badge tone="neutral">{t('socialCampaign.f.planning', 'Planning')}: {c.planningMode}</Badge>
             </div>
-          )}
+          </div>
 
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList>

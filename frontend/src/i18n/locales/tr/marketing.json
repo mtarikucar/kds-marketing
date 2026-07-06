@@ -2513,7 +2513,9 @@
     "modesUpdated": "Modlar güncellendi",
     "modesUpdateFailed": "Modlar güncellenemedi",
     "modesTitle": "Modlar",
-    "modesHint": "Sonraki gönderilerin nasıl işleneceğini değiştir. Bir gönderi üretim aşamasındaysa kampanyayı duraklat."
+    "modesHint": "Sonraki gönderilerin nasıl işleneceğini değiştir. Bir gönderi üretim aşamasındaysa kampanyayı duraklat.",
+    "subtitleAuto": "Autopilot senin için yürüttüğü AI içerik kampanyaları",
+    "modesReadonlyHint": "Bu kampanyanın ne kadar otomatik olduğu — Growth Autopilot belirler."
   },
   "landing": {
     "a11y": {
@@ -3211,6 +3213,10 @@
       "failed": "Başarısız",
       "spend": "Motor harcaması",
       "spendCredit": "Harcama iade edildi"
+    },
+    "wizard": {
+      "manifestContent": "Otonom içerik artık çalışıyor",
+      "manifestContentCount": "{{n}} kampanya"
     }
   },
   "studio": {

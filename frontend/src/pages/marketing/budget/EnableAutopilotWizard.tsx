@@ -307,6 +307,17 @@ function ManifestScreen({ manifest, onClose }: { manifest: QuickStartManifest; o
             ))}
           </ul>
         </div>
+        {manifest.contentCampaign && manifest.contentCampaign.count > 0 && (
+          <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" aria-hidden="true" />
+              {t('autopilot.wizard.manifestContent', 'Autonomous content is now running')}
+            </span>
+            <Badge tone="success">
+              {t('autopilot.wizard.manifestContentCount', '{{n}} campaign(s)', { n: manifest.contentCampaign.count })}
+            </Badge>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground">
           {t('autopilot.honesty', 'Ad spend is billed by Meta/TikTok on your connected ad account; your credit governs how much the engine commits.')}
         </p>
