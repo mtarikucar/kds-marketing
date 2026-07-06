@@ -1393,6 +1393,10 @@ model VideoPersona {
 /// budget analysis for the week (`budgetBreakdown`: ad-spend / content-gen /
 /// conversations vs the weekly slice of the monthly growth budget). One plan per
 /// (workspace, week). Items are DRAFTs until the user approves them.
+/// DEPRECATED (2026-07 system trim): the WeeklyPlan feature was removed — its
+/// Approve button never scheduled or published anything (dead-end). The weekly
+/// CTA now provisions a real one-week SocialCampaign. Table + data retained;
+/// drop in a later cleanup once zero production usage is confirmed.
 model WeeklyPlan {
   id              String           @id @default(uuid())
   workspaceId     String
@@ -1412,6 +1416,10 @@ model WeeklyPlan {
 /// One draft piece of a WeeklyPlan — a social post, content idea, campaign, or
 /// trend remix on a given day, with its estimated cost. Approved items flow into
 /// scheduled content; `refId` links the materialized post once scheduled.
+/// DEPRECATED (2026-07 system trim): the WeeklyPlan feature was removed — its
+/// Approve button never scheduled or published anything (dead-end). The weekly
+/// CTA now provisions a real one-week SocialCampaign. Table + data retained;
+/// drop in a later cleanup once zero production usage is confirmed.
 model WeeklyPlanItem {
   id          String     @id @default(uuid())
   workspaceId String

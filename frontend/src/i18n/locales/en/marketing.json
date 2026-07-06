@@ -2537,5 +2537,10 @@
       "calls": "Calls",
       "dialer": "Power Dialer"
     }
+  },
+  "weekly": {
+    "campaignName": "Weekly plan — {{date}}",
+    "provisioned": "Your week is being planned — review and approve each draft here.",
+    "error": "Could not generate a plan"
   }
 }

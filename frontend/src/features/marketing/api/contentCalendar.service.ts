@@ -1,7 +1,7 @@
 /** contentCalendar.service.ts — unified content calendar (Faz 4). */
 import marketingApi from './marketingApi';
 
-export type CalendarItemType = 'SOCIAL_POST' | 'CAMPAIGN_ITEM' | 'WEEKLY_PLAN';
+export type CalendarItemType = 'SOCIAL_POST' | 'CAMPAIGN_ITEM';
 
 export interface CalendarItem {
   type: CalendarItemType;
