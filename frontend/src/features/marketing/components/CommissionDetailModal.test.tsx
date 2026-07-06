@@ -63,7 +63,7 @@ describe('CommissionDetailModal — amount editor reset', () => {
 
     await screen.findByText(formatMoney(100, 'TRY'));
     // Open the inline editor for cA and type a new amount.
-    await user.click(screen.getByText('Tutarı düzelt'));
+    await user.click(screen.getByText('Adjust amount'));
     const input = screen.getByRole('spinbutton') as HTMLInputElement;
     await user.clear(input);
     await user.type(input, '500');
@@ -75,7 +75,7 @@ describe('CommissionDetailModal — amount editor reset', () => {
     // The editor must be closed (no stale 500 input carried from cA).
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
     // And the edit affordance is offered fresh for cB.
-    expect(screen.getByText('Tutarı düzelt')).toBeInTheDocument();
+    expect(screen.getByText('Adjust amount')).toBeInTheDocument();
   });
 
   // The modal has no per-row currency, so it must format amounts in the workspace

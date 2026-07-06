@@ -330,7 +330,7 @@ export function PostComposerDialog({
                         onClick={() => setAiOpen(true)}
                       >
                         <Sparkles className="h-4 w-4" aria-hidden="true" />
-                        {t('social.composer.aiGenerate', { defaultValue: 'AI ile Üret' })}
+                        {t('social.composer.aiGenerate', { defaultValue: 'Generate with AI' })}
                       </Button>
                     </div>
                   </div>

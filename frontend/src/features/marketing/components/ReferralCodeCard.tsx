@@ -66,7 +66,7 @@ export default function ReferralCodeCard() {
       setCopyHint(hint);
       setTimeout(() => setCopyHint(null), 1500);
     } catch {
-      toast.error(t('referral.copyFailed', 'Panoya kopyalanamadı'));
+      toast.error(t('referral.copyFailed', 'Could not copy to clipboard'));
     }
   };
 
@@ -83,7 +83,7 @@ export default function ReferralCodeCard() {
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
         {t(
           'referral.noCode',
-          'Henüz bir referans kodunuz yok. Yöneticinizden bir kod tahsis etmesini isteyin.',
+          "You don't have a referral code yet. Ask your manager to allocate one.",
         )}
       </div>
     );
@@ -98,7 +98,7 @@ export default function ReferralCodeCard() {
           <div className="flex items-center gap-2 text-sm text-primary">
             <Tag className="w-4 h-4" />
             <span className="font-medium">
-              {t('referral.yourCode', 'Sizin referans kodunuz')}
+              {t('referral.yourCode', 'Your referral code')}
             </span>
           </div>
           <div className="mt-2 flex items-center gap-3">
@@ -113,8 +113,8 @@ export default function ReferralCodeCard() {
             >
               <Copy className="w-3.5 h-3.5" />
               {copyHint === 'code'
-                ? t('referral.copied', 'Kopyalandı')
-                : t('referral.copyCode', 'Kodu kopyala')}
+                ? t('referral.copied', 'Copied')
+                : t('referral.copyCode', 'Copy code')}
             </button>
             {shareLink && (
               <button
@@ -125,8 +125,8 @@ export default function ReferralCodeCard() {
               >
                 <LinkIcon className="w-3.5 h-3.5" />
                 {copyHint === 'link'
-                  ? t('referral.copied', 'Kopyalandı')
-                  : t('referral.copyLink', 'Linki kopyala')}
+                  ? t('referral.copied', 'Copied')
+                  : t('referral.copyLink', 'Copy link')}
               </button>
             )}
           </div>
@@ -136,7 +136,7 @@ export default function ReferralCodeCard() {
           <p className="mt-2 text-xs text-muted-foreground">
             {t(
               'referral.hint',
-              'Bu link/kod ile yapılan abonelik satışlarından komisyon kazanırsınız (ilk satış + yenilemeler + yükseltmeler).',
+              'You earn commission on subscription sales made with this link/code (first sale + renewals + upgrades).',
             )}
           </p>
         </div>
@@ -147,7 +147,7 @@ export default function ReferralCodeCard() {
               {data?.referralLeadCount ?? 0}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {t('referral.statsLeads', 'Toplam Lead')}
+              {t('referral.statsLeads', 'Total leads')}
             </div>
           </div>
           <div className="rounded-lg bg-surface border border-primary/20 px-4 py-3 text-center">
@@ -155,7 +155,7 @@ export default function ReferralCodeCard() {
               {data?.referralWonCount ?? 0}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {t('referral.statsWon', 'Kazanılan')}
+              {t('referral.statsWon', 'Won')}
             </div>
           </div>
           <div className="rounded-lg bg-surface border border-primary/20 px-4 py-3 text-center">
@@ -163,7 +163,7 @@ export default function ReferralCodeCard() {
               ₺{amount.toFixed(2)}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {t('referral.statsCommission', 'Toplam Komisyon')}
+              {t('referral.statsCommission', 'Total commission')}
             </div>
           </div>
         </div>

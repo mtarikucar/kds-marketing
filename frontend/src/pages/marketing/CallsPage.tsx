@@ -316,7 +316,7 @@ function CallsTab() {
                       <TD colSpan={colCount} className="bg-surface-muted/40">
                         <div className="px-2">
                           <p className="text-caption font-medium text-foreground">
-                            {t('callAnalysis.title', 'Görüşme analizi')}
+                            {t('callAnalysis.title', 'Call analysis')}
                           </p>
                           <CallAnalysisPanel
                             callId={c.id}

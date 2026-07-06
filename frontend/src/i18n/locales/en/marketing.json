@@ -2053,7 +2053,7 @@
       "create": "Create post",
       "schedule": "Schedule (optional)",
       "scheduleHint": "Leave empty to keep as draft; the post publishes at this time when set.",
-      "aiGenerate": "AI ile Üret",
+      "aiGenerate": "Generate with AI",
       "aiAdded": "Added to post",
       "aiFailed": "Generation failed",
       "aiTimeout": "Still generating — check the Studio",

@@ -125,12 +125,12 @@ export default function MarketingDashboardPage() {
                   onSelect={() => downloadFile(managerGuideUrl, 'Yonetici-Rehberi.pdf')}
                 >
                   <Download className="me-2 h-4 w-4" />
-                  {t('dashboard.downloadManagerGuide', 'Yönetici Rehberini İndir (PDF)')}
+                  {t('dashboard.downloadManagerGuide', 'Download Manager Guide (PDF)')}
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onSelect={() => downloadFile(guideUrl, 'Pazarlamaci-Rehberi.pdf')}>
                 <Download className="me-2 h-4 w-4" />
-                {t('dashboard.downloadGuide', 'Pazarlamacı Rehberini İndir (PDF)')}
+                {t('dashboard.downloadGuide', 'Download Marketer Guide (PDF)')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

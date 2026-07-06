@@ -47,27 +47,27 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
     mutationFn: () => runCallAnalysis(callId),
     onSuccess: (res) => {
       if (res.status === 'OK') {
-        toast.success(t('callAnalysis.runOk', 'Analiz tamamlandı'));
+        toast.success(t('callAnalysis.runOk', 'Analysis complete'));
         qc.invalidateQueries({ queryKey });
       } else if (res.status === 'SKIPPED') {
-        toast.message(t('callAnalysis.runSkipped', 'Analiz zaten mevcut'));
+        toast.message(t('callAnalysis.runSkipped', 'Analysis already exists'));
         qc.invalidateQueries({ queryKey });
       } else {
         toast.error(
           res.reason
-            ? `${t('callAnalysis.runFailed', 'Analiz başarısız')}: ${res.reason}`
-            : t('callAnalysis.runFailed', 'Analiz başarısız'),
+            ? `${t('callAnalysis.runFailed', 'Analysis failed')}: ${res.reason}`
+            : t('callAnalysis.runFailed', 'Analysis failed'),
         );
       }
     },
     onError: (e: any) =>
-      toast.error(e?.response?.data?.message ?? t('callAnalysis.runFailed', 'Analiz başarısız')),
+      toast.error(e?.response?.data?.message ?? t('callAnalysis.runFailed', 'Analysis failed')),
   });
 
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 py-2 text-caption text-muted-foreground">
-        <Spinner className="h-4 w-4" /> {t('common.loading', 'Yükleniyor…')}
+        <Spinner className="h-4 w-4" /> {t('common.loading', 'Loading…')}
       </div>
     );
   }
@@ -78,7 +78,7 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
       return (
         <p className="inline-flex items-center gap-1.5 py-2 text-caption text-muted-foreground">
           <AlarmClock className="h-3.5 w-3.5" aria-hidden="true" />
-          {t('callAnalysis.recordingRequired', 'Analiz için görüşme kaydı gerekiyor')}
+          {t('callAnalysis.recordingRequired', 'A call recording is required to analyse')}
         </p>
       );
     }
@@ -91,7 +91,7 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
           loading={run.isPending}
         >
           <Sparkles className="h-4 w-4" aria-hidden="true" />
-          {t('callAnalysis.analyse', 'Analiz et')}
+          {t('callAnalysis.analyse', 'Analyse')}
         </Button>
       </div>
     );
@@ -110,7 +110,7 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
         )}
         {a.score != null && (
           <Badge tone="primary">
-            {t('callAnalysis.score', 'Skor')}: {a.score}/100
+            {t('callAnalysis.score', 'Score')}: {a.score}/100
           </Badge>
         )}
         {a.sttProvider && (
@@ -122,7 +122,7 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
       {a.summary && (
         <div>
           <p className="text-caption font-medium text-foreground">
-            {t('callAnalysis.summary', 'Özet')}
+            {t('callAnalysis.summary', 'Summary')}
           </p>
           <p className="text-sm text-muted-foreground whitespace-pre-line">{a.summary}</p>
         </div>
@@ -132,7 +132,7 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
       {a.actionItems && a.actionItems.length > 0 && (
         <div>
           <p className="text-caption font-medium text-foreground">
-            {t('callAnalysis.actionItems', 'Aksiyon maddeleri')}
+            {t('callAnalysis.actionItems', 'Action items')}
           </p>
           <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
             {a.actionItems.map((item, i) => (
@@ -146,7 +146,7 @@ export default function CallAnalysisPanel({ callId, hasRecording }: CallAnalysis
       {a.topics && a.topics.length > 0 && (
         <div>
           <p className="text-caption font-medium text-foreground">
-            {t('callAnalysis.topics', 'Konular')}
+            {t('callAnalysis.topics', 'Topics')}
           </p>
           <div className="mt-1 flex flex-wrap gap-1.5">
             {a.topics.map((topic, i) => (

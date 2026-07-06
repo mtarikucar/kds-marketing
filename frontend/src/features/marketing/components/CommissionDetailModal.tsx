@@ -148,10 +148,10 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
       marketingApi.patch(`/commissions/${commissionId}/approve`),
     onSuccess: () => {
       invalidate();
-      toast.success(t('commission.approved', 'Onaylandı'));
+      toast.success(t('commission.approved', 'Approved'));
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? t('commission.approveFailed', 'Onay başarısız'));
+      toast.error(err?.response?.data?.message ?? t('commission.approveFailed', 'Approval failed'));
     },
   });
 
@@ -159,10 +159,10 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
     mutationFn: () => marketingApi.patch(`/commissions/${commissionId}/pay`),
     onSuccess: () => {
       invalidate();
-      toast.success(t('commission.paid', 'Ödendi olarak işaretlendi'));
+      toast.success(t('commission.paid', 'Marked as paid'));
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? t('commission.payFailed', 'Ödeme işaretlenemedi'));
+      toast.error(err?.response?.data?.message ?? t('commission.payFailed', 'Could not mark paid'));
     },
   });
 
@@ -172,10 +172,10 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
     onSuccess: () => {
       invalidate();
       setEditingAmount(false);
-      toast.success(t('commission.amountUpdated', 'Tutar güncellendi'));
+      toast.success(t('commission.amountUpdated', 'Amount updated'));
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? t('commission.amountUpdateFailed', 'Tutar güncellenemedi'));
+      toast.error(err?.response?.data?.message ?? t('commission.amountUpdateFailed', 'Amount update failed'));
     },
   });
 
@@ -193,7 +193,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
         {/* Header */}
         <DialogHeader className="px-6 py-4 border-b border-border">
           <DialogTitle>
-            {t('commission.detailTitle', 'Komisyon detayı')}
+            {t('commission.detailTitle', 'Commission detail')}
           </DialogTitle>
           <DialogDescription className="sr-only">
             {t('commission.detailDescription', 'Commission details and payment information')}
@@ -232,7 +232,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                     className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <Pencil className="w-3.5 h-3.5" />
-                    {t('commission.editAmount', 'Tutarı düzelt')}
+                    {t('commission.editAmount', 'Adjust amount')}
                   </button>
                 )}
               </div>
@@ -253,21 +253,21 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                     onClick={() => {
                       const n = Number(draftAmount);
                       if (!Number.isFinite(n) || n < 0) {
-                        toast.error(t('commission.amountInvalid', 'Geçersiz tutar'));
+                        toast.error(t('commission.amountInvalid', 'Invalid amount'));
                         return;
                       }
                       updateAmount.mutate(n);
                     }}
                     loading={updateAmount.isPending}
                   >
-                    {t('common.save', 'Kaydet')}
+                    {t('common.save', 'Save')}
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => setEditingAmount(false)}
                   >
-                    {t('common.cancel', 'Vazgeç')}
+                    {t('common.cancel', 'Cancel')}
                   </Button>
                 </div>
               )}
@@ -276,7 +276,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
               <dl className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 text-sm">
                 <div>
                   <dt className="text-muted-foreground">
-                    {t('commission.fields.customer', 'Müşteri')}
+                    {t('commission.fields.customer', 'Customer')}
                   </dt>
                   <dd className="mt-0.5 font-medium text-foreground">
                     {data.tenant?.name ?? '—'}
@@ -302,13 +302,13 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                 </div>
                 <div>
                   <dt className="text-muted-foreground">
-                    {t('commission.fields.period', 'Periyot')}
+                    {t('commission.fields.period', 'Period')}
                   </dt>
                   <dd className="mt-0.5 font-medium text-foreground">{data.period}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">
-                    {t('commission.fields.calculation', 'Hesaplama')}
+                    {t('commission.fields.calculation', 'Calculation')}
                   </dt>
                   <dd className="mt-0.5 font-mono text-xs text-foreground">
                     {paidAmount != null && commissionRate != null ? (
@@ -318,14 +318,14 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                       </>
                     ) : (
                       <span className="text-muted-foreground">
-                        {t('commission.fields.calcUnavailable', 'Plan ilişkilendirilemedi')}
+                        {t('commission.fields.calcUnavailable', 'Plan could not be resolved')}
                       </span>
                     )}
                   </dd>
                 </div>
                 <div className="sm:col-span-2">
                   <dt className="text-muted-foreground">
-                    {t('commission.fields.lead', 'Bağlı Lead')}
+                    {t('commission.fields.lead', 'Linked lead')}
                   </dt>
                   <dd className="mt-0.5 text-sm text-foreground">
                     {data.lead ? (
@@ -344,7 +344,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                       </span>
                     ) : (
                       <span className="text-muted-foreground">
-                        {t('commission.fields.noLead', 'Lead bağlantısı yok')}
+                        {t('commission.fields.noLead', 'No linked lead')}
                       </span>
                     )}
                   </dd>
@@ -352,7 +352,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                 {data.notes && (
                   <div className="sm:col-span-2">
                     <dt className="text-muted-foreground">
-                      {t('commission.fields.notes', 'Notlar')}
+                      {t('commission.fields.notes', 'Notes')}
                     </dt>
                     <dd className="mt-0.5 text-sm text-foreground">{data.notes}</dd>
                   </div>
@@ -362,11 +362,11 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
               {/* Audit timeline */}
               <section className="mt-6">
                 <h3 className="text-sm font-semibold text-foreground mb-3">
-                  {t('commission.auditLog', 'Geçmiş')}
+                  {t('commission.auditLog', 'History')}
                 </h3>
                 <ol className="relative border-s border-border ps-5 space-y-3">
                   <AuditEntry
-                    label={t('commission.history.created', 'Komisyon oluşturuldu')}
+                    label={t('commission.history.created', 'Commission created')}
                     at={data.createdAt}
                   />
                   {(data.auditLog ?? []).map((entry, idx) => (
@@ -400,7 +400,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                 loading={approve.isPending}
               >
                 <CheckCircle2 className="h-4 w-4" />
-                {t('commission.approve', 'Onayla')}
+                {t('commission.approve', 'Approve')}
               </Button>
             )}
             {data.status === 'APPROVED' && (
@@ -409,7 +409,7 @@ export default function CommissionDetailModal({ commissionId, onClose, currency 
                 loading={markPaid.isPending}
               >
                 <DollarSign className="h-4 w-4" />
-                {t('commission.markPaid', 'Ödendi işaretle')}
+                {t('commission.markPaid', 'Mark paid')}
               </Button>
             )}
           </DialogFooter>
@@ -456,14 +456,14 @@ function describeAuditEntry(
   currency: WorkspaceCurrency,
 ): string {
   if (entry.action === 'approve') {
-    return t('commission.history.approved', 'Onaylandı');
+    return t('commission.history.approved', 'Approved');
   }
   if (entry.action === 'pay') {
-    return t('commission.history.paid', 'Ödendi olarak işaretlendi');
+    return t('commission.history.paid', 'Marked paid');
   }
   if (entry.action === 'amount') {
     const fmt = (v?: string) => (v == null ? '?' : formatMoney(v, currency));
-    return `${t('commission.history.amount', 'Tutar değiştirildi')} (${fmt(entry.prevAmount)} → ${fmt(entry.nextAmount)})`;
+    return `${t('commission.history.amount', 'Amount changed')} (${fmt(entry.prevAmount)} → ${fmt(entry.nextAmount)})`;
   }
   return entry.action;
 }
