@@ -3,7 +3,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { PageHeader, Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui';
+import {
+  PageHeader,
+  Tabs,
+  TabsContent,
+  Button,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui';
+import { Settings, ArrowLeft } from 'lucide-react';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { API_URL } from '../../../lib/env';
@@ -260,18 +270,46 @@ export default function InboxPage() {
       <PageHeader
         title={t('inbox.title')}
         description={t('inbox.subtitle')}
+        actions={
+          // 2026-07 trim: the 4 one-time config surfaces no longer sit as
+          // always-visible tabs on the daily messaging page — they live behind
+          // ONE gear menu (deep links via ?tab= keep resolving unchanged).
+          isManager ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Settings className="h-4 w-4" aria-hidden="true" />
+                  {t('inbox.settings', 'Inbox settings')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setTab('channels')}>
+                  {t('inbox.tab.channels', 'Channels')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTab('snippets')}>
+                  {t('inbox.tab.snippets', 'Canned Responses')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTab('agents')}>
+                  {t('inbox.tab.agents', 'AI Agents')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTab('knowledge')}>
+                  {t('inbox.tab.knowledge', 'Knowledge')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : undefined
+        }
       />
 
       <Tabs value={tab} onValueChange={setTab} className="flex-1 min-h-0 flex flex-col">
-        {/* The config tabs are manager-only; reps get the plain inbox (no bar). */}
-        {isManager && (
-          <TabsList className="shrink-0">
-            <TabsTrigger value="inbox">{t('inbox.tab.inbox', 'Inbox')}</TabsTrigger>
-            <TabsTrigger value="channels">{t('inbox.tab.channels', 'Channels')}</TabsTrigger>
-            <TabsTrigger value="snippets">{t('inbox.tab.snippets', 'Canned Responses')}</TabsTrigger>
-            <TabsTrigger value="agents">{t('inbox.tab.agents', 'AI Agents')}</TabsTrigger>
-            <TabsTrigger value="knowledge">{t('inbox.tab.knowledge', 'Knowledge')}</TabsTrigger>
-          </TabsList>
+        {/* On a config surface, one compact affordance leads back to the inbox. */}
+        {isManager && tab !== 'inbox' && (
+          <div className="shrink-0">
+            <Button variant="ghost" size="sm" onClick={() => setTab('inbox')}>
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              {t('inbox.backToInbox', 'Back to inbox')}
+            </Button>
+          </div>
         )}
 
         {/* Inbox — the pre-existing 3-pane layout, byte-for-byte. Its state,
@@ -279,7 +317,7 @@ export default function InboxPage() {
             real-time behavior is identical whether or not the bar is shown. */}
         <TabsContent
           value="inbox"
-          className={`flex-1 min-h-0 flex gap-0 sm:gap-4 ${isManager ? 'mt-4' : 'mt-0'}`}
+          className="flex-1 min-h-0 flex gap-0 sm:gap-4 mt-0"
         >
           {/* Pane 1 — conversation list (full-width on phone until one is opened) */}
           <div className={selectedId ? 'hidden sm:flex' : 'flex w-full sm:w-auto'}>
