@@ -27,6 +27,8 @@ describe('entitlements — feature-key drift tripwire', () => {
       'installations',
       'invoicing',
       'mediaGen',
+      'memberships',
+      'research',
       'reviews',
       'socialCampaigns',
       'telephony',
