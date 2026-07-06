@@ -2508,6 +2508,14 @@
     "wizard": {
       "manifestContent": "Autonomous content is now running",
       "manifestContentCount": "{{n}} campaign(s)"
+    },
+    "contentAutoOnToast": "Content auto-publishes now — no review queue.",
+    "contentAutoOffToast": "Content will be shown before it posts (auto-publishes unless you reject it).",
+    "contentAutoError": "Could not change the content setting",
+    "contentAuto": {
+      "title": "Auto-publish content",
+      "onDesc": "The engine posts to your accounts with no review — pure hands-off.",
+      "offDesc": "Each post is shown in Approvals first and auto-publishes unless you reject it — posting can’t be undone."
     }
   },
   "studio": {

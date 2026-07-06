@@ -14,6 +14,12 @@ export interface QuickStartInput {
   arm?: boolean;
   /** The acting user — required to provision engine-owned content campaigns. */
   createdById?: string;
+  /**
+   * Content-arm safety. false (default) = engine content is SEMI_AUTO (posts
+   * surface in the approval queue and auto-publish unless rejected — "show
+   * before posting"). true = FULL_AUTO, pure never-ask.
+   */
+  contentAutoPublish?: boolean;
 }
 
 /** What the content arm set up (autonomous social campaigns), or null if it didn't run. */
@@ -86,6 +92,7 @@ export class BudgetQuickstartService {
       status: 'ACTIVE',
       killSwitch: false,
       autonomyLevel,
+      contentAutoPublish: Boolean(input.contentAutoPublish),
       targetRoas: input.targetRoas != null ? new Prisma.Decimal(input.targetRoas) : null,
       targetCac: input.targetCac != null ? new Prisma.Decimal(input.targetCac) : null,
     };
@@ -118,7 +125,7 @@ export class BudgetQuickstartService {
       budget.id,
       armed,
       input.createdById,
-      { goal: input.targetRoas, now, currency: wallet.currency },
+      { goal: input.targetRoas, now, currency: wallet.currency, autoPublish: Boolean(input.contentAutoPublish) },
     );
 
     this.logger.log(`quick-start provisioned budget ${budget.id} (${periodKey}, ${channels.join(',')}, ${autonomyLevel}) for ${workspaceId}`);
@@ -154,7 +161,7 @@ export class BudgetQuickstartService {
     budgetId: string,
     armed: boolean,
     createdById: string | undefined,
-    ctx: { goal?: number; now: Date; currency: string },
+    ctx: { goal?: number; now: Date; currency: string; autoPublish: boolean },
   ): Promise<ContentCampaignSummary | null> {
     if (!armed || !createdById) return null;
 
@@ -195,7 +202,11 @@ export class BudgetQuickstartService {
           name: `Autopilot content — ${account.network}`,
           goal: brief.goal,
           brief,
-          automationMode: 'FULL_AUTO',
+          // Safety gate: SEMI_AUTO shows each post in the approval queue and
+          // auto-publishes unless rejected; FULL_AUTO posts with no queue. Only
+          // the opt-in flag reaches pure never-ask (public posting is the one
+          // action the kill-switch can't reverse).
+          automationMode: ctx.autoPublish ? 'FULL_AUTO' : 'SEMI_AUTO',
           planningMode: 'AI_FULL',
           cadence,
           startDate: start,

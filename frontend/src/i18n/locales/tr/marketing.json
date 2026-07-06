@@ -3217,6 +3217,14 @@
     "wizard": {
       "manifestContent": "Otonom içerik artık çalışıyor",
       "manifestContentCount": "{{n}} kampanya"
+    },
+    "contentAutoOnToast": "İçerik artık otomatik yayınlanıyor — onay kuyruğu yok.",
+    "contentAutoOffToast": "İçerik yayınlanmadan önce gösterilecek (reddetmezsen otomatik yayınlanır).",
+    "contentAutoError": "İçerik ayarı değiştirilemedi",
+    "contentAuto": {
+      "title": "İçeriği otomatik yayınla",
+      "onDesc": "Motor hesaplarına onaysız yayın yapar — tamamen elini sürmeden.",
+      "offDesc": "Her gönderi önce Onaylar’da gösterilir ve reddetmezsen otomatik yayınlanır — yayın geri alınamaz."
     }
   },
   "studio": {

@@ -50,6 +50,11 @@ class QuickStartDto {
   @IsOptional() @IsNumber() @Min(0) targetRoas?: number;
   @IsOptional() @IsNumber() @Min(0) targetCac?: number;
   @IsOptional() @IsBoolean() arm?: boolean;
+  @IsOptional() @IsBoolean() contentAutoPublish?: boolean;
+}
+
+class ContentAutoPublishDto {
+  @IsBoolean() on: boolean;
 }
 
 class AutonomyDto {
@@ -138,6 +143,16 @@ export class MarketingBudgetController {
   @Audit({ action: 'growth_budget.status', resourceType: 'growth_budget', resourceIdParam: 'id' })
   status(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: StatusDto) {
     return this.budgets.setStatus(a.workspaceId, id, dto.status);
+  }
+
+  // Content-arm safety gate: on = FULL_AUTO (pure never-ask), off = SEMI_AUTO
+  // (show each post before it publishes). Applies to campaigns provisioned next.
+  @Patch(':id/content-autopublish')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'growth_budget.content_autopublish', resourceType: 'growth_budget', resourceIdParam: 'id', captureBody: ['on'] })
+  contentAutoPublish(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string, @Body() dto: ContentAutoPublishDto) {
+    return this.budgets.setContentAutoPublish(a.workspaceId, id, dto.on);
   }
 
   @Post(':id/allocations')

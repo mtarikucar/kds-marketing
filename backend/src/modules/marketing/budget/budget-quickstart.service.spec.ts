@@ -135,7 +135,7 @@ describe('BudgetQuickstartService', () => {
   // accounts, the ONE click also provisions a fully-autonomous content campaign
   // per account (FULL_AUTO + AI_FULL) and activates it — no hand-authoring.
   describe('content arm (autonomous content per connected account)', () => {
-    it('provisions a FULL_AUTO + AI_FULL campaign per social account and activates it when armed', async () => {
+    it('provisions a SEMI_AUTO (show-before-posting) + AI_FULL campaign per account by default and activates it when armed', async () => {
       process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
       const { svc, socialCampaigns } = make({ walletBalance: 300, socialAccounts: 2, providers: ['META'] });
 
@@ -144,7 +144,9 @@ describe('BudgetQuickstartService', () => {
       expect(socialCampaigns.create).toHaveBeenCalledTimes(2);
       const first = socialCampaigns.create.mock.calls[0][1];
       expect(first).toMatchObject({
-        automationMode: 'FULL_AUTO',
+        // Safety default: posts surface + auto-publish-unless-rejected. The
+        // kill-switch can't un-post, so the first posts are shown before going.
+        automationMode: 'SEMI_AUTO',
         planningMode: 'AI_FULL',
         targetAccountIds: ['sa-0'],
         engineBudgetId: 'b1',
@@ -156,6 +158,15 @@ describe('BudgetQuickstartService', () => {
       // Manifest reports what was set up.
       expect(m.contentCampaign).toMatchObject({ count: 2 });
       expect((m.contentCampaign as { campaignIds: string[] }).campaignIds).toHaveLength(2);
+    });
+
+    it('provisions FULL_AUTO (pure never-ask) when contentAutoPublish is opted in', async () => {
+      process.env.GROWTH_AUTOPILOT_AUTONOMY = '1';
+      const { svc, socialCampaigns } = make({ walletBalance: 300, socialAccounts: 1, providers: ['META'] });
+
+      await svc.quickStart('ws1', { arm: true, createdById: 'u1', contentAutoPublish: true }, NOW);
+
+      expect(socialCampaigns.create.mock.calls[0][1].automationMode).toBe('FULL_AUTO');
     });
 
     it('does NOT provision content when the flag is off (arm degrades to ASSISTED)', async () => {

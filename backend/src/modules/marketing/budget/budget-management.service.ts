@@ -88,6 +88,17 @@ export class BudgetManagementService {
   }
 
   /**
+   * Content-arm safety gate. false = engine content is SEMI_AUTO (posts surface
+   * in the approval queue, auto-publish unless rejected — "show before
+   * posting"); true = FULL_AUTO, pure never-ask. Only affects content campaigns
+   * provisioned AFTER this call; ad reallocation is unaffected.
+   */
+  async setContentAutoPublish(workspaceId: string, id: string, on: boolean) {
+    await this.assertOwned(workspaceId, id);
+    return this.prisma.growthBudget.update({ where: { id }, data: { contentAutoPublish: on } });
+  }
+
+  /**
    * Switch the autonomy lane (Growth Autopilot spec D6). Arming AUTONOMOUS is
    * the user's ONE explicit opt-in and requires the platform env flag; while
    * the flag is off the lane cannot be armed anywhere (ships dark).

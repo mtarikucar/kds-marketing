@@ -48,7 +48,7 @@ function renderPage() {
 const budget: svc.GrowthBudget = {
   id: 'b1', workspaceId: 'ws1', periodKey: '2026-07', currency: 'TRY', totalAmount: '30000',
   scope: 'HOLISTIC', status: 'ACTIVE', killSwitch: false, explorationPct: 20, allocatorStage: 'MARGINAL', targetRoas: '2.5',
-  targetCac: null, autonomyLevel: 'ASSISTED', createdAt: '', updatedAt: '',
+  targetCac: null, autonomyLevel: 'ASSISTED', contentAutoPublish: false, createdAt: '', updatedAt: '',
   allocations: [{ id: 'a1', channel: 'META', campaignRef: '', plannedAmount: '20000', spentAmount: '5000', marginalRoas: '3.2', lastPacedAt: null }],
 };
 

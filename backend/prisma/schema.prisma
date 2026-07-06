@@ -3920,6 +3920,13 @@ model GrowthBudget {
   /// ASSISTED = propose + human approval queue (the pre-autopilot default);
   /// AUTONOMOUS = propose → auto-apply under machine guardrails, no approvals.
   autonomyLevel  String   @default("ASSISTED") // SHADOW | ASSISTED | AUTONOMOUS
+  /// Content-arm safety gate (Growth Autopilot). FALSE (default) = the engine
+  /// provisions content campaigns as SEMI_AUTO — each post surfaces in the
+  /// approval queue and auto-publishes unless the user rejects it in the
+  /// window ("show before posting", since autonomous posting can't be undone
+  /// by the kill-switch). TRUE = FULL_AUTO, pure never-ask. Ad reallocation is
+  /// unaffected (it's reversible and always follows autonomyLevel).
+  contentAutoPublish Boolean @default(false)
   targetRoas     Decimal? @db.Decimal(10, 4)
   targetCac      Decimal? @db.Decimal(14, 2)
   createdAt      DateTime @default(now())
