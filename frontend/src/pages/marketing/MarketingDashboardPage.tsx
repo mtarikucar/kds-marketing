@@ -163,8 +163,10 @@ export default function MarketingDashboardPage() {
         <MonthlyMetrics monthly={monthly} />
       </div>
 
-      {/* KPI tiles — the "performance at a glance" report, below the day's work. */}
-      <KpiGrid stats={stats} isManager={isManager} />
+      {/* KPI tiles — the "performance at a glance" report, below the day's work.
+          Trimmed to the two numbers no other section shows (2026-07): queues
+          live in NeedsAttention, NEW/WON/LOST live in LeadsByStatus. */}
+      <KpiGrid stats={stats} />
 
       {/* Leads by Status breakdown */}
       <LeadsByStatus leadsByStatus={leadsByStatus} />

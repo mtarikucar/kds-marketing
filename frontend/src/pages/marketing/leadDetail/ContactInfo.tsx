@@ -1,11 +1,6 @@
-import { useTranslation } from 'react-i18next';
 import { Phone, Mail, MapPin, MessageCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { AssignCell } from '../../../features/marketing/components';
 import {
-  LeadStatus,
-  LEAD_STATUS_LABELS,
   BUSINESS_TYPE_LABELS,
   LEAD_SOURCE_LABELS,
 } from '../../../features/marketing/types';
@@ -18,24 +13,17 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface ContactInfoProps {
   lead: DetailLead;
-  isManager: boolean;
   fmtDate: (d: string | Date | null | undefined) => string;
-  onAssigned: () => void;
-  onStatusChange: (status: string) => void;
-  statusPending: boolean;
 }
 
-/** Left-rail summary cards: contact, business details, assignment, status, notes. */
-export default function ContactInfo({
-  lead,
-  isManager,
-  fmtDate,
-  onAssigned,
-  onStatusChange,
-  statusPending,
-}: ContactInfoProps) {
-  const { t } = useTranslation('marketing');
-
+/**
+ * Left-rail summary cards: contact, business details, notes. Trimmed (2026-07):
+ * assignment and status each live in ONE place now — the page header's
+ * AssignCell and its legal-transitions status Select. The old rail showed
+ * assignment in 3 places and an 8-pill status card where most pills were
+ * illegal moves that 400'd.
+ */
+export default function ContactInfo({ lead, fmtDate }: ContactInfoProps) {
   return (
     <div className="space-y-4">
       {/* Contact Info */}
@@ -133,14 +121,6 @@ export default function ContactInfo({
                 <dd className="text-foreground">{lead.currentSystem}</dd>
               </div>
             )}
-            {lead.assignedTo && (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Assigned To</dt>
-                <dd className="text-foreground">
-                  {lead.assignedTo.firstName} {lead.assignedTo.lastName}
-                </dd>
-              </div>
-            )}
             {lead.nextFollowUp && (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Next Follow-up</dt>
@@ -148,59 +128,6 @@ export default function ContactInfo({
               </div>
             )}
           </dl>
-        </CardContent>
-      </Card>
-
-      {/* Assign (Manager only) — compact inline popover so the rest
-          of the panel still serves as the lead's info hub. */}
-      {isManager && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">{t('leads.assignment.title')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AssignCell
-              leadId={lead.id}
-              currentAssignee={lead.assignedTo ?? null}
-              onAssigned={onAssigned}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Status Change */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Change Status</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            {/* WON is owned by the /convert flow on the backend
-                (marketing-leads.service.ts:295-299) — exposing a WON
-                button here just produced a 400 every time. */}
-            {Object.values(LeadStatus)
-              .filter((s) => s !== LeadStatus.WON)
-              .map((s) => {
-                const active = lead.status === s;
-                return (
-                  <Button
-                    key={s}
-                    type="button"
-                    variant={active ? 'secondary' : 'outline'}
-                    size="sm"
-                    onClick={() => onStatusChange(s)}
-                    disabled={active || statusPending}
-                    className={
-                      active
-                        ? 'rounded-full bg-primary/15 text-primary hover:bg-primary/15'
-                        : 'rounded-full'
-                    }
-                  >
-                    {LEAD_STATUS_LABELS[s]}
-                  </Button>
-                );
-              })}
-          </div>
         </CardContent>
       </Card>
 
