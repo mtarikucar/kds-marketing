@@ -64,7 +64,7 @@ describe('PostComposerDialog AI generate', () => {
       { wrapper },
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /ai ile üret/i }));
+    await userEvent.click(screen.getByRole('button', { name: /generate with ai/i }));
     await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a sunset');
     await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
@@ -94,7 +94,7 @@ describe('PostComposerDialog AI generate', () => {
       { wrapper },
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /ai ile üret/i }));
+    await userEvent.click(screen.getByRole('button', { name: /generate with ai/i }));
     await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a sunset');
     await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 

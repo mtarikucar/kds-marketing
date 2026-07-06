@@ -40,16 +40,16 @@ describe('CallAnalysisPanel', () => {
   it('shows a recording-required hint when no analysis and no recording', async () => {
     getCallAnalysis.mockResolvedValue({ status: 'NONE' });
     render(<CallAnalysisPanel callId="c1" hasRecording={false} />, { wrapper });
-    expect(await screen.findByText(/görüşme kaydı gerekiyor/i)).toBeInTheDocument();
+    expect(await screen.findByText(/a call recording is required/i)).toBeInTheDocument();
     // No analyse button when there's no recording.
-    expect(screen.queryByRole('button', { name: /analiz et/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /analyse/i })).not.toBeInTheDocument();
   });
 
   it('shows an Analyse button when no analysis but a recording exists, and runs it', async () => {
     getCallAnalysis.mockResolvedValue({ status: 'NONE' });
     runCallAnalysis.mockResolvedValue({ status: 'OK' });
     render(<CallAnalysisPanel callId="c1" hasRecording />, { wrapper });
-    const btn = await screen.findByRole('button', { name: /analiz et/i });
+    const btn = await screen.findByRole('button', { name: /analyse/i });
     await userEvent.click(btn);
     await waitFor(() => expect(runCallAnalysis).toHaveBeenCalledWith('c1'));
   });

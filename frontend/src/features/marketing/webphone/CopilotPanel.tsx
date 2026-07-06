@@ -170,7 +170,7 @@ export default function CopilotPanel({
       <div className="flex items-center justify-between">
         <span className="inline-flex items-center gap-1.5 text-caption font-medium text-foreground">
           <Sparkles className="h-4 w-4 text-primary" aria-hidden="true" />
-          {t('copilot.title', 'Canlı Asistan')}
+          {t('copilot.title', 'Live Assistant')}
         </span>
         {supported.current && (
           <Button
@@ -181,12 +181,12 @@ export default function CopilotPanel({
             {listening ? (
               <>
                 <MicOff className="h-4 w-4" aria-hidden="true" />
-                {t('copilot.stop', 'Durdur')}
+                {t('copilot.stop', 'Stop')}
               </>
             ) : (
               <>
                 <Mic className="h-4 w-4" aria-hidden="true" />
-                {t('copilot.listen', 'Dinle')}
+                {t('copilot.listen', 'Listen')}
               </>
             )}
           </Button>
@@ -199,7 +199,7 @@ export default function CopilotPanel({
           <Textarea
             value={manualTranscript}
             onChange={(e) => setManualTranscript(e.target.value)}
-            placeholder={t('copilot.pastePlaceholder', 'Görüşme metnini buraya yapıştırın…')}
+            placeholder={t('copilot.pastePlaceholder', 'Paste the call transcript here…')}
             rows={3}
           />
           <Button
@@ -209,7 +209,7 @@ export default function CopilotPanel({
             onClick={() => void fetchSuggestions(manualTranscript)}
           >
             <Sparkles className="h-4 w-4" aria-hidden="true" />
-            {t('copilot.getSuggestions', 'Öneri al')}
+            {t('copilot.getSuggestions', 'Get suggestions')}
           </Button>
         </div>
       )}
@@ -221,14 +221,14 @@ export default function CopilotPanel({
 
       {loading && (
         <div className="inline-flex items-center gap-2 text-caption text-muted-foreground">
-          <Spinner className="h-4 w-4" /> {t('copilot.thinking', 'Düşünüyor…')}
+          <Spinner className="h-4 w-4" /> {t('copilot.thinking', 'Thinking…')}
         </div>
       )}
 
       {/* Summary */}
       {result?.summary && (
         <p className="text-caption text-muted-foreground">
-          <span className="font-medium text-foreground">{t('copilot.summary', 'Özet')}: </span>
+          <span className="font-medium text-foreground">{t('copilot.summary', 'Summary')}: </span>
           {result.summary}
         </p>
       )}

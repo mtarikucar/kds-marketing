@@ -12,6 +12,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
+import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 import { hashBackupCode, openTotpSecret, verifyTotp } from '../util/totp';
 
 const MAX_FAILED_LOGINS = 5;
@@ -380,6 +381,9 @@ export class MarketingAuthService {
           defaultLanguage: dto.language ?? 'en',
           defaultCurrency: dto.currency ?? 'USD',
           settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
+          // Leaner first-run: memberships + research start OFF (switch on in
+          // Modules). Everything else active.
+          activatedModules: [...DEFAULT_ACTIVATED_MODULES],
         },
       });
 

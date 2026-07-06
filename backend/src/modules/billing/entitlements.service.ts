@@ -29,6 +29,10 @@ export const FEATURE_KEYS = [
   'mediaGen',
   // AI Social Content Studio — Social Campaign engine (Milestone 3).
   'socialCampaigns',
+  // Optional modules hidden by default for NEW workspaces (nav-gating only, no
+  // API gate) — a leaner first-run; power users switch them on in Modules.
+  'memberships',
+  'research',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -39,6 +43,17 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
  */
 export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter(
   (k) => k !== 'autoAssign',
+);
+
+/**
+ * New-workspace default `activatedModules`: every toggleable module active
+ * EXCEPT the ones hidden by default for a leaner first-run (memberships +
+ * research). Existing workspaces keep `activatedModules = null` (all-active),
+ * so this only affects freshly-created workspaces; the two hidden modules stay
+ * entitled and can be switched on in Modules settings.
+ */
+export const DEFAULT_ACTIVATED_MODULES: FeatureKey[] = TOGGLEABLE_MODULE_KEYS.filter(
+  (k) => k !== 'memberships' && k !== 'research',
 );
 
 /**

@@ -83,6 +83,10 @@ export type FeatureKey =
   | 'agentStudio'
   | 'voiceAi'
   | 'invoicing'
+  // Optional modules hidden by default for NEW workspaces (leaner first-run;
+  // switch on in Modules). Existing workspaces (activatedModules null) keep them.
+  | 'memberships'
+  | 'research'
   // Platform-level inert features (env-gated; surfaced via /billing/summary so the
   // nav hides them until ops enables the feature, instead of showing a 503 button).
   | 'prospecting'
@@ -210,8 +214,10 @@ export const NAV_HUBS: NavHub[] = [
   {
     // Communities + Leaderboard were deleted (2026-07 trim: they simulated a
     // member experience no member could ever see — no member portal exists).
+    // Module OFF by default for new workspaces (feature 'memberships'); existing
+    // workspaces (activatedModules null) keep it. Switch on in Modules.
     id: 'memberships', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, tier: 'advanced',
-    path: '/memberships/courses', managerOnly: true,
+    path: '/memberships/courses', managerOnly: true, feature: 'memberships',
   },
   {
     id: 'voice', labelKey: 'nav.group.voice', label: 'Voice', icon: Mic, tier: 'advanced',
@@ -240,7 +246,7 @@ export const NAV_HUBS: NavHub[] = [
       // Data (Custom Objects deleted — 2026-07 trim: an island with no consumer
       // anywhere and no record-to-contact linking UI at all)
       { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
-      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
+      { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true, feature: 'research' },
       // Connections & domains (Account Center absorbed Settings→Connections)
       { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },
       { path: '/settings/sending-domains', labelKey: 'nav.sendingDomains', label: 'Sending Domains', icon: Mail, managerOnly: true, feature: 'sendingDomains' },

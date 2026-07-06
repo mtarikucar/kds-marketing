@@ -36,6 +36,8 @@ export interface GrowthBudget {
   allocatorStage: AllocatorStage;
   /** Autonomy lane (spec D6). Existing rows default to ASSISTED. */
   autonomyLevel: AutonomyLevel;
+  /** Content-arm safety: false = SEMI_AUTO (show before posting), true = FULL_AUTO (never-ask). */
+  contentAutoPublish: boolean;
   targetRoas: string | null;
   targetCac: string | null;
   createdAt: string;
@@ -217,6 +219,9 @@ export const listBudgetActivity = (id: string) =>
 
 export const setAutonomyLevel = (id: string, level: AutonomyLevel) =>
   marketingApi.patch<GrowthBudget>(`/budget/${id}/autonomy`, { level }).then((r) => r.data);
+
+export const setContentAutoPublish = (id: string, on: boolean) =>
+  marketingApi.patch<GrowthBudget>(`/budget/${id}/content-autopublish`, { on }).then((r) => r.data);
 
 export const walletTopup = (payload: WalletTopupPayload) =>
   marketingApi

@@ -22,6 +22,7 @@ import {
   setBudgetKillSwitch,
   setBudgetStatus,
   setAutonomyLevel,
+  setContentAutoPublish,
   proposeBudget,
   listAutopilotRuns,
   listPendingApprovals,
@@ -189,6 +190,19 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
     },
   });
 
+  const contentAuto = useMutation({
+    mutationFn: (on: boolean) => setContentAutoPublish(budget.id, on),
+    onSuccess: (_d, on) => {
+      invalidate();
+      toast.success(
+        on
+          ? t('autopilot.contentAutoOnToast', 'Content auto-publishes now — no review queue.')
+          : t('autopilot.contentAutoOffToast', 'Content will be shown before it posts (auto-publishes unless you reject it).'),
+      );
+    },
+    onError: () => toast.error(t('autopilot.contentAutoError', 'Could not change the content setting')),
+  });
+
   const topup = useMutation({
     mutationFn: (amount: number) =>
       walletTopup({ amount, provider: pickTopupProvider(walletQ.data?.currency ?? currency) }),
@@ -280,6 +294,30 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
             <Callout tone="warning" title={t('autopilot.flagOffTitle', 'Autonomous mode unavailable')}>
               {t('autopilot.flagOff', 'Autonomous mode is not enabled on this platform yet — ask your platform admin.')}
             </Callout>
+          )}
+
+          {/* Content-arm safety: autonomous PUBLIC posting can't be undone by
+              the kill-switch, so by default the engine shows each post before
+              it goes (auto-publishes unless rejected). Only shown when armed. */}
+          {armed && (
+            <Card>
+              <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{t('autopilot.contentAuto.title', 'Auto-publish content')}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {budget.contentAutoPublish
+                      ? t('autopilot.contentAuto.onDesc', 'The engine posts to your accounts with no review — pure hands-off.')
+                      : t('autopilot.contentAuto.offDesc', 'Each post is shown in Approvals first and auto-publishes unless you reject it — posting can’t be undone.')}
+                  </p>
+                </div>
+                <Switch
+                  checked={budget.contentAutoPublish}
+                  disabled={contentAuto.isPending || budget.killSwitch}
+                  onCheckedChange={(v) => contentAuto.mutate(v)}
+                  aria-label={t('autopilot.contentAuto.title', 'Auto-publish content')}
+                />
+              </CardContent>
+            </Card>
           )}
 
           {/* Mode-1 honesty (spec D3 / guardrail 7): never imply the platform pays the ad network. */}

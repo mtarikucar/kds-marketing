@@ -34,9 +34,9 @@ describe('CopilotPanel (fallback, no SpeechRecognition)', () => {
     });
     render(<CopilotPanel />);
 
-    const textarea = screen.getByPlaceholderText(/yapıştırın/i);
+    const textarea = screen.getByPlaceholderText(/paste the call transcript/i);
     await userEvent.type(textarea, 'Müşteri fiyat sordu');
-    await userEvent.click(screen.getByRole('button', { name: /öneri al/i }));
+    await userEvent.click(screen.getByRole('button', { name: /get suggestions/i }));
 
     await waitFor(() =>
       expect(getCopilotSuggestions).toHaveBeenCalledWith({
@@ -52,7 +52,7 @@ describe('CopilotPanel (fallback, no SpeechRecognition)', () => {
 
   it('does not call the API for an empty transcript', async () => {
     render(<CopilotPanel />);
-    await userEvent.click(screen.getByRole('button', { name: /öneri al/i }));
+    await userEvent.click(screen.getByRole('button', { name: /get suggestions/i }));
     expect(getCopilotSuggestions).not.toHaveBeenCalled();
   });
 });

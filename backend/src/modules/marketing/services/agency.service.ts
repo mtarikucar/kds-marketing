@@ -10,6 +10,7 @@ import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
+import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 
 /**
  * Epic D1 — agency / sub-account hierarchy (GoHighLevel parity).
@@ -214,6 +215,8 @@ export class AgencyService {
           defaultCurrency: input.currency ?? 'USD',
           timezone: input.timezone ?? 'UTC',
           settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
+          // Leaner first-run: memberships + research start OFF (see auth register).
+          activatedModules: [...DEFAULT_ACTIVATED_MODULES],
         },
         select: PUBLIC_WORKSPACE_FIELDS,
       });

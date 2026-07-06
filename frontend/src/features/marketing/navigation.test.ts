@@ -50,12 +50,19 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     // Surveys + Experiments were deleted (2026-07 trim), so Sites is a
     // single-page funnels-gated hub — absent without the entitlement.
     expect(hubs.find((h) => h.id === 'sites')).toBeUndefined();
+    // Memberships is now module-gated ('memberships', OFF by default for new
+    // workspaces) — absent without the entitlement even for a manager.
+    expect(hubs.find((h) => h.id === 'memberships')).toBeUndefined();
+    // Automation now also carries Trigger Links (moved out of Studio→More).
+    expect(childPaths(hubs, 'automation')).toEqual(['/trigger-links']);
+  });
+
+  it('shows Memberships as a single Courses page when the module is entitled', () => {
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle('memberships') });
     // Communities + Leaderboard were deleted; Memberships is just Courses now.
     const memberships = hubs.find((h) => h.id === 'memberships');
     expect(memberships?.path).toBe('/memberships/courses');
     expect(memberships?.children).toBeUndefined();
-    // Automation now also carries Trigger Links (moved out of Studio→More).
-    expect(childPaths(hubs, 'automation')).toEqual(['/trigger-links']);
   });
 
   it('Sites appears as a single-page hub when funnels is entitled', () => {
@@ -168,11 +175,12 @@ describe('splitByTier — progressive disclosure', () => {
     expect(coreIds).toEqual(
       expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reports', 'studio']),
     );
-    // Sites is funnels-gated (single page) now, so it is absent without the
-    // entitlement — the remaining advanced trio still tucks behind "More".
+    // Sites (funnels) and Memberships (memberships module) are both gated now,
+    // so without those entitlements the remaining advanced pair tucks behind "More".
     expect(advIds).toEqual(
-      expect.arrayContaining(['memberships', 'payments', 'automation']),
+      expect.arrayContaining(['payments', 'automation']),
     );
+    expect(advIds).not.toContain('memberships'); // module OFF by default
     // The two tiers never overlap.
     expect(coreIds.some((id) => advIds.includes(id))).toBe(false);
   });
