@@ -3246,5 +3246,10 @@
       "calls": "Aramalar",
       "dialer": "Güçlü Arayıcı"
     }
+  },
+  "weekly": {
+    "campaignName": "Haftalık plan — {{date}}",
+    "provisioned": "Haftan planlanıyor — her taslağı burada inceleyip onayla.",
+    "error": "Plan oluşturulamadı"
   }
 }

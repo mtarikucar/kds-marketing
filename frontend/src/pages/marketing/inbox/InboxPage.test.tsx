@@ -126,23 +126,32 @@ describe('InboxPage — composer draft isolation', () => {
   });
 });
 
-describe('InboxPage — top tabs (?tab=)', () => {
+// 2026-07 trim: the config surfaces moved from an always-visible tab bar into
+// ONE gear "Inbox settings" menu — the daily messaging page shows no config
+// chrome. ?tab= deep links keep resolving unchanged.
+describe('InboxPage — config surfaces behind the gear menu (?tab=)', () => {
   beforeEach(setupApi);
 
-  it('renders the inbox + 4 config tabs for a manager, inbox active by default', async () => {
+  it('shows the plain inbox with a single Inbox settings gear for a manager (no tab bar)', async () => {
     renderAt('/inbox');
-    for (const label of ['Inbox', 'Channels', 'Canned Responses', 'AI Agents', 'Knowledge']) {
-      expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
-    }
-    expect(screen.getByRole('tab', { name: 'Inbox' })).toHaveAttribute('data-state', 'active');
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /inbox settings/i })).toBeInTheDocument();
     // The real inbox body (mocked ConversationList) is what's mounted.
     expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
   });
 
-  it('honors the ?tab= deep link and lazy-mounts the embedded page', async () => {
-    renderAt('/inbox?tab=agents');
-    expect(screen.getByRole('tab', { name: 'AI Agents' })).toHaveAttribute('data-state', 'active');
+  it('opens a config surface from the gear menu', async () => {
+    const user = userEvent.setup();
+    renderAt('/inbox');
+    await user.click(screen.getByRole('button', { name: /inbox settings/i }));
+    await user.click(await screen.findByRole('menuitem', { name: 'AI Agents' }));
     expect(await screen.findByText('agents-page')).toBeInTheDocument();
+  });
+
+  it('honors the ?tab= deep link and lazy-mounts the embedded page with a back affordance', async () => {
+    renderAt('/inbox?tab=agents');
+    expect(await screen.findByText('agents-page')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /back to inbox/i })).toBeInTheDocument();
   });
 
   it('passes embedded to the hosted config page (no double header)', async () => {
@@ -150,16 +159,16 @@ describe('InboxPage — top tabs (?tab=)', () => {
     expect(await screen.findByText('channels-embedded:true')).toBeInTheDocument();
   });
 
-  it('falls back to the inbox on an unknown ?tab= value', () => {
+  it('falls back to the inbox on an unknown ?tab= value', async () => {
     renderAt('/inbox?tab=nope');
-    expect(screen.getByRole('tab', { name: 'Inbox' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /back to inbox/i })).not.toBeInTheDocument();
   });
 
-  it('hides the config tabs from non-managers and forces deep links back to the inbox', async () => {
+  it('hides the gear from non-managers and forces deep links back to the inbox', async () => {
     auth.role = 'REP';
     renderAt('/inbox?tab=channels');
-    // No tab bar at all for reps — the inbox looks exactly like it always did…
-    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /inbox settings/i })).not.toBeInTheDocument();
     // …and the manager-only deep link lands on the inbox body, not the config page.
     expect(await screen.findByRole('button', { name: 'cA' })).toBeInTheDocument();
     expect(screen.queryByText('channels-embedded:true')).not.toBeInTheDocument();

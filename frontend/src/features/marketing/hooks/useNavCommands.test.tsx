@@ -57,7 +57,7 @@ describe('useNavCommands', () => {
     expect(paths).toContain('/dashboard');
     expect(paths).toContain('/leads');
     // managerOnly + no entitlement flag → visible to a manager.
-    expect(paths).toContain('/custom-objects');
+    expect(paths).toContain('/tags');
   });
 
   it('hides manager-only destinations from a rep', () => {

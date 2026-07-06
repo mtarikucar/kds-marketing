@@ -217,7 +217,7 @@ model Lead {
   activities  LeadActivity[]
   tasks       MarketingTask[]
   offers      LeadOffer[]
-  commissions Commission[]    @relation("CommissionLead")
+  commissions Commission[]     @relation("CommissionLead")
   tags        LeadTag[]
   attribution LeadAttribution?
 
@@ -233,16 +233,16 @@ model Lead {
 
   // Phase F P2 — per-channel marketing opt-out. Campaigns AND the Conversation
   // AI engine check these before sending. Default false = opted-in.
-  emailOptOut Boolean @default(false)
+  emailOptOut         Boolean   @default(false)
   /// List-hygiene tier-1 (GHL parity): syntax+MX verification result, set at
   /// ingest. UNKNOWN | VALID | INVALID | RISKY. INVALID is excluded from email
   /// campaign audiences.
-  emailVerifiedStatus String @default("UNKNOWN")
+  emailVerifiedStatus String    @default("UNKNOWN")
   /// Stamped when the ESP reports a hard bounce/complaint for this email — the
   /// lead is then suppressed from email campaigns (with emailOptOut).
-  emailBouncedAt DateTime?
-  smsOptOut   Boolean @default(false)
-  waOptOut    Boolean @default(false)
+  emailBouncedAt      DateTime?
+  smsOptOut           Boolean   @default(false)
+  waOptOut            Boolean   @default(false)
 
   // Epic A1 — workspace-defined custom fields. Shape is { "<defKey>": value };
   // values are validated/coerced against CustomFieldDef by CustomFieldsService
@@ -291,32 +291,32 @@ model Lead {
 /// references so a deleted post/campaign/ad never blocks a lead. The Faz 5/7
 /// Performance Loop joins spend↔content↔revenue through these keys.
 model LeadAttribution {
-  id          String @id @default(uuid())
-  workspaceId String
-  leadId      String @unique
-  lead        Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id                     String   @id @default(uuid())
+  workspaceId            String
+  leadId                 String   @unique
+  lead                   Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
   // Marketing params captured verbatim from the landing URL / referral payload.
-  utmSource   String?
-  utmMedium   String?
-  utmCampaign String?
-  utmContent  String?
-  utmTerm     String?
+  utmSource              String?
+  utmMedium              String?
+  utmCampaign            String?
+  utmContent             String?
+  utmTerm                String?
   // Platform click identifiers.
-  clickId     String?
-  clickIdType String? // FBCLID | GCLID | TTCLID | LICLID | OTHER
+  clickId                String?
+  clickIdType            String? // FBCLID | GCLID | TTCLID | LICLID | OTHER
   // Click-to-WhatsApp referral (Meta CTWA) — ties a WA conversation to its ad.
-  ctwaClid    String?
-  landingUrl  String? @db.Text
-  referrerUrl String? @db.Text
+  ctwaClid               String?
+  landingUrl             String?  @db.Text
+  referrerUrl            String?  @db.Text
   // Soft content / campaign / ad references (no FK — content may be deleted).
   sourceSocialPostId     String?
   sourceCampaignItemId   String?
   sourceSocialCampaignId String?
   sourceAdCampaignId     String?
   sourceAdCreativeId     String?
-  raw       Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  raw                    Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@index([workspaceId, sourceSocialPostId])
   @@index([workspaceId, sourceAdCampaignId])
@@ -353,19 +353,19 @@ model CustomFieldDef {
 /// `customFields` holds values for the workspace's COMPANY CustomFieldDefs (same
 /// pattern as leads). No FK — soft `workspaceId` scoping like the rest of CRM.
 model Company {
-  id          String   @id @default(uuid())
-  workspaceId String
-  name        String
-  domain      String?
-  phone       String?
-  email       String?
-  address     String?
-  city        String?
-  notes       String?  @db.Text
+  id           String   @id @default(uuid())
+  workspaceId  String
+  name         String
+  domain       String?
+  phone        String?
+  email        String?
+  address      String?
+  city         String?
+  notes        String?  @db.Text
   customFields Json?
-  archived    Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  archived     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([workspaceId, archived])
   @@map("companies")
@@ -376,6 +376,10 @@ model Company {
 /// CustomFieldDef rows namespaced by `entity = "OBJ:<key>"`, so the whole
 /// custom-field type/validation machinery is shared. `primaryField` names the
 /// field whose value is denormalized into CustomObjectRecord.displayName.
+/// DEPRECATED (2026-07 system trim): the custom-objects feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model CustomObjectDef {
   id            String   @id @default(uuid())
   workspaceId   String
@@ -399,15 +403,19 @@ model CustomObjectDef {
 /// One instance of a custom object. Field values live in `values` (JSONB,
 /// validated against the object's CustomFieldDefs); `displayName` is denormalized
 /// from the primary field for cheap list/search. Cascade-deleted with its def.
+/// DEPRECATED (2026-07 system trim): the custom-objects feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model CustomObjectRecord {
-  id          String   @id @default(uuid())
+  id          String          @id @default(uuid())
   workspaceId String
   objectDefId String
   objectDef   CustomObjectDef @relation(fields: [objectDefId], references: [id], onDelete: Cascade)
-  values      Json     @default("{}")
-  displayName String   @default("")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  values      Json            @default("{}")
+  displayName String          @default("")
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   links CustomObjectLink[]
 
@@ -419,14 +427,18 @@ model CustomObjectRecord {
 /// Association between a custom-object record and a Contact (Lead, soft ref).
 /// The (record, lead) pair is unique so linking is idempotent. Cascade-deleted
 /// with its record; lead deletion is reconciled by the records service.
+/// DEPRECATED (2026-07 system trim): the custom-objects feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model CustomObjectLink {
-  id          String   @id @default(uuid())
+  id          String             @id @default(uuid())
   workspaceId String
   recordId    String
   record      CustomObjectRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
   leadId      String // associated Contact (soft ref to Lead — no FK, multi-tenant pattern)
   label       String? // e.g. "owner", "primary contact"
-  createdAt   DateTime @default(now())
+  createdAt   DateTime           @default(now())
 
   @@unique([recordId, leadId])
   @@index([workspaceId, leadId])
@@ -792,30 +804,30 @@ model MarketingDistributionConfig {
 /// avoids back-relations). externalCallId / durationSec / recordingUrl are the
 /// seams a future Netgsm API/webhook provider fills.
 model SalesCall {
-  id              String    @id @default(uuid())
-  workspaceId     String
-  marketingUserId String
-  leadId          String?
-  direction       String    @default("OUTBOUND") // OUTBOUND, INBOUND
-  toPhone         String
-  providerId      String // 'netgsm-lite', ...
-  status          String    @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
-  externalCallId  String?
-  durationSec     Int?
+  id                 String    @id @default(uuid())
+  workspaceId        String
+  marketingUserId    String
+  leadId             String?
+  direction          String    @default("OUTBOUND") // OUTBOUND, INBOUND
+  toPhone            String
+  providerId         String // 'netgsm-lite', ...
+  status             String    @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
+  externalCallId     String?
+  durationSec        Int?
   /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
   /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
-  billableSeconds Int?
-  costAmount      Decimal? @db.Decimal(14, 4)
-  recordingUrl    String?
+  billableSeconds    Int?
+  costAmount         Decimal?  @db.Decimal(14, 4)
+  recordingUrl       String?
   // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
   // the back of the queue (a CONNECTED call with no recording yet, or never), and
   // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
   recordingCheckedAt DateTime?
-  notes           String?   @db.Text
-  startedAt       DateTime  @default(now())
-  endedAt         DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  notes              String?   @db.Text
+  startedAt          DateTime  @default(now())
+  endedAt            DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([workspaceId])
   @@index([marketingUserId, startedAt(sort: Desc)])
@@ -830,18 +842,18 @@ model SalesCall {
 /// the analysis cron sweep or the manual-run endpoint. Inert until STT + Claude
 /// are configured (NetGSM Görüşme Kaydı recordings + STT key).
 model CallAnalysis {
-  id           String   @id @default(uuid())
-  workspaceId  String
-  salesCallId  String   @unique
-  transcript   String   @db.Text
-  language     String?
-  summary      String   @db.Text
-  sentiment    String? // POSITIVE | NEUTRAL | NEGATIVE
-  score        Int? // 0-100 call-quality/intent score
-  actionItems  Json? // string[]
-  topics       Json? // string[]
-  sttProvider  String?
-  createdAt    DateTime @default(now())
+  id          String   @id @default(uuid())
+  workspaceId String
+  salesCallId String   @unique
+  transcript  String   @db.Text
+  language    String?
+  summary     String   @db.Text
+  sentiment   String? // POSITIVE | NEUTRAL | NEGATIVE
+  score       Int? // 0-100 call-quality/intent score
+  actionItems Json? // string[]
+  topics      Json? // string[]
+  sttProvider String?
+  createdAt   DateTime @default(now())
 
   @@index([workspaceId, createdAt])
   @@map("call_analyses")
@@ -1381,6 +1393,10 @@ model VideoPersona {
 /// budget analysis for the week (`budgetBreakdown`: ad-spend / content-gen /
 /// conversations vs the weekly slice of the monthly growth budget). One plan per
 /// (workspace, week). Items are DRAFTs until the user approves them.
+/// DEPRECATED (2026-07 system trim): the WeeklyPlan feature was removed — its
+/// Approve button never scheduled or published anything (dead-end). The weekly
+/// CTA now provisions a real one-week SocialCampaign. Table + data retained;
+/// drop in a later cleanup once zero production usage is confirmed.
 model WeeklyPlan {
   id              String           @id @default(uuid())
   workspaceId     String
@@ -1400,6 +1416,10 @@ model WeeklyPlan {
 /// One draft piece of a WeeklyPlan — a social post, content idea, campaign, or
 /// trend remix on a given day, with its estimated cost. Approved items flow into
 /// scheduled content; `refId` links the materialized post once scheduled.
+/// DEPRECATED (2026-07 system trim): the WeeklyPlan feature was removed — its
+/// Approve button never scheduled or published anything (dead-end). The weekly
+/// CTA now provisions a real one-week SocialCampaign. Table + data retained;
+/// drop in a later cleanup once zero production usage is confirmed.
 model WeeklyPlanItem {
   id          String     @id @default(uuid())
   workspaceId String
@@ -1570,16 +1590,16 @@ model Conversation {
 /// (nullable: web-chat / internal messages have none, and Postgres allows
 /// many NULLs under a unique index).
 model Message {
-  id                String  @id @default(uuid())
+  id                String   @id @default(uuid())
   workspaceId       String
   conversationId    String
   direction         String // INBOUND | OUTBOUND
   authorType        String // CUSTOMER | AI | AGENT | SYSTEM
   /// MarketingUser id for AGENT-authored messages; null otherwise.
   authorId          String?
-  body              String  @db.Text
-  externalMessageId String? @unique
-  status            String  @default("SENT") // RECEIVED | SENT | DELIVERED | READ | FAILED
+  body              String   @db.Text
+  externalMessageId String?  @unique
+  status            String   @default("SENT") // RECEIVED | SENT | DELIVERED | READ | FAILED
   error             String?
   meta              Json?
   /// Budget Autopilot conversation-spend settlement (Faz 7). `smsSegments` is the
@@ -1770,40 +1790,40 @@ model InboundWebhook {
 /// list of URLs extracted from `body` at launch so click-tracking can only ever
 /// redirect to a campaign-authored URL (no open redirect).
 model Campaign {
-  id             String    @id @default(uuid())
-  workspaceId    String
-  name           String
-  channel        String // EMAIL | SMS | WHATSAPP
-  status         String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | PAUSED | CANCELLED
+  id               String    @id @default(uuid())
+  workspaceId      String
+  name             String
+  channel          String // EMAIL | SMS | WHATSAPP
+  status           String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | PAUSED | CANCELLED
   /// A/B split test (GHL parity): when true + variants exist, each recipient is
   /// assigned a weighted-random variantKey at launch and gets that variant's
   /// subject/body. `subject`/`body` below remain the control/fallback.
-  abEnabled      Boolean   @default(false)
+  abEnabled        Boolean   @default(false)
   /// A/B mode: SPLIT = send every variant to its weighted share (default, legacy
   /// behaviour). WINNER = send the variants to abTestPercent% of the audience,
   /// then auto-send the winning variant (by abWinnerMetric) to the held-back
   /// remainder. abDecideAt schedules the decision; abWinnerKey is set once decided.
-  abMode         String?   // SPLIT | WINNER
-  abTestPercent  Int?      // 5–50: % of the audience used as the WINNER test cohort
-  abWinnerMetric String?   // OPEN | CLICK
-  abWinnerKey    String?   // the variant key chosen as the winner
-  abDecideAt     DateTime?
-  subject        String?
-  body           String    @db.Text
+  abMode           String? // SPLIT | WINNER
+  abTestPercent    Int? // 5–50: % of the audience used as the WINNER test cohort
+  abWinnerMetric   String? // OPEN | CLICK
+  abWinnerKey      String? // the variant key chosen as the winner
+  abDecideAt       DateTime?
+  subject          String?
+  body             String    @db.Text
   /// Optional rendered HTML body (GHL email block builder). When set, EMAIL
   /// campaigns send this as the html part; `body` stays the plain-text fallback.
   /// Snapshotted from the EmailTemplate at launch so a later edit can't change
   /// an in-flight send.
-  bodyHtml       String?   @db.Text
+  bodyHtml         String?   @db.Text
   /// Soft ref to the EmailTemplate this campaign was built from (display only).
-  emailTemplateId String?
-  audienceFilter Json?
-  links          Json?
-  scheduledAt    DateTime?
-  startedAt      DateTime?
-  completedAt    DateTime?
+  emailTemplateId  String?
+  audienceFilter   Json?
+  links            Json?
+  scheduledAt      DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
   /// { recipients, sent, failed, skipped, opened, clicked, unsubscribed }.
-  stats          Json?
+  stats            Json?
   /// Cross-linkage (AI Social Content Studio §6.3): the companion SocialCampaign
   /// provisioned from this blast. Nullable — manual/legacy campaigns have none.
   socialCampaignId String?
@@ -1819,14 +1839,14 @@ model Campaign {
 /// subject + body (and optional HTML); recipients are split across variants by
 /// `weight` at launch. `stats` accumulates per-variant {sent, opened, clicked}.
 model CampaignVariant {
-  id              String  @id @default(uuid())
+  id              String   @id @default(uuid())
   workspaceId     String
   campaignId      String
-  key             String  // 'A' | 'B' | … (unique per campaign)
-  weight          Int     @default(1)
+  key             String // 'A' | 'B' | … (unique per campaign)
+  weight          Int      @default(1)
   subject         String?
-  body            String  @db.Text
-  bodyHtml        String? @db.Text
+  body            String   @db.Text
+  bodyHtml        String?  @db.Text
   emailTemplateId String?
   stats           Json?
   createdAt       DateTime @default(now())
@@ -1844,12 +1864,12 @@ model CampaignVariant {
 /// (emailtemplate.render.ts). Shared by campaigns: a campaign snapshots the
 /// compiled HTML into Campaign.bodyHtml at launch.
 model EmailTemplate {
-  id           String  @id @default(uuid())
+  id           String   @id @default(uuid())
   workspaceId  String
   name         String
   blocks       Json
   theme        Json?
-  compiledHtml String? @db.Text
+  compiledHtml String?  @db.Text
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1925,13 +1945,13 @@ model FormDef {
 /// — the funnel is the publish unit, and the public renderer reuses the page's
 /// block list per step + appends a "Continue" link to the next step.
 model Funnel {
-  id          String  @id @default(uuid())
+  id          String   @id @default(uuid())
   workspaceId String
   name        String
   slug        String
   /// Ordered [{ sitePageId, name? }] — each step renders that page's blocks.
   steps       Json
-  published   Boolean @default(false)
+  published   Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -2044,21 +2064,21 @@ model MemberAvailability {
 /// A booked slot. Creating one mints/links a Lead, emits booking.created (a
 /// workflow trigger), emails an ICS invite, and schedules a booking.reminder.
 model Booking {
-  id          String   @id @default(uuid())
-  workspaceId String
-  calendarId  String
-  leadId      String?
-  startAt     DateTime
-  endAt       DateTime
-  name        String
-  email       String?
-  phone       String?
-  notes       String?
-  status      String   @default("CONFIRMED") // CONFIRMED | CANCELLED | EXTERNAL_BUSY (pulled from Google)
+  id             String   @id @default(uuid())
+  workspaceId    String
+  calendarId     String
+  leadId         String?
+  startAt        DateTime
+  endAt          DateTime
+  name           String
+  email          String?
+  phone          String?
+  notes          String?
+  status         String   @default("CONFIRMED") // CONFIRMED | CANCELLED | EXTERNAL_BUSY (pulled from Google)
   // The team member this booking is assigned to (round-robin pick; the owner
   // for SINGLE/COLLECTIVE). Soft ref to a marketing user; null for class attendees.
   assigneeUserId String?
-  token       String   @unique
+  token          String   @unique
 
   // Google Calendar 2-way sync: the mirrored Google event id (nullable). For
   // our bookings pushed to Google it is the created event's id; for "busy"
@@ -2096,17 +2116,17 @@ model Booking {
 
 /// A place reviews are collected (v1: a Google Business "leave a review" URL).
 model ReviewSource {
-  id          String @id @default(uuid())
-  workspaceId String
-  type        String @default("GOOGLE") // GOOGLE | FACEBOOK
-  name        String
-  placeUrl    String
+  id           String    @id @default(uuid())
+  workspaceId  String
+  type         String    @default("GOOGLE") // GOOGLE | FACEBOOK
+  name         String
+  placeUrl     String
   // Review-sync (Epic 13, inert until a Google Business / FB page token): the
   // place/location/page id, a SEALED OAuth token, and the sweep bookkeeping.
   placeId      String?
   accessToken  String? // SEALED (secret-box) — masked out of responses
   externalRef  String? // provider account/location ref (e.g. accounts/{a}/locations/{l})
-  syncStatus   String  @default("ACTIVE") // ACTIVE | PAUSED | ERROR
+  syncStatus   String    @default("ACTIVE") // ACTIVE | PAUSED | ERROR
   lastSyncedAt DateTime?
   lastError    String?
 
@@ -2122,23 +2142,23 @@ model ReviewSource {
 /// (/r/:token): ≥4 stars routes to the public source URL (PUBLIC_ROUTED), <4
 /// captures private feedback (PRIVATE_FEEDBACK). The team can AI-draft a reply.
 model Review {
-  id          String  @id @default(uuid())
-  workspaceId String
-  sourceId    String?
-  leadId      String?
-  rating      Int?
-  text        String? @db.Text
-  authorName  String?
-  status      String  @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED | SYNCED
-  replyDraft  String? @db.Text
-  replyText   String? @db.Text
-  token       String  @unique
+  id               String    @id @default(uuid())
+  workspaceId      String
+  sourceId         String?
+  leadId           String?
+  rating           Int?
+  text             String?   @db.Text
+  authorName       String?
+  status           String    @default("REQUESTED") // REQUESTED | PUBLIC_ROUTED | PRIVATE_FEEDBACK | REPLIED | SYNCED
+  replyDraft       String?   @db.Text
+  replyText        String?   @db.Text
+  token            String    @unique
   // Review-sync (Epic 13): a synced public review carries the provider's review
   // id (idempotency key per source) + origin + authored time. Gate reviews leave
   // these null.
-  source          String  @default("GATE") // GATE | GOOGLE | FACEBOOK
+  source           String    @default("GATE") // GATE | GOOGLE | FACEBOOK
   externalReviewId String?
-  authoredAt      DateTime?
+  authoredAt       DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2151,15 +2171,15 @@ model Review {
 /// An inbound AI-answered phone call (Twilio). The agent persona comes from the
 /// VOICE Channel's agentProfileId; turns are transcribed into VoiceTranscript.
 model VoiceCall {
-  id              String  @id @default(uuid())
+  id              String   @id @default(uuid())
   workspaceId     String
   channelId       String
   leadId          String?
-  externalCallId  String  @unique
+  externalCallId  String   @unique
   fromNumber      String
   toNumber        String
-  status          String  @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
-  turns           Int     @default(0)
+  status          String   @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
+  turns           Int      @default(0)
   lastGatherToken String?
   /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
   /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
@@ -2565,27 +2585,27 @@ model RoutineConfig {
 /// Lesson. Members are Leads (soft ref via Enrollment). Publishing requires
 /// at least one lesson (enforced in the service).
 model Course {
-  id            String   @id @default(uuid())
-  workspaceId   String
-  title         String
-  slug          String
-  description   String?  @db.Text
-  status        String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
-  priceCents    Int? // null = free
-  currency      String?
-  coverImageUrl String?
-  position      Int      @default(0)
+  id                  String   @id @default(uuid())
+  workspaceId         String
+  title               String
+  slug                String
+  description         String?  @db.Text
+  status              String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  priceCents          Int? // null = free
+  currency            String?
+  coverImageUrl       String?
+  position            Int      @default(0)
   // Course-level default lesson gating (Epic 10a drip). A lesson keeps its own
   // gating unless that is FREE, in which case this course default applies — so an
   // operator can gate/drip a whole course without editing every lesson.
-  dripMode      String?  // null/FREE | SEQUENTIAL | DRIP
+  dripMode            String? // null/FREE | SEQUENTIAL | DRIP
   // Completion certificates (Epic 10b). When enabled, a Certificate is issued
   // the moment an enrollment reaches 100%. The template holds {title?, signature?,
   // logoUrl?} for the rendered certificate.
-  certificateEnabled  Boolean @default(false)
+  certificateEnabled  Boolean  @default(false)
   certificateTemplate Json?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   modules      CourseModule[]
   enrollments  Enrollment[]
@@ -2706,6 +2726,10 @@ model EarnedBadge {
 /// Epic C3 — a community space. Members are Leads; posts/comments may be
 /// authored by a staff MarketingUser (authorUserId) or a member Lead
 /// (authorLeadId), both soft refs.
+/// DEPRECATED (2026-07 system trim): the communities feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model Community {
   id          String   @id @default(uuid())
   workspaceId String
@@ -2724,6 +2748,10 @@ model Community {
   @@map("communities")
 }
 
+/// DEPRECATED (2026-07 system trim): the communities feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model CommunityMember {
   id          String   @id @default(uuid())
   communityId String
@@ -2738,6 +2766,10 @@ model CommunityMember {
   @@map("community_members")
 }
 
+/// DEPRECATED (2026-07 system trim): the communities feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model CommunityPost {
   id           String   @id @default(uuid())
   communityId  String
@@ -2757,6 +2789,10 @@ model CommunityPost {
   @@map("community_posts")
 }
 
+/// DEPRECATED (2026-07 system trim): the communities feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model CommunityComment {
   id           String   @id @default(uuid())
   postId       String
@@ -2845,6 +2881,10 @@ model DataRequest {
 /// Epic E — an A/B (split) experiment over a funnel/site page. `variants` is a
 /// JSON array of { key, label, weight, blocks? }; selection is weighted-random
 /// and each impression/conversion is an ExperimentEvent for results aggregation.
+/// DEPRECATED (2026-07 system trim): the experiments feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model Experiment {
   id          String   @id @default(uuid())
   workspaceId String
@@ -2861,6 +2901,10 @@ model Experiment {
   @@map("experiments")
 }
 
+/// DEPRECATED (2026-07 system trim): the experiments feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model ExperimentEvent {
   id           String   @id @default(uuid())
   experimentId String
@@ -2877,6 +2921,10 @@ model ExperimentEvent {
 
 /// Epic E — a workspace-authored survey (richer than a lead-capture FormDef).
 /// `questions` is a JSON array of { key, label, type, required?, options? }.
+/// DEPRECATED (2026-07 system trim): the surveys feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model Survey {
   id          String   @id @default(uuid())
   workspaceId String
@@ -2893,6 +2941,10 @@ model Survey {
   @@map("surveys")
 }
 
+/// DEPRECATED (2026-07 system trim): the surveys feature was removed — no UI or
+/// API serves this model anymore. The table + any tenant data are RETAINED
+/// on purpose (no destructive migration); drop in a later cleanup once the
+/// owner confirms zero production usage.
 model SurveyResponse {
   id          String   @id @default(uuid())
   surveyId    String
@@ -2953,13 +3005,13 @@ model SsoConnection {
 /// v1:...) and NEVER returned by the API. `syncToken` drives incremental pulls;
 /// `channelId`/`resourceId` back the optional Google "watch" push-webhook.
 model GoogleCalendarConnection {
-  id               String   @id @default(uuid())
-  workspaceId      String
-  marketingUserId  String
-  googleCalendarId String   @default("primary")
-  accessToken      String // SEALED (secret-box v1:...) — masked out of API responses
-  refreshToken     String // SEALED (secret-box v1:...) — masked out of API responses
-  tokenExpiresAt   DateTime
+  id                String    @id @default(uuid())
+  workspaceId       String
+  marketingUserId   String
+  googleCalendarId  String    @default("primary")
+  accessToken       String // SEALED (secret-box v1:...) — masked out of API responses
+  refreshToken      String // SEALED (secret-box v1:...) — masked out of API responses
+  tokenExpiresAt    DateTime
   syncToken         String? // Google incremental events.list sync token (nullable until first pull)
   channelId         String? // Google watch channel id (push webhook); unique when set
   resourceId        String? // Google watch resource id (push webhook)
@@ -2968,13 +3020,13 @@ model GoogleCalendarConnection {
   // Space-separated OAuth scopes Google granted (Phase 4). Presence of
   // meetings.space.created gates advanced Meet (recording/transcript/co-host).
   scopes            String?
-  enabled           Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  enabled           Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
+  @@unique([channelId])
   @@index([workspaceId])
   @@index([workspaceId, marketingUserId])
-  @@unique([channelId])
   @@map("google_calendar_connections")
 }
 
@@ -2983,24 +3035,24 @@ model GoogleCalendarConnection {
 /// sealed access/refresh tokens, a Graph delta cursor, and (for the deferred
 /// real-time sync) a change-notification subscription.
 model OutlookCalendarConnection {
-  id              String   @id @default(uuid())
-  workspaceId     String
-  marketingUserId String
-  outlookCalendarId String @default("primary")
-  accessToken     String // SEALED — masked out of API responses
-  refreshToken    String // SEALED — masked out of API responses
-  tokenExpiresAt  DateTime
+  id                     String    @id @default(uuid())
+  workspaceId            String
+  marketingUserId        String
+  outlookCalendarId      String    @default("primary")
+  accessToken            String // SEALED — masked out of API responses
+  refreshToken           String // SEALED — masked out of API responses
+  tokenExpiresAt         DateTime
   deltaToken             String? // Graph /me/events delta cursor (nullable until first pull)
   subscriptionId         String? // Graph change-notification subscription id; unique when set
   clientState            String? // per-subscription verification nonce
   subscriptionExpiration DateTime? // when the Graph subscription expires (drives renewal)
-  enabled         Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  enabled                Boolean   @default(true)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
+  @@unique([subscriptionId])
   @@index([workspaceId])
   @@index([workspaceId, marketingUserId])
-  @@unique([subscriptionId])
   @@map("outlook_calendar_connections")
 }
 
@@ -3023,24 +3075,24 @@ model CustomRole {
 /// Affiliate manager — workspace-scoped affiliate (partner/referrer).
 /// `code` is unique per workspace (not globally unique, unlike MarketingUser.referralCode) — use @@unique([workspaceId, code]).
 model Affiliate {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   workspaceId     String
   name            String
   email           String
   code            String
-  commissionType  String   // PERCENT | FLAT
-  commissionValue Decimal  @db.Decimal(10, 2)
-  status          String   @default("ACTIVE") // ACTIVE | PAUSED | DISABLED | PENDING (self-signup, awaiting approval)
+  commissionType  String // PERCENT | FLAT
+  commissionValue Decimal   @db.Decimal(10, 2)
+  status          String    @default("ACTIVE") // ACTIVE | PAUSED | DISABLED | PENDING (self-signup, awaiting approval)
   // Self-serve portal (Epic 11a): sha256 of the affiliate's portal bearer token
   // (shown once on generation, like IngestToken). null = no portal access yet.
-  portalTokenHash String?  @unique
+  portalTokenHash String?   @unique
   // Globally-unique public referral slug for the shareable /r/:slug link (the
   // per-workspace `code` is NOT unique across workspaces, so it can't be the
   // public key). Lazily minted; null until the affiliate first needs a link.
-  referralSlug    String?  @unique
+  referralSlug    String?   @unique
   lastLoginAt     DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   referrals   AffiliateReferral[]
   commissions AffiliateCommission[]
@@ -3052,14 +3104,14 @@ model Affiliate {
 
 /// A referral tracked to an affiliate. referredLeadId is a soft ref to Lead.id.
 model AffiliateReferral {
-  id                  String    @id @default(uuid())
-  workspaceId         String
-  affiliateId         String
-  affiliate           Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
-  referredLeadId      String?
-  status              String    @default("PENDING") // PENDING | CONVERTED | REJECTED
-  convertedAt         DateTime?
-  createdAt           DateTime  @default(now())
+  id             String    @id @default(uuid())
+  workspaceId    String
+  affiliateId    String
+  affiliate      Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  referredLeadId String?
+  status         String    @default("PENDING") // PENDING | CONVERTED | REJECTED
+  convertedAt    DateTime?
+  createdAt      DateTime  @default(now())
 
   commissions AffiliateCommission[]
 
@@ -3090,19 +3142,19 @@ model AffiliateCommission {
 /// Social account connected to a workspace (env-gated per-network publish).
 /// accessToken is SEALED (secret-box v1:...) — never returned raw in API responses.
 model SocialAccount {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   workspaceId    String
-  network        String   // FACEBOOK | INSTAGRAM | LINKEDIN
-  externalId     String   // provider page/profile id
+  network        String // FACEBOOK | INSTAGRAM | LINKEDIN
+  externalId     String // provider page/profile id
   displayName    String
-  accessToken    String   @db.Text // SEALED — never returned raw
+  accessToken    String    @db.Text // SEALED — never returned raw
   tokenExpiresAt DateTime?
-  refreshToken   String?  @db.Text // SEALED — provider refresh token (LinkedIn/TikTok)
-  accountType    String?  // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK
-  connectedVia   String   @default("MANUAL") // MANUAL | OAUTH
-  lastError      String?  // e.g. 'reauth_required' when token refresh fails
-  enabled        Boolean  @default(true)
-  createdAt      DateTime @default(now())
+  refreshToken   String?   @db.Text // SEALED — provider refresh token (LinkedIn/TikTok)
+  accountType    String? // PAGE | IG_BUSINESS | LI_PERSON | LI_ORG | TIKTOK
+  connectedVia   String    @default("MANUAL") // MANUAL | OAUTH
+  lastError      String? // e.g. 'reauth_required' when token refresh fails
+  enabled        Boolean   @default(true)
+  createdAt      DateTime  @default(now())
 
   targets SocialPostTarget[]
 
@@ -3128,22 +3180,22 @@ model PendingSocialConnection {
 
 /// A social post authored in the planner (may fan out to multiple networks).
 model SocialPost {
-  id          String    @id @default(uuid())
-  workspaceId String
-  content     String    @db.Text
-  mediaUrls   String[]
+  id               String    @id @default(uuid())
+  workspaceId      String
+  content          String    @db.Text
+  mediaUrls        String[]
   /// Free-form publish options: per-target formats ({accountId: FEED|REEL|STORY}),
   /// uploaded media descriptors ([{url,key,mime}] for R2 cleanup), mediaDeletedAt,
   /// and per-post network-specific controls. For TikTok:
   /// { tiktok?: { privacyLevel?: string, disableComment?: boolean,
   ///   disableDuet?: boolean, disableStitch?: boolean, mediaType?: 'VIDEO'|'PHOTO',
   ///   coverIndex?: number } }
-  options     Json?
-  status      String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
-  scheduledAt DateTime?
-  publishedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  options          Json?
+  status           String    @default("DRAFT") // DRAFT|SCHEDULED|PUBLISHING|PUBLISHED|FAILED
+  scheduledAt      DateTime?
+  publishedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
   /// AI Social Content Studio — set when a post originates from a SocialCampaign.
   socialCampaignId String?
   campaignItemId   String?
@@ -3157,14 +3209,14 @@ model SocialPost {
 
 /// A single per-network publish target for a SocialPost.
 model SocialPostTarget {
-  id              String    @id @default(uuid())
+  id              String        @id @default(uuid())
   workspaceId     String
   postId          String
   post            SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
   socialAccountId String
   account         SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Restrict)
-  network         String   // FACEBOOK | INSTAGRAM | LINKEDIN
-  status          String   @default("PENDING") // PENDING|PUBLISHED|FAILED
+  network         String // FACEBOOK | INSTAGRAM | LINKEDIN
+  status          String        @default("PENDING") // PENDING|PUBLISHED|FAILED
   externalPostId  String?
   error           String?
 
@@ -3228,17 +3280,17 @@ model BrandKit {
 /// lifecycle. status: QUEUED|GENERATING|READY|FAILED|BLOCKED. fal result URLs
 /// are re-hosted to R2 on READY; `r2Key` is the canonical store.
 model GeneratedAsset {
-  id                  String   @id @default(uuid())
+  id                  String          @id @default(uuid())
   workspaceId         String
-  type                String   // IMAGE | VIDEO
-  status              String   @default("QUEUED") // QUEUED|GENERATING|READY|FAILED|BLOCKED
-  provider            String   // e.g. "fal"
-  model               String   // provider model id
-  providerRequestId   String?  // idempotency key for webhook/poll convergence
-  prompt              String   @db.Text
+  type                String // IMAGE | VIDEO
+  status              String          @default("QUEUED") // QUEUED|GENERATING|READY|FAILED|BLOCKED
+  provider            String // e.g. "fal"
+  model               String // provider model id
+  providerRequestId   String? // idempotency key for webhook/poll convergence
+  prompt              String          @db.Text
   negativePrompt      String?
   /// aspectRatio, durationSec, seed, referenceImageUrls, count, etc.
-  params              Json     @default("{}")
+  params              Json            @default("{}")
   url                 String?
   r2Key               String?
   mime                String?
@@ -3247,15 +3299,15 @@ model GeneratedAsset {
   durationSec         Float?
   thumbnailUrl        String?
   thumbnailR2Key      String?
-  costCredits         Int?     // reconciled actual
-  costCreditsReserved Int?     // estimate reserved at submit (for refund/reconcile)
-  costUsd             Decimal? @db.Decimal(10, 4)
+  costCredits         Int? // reconciled actual
+  costCreditsReserved Int? // estimate reserved at submit (for refund/reconcile)
+  costUsd             Decimal?        @db.Decimal(10, 4)
   error               String?
   socialCampaignId    String?
   socialCampaign      SocialCampaign? @relation(fields: [socialCampaignId], references: [id], onDelete: SetNull)
   createdById         String
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   @@index([workspaceId, status])
   @@index([providerRequestId])
@@ -3296,14 +3348,14 @@ enum SocialCampaignItemStatus {
 /// AI Social Content Studio — a goal/theme/cadence-driven content calendar that
 /// auto-progresses generated posts. One per workspace per campaign.
 model SocialCampaign {
-  id                 String   @id @default(uuid())
+  id                 String                       @id @default(uuid())
   workspaceId        String
   name               String
   goal               String?
   theme              String?
   /// { audience?, keyMessages?, languages?, productRefs?, topics?[] }
   brief              Json
-  status             SocialCampaignStatus @default(DRAFT)
+  status             SocialCampaignStatus         @default(DRAFT)
   automationMode     SocialCampaignAutomationMode
   planningMode       SocialCampaignPlanningMode
   /// { perWeek?, daysOfWeek:number[], timeOfDay:'HH:MM', timezone? }
@@ -3314,14 +3366,14 @@ model SocialCampaign {
   mediaKinds         String[]
   defaultImageModel  String?
   defaultVideoModel  String?
-  dailyPublishCap    Int      @default(2)
+  dailyPublishCap    Int                          @default(2)
   linkedCampaignId   String?
   linkedAdCampaignId String?
   /// { planned, generated, approved, published }
   stats              Json?
   createdById        String
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
 
   items  SocialCampaignItem[]
   assets GeneratedAsset[]
@@ -3332,9 +3384,9 @@ model SocialCampaign {
 
 /// One planned slot in a SocialCampaign's calendar.
 model SocialCampaignItem {
-  id                String   @id @default(uuid())
+  id                String                   @id @default(uuid())
   socialCampaignId  String
-  campaign          SocialCampaign @relation(fields: [socialCampaignId], references: [id], onDelete: Cascade)
+  campaign          SocialCampaign           @relation(fields: [socialCampaignId], references: [id], onDelete: Cascade)
   workspaceId       String
   sequenceIndex     Int
   scheduledFor      DateTime
@@ -3343,8 +3395,8 @@ model SocialCampaignItem {
   socialPostId      String?
   generatedAssetIds String[]
   error             String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
 
   @@index([socialCampaignId, status])
   @@index([workspaceId, status])
@@ -3490,21 +3542,21 @@ model Opportunity {
   leadId       String? // soft ref to leads.id (the originating contact), nullable
   assignedToId String? // soft ref to marketing_users.id (owning rep), nullable
 
-  name       String
-  value      Decimal   @default(0) @db.Decimal(12, 2) // monetary value for forecasting
-  currency   String    @default("TRY") // TRY | USD | EUR
-  status     String    @default("OPEN") // OPEN | WON | LOST | ABANDONED
-  source     String?
-  notes      String?   @db.Text
-  position   Int       @default(0) // order within the stage column (lower = top)
-  lostReason String?
+  name              String
+  value             Decimal   @default(0) @db.Decimal(12, 2) // monetary value for forecasting
+  currency          String    @default("TRY") // TRY | USD | EUR
+  status            String    @default("OPEN") // OPEN | WON | LOST | ABANDONED
+  source            String?
+  notes             String?   @db.Text
+  position          Int       @default(0) // order within the stage column (lower = top)
+  lostReason        String?
   /// Forecasting (GHL parity): when the rep expects this deal to close. Drives
   /// the time-phased forecast month buckets; nullable = unscheduled.
   expectedCloseDate DateTime?
-  wonAt      DateTime?
-  lostAt     DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  wonAt             DateTime?
+  lostAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([workspaceId])
   @@index([workspaceId, pipelineId, stageId, position])
@@ -3680,23 +3732,23 @@ model AdAccount {
 /// provider. Idempotent upsert on (adAccountId, date, campaignId) so a re-pull
 /// never duplicates. `spend` is in the account currency's major unit.
 model AdMetric {
-  id          String    @id @default(uuid())
-  workspaceId String
-  adAccountId String
-  adAccount   AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
-  date        DateTime  @db.Date // UTC day
-  campaignId  String    @default("") // '' = account-level rollup
-  spend       Decimal   @default(0) @db.Decimal(14, 2)
-  impressions Int       @default(0)
-  clicks      Int       @default(0)
-  leads       Int       @default(0)
+  id              String    @id @default(uuid())
+  workspaceId     String
+  adAccountId     String
+  adAccount       AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  date            DateTime  @db.Date // UTC day
+  campaignId      String    @default("") // '' = account-level rollup
+  spend           Decimal   @default(0) @db.Decimal(14, 2)
+  impressions     Int       @default(0)
+  clicks          Int       @default(0)
+  leads           Int       @default(0)
   /// Faz 5/7 Performance Loop: revenue & conversion value pulled from the
   /// provider (or reconciled from CRM won-revenue); roas = revenue / spend.
-  revenue         Decimal  @default(0) @db.Decimal(14, 2)
-  conversionValue Decimal  @default(0) @db.Decimal(14, 2)
-  roas            Decimal? @db.Decimal(10, 4)
-  rawMetrics  Json?
-  pulledAt    DateTime  @default(now())
+  revenue         Decimal   @default(0) @db.Decimal(14, 2)
+  conversionValue Decimal   @default(0) @db.Decimal(14, 2)
+  roas            Decimal?  @db.Decimal(10, 4)
+  rawMetrics      Json?
+  pulledAt        DateTime  @default(now())
 
   @@unique([adAccountId, date, campaignId])
   @@index([workspaceId, date])
@@ -3709,26 +3761,26 @@ model AdMetric {
 /// INCREASE_BUDGET / DECREASE_BUDGET (by `actionValue` %, clamped to min/max),
 /// PAUSE or RESUME. Every firing is recorded in AdRuleLog.
 model AdRule {
-  id            String    @id @default(uuid())
-  workspaceId   String
-  adAccountId   String
-  account       AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
-  name          String
-  enabled       Boolean   @default(true)
-  level         String    @default("CAMPAIGN") // CAMPAIGN (adset = follow-up)
-  metric        String // SPEND | CPL | CTR | LEADS | CLICKS | IMPRESSIONS
-  operator      String // GT | LT | GTE | LTE
-  threshold     Decimal   @db.Decimal(14, 2)
-  windowDays    Int       @default(3)
-  action        String // INCREASE_BUDGET | DECREASE_BUDGET | PAUSE | RESUME
-  actionValue   Decimal?  @db.Decimal(10, 2) // percent for budget actions
-  maxBudget     Decimal?  @db.Decimal(14, 2) // major units (budget ceiling)
-  minBudget     Decimal?  @db.Decimal(14, 2) // major units (budget floor)
-  cooldownHours Int       @default(24)
-  lastRunAt     DateTime?
+  id              String    @id @default(uuid())
+  workspaceId     String
+  adAccountId     String
+  account         AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  name            String
+  enabled         Boolean   @default(true)
+  level           String    @default("CAMPAIGN") // CAMPAIGN (adset = follow-up)
+  metric          String // SPEND | CPL | CTR | LEADS | CLICKS | IMPRESSIONS
+  operator        String // GT | LT | GTE | LTE
+  threshold       Decimal   @db.Decimal(14, 2)
+  windowDays      Int       @default(3)
+  action          String // INCREASE_BUDGET | DECREASE_BUDGET | PAUSE | RESUME
+  actionValue     Decimal?  @db.Decimal(10, 2) // percent for budget actions
+  maxBudget       Decimal?  @db.Decimal(14, 2) // major units (budget ceiling)
+  minBudget       Decimal?  @db.Decimal(14, 2) // major units (budget floor)
+  cooldownHours   Int       @default(24)
+  lastRunAt       DateTime?
   lastTriggeredAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   logs AdRuleLog[]
 
@@ -3924,18 +3976,18 @@ model AutopilotRun {
 /// controller's integral/last-error across ticks so spend is smoothed toward
 /// the ideal curve (avoids front-loading the budget early or starving it late).
 model PacingState {
-  id                  String   @id @default(uuid())
+  id                  String    @id @default(uuid())
   workspaceId         String
   budgetId            String
-  channel             String   @default("") // '' = whole-budget
-  spentToDate         Decimal  @default(0) @db.Decimal(14, 2)
-  idealToDate         Decimal  @default(0) @db.Decimal(14, 2)
-  pidIntegral         Decimal  @default(0) @db.Decimal(16, 6)
-  pidLastError        Decimal  @default(0) @db.Decimal(16, 6)
-  recommendedDailyCap Decimal? @db.Decimal(14, 2)
-  status              String   @default("ON_PACE") // ON_PACE | UNDERSPENDING | OVERSPENDING
+  channel             String    @default("") // '' = whole-budget
+  spentToDate         Decimal   @default(0) @db.Decimal(14, 2)
+  idealToDate         Decimal   @default(0) @db.Decimal(14, 2)
+  pidIntegral         Decimal   @default(0) @db.Decimal(16, 6)
+  pidLastError        Decimal   @default(0) @db.Decimal(16, 6)
+  recommendedDailyCap Decimal?  @db.Decimal(14, 2)
+  status              String    @default("ON_PACE") // ON_PACE | UNDERSPENDING | OVERSPENDING
   lastPacedAt         DateTime?
-  updatedAt           DateTime @updatedAt
+  updatedAt           DateTime  @updatedAt
 
   @@unique([budgetId, channel])
   @@map("pacing_states")

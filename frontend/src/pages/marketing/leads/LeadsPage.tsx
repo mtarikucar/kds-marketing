@@ -4,7 +4,7 @@ import type { SortingState } from '@tanstack/react-table';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Download } from 'lucide-react';
+import { Plus, Download, SlidersHorizontal } from 'lucide-react';
 
 import {
   listLeads,
@@ -40,6 +40,10 @@ import {
   SelectItem,
   QueryStateBoundary,
   ConfirmDialog,
+  Badge,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
 } from '@/components/ui';
 
 import { buildLeadsColumns } from './leadsColumns';
@@ -328,43 +332,8 @@ export default function LeadsPage() {
           </SelectContent>
         </Select>
 
-        {/* Source */}
-        <Select
-          value={source || '__all__'}
-          onValueChange={(v) => { setSource(v === '__all__' ? '' : v); setPage(1); }}
-        >
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder={t('leads.filterSource')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">{t('leads.filterSource')}</SelectItem>
-            {Object.values(LeadSource).map((s) => (
-              <SelectItem key={s} value={s}>
-                {t(`source.${s}`, { defaultValue: LEAD_SOURCE_LABELS[s] })}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Business type */}
-        <Select
-          value={businessType || '__all__'}
-          onValueChange={(v) => { setBusinessType(v === '__all__' ? '' : v); setPage(1); }}
-        >
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder={t('leads.filterBusinessType')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">{t('leads.filterBusinessType')}</SelectItem>
-            {Object.values(BusinessType).map((b) => (
-              <SelectItem key={b} value={b}>
-                {t(`businessType.${b}`, { defaultValue: BUSINESS_TYPE_LABELS[b] })}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Assignment status */}
+        {/* Assignment status — stays visible: it's the target of the dashboard's
+            unassigned deep-links (?assignmentStatus=unassigned). */}
         <Select
           value={assignmentStatus || '__all__'}
           onValueChange={(v) => {
@@ -382,6 +351,58 @@ export default function LeadsPage() {
             <SelectItem value="mine">{t('leads.assignmentStatus.mine')}</SelectItem>
           </SelectContent>
         </Select>
+
+        {/* Power filters (Source / Business type) collapse behind "More filters"
+            (2026-07 trim) so the daily bar stays lean; the badge keeps active
+            hidden filters discoverable. */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="md">
+              <SlidersHorizontal className="w-4 h-4" aria-hidden="true" />
+              {t('leads.moreFilters', { defaultValue: 'More filters' })}
+              {(source || businessType) && (
+                <Badge tone="primary">{[source, businessType].filter(Boolean).length}</Badge>
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-64 space-y-3">
+            {/* Source */}
+            <Select
+              value={source || '__all__'}
+              onValueChange={(v) => { setSource(v === '__all__' ? '' : v); setPage(1); }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t('leads.filterSource')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{t('leads.filterSource')}</SelectItem>
+                {Object.values(LeadSource).map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {t(`source.${s}`, { defaultValue: LEAD_SOURCE_LABELS[s] })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* Business type */}
+            <Select
+              value={businessType || '__all__'}
+              onValueChange={(v) => { setBusinessType(v === '__all__' ? '' : v); setPage(1); }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t('leads.filterBusinessType')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{t('leads.filterBusinessType')}</SelectItem>
+                {Object.values(BusinessType).map((b) => (
+                  <SelectItem key={b} value={b}>
+                    {t(`businessType.${b}`, { defaultValue: BUSINESS_TYPE_LABELS[b] })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </PopoverContent>
+        </Popover>
       </FilterBar>
 
       {/* Bulk action toolbar — sticky once selection exists (manager only) */}

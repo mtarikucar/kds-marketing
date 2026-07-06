@@ -11,6 +11,26 @@ import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/Select';
+import { LEAD_STATUS_LABELS } from '../../../features/marketing/types';
+
+/**
+ * Frontend mirror of the backend's ALLOWED_TRANSITIONS
+ * (marketing-leads.service.ts) — the header status Select offers ONLY legal
+ * moves for the current status, so no option can 400. WON is excluded (owned
+ * by the /convert flow); WON/LOST are terminal.
+ */
+const STATUS_TRANSITIONS: Record<string, string[]> = {
+  NEW: ['CONTACTED', 'NOT_REACHABLE', 'LOST'],
+  CONTACTED: ['MEETING_DONE', 'DEMO_SCHEDULED', 'NOT_REACHABLE', 'WAITING', 'LOST'],
+  NOT_REACHABLE: ['CONTACTED', 'LOST'],
+  MEETING_DONE: ['DEMO_SCHEDULED', 'OFFER_SENT', 'WAITING', 'LOST'],
+  DEMO_SCHEDULED: ['MEETING_DONE', 'OFFER_SENT', 'WAITING', 'LOST'],
+  OFFER_SENT: ['WAITING', 'WON', 'LOST'],
+  WAITING: ['OFFER_SENT', 'WON', 'LOST'],
+  WON: [],
+  LOST: [],
+};
 import {
   getLead,
   updateLeadStatus,
@@ -202,6 +222,32 @@ export default function LeadDetailPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <LeadStatusBadge status={lead.status} />
+            {/* Status changes live HERE now (2026-07 trim) — one Select offering
+                only the backend's LEGAL transitions for the current status,
+                replacing the left-rail card of 8 pills where most were illegal
+                moves that 400'd with a generic toast. WON stays owned by the
+                /convert flow; a closed/converted lead gets no select at all. */}
+            {!lead.convertedTenantId && STATUS_TRANSITIONS[lead.status]?.length > 0 && (
+              <Select
+                value="__current__"
+                onValueChange={(s) => statusMutation.mutate(s)}
+                disabled={statusMutation.isPending}
+              >
+                <SelectTrigger className="h-8 w-44" aria-label={t('leadDetail.changeStatus', 'Change status')}>
+                  <SelectValue placeholder={t('leadDetail.changeStatus', 'Change status')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__current__" disabled>
+                    {t('leadDetail.changeStatus', 'Change status')}
+                  </SelectItem>
+                  {STATUS_TRANSITIONS[lead.status].filter((s) => s !== 'WON').map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {LEAD_STATUS_LABELS[s as keyof typeof LEAD_STATUS_LABELS] ?? s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             {canConvert && (
               <Button
                 variant="primary"
@@ -212,18 +258,16 @@ export default function LeadDetailPage() {
                 <CheckCircle2 className="h-4 w-4" /> Convert to Customer
               </Button>
             )}
-            {/* Header-level assignment — primary discoverability point.
-                Iki AssignCell instance ayni queryKey'leri paylasir,
-                biri mutate ettiginde diger invalidate olur (no manual sync). */}
-            {isManager && (
-              <div className="flex items-center gap-1 rounded-lg border border-border-strong px-3 py-1.5 text-sm hover:bg-surface-muted">
-                <AssignCell
-                  leadId={lead.id}
-                  currentAssignee={lead.assignedTo ?? null}
-                  onAssigned={invalidate}
-                />
-              </div>
-            )}
+            {/* Header-level assignment — THE one assignment surface (2026-07
+                trim). AssignCell self-renders a read-only assignee label for
+                non-managers, so it is safe un-gated. */}
+            <div className="flex items-center gap-1 rounded-lg border border-border-strong px-3 py-1.5 text-sm hover:bg-surface-muted">
+              <AssignCell
+                leadId={lead.id}
+                currentAssignee={lead.assignedTo ?? null}
+                onAssigned={invalidate}
+              />
+            </div>
             <Button variant="outline" size="sm" asChild>
               <Link to={`/leads/${id}/edit`}>
                 <Pencil className="h-4 w-4" /> Edit
@@ -277,14 +321,7 @@ export default function LeadDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left: Info */}
         <div className="lg:col-span-1 space-y-4">
-          <ContactInfo
-            lead={lead}
-            isManager={isManager}
-            fmtDate={fmtDate}
-            onAssigned={invalidate}
-            onStatusChange={(s) => statusMutation.mutate(s)}
-            statusPending={statusMutation.isPending}
-          />
+          <ContactInfo lead={lead} fmtDate={fmtDate} />
           <CompanyPanel leadId={lead.id} companyId={lead.companyId} onUpdated={invalidate} />
           <WalletPanel leadId={lead.id} isManager={isManager} />
         </div>
