@@ -183,6 +183,13 @@ jobs:
           # NetGSM *SMS* credentials (usercode/password/msgheader) are NOT env vars —
           # they live per-channel, sealed in the DB (set via Channels settings UI).
           NETGSM_SALES_LINE: ${{ secrets.NETGSM_SALES_LINE }}
+          # Growth Autopilot autonomy (owner-approved LIVE 2026-07). '1' arms the
+          # AUTONOMOUS lane globally: a workspace that loads credit + flips the
+          # switch gets real, approval-free budget reallocation on its connected
+          # ad accounts (Mode-1: the ad network bills the customer's own account;
+          # Kill-switch + anomaly auto-stop are the safety rails). Set to 0/unset
+          # to instantly fall back to ASSISTED (propose-and-approve) everywhere.
+          GROWTH_AUTOPILOT_AUTONOMY: ${{ vars.GROWTH_AUTOPILOT_AUTONOMY }}
         run: |
           set -euo pipefail
           required=(MARKETING_POSTGRES_PASSWORD MARKETING_JWT_SECRET
@@ -260,6 +267,9 @@ jobs:
           # NetGSM click-to-dial sales line (telephony only; empty = inert). SMS
           # creds are per-channel in the DB, not here.
           NETGSM_SALES_LINE=${NETGSM_SALES_LINE}
+          # Growth Autopilot autonomy (repo Variable GROWTH_AUTOPILOT_AUTONOMY).
+          # '1' arms the AUTONOMOUS lane; empty/0 = ASSISTED fallback everywhere.
+          GROWTH_AUTOPILOT_AUTONOMY=${GROWTH_AUTOPILOT_AUTONOMY}
           ENV
 
       - name: Ship env + compose (atomic)
