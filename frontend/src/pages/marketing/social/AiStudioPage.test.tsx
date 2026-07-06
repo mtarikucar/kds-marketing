@@ -123,7 +123,7 @@ describe('AiStudioPage', () => {
     await userEvent.click(addBtn);
     // Direct to the planner INSIDE Growth Studio — the legacy /social redirect
     // hop would drop location.state and lose the seeded media.
-    expect(navigate).toHaveBeenCalledWith('/studio?tab=campaigns&sub=planner', {
+    expect(navigate).toHaveBeenCalledWith('/studio?view=tools&tab=campaigns&sub=planner', {
       state: { seedMedia: [{ url: 'https://r2/img.png', key: 'social/ws/img.png', mime: 'image/png' }] },
     });
   });

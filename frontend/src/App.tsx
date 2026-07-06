@@ -188,10 +188,12 @@ export default function App() {
           <Route path="/ads"            element={<RedirectMergingParams to="/reports" set={{ tab: 'ads' }} />} />
           <Route path="/performance"    element={<RedirectMergingParams to="/reports" set={{ tab: 'performance' }} />} />
           <Route path="/analytics"      element={<RedirectMergingParams to="/reports" set={{ tab: 'analytics' }} />} />
+          {/* Growth Studio is Autopilot-first: /studio IS the autopilot console;
+              the manual tools live behind ?view=tools&tab=… */}
           <Route path="/studio"         element={<S><GrowthStudioPage /></S>} />
-          <Route path="/budget"         element={<Navigate to="/studio?tab=budget" replace />} />
-          <Route path="/trends"         element={<Navigate to="/studio?tab=trends" replace />} />
-          <Route path="/content-calendar" element={<Navigate to="/studio?tab=calendar" replace />} />
+          <Route path="/budget"         element={<Navigate to="/studio" replace />} />
+          <Route path="/trends"         element={<Navigate to="/studio?view=tools&tab=trends" replace />} />
+          <Route path="/content-calendar" element={<Navigate to="/studio?view=tools&tab=calendar" replace />} />
           <Route path="/commissions"    element={<S><CommissionsPage /></S>} />
           <Route path="/installations"  element={<S><InstallationsPage /></S>} />
           {/* Calls | Power Dialer — ONE page, tabs at ?tab= */}
@@ -233,7 +235,7 @@ export default function App() {
             <Route path="/automations" element={<S><AutomationsPage /></S>} />
             <Route path="/automations/new" element={<S><AutomationBuilderPage /></S>} />
             <Route path="/automations/:id/edit" element={<S><AutomationBuilderPage /></S>} />
-            <Route path="/campaigns"   element={<Navigate to="/studio?tab=campaigns" replace />} />
+            <Route path="/campaigns"   element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
             <Route path="/email-templates" element={<S><EmailTemplatesPage /></S>} />
             <Route path="/sites"       element={<S><SitesPage /></S>} />
             <Route path="/booking"     element={<S><BookingSettingsPage /></S>} />
@@ -259,8 +261,8 @@ export default function App() {
             {/* Telephony + Voice-AI setup now lives in the Account Center. */}
             <Route path="/settings/telephony"   element={<Navigate to="/accounts" replace />} />
             <Route path="/settings/voice-ai"    element={<Navigate to="/accounts" replace />} />
-            <Route path="/social"      element={<Navigate to="/studio?tab=campaigns" replace />} />
-            <Route path="/social-campaigns"      element={<Navigate to="/studio?tab=campaigns" replace />} />
+            <Route path="/social"      element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
+            <Route path="/social-campaigns"      element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
             <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />

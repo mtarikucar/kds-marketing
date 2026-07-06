@@ -1,16 +1,15 @@
-import { lazy, Suspense, useState, type ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Sparkles } from 'lucide-react';
+import { Wrench, ArrowLeft } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { RouteFallback } from '../../../components/RouteFallback';
-import { EnableAutopilotWizard } from '../budget/EnableAutopilotWizard';
 
-// Lazy so a tab's code only loads when opened (each was its own route before).
-const StudioCalendarTab = lazy(() => import('./StudioCalendarTab'));
+// Lazy so a surface's code only loads when opened.
 const BudgetAutopilotPage = lazy(() => import('../budget/BudgetAutopilotPage'));
+const StudioCalendarTab = lazy(() => import('./StudioCalendarTab'));
 const TrendsPage = lazy(() => import('../trends/TrendsPage'));
 const CampaignsPage = lazy(() => import('../CampaignsPage'));
 const SocialCampaignsPage = lazy(() => import('../socialCampaigns/SocialCampaignsPage'));
@@ -21,8 +20,8 @@ const EmailTemplatesPage = lazy(() => import('../emailTemplates'));
 const ReviewsPage = lazy(() => import('../ReviewsPage'));
 const AffiliatePortalPage = lazy(() => import('../affiliate-portal/AffiliatePortalPage'));
 
-const TABS = ['calendar', 'create', 'campaigns', 'trends', 'budget', 'more'] as const;
-type StudioTab = (typeof TABS)[number];
+const TOOL_TABS = ['calendar', 'create', 'campaigns', 'trends', 'more'] as const;
+type ToolTab = (typeof TOOL_TABS)[number];
 
 const CREATE_SUBS = ['studio', 'personas'] as const;
 const CAMPAIGN_SUBS = ['standard', 'social', 'planner'] as const;
@@ -33,69 +32,54 @@ function Lazy({ children }: { children: ReactNode }) {
 }
 
 /**
- * Growth Studio — the single unified marketing surface. Content calendar,
- * campaigns (normal + social + planner), trends and the Autopilot all live
- * here as deep-linkable tabs: `?tab=` for the page level and `?sub=` for the
- * nested groups, so EVERY view survives refresh/back and can be shared.
- * The header carries the product's one-click promise: Enable Autopilot.
+ * Growth Studio — AUTONOMY-FIRST (2026-07 radical reshape, owner-directed).
+ *
+ * The default screen IS the Growth Autopilot console: load credit, flip one
+ * switch, and the engine spends it to grow sales — it never asks. The old
+ * 6-tab "suite" (content calendar, create, campaigns, trends, more) is NOT the
+ * front door anymore; it lives behind a single "Manual tools" button as an
+ * advanced surface (`?view=tools`), one click away, deep-links preserved.
+ * The Autopilot is no longer a tab — it is the page.
  */
 export default function GrowthStudioPage() {
   const { t } = useTranslation('marketing');
   const [params, setParams] = useSearchParams();
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const raw = params.get('tab');
-  const tab: StudioTab = (TABS as readonly string[]).includes(raw ?? '') ? (raw as StudioTab) : 'calendar';
+  const showTools = params.get('view') === 'tools';
 
-  const setTab = (v: string) => setParams((p) => {
-    p.set('tab', v);
-    p.delete('sub'); // a page-level switch resets the nested selection
-    return p;
-  }, { replace: true });
+  const openTools = () => setParams((p) => { p.set('view', 'tools'); return p; }, { replace: true });
+  const closeTools = () => setParams((p) => { p.delete('view'); p.delete('tab'); p.delete('sub'); return p; }, { replace: true });
+
+  if (showTools) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title={t('studio.tools.title', 'Manual tools')}
+          description={t('studio.tools.subtitle', 'Hand-run content, campaigns and trends. The Autopilot uses these same tools automatically — you only need them for one-off overrides.')}
+          actions={
+            <Button variant="secondary" onClick={closeTools}>
+              <ArrowLeft className="mr-1.5 h-4 w-4" aria-hidden="true" />
+              {t('studio.tools.back', 'Back to Autopilot')}
+            </Button>
+          }
+        />
+        <ToolsSurface />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title={t('studio.title', 'Growth Studio')}
-        description={t('studio.subtitle', 'Plan, create, schedule and budget your marketing — all in one place.')}
+        title={t('autopilot.title', 'Growth Autopilot')}
+        description={t('autopilot.subtitle', 'Load credit, set your caps once, flip it on — the engine spends it where it makes you the most sales, and logs everything it does.')}
         actions={
-          <Button onClick={() => setWizardOpen(true)}>
-            <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />
-            {t('autopilot.enableCta', 'Enable Autopilot')}
+          <Button variant="secondary" onClick={openTools}>
+            <Wrench className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            {t('studio.manualTools', 'Manual tools')}
           </Button>
         }
       />
-
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="calendar">{t('studio.tab.calendar', 'Content Calendar')}</TabsTrigger>
-          <TabsTrigger value="create">{t('studio.tab.create', 'Create')}</TabsTrigger>
-          <TabsTrigger value="campaigns">{t('studio.tab.campaigns', 'Campaigns')}</TabsTrigger>
-          <TabsTrigger value="trends">{t('studio.tab.trends', 'Trends')}</TabsTrigger>
-          <TabsTrigger value="budget">{t('studio.tab.autopilot', 'Autopilot')}</TabsTrigger>
-          <TabsTrigger value="more">{t('studio.tab.more', 'More')}</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="calendar" className="pt-5">
-          <Lazy><StudioCalendarTab /></Lazy>
-        </TabsContent>
-        <TabsContent value="create" className="pt-5">
-          <CreateTab />
-        </TabsContent>
-        <TabsContent value="campaigns" className="pt-5">
-          <CampaignsTab />
-        </TabsContent>
-        <TabsContent value="trends" className="pt-5">
-          <Lazy><TrendsPage embedded /></Lazy>
-        </TabsContent>
-        <TabsContent value="budget" className="pt-5">
-          <Lazy><BudgetAutopilotPage embedded /></Lazy>
-        </TabsContent>
-        <TabsContent value="more" className="pt-5">
-          <MoreTab />
-        </TabsContent>
-      </Tabs>
-
-      <EnableAutopilotWizard open={wizardOpen} onOpenChange={setWizardOpen} onProvisioned={() => setTab('budget')} />
+      <Lazy><BudgetAutopilotPage embedded /></Lazy>
     </div>
   );
 }
@@ -110,6 +94,38 @@ function useSubTab<T extends readonly string[]>(subs: T, fallback: T[number]): [
     return p;
   }, { replace: true });
   return [sub, setSub];
+}
+
+/** The advanced/manual surface — the former Studio hub, now one click away. */
+function ToolsSurface() {
+  const { t } = useTranslation('marketing');
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: ToolTab = (TOOL_TABS as readonly string[]).includes(raw ?? '') ? (raw as ToolTab) : 'calendar';
+  const setTab = (v: string) => setParams((p) => {
+    p.set('view', 'tools');
+    p.set('tab', v);
+    p.delete('sub');
+    return p;
+  }, { replace: true });
+
+  return (
+    <Tabs value={tab} onValueChange={setTab}>
+      <TabsList>
+        <TabsTrigger value="calendar">{t('studio.tab.calendar', 'Content Calendar')}</TabsTrigger>
+        <TabsTrigger value="create">{t('studio.tab.create', 'Create')}</TabsTrigger>
+        <TabsTrigger value="campaigns">{t('studio.tab.campaigns', 'Campaigns')}</TabsTrigger>
+        <TabsTrigger value="trends">{t('studio.tab.trends', 'Trends')}</TabsTrigger>
+        <TabsTrigger value="more">{t('studio.tab.more', 'More')}</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="calendar" className="pt-5"><Lazy><StudioCalendarTab /></Lazy></TabsContent>
+      <TabsContent value="create" className="pt-5"><CreateTab /></TabsContent>
+      <TabsContent value="campaigns" className="pt-5"><CampaignsTab /></TabsContent>
+      <TabsContent value="trends" className="pt-5"><Lazy><TrendsPage embedded /></Lazy></TabsContent>
+      <TabsContent value="more" className="pt-5"><MoreTab /></TabsContent>
+    </Tabs>
+  );
 }
 
 /** Create tab — the AI content tools: media generation + reusable UGC personas. */

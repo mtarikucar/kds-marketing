@@ -138,7 +138,7 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
     const media: MediaItemValue = { url: a.url, key: a.r2Key ?? undefined, mime: a.mime ?? undefined };
     // Straight to the planner INSIDE Growth Studio — the legacy /social
     // redirect would drop location.state and lose the seeded media.
-    navigate('/studio?tab=campaigns&sub=planner', { state: { seedMedia: [media] } });
+    navigate('/studio?view=tools&tab=campaigns&sub=planner', { state: { seedMedia: [media] } });
   };
 
   const onType = (next: GeneratedAssetType) => {
