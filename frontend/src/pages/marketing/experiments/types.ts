@@ -1,58 +1,6 @@
-// Shapes mirror the marketing backend (experiments / surveys / affiliate
-// controllers). Decimal money values arrive as strings over JSON.
-
-export interface ExperimentVariant {
-  key: string;
-  label?: string;
-  weight?: number;
-  blocks?: unknown;
-}
-
-export interface Experiment {
-  id: string;
-  workspaceId: string;
-  name: string;
-  pageId?: string | null;
-  variants: ExperimentVariant[];
-  status: 'DRAFT' | 'RUNNING' | 'STOPPED';
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ExperimentResult {
-  variantKey: string;
-  impressions: number;
-  conversions: number;
-  conversionRate: number;
-}
-
-export interface SurveyQuestion {
-  key: string;
-  label: string;
-  type: 'TEXT' | 'TEXTAREA' | 'SINGLE' | 'MULTIPLE' | 'RATING';
-  required?: boolean;
-  options?: string[];
-}
-
-export interface Survey {
-  id: string;
-  workspaceId: string;
-  name: string;
-  questions: SurveyQuestion[];
-  status: 'DRAFT' | 'PUBLISHED' | 'CLOSED';
-  redirectUrl?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface SurveyResponse {
-  id: string;
-  surveyId: string;
-  workspaceId: string;
-  leadId?: string | null;
-  answers: Record<string, unknown>;
-  createdAt: string;
-}
+// Shapes mirror the marketing backend affiliate controllers. Decimal money
+// values arrive as strings over JSON. (The Experiments/Surveys types that used
+// to live here died with those features — 2026-07 system trim.)
 
 export type CommissionType = 'PERCENT' | 'FLAT';
 export type AffiliateStatus = 'ACTIVE' | 'PAUSED' | 'DISABLED';

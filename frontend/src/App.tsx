@@ -33,10 +33,8 @@ const DocumentsHubPage         = lazy(() => import('./pages/marketing/documents/
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const GrowthStudioPage         = lazy(() => import('./pages/marketing/studio/GrowthStudioPage'));
 const HelpPage                 = lazy(() => import('./pages/marketing/help'));
-const CustomObjectsPage        = lazy(() => import('./pages/marketing/customObjects/CustomObjectsPage'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
 const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTemplates'));
-const CustomObjectDetailPage   = lazy(() => import('./pages/marketing/customObjects/CustomObjectDetailPage'));
 const CommissionsPage          = lazy(() => import('./pages/marketing/CommissionsPage'));
 const InstallationsPage        = lazy(() => import('./pages/marketing/installations/InstallationsPage'));
 // The Power Dialer is a TAB inside CallsPage now.
@@ -52,9 +50,6 @@ const TagsPage                 = lazy(() => import('./pages/marketing/crm/tags')
 const SegmentsPage             = lazy(() => import('./pages/marketing/crm/segments'));
 const CoursesPage              = lazy(() => import('./pages/marketing/memberships/courses'));
 const CourseEditorPage         = lazy(() => import('./pages/marketing/memberships/courses/CourseEditorPage'));
-const CommunitiesPage          = lazy(() => import('./pages/marketing/memberships/communities'));
-const CommunityDetailPage      = lazy(() => import('./pages/marketing/memberships/communities/CommunityDetailPage'));
-const LeaderboardPage          = lazy(() => import('./pages/marketing/memberships/gamification/LeaderboardPage'));
 const AffiliatePortalPage      = lazy(() => import('./pages/marketing/affiliate-portal/AffiliatePortalPage'));
 const AgencyLocationsPage      = lazy(() => import('./pages/marketing/agency/LocationsPage'));
 const AgencySnapshotsPage      = lazy(() => import('./pages/marketing/agency/SnapshotsPage'));
@@ -95,8 +90,6 @@ const SocialCampaignsPage      = lazy(() => import('./pages/marketing/socialCamp
 const SocialCampaignBuilder    = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignBuilder'));
 const SocialCampaignDetailPage = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignDetailPage'));
 const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
-const ExperimentsPage          = lazy(() => import('./pages/marketing/experiments'));
-const SurveysPage              = lazy(() => import('./pages/marketing/experiments/surveys'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
 
 // ── Lazy page imports — platform (superadmin) realm ───────────────────────────
@@ -226,9 +219,6 @@ export default function App() {
             <Route path="/settings/import" element={<Navigate to="/import" replace />} />
             <Route path="/memberships/courses"            element={<S><CoursesPage /></S>} />
             <Route path="/memberships/courses/:id"        element={<S><CourseEditorPage /></S>} />
-            <Route path="/memberships/communities"        element={<S><CommunitiesPage /></S>} />
-            <Route path="/memberships/communities/:id"    element={<S><CommunityDetailPage /></S>} />
-            <Route path="/memberships/leaderboard"        element={<S><LeaderboardPage /></S>} />
             {/* Agency console (Epic D) — each page self-guards on workspace.kind === AGENCY
                 (AgencyGuard); backend additionally 403s every /agency route for non-agencies. */}
             <Route path="/agency/locations"  element={<S><AgencyLocationsPage /></S>} />
@@ -274,11 +264,7 @@ export default function App() {
             <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
-            <Route path="/custom-objects"      element={<S><CustomObjectsPage /></S>} />
-            <Route path="/custom-objects/:key" element={<S><CustomObjectDetailPage /></S>} />
             <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />
-            <Route path="/experiments" element={<S><ExperimentsPage /></S>} />
-            <Route path="/surveys"     element={<S><SurveysPage /></S>} />
             <Route path="/affiliates"  element={<S><AffiliatesPage /></S>} />
           </Route>
         </Route>

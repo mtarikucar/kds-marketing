@@ -47,14 +47,22 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(studio?.children).toBeUndefined();
     // The AI hub is GONE — its tools live inside Studio, Inbox and Brand.
     expect(hubs.find((h) => h.id === 'ai')).toBeUndefined();
-    expect(childPaths(hubs, 'sites').sort()).toEqual(['/experiments', '/surveys']);
-    expect(childPaths(hubs, 'memberships').sort()).toEqual([
-      '/memberships/communities',
-      '/memberships/courses',
-      '/memberships/leaderboard',
-    ]);
+    // Surveys + Experiments were deleted (2026-07 trim), so Sites is a
+    // single-page funnels-gated hub — absent without the entitlement.
+    expect(hubs.find((h) => h.id === 'sites')).toBeUndefined();
+    // Communities + Leaderboard were deleted; Memberships is just Courses now.
+    const memberships = hubs.find((h) => h.id === 'memberships');
+    expect(memberships?.path).toBe('/memberships/courses');
+    expect(memberships?.children).toBeUndefined();
     // Automation now also carries Trigger Links (moved out of Studio→More).
     expect(childPaths(hubs, 'automation')).toEqual(['/trigger-links']);
+  });
+
+  it('Sites appears as a single-page hub when funnels is entitled', () => {
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle('funnels') });
+    const sites = hubs.find((h) => h.id === 'sites');
+    expect(sites?.path).toBe('/sites');
+    expect(sites?.children).toBeUndefined();
   });
 
   it('the Inbox is a single-page hub gated by conversationAi (channels/snippets/agents/knowledge are tabs inside)', () => {
@@ -138,7 +146,6 @@ describe('findActiveHub — path → owning hub', () => {
     expect(findActiveHub(NAV_HUBS, '/voice/ivr')?.id).toBe('voice');
     expect(findActiveHub(NAV_HUBS, '/documents')?.id).toBe('sales');
     expect(findActiveHub(NAV_HUBS, '/trigger-links')?.id).toBe('automation');
-    expect(findActiveHub(NAV_HUBS, '/custom-objects')?.id).toBe('settings');
     expect(findActiveHub(NAV_HUBS, '/accounts')?.id).toBe('settings');
   });
 
@@ -161,8 +168,10 @@ describe('splitByTier — progressive disclosure', () => {
     expect(coreIds).toEqual(
       expect.arrayContaining(['dashboard', 'contacts', 'calendar', 'sales', 'tasks', 'reports', 'studio']),
     );
+    // Sites is funnels-gated (single page) now, so it is absent without the
+    // entitlement — the remaining advanced trio still tucks behind "More".
     expect(advIds).toEqual(
-      expect.arrayContaining(['memberships', 'payments', 'sites', 'automation']),
+      expect.arrayContaining(['memberships', 'payments', 'automation']),
     );
     // The two tiers never overlap.
     expect(coreIds.some((id) => advIds.includes(id))).toBe(false);

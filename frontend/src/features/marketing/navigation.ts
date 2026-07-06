@@ -16,7 +16,6 @@ import {
   Sparkles,
   BookOpen,
   Inbox,
-  MessagesSquare,
   Zap,
   Mail,
   Globe,
@@ -30,7 +29,6 @@ import {
   Filter,
   FileUp,
   GraduationCap,
-  Trophy,
   Building2,
   Camera,
   Receipt,
@@ -44,7 +42,6 @@ import {
   ShieldCheck,
   Scale,
   Settings,
-  Database,
   Link2,
 } from 'lucide-react';
 
@@ -205,20 +202,16 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'sites', labelKey: 'nav.group.sites', label: 'Sites', icon: Globe, tier: 'advanced',
-    children: [
-      { path: '/sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, feature: 'funnels', managerOnly: true },
-      { path: '/surveys', labelKey: 'nav.surveys', label: 'Surveys', icon: ClipboardList, managerOnly: true },
-      { path: '/experiments', labelKey: 'nav.experiments', label: 'A/B Experiments', icon: FlaskConical, managerOnly: true },
-    ],
+    // Surveys + A/B Experiments were deleted (2026-07 trim: dead-end surfaces —
+    // no respondent renderer / no variant consumer ever existed).
+    id: 'sites', labelKey: 'nav.sites', label: 'Sites & Funnels', icon: Globe, tier: 'advanced',
+    path: '/sites', feature: 'funnels', managerOnly: true,
   },
   {
-    id: 'memberships', labelKey: 'nav.group.memberships', label: 'Memberships', icon: GraduationCap, tier: 'advanced',
-    children: [
-      { path: '/memberships/courses', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, managerOnly: true },
-      { path: '/memberships/communities', labelKey: 'nav.communities', label: 'Communities', icon: MessagesSquare, managerOnly: true },
-      { path: '/memberships/leaderboard', labelKey: 'nav.leaderboard', label: 'Leaderboard', icon: Trophy, managerOnly: true },
-    ],
+    // Communities + Leaderboard were deleted (2026-07 trim: they simulated a
+    // member experience no member could ever see — no member portal exists).
+    id: 'memberships', labelKey: 'nav.courses', label: 'Courses', icon: GraduationCap, tier: 'advanced',
+    path: '/memberships/courses', managerOnly: true,
   },
   {
     id: 'voice', labelKey: 'nav.group.voice', label: 'Voice', icon: Mic, tier: 'advanced',
@@ -244,9 +237,9 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/roles', labelKey: 'nav.roles', label: 'Roles & permissions', icon: ShieldCheck, managerOnly: true },
       { path: '/targets', labelKey: 'nav.targets', label: 'Targets', icon: Flag, managerOnly: true },
       { path: '/settings/modules', labelKey: 'nav.modules', label: 'Modules', icon: Blocks, managerOnly: true },
-      // Data
+      // Data (Custom Objects deleted — 2026-07 trim: an island with no consumer
+      // anywhere and no record-to-contact linking UI at all)
       { path: '/settings/custom-fields', labelKey: 'nav.customFields', label: 'Custom Fields', icon: SlidersHorizontal, managerOnly: true },
-      { path: '/custom-objects', labelKey: 'nav.customObjects', label: 'Custom Objects', icon: Database, managerOnly: true },
       { path: '/research', labelKey: 'nav.research', label: 'Research', icon: FlaskConical, managerOnly: true },
       // Connections & domains (Account Center absorbed Settings→Connections)
       { path: '/accounts', labelKey: 'nav.accounts', label: 'Connections', icon: Plug, managerOnly: true },

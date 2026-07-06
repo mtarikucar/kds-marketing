@@ -304,9 +304,6 @@ import { EnrollmentService } from './memberships/enrollment.service';
 import { CertificateService } from './memberships/certificate.service';
 import { PublicCertificateController } from './controllers/public-certificate.controller';
 import { GamificationService } from './memberships/gamification.service';
-import { GamificationController } from './memberships/gamification.controller';
-import { CommunitiesController } from './memberships/communities.controller';
-import { CommunitiesService } from './memberships/communities.service';
 // Epic G — analytics (read-only lead aggregations).
 import { AnalyticsController } from './analytics/analytics.controller';
 import { AnalyticsService } from './analytics/analytics.service';
@@ -315,11 +312,6 @@ import { AttributionService } from './analytics/attribution.service';
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
 // Epic E — funnel A/B experiments + surveys.
-import { ExperimentsController } from './funnels/experiments.controller';
-import { ExperimentsService } from './funnels/experiments.service';
-import { SurveysController } from './funnels/surveys.controller';
-import { SurveysService } from './funnels/surveys.service';
-import { PublicFunnelsController } from './funnels/public-funnels.controller';
 // Epic F — 2FA/MFA (TOTP).
 import { TwoFactorController } from './controllers/two-factor.controller';
 import { TwoFactorService } from './services/two-factor.service';
@@ -395,8 +387,6 @@ import { AdManagementService } from './ads/ad-management.service';
 import { AdRulesService } from './ads/ad-rules.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
-import { MarketingCustomObjectsController } from './controllers/marketing-custom-objects.controller';
-import { CustomObjectsService } from './custom-objects/custom-objects.service';
 
 // Inbox productivity (GoHighLevel parity) — snippets, notes, bulk, export.
 import { MarketingSnippetsController } from './controllers/marketing-snippets.controller';
@@ -545,7 +535,6 @@ import { WalletService } from './wallet/wallet.service';
     MarketingContentCalendarController,
     MarketingBrandBrainController,
     MarketingWeeklyPlanController,
-    MarketingCustomObjectsController,
     MarketingSnippetsController,
     MarketingTriggerLinksController,
     PublicTriggerLinkController,
@@ -573,13 +562,8 @@ import { WalletService } from './wallet/wallet.service';
     PublicBrandingController,
     CoursesController,
     EnrollmentController,
-    GamificationController,
-    CommunitiesController,
     AnalyticsController,
     ComplianceController,
-    ExperimentsController,
-    SurveysController,
-    PublicFunnelsController,
     TwoFactorController,
     SlackController,
     RolesController,
@@ -766,7 +750,6 @@ import { WalletService } from './wallet/wallet.service';
     TiktokBusinessOAuthService,
     AdManagementService,
     AdRulesService,
-    CustomObjectsService,
     SnippetsService,
     LeadBulkService,
     TriggerLinksService,
@@ -810,15 +793,12 @@ import { WalletService } from './wallet/wallet.service';
     EnrollmentService,
     CertificateService,
     GamificationService,
-    CommunitiesService,
     // Epic G — analytics.
     AnalyticsService,
     AttributionService,
     // Epic F (compliance).
     ComplianceService,
     // Epic E — funnel A/B + surveys.
-    ExperimentsService,
-    SurveysService,
     // Epic F — 2FA.
     TwoFactorService,
     // Epic B4 — Slack notify.
