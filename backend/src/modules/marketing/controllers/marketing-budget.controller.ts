@@ -100,7 +100,8 @@ export class MarketingBudgetController {
   @RequirePermission('settings.manage')
   @Audit({ action: 'growth_budget.quick_start', resourceType: 'growth_budget', captureBody: ['amount', 'arm'] })
   quickStart(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: QuickStartDto) {
-    return this.quickstart.quickStart(a.workspaceId, dto);
+    // Thread the actor so the content arm can provision engine-owned campaigns.
+    return this.quickstart.quickStart(a.workspaceId, { ...dto, createdById: a.id });
   }
 
   @Get()

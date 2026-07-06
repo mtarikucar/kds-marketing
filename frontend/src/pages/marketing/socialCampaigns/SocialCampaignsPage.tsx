@@ -1,14 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Plus, CalendarRange } from 'lucide-react';
+import { CalendarRange } from 'lucide-react';
 import {
   listSocialCampaigns,
   type SocialCampaign,
   type SocialCampaignStatus,
 } from '../../../features/marketing/api/socialCampaigns.service';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Button } from '@/components/ui/Button';
 import { Badge, type BadgeProps } from '@/components/ui/Badge';
 import { Card, CardContent } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -31,16 +30,11 @@ export default function SocialCampaignsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Read-only monitor (2026-07): campaigns are provisioned by the Growth
+          Autopilot's one switch now — there is no manual "New campaign" builder. */}
       <PageHeader
         title={t('socialCampaign.title', 'Social Campaigns')}
-        description={t('socialCampaign.subtitle', 'AI-planned social content calendars')}
-        actions={
-          <Button asChild>
-            <Link to="/social-campaigns/new">
-              <Plus className="h-4 w-4" /> {t('socialCampaign.new', 'New campaign')}
-            </Link>
-          </Button>
-        }
+        description={t('socialCampaign.subtitleAuto', 'AI content campaigns the Autopilot runs for you')}
       />
       <QueryStateBoundary
         isLoading={isLoading}

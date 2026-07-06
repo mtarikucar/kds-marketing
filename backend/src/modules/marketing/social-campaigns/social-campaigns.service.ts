@@ -48,6 +48,8 @@ export interface CreateSocialCampaignInput {
   defaultVideoModel?: string;
   dailyPublishCap?: number;
   linkedCampaignId?: string;
+  /** Set by the Growth Autopilot engine (= the GrowthBudget id) for idempotent provisioning. */
+  engineBudgetId?: string;
   createdById: string;
 }
 
@@ -96,6 +98,7 @@ export class SocialCampaignsService implements OnModuleInit {
         defaultVideoModel: input.defaultVideoModel ?? null,
         dailyPublishCap: input.dailyPublishCap ?? 2,
         linkedCampaignId: input.linkedCampaignId ?? null,
+        engineBudgetId: input.engineBudgetId ?? null,
         createdById: input.createdById,
         status: 'DRAFT',
       },

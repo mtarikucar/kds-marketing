@@ -176,13 +176,19 @@ export interface QuickStartPayload {
 }
 
 /** Everything one quick-start call provisioned — the wizard renders this. */
+export interface ContentCampaignSummary {
+  campaignIds: string[];
+  count: number;
+}
+
 export interface QuickStartManifest {
   wallet: { balance: string; currency: string; exists: boolean };
   budget: { id: string; periodKey: string; totalAmount: string; autonomyLevel: string; status: string };
   channels: string[];
   allocations: Array<{ channel: string; plannedAmount: string }>;
   armed: boolean;
-  contentCampaign: null;
+  /** The autonomous content campaigns the same click set up, or null when it didn't run. */
+  contentCampaign: ContentCampaignSummary | null;
 }
 
 /** What the SPA does after a top-up checkout: iframe (PayTR), redirect (Stripe), or bank instructions. */

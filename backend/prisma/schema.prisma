@@ -3369,6 +3369,11 @@ model SocialCampaign {
   dailyPublishCap    Int                          @default(2)
   linkedCampaignId   String?
   linkedAdCampaignId String?
+  /// Set when the Growth Autopilot ENGINE provisioned this campaign (= the
+  /// GrowthBudget id it belongs to). Makes one-click provisioning idempotent:
+  /// re-running quick-start skips accounts already backed by an active
+  /// engine-owned campaign for the budget's period. Null = user-authored.
+  engineBudgetId     String?
   /// { planned, generated, approved, published }
   stats              Json?
   createdById        String
@@ -3379,6 +3384,7 @@ model SocialCampaign {
   assets GeneratedAsset[]
 
   @@index([workspaceId, status])
+  @@index([workspaceId, engineBudgetId])
   @@map("social_campaigns")
 }
 

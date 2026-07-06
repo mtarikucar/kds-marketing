@@ -87,7 +87,6 @@ const CompliancePage           = lazy(() => import('./pages/marketing/settings/c
 // AI Studio + UGC Personas live in Growth Studio's Create tab; Brand Kit and
 // Brand Brain are tabs of the ONE Brand page (/branding).
 const SocialCampaignsPage      = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignsPage'));
-const SocialCampaignBuilder    = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignBuilder'));
 const SocialCampaignDetailPage = lazy(() => import('./pages/marketing/socialCampaigns/SocialCampaignDetailPage'));
 const IvrMenusPage             = lazy(() => import('./pages/marketing/voice/ivr'));
 const AffiliatesPage           = lazy(() => import('./pages/marketing/experiments/affiliates'));
@@ -263,7 +262,6 @@ export default function App() {
             <Route path="/settings/voice-ai"    element={<Navigate to="/accounts" replace />} />
             <Route path="/social"      element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
             <Route path="/social-campaigns"      element={<Navigate to="/studio?view=tools&tab=campaigns" replace />} />
-            <Route path="/social-campaigns/new"  element={<S><SocialCampaignBuilder /></S>} />
             <Route path="/social-campaigns/:id"  element={<S><SocialCampaignDetailPage /></S>} />
             <Route path="/trigger-links" element={<S><TriggerLinksPage /></S>} />
             <Route path="/voice/ivr"   element={<S><IvrMenusPage /></S>} />

@@ -2187,7 +2187,9 @@
     "lifecycleFailed": "Action failed",
     "crossLink": "Create social content",
     "provisioned": "Social campaign created",
-    "provisionFailed": "Could not create social content"
+    "provisionFailed": "Could not create social content",
+    "subtitleAuto": "AI content campaigns the Autopilot runs for you",
+    "modesReadonlyHint": "How automatic this campaign is — set by the Growth Autopilot."
   },
   "landing": {
     "a11y": {
@@ -2502,6 +2504,10 @@
       "failed": "Failed",
       "spend": "Engine spend",
       "spendCredit": "Spend credited back"
+    },
+    "wizard": {
+      "manifestContent": "Autonomous content is now running",
+      "manifestContentCount": "{{n}} campaign(s)"
     }
   },
   "studio": {
