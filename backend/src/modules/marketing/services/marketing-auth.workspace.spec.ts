@@ -85,6 +85,9 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
       const wsData = prisma.workspace.create.mock.calls[0][0].data;
       expect(wsData.slug).toBe('acme-inc');
       expect(wsData.settings.businessTypes).toContain('OTHER');
+      // Self-serve signup collects no currency; default to TRY (the only PSP
+      // live in prod is PayTR, which is TRY-only — a USD workspace can't pay).
+      expect(wsData.defaultCurrency).toBe('TRY');
 
       // First create = OWNER, second = SYSTEM sentinel (unguessable email).
       const ownerData = prisma.marketingUser.create.mock.calls[0][0].data;
@@ -103,6 +106,7 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         workspaceId: 'ws-new',
         packageId: 'pkg-trial',
         status: 'TRIALING',
+        currency: 'TRY',
       });
       expect(trialSub.trialEndsAt.getTime()).toBeGreaterThan(Date.now());
 

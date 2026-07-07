@@ -379,7 +379,9 @@ export class MarketingAuthService {
           productUrl: dto.productUrl ?? null,
           productDescription: dto.productDescription ?? null,
           defaultLanguage: dto.language ?? 'en',
-          defaultCurrency: dto.currency ?? 'USD',
+          // Default to TRY: PayTR (the only PSP live in prod) is TRY-only, so a
+          // USD-defaulted workspace can neither top-up its wallet nor subscribe.
+          defaultCurrency: dto.currency ?? 'TRY',
           settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
           // Leaner first-run: memberships + research start OFF (switch on in
           // Modules). Everything else active.
@@ -437,7 +439,7 @@ export class MarketingAuthService {
             packageId: trialPackage.id,
             status: 'TRIALING',
             billingCycle: 'MONTHLY',
-            currency: dto.currency ?? 'USD',
+            currency: dto.currency ?? 'TRY',
             currentPeriodStart: now,
             currentPeriodEnd: trialEnd,
             trialEndsAt: trialEnd,

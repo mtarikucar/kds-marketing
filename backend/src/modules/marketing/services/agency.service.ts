@@ -212,7 +212,8 @@ export class AgencyService {
           productUrl: input.productUrl ?? null,
           productDescription: input.productDescription ?? null,
           defaultLanguage: input.language ?? 'en',
-          defaultCurrency: input.currency ?? 'USD',
+          // TRY default (PayTR-only PSP in prod); agencies can pass a currency.
+          defaultCurrency: input.currency ?? 'TRY',
           timezone: input.timezone ?? 'UTC',
           settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
           // Leaner first-run: memberships + research start OFF (see auth register).
