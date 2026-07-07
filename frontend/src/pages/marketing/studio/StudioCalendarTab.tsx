@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import ContentCalendarPage from '../contentCalendar/ContentCalendarPage';
 import { createSocialCampaign } from '../../../features/marketing/api/socialCampaigns.service';
+import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { UpgradeCallout } from './UpgradeCallout';
 import type { SocialAccount } from '../social/types';
 
 /**
@@ -20,6 +22,11 @@ export default function StudioCalendarTab() {
   const { t } = useTranslation('marketing');
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // The weekly plan provisions a SocialCampaign (POST /social-campaigns) — gated
+  // by 'socialCampaigns' on the backend. Without this check the button fires and
+  // silently 403s; instead we hide the CTA and prompt an upgrade.
+  const { has } = useEntitlements();
+  const canGenerate = has('socialCampaigns');
 
   const generate = useMutation({
     mutationFn: async () => {
@@ -66,5 +73,13 @@ export default function StudioCalendarTab() {
     onError: () => toast.error(t('weekly.error', 'Could not generate a plan')),
   });
 
-  return <ContentCalendarPage embedded onGenerateWeeklyPlan={() => generate.mutate()} />;
+  return (
+    <div className="space-y-4">
+      {!canGenerate && <UpgradeCallout />}
+      <ContentCalendarPage
+        embedded
+        onGenerateWeeklyPlan={canGenerate ? () => generate.mutate() : undefined}
+      />
+    </div>
+  );
 }

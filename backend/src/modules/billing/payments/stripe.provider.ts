@@ -16,8 +16,9 @@ import {
 /**
  * Stripe Checkout adapter — the USD path. Subscription-shaped orders
  * (SUBSCRIPTION / UPGRADE / RENEWAL) open a `mode: 'subscription'` session
- * so Stripe owns the renewal billing; ADDON is a one-off
- * `mode: 'payment'` charge that rides the workspace's current period.
+ * so Stripe owns the renewal billing; ADDON and WALLET_TOPUP are one-off
+ * `mode: 'payment'` charges (the add-on rides the workspace's current period,
+ * the top-up is a single wallet credit — neither may ever recur).
  *
  * Prices live in OUR database (PaymentOrder.amount), so sessions use
  * inline `price_data` instead of pre-provisioned Stripe Price objects —
@@ -46,6 +47,7 @@ function amountToCents(amount: number | string | Prisma.Decimal): number {
 
 /** What the customer sees as the line item on Stripe's hosted page. */
 function describeOrder(order: PaymentOrder): string {
+  if (order.type === 'WALLET_TOPUP') return 'Growth wallet top-up';
   return order.type === 'ADDON'
     ? `Add-on: ${order.addOnCode ?? 'addon'}`
     : `Subscription (${order.billingCycle ?? 'MONTHLY'})`;
@@ -106,8 +108,14 @@ export class StripeProvider implements BillingPaymentProvider {
 
     // RENEWAL/UPGRADE open a fresh Stripe subscription, same as a new
     // SUBSCRIPTION — settlement upserts the one workspace subscription row
-    // either way. Only ADDON is a one-shot charge.
-    const isRecurring = order.type !== 'ADDON';
+    // either way. ONLY true subscription-family orders recur; ADDON and
+    // WALLET_TOPUP are one-shot `mode: 'payment'` charges. (A WALLET_TOPUP is a
+    // one-time credit — billing it monthly would charge the customer forever
+    // for a single top-up.)
+    const isRecurring =
+      order.type === 'SUBSCRIPTION' ||
+      order.type === 'UPGRADE' ||
+      order.type === 'RENEWAL';
 
     let session: CheckoutSession;
     try {

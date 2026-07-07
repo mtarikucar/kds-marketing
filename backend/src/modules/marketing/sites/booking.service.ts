@@ -8,6 +8,7 @@ import {
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
 import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { EmailService } from '../../../common/services/email.service';
@@ -113,6 +114,7 @@ export class BookingService implements OnModuleInit {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly entitlements: EntitlementsService,
     private readonly outbox: OutboxService,
     private readonly email: EmailService,
     private readonly autoAssigner: LeadAutoAssignerService,
@@ -136,37 +138,54 @@ export class BookingService implements OnModuleInit {
     if (!c) throw new NotFoundException('Calendar not found');
     return c;
   }
-  create(workspaceId: string, dto: any) {
-    return this.prisma.bookingCalendar
-      .create({
-        data: {
-          workspaceId,
-          name: dto.name,
-          slug: this.slugify(dto.slug || dto.name),
-          ownerUserId: dto.ownerUserId ?? null,
-          type: CALENDAR_TYPES.includes(dto.type) ? dto.type : 'SINGLE',
-          capacity: this.normCapacity(dto.capacity),
-          availability: dto.availability ?? {},
-          slotMinutes: dto.slotMinutes ?? 30,
-          bufferMinutes: dto.bufferMinutes ?? 0,
-          timezone: dto.timezone ?? 'Europe/Istanbul',
-          conferencing: CONFERENCING.includes(dto.conferencing) ? dto.conferencing : 'NONE',
-          minNoticeMinutes: dto.minNoticeMinutes ?? 0,
-          maxAdvanceDays: dto.maxAdvanceDays ?? 60,
-          bufferBeforeMinutes: dto.bufferBeforeMinutes ?? 0,
-          bufferAfterMinutes: dto.bufferAfterMinutes ?? 0,
-          requiresApproval: dto.requiresApproval ?? false,
-          ...(dto.reminderConfig !== undefined ? { reminderConfig: dto.reminderConfig } : {}),
-        },
-      })
-      // slug is unique per (workspaceId, slug); a duplicate name/slug is a clean
-      // 400, not a raw P2002 → 500 (parity with SitesService.create).
-      .catch((e) => {
-        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-          throw new BadRequestException('A calendar with that slug already exists');
+  async create(workspaceId: string, dto: any) {
+    const effective = await this.entitlements.getEffective(workspaceId);
+    const limit = effective.limits.maxCalendars;
+    const data = {
+      workspaceId,
+      name: dto.name,
+      slug: this.slugify(dto.slug || dto.name),
+      ownerUserId: dto.ownerUserId ?? null,
+      type: CALENDAR_TYPES.includes(dto.type) ? dto.type : 'SINGLE',
+      capacity: this.normCapacity(dto.capacity),
+      availability: dto.availability ?? {},
+      slotMinutes: dto.slotMinutes ?? 30,
+      bufferMinutes: dto.bufferMinutes ?? 0,
+      timezone: dto.timezone ?? 'Europe/Istanbul',
+      conferencing: CONFERENCING.includes(dto.conferencing) ? dto.conferencing : 'NONE',
+      minNoticeMinutes: dto.minNoticeMinutes ?? 0,
+      maxAdvanceDays: dto.maxAdvanceDays ?? 60,
+      bufferBeforeMinutes: dto.bufferBeforeMinutes ?? 0,
+      bufferAfterMinutes: dto.bufferAfterMinutes ?? 0,
+      requiresApproval: dto.requiresApproval ?? false,
+      ...(dto.reminderConfig !== undefined ? { reminderConfig: dto.reminderConfig } : {}),
+    };
+    // slug is unique per (workspaceId, slug); a duplicate name/slug is a clean
+    // 400, not a raw P2002 → 500 (parity with SitesService.create).
+    const onError = (e: unknown) => {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new BadRequestException('A calendar with that slug already exists');
+      }
+      throw e;
+    };
+    // Unlimited plan — no cap to race against.
+    if (limit === -1) {
+      return this.prisma.bookingCalendar.create({ data }).catch(onError);
+    }
+    // Enforce the per-plan maxCalendars cap. Serialize the count-check + create
+    // per workspace under an advisory xact-lock so two concurrent creates at
+    // (limit-1) can't BOTH pass the cap and exceed it (mirrors SitesService.create
+    // and the booking-reserve lock in this file).
+    return this.prisma
+      .$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`calendars:${workspaceId}`}))`;
+        const count = await tx.bookingCalendar.count({ where: { workspaceId } });
+        if (count >= limit) {
+          throw new BadRequestException(`Calendar limit reached (${limit}) — upgrade your package`);
         }
-        throw e;
-      });
+        return tx.bookingCalendar.create({ data });
+      })
+      .catch(onError);
   }
   async update(workspaceId: string, id: string, dto: any) {
     const existing = await this.prisma.bookingCalendar.findFirst({ where: { id, workspaceId } });

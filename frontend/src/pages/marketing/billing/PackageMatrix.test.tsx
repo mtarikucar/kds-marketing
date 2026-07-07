@@ -1,6 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { PackageMatrix, type PackageRow } from './PackageMatrix';
+import { PackageMatrix, FEATURE_LABELS, type PackageRow } from './PackageMatrix';
+
+// Mirror of the backend's FEATURE_KEYS (entitlements.service.ts). Hardcoded
+// because the frontend doesn't import from the backend package; the backend's
+// entitlements.tripwire.spec.ts pins this exact list, so if the vocabulary
+// changes there, that suite fails and this list is updated in the same PR.
+const BACKEND_FEATURE_KEYS = [
+  'autoAssign',
+  'telephony',
+  'installations',
+  'commissions',
+  'advancedReports',
+  'apiAccess',
+  'conversationAi',
+  'workflows',
+  'campaigns',
+  'funnels',
+  'reviews',
+  'askAi',
+  'agentStudio',
+  'voiceAi',
+  'invoicing',
+  'mediaGen',
+  'socialCampaigns',
+  'memberships',
+  'research',
+] as const;
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -54,6 +80,19 @@ describe('PackageMatrix checkout loading', () => {
     render(<PackageMatrix {...baseProps} isPending={false} />);
     for (const btn of screen.getAllByRole('button', { name: /choose/i })) {
       expect(btn).not.toHaveAttribute('aria-busy');
+    }
+  });
+});
+
+describe('PackageMatrix feature labels', () => {
+  // Regression: public packages grant mediaGen/socialCampaigns/memberships/
+  // research, but FEATURE_LABELS covered only 15 keys — so the pricing cards
+  // printed raw camelCase ("mediaGen"). Every backend feature the packages can
+  // grant must have a human-readable label; this pins the whole vocabulary so a
+  // future feature key can't silently drift back to raw camelCase.
+  it('has a readable label for every backend FEATURE_KEY', () => {
+    for (const key of BACKEND_FEATURE_KEYS) {
+      expect(FEATURE_LABELS[key], `missing label for '${key}'`).toBeTruthy();
     }
   });
 });

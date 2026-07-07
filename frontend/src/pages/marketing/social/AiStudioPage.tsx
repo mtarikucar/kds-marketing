@@ -34,6 +34,8 @@ import {
   type GeneratedAssetType,
   type GenerateMediaPayload,
 } from '../../../features/marketing/api/media.service';
+import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { UpgradeCallout } from '../studio/UpgradeCallout';
 import type { MediaItemValue } from './socialSchemas';
 
 const ASPECT_RATIOS = ['1:1', '9:16', '16:9', '4:5'] as const;
@@ -55,6 +57,11 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
   const { t } = useTranslation('marketing');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // Media generation (POST /ai/media/generate) and its library are gated by
+  // 'mediaGen'. Gate the whole page so the Generate button and the library query
+  // don't silently 403 when the plan doesn't entitle it.
+  const { has } = useEntitlements();
+  const entitled = has('mediaGen');
 
   const [type, setType] = useState<GeneratedAssetType>('IMAGE');
   const [prompt, setPrompt] = useState('');
@@ -70,6 +77,8 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
   const library = useQuery({
     queryKey: ['marketing', 'aiStudio', 'generations', filterType],
     queryFn: () => listGenerations(filterType ? { type: filterType } : {}),
+    // Don't hit the (403-ing) library endpoint when the plan doesn't entitle it.
+    enabled: entitled,
   });
 
   const invalidateLibrary = () =>
@@ -145,6 +154,20 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
     setType(next);
     setModel((next === 'IMAGE' ? IMAGE_MODELS : VIDEO_MODELS)[0].value);
   };
+
+  if (!entitled) {
+    return (
+      <div className="space-y-6">
+        {!embedded && (
+          <PageHeader
+            title={t('aiStudio.title', 'AI Content Studio')}
+            description={t('aiStudio.subtitle', 'Generate images and video for your social posts.')}
+          />
+        )}
+        <UpgradeCallout />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

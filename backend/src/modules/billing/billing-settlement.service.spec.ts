@@ -44,6 +44,14 @@ describe('BillingSettlementService — idempotent settlement', () => {
       },
       workspaceAddOn: { create: jest.fn().mockResolvedValue({}) },
       growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(null) },
+      // FIX 5: activateSubscription now widens the module allow-list. Default to
+      // null (all-active) so the common path is a no-op; module-union tests
+      // override these.
+      workspace: {
+        findUnique: jest.fn().mockResolvedValue({ activatedModules: null }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      package: { findUnique: jest.fn().mockResolvedValue({ features: {} }) },
     };
     entitlements = { invalidate: jest.fn() };
     growthWallet = { credit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }) };
@@ -124,6 +132,43 @@ describe('BillingSettlementService — idempotent settlement', () => {
     });
   });
 
+  describe('module activation on upgrade (FIX 5)', () => {
+    it('unions newly-entitled default-ON modules into a customised activatedModules allow-list', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({
+        activatedModules: ['telephony'],
+      });
+      prisma.package.findUnique.mockResolvedValue({
+        features: { telephony: true, campaigns: true, memberships: true },
+      });
+
+      await svc.settleSuccess('order-1'); // SUBSCRIPTION order for pkg-1
+
+      const upd = prisma.workspace.update.mock.calls[0][0];
+      expect(upd.where).toEqual({ id: 'ws-1' });
+      // campaigns is newly entitled + default-ON → added; telephony already on;
+      // memberships is entitled but hidden-by-default → NOT auto-activated.
+      expect(upd.data.activatedModules).toEqual(['telephony', 'campaigns']);
+      expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+    });
+
+    it('leaves activatedModules untouched when the workspace is all-active (null allow-list)', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ activatedModules: null });
+      await svc.settleSuccess('order-1');
+      expect(prisma.workspace.update).not.toHaveBeenCalled();
+    });
+
+    it('does not write when every entitled default-ON module is already active', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({
+        activatedModules: ['telephony'],
+      });
+      prisma.package.findUnique.mockResolvedValue({
+        features: { telephony: true },
+      });
+      await svc.settleSuccess('order-1');
+      expect(prisma.workspace.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('reconcileUngrantedOrders re-grants a SUCCEEDED subscription order whose workspace lacks a subscription', async () => {
     // The sweep now issues one findMany per family (subscription vs WALLET_TOPUP) —
     // answer per-where so the topup pass sees nothing here.
@@ -144,15 +189,38 @@ describe('BillingSettlementService — idempotent settlement', () => {
     expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
   });
 
-  it('reconcileUngrantedOrders skips orders whose workspace already has a subscription', async () => {
+  it('reconcileUngrantedOrders skips orders whose subscription already reflects the paid order (same package, ACTIVE, live period)', async () => {
     prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
       where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
-    prisma.workspaceSubscription.findUnique.mockResolvedValue({ id: 'sub-1' });
+    prisma.workspaceSubscription.findUnique.mockResolvedValue({
+      packageId: 'pkg-1', // matches ORDER.packageId
+      status: 'ACTIVE',
+      currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+    });
 
     const regranted = await svc.reconcileUngrantedOrders();
 
     expect(regranted).toBe(0);
     expect(prisma.workspaceSubscription.upsert).not.toHaveBeenCalled();
+  });
+
+  it('reconcileUngrantedOrders RE-GRANTS a paid upgrade whose workspace only has the pre-existing trial row (FIX 2)', async () => {
+    // The universal trial→paid upgrade: a TRIALING row for a DIFFERENT package
+    // already exists. Old code short-circuited on its mere presence and never
+    // ran the paid grant — the customer stayed on trial entitlements.
+    prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+      where.type?.in ? [{ ...ORDER, type: 'UPGRADE', status: 'SUCCEEDED' }] : []);
+    prisma.workspaceSubscription.findUnique.mockResolvedValue({
+      packageId: 'trial-pkg',
+      status: 'TRIALING',
+      currentPeriodEnd: new Date(Date.now() + 5 * 86_400_000),
+    });
+
+    const regranted = await svc.reconcileUngrantedOrders();
+
+    expect(regranted).toBe(1);
+    expect(prisma.workspaceSubscription.upsert).toHaveBeenCalledTimes(1);
+    expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
   });
 
   describe('WALLET_TOPUP (growth wallet, spec D2)', () => {
@@ -259,7 +327,11 @@ describe('BillingSettlementService — idempotent settlement', () => {
     it('reconcile stamps grantedAt when the probe shows the grant already landed (self-heal eviction)', async () => {
       prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
         where.type?.in ? [{ ...ORDER, status: 'SUCCEEDED' }] : []);
-      prisma.workspaceSubscription.findUnique.mockResolvedValue({ id: 'sub-1' });
+      prisma.workspaceSubscription.findUnique.mockResolvedValue({
+        packageId: 'pkg-1',
+        status: 'ACTIVE',
+        currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+      });
 
       const regranted = await svc.reconcileUngrantedOrders();
 

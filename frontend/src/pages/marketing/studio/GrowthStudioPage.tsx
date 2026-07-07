@@ -5,7 +5,9 @@ import { Wrench, ArrowLeft } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { FeatureGate } from '@/components/ui/access-gates';
 import { RouteFallback } from '../../../components/RouteFallback';
+import { UpgradeCallout } from './UpgradeCallout';
 
 // Lazy so a surface's code only loads when opened.
 const BudgetAutopilotPage = lazy(() => import('../budget/BudgetAutopilotPage'));
@@ -119,7 +121,11 @@ function ToolsSurface() {
         <TabsTrigger value="more">{t('studio.tab.more', 'More')}</TabsTrigger>
       </TabsList>
 
-      <TabsContent value="calendar" className="pt-5"><Lazy><StudioCalendarTab /></Lazy></TabsContent>
+      <TabsContent value="calendar" className="pt-5">
+        <FeatureGate feature="socialCampaigns" fallback={<UpgradeCallout />}>
+          <Lazy><StudioCalendarTab /></Lazy>
+        </FeatureGate>
+      </TabsContent>
       <TabsContent value="create" className="pt-5"><CreateTab /></TabsContent>
       <TabsContent value="campaigns" className="pt-5"><CampaignsTab /></TabsContent>
       <TabsContent value="trends" className="pt-5"><Lazy><TrendsPage embedded /></Lazy></TabsContent>
@@ -138,7 +144,11 @@ function CreateTab() {
         <TabsTrigger value="studio">{t('studio.create.studio', 'AI Studio')}</TabsTrigger>
         <TabsTrigger value="personas">{t('studio.create.personas', 'UGC Personas')}</TabsTrigger>
       </TabsList>
-      <TabsContent value="studio" className="pt-4"><Lazy><AiStudioPage embedded /></Lazy></TabsContent>
+      <TabsContent value="studio" className="pt-4">
+        <FeatureGate feature="mediaGen" fallback={<UpgradeCallout />}>
+          <Lazy><AiStudioPage embedded /></Lazy>
+        </FeatureGate>
+      </TabsContent>
       <TabsContent value="personas" className="pt-4"><Lazy><PersonasPage embedded /></Lazy></TabsContent>
     </Tabs>
   );
@@ -155,8 +165,16 @@ function CampaignsTab() {
         <TabsTrigger value="social">{t('studio.camp.social', 'Social Campaigns')}</TabsTrigger>
         <TabsTrigger value="planner">{t('studio.camp.planner', 'Social Planner')}</TabsTrigger>
       </TabsList>
-      <TabsContent value="standard" className="pt-4"><Lazy><CampaignsPage /></Lazy></TabsContent>
-      <TabsContent value="social" className="pt-4"><Lazy><SocialCampaignsPage /></Lazy></TabsContent>
+      <TabsContent value="standard" className="pt-4">
+        <FeatureGate feature="campaigns" fallback={<UpgradeCallout />}>
+          <Lazy><CampaignsPage /></Lazy>
+        </FeatureGate>
+      </TabsContent>
+      <TabsContent value="social" className="pt-4">
+        <FeatureGate feature="socialCampaigns" fallback={<UpgradeCallout />}>
+          <Lazy><SocialCampaignsPage /></Lazy>
+        </FeatureGate>
+      </TabsContent>
       <TabsContent value="planner" className="pt-4"><Lazy><SocialPlannerPage /></Lazy></TabsContent>
     </Tabs>
   );
@@ -173,7 +191,11 @@ function MoreTab() {
         <TabsTrigger value="reviews">{t('studio.more.reviews', 'Reviews')}</TabsTrigger>
         <TabsTrigger value="affiliates">{t('studio.more.affiliates', 'Affiliates')}</TabsTrigger>
       </TabsList>
-      <TabsContent value="email" className="pt-4"><Lazy><EmailTemplatesPage /></Lazy></TabsContent>
+      <TabsContent value="email" className="pt-4">
+        <FeatureGate feature="campaigns" fallback={<UpgradeCallout />}>
+          <Lazy><EmailTemplatesPage /></Lazy>
+        </FeatureGate>
+      </TabsContent>
       <TabsContent value="reviews" className="pt-4"><Lazy><ReviewsPage /></Lazy></TabsContent>
       <TabsContent value="affiliates" className="pt-4"><Lazy><AffiliatePortalPage /></Lazy></TabsContent>
     </Tabs>

@@ -175,6 +175,26 @@ describe('StripeProvider', () => {
       );
     });
 
+    it('charges WALLET_TOPUP as a one-off payment, never a recurring subscription', async () => {
+      // Regression: a WALLET_TOPUP opened as mode:'subscription' billed the
+      // customer every month for a one-time top-up.
+      await provider.createCheckout(
+        makeOrder({
+          type: 'WALLET_TOPUP',
+          packageId: null,
+          billingCycle: null,
+          amount: new Prisma.Decimal('250.00'),
+        }),
+        ctx,
+      );
+      const params = mockSessionsCreate.mock.calls[0][0];
+      expect(params.mode).toBe('payment');
+      expect(params.line_items[0].price_data.recurring).toBeUndefined();
+      expect(params.line_items[0].price_data.product_data.name).toBe(
+        'Growth wallet top-up',
+      );
+    });
+
     it('fails loud when Stripe returns a session without a URL', async () => {
       mockSessionsCreate.mockResolvedValue({ id: 'cs_no_url', url: null });
       await expect(provider.createCheckout(makeOrder(), ctx)).rejects.toThrow(

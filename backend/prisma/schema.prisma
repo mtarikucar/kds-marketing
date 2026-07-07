@@ -1169,7 +1169,7 @@ model Package {
   dailyLeadQuota      Int // -1 = unlimited
   maxUsers            Int
   maxResearchProfiles Int
-  features            Json // FEATURE_KEYS (15): autoAssign, telephony, installations, commissions, advancedReports, apiAccess, conversationAi, workflows, campaigns, funnels, reviews, askAi, agentStudio, voiceAi, invoicing
+  features            Json // FEATURE_KEYS (19): autoAssign, telephony, installations, commissions, advancedReports, apiAccess, conversationAi, workflows, campaigns, funnels, reviews, askAi, agentStudio, voiceAi, invoicing, mediaGen, socialCampaigns, memberships, research
   // Numeric entitlement limits (-1 = unlimited). Keys mirror LIMIT_KEYS in
   // entitlements.service.ts (tripwire-pinned). Legacy dailyLeadQuota/maxUsers/
   // maxResearchProfiles stay as their own columns; everything new lives here
