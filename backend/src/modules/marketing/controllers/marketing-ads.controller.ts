@@ -34,7 +34,9 @@ class SetStatusDto {
   @IsIn(['ACTIVE', 'PAUSED'])
   status: 'ACTIVE' | 'PAUSED';
 }
-class CreateCampaignDto {
+// Named distinctly from the marketing CreateCampaignDto (dto/campaign.dto.ts) so
+// Swagger doesn't collide two different schemas under one model name.
+class CreateAdCampaignDto {
   @IsString() @MaxLength(200)
   name: string;
 
@@ -182,7 +184,7 @@ export class MarketingAdsController {
   createCampaign(
     @CurrentMarketingUser() a: MarketingUserPayload,
     @Param('id') id: string,
-    @Body() dto: CreateCampaignDto,
+    @Body() dto: CreateAdCampaignDto,
   ) {
     return this.adMgmt.create(a.workspaceId, id, dto);
   }

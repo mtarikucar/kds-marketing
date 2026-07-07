@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Phone, PhoneCall, PhoneOff } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
+import { useEntitlements } from '../hooks/useEntitlements';
 import { createWebphone, type WebphoneState, type WebphoneConfig } from './webphone.store';
 import CopilotPanel from './CopilotPanel';
 
@@ -18,10 +19,15 @@ export default function WebphoneHost() {
   const wpRef = useRef<ReturnType<typeof createWebphone> | null>(null);
   const [state, setState] = useState<WebphoneState>({ status: 'idle' });
 
+  // Only reach for the webphone config when the workspace is entitled to
+  // telephony — otherwise the FeatureGuard returns 403 and every page logs a
+  // noisy console error for workspaces that don't use the phone at all.
+  const { has } = useEntitlements();
   const { data: cfg } = useQuery<WebphoneConfig | null>({
     queryKey: ['marketing', 'telephony', 'webphone-config'],
     queryFn: () => marketingApi.get('/telephony/webphone-config').then((r) => r.data),
     staleTime: 5 * 60 * 1000,
+    enabled: has('telephony'),
   });
 
   useEffect(() => {
