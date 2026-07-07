@@ -44,24 +44,39 @@ export default {
           raised: "var(--surface-raised)",
         },
 
-        // Primary — Console iris. DEFAULT/hover CSS vars carry the active brand
-        // values; the numeric ramp is the iris scale used by existing pages
+        // Primary — Jeeta brand blue (swoosh). DEFAULT/hover CSS vars carry the
+        // active brand values; the numeric ramp is a blue→navy scale (its deep
+        // end lands on the brand navy #0f2350) used by existing pages
         // (from-primary-*, ring-primary-*, border-primary-*).
         primary: {
           DEFAULT: "var(--primary)",
           foreground: "var(--primary-foreground)",
           hover: "var(--primary-hover)",
-          50: '#eef2ff',
-          100: '#e0e7ff',
-          200: '#c7d2fe',
-          300: '#a5b4fc',
-          400: '#818cf8',
-          500: '#6366f1',
-          600: '#4f46e5',
-          700: '#4338ca',
-          800: '#3730a3',
-          900: '#312e81',
-          950: '#1e1b4b',
+          50: '#eff4ff',
+          100: '#dbe6ff',
+          200: '#bdd0ff',
+          300: '#90b0ff',
+          400: '#5c85fb',
+          500: '#3b6af4',
+          600: '#2458e6',
+          700: '#1d48c4',
+          800: '#1e3f9e',
+          900: '#1b357b',
+          950: '#0f2350',
+        },
+
+        // Jeeta brand tokens — navy (structure/brand-dark) + orange (growth/CTA).
+        brand: {
+          navy: {
+            DEFAULT: "var(--brand-navy)",
+            foreground: "var(--brand-navy-foreground)",
+          },
+          accent: {
+            DEFAULT: "var(--brand-accent)",
+            foreground: "var(--brand-accent-foreground)",
+            hover: "var(--brand-accent-hover)",
+            subtle: "var(--brand-accent-subtle)",
+          },
         },
 
         // Secondary

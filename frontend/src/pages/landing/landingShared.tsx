@@ -6,7 +6,7 @@ import { cn } from '../../components/ui/cn';
 /**
  * Shared primitives for the public Jeeta landing page.
  *
- * The landing is intentionally THEME-INDEPENDENT: it uses explicit indigo
+ * The landing is intentionally THEME-INDEPENDENT: it uses the Jeeta brand blue
  * (`primary-50/600/700`, which are hard-coded hex in tailwind.config) + slate +
  * white, never the app's `--background`/`--foreground` CSS-var tokens. That way
  * the marketing page looks identical regardless of whether a returning, signed-in
