@@ -5,6 +5,12 @@ import { MemoryRouter } from 'react-router-dom';
 import GrowthStudioPage from './GrowthStudioPage';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, o?: string) => (typeof o === 'string' ? o : k), i18n: { language: 'en' } }) }));
+// The tool tabs are now FeatureGate-wrapped; entitle everything so the shell
+// renders the (stubbed) surfaces, not the upgrade callout. FeatureGate reads
+// this hook, which otherwise needs a QueryClient this shell test doesn't set up.
+vi.mock('@/features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: () => true }),
+}));
 // Stub the heavy surfaces so the shell renders in isolation. The Autopilot
 // console is the default body; the rest are the behind-"Manual tools" surface.
 const stub = { default: () => <div>autopilot-console</div> };

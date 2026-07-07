@@ -19,6 +19,7 @@ describe('BookingService', () => {
   let outlookSync: any;
   let scheduledJobs: any;
   let leadAttribution: { capture: jest.Mock };
+  let entitlements: any;
 
   function calendar(extra: any = {}) {
     // maxAdvanceDays is generous so the fixed far-future fixture day isn't
@@ -62,7 +63,10 @@ describe('BookingService', () => {
       cancelBooking: jest.fn().mockResolvedValue(false),
     };
     leadAttribution = { capture: jest.fn().mockResolvedValue(undefined) };
-    svc = new BookingService(prisma as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any, leadAttribution as any);
+    // Calendar-count limit: default unlimited so the CRUD/booking specs are
+    // unaffected; the maxCalendars-cap test overrides getEffective.
+    entitlements = { getEffective: jest.fn().mockResolvedValue({ limits: { maxCalendars: -1 } }) };
+    svc = new BookingService(prisma as any, entitlements as any, outbox as any, email as any, autoAssigner as any, scheduledJobs as any, runner as any, googleSync as any, outlookSync as any, leadAttribution as any);
   });
 
   it('slices the availability window into slots', async () => {
@@ -324,6 +328,34 @@ describe('BookingService', () => {
     it('rethrows a non-P2002 create error unchanged', async () => {
       prisma.bookingCalendar.create = jest.fn(() => Promise.reject(new Error('boom')));
       await expect(svc.create(WS, { name: 'X' })).rejects.toThrow('boom');
+    });
+  });
+
+  // maxCalendars is a real per-plan LIMIT_KEY — enforce it at create like the
+  // sibling count-limited resources (advisory-locked count-then-create).
+  describe('maxCalendars limit', () => {
+    it('rejects creating a calendar once the plan cap is reached', async () => {
+      entitlements.getEffective.mockResolvedValue({ limits: { maxCalendars: 1 } });
+      prisma.bookingCalendar.count = jest.fn().mockResolvedValue(1); // already at cap
+      prisma.bookingCalendar.create = jest.fn();
+      await expect(svc.create(WS, { name: 'Second' })).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.bookingCalendar.create).not.toHaveBeenCalled();
+    });
+
+    it('allows creating a calendar under the cap', async () => {
+      entitlements.getEffective.mockResolvedValue({ limits: { maxCalendars: 3 } });
+      prisma.bookingCalendar.count = jest.fn().mockResolvedValue(1);
+      prisma.bookingCalendar.create = jest.fn().mockResolvedValue(calendar());
+      await expect(svc.create(WS, { name: 'Second' })).resolves.toBeTruthy();
+      expect(prisma.bookingCalendar.create).toHaveBeenCalled();
+    });
+
+    it('skips the count-check when the plan is unlimited (-1)', async () => {
+      entitlements.getEffective.mockResolvedValue({ limits: { maxCalendars: -1 } });
+      prisma.bookingCalendar.count = jest.fn();
+      prisma.bookingCalendar.create = jest.fn().mockResolvedValue(calendar());
+      await expect(svc.create(WS, { name: 'Nth' })).resolves.toBeTruthy();
+      expect(prisma.bookingCalendar.count).not.toHaveBeenCalled();
     });
   });
 

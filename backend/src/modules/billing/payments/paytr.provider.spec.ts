@@ -326,5 +326,32 @@ describe('PaytrProvider', () => {
       expect(basket).toEqual([['Add-on: quota_boost_10', '2690.00', 1]]);
       expect(form.get('payment_amount')).toBe('269000');
     });
+
+    it('labels WALLET_TOPUP orders as a growth wallet top-up on the basket line', async () => {
+      fetchMock.mockResolvedValue(okResponse);
+
+      await provider.createCheckout(
+        makeOrder({
+          type: 'WALLET_TOPUP',
+          packageId: null,
+          addOnCode: null,
+          billingCycle: null,
+          amount: new Prisma.Decimal('500.00'),
+        }),
+        {
+          buyerEmail: 'buyer@example.com',
+          buyerIp: '203.0.113.7',
+          returnUrl: 'https://app.example.com/billing',
+        },
+      );
+
+      const form = new URLSearchParams(
+        fetchMock.mock.calls[0][1].body as string,
+      );
+      const basket = JSON.parse(
+        Buffer.from(form.get('user_basket')!, 'base64').toString('utf-8'),
+      );
+      expect(basket).toEqual([['Growth wallet top-up', '500.00', 1]]);
+    });
   });
 });

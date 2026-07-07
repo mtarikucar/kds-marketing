@@ -20,6 +20,11 @@ vi.mock('react-i18next', () => ({
 vi.mock('../../../features/marketing/api/socialCampaigns.service', () => ({
   createSocialCampaign: vi.fn(),
 }));
+// Entitled so the "Generate weekly plan" CTA renders (the gate hides it and
+// shows an upgrade prompt when 'socialCampaigns' isn't entitled).
+vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: () => true }),
+}));
 vi.mock('../../../features/marketing/api/contentCalendar.service', () => ({
   listContentCalendar: vi.fn().mockResolvedValue([]),
 }));

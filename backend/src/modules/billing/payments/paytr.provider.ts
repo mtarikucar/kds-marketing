@@ -134,6 +134,7 @@ export function verifyCallbackHash(
 
 /** What the customer sees as the single basket line on PayTR's iframe. */
 function describeOrder(order: PaymentOrder): string {
+  if (order.type === 'WALLET_TOPUP') return 'Growth wallet top-up';
   return order.type === 'ADDON'
     ? `Add-on: ${order.addOnCode ?? 'addon'}`
     : `Subscription (${order.billingCycle ?? 'MONTHLY'})`;

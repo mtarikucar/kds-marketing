@@ -334,8 +334,17 @@ export class BillingService {
     if (!workspace || workspace.status !== 'ACTIVE') {
       throw new NotFoundException('Workspace not found');
     }
-    const currency =
-      input.currency ?? (workspace.defaultCurrency === 'TRY' ? 'TRY' : 'USD');
+    // The growth wallet is denominated in the workspace's spend currency — it is
+    // NOT client-choosable. Derive it from the workspace default exactly like
+    // checkout() so a top-up can never seed/credit the wallet in a currency that
+    // diverges from where spend is denominated. A client-supplied currency that
+    // conflicts with the default is refused rather than silently ignored.
+    const currency = workspace.defaultCurrency === 'TRY' ? 'TRY' : 'USD';
+    if (input.currency && input.currency !== currency) {
+      throw new BadRequestException(
+        `Top-up currency must be ${currency} (the workspace default), not ${input.currency}`,
+      );
+    }
 
     // No-FX invariant (audit A2), checkout-side: the growth wallet stores ONE
     // currency and settlement refuses a mismatched credit — so refuse the

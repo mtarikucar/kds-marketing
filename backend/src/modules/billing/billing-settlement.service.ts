@@ -2,7 +2,10 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../common/scheduling/advisory-lock';
-import { EntitlementsService } from './entitlements.service';
+import {
+  EntitlementsService,
+  DEFAULT_ACTIVATED_MODULES,
+} from './entitlements.service';
 import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
 
 const ADDON_GRANTS: Record<string, Record<string, number>> = {
@@ -221,11 +224,24 @@ export class BillingSettlementService implements OnModuleInit {
     for (const order of candidates) {
       const existing = await this.prisma.workspaceSubscription.findUnique({
         where: { workspaceId: order.workspaceId },
-        select: { id: true },
+        select: { packageId: true, status: true, currentPeriodEnd: true },
       });
-      if (existing) {
-        // Already granted (e.g. pre-marker order): stamp it so it leaves the
-        // window instead of being re-probed on every sweep forever.
+      // Only treat as already-granted when the live subscription actually
+      // reflects THIS paid order — same package, ACTIVE, and a period still
+      // open. A mere row EXISTING is NOT enough: the universal trial→paid
+      // upgrade always has a TRIALING row (or a different package) sitting
+      // there, and short-circuiting on its presence defeated recovery — the
+      // paid grant never landed and the customer stayed on trial entitlements.
+      // Otherwise fall through and (re-)grant; activateSubscription is an
+      // idempotent upsert on workspaceId, so re-running it is safe.
+      const alreadyGranted =
+        existing != null &&
+        existing.packageId === order.packageId &&
+        existing.status === 'ACTIVE' &&
+        existing.currentPeriodEnd > new Date();
+      if (alreadyGranted) {
+        // Stamp it so it leaves the window instead of being re-probed on every
+        // sweep forever.
         await this.markGranted(order.id);
         continue;
       }
@@ -326,6 +342,52 @@ export class BillingSettlementService implements OnModuleInit {
         providerRef: order.providerRef,
       },
     });
+
+    // A purchased feature must be ON by default. Workspaces that never
+    // customised their module list keep activatedModules = null (all entitled
+    // modules active) and need nothing. But once a workspace has an explicit
+    // allow-list, that list is exhaustive — a module the NEW package now
+    // entitles would stay dark until manually toggled on. Union the newly
+    // entitled default-ON modules into the allow-list so the upgrade lands hot.
+    await this.activateEntitledModules(order.workspaceId, order.packageId);
+  }
+
+  /**
+   * Turn ON any default-activated module the (new) package entitles for a
+   * workspace whose `activatedModules` is an explicit allow-list. Mirrors a
+   * fresh workspace's DEFAULT_ACTIVATED_MODULES (memberships/research stay
+   * user-controlled — hidden by default even when entitled). Workspaces with
+   * `activatedModules = null` are all-active and left untouched.
+   */
+  private async activateEntitledModules(
+    workspaceId: string,
+    packageId: string,
+  ): Promise<void> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { activatedModules: true },
+    });
+    // null/absent = every entitled module already active — nothing to widen.
+    if (!Array.isArray(workspace?.activatedModules)) return;
+    const activated = (workspace!.activatedModules as unknown[]).filter(
+      (m): m is string => typeof m === 'string',
+    );
+
+    const pkg = await this.prisma.package.findUnique({
+      where: { id: packageId },
+      select: { features: true },
+    });
+    const features = (pkg?.features ?? {}) as Record<string, unknown>;
+    const toAdd = DEFAULT_ACTIVATED_MODULES.filter(
+      (k) => Boolean(features[k]) && !activated.includes(k),
+    );
+    if (toAdd.length === 0) return;
+
+    await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { activatedModules: [...activated, ...toAdd] },
+    });
+    this.entitlements.invalidate(workspaceId);
   }
 
   /** Stripe renewal (invoice.paid): extend the period it already paid for. */

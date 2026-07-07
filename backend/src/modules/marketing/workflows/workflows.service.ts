@@ -75,22 +75,30 @@ export class WorkflowsService {
     const dsl = this.validate(dto.trigger, dto.steps, dto.goal);
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxWorkflows;
-    if (limit !== -1) {
-      const count = await this.prisma.workflow.count({ where: { workspaceId } });
+    const data = {
+      workspaceId,
+      name: dto.name,
+      description: dto.description ?? null,
+      trigger: dsl.trigger as any,
+      steps: dsl.steps as any,
+      goal: (dsl.goal ?? null) as any,
+      status: 'DRAFT',
+    };
+    // Unlimited plan — no cap to race against.
+    if (limit === -1) {
+      return this.prisma.workflow.create({ data });
+    }
+    // Serialize the count-check + create per workspace under an advisory xact-lock:
+    // a bare count-then-create lets two concurrent requests at (limit-1) BOTH pass
+    // the cap and exceed it. The lock makes the read-modify-write atomic (mirrors
+    // SitesService.create).
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`workflows:${workspaceId}`}))`;
+      const count = await tx.workflow.count({ where: { workspaceId } });
       if (count >= limit) {
         throw new BadRequestException(`Workflow limit reached (${limit}) — upgrade your package`);
       }
-    }
-    return this.prisma.workflow.create({
-      data: {
-        workspaceId,
-        name: dto.name,
-        description: dto.description ?? null,
-        trigger: dsl.trigger as any,
-        steps: dsl.steps as any,
-        goal: (dsl.goal ?? null) as any,
-        status: 'DRAFT',
-      },
+      return tx.workflow.create({ data });
     });
   }
 

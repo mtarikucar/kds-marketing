@@ -22,7 +22,11 @@ export interface PackageRow {
   priceYearlyUSD?: string | null;
 }
 
-const FEATURE_LABELS: Record<string, string> = {
+// Keep in lockstep with the backend's FEATURE_KEYS (entitlements.service.ts):
+// public packages grant mediaGen/socialCampaigns/memberships/research too, so a
+// missing label prints the raw camelCase key on the pricing card. The test pins
+// full coverage so this can't silently drift.
+export const FEATURE_LABELS: Record<string, string> = {
   autoAssign: 'Auto lead assignment',
   telephony: 'Click-to-call',
   installations: 'Field installations',
@@ -38,6 +42,10 @@ const FEATURE_LABELS: Record<string, string> = {
   agentStudio: 'AI Agent Studio',
   voiceAi: 'Voice AI receptionist',
   invoicing: 'Customer invoicing',
+  mediaGen: 'AI media generation',
+  socialCampaigns: 'Social campaigns',
+  memberships: 'Memberships & courses',
+  research: 'AI lead research',
 };
 
 interface Props {

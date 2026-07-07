@@ -83,6 +83,9 @@ export type FeatureKey =
   | 'agentStudio'
   | 'voiceAi'
   | 'invoicing'
+  // AI Social Content Studio — media generation + the Social Campaign engine.
+  | 'mediaGen'
+  | 'socialCampaigns'
   // Optional modules hidden by default for NEW workspaces (leaner first-run;
   // switch on in Modules). Existing workspaces (activatedModules null) keep them.
   | 'memberships'

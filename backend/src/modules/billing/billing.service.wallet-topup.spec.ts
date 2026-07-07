@@ -66,12 +66,26 @@ describe('BillingService.walletTopup', () => {
     });
   });
 
-  it('honors an explicit currency override', async () => {
-    const { prisma, provider, svc } = makeSvc();
+  it('locks the wallet currency to the workspace default, ignoring/rejecting a divergent client currency (FIX 3)', async () => {
+    const { prisma, svc } = makeSvc(); // TRY-default workspace
+    // A client-supplied currency that diverges from the workspace's spend
+    // denomination is refused — a wallet must never be seeded off-currency.
+    await expect(
+      svc.walletTopup('ws-1', { amount: 100, provider: 'paytr', currency: 'USD' }, CTX),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.paymentOrder.create).not.toHaveBeenCalled();
+  });
 
-    await svc.walletTopup('ws-1', { amount: 100, provider: 'paytr', currency: 'USD' }, CTX);
+  it('accepts an explicit currency that matches the workspace default', async () => {
+    const { prisma, svc } = makeSvc(); // TRY-default workspace
+    await svc.walletTopup('ws-1', { amount: 100, provider: 'paytr', currency: 'TRY' }, CTX);
+    expect(prisma.paymentOrder.create.mock.calls[0][0].data.currency).toBe('TRY');
+  });
 
-    expect(provider.supports).toHaveBeenCalledWith('USD');
+  it('derives a USD wallet currency from a USD-default workspace', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({ defaultCurrency: 'USD', status: 'ACTIVE' });
+    await svc.walletTopup('ws-1', { amount: 100, provider: 'paytr' }, CTX);
     expect(prisma.paymentOrder.create.mock.calls[0][0].data.currency).toBe('USD');
   });
 
@@ -146,11 +160,12 @@ describe('BillingService.walletTopup', () => {
     expect(prisma.paymentOrder.create).not.toHaveBeenCalled();
   });
 
-  it('allows any supported currency when no wallet exists yet (first top-up sets it)', async () => {
-    const { prisma, svc } = makeSvc();
+  it('seeds the wallet in the workspace default currency on first top-up (no client override needed)', async () => {
+    const { prisma, svc } = makeSvc(); // TRY-default workspace, no wallet yet
     prisma.growthWallet.findUnique.mockResolvedValue(null);
 
-    const out = await svc.walletTopup('ws-1', { amount: 100, provider: 'paytr', currency: 'USD' }, CTX);
+    const out = await svc.walletTopup('ws-1', { amount: 100, provider: 'paytr' }, CTX);
     expect(out.orderId).toBe('topup-new');
+    expect(prisma.paymentOrder.create.mock.calls[0][0].data.currency).toBe('TRY');
   });
 });
