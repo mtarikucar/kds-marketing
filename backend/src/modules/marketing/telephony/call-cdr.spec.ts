@@ -1,4 +1,4 @@
-import { normalizeRecords } from './netgsm-cdr.client';
+import { normalizeRecords } from '../../netgsm/santral/netgsm-cdr.client';
 import { CallCdrSyncService } from './call-cdr-sync.service';
 
 describe('normalizeRecords — defensive CDR parsing', () => {

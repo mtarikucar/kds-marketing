@@ -78,7 +78,6 @@ import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { RecordingSyncService } from './telephony/recording-sync.service';
-import { NetgsmCdrClient } from './telephony/netgsm-cdr.client';
 import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 
@@ -629,7 +628,6 @@ import { WalletService } from './wallet/wallet.service';
     NetgsmApiAdapter,
     TelephonyConfigService,
     RecordingSyncService,
-    NetgsmCdrClient,
     CallCdrSyncService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).

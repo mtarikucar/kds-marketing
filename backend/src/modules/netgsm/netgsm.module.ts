@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { NetsantralClient } from './santral/netsantral.client';
+import { NetgsmCdrClient } from './santral/netgsm-cdr.client';
 
 /**
  * NetGSM hub — owns ALL communication with NetGSM (SMS REST v2, İYS,
@@ -10,7 +11,7 @@ import { NetsantralClient } from './santral/netsantral.client';
  * Spec: docs/superpowers/specs/2026-07-08-netgsm-full-integration-design.md
  */
 @Module({
-  providers: [NetsantralClient],
-  exports: [NetsantralClient],
+  providers: [NetsantralClient, NetgsmCdrClient],
+  exports: [NetsantralClient, NetgsmCdrClient],
 })
 export class NetgsmModule {}

@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
-import { NetgsmCdrClient, CdrRecord } from './netgsm-cdr.client';
+import { NetgsmCdrClient, CdrRecord } from '../../netgsm/santral/netgsm-cdr.client';
 import { TelephonyConfigService } from './telephony-config.service';
 
 type Creds = { usercode: string; password: string };
