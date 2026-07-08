@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -96,5 +96,52 @@ describe('CampaignsPage — per-row pause/resume loading (no cross-row bleed)', 
     const after = screen.getAllByRole('button', { name: /pause/i });
     expect(after[0]).toBeDisabled();
     expect(after[1]).not.toBeDisabled();
+  });
+});
+
+// SMS is its own feature (split off `conversationAi` for the NetGSM SMS v2
+// program): the composer's channel picker must hide SMS when the workspace
+// isn't entitled, instead of letting the create call 403 on submit.
+describe('CampaignsPage — channel picker SMS gate', () => {
+  const ONE = [{ id: 'c1', name: 'Promo', channel: 'EMAIL', status: 'DRAFT', stats: null }];
+
+  function mockEntitlements(features: Record<string, boolean>) {
+    get.mockImplementation((url: string) => {
+      if (url === '/campaigns') return Promise.resolve({ data: ONE });
+      if (url === '/billing/summary') {
+        return Promise.resolve({ data: { entitlements: { features, entitledModules: [] } } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+  }
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockClear();
+  });
+
+  async function openChannelListbox(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }));
+    const trigger = await screen.findByRole('combobox', { name: 'Channel' });
+    await user.click(trigger);
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+  }
+
+  it('hides the SMS option when the workspace lacks the sms feature', async () => {
+    mockEntitlements({ sms: false });
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openChannelListbox(user);
+    expect(screen.queryByRole('option', { name: 'SMS' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'EMAIL' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'WHATSAPP' })).toBeInTheDocument();
+  });
+
+  it('shows the SMS option when the workspace has the sms feature', async () => {
+    mockEntitlements({ sms: true });
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openChannelListbox(user);
+    expect(screen.getByRole('option', { name: 'SMS' })).toBeInTheDocument();
   });
 });

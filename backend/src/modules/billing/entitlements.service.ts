@@ -17,6 +17,10 @@ export const FEATURE_KEYS = [
   'apiAccess',
   // GoHighLevel-class capabilities (P1+). Each is a sellable feature gate.
   'conversationAi',
+  // Split off `conversationAi` (NetGSM SMS v2 program): SMS campaigns + SMS
+  // channel management gate on this key specifically; inbox/conversations
+  // stay on `conversationAi`. Granted on every plan block (no regression).
+  'sms',
   'workflows',
   'campaigns',
   'funnels',

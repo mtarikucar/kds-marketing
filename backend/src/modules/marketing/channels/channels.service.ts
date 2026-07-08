@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   ConflictException,
   ServiceUnavailableException,
@@ -14,6 +15,7 @@ import {
   isSecretBoxConfigured,
 } from '../../../common/crypto/secret-box.helper';
 import { metaGraphFetch, graphApiVersion } from '../../../common/util/meta-graph.util';
+import { EntitlementsService, FeatureKey } from '../../billing/entitlements.service';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
@@ -55,7 +57,26 @@ export class ChannelsService {
     private readonly prisma: PrismaService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly resolver: PublicChannelResolverService,
+    private readonly entitlements: EntitlementsService,
   ) {}
+
+  /**
+   * Per-type feature gate for channel save/verify. Channel CRUD is one generic
+   * surface across every type, so the controller can't statically decide the
+   * key — SMS requires `sms` (split off `conversationAi` for the NetGSM SMS v2
+   * program); every other type keeps requiring `conversationAi`, unchanged.
+   */
+  private async assertChannelFeature(workspaceId: string, type: string): Promise<void> {
+    const feature: FeatureKey = type === 'SMS' ? 'sms' : 'conversationAi';
+    const effective = await this.entitlements.getEffective(workspaceId);
+    if (!effective.features[feature]) {
+      throw new ForbiddenException({
+        message: 'This feature requires a higher package',
+        feature,
+        code: 'FEATURE_NOT_IN_PACKAGE',
+      });
+    }
+  }
 
   /** Canonical externalId for a type. EMAIL addresses are case-insensitive, so
    *  store them lower-cased+trimmed — the inbound webhook lower-cases the To
@@ -98,6 +119,7 @@ export class ChannelsService {
     if (!this.registry.has(dto.type)) {
       throw new NotFoundException(`Unsupported channel type: ${dto.type}`);
     }
+    await this.assertChannelFeature(workspaceId, dto.type);
     const externalId = this.normalizeExternalId(dto.type, dto.externalId);
     await this.assertExternalIdFree(dto.type, externalId);
     const data: any = {
@@ -222,6 +244,7 @@ export class ChannelsService {
   async update(workspaceId: string, id: string, dto: UpdateChannelInput) {
     const existing = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
     if (!existing) throw new NotFoundException('Channel not found');
+    await this.assertChannelFeature(workspaceId, existing.type);
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.status !== undefined) data.status = dto.status;
@@ -263,6 +286,7 @@ export class ChannelsService {
   async verify(workspaceId: string, id: string) {
     const c = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
     if (!c) throw new NotFoundException('Channel not found');
+    await this.assertChannelFeature(workspaceId, c.type);
     const adapter = this.registry.get(c.type);
     const health = await adapter.healthCheck(this.registry.resolveConfig(c));
     if (health.ok) {

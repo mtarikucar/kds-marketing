@@ -75,6 +75,10 @@ export type FeatureKey =
   | 'installations'
   | 'commissions'
   | 'conversationAi'
+  // Split off `conversationAi` (NetGSM SMS v2 program): SMS campaigns + SMS
+  // channel management. Granted on every plan (no regression); inbox/
+  // conversations stay on `conversationAi`.
+  | 'sms'
   | 'workflows'
   | 'campaigns'
   | 'funnels'

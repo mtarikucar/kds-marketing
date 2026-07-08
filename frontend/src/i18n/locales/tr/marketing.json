@@ -260,6 +260,7 @@
     "emptyDesc": "Mevcut planında aç/kapat yapılabilir modül yok.",
     "keys": {
       "conversationAi": "Mesajlar & Gelen Kutusu",
+      "sms": "SMS",
       "campaigns": "Kampanyalar",
       "socialCampaigns": "Sosyal kampanyalar",
       "mediaGen": "AI medya stüdyosu",

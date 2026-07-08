@@ -1,12 +1,14 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
 
 export const CAMPAIGN_BATCH_KIND = 'campaign.batch';
 /** A/B WINNER mode: the job that picks the winner + releases the held remainder. */
@@ -37,6 +39,7 @@ export class CampaignsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduledJobs: ScheduledJobService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   async list(workspaceId: string) {
@@ -117,6 +120,19 @@ export class CampaignsService {
   async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string }) {
     if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(dto.channel)) {
       throw new BadRequestException('Invalid channel');
+    }
+    // SMS is its own sellable feature (split off `conversationAi` for the
+    // NetGSM SMS v2 program) — an SMS-channel campaign requires it even
+    // though the broader `campaigns` feature already gates this controller.
+    if (dto.channel === 'SMS') {
+      const effective = await this.entitlements.getEffective(workspaceId);
+      if (!effective.features.sms) {
+        throw new ForbiddenException({
+          message: 'This feature requires a higher package',
+          feature: 'sms',
+          code: 'FEATURE_NOT_IN_PACKAGE',
+        });
+      }
     }
     return this.prisma.campaign.create({
       data: {

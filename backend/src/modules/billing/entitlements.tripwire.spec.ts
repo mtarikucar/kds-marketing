@@ -30,6 +30,7 @@ describe('entitlements — feature-key drift tripwire', () => {
       'memberships',
       'research',
       'reviews',
+      'sms',
       'socialCampaigns',
       'telephony',
       'voiceAi',

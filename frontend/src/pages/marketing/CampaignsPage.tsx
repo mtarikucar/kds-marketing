@@ -20,6 +20,7 @@ import {
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
 import { provisionSocialFromCampaign } from '../../features/marketing/api/social-link.service';
+import { useEntitlements } from '../../features/marketing/hooks/useEntitlements';
 import { VariantsDialog } from './campaigns/VariantsDialog';
 import { CampaignDetailDialog } from './campaigns/CampaignDetailDialog';
 import { plainTextBody } from './campaigns/plainText';
@@ -146,6 +147,11 @@ export function CampaignSocialLinkButton({ campaignId }: { campaignId: string })
 export default function CampaignsPage() {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
+  const { has } = useEntitlements();
+  // SMS is its own feature (split off `conversationAi` for the NetGSM SMS v2
+  // program) — hide it from the channel picker when the workspace isn't
+  // entitled, instead of letting the create call 403 on submit.
+  const availableChannels = CHANNELS.filter((c) => c !== 'SMS' || has('sms'));
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<string>('');
   const [aiGoal, setAiGoal] = useState('');
@@ -377,7 +383,7 @@ export default function CampaignsPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {CHANNELS.map((c) => (
+                          {availableChannels.map((c) => (
                             <SelectItem key={c} value={c}>
                               {c}
                             </SelectItem>

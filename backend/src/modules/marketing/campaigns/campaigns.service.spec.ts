@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CampaignsService } from './campaigns.service';
 
 /**
@@ -11,6 +11,7 @@ describe('CampaignsService', () => {
   const WS = 'ws-1';
   let prisma: any;
   let scheduledJobs: { schedule: jest.Mock; cancel: jest.Mock };
+  let entitlements: { getEffective: jest.Mock };
   let svc: CampaignsService;
 
   beforeEach(() => {
@@ -23,7 +24,9 @@ describe('CampaignsService', () => {
       campaignRecipient: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
     };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
-    svc = new CampaignsService(prisma as any, scheduledJobs as any);
+    // Default: entitled to sms (matches every plan block — no regression).
+    entitlements = { getEffective: jest.fn().mockResolvedValue({ features: { sms: true } }) };
+    svc = new CampaignsService(prisma as any, scheduledJobs as any, entitlements as any);
   });
 
   describe('buildAudienceWhere', () => {
@@ -170,6 +173,36 @@ describe('CampaignsService', () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
       await svc.update(WS, 'c1', { subject: 'Spring sale' });
       expect(prisma.campaign.update.mock.calls[0][0].data.subject).toBe('Spring sale');
+    });
+  });
+
+  // Split off `conversationAi` for the NetGSM SMS v2 program: an SMS-channel
+  // campaign now requires its own `sms` feature; EMAIL/WHATSAPP are unaffected
+  // (they never check entitlements here — `campaigns` at the controller
+  // already gates the whole surface).
+  describe('create — SMS feature gate', () => {
+    beforeEach(() => {
+      prisma.campaign.create = jest.fn().mockResolvedValue({ id: 'c1' });
+    });
+
+    it('blocks an SMS campaign when the workspace lacks the sms feature', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { sms: false } });
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'SMS', body: 'Hi' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('allows an SMS campaign when the workspace has the sms feature', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { sms: true } });
+      await svc.create(WS, { name: 'N', channel: 'SMS', body: 'Hi' });
+      expect(prisma.campaign.create).toHaveBeenCalled();
+    });
+
+    it('never checks entitlements for an EMAIL or WHATSAPP campaign', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi' });
+      await svc.create(WS, { name: 'N', channel: 'WHATSAPP', body: 'Hi' });
+      expect(entitlements.getEffective).not.toHaveBeenCalled();
     });
   });
 });

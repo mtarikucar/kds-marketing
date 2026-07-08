@@ -1,5 +1,11 @@
+import { ForbiddenException } from '@nestjs/common';
 import { ChannelsService } from './channels.service';
 import * as secretBox from '../../../common/crypto/secret-box.helper';
+
+/** Entitled to both — matches every real plan block (no regression). */
+function makeEntitlements(features: Record<string, boolean> = { conversationAi: true, sms: true }) {
+  return { getEffective: jest.fn().mockResolvedValue({ features }) } as any;
+}
 
 /**
  * Focused tests for ChannelsService.mask() — the public view of a channel.
@@ -12,7 +18,7 @@ describe('ChannelsService — mask()', () => {
     const prisma = { channel: { findMany: jest.fn().mockResolvedValue([channelRow]) } } as any;
     const registry = {} as any;
     const resolver = {} as any;
-    return new ChannelsService(prisma, registry, resolver);
+    return new ChannelsService(prisma, registry, resolver, makeEntitlements());
   }
 
   beforeEach(() => {
@@ -148,7 +154,11 @@ describe('ChannelsService — mask()', () => {
  * provider's diagnostic `message`/`code` as secondary detail.
  */
 describe('ChannelsService — verify()', () => {
-  function makeVerifyService(channelRow: any, adapter: { healthCheck: jest.Mock }) {
+  function makeVerifyService(
+    channelRow: any,
+    adapter: { healthCheck: jest.Mock },
+    entitlements = makeEntitlements(),
+  ) {
     const prisma = {
       channel: {
         findFirst: jest.fn().mockResolvedValue(channelRow),
@@ -167,7 +177,7 @@ describe('ChannelsService — verify()', () => {
       }),
     } as any;
     const resolver = {} as any;
-    return { svc: new ChannelsService(prisma, registry, resolver), prisma, registry };
+    return { svc: new ChannelsService(prisma, registry, resolver, entitlements), prisma, registry, entitlements };
   }
 
   it('surfaces credsValid:false + message + code so the UI can show a rejected-credential reason', async () => {
@@ -221,5 +231,103 @@ describe('ChannelsService — verify()', () => {
       where: { id: 'ch-3' },
       data: { lastVerifiedAt: expect.any(Date) },
     });
+  });
+
+  // Split off `conversationAi` for the NetGSM SMS v2 program: verifying an SMS
+  // channel now requires the `sms` feature specifically; every other type keeps
+  // requiring `conversationAi` (unchanged), resolved at runtime from the
+  // channel's own `type` since one generic CRUD surface covers every type.
+  describe('feature gate (SMS → sms, everything else → conversationAi)', () => {
+    it('blocks verifying an SMS channel when the workspace lacks sms (never calls the adapter)', async () => {
+      const adapter = { healthCheck: jest.fn() };
+      const { svc } = makeVerifyService(
+        { id: 'ch-4', workspaceId: 'ws-1', type: 'SMS' },
+        adapter,
+        makeEntitlements({ conversationAi: true, sms: false }),
+      );
+      await expect(svc.verify('ws-1', 'ch-4')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(adapter.healthCheck).not.toHaveBeenCalled();
+    });
+
+    it('blocks verifying a non-SMS channel when the workspace lacks conversationAi', async () => {
+      const adapter = { healthCheck: jest.fn() };
+      const { svc } = makeVerifyService(
+        { id: 'ch-5', workspaceId: 'ws-1', type: 'WHATSAPP' },
+        adapter,
+        makeEntitlements({ conversationAi: false, sms: true }),
+      );
+      await expect(svc.verify('ws-1', 'ch-5')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(adapter.healthCheck).not.toHaveBeenCalled();
+    });
+
+    it('allows verifying an SMS channel on sms alone, even without conversationAi', async () => {
+      const adapter = {
+        healthCheck: jest.fn().mockResolvedValue({ ok: true, details: {} }),
+      };
+      const { svc } = makeVerifyService(
+        { id: 'ch-6', workspaceId: 'ws-1', type: 'SMS' },
+        adapter,
+        makeEntitlements({ conversationAi: false, sms: true }),
+      );
+      const result = await svc.verify('ws-1', 'ch-6');
+      expect(result.ok).toBe(true);
+      expect(adapter.healthCheck).toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * Focused tests for ChannelsService.create()/update() — the same per-type
+ * feature gate as verify() (SMS → `sms`, everything else → `conversationAi`),
+ * checked BEFORE any secret validation/persistence.
+ */
+describe('ChannelsService — create()/update() feature gate', () => {
+  function makeCrudService(entitlements = makeEntitlements()) {
+    const prisma = {
+      channel: {
+        create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data, id: 'new-ch' })),
+        update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: 'ch-1', type: 'SMS', ...data })),
+        findFirst: jest.fn(),
+      },
+    } as any;
+    const registry = { has: jest.fn().mockReturnValue(true) } as any;
+    const resolver = { byExternalId: jest.fn().mockResolvedValue(null) } as any;
+    return { svc: new ChannelsService(prisma, registry, resolver, entitlements), prisma, registry, entitlements };
+  }
+
+  it('create() blocks an SMS channel when the workspace lacks sms', async () => {
+    const { svc, prisma } = makeCrudService(makeEntitlements({ conversationAi: true, sms: false }));
+    await expect(
+      svc.create('ws-1', { type: 'SMS', name: 'SMS line' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.channel.create).not.toHaveBeenCalled();
+  });
+
+  it('create() allows an SMS channel on sms alone, even without conversationAi', async () => {
+    const { svc, prisma } = makeCrudService(makeEntitlements({ conversationAi: false, sms: true }));
+    await svc.create('ws-1', { type: 'SMS', name: 'SMS line' });
+    expect(prisma.channel.create).toHaveBeenCalled();
+  });
+
+  it('create() blocks a non-SMS channel when the workspace lacks conversationAi', async () => {
+    const { svc, prisma } = makeCrudService(makeEntitlements({ conversationAi: false, sms: true }));
+    await expect(
+      svc.create('ws-1', { type: 'WEBCHAT', name: 'Web chat' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.channel.create).not.toHaveBeenCalled();
+  });
+
+  it('update() resolves the feature from the EXISTING channel type (SMS → sms)', async () => {
+    const { svc, prisma } = makeCrudService(makeEntitlements({ conversationAi: true, sms: false }));
+    prisma.channel.findFirst.mockResolvedValue({ id: 'ch-1', type: 'SMS', configSealed: null });
+    await expect(svc.update('ws-1', 'ch-1', { name: 'Renamed' })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.channel.update).not.toHaveBeenCalled();
+  });
+
+  it('update() allows renaming an SMS channel on sms alone', async () => {
+    const { svc, prisma } = makeCrudService(makeEntitlements({ conversationAi: false, sms: true }));
+    prisma.channel.findFirst.mockResolvedValue({ id: 'ch-1', type: 'SMS', configSealed: null });
+    await svc.update('ws-1', 'ch-1', { name: 'Renamed' });
+    expect(prisma.channel.update).toHaveBeenCalled();
   });
 });
