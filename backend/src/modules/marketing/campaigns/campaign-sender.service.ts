@@ -480,8 +480,14 @@ export class CampaignSenderService implements OnModuleInit {
       where: { id: campaignId },
       data: {
         stats: {
-          // `recipients` is a static launch-time total (never bumped) — preserve it.
-          ...(s.recipients !== undefined ? { recipients: s.recipients } : {}),
+          // Spread the existing blob FIRST so any key this method doesn't own
+          // (the static launch-time `recipients` total, and — critically —
+          // `delivered`/`undelivered`/`iysBlocked`, which `netgsm-dlr-poll.
+          // service.ts`'s `rollupCampaignStats` merges in independently)
+          // survives a recompute that races it. Every field this method DOES
+          // own is listed after the spread so it always wins over whatever
+          // stale value was sitting in `s` for that same key.
+          ...s,
           sent: countOf('SENT'),
           failed: countOf('FAILED'),
           skipped: countOf('SKIPPED'),

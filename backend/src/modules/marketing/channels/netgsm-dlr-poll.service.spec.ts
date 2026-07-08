@@ -205,6 +205,22 @@ describe('NetgsmDlrPollService.poll', () => {
       expect(legacyReport.fetchStatus).not.toHaveBeenCalled();
       expect(out.polled).toBe(0);
     });
+
+    it('caps its candidates query at 60 (one account-minute of budget) even when far more are eligible', async () => {
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel({ configPublic: { useLegacySend: true } })]);
+      registry.resolveConfig.mockReturnValue({
+        secrets: { usercode: 'uL', password: 'pL' },
+        public: { useLegacySend: true },
+      });
+      prisma.conversation.findMany.mockResolvedValue([{ id: 'cv1' }]);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      await service.poll();
+
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 60 }),
+      );
+    });
   });
 
   describe('per-account budget denial', () => {

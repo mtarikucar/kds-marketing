@@ -209,8 +209,8 @@ export class NetgsmDlrPollService {
   }
 
   /** OLD single-bulkid report path, scoped to one legacy-flagged channel
-   *  (one workspace) — byte-identical behavior to the pre-v2 poller, just
-   *  budgeted per-account instead of by a global per-tick cap. */
+   *  (one workspace) — behavior-preserving relative to the pre-v2 poller,
+   *  just budgeted per-account instead of by a global per-tick cap. */
   private async pollLegacyChannel(
     ch: ChannelRow,
     since: Date,
@@ -235,6 +235,11 @@ export class NetgsmDlrPollService {
       },
       select: { id: true, externalMessageId: true },
       orderBy: { createdAt: 'asc' },
+      // Query-level cap restored: one account-minute of report budget
+      // (REPORT_LIMIT), so this candidate fetch can never outgrow what a
+      // single tick could possibly spend on this account, regardless of how
+      // many OUTBOUND/SENT messages accumulate in the window.
+      take: NetgsmDlrPollService.REPORT_LIMIT,
     });
 
     let polled = 0;

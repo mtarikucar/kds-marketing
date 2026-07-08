@@ -185,6 +185,35 @@ describe('CampaignSenderService.batch', () => {
     });
   });
 
+  it('preserves a foreign stats key (delivered, owned by the DLR poller) while updating its own recomputed counters', async () => {
+    // `campaign.stats.delivered`/`undelivered` are written by
+    // netgsm-dlr-poll.service.ts's rollupCampaignStats merge, never by this
+    // method's own fixed field list — a recomputeStats tick that lands after
+    // that merge must not silently drop them.
+    prisma.campaign.findUnique.mockResolvedValue({
+      stats: { recipients: 10, delivered: 5, sent: 1 },
+      abEnabled: false,
+    });
+    prisma.campaignRecipient.groupBy.mockResolvedValue([
+      { status: 'SENT', _count: { _all: 3 } },
+      { status: 'FAILED', _count: { _all: 1 } },
+    ]);
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats);
+    expect(statsUpdate[0].data.stats).toEqual({
+      recipients: 10,
+      delivered: 5, // foreign key survives, untouched
+      sent: 3, // recomputed field wins over the stale `sent: 1`
+      failed: 1,
+      skipped: 0,
+      opened: 0,
+      clicked: 0,
+      unsubscribed: 0,
+    });
+  });
+
   describe('A/B WINNER mode', () => {
     it('does NOT mark a campaign SENT while HOLD recipients await the winner', async () => {
       prisma.campaignRecipient.findMany.mockResolvedValue([]); // test cohort all sent → no PENDING
