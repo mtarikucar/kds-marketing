@@ -499,6 +499,31 @@ model Segment {
   @@map("segments")
 }
 
+/// CRM segment → ad-platform Custom Audience sync state. One row per
+/// (segment, adAccount): holds the created Meta custom-audience id so a re-sync
+/// APPENDS to the same audience instead of creating duplicates, plus an optional
+/// seeded lookalike id. Config data, not a secret (the source token stays sealed
+/// on AdAccount).
+model SegmentAudienceSync {
+  id                  String    @id @default(uuid())
+  workspaceId         String
+  segmentId           String
+  adAccountId         String
+  provider            String // META
+  externalAudienceId  String? // Meta custom audience id
+  lookalikeAudienceId String?
+  status              String    @default("PENDING") // PENDING | SYNCED | ERROR
+  lastCount           Int?
+  lastError           String?   @db.Text
+  lastSyncedAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([segmentId, adAccountId])
+  @@index([workspaceId])
+  @@map("segment_audience_syncs")
+}
+
 /// Epic A5 — a CSV lead import. Rows are parsed + stored on upload (status
 /// MAPPING); on commit the mapping + dedupe policy are set and processing runs
 /// in batches via the ScheduledJob queue (kind 'import.batch').

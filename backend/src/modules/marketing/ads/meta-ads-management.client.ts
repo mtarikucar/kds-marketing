@@ -41,6 +41,14 @@ export interface MetaWriteResult {
   isAuthError?: boolean;
 }
 
+export interface MetaAudienceUploadResult {
+  ok: boolean;
+  numReceived?: number;
+  numInvalid?: number;
+  error?: string;
+  isAuthError?: boolean;
+}
+
 function actOf(externalAdId: string): string {
   return externalAdId.startsWith('act_') ? externalAdId : `act_${externalAdId}`;
 }
@@ -169,6 +177,92 @@ export async function createCampaign(
     timeoutMs: 20_000,
   });
   if (!r.ok) return { ok: false, ...fail(r, 'Meta create campaign') };
+  const id = r.data?.id;
+  return { ok: true, id: id ? String(id) : undefined };
+}
+
+/**
+ * Create a hashed-customer-list Custom Audience on the ad account. Population
+ * happens via addAudienceUsers (a separate session upload) — this only creates
+ * the empty container. Needs an ads_management token.
+ */
+export async function createCustomAudience(
+  token: string,
+  externalAdId: string,
+  input: { name: string; description?: string },
+): Promise<MetaWriteResult> {
+  const r = await metaGraphFetch(`/${actOf(externalAdId)}/customaudiences`, {
+    accessToken: token,
+    method: 'POST',
+    body: {
+      name: input.name,
+      description: input.description ?? 'Synced from Jeeta CRM segment',
+      subtype: 'CUSTOM',
+      customer_file_source: 'USER_PROVIDED_ONLY',
+    },
+    timeoutMs: 20_000,
+  });
+  if (!r.ok) return { ok: false, ...fail(r, 'Meta create audience') };
+  const id = r.data?.id;
+  return { ok: true, id: id ? String(id) : undefined };
+}
+
+/**
+ * Upload one batch of hashed users to a Custom Audience. `schema` names the
+ * hashed keys (e.g. ['EMAIL','PHONE']); `rows` is a parallel array of hashed
+ * value tuples. `session` drives Meta's multi-batch protocol (constant
+ * session_id, 1-based batch_seq, last_batch_flag on the final batch).
+ */
+export async function addAudienceUsers(
+  token: string,
+  audienceId: string,
+  schema: string[],
+  rows: string[][],
+  session: { session_id: number; batch_seq: number; last_batch_flag: boolean; estimated_num_total: number },
+): Promise<MetaAudienceUploadResult> {
+  const r = await metaGraphFetch(`/${audienceId}/users`, {
+    accessToken: token,
+    method: 'POST',
+    body: {
+      payload: { schema, data: rows },
+      session,
+    },
+    timeoutMs: 30_000,
+  });
+  if (!r.ok) return { ok: false, ...fail(r, 'Meta audience upload') };
+  return {
+    ok: true,
+    numReceived: num(r.data?.num_received) ?? undefined,
+    numInvalid: num(r.data?.num_invalid_entries) ?? undefined,
+  };
+}
+
+/**
+ * Seed a Lookalike Audience from an already-populated source Custom Audience.
+ * The seed must have enough matched users (Meta min ~100) or this fails, so it
+ * is sequenced AFTER a populate, never chained synchronously.
+ */
+export async function createLookalikeAudience(
+  token: string,
+  externalAdId: string,
+  input: { name: string; seedAudienceId: string; country: string; ratio: number },
+): Promise<MetaWriteResult> {
+  const r = await metaGraphFetch(`/${actOf(externalAdId)}/customaudiences`, {
+    accessToken: token,
+    method: 'POST',
+    body: {
+      name: input.name,
+      subtype: 'LOOKALIKE',
+      origin_audience_id: input.seedAudienceId,
+      lookalike_spec: JSON.stringify({
+        type: 'similarity',
+        country: input.country,
+        ratio: input.ratio,
+      }),
+    },
+    timeoutMs: 20_000,
+  });
+  if (!r.ok) return { ok: false, ...fail(r, 'Meta create lookalike') };
   const id = r.data?.id;
   return { ok: true, id: id ? String(id) : undefined };
 }

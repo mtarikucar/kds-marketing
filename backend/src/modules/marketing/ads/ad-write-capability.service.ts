@@ -7,6 +7,8 @@ export interface AdWriteCapabilities {
   pauseResume: boolean;
   createCampaign: boolean;
   duplicate: boolean;
+  /** Push a CRM segment up as a Custom/Lookalike audience. */
+  syncAudience: boolean;
   /** Env-gated: creds present so a live write can actually happen. */
   configured: boolean;
   note: string;
@@ -30,6 +32,7 @@ export class AdWriteCapabilityService {
       pauseResume: true,
       createCampaign: true,
       duplicate: true,
+      syncAudience: true,
       note: 'Full Marketing API write (needs an ads_management-scoped token).',
     },
     TIKTOK: {
@@ -38,6 +41,7 @@ export class AdWriteCapabilityService {
       pauseResume: false,
       createCampaign: false,
       duplicate: false,
+      syncAudience: false,
       note: 'Read-only today; Business Ads Management write client pending.',
     },
     LINKEDIN: {
@@ -46,6 +50,7 @@ export class AdWriteCapabilityService {
       pauseResume: false,
       createCampaign: false,
       duplicate: false,
+      syncAudience: false,
       note: 'Read-only today; needs rw_ads scope + campaign-update client.',
     },
     GOOGLE: {
@@ -54,6 +59,7 @@ export class AdWriteCapabilityService {
       pauseResume: false,
       createCampaign: false,
       duplicate: false,
+      syncAudience: false,
       note: 'Not integrated; Google Ads API + developer token pending.',
     },
   };
@@ -65,6 +71,7 @@ export class AdWriteCapabilityService {
       pauseResume: false,
       createCampaign: false,
       duplicate: false,
+      syncAudience: false,
       note: 'Unknown provider.',
     };
     return { ...base, configured: this.configured(provider) };
@@ -74,6 +81,12 @@ export class AdWriteCapabilityService {
   canWriteBudget(provider: string): boolean {
     const cap = this.get(provider);
     return cap.setBudget && cap.configured;
+  }
+
+  /** True when a CRM segment can be synced to this provider as an audience now. */
+  canSyncAudience(provider: string): boolean {
+    const cap = this.get(provider);
+    return cap.syncAudience && cap.configured;
   }
 
   all(): AdWriteCapabilities[] {

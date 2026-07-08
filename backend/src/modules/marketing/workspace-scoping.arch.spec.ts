@@ -163,6 +163,8 @@ const OWNED_DELEGATES = [
   // hourly eval sweep (cross-workspace) is whitelisted in ALLOWED_GLOBAL.
   'adRule',
   'adRuleLog',
+  // CRM segment → Meta Custom Audience sync state (one row per segment+account).
+  'segmentAudienceSync',
   // Custom Objects (GHL parity): workspace-defined record types, their records,
   // and record↔Contact links are all workspace-owned.
   'customObjectDef',

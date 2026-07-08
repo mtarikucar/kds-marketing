@@ -384,6 +384,7 @@ import { LinkedinAdsOAuthService } from './ads/linkedin-ads-oauth.service';
 import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
 import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
 import { AdManagementService } from './ads/ad-management.service';
+import { AudienceSyncService } from './ads/audience-sync.service';
 import { AdRulesService } from './ads/ad-rules.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
@@ -749,6 +750,7 @@ import { WalletService } from './wallet/wallet.service';
     AdsPullService,
     TiktokBusinessOAuthService,
     AdManagementService,
+    AudienceSyncService,
     AdRulesService,
     SnippetsService,
     LeadBulkService,
