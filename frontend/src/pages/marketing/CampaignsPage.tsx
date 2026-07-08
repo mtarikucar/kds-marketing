@@ -16,6 +16,7 @@ import {
   Play,
   Pencil,
   BarChart3,
+  XCircle,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
@@ -158,6 +159,7 @@ export default function CampaignsPage() {
   const [deleteTarget, setDeleteTarget] = useState<CampaignRow | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [launchTarget, setLaunchTarget] = useState<CampaignRow | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<CampaignRow | null>(null);
 
   // ── Query ─────────────────────────────────────────────────────────────────
   const { data: campaigns, isError, refetch } = useQuery<CampaignRow[]>({
@@ -308,6 +310,20 @@ export default function CampaignsPage() {
     onSuccess: invalidate,
     onError: (e: any) =>
       toast.error(e.response?.data?.message ?? t('campaigns.actionFailed', 'Action failed')),
+  });
+
+  // Cancel a SCHEDULED (not yet sending) campaign's queued send — its own
+  // mutation (not the generic `act`) so the confirm dialog gets a dedicated
+  // loading state and success/error toast, matching the `launch` mutation.
+  const cancelScheduled = useMutation({
+    mutationFn: (id: string) => marketingApi.post(`/campaigns/${id}/cancel`),
+    onSuccess: () => {
+      invalidate();
+      setCancelTarget(null);
+      toast.success(t('campaigns.cancelScheduledSuccess', 'Scheduled send cancelled'));
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('campaigns.cancelScheduledFailed', 'Could not cancel the scheduled send')),
   });
 
   const remove = useMutation({
@@ -624,6 +640,21 @@ export default function CampaignsPage() {
         onConfirm={() => launchTarget && launch.mutate(launchTarget.id)}
       />
 
+      {/* ── Cancel scheduled send confirm ───────────────────────────────────── */}
+      <ConfirmDialog
+        open={!!cancelTarget}
+        onOpenChange={(o) => { if (!o) setCancelTarget(null); }}
+        title={t('campaigns.cancelScheduledTitle', 'Cancel scheduled send?')}
+        description={t(
+          'campaigns.cancelScheduledDesc',
+          'The campaign will not go out at its scheduled time. You can launch it manually later.',
+        )}
+        confirmLabel={t('campaigns.cancelScheduledConfirm', 'Cancel send')}
+        tone="danger"
+        loading={cancelScheduled.isPending}
+        onConfirm={() => cancelTarget && cancelScheduled.mutate(cancelTarget.id)}
+      />
+
       {/* ── Campaign list ─────────────────────────────────────────────────── */}
       <QueryStateBoundary
         isError={isError}
@@ -688,6 +719,18 @@ export default function CampaignsPage() {
                       disabled={act.isPending && act.variables?.id === c.id}
                     >
                       <Play className="h-5 w-5" />
+                    </IconButton>
+                  )}
+                  {c.status === 'SCHEDULED' && (
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('campaigns.cancelScheduled', 'Cancel scheduled send')}
+                      className="text-danger hover:bg-danger-subtle"
+                      onClick={() => setCancelTarget(c)}
+                      disabled={cancelScheduled.isPending && cancelTarget?.id === c.id}
+                    >
+                      <XCircle className="h-5 w-5" />
                     </IconButton>
                   )}
                   {c.status === 'DRAFT' && (

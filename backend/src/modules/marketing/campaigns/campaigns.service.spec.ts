@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { CampaignsService } from './campaigns.service';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { CampaignsService, CAMPAIGN_BATCH_KIND } from './campaigns.service';
 
 /**
  * Audience resolution + launch. The audience where must always pin the
@@ -115,6 +115,34 @@ describe('CampaignsService', () => {
       await svc.launch(WS, 'c1');
       const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
       expect(rows.every((r: any) => r.variantKey === null)).toBe(true);
+    });
+  });
+
+  describe('cancel', () => {
+    it('cancels the queued batch job (by dedupKey=campaignId) and flips SCHEDULED → CANCELLED', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+      const res = await svc.cancel(WS, 'c1');
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_BATCH_KIND, 'c1');
+      expect(prisma.campaign.update).toHaveBeenCalledWith({ where: { id: 'c1' }, data: { status: 'CANCELLED' } });
+      expect(res).toEqual({ message: 'Campaign cancelled' });
+    });
+
+    it('refuses to cancel a SENDING campaign (409) — pause covers that', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING' });
+      await expect(svc.cancel(WS, 'c1')).rejects.toBeInstanceOf(ConflictException);
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(prisma.campaign.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to re-cancel an already-CANCELLED campaign (409, not a silent no-op)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'CANCELLED' });
+      await expect(svc.cancel(WS, 'c1')).rejects.toBeInstanceOf(ConflictException);
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+    });
+
+    it('404s when the campaign does not exist in this workspace', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(null);
+      await expect(svc.cancel(WS, 'missing')).rejects.toThrow('Campaign not found');
     });
   });
 

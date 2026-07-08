@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -187,10 +188,24 @@ export class CampaignsService {
     return { message: 'Campaign resumed' };
   }
 
+  /**
+   * Cancel a SCHEDULED (not yet sending) campaign's queued send — the "undo" for
+   * a scheduled blast. Only valid from SCHEDULED: a SENDING campaign must go
+   * through `pause` instead (cancelling mid-send would abandon recipients in an
+   * ambiguous sent/skipped limbo), and any other status (including an
+   * already-CANCELLED one) has nothing queued to cancel.
+   */
   async cancel(workspaceId: string, id: string) {
-    const c = await this.prisma.campaign.findFirst({ where: { id, workspaceId }, select: { id: true } });
+    const c = await this.prisma.campaign.findFirst({ where: { id, workspaceId }, select: { id: true, status: true } });
     if (!c) throw new NotFoundException('Campaign not found');
+    if (c.status !== 'SCHEDULED') {
+      throw new ConflictException('Only a scheduled (not yet sending) campaign can be cancelled');
+    }
     await this.scheduledJobs.cancel(CAMPAIGN_BATCH_KIND, c.id);
+    // NetGSM-side scheduling (startdate passthrough) isn't wired up yet — app-side
+    // ScheduledJob cancellation above is the only queued work today. If a later
+    // task adds startdate passthrough, also best-effort SmsV2Client.cancel(jobid)
+    // here for each of the campaign's netgsmJobIds.
     await this.prisma.campaign.update({ where: { id: c.id }, data: { status: 'CANCELLED' } });
     return { message: 'Campaign cancelled' };
   }

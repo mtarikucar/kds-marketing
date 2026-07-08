@@ -62,6 +62,33 @@ describe('CampaignsPage launch', () => {
   });
 });
 
+describe('CampaignsPage — cancel scheduled send', () => {
+  const SCHEDULED = [{ id: 'c1', name: 'Promo', channel: 'SMS', status: 'SCHEDULED', stats: null }];
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockClear();
+    get.mockImplementation((url: string) =>
+      url === '/campaigns' ? Promise.resolve({ data: SCHEDULED }) : Promise.resolve({ data: [] }),
+    );
+  });
+
+  it('confirms before cancelling — a single click does NOT cancel immediately', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+
+    const rowCancel = await screen.findByRole('button', { name: /Cancel scheduled send/i });
+    await user.click(rowCancel);
+
+    // No cancel call yet — the confirm dialog is shown instead of firing the mutation.
+    expect(post).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Cancel send/i }));
+    expect(post).toHaveBeenCalledWith('/campaigns/c1/cancel');
+  });
+});
+
 // Regression: pause/resume on each SENDING campaign row was driven off a single
 // shared `act` mutation's isPending, so pausing ONE campaign disabled the Pause
 // button on EVERY other SENDING campaign too. Multiple campaigns send at once,
