@@ -162,6 +162,29 @@ describe('SocialOAuthService', () => {
       expect(prisma.socialAccount.upsert).toHaveBeenCalledTimes(2);
     });
 
+    it('stores a PAGE under FACEBOOK and an IG account under INSTAGRAM regardless of the OAuth flow network', async () => {
+      // Meta's single Login-for-Business returns BOTH Pages and IG accounts; the flow may
+      // have been started as INSTAGRAM. The stored SocialAccount.network must reflect the
+      // ASSET (Page→FACEBOOK, IG→INSTAGRAM) so the publisher routes to the right Graph
+      // endpoint (/feed vs /media). A Page mis-stored as INSTAGRAM silently fails to publish.
+      prisma.pendingSocialConnection.findFirst.mockResolvedValue({
+        id: 'p1', workspaceId: WS, network: 'INSTAGRAM', expiresAt: new Date(Date.now() + 60000),
+        payload: sealedPayload([
+          { externalId: 'P1', displayName: 'Acme', accountType: 'PAGE', token: 'pt1' },
+          { externalId: 'IG1', displayName: '@acme', accountType: 'IG_BUSINESS', token: 'pt1' },
+        ]),
+      });
+      await svc.confirm(WS, 'p1', ['P1', 'IG1']);
+      const keys = prisma.socialAccount.upsert.mock.calls.map(
+        (c: any) => c[0].where.workspaceId_network_externalId,
+      );
+      expect(keys).toContainEqual({ workspaceId: WS, network: 'FACEBOOK', externalId: 'P1' });
+      expect(keys).toContainEqual({ workspaceId: WS, network: 'INSTAGRAM', externalId: 'IG1' });
+      // and the create payload carries the same corrected network
+      const pageCall = prisma.socialAccount.upsert.mock.calls.find((c: any) => c[0].create.externalId === 'P1');
+      expect(pageCall[0].create.network).toBe('FACEBOOK');
+    });
+
     it('throws when nothing is selected', async () => {
       await expect(svc.confirm(WS, 'p1', [])).rejects.toThrow(BadRequestException);
     });
