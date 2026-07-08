@@ -336,4 +336,48 @@ describe('SmsV2Client', () => {
       expect(r).toEqual({ ok: false, messages: [] });
     });
   });
+
+  describe('stats', () => {
+    it('sends one jobid per call and parses rollup rows', async () => {
+      const requestSpy = jest.spyOn(rest, 'request').mockResolvedValue({
+        httpStatus: 200,
+        body: { code: '00', rows: [{ status: 'delivered', count: 42 }, { status: 'undelivered', count: 3 }] },
+        rawText: 'x',
+      } as any);
+      const r = await client.stats(creds, 'job-1');
+      expect(r).toEqual({ ok: true, code: '00', rows: [{ status: 'delivered', count: 42 }, { status: 'undelivered', count: 3 }] });
+      const [call] = requestSpy.mock.calls;
+      expect(call[0].path).toBe('/sms/rest/v2/stats');
+      expect(call[0].method).toBe('POST');
+      expect(call[0].body).toEqual({ jobid: 'job-1' });
+    });
+
+    it('tolerates the alternate rows key/field casing (stats[]/durum/adet) and drops a statusless row', async () => {
+      jest.spyOn(rest, 'request').mockResolvedValue({
+        httpStatus: 200,
+        body: { code: '00', stats: [{ durum: 'blacklist', adet: 5 }, { durum: '', adet: 1 }] },
+        rawText: 'x',
+      } as any);
+      const r = await client.stats(creds, 'job-2');
+      expect(r).toEqual({ ok: true, code: '00', rows: [{ status: 'blacklist', count: 5 }] });
+    });
+
+    it('an error envelope returns ok:false with empty rows', async () => {
+      jest.spyOn(rest, 'request').mockResolvedValue({ httpStatus: 200, body: { code: '60' }, rawText: '{"code":"60"}' } as any);
+      const r = await client.stats(creds, 'job-3');
+      expect(r).toEqual({ ok: false, code: '60', rows: [] });
+    });
+
+    it('a non-JSON body returns ok:false with empty rows', async () => {
+      jest.spyOn(rest, 'request').mockResolvedValue({ httpStatus: 200, body: null, rawText: '<html/>' } as any);
+      const r = await client.stats(creds, 'job-4');
+      expect(r).toEqual({ ok: false, code: String(200), rows: [] });
+    });
+
+    it('a transport error (rejected promise) returns ok:false with empty rows, no throw', async () => {
+      jest.spyOn(rest, 'request').mockRejectedValue(new Error('down'));
+      const r = await client.stats(creds, 'job-5');
+      expect(r).toEqual({ ok: false, code: '', rows: [] });
+    });
+  });
 });

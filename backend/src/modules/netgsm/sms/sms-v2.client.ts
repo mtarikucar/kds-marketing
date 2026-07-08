@@ -32,6 +32,17 @@ export interface SmsV2ReportResult {
   rows: SmsV2ReportRow[];
 }
 
+export interface SmsV2StatsRow {
+  status: string;
+  count: number;
+}
+
+export interface SmsV2StatsResult {
+  ok: boolean;
+  code: string;
+  rows: SmsV2StatsRow[];
+}
+
 export interface SmsV2SendMessage {
   msg: string;
   no: string;
@@ -91,7 +102,7 @@ const OTP_MAX_SEGMENT_CHARS = 155;
 
 /**
  * NetGSM SMS REST v2 hub client (send n:n / report / otp / msgheader / cancel /
- * inbox). Transport, Basic Auth and credential scrubbing are owned entirely by
+ * inbox / stats). Transport, Basic Auth and credential scrubbing are owned entirely by
  * `NetgsmRestClient` — this class only shapes request/response bodies and
  * classifies outcomes. Parsing is tolerant throughout (NetGSM's REST v2
  * responses vary in casing across accounts/docs revisions and sometimes answer
@@ -209,6 +220,42 @@ export class SmsV2Client {
         : j?.referans != null ? String(j.referans)
         : null,
     }));
+    return { ok: true, code, rows };
+  }
+
+  /**
+   * Rollup counts for ONE jobid (caller enforces the documented 1-jobid-per-call
+   * / once-per-10-min-per-jobid cap via `AccountRateBudgeter`). NetGSM's stats
+   * response shape isn't pinned down as tightly as report()'s — parse
+   * tolerantly on both the row-array key (`rows`/`stats`/`result`) and each
+   * row's field names (`status`/`durum`, `count`/`adet`/`total`), mirroring
+   * this file's parsing philosophy elsewhere. A row with an empty/missing
+   * status is dropped rather than surfaced as a bogus `''` bucket.
+   */
+  async stats(creds: NetgsmCreds, jobid: string): Promise<SmsV2StatsResult> {
+    let httpStatus: number, respBody: any, rawText: string;
+    try {
+      ({ httpStatus, body: respBody, rawText } = await this.rest.request({
+        path: '/sms/rest/v2/stats', method: 'POST', creds, body: { jobid },
+      }));
+    } catch {
+      return { ok: false, code: '', rows: [] };
+    }
+    const code = this.extractCode(respBody, rawText);
+    if (code == null || code !== '00') {
+      return { ok: false, code: code ?? String(httpStatus), rows: [] };
+    }
+    const raw: any[] =
+      Array.isArray(respBody?.rows) ? respBody.rows
+      : Array.isArray(respBody?.stats) ? respBody.stats
+      : Array.isArray(respBody?.result) ? respBody.result
+      : [];
+    const rows: SmsV2StatsRow[] = raw
+      .map((r) => ({
+        status: String(r?.status ?? r?.durum ?? ''),
+        count: Number(r?.count ?? r?.adet ?? r?.total ?? 0),
+      }))
+      .filter((r) => r.status.length > 0);
     return { ok: true, code, rows };
   }
 

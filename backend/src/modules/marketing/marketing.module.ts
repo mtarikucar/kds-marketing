@@ -149,6 +149,7 @@ import { CampaignTrackingController } from './controllers/campaign-tracking.cont
 import { CampaignsService } from './campaigns/campaigns.service';
 import { CampaignSenderService } from './campaigns/campaign-sender.service';
 import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
+import { CampaignSmsStatsService } from './campaigns/campaign-sms-stats.service';
 
 // Phase F P5 — funnels/sites + forms + booking.
 import { MarketingSitesController } from './controllers/marketing-sites.controller';
@@ -690,6 +691,9 @@ import { WalletService } from './wallet/wallet.service';
     CampaignsService,
     CampaignSenderService,
     CampaignTrackingService,
+    // Slow reconciler (15-min tick): NetGSM per-jobid stats() rollups
+    // (delivered/undelivered/blacklist/iysNotValid/…) into campaign.stats.sms.
+    CampaignSmsStatsService,
     // Phase F P5 — funnels: page/form CRUD + AI draft, the safe block renderer,
     // public form submit, and booking (registers the booking.reminder handler).
     SitesService,
