@@ -147,27 +147,29 @@ describe('AdAccountService', () => {
     it('returns empty totals when the workspace has no accounts', async () => {
       prisma.adAccount.findMany.mockResolvedValue([]);
       const res = await svc.getMetrics(WS, '2026-06-01', '2026-06-30');
-      expect(res).toEqual({ totals: { spend: 0, impressions: 0, clicks: 0, leads: 0 }, byDay: [], byProvider: {} });
+      expect(res).toEqual({ totals: { spend: 0, impressions: 0, clicks: 0, leads: 0, revenue: 0, roas: 0 }, byDay: [], byProvider: {} });
       expect(prisma.adMetric.findMany).not.toHaveBeenCalled();
     });
 
-    it('aggregates rows into totals, byDay and byProvider', async () => {
+    it('aggregates rows into totals, byDay and byProvider (with recomputed ROAS)', async () => {
       prisma.adAccount.findMany.mockResolvedValue([
         { id: 'a1', provider: 'META' },
         { id: 'a2', provider: 'TIKTOK' },
       ]);
       prisma.adMetric.findMany.mockResolvedValue([
-        { adAccountId: 'a1', date: new Date('2026-06-01T00:00:00Z'), spend: '10.50', impressions: 100, clicks: 5, leads: 1 },
-        { adAccountId: 'a1', date: new Date('2026-06-02T00:00:00Z'), spend: '4.50', impressions: 50, clicks: 2, leads: 0 },
-        { adAccountId: 'a2', date: new Date('2026-06-01T00:00:00Z'), spend: '5.00', impressions: 20, clicks: 3, leads: 2 },
+        { adAccountId: 'a1', date: new Date('2026-06-01T00:00:00Z'), spend: '10.50', impressions: 100, clicks: 5, leads: 1, revenue: '42.00' },
+        { adAccountId: 'a1', date: new Date('2026-06-02T00:00:00Z'), spend: '4.50', impressions: 50, clicks: 2, leads: 0, revenue: '0' },
+        { adAccountId: 'a2', date: new Date('2026-06-01T00:00:00Z'), spend: '5.00', impressions: 20, clicks: 3, leads: 2, revenue: '0' },
       ]);
 
       const res = await svc.getMetrics(WS, '2026-06-01', '2026-06-30');
-      expect(res.totals).toEqual({ spend: 20, impressions: 170, clicks: 10, leads: 3 });
-      expect(res.byProvider.META).toEqual({ spend: 15, impressions: 150, clicks: 7, leads: 1 });
-      expect(res.byProvider.TIKTOK).toEqual({ spend: 5, impressions: 20, clicks: 3, leads: 2 });
+      // ROAS is recomputed from aggregated revenue/spend, never a sum of per-row roas.
+      expect(res.totals).toEqual({ spend: 20, impressions: 170, clicks: 10, leads: 3, revenue: 42, roas: 42 / 20 });
+      expect(res.byProvider.META).toEqual({ spend: 15, impressions: 150, clicks: 7, leads: 1, revenue: 42, roas: 42 / 15 });
+      // No revenue on TikTok → ROAS is 0 (rendered as a dash by the UI).
+      expect(res.byProvider.TIKTOK).toEqual({ spend: 5, impressions: 20, clicks: 3, leads: 2, revenue: 0, roas: 0 });
       const day1 = res.byDay.find((d) => d.date === '2026-06-01');
-      expect(day1).toEqual({ date: '2026-06-01', spend: 15.5, impressions: 120, clicks: 8, leads: 3 });
+      expect(day1).toEqual({ date: '2026-06-01', spend: 15.5, impressions: 120, clicks: 8, leads: 3, revenue: 42, roas: 42 / 15.5 });
       // metric query is workspace-scoped AND constrained to this workspace's accounts
       const arg = prisma.adMetric.findMany.mock.calls[0][0] as any;
       expect(arg.where.workspaceId).toBe(WS);

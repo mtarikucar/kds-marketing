@@ -144,6 +144,7 @@ export class AdAccountService {
         a.impressions += r.impressions;
         a.clicks += r.clicks;
         a.leads += r.leads;
+        a.revenueCents += Math.round(Number(r.revenue) * 100);
       };
       add(totals);
       add((byDay.get(day) ?? byDay.set(day, acc0()).get(day))!);
@@ -313,15 +314,26 @@ export class AdAccountService {
 }
 
 function empty() {
-  return { spend: 0, impressions: 0, clicks: 0, leads: 0 };
+  return { spend: 0, impressions: 0, clicks: 0, leads: 0, revenue: 0, roas: 0 };
 }
-/** Internal accumulator: spend in integer cents to avoid float drift. */
+/** Internal accumulator: money in integer cents to avoid float drift. */
 function acc0() {
-  return { spendCents: 0, impressions: 0, clicks: 0, leads: 0 };
+  return { spendCents: 0, impressions: 0, clicks: 0, leads: 0, revenueCents: 0 };
 }
-/** Project an accumulator back to the public bucket (cents → major units). */
+/**
+ * Project an accumulator back to the public bucket (cents → major units). ROAS is
+ * RECOMPUTED from aggregated revenue/spend — never a sum of the stored per-row
+ * roas — so totals/byDay/byProvider stay correct across any grouping.
+ */
 function bucket(a: ReturnType<typeof acc0>) {
-  return { spend: a.spendCents / 100, impressions: a.impressions, clicks: a.clicks, leads: a.leads };
+  return {
+    spend: a.spendCents / 100,
+    impressions: a.impressions,
+    clicks: a.clicks,
+    leads: a.leads,
+    revenue: a.revenueCents / 100,
+    roas: a.spendCents > 0 ? a.revenueCents / a.spendCents : 0,
+  };
 }
 function iso(d: Date): string {
   return d.toISOString().slice(0, 10);

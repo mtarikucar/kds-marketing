@@ -76,6 +76,11 @@ function fmtInt(n: number): string {
 function pct(n: number): string {
   return `${n.toFixed(2)}%`;
 }
+/** ROAS as `2.40×`; a dash when there is no revenue signal (0) so providers that
+ *  simply don't report purchase value don't read as a real 0× return. */
+function fmtRoas(n: number): string {
+  return n > 0 ? `${n.toFixed(2)}×` : '—';
+}
 
 export default function AdReportingPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
@@ -238,7 +243,7 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const totals = metrics?.totals ?? { spend: 0, impressions: 0, clicks: 0, leads: 0 };
+  const totals = metrics?.totals ?? { spend: 0, impressions: 0, clicks: 0, leads: 0, revenue: 0, roas: 0 };
   const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
   const cpl = totals.leads > 0 ? totals.spend / totals.leads : 0;
   const noAccounts = !accountsLoading && accounts.length === 0;
@@ -423,6 +428,8 @@ interface Bucket {
   impressions: number;
   clicks: number;
   leads: number;
+  revenue: number;
+  roas: number;
 }
 
 interface OverviewViewProps {
@@ -512,6 +519,17 @@ function OverviewView({
           label={t('ads.stat.cpl', { defaultValue: 'Cost / lead' })}
           value={totals.leads > 0 ? formatMoney(cpl, currency) : '—'}
         />
+        <StatCard
+          label={t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}
+          value={totals.revenue > 0 ? formatMoney(totals.revenue, currency) : '—'}
+          icon={<DollarSign className="h-5 w-5" />}
+          tone="success"
+        />
+        <StatCard
+          label={t('ads.stat.roas', { defaultValue: 'ROAS' })}
+          value={fmtRoas(totals.roas)}
+          tone={totals.roas >= 1 ? 'success' : undefined}
+        />
       </div>
 
       {providerEntries.length > 0 && (
@@ -529,6 +547,8 @@ function OverviewView({
                 <TH className="text-right">{t('ads.stat.impressions', { defaultValue: 'Impressions' })}</TH>
                 <TH className="text-right">{t('ads.stat.clicks', { defaultValue: 'Clicks' })}</TH>
                 <TH className="text-right">{t('ads.stat.leads', { defaultValue: 'Leads' })}</TH>
+                <TH className="text-right">{t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}</TH>
+                <TH className="text-right">{t('ads.stat.roas', { defaultValue: 'ROAS' })}</TH>
               </TR>
             </THead>
             <TBody>
@@ -541,6 +561,8 @@ function OverviewView({
                   <TD className="text-right tabular-nums">{fmtInt(m.impressions)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(m.clicks)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(m.leads)}</TD>
+                  <TD className="text-right tabular-nums">{m.revenue > 0 ? formatMoney(m.revenue, currency) : '—'}</TD>
+                  <TD className="text-right tabular-nums">{fmtRoas(m.roas)}</TD>
                 </TR>
               ))}
             </TBody>
@@ -567,6 +589,8 @@ function OverviewView({
                 <TH className="text-right">{t('ads.stat.impressions', { defaultValue: 'Impressions' })}</TH>
                 <TH className="text-right">{t('ads.stat.clicks', { defaultValue: 'Clicks' })}</TH>
                 <TH className="text-right">{t('ads.stat.leads', { defaultValue: 'Leads' })}</TH>
+                <TH className="text-right">{t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}</TH>
+                <TH className="text-right">{t('ads.stat.roas', { defaultValue: 'ROAS' })}</TH>
               </TR>
             </THead>
             <TBody>
@@ -577,6 +601,8 @@ function OverviewView({
                   <TD className="text-right tabular-nums">{fmtInt(d.impressions)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(d.clicks)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(d.leads)}</TD>
+                  <TD className="text-right tabular-nums">{d.revenue > 0 ? formatMoney(d.revenue, currency) : '—'}</TD>
+                  <TD className="text-right tabular-nums">{fmtRoas(d.roas)}</TD>
                 </TR>
               ))}
             </TBody>

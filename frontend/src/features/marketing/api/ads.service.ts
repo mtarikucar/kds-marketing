@@ -38,12 +38,16 @@ export interface ConnectAdAccountPayload {
   currency?: string;
 }
 
-/** A single bucket of aggregated metrics (major-unit spend). */
+/** A single bucket of aggregated metrics (major-unit spend + closed-loop revenue). */
 export interface AdMetricBucket {
   spend: number;
   impressions: number;
   clicks: number;
   leads: number;
+  /** First-party CRM revenue attributed to these ads (major units). */
+  revenue: number;
+  /** Recomputed revenue / spend for this bucket (0 when spend or revenue is 0). */
+  roas: number;
 }
 
 export interface AdMetricsResponse {
