@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { toast } from 'sonner';
 import ChannelsSettingsPage from './ChannelsSettingsPage';
 
 vi.mock('../../features/marketing/api/marketingApi', () => ({
@@ -15,6 +17,8 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
 
 // The OAuth "start" does a full-page redirect — stub it so jsdom doesn't navigate.
 vi.mock('../../lib/navigateExternal', () => ({ navigateExternal: vi.fn() }));
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -87,5 +91,68 @@ describe('ChannelsSettingsPage', () => {
     render(<ChannelsSettingsPage />, { wrapper });
     expect(await screen.findByText('SMS line')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /verify/i })).toBeInTheDocument();
+  });
+
+  /**
+   * Verify failure headline splits by WHY it failed (NetGSM SMS healthCheck):
+   * a rejected credential, an unreachable provider, and an approved-header
+   * miss are three different operator actions, so they must not collapse
+   * into one generic "check credentials" toast.
+   */
+  describe('verify failure headline split', () => {
+    async function renderAndVerify(verifyResponse: unknown) {
+      const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+      marketingApi.get.mockImplementation((url: string) =>
+        url === '/channels'
+          ? Promise.resolve({
+              data: [
+                { id: 'ch1', type: 'SMS', name: 'SMS line', status: 'ACTIVE', configuredSecrets: ['usercode'], configPublic: {}, agentProfileId: null },
+              ],
+            })
+          : Promise.resolve({ data: [] }),
+      );
+      marketingApi.post.mockResolvedValue({ data: verifyResponse });
+      render(<ChannelsSettingsPage />, { wrapper });
+      await screen.findByText('SMS line');
+      await userEvent.click(screen.getByRole('button', { name: /verify/i }));
+    }
+
+    it('credsValid: false → the "check credentials" headline', async () => {
+      await renderAndVerify({ ok: false, details: { credsValid: false, message: 'Kimlik doğrulama hatası' } });
+      expect(toast.error).toHaveBeenCalledWith(
+        'Verification failed — check credentials',
+        expect.objectContaining({ description: 'Kimlik doğrulama hatası' }),
+      );
+    });
+
+    it('credsValid: null (unreachable) → the "could not reach" headline, distinct from bad creds', async () => {
+      await renderAndVerify({ ok: false, details: { credsValid: null, message: 'NetGSM erişilemedi' } });
+      expect(toast.error).toHaveBeenCalledWith(
+        'Could not reach NetGSM — try again',
+        expect.objectContaining({ description: 'NetGSM erişilemedi' }),
+      );
+    });
+
+    it('credsValid: undefined (unreachable, absent) → the "could not reach" headline', async () => {
+      await renderAndVerify({ ok: false, details: { message: 'timeout' } });
+      expect(toast.error).toHaveBeenCalledWith(
+        'Could not reach NetGSM — try again',
+        expect.objectContaining({ description: 'timeout' }),
+      );
+    });
+
+    it('headerApproved: false → the sender-ID-not-approved headline, even though creds are valid', async () => {
+      await renderAndVerify({
+        ok: false,
+        details: { credsValid: true, headerApproved: false, approvedHeaders: ['OTHERHDR'], message: null },
+      });
+      expect(toast.error).toHaveBeenCalledWith('Sender ID is not approved on this account', undefined);
+    });
+
+    it('ok: true → the verified headline (success toast, not error)', async () => {
+      await renderAndVerify({ ok: true, details: { credsValid: true, headerApproved: true } });
+      expect(toast.success).toHaveBeenCalledWith('Channel verified ✓', undefined);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
   });
 });

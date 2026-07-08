@@ -57,14 +57,19 @@ interface AgentRow {
 /** POST /channels/:id/verify response — `details` echoes the adapter's
  *  healthCheck (e.g. NetGSM's live /balance probe for SMS): `credsValid` is
  *  `false` for rejected credentials vs `null`/absent when the provider
- *  couldn't be reached at all (transient outage). `message` is a raw
- *  provider diagnostic string (not localized), so it is only ever shown as
- *  secondary detail underneath the i18n headline, never as the headline
+ *  couldn't be reached at all (transient outage). `headerApproved` (SMS only)
+ *  is `false` when the configured NetGSM msgheader is live but not on the
+ *  account's İYS-approved sender list — a distinct failure from bad
+ *  credentials — with `approvedHeaders` carrying the live list. `message` is
+ *  a raw provider diagnostic string (not localized), so it is only ever shown
+ *  as secondary detail underneath the i18n headline, never as the headline
  *  itself. */
 interface VerifyResponse {
   ok: boolean;
   details?: {
     credsValid?: boolean | null;
+    headerApproved?: boolean;
+    approvedHeaders?: string[];
     message?: string | null;
     code?: string | null;
     [key: string]: unknown;
@@ -118,17 +123,26 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
       const ok = !!data?.ok;
       // Headline is ALWAYS the localized copy — `details.message` is a raw
       // provider string (e.g. NetGSM's Turkish error map) and must never
-      // replace it. On failure, surface that message as secondary toast
-      // description so the operator can tell a rejected credential
-      // (details.credsValid === false) apart from a transient/unreachable
-      // probe (credsValid null/absent) instead of just a generic failure.
+      // replace it, only ever shown as secondary toast description. On
+      // failure, split the headline by WHY it failed so the operator doesn't
+      // have to read the provider message to know what to do next:
+      //  - details.headerApproved === false: creds are fine, the sender ID
+      //    (NetGSM msgheader) itself isn't İYS-approved on this account.
+      //  - details.credsValid === false: the provider actively rejected the
+      //    credentials.
+      //  - details.credsValid null/undefined: we couldn't reach the provider
+      //    at all (transient outage) — distinct from a rejected credential.
       const headline = ok
         ? t('channels.verifyOk', 'Channel verified ✓')
-        : t('channels.verifyFail', 'Verification failed — check credentials');
+        : data?.details?.headerApproved === false
+          ? t('channels.verifyHeaderNotApproved', 'Sender ID is not approved on this account')
+          : data?.details?.credsValid === false
+            ? t('channels.verifyFailCreds', 'Verification failed — check credentials')
+            : t('channels.verifyUnreachable', 'Could not reach NetGSM — try again');
       const detail = !ok ? (data?.details?.message ?? undefined) : undefined;
       toast[ok ? 'success' : 'error'](headline, detail ? { description: detail } : undefined);
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFail', 'Verification failed — check credentials')),
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFailCreds', 'Verification failed — check credentials')),
   });
 
   // Answering-agent picker (which AI answers on this channel) — the one piece of

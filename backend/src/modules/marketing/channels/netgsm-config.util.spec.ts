@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { assertNetgsmSmsSecrets } from './netgsm-config.util';
+import { assertNetgsmSmsSecrets, assertNetgsmSmsPublicConfig } from './netgsm-config.util';
 
 /**
  * SMS channel credential validation. NetGSM needs usercode + (API) password +
@@ -43,5 +43,35 @@ describe('assertNetgsmSmsSecrets', () => {
     expect(() =>
       assertNetgsmSmsSecrets({ usercode: '   ', password: 'p', msgheader: 'ACME' }),
     ).toThrow(/usercode/i);
+  });
+});
+
+/**
+ * `useLegacySend` lives on the channel's PUBLIC config (never secrets) and
+ * routes `NetgsmSmsAdapter.send` between the legacy GET API and REST v2. This
+ * validator only checks the TYPE — it never defaults or mutates the config
+ * (the adapter treats anything other than `true` as v2, i.e. default false).
+ */
+describe('assertNetgsmSmsPublicConfig', () => {
+  it('accepts an absent configPublic (v2 default applies downstream)', () => {
+    expect(() => assertNetgsmSmsPublicConfig(undefined)).not.toThrow();
+    expect(() => assertNetgsmSmsPublicConfig(null)).not.toThrow();
+  });
+
+  it('accepts a configPublic with no useLegacySend key', () => {
+    expect(() => assertNetgsmSmsPublicConfig({ brandCode: 'ACME' })).not.toThrow();
+  });
+
+  it('accepts useLegacySend: true and useLegacySend: false', () => {
+    expect(() => assertNetgsmSmsPublicConfig({ useLegacySend: true })).not.toThrow();
+    expect(() => assertNetgsmSmsPublicConfig({ useLegacySend: false })).not.toThrow();
+  });
+
+  it('rejects a non-boolean useLegacySend (BadRequest)', () => {
+    expect(() => assertNetgsmSmsPublicConfig({ useLegacySend: 'true' as any })).toThrow(
+      BadRequestException,
+    );
+    expect(() => assertNetgsmSmsPublicConfig({ useLegacySend: 1 as any })).toThrow(/boolean/i);
+    expect(() => assertNetgsmSmsPublicConfig({ useLegacySend: null as any })).toThrow(/boolean/i);
   });
 });
