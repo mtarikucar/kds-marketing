@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ChannelAdapterRegistry } from '../channel-adapter.registry';
 import { withRetry } from '../../../../common/retry.util';
 import { interpretNetgsmSend } from '../netgsm-send.util';
+import { BalanceClient } from '../../../netgsm/balance/balance.client';
 import {
   ChannelAdapter,
   ChannelCapability,
@@ -37,7 +38,10 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
    *  ingest transactions (a real MO POST carries a single reply). */
   private static readonly MAX_INBOUND_BATCH = 100;
 
-  constructor(private readonly registry: ChannelAdapterRegistry) {}
+  constructor(
+    private readonly registry: ChannelAdapterRegistry,
+    private readonly balance: BalanceClient,
+  ) {}
 
   onModuleInit(): void {
     this.registry.register(this);
@@ -151,11 +155,24 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
     return d ? `+${d}` : '';
   }
 
+  /** Live verify: presence check, then a real /balance auth probe (not IP-gated). */
   async healthCheck(
     config: ResolvedChannelConfig,
   ): Promise<{ ok: boolean; details?: Record<string, unknown> }> {
     const { usercode, password, msgheader } = config.secrets;
-    const ok = !!(usercode && password && msgheader);
-    return { ok, details: { hasUsercode: !!usercode, hasHeader: !!msgheader } };
+    if (!usercode || !password || !msgheader) {
+      return { ok: false, details: { hasUsercode: !!usercode, hasHeader: !!msgheader } };
+    }
+    const probe = await this.balance.fetchBalance({ usercode, password });
+    return {
+      ok: probe.credsValid === true,
+      details: {
+        credsValid: probe.credsValid,
+        credit: probe.credit,
+        code: probe.code,
+        message: probe.message,
+        hasHeader: true,
+      },
+    };
   }
 }

@@ -16,7 +16,7 @@ describe('NetgsmSmsAdapter.send', () => {
 
   beforeEach(() => {
     registry = { register: jest.fn() };
-    adapter = new NetgsmSmsAdapter(registry as any);
+    adapter = new NetgsmSmsAdapter(registry as any, { fetchBalance: jest.fn() } as any);
     fetchMock = jest.fn().mockResolvedValue({ text: async () => '00 9988776655' });
     (global as any).fetch = fetchMock;
   });
@@ -83,7 +83,7 @@ describe('NetgsmSmsAdapter.send — error mapping, retry & timeout', () => {
   const config = { secrets: { usercode: 'u', password: 'p', msgheader: 'ACME' } } as any;
 
   beforeEach(() => {
-    adapter = new NetgsmSmsAdapter({ register: jest.fn() } as any);
+    adapter = new NetgsmSmsAdapter({ register: jest.fn() } as any, { fetchBalance: jest.fn() } as any);
     fetchMock = jest.fn();
     (global as any).fetch = fetchMock;
   });
@@ -169,7 +169,7 @@ describe('NetgsmSmsAdapter.parseInbound', () => {
   let adapter: NetgsmSmsAdapter;
 
   beforeEach(() => {
-    adapter = new NetgsmSmsAdapter({ register: jest.fn() } as any);
+    adapter = new NetgsmSmsAdapter({ register: jest.fn() } as any, { fetchBalance: jest.fn() } as any);
   });
 
   const cfg = {
@@ -239,5 +239,47 @@ describe('NetgsmSmsAdapter.parseInbound', () => {
     const out = adapter.parseInbound!(cfg, body);
     expect(out.length).toBeLessThanOrEqual(100);
     expect(out.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Live verify: healthCheck now does a real /balance auth probe (via
+ * BalanceClient) instead of a presence-only check, so "Verify" actually
+ * confirms NetGSM accepted the credentials.
+ */
+describe('NetgsmSmsAdapter.healthCheck', () => {
+  const registryStub = { register: jest.fn() };
+
+  it('probes NetGSM live and reports credsValid', async () => {
+    const balance = {
+      fetchBalance: jest
+        .fn()
+        .mockResolvedValue({ ok: true, credsValid: true, credit: '100', packages: [], code: null, message: null }),
+    };
+    const adapter = new NetgsmSmsAdapter(registryStub as any, balance as any);
+    const res = await adapter.healthCheck({ secrets: { usercode: 'u', password: 'p', msgheader: 'HDR' } } as any);
+    expect(balance.fetchBalance).toHaveBeenCalledWith({ usercode: 'u', password: 'p' });
+    expect(res.ok).toBe(true);
+    expect(res.details).toMatchObject({ credsValid: true });
+  });
+
+  it('missing secrets → ok:false without probing', async () => {
+    const balance = { fetchBalance: jest.fn() };
+    const adapter = new NetgsmSmsAdapter(registryStub as any, balance as any);
+    const res = await adapter.healthCheck({ secrets: {} } as any);
+    expect(res.ok).toBe(false);
+    expect(balance.fetchBalance).not.toHaveBeenCalled();
+  });
+
+  it('rejected creds (code 30) → ok:false with the mapped message', async () => {
+    const balance = {
+      fetchBalance: jest
+        .fn()
+        .mockResolvedValue({ ok: false, credsValid: false, credit: null, packages: [], code: '30', message: 'Kimlik doğrulama hatası' }),
+    };
+    const adapter = new NetgsmSmsAdapter(registryStub as any, balance as any);
+    const res = await adapter.healthCheck({ secrets: { usercode: 'u', password: 'wrong', msgheader: 'HDR' } } as any);
+    expect(res.ok).toBe(false);
+    expect(res.details).toMatchObject({ credsValid: false, code: '30' });
   });
 });

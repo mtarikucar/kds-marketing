@@ -34,6 +34,22 @@ export class TelephonyConfigController {
     return this.cdr.testFetch(a.workspaceId, dto?.startdate, dto?.stopdate);
   }
 
+  /** Live verify: /balance auth probe (anywhere) + CDR fetch (prod IP only). */
+  @Post('verify')
+  @RequirePermission('settings.manage')
+  async verify(@CurrentMarketingUser() a: MarketingUserPayload) {
+    const creds = await this.telephony.verifyCreds(a.workspaceId);
+    let cdr: unknown = { skipped: 'no active config' };
+    if (creds.configured) {
+      try {
+        cdr = await this.cdr.testFetch(a.workspaceId);
+      } catch (e: any) {
+        cdr = { error: e?.message };
+      }
+    }
+    return { ...creds, cdr };
+  }
+
   @Get('config')
   get(@CurrentMarketingUser() a: MarketingUserPayload) {
     return this.telephony.get(a.workspaceId);

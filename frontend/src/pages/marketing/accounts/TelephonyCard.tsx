@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Callout, type CalloutTone } from '@/components/ui/Callout';
 import {
   Dialog,
   DialogContent,
@@ -33,6 +34,21 @@ interface Rep {
   email: string;
   phone?: string | null;
   dahili?: string | null;
+}
+
+interface BalanceResult {
+  ok: boolean;
+  /** true = NetGSM authenticated the creds; false = rejected; null = couldn't reach NetGSM. */
+  credsValid: boolean | null;
+  code: string | null;
+  credit: string | null;
+  packages: Array<{ name: string; remaining: string | null }>;
+  message: string | null;
+}
+interface VerifyResult {
+  configured: boolean;
+  balance: BalanceResult | null;
+  cdr: { httpStatus: number; body: unknown } | { skipped: string } | { error: string };
 }
 
 const telephonyKey = ['marketing', 'telephony', 'config'] as const;
@@ -114,6 +130,45 @@ export function TelephonyCard() {
   );
 }
 
+/**
+ * Disambiguate the /telephony/verify response into a single tone + message:
+ * the /balance probe is the real credential check (works from any IP); the
+ * CDR leg is only ever reachable from NetGSM's allow-listed prod IP, so its
+ * absence is expected almost everywhere except production and gets its own
+ * informational note rather than being folded into the main verdict.
+ */
+function describeVerifyResult(
+  result: VerifyResult,
+  t: (key: string, fallback: string) => string,
+): { tone: CalloutTone; message: string; showCdrNote: boolean } {
+  const credsValid = result.balance?.credsValid ?? null;
+  const cdrConfirmed = !!result.cdr && 'httpStatus' in result.cdr;
+  const showCdrNote = result.configured && !cdrConfirmed;
+
+  if (credsValid === true) {
+    const credit = result.balance?.credit;
+    return {
+      tone: 'success',
+      message:
+        t('accounts.tel.verify.ok', 'Credentials verified with NetGSM') +
+        (credit ? ` — ${credit} TL` : ''),
+      showCdrNote,
+    };
+  }
+  if (credsValid === false) {
+    return {
+      tone: 'danger',
+      message: result.balance?.message || t('accounts.tel.verify.badCreds', 'NetGSM rejected these credentials'),
+      showCdrNote,
+    };
+  }
+  return {
+    tone: 'warning',
+    message: t('accounts.tel.verify.unreachable', "Couldn't reach NetGSM — try again in a moment"),
+    showCdrNote,
+  };
+}
+
 function TelephonyDialog({
   cfg,
   onOpenChange,
@@ -161,11 +216,16 @@ function TelephonyDialog({
     onError: (e: any) => toast.error(e?.response?.data?.message || t('accounts.tel.saveFailed', 'Could not save')),
   });
 
-  const test = useMutation({
-    mutationFn: () => marketingApi.post('/telephony/cdr/test', {}),
-    onSuccess: () => toast.success(t('accounts.tel.testOk', 'Credentials verified with NetGSM')),
-    onError: (e: any) => toast.error(e?.response?.data?.message || t('accounts.tel.testFailed', 'Verification failed — check the credentials')),
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+  const verify = useMutation({
+    mutationFn: () => marketingApi.post<VerifyResult>('/telephony/verify', {}),
+    onSuccess: (res) => setVerifyResult(res.data),
+    onError: (e: any) => {
+      setVerifyResult(null);
+      toast.error(e?.response?.data?.message || t('accounts.tel.testFailed', 'Verification failed — check the credentials'));
+    },
   });
+  const outcome = verifyResult ? describeVerifyResult(verifyResult, t) : null;
 
   const hasUser = cfg?.configuredSecrets?.includes('username');
   const hasPass = cfg?.configuredSecrets?.includes('password');
@@ -207,8 +267,19 @@ function TelephonyDialog({
 
           <div className="flex gap-2">
             <Button onClick={() => save.mutate()} loading={save.isPending}>{t('common.save', 'Save')}</Button>
-            <Button variant="outline" onClick={() => test.mutate()} loading={test.isPending}>{t('accounts.tel.test', 'Verify credentials')}</Button>
+            <Button variant="outline" onClick={() => verify.mutate()} loading={verify.isPending}>{t('accounts.tel.test', 'Verify credentials')}</Button>
           </div>
+
+          {outcome && (
+            <Callout tone={outcome.tone}>
+              <p>{outcome.message}</p>
+              {outcome.showCdrNote && (
+                <p className="text-caption text-muted-foreground">
+                  {t('accounts.tel.verify.cdrProdOnly', 'Call log (CDR) can only be confirmed from the production server IP')}
+                </p>
+              )}
+            </Callout>
+          )}
 
           <section className="space-y-2 border-t border-border pt-3">
             <p className="text-sm font-medium text-foreground">{t('accounts.tel.reps', 'Who can call')}</p>

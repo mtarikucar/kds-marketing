@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, ServiceUnavailableException } fr
 import { PrismaService } from '../../../prisma/prisma.service';
 import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 import { assertNetsantralConfig } from './telephony-config.util';
+import { BalanceClient } from '../../netgsm/balance/balance.client';
 
 export interface UpsertTelephonyInput {
   secrets?: Record<string, string>;
@@ -22,7 +23,10 @@ export interface ResolvedNetsantral {
 export class TelephonyConfigService {
   private readonly logger = new Logger(TelephonyConfigService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly balanceClient: BalanceClient,
+  ) {}
 
   async get(workspaceId: string) {
     const c = await this.prisma.telephonyConfig.findUnique({ where: { workspaceId } });
@@ -74,6 +78,14 @@ export class TelephonyConfigService {
     try { creds = JSON.parse(openSecret(c.configSealed)); } catch { return null; }
     if (!creds.username || !creds.password) return null;
     return { username: creds.username, password: creds.password, trunk: c.trunk, pbxnum: c.pbxnum ?? undefined };
+  }
+
+  /** Live verify of the santral creds via /balance (works off-prod, unlike CDR). */
+  async verifyCreds(workspaceId: string) {
+    const cfg = await this.resolveForWorkspace(workspaceId);
+    if (!cfg) return { configured: false as const, balance: null };
+    const balance = await this.balanceClient.fetchBalance({ usercode: cfg.username, password: cfg.password });
+    return { configured: true as const, balance };
   }
 
   /** Set a rep's Netsantral extension + own phone (workspace-scoped). */

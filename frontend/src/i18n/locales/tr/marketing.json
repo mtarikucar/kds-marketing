@@ -175,6 +175,12 @@
       "saveFailed": "Kaydedilemedi",
       "testOk": "Kimlik bilgileri NetGSM ile doğrulandı",
       "testFailed": "Doğrulama başarısız oldu — kimlik bilgilerini kontrol edin",
+      "verify": {
+        "ok": "Kimlik bilgileri NetGSM ile doğrulandı",
+        "badCreds": "NetGSM kimlik bilgilerini reddetti",
+        "unreachable": "NetGSM'e ulaşılamadı — bir süre sonra tekrar deneyin",
+        "cdrProdOnly": "Çağrı kayıtları (CDR) yalnızca üretim sunucusunun IP'sinden doğrulanabilir"
+      },
       "dialogDesc": "NetGSM Netsantral API kimlik bilgilerinizi ve 0850 trunk'ını girin. Tarayıcı içi webphone için WebRTC URL'lerini ekleyin ve aşağıda her temsilciye bir telefon veya dahili tanımlayın.",
       "username": "NetGSM kullanıcı adı (abone no)",
       "usernameSet": "NetGSM kullanıcı adı (kaydedildi — korumak için boş bırakın)",
