@@ -25,8 +25,10 @@ import { EmailChannelDialog } from './EmailChannelDialog';
 import { WebchatChannelDialog } from './WebchatChannelDialog';
 import { TelephonyCard } from './TelephonyCard';
 import { VoiceAiCard } from './VoiceAiCard';
+import { NetgsmOnboardingCard } from './NetgsmOnboardingCard';
 import { ProviderLogo, providerBrand } from './ProviderLogo';
 import { CopyField } from './CopyField';
+import { FeatureGate } from '@/components/ui/access-gates';
 // Company (workspace-level) identity + notifications — reused from the (now
 // personal-only) Settings › Connections page.
 import { SsoTab } from '../settings/connections/SsoTab';
@@ -409,6 +411,14 @@ export default function AccountCenterPage() {
               <ConnectionsPage embedded />
             </Suspense>
           </section>
+
+          {/* NetGSM setup checklist — only relevant to workspaces entitled to
+              telephony (same gate the /calls nav item and the webphone use). */}
+          <FeatureGate feature="telephony">
+            <section className="space-y-3">
+              <NetgsmOnboardingCard />
+            </section>
+          </FeatureGate>
 
           {/* Company (workspace-level) identity + notifications. */}
           <section className="space-y-3">

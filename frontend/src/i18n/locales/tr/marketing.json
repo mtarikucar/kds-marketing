@@ -211,6 +211,23 @@
       "ivrUrl": "NetGSM IVR webhook URL'si",
       "opsNote": "Bunlar devreye girmeden önce bir yöneticinin VOICE_AI_BRIDGE_SECRET değerini ayarlaması (ve aramalar için NetGSM SIP-trunk / AI eklentisini sağlaması) gerekir."
     },
+    "netgsm": {
+      "title": "NetGSM Kurulum Kontrol Listesi",
+      "subtitle": "NetGSM'in kendi panelinde yapman gereken manuel adımlar — mümkün olan yerde canlı bir kontrolle.",
+      "smsChannel": "SMS kanalı bağlı",
+      "smsCredsLive": "SMS kimlik bilgileri canlı doğrulandı",
+      "moUrl": "Gelen (MO) callback URL'si",
+      "telephonyConfig": "Netsantral telefon sistemi yapılandırıldı",
+      "santralCredsLive": "Netsantral kimlik bilgileri canlı doğrulandı",
+      "repsWithDahili": "Dahili tanımlı temsilciler",
+      "eventsWebhookUrl": "Olay webhook URL'si",
+      "repsCount": "{{count}} temsilcide dahili tanımlı",
+      "detail": {
+        "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
+        "noSantralConfig": "Henüz kontrol edilmedi — Netsantral kimlik bilgisi kayıtlı değil",
+        "eventsWebhookHint": "Netsantral panel > Ayarlar > Genel Ayarlar > API Talep Ayarları'na yapıştırın"
+      }
+    },
     "tab": {
       "accounts": "Hesaplar",
       "integrations": "Entegrasyonlar"

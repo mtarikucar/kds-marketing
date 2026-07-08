@@ -79,6 +79,8 @@ import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
+import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
+import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -485,6 +487,7 @@ import { WalletService } from './wallet/wallet.service';
     DialerController,
     TelephonyConfigController,
     WebphoneConfigController,
+    NetgsmOnboardingController,
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
@@ -627,6 +630,7 @@ import { WalletService } from './wallet/wallet.service';
     NetgsmApiAdapter,
     TelephonyConfigService,
     CallCdrSyncService,
+    NetgsmOnboardingService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
