@@ -4,6 +4,7 @@ import { NetgsmCdrClient } from './santral/netgsm-cdr.client';
 import { NetgsmRestClient } from './core/netgsm-rest.client';
 import { AccountRateBudgeter } from './core/account-rate-budgeter';
 import { BalanceClient } from './balance/balance.client';
+import { SmsV2Client } from './sms/sms-v2.client';
 import { NetgsmEventsController } from './webhooks/netgsm-events.controller';
 
 /**
@@ -16,7 +17,7 @@ import { NetgsmEventsController } from './webhooks/netgsm-events.controller';
  */
 @Module({
   controllers: [NetgsmEventsController],
-  providers: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient],
-  exports: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient],
+  providers: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client],
+  exports: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client],
 })
 export class NetgsmModule {}

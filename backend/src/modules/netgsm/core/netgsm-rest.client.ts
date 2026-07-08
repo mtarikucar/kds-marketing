@@ -60,10 +60,10 @@ export class NetgsmRestClient {
     } catch (e: any) {
       const timedOut = e?.name === 'AbortError' || e?.name === 'TimeoutError';
       const raw = timedOut ? 'NetGSM request timed out' : (e?.message ?? String(e));
-      const escaped = req.creds.password.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const scrubbed = raw
-        .replace(new RegExp(escaped, 'g'), '***')
-        .replace(new RegExp(req.creds.usercode, 'g'), '***');
+        .replace(new RegExp(escapeRegex(req.creds.password), 'g'), '***')
+        .replace(new RegExp(escapeRegex(req.creds.usercode), 'g'), '***');
       throw new Error(scrubbed);
     }
   }

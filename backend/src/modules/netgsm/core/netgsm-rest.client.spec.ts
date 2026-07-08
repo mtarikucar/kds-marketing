@@ -39,4 +39,17 @@ describe('NetgsmRestClient', () => {
       client.request({ path: '/x', method: 'POST', creds, body: {} }),
     ).rejects.toThrow(/\*\*\*/);
   });
+
+  it('scrubs a usercode containing unescaped regex metacharacters instead of crashing', async () => {
+    // An unbalanced '(' in the usercode used to be interpolated straight into
+    // `new RegExp(...)`, which throws "Unterminated group" instead of
+    // producing the scrubbed error — masking the real transport failure.
+    const metaCreds = { usercode: '850(3021234', password: 'p@ss&w=rd' };
+    jest
+      .spyOn(global, 'fetch' as any)
+      .mockRejectedValue(new Error('auth failed for 850(3021234'));
+    await expect(
+      client.request({ path: '/x', method: 'POST', creds: metaCreds, body: {} }),
+    ).rejects.toThrow(/\*\*\*/);
+  });
 });
