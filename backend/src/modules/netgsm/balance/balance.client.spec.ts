@@ -41,4 +41,24 @@ describe('BalanceClient', () => {
     expect(r.ok).toBe(false);
     expect(r.credsValid).toBeNull();
   });
+
+  it('NUMERIC code 30 envelope is still recognized as creds-invalid', async () => {
+    jest.spyOn(rest, 'request').mockResolvedValue({ httpStatus: 406, body: { code: 30 }, rawText: '' } as any);
+    const r = await client.fetchBalance(creds);
+    expect(r.ok).toBe(false);
+    expect(r.credsValid).toBe(false);
+    expect(r.code).toBe('30');
+  });
+
+  it('non-200 without a recognized code must NOT read as verified (gateway error page)', async () => {
+    jest.spyOn(rest, 'request').mockResolvedValue({
+      httpStatus: 502,
+      body: null,
+      rawText: '<html>Bad Gateway</html>',
+    } as any);
+    const r = await client.fetchBalance(creds);
+    expect(r.ok).toBe(false);
+    expect(r.credsValid).toBeNull();
+    expect(r.message).toMatch(/502/);
+  });
 });

@@ -36,12 +36,24 @@ export class BalanceClient {
     } catch (e: any) {
       return { ok: false, credsValid: null, code: null, credit: null, packages: [], message: e?.message ?? 'NetGSM erişilemedi' };
     }
-    const code = typeof body?.code === 'string' ? body.code : /^\d{2,3}$/.test(rawText) ? rawText : null;
+    // NetGSM may return the error envelope with a numeric code ({code: 30})
+    // and under a non-200 status — normalize before branching.
+    const code =
+      body?.code != null ? String(body.code) : /^\d{2,3}$/.test(rawText) ? rawText : null;
     if (code && code !== '00') {
       return {
         ok: false,
         credsValid: code === '30' ? false : code === '60' ? true : null,
         code, credit: null, packages: [], message: netgsmErrorMessage(code),
+      };
+    }
+    // No recognized error code: only a 200 proves the creds. A gateway error
+    // page (502/503 HTML) must NOT read as "verified" — healthCheck keys off
+    // credsValid === true and ChannelsService stamps lastVerifiedAt on it.
+    if (httpStatus !== 200) {
+      return {
+        ok: false, credsValid: null, code: null, credit: null, packages: [],
+        message: `NetGSM beklenmedik yanıt döndürdü (HTTP ${httpStatus}).`,
       };
     }
     const rows: any[] = Array.isArray(body) ? body : Array.isArray(body?.balance) ? body.balance : [];
@@ -51,7 +63,7 @@ export class BalanceClient {
     }));
     const tl = packages.find((p) => /tl|kredi|bakiye/i.test(p.name));
     return {
-      ok: httpStatus === 200 && (packages.length > 0 || body != null),
+      ok: packages.length > 0 || body != null,
       credsValid: true, code: null,
       credit: tl?.remaining ?? null, packages,
       message: null,

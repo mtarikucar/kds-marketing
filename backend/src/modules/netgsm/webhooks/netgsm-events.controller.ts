@@ -26,10 +26,13 @@ export class NetgsmEventsController {
       (typeof b.unique_id === 'string' && b.unique_id) ||
       (typeof b.uniqueid === 'string' && b.uniqueid) ||
       payloadDigest(body);
-    await this.prisma.netgsmWebhookEvent.upsert({
-      where: { workspaceId_purpose_externalId: { workspaceId, purpose: 'events', externalId } },
-      create: { workspaceId, purpose: 'events', externalId, payload: (body ?? {}) as object },
-      update: {}, // duplicate delivery — keep the first archive row
+    // Duplicate delivery — first archive row wins. skipDuplicates emits a
+    // native ON CONFLICT DO NOTHING, so a concurrent NetGSM retry is a clean
+    // no-op instead of a P2002 500 (Prisma EMULATES upsert for this compound
+    // key + empty-update shape, which loses the insert race).
+    await this.prisma.netgsmWebhookEvent.createMany({
+      data: [{ workspaceId, purpose: 'events', externalId, payload: (body ?? {}) as object }],
+      skipDuplicates: true,
     });
     return { ok: true };
   }
