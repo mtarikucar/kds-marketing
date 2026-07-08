@@ -24,6 +24,11 @@ export class ConnectAdAccountDto {
   @IsOptional() @IsString() @MaxLength(160) displayName?: string;
   @IsString() @IsNotEmpty() @MaxLength(4000) accessToken: string;
   @IsOptional() @IsString() @MaxLength(8) currency?: string;
+  // Meta Conversions API (CAPI) destination. pixelId is the dataset id we feed
+  // server-side conversions to; capiToken is an optional dedicated System-User
+  // token (SEALED at rest) — when omitted the accessToken is reused for CAPI.
+  @IsOptional() @IsString() @MaxLength(64) pixelId?: string;
+  @IsOptional() @IsString() @MaxLength(4000) capiToken?: string;
 }
 
 /** Date-range + optional provider filter for the aggregated metrics read. */

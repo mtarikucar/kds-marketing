@@ -80,6 +80,10 @@ export class AdAccountService {
       throw new BadRequestException('Secret storage is not configured (MARKETING_SECRET_KEY)');
     }
     const sealed = sealSecret(dto.accessToken);
+    // pixelId is non-secret config; capiToken (optional) is sealed like the main
+    // token. Only write them when supplied so a re-connect that omits them keeps
+    // any previously-configured CAPI destination.
+    const capiSealed = dto.capiToken ? sealSecret(dto.capiToken) : undefined;
     // Re-connecting the same (workspace, provider, account) rotates the token.
     return this.prisma.adAccount.upsert({
       where: {
@@ -97,6 +101,8 @@ export class AdAccountService {
         accessToken: sealed,
         currency: dto.currency ?? null,
         status: 'ACTIVE',
+        ...(dto.pixelId ? { pixelId: dto.pixelId } : {}),
+        ...(capiSealed ? { capiToken: capiSealed } : {}),
       },
       update: {
         accessToken: sealed,
@@ -104,6 +110,8 @@ export class AdAccountService {
         currency: dto.currency ?? null,
         status: 'ACTIVE',
         lastError: null,
+        ...(dto.pixelId !== undefined ? { pixelId: dto.pixelId || null } : {}),
+        ...(capiSealed ? { capiToken: capiSealed } : {}),
       },
       select: { id: true, provider: true, externalAdId: true, displayName: true, status: true },
     });

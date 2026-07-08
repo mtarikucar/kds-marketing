@@ -3720,6 +3720,12 @@ model AdAccount {
   tokenExpiresAt DateTime?
   status         String    @default("ACTIVE") // ACTIVE | TOKEN_EXPIRED | DISCONNECTED
   currency       String?
+  // Meta Conversions API (CAPI) destination. pixelId is the dataset id we POST
+  // server-side conversion events to (/<pixelId>/events) — non-secret. capiToken
+  // is an OPTIONAL dedicated System-User token (SEALED); when unset the sealed
+  // accessToken is reused. Feeding real CRM outcomes (won/paid) back to Meta.
+  pixelId        String?
+  capiToken      String?   @db.Text // SEALED
   lastPulledAt   DateTime?
   lastError      String?   @db.Text
   createdAt      DateTime  @default(now())
