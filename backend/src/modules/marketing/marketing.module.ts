@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BillingModule } from '../billing/billing.module';
+import { NetgsmModule } from '../netgsm/netgsm.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
@@ -425,6 +426,7 @@ import { WalletService } from './wallet/wallet.service';
     // Entitlements (lead quota, seat/profile limits, feature gates) +
     // the billing services the workspace-facing controller mounts.
     BillingModule,
+    NetgsmModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
