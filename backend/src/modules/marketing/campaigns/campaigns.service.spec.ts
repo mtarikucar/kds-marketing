@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import { CampaignsService, CAMPAIGN_BATCH_KIND } from './campaigns.service';
+import { CampaignsService, CAMPAIGN_BATCH_KIND, CAMPAIGN_LAUNCH_KIND } from './campaigns.service';
 
 /**
  * Audience resolution + launch. The audience where must always pin the
@@ -116,13 +116,80 @@ describe('CampaignsService', () => {
       const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
       expect(rows.every((r: any) => r.variantKey === null)).toBe(true);
     });
+
+    // Task 8b: a future scheduledAt defers the actual send — freeze now, but
+    // flip to SCHEDULED (not SENDING) and queue the `campaign.launch` job for
+    // scheduledAt instead of kicking a batch right away.
+    describe('with a scheduledAt', () => {
+      it('a FUTURE scheduledAt freezes the audience but flips to SCHEDULED and queues campaign.launch (no batch kick)', async () => {
+        const scheduledAt = new Date(Date.now() + 60 * 60 * 1000); // 1h out
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt,
+        });
+
+        const res = await svc.launch(WS, 'c1');
+
+        // Audience still frozen exactly like the immediate path.
+        expect(prisma.campaignRecipient.createMany).toHaveBeenCalled();
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SCHEDULED');
+        expect(update.startedAt).toBeUndefined();
+        // The `campaign.launch` job is queued for scheduledAt — not a batch kick.
+        expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND, dedupKey: 'c1', runAt: scheduledAt }),
+        );
+        expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(
+          expect.objectContaining({ kind: CAMPAIGN_BATCH_KIND }),
+        );
+        expect(res).toEqual(expect.objectContaining({ message: 'Campaign scheduled', recipients: 2, scheduledAt }));
+      });
+
+      it('a scheduledAt within the 30s tolerance sends immediately (SENDING + batch kick), not SCHEDULED', async () => {
+        const almostNow = new Date(Date.now() + 5_000); // well under the 30s tolerance
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: almostNow,
+        });
+
+        await svc.launch(WS, 'c1');
+
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SENDING');
+        expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: CAMPAIGN_BATCH_KIND, dedupKey: 'c1' }),
+        );
+      });
+
+      it('a past scheduledAt (e.g. a stale SCHEDULED campaign re-launched) sends immediately', async () => {
+        const past = new Date(Date.now() - 60_000);
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: past,
+        });
+
+        await svc.launch(WS, 'c1');
+
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SENDING');
+      });
+
+      it('an absent scheduledAt keeps the existing immediate-send behavior', async () => {
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: null,
+        });
+
+        await svc.launch(WS, 'c1');
+
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SENDING');
+      });
+    });
   });
 
   describe('cancel', () => {
-    it('cancels the queued batch job (by dedupKey=campaignId) and flips SCHEDULED → CANCELLED', async () => {
+    it('cancels both the queued campaign.launch job AND the batch job (by dedupKey=campaignId) and flips SCHEDULED → CANCELLED', async () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
       const res = await svc.cancel(WS, 'c1');
       expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_BATCH_KIND, 'c1');
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
       expect(prisma.campaign.update).toHaveBeenCalledWith({ where: { id: 'c1' }, data: { status: 'CANCELLED' } });
       expect(res).toEqual({ message: 'Campaign cancelled' });
     });
@@ -201,6 +268,55 @@ describe('CampaignsService', () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
       await svc.update(WS, 'c1', { subject: 'Spring sale' });
       expect(prisma.campaign.update.mock.calls[0][0].data.subject).toBe('Spring sale');
+    });
+  });
+
+  // Task 8b: a SCHEDULED campaign already has its `campaign.launch` job queued
+  // (audience frozen at the original launch() call). Editing scheduledAt must
+  // move that job, not just the DB column.
+  describe('update — reschedule a SCHEDULED campaign', () => {
+    it('reschedules the queued campaign.launch job to the new scheduledAt (cancel + schedule)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+      const newScheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
+      await svc.update(WS, 'c1', { scheduledAt: newScheduledAt.toISOString() });
+
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
+      expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND, dedupKey: 'c1', runAt: newScheduledAt }),
+      );
+      // Only the DB column update, not a second status-revert update.
+      expect(prisma.campaign.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('clearing scheduledAt on a SCHEDULED campaign cancels the job and reverts status to DRAFT (no orphaned SCHEDULED-with-nothing-queued)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { scheduledAt: '' });
+
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
+      expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND }));
+      // Two writes: the scheduledAt=null column update, then the status revert.
+      expect(prisma.campaign.update).toHaveBeenCalledTimes(2);
+      expect(prisma.campaign.update.mock.calls[1][0]).toEqual({ where: { id: 'c1' }, data: { status: 'DRAFT' } });
+    });
+
+    it('does NOT touch any job when a DRAFT campaign edits scheduledAt (nothing queued yet)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
+
+      await svc.update(WS, 'c1', { scheduledAt: new Date(Date.now() + 60_000).toISOString() });
+
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('does NOT touch any job when a SCHEDULED campaign is edited without changing scheduledAt', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { name: 'New name' });
+
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
     });
   });
 

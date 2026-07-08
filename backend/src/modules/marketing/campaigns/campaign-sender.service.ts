@@ -10,7 +10,7 @@ import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
 import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
 import { SmsV2Client, SmsV2SendResult } from '../../netgsm/sms/sms-v2.client';
-import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND } from './campaigns.service';
+import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND, CAMPAIGN_LAUNCH_KIND, AB_TEST_WINDOW_MS } from './campaigns.service';
 
 const BATCH_SIZE = 50;
 const BATCH_INTERVAL_SEC = 60; // ~50 sends/min throttle
@@ -57,6 +57,42 @@ export class CampaignSenderService implements OnModuleInit {
   onModuleInit(): void {
     this.runner.registerHandler(CAMPAIGN_BATCH_KIND, (job) => this.batch(job));
     this.runner.registerHandler(CAMPAIGN_AB_DECIDE_KIND, (job) => this.decideAbWinner(job));
+    this.runner.registerHandler(CAMPAIGN_LAUNCH_KIND, (job) => this.launchScheduled(job));
+  }
+
+  /**
+   * Fires at a SCHEDULED campaign's `scheduledAt` (queued by
+   * CampaignsService.launch/update). Atomically claims the SCHEDULED→SENDING
+   * flip — a guarded updateMany, so a campaign already cancelled (CANCELLED),
+   * already force-launched early (SENDING), or otherwise no longer SCHEDULED
+   * makes this a safe no-op (count 0, no batch kicked).
+   */
+  private async launchScheduled(job: ClaimedJob): Promise<void> {
+    const { workspaceId, campaignId } = job.payload;
+    const claimed = await this.prisma.campaign.updateMany({
+      where: { id: campaignId, workspaceId, status: 'SCHEDULED' },
+      data: { status: 'SENDING', startedAt: new Date() },
+    });
+    if (claimed.count === 0) return;
+
+    // A/B WINNER mode: the test-cohort window is measured from NOW (the real
+    // send start) — mirrors launch()'s immediate path, just computed here
+    // instead of at the original (pre-scheduledAt) freeze time. Only relevant
+    // if the freeze actually held back a remainder (winnerMode).
+    const campaign = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
+    if (campaign && (campaign as any).abMode === 'WINNER') {
+      const held = await this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, status: 'HOLD' } });
+      if (held > 0) {
+        const abDecideAt = new Date(Date.now() + AB_TEST_WINDOW_MS);
+        await this.prisma.campaign.update({ where: { id: campaignId }, data: { abDecideAt } });
+        await this.scheduledJobs.schedule({
+          workspaceId, kind: CAMPAIGN_AB_DECIDE_KIND, runAt: abDecideAt, dedupKey: `ab-decide:${campaignId}`, payload: { workspaceId, campaignId },
+        });
+      }
+    }
+    await this.scheduledJobs.schedule({
+      workspaceId, kind: CAMPAIGN_BATCH_KIND, runAt: new Date(), dedupKey: campaignId, payload: { workspaceId, campaignId },
+    });
   }
 
   /**

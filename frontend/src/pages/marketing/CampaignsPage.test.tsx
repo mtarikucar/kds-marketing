@@ -62,6 +62,60 @@ describe('CampaignsPage launch', () => {
   });
 });
 
+// Task 8b: a DRAFT campaign with a future scheduledAt (set via the form) makes
+// launch() SCHEDULE rather than send immediately — the confirm dialog's copy
+// must say so instead of implying an instant, irreversible send.
+describe('CampaignsPage — launch a campaign with a future scheduledAt', () => {
+  const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const SCHEDULED_DRAFT = [{ id: 'c1', name: 'Promo', channel: 'EMAIL', status: 'DRAFT', stats: null, scheduledAt: FUTURE }];
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    post.mockResolvedValue({ data: { recipients: 5, scheduledAt: FUTURE } });
+    get.mockImplementation((url: string) =>
+      url === '/campaigns' ? Promise.resolve({ data: SCHEDULED_DRAFT }) : Promise.resolve({ data: [] }),
+    );
+  });
+
+  it('shows "Schedule" copy (not "Launch now") in the confirm dialog and posts /launch on confirm', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+
+    const rowLaunch = await screen.findByRole('button', { name: /Launch/i });
+    await user.click(rowLaunch);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Schedule this campaign\?/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /Schedule/i }));
+    expect(post).toHaveBeenCalledWith('/campaigns/c1/launch');
+  });
+});
+
+// A SCHEDULED campaign is still editable (reschedule/clear the send time) —
+// the Edit button used to be DRAFT-only; it must now also show for SCHEDULED,
+// and the row should surface when it's due.
+describe('CampaignsPage — SCHEDULED campaign row', () => {
+  const WHEN = new Date('2026-08-01T10:00:00Z').toISOString();
+  const SCHEDULED_ROW = [{ id: 'c1', name: 'Promo', channel: 'SMS', status: 'SCHEDULED', stats: null, scheduledAt: WHEN }];
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockClear();
+    get.mockImplementation((url: string) =>
+      url === '/campaigns' ? Promise.resolve({ data: SCHEDULED_ROW }) : Promise.resolve({ data: [] }),
+    );
+  });
+
+  it('shows an Edit button and the scheduled time, and no Launch button', async () => {
+    render(<CampaignsPage />, { wrapper });
+    await screen.findByText('Promo');
+    expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Launch$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Scheduled for/i)).toBeInTheDocument();
+  });
+});
+
 describe('CampaignsPage — cancel scheduled send', () => {
   const SCHEDULED = [{ id: 'c1', name: 'Promo', channel: 'SMS', status: 'SCHEDULED', stats: null }];
 

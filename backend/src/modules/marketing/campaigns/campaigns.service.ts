@@ -14,8 +14,14 @@ import { EntitlementsService } from '../../billing/entitlements.service';
 export const CAMPAIGN_BATCH_KIND = 'campaign.batch';
 /** A/B WINNER mode: the job that picks the winner + releases the held remainder. */
 export const CAMPAIGN_AB_DECIDE_KIND = 'campaign.ab.decide';
+/** A DRAFT campaign launched with a future `scheduledAt`: the job that flips it
+ *  SCHEDULED → SENDING and kicks the first batch, at `scheduledAt`. */
+export const CAMPAIGN_LAUNCH_KIND = 'campaign.launch';
 /** How long the test cohort runs before the winner is auto-decided. */
 export const AB_TEST_WINDOW_MS = 4 * 60 * 60 * 1000; // 4h
+/** A `scheduledAt` within this window of "now" is treated as "send immediately"
+ *  rather than queuing a `campaign.launch` job for a few seconds out. */
+const SCHEDULE_TOLERANCE_MS = 30_000;
 
 // Audience filters may only target these scalar lead columns (no arbitrary
 // Prisma path injection).
@@ -32,8 +38,11 @@ interface AudienceFilter {
 /**
  * Campaign CRUD + launch. Launch freezes the audience (leads matching the
  * filter AND opted-in AND reachable on the channel) into CampaignRecipient
- * rows, extracts the body's links for safe click-tracking, flips the campaign
- * to SENDING and kicks the first throttled `campaign.batch` job.
+ * rows and extracts the body's links for safe click-tracking. With no future
+ * `scheduledAt` it flips the campaign to SENDING and kicks the first throttled
+ * `campaign.batch` job right away; with one, it flips to SCHEDULED instead and
+ * queues a `campaign.launch` job for scheduledAt (campaign-sender.service.ts's
+ * handler does the actual SENDING flip + batch kick when that job fires).
  */
 @Injectable()
 export class CampaignsService {
@@ -168,7 +177,37 @@ export class CampaignsService {
     if (data.emailTemplateId === '') data.emailTemplateId = null;
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
-    return this.prisma.campaign.update({ where: { id: existing.id }, data });
+    const updated = await this.prisma.campaign.update({ where: { id: existing.id }, data });
+
+    // A SCHEDULED campaign already has its `campaign.launch` job queued (audience
+    // frozen, recipients materialized). Editing scheduledAt here must move that
+    // job, not just the DB column — otherwise the stale job still fires at the
+    // OLD time regardless of what the operator just picked.
+    if (existing.status === 'SCHEDULED' && dto.scheduledAt !== undefined) {
+      await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
+      // Read the new scheduledAt from `data` (what we just asked Prisma to
+      // persist) rather than `updated` — trusting the write we issued rather
+      // than however a given Prisma client/mock happens to shape its return.
+      const newScheduledAt: Date | null = data.scheduledAt;
+      if (newScheduledAt && newScheduledAt.getTime() > Date.now() + SCHEDULE_TOLERANCE_MS) {
+        await this.scheduledJobs.schedule({
+          workspaceId,
+          kind: CAMPAIGN_LAUNCH_KIND,
+          runAt: newScheduledAt,
+          dedupKey: existing.id,
+          payload: { workspaceId, campaignId: existing.id },
+        });
+      } else {
+        // Cleared, or moved to a non-future time: nothing is left to fire the
+        // launch — revert to DRAFT rather than stranding the campaign SCHEDULED
+        // with no queued job. The frozen recipients/links stay put; a later
+        // launch() re-freeze is idempotent (CampaignRecipient's
+        // @@unique([campaignId, leadId]) + skipDuplicates).
+        await this.prisma.campaign.update({ where: { id: existing.id }, data: { status: 'DRAFT' } });
+        updated.status = 'DRAFT';
+      }
+    }
+    return updated;
   }
 
   async remove(workspaceId: string, id: string) {
@@ -201,7 +240,13 @@ export class CampaignsService {
     if (c.status !== 'SCHEDULED') {
       throw new ConflictException('Only a scheduled (not yet sending) campaign can be cancelled');
     }
+    // Cancel whichever job is actually queued for a SCHEDULED campaign — the
+    // `campaign.launch` job that would flip it to SENDING at scheduledAt. The
+    // `campaign.batch` cancel alongside it is a defensive no-op (SCHEDULED never
+    // has one queued; only SENDING does), kept so this stays correct even if a
+    // future edge case leaves one behind.
     await this.scheduledJobs.cancel(CAMPAIGN_BATCH_KIND, c.id);
+    await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, c.id);
     // NetGSM-side scheduling (startdate passthrough) isn't wired up yet — app-side
     // ScheduledJob cancellation above is the only queued work today. If a later
     // task adds startdate passthrough, also best-effort SmsV2Client.cancel(jobid)
@@ -219,7 +264,11 @@ export class CampaignsService {
     });
   }
 
-  /** Freeze the audience, extract links, flip to SENDING, kick the first batch. */
+  /**
+   * Freeze the audience, extract links, then either start sending now (flip to
+   * SENDING + kick the first batch) or — with a future `scheduledAt` — flip to
+   * SCHEDULED and queue a `campaign.launch` job to do that later.
+   */
   async launch(workspaceId: string, id: string) {
     const campaign = await this.prisma.campaign.findFirst({ where: { id, workspaceId } });
     if (!campaign) throw new NotFoundException('Campaign not found');
@@ -273,6 +322,47 @@ export class CampaignsService {
       ],
       skipDuplicates: true,
     });
+
+    const isScheduled = !!campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() + SCHEDULE_TOLERANCE_MS;
+
+    if (isScheduled) {
+      // Freeze now (recipients/links/stats materialized above), exactly like the
+      // immediate path — but don't start sending yet. Flip to SCHEDULED and let
+      // the `campaign.launch` job do the SENDING flip + first batch kick at
+      // scheduledAt. A/B WINNER's abDecideAt (the test-cohort window) is deferred
+      // to that same moment too — it must be measured from when the test cohort
+      // actually starts sending, not from this freeze time, or the decide job
+      // could fire while the campaign is still SCHEDULED (no-op, and the held
+      // remainder would never be released).
+      await this.prisma.campaign.update({
+        where: { id: campaign.id },
+        data: {
+          status: 'SCHEDULED',
+          links: links as Prisma.InputJsonValue,
+          stats: { recipients: leads.length, sent: 0, failed: 0, skipped: 0, opened: 0, clicked: 0, unsubscribed: 0 },
+        },
+      });
+      await this.scheduledJobs.schedule({
+        workspaceId,
+        kind: CAMPAIGN_LAUNCH_KIND,
+        runAt: campaign.scheduledAt as Date,
+        dedupKey: campaign.id,
+        payload: { workspaceId, campaignId: campaign.id },
+      });
+      return {
+        message: 'Campaign scheduled',
+        recipients: leads.length,
+        scheduledAt: campaign.scheduledAt,
+        testCohort: winnerMode ? testLeads.length : undefined,
+      };
+    }
+
+    // Immediate send (no future scheduledAt): start right now, exactly as before.
+    // Clear any stray queued `campaign.launch` job — e.g. an admin re-launching a
+    // still-SCHEDULED campaign ahead of its scheduled time forces it to send now
+    // — so the old job doesn't linger as an orphaned PENDING row (harmless: the
+    // handler's guarded updateMany would no-op it once status is SENDING).
+    await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, campaign.id);
     await this.prisma.campaign.update({
       where: { id: campaign.id },
       data: {

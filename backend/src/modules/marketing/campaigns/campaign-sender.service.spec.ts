@@ -264,6 +264,88 @@ describe('CampaignSenderService.batch', () => {
 });
 
 /**
+ * A DRAFT campaign launched with a future scheduledAt queues a `campaign.launch`
+ * job (Task 8b) instead of sending immediately; this is the handler that fires
+ * at scheduledAt to actually flip SCHEDULED → SENDING and kick the first batch.
+ */
+describe('CampaignSenderService.launchScheduled', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let scheduledJobs: { schedule: jest.Mock };
+  let svc: CampaignSenderService;
+
+  beforeEach(() => {
+    prisma = {
+      campaign: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'c1', workspaceId: WS, abMode: null }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      campaignRecipient: {
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const config = { get: jest.fn() };
+    const email = { sendPlainEmail: jest.fn(), sendCampaignEmail: jest.fn() };
+    scheduledJobs = { schedule: jest.fn() };
+    const runner = { registerHandler: jest.fn() };
+    const registry = { get: jest.fn(), resolveConfig: jest.fn() };
+    const quota = { reserve: jest.fn(), refund: jest.fn() };
+    const sendingDomains = { resolveFrom: jest.fn() };
+    const smsV2 = { send: jest.fn() };
+    svc = new CampaignSenderService(
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any,
+    );
+  });
+
+  it('flips SCHEDULED → SENDING via a guarded updateMany and kicks the first batch', async () => {
+    await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c1', workspaceId: WS, status: 'SCHEDULED' },
+      data: { status: 'SENDING', startedAt: expect.any(Date) },
+    });
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'campaign.batch', dedupKey: 'c1', workspaceId: WS }),
+    );
+  });
+
+  it('does nothing when the guard misses (already cancelled/force-launched — count 0, no batch kicked)', async () => {
+    prisma.campaign.updateMany.mockResolvedValue({ count: 0 });
+
+    await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(prisma.campaign.findFirst).not.toHaveBeenCalled();
+    expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+  });
+
+  it('A/B WINNER: schedules the ab.decide job (test window measured from NOW) when a HELD remainder exists', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, abMode: 'WINNER' });
+    prisma.campaignRecipient.count.mockResolvedValue(8); // held remainder
+
+    await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(prisma.campaign.update).toHaveBeenCalledWith({ where: { id: 'c1' }, data: { abDecideAt: expect.any(Date) } });
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'campaign.ab.decide', dedupKey: 'ab-decide:c1' }),
+    );
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'campaign.batch', dedupKey: 'c1' }),
+    );
+  });
+
+  it('A/B WINNER mode with no HELD remainder does not schedule ab.decide (nothing to release later)', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, abMode: 'WINNER' });
+    prisma.campaignRecipient.count.mockResolvedValue(0);
+
+    await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'campaign.ab.decide' }));
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ kind: 'campaign.batch' }));
+  });
+});
+
+/**
  * True n:n SMS batching (NetGSM REST v2, Task 5): the per-recipient claim +
  * opt-out/render loop is unchanged, but eligible SMS recipients are collected
  * and sent via ONE `SmsV2Client.send` call instead of N adapter round-trips.

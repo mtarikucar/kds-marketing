@@ -62,6 +62,7 @@ interface CampaignRow {
   channel: string;
   status: string;
   stats?: Record<string, number> | null;
+  scheduledAt?: string | null;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -87,6 +88,8 @@ const campaignSchema = z
     bodyHtml: z.string().optional(),
     emailTemplateId: z.string().optional(),
     filters: z.array(filterRowSchema),
+    // datetime-local value ("YYYY-MM-DDTHH:mm"), local time — '' = send immediately.
+    scheduledAt: z.string().optional(),
   })
   // The plain-text body is only mandatory when there's no HTML to fall back on.
   // With an HTML template attached we auto-derive the plain-text version, so an
@@ -106,6 +109,7 @@ const DEFAULT_VALUES: CampaignFormValues = {
   bodyHtml: '',
   emailTemplateId: '',
   filters: [],
+  scheduledAt: '',
 };
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
@@ -114,7 +118,30 @@ function campaignStatusTone(status: string) {
   if (status === 'SENT') return 'success' as const;
   if (status === 'SENDING') return 'info' as const;
   if (status === 'PAUSED') return 'warning' as const;
+  if (status === 'SCHEDULED') return 'info' as const;
   return 'neutral' as const;
+}
+
+// ── Scheduling helpers ───────────────────────────────────────────────────────
+
+/** A `scheduledAt` more than 30s in the future — mirrors the backend's own
+ *  SCHEDULE_TOLERANCE_MS so the confirm dialog's copy matches what launch()
+ *  will actually do. */
+function isFutureSchedule(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  return !Number.isNaN(t) && t > Date.now() + 30_000;
+}
+
+/** ISO datetime → the local "YYYY-MM-DDTHH:mm" value an <input type="datetime-local">
+ *  expects, in the browser's own timezone (so the picker shows the wall-clock
+ *  time the operator originally chose, not a UTC-shifted one). */
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // ── Cross-link: provision a Social Campaign from this blast ─────────────────────
@@ -228,6 +255,7 @@ export default function CampaignsPage() {
         op: f.op,
         value: Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? ''),
       })),
+      scheduledAt: toDatetimeLocalValue(full.scheduledAt),
     });
     setAiGoal('');
     setFormOpen(true);
@@ -257,6 +285,10 @@ export default function CampaignsPage() {
         op: f.op,
         value: f.op === 'in' ? f.value.split(',').map((s) => s.trim()) : f.value,
       })),
+    // Backend validates this with @IsDateString(), which (unlike @IsString()
+    // above) does NOT treat '' as "skip validation" — only null/undefined do.
+    // So clearing the picker must send null, not ''.
+    scheduledAt: values.scheduledAt ? new Date(values.scheduledAt).toISOString() : null,
   });
 
   const save = useMutation({
@@ -298,7 +330,16 @@ export default function CampaignsPage() {
     onSuccess: ({ data }) => {
       invalidate();
       setLaunchTarget(null);
-      toast.success(t('campaigns.launched', `Launched to ${data.recipients} recipients`));
+      // A future scheduledAt on the campaign made this a SCHEDULE, not an
+      // immediate send — the backend reports which one happened (data.scheduledAt
+      // is only set on the SCHEDULED path).
+      if (data.scheduledAt) {
+        toast.success(
+          t('campaigns.scheduled', { defaultValue: 'Scheduled for {{when}}', when: new Date(data.scheduledAt).toLocaleString() }),
+        );
+      } else {
+        toast.success(t('campaigns.launched', `Launched to ${data.recipients} recipients`));
+      }
     },
     onError: (e: any) =>
       toast.error(e.response?.data?.message ?? t('campaigns.launchFailed', 'Launch failed')),
@@ -333,6 +374,12 @@ export default function CampaignsPage() {
       setDeleteTarget(null);
     },
   });
+
+  // The Launch confirm's copy depends on whether the campaign has a future
+  // scheduledAt (set via the form above) — launch() will SCHEDULE it instead
+  // of sending immediately, so the confirm must say so rather than implying
+  // an instant, irreversible send.
+  const launchIsScheduled = isFutureSchedule(launchTarget?.scheduledAt);
 
   return (
     <div className="space-y-6">
@@ -411,6 +458,16 @@ export default function CampaignsPage() {
                 )}
               </Field>
             </div>
+
+            {/* Schedule (optional) — leave blank to send immediately on Launch */}
+            <Field
+              label={t('campaigns.scheduledAt', 'Send at (optional)')}
+              hint={t('campaigns.scheduledAtHint', 'Leave blank to send immediately when you launch.')}
+            >
+              {({ id }) => (
+                <Input id={id} type="datetime-local" {...form.register('scheduledAt')} />
+              )}
+            </Field>
 
             {/* Audience filter builder */}
             <div>
@@ -626,16 +683,29 @@ export default function CampaignsPage() {
       {/* ── Launch confirm ─────────────────────────────────────────────────── */}
       {/* Launching sends the campaign to its whole audience right away (and can't
           be undone / costs message quota), so guard it behind a confirm — the
-          Launch button used to fire on a single click. */}
+          Launch button used to fire on a single click. When the campaign has a
+          future "Send at" set, launch() SCHEDULES it instead — the copy below
+          reflects that rather than implying an instant send. */}
       <ConfirmDialog
         open={!!launchTarget}
         onOpenChange={(o) => { if (!o) setLaunchTarget(null); }}
-        title={t('campaigns.launchTitle', 'Launch this campaign?')}
-        description={t(
-          'campaigns.launchDesc',
-          'It will be sent to everyone in the audience now. This cannot be undone.',
-        )}
-        confirmLabel={t('campaigns.launch', 'Launch')}
+        title={
+          launchIsScheduled
+            ? t('campaigns.scheduleTitle', 'Schedule this campaign?')
+            : t('campaigns.launchTitle', 'Launch this campaign?')
+        }
+        description={
+          launchIsScheduled
+            ? t('campaigns.scheduleDesc', {
+                defaultValue: 'It will be sent automatically at {{when}}.',
+                when: launchTarget?.scheduledAt ? new Date(launchTarget.scheduledAt).toLocaleString() : '',
+              })
+            : t(
+                'campaigns.launchDesc',
+                'It will be sent to everyone in the audience now. This cannot be undone.',
+              )
+        }
+        confirmLabel={launchIsScheduled ? t('campaigns.scheduleConfirm', 'Schedule') : t('campaigns.launch', 'Launch')}
         loading={launch.isPending}
         onConfirm={() => launchTarget && launch.mutate(launchTarget.id)}
       />
@@ -680,6 +750,14 @@ export default function CampaignsPage() {
                         {c.status}
                       </Badge>
                     </div>
+                    {c.status === 'SCHEDULED' && c.scheduledAt && (
+                      <p className="text-caption text-muted-foreground mt-0.5">
+                        {t('campaigns.scheduledFor', {
+                          defaultValue: 'Scheduled for {{when}}',
+                          when: new Date(c.scheduledAt).toLocaleString(),
+                        })}
+                      </p>
+                    )}
                     {c.stats && (
                       <p className="text-caption text-muted-foreground mt-0.5">
                         {c.stats.sent ?? 0}/{c.stats.recipients ?? 0}{' '}
@@ -733,7 +811,10 @@ export default function CampaignsPage() {
                       <XCircle className="h-5 w-5" />
                     </IconButton>
                   )}
-                  {c.status === 'DRAFT' && (
+                  {/* SCHEDULED is editable too (backend allows it) — this is how an
+                      operator reschedules or clears the "Send at" time; clearing it
+                      reverts the campaign to DRAFT (see CampaignsService.update). */}
+                  {(c.status === 'DRAFT' || c.status === 'SCHEDULED') && (
                     <Button variant="outline" size="sm" onClick={() => openEdit(c)}>
                       <Pencil className="h-3.5 w-3.5" />
                       {t('common.edit', 'Edit')}
