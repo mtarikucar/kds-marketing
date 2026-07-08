@@ -104,3 +104,45 @@ describe('entitlements — feature-key drift tripwire', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * Backfill-note tripwire. `EntitlementsService.compute()` treats a non-null
+ * `Workspace.activatedModules` as an explicit allow-list: any
+ * TOGGLEABLE_MODULE_KEYS entry missing from it is forced to
+ * `features[k] = false`, no matter what Package.features grants. That means
+ * any FEATURE_KEYS member added AFTER the allow-list model shipped
+ * (20260702160000_workspace_activated_modules) needs a one-off data
+ * migration backfilling it into every pre-existing customized allow-list, or
+ * every tenant who had already customized their module list silently loses
+ * the new capability on deploy. Pin the keys that needed this treatment here
+ * — adding a new post-20260702 toggleable key means EITHER shipping a
+ * backfill migration for it and listing it below, OR proving it can't
+ * possibly appear in a pre-existing allow-list (e.g. it's read-only/never
+ * user-toggleable) and documenting why instead.
+ */
+describe('entitlements — activatedModules backfill-note tripwire', () => {
+  const KEYS_REQUIRING_BACKFILL = ['sms'] as const;
+
+  it('every key needing a backfill has a reversible migration on disk', () => {
+    const migrationsRoot = path.resolve(__dirname, '../../../prisma/migrations');
+    const dirs = fs
+      .readdirSync(migrationsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+
+    for (const key of KEYS_REQUIRING_BACKFILL) {
+      expect(FEATURE_KEYS as readonly string[]).toContain(key);
+
+      const match = dirs.find((d) => d.includes(`backfill_${key}_activated_modules`));
+      expect(match).toBeDefined();
+
+      const migrationPath = path.join(migrationsRoot, match!, 'migration.sql');
+      const downPath = path.join(migrationsRoot, match!, 'down.sql');
+      expect(fs.existsSync(downPath)).toBe(true); // reversible, per repo convention
+
+      const sql = fs.readFileSync(migrationPath, 'utf8').toLowerCase();
+      expect(sql).toContain('activatedmodules');
+      expect(sql).toContain(key.toLowerCase());
+    }
+  });
+});
