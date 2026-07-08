@@ -7,6 +7,9 @@ const D = (n: string | number) => new Prisma.Decimal(n);
 function makeDeps(pricedMap: Record<string, any>, opts: { autonomyLevel?: string } = {}) {
   const price = jest.fn(async (_ws: string, _ch: string, unitType: string) => pricedMap[unitType] ?? null);
   const debit = jest.fn().mockResolvedValue({ id: 'led-1', balanceAfter: D(0) });
+  // Message-keyed settlements use the ref-deduped variant so a replayed
+  // settlement can never double-bill (settleVoice still uses plain debit).
+  const debitOnce = jest.fn().mockResolvedValue({ id: 'led-1', balanceAfter: D(0), replayed: false });
   const prisma = {
     message: { update: jest.fn().mockResolvedValue({}) },
     voiceCall: { update: jest.fn().mockResolvedValue({}) },
@@ -17,26 +20,26 @@ function makeDeps(pricedMap: Record<string, any>, opts: { autonomyLevel?: string
     },
   } as any;
   const tariffs = { price } as any;
-  const ledger = { debit } as any;
+  const ledger = { debit, debitOnce } as any;
   const wallet = {
     debit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }),
     debitUpTo: jest.fn().mockResolvedValue({ wallet: {}, replayed: false, debited: D(0), shortfall: D(0) }),
     balance: jest.fn().mockResolvedValue(D(0)),
   } as any;
-  return { prisma, tariffs, ledger, wallet, price, debit };
+  return { prisma, tariffs, ledger, wallet, price, debit, debitOnce };
 }
 
 const FLAG = 'GROWTH_AUTOPILOT_AUTONOMY';
 
 describe('ConversationSpendService', () => {
   it('prices an SMS by segment count, debits the ledger, and stamps the message', async () => {
-    const { prisma, tariffs, ledger, wallet, debit } = makeDeps({
+    const { prisma, tariffs, ledger, wallet, debitOnce } = makeDeps({
       SMS_SEGMENT: { unitCost: D('0.9'), amount: D('1.8'), quantity: D(2), currency: 'TRY', tariffId: 't' },
     });
     const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
     const r = await svc.settleSms('ws1', { messageId: 'm1', text: 'a'.repeat(200) }); // 2 segments
     expect(r?.quantity).toBe(2);
-    expect(debit).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', reason: 'SMS', ref: 'm1', quantity: 2 }));
+    expect(debitOnce).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', reason: 'SMS', ref: 'm1', quantity: 2 }));
     const upd = prisma.message.update.mock.calls[0][0];
     expect(upd.where).toEqual({ id: 'm1' });
     expect(upd.data.smsSegments).toBe(2);
@@ -75,18 +78,19 @@ describe('ConversationSpendService', () => {
   });
 
   it('returns null and does not debit when no tariff is configured', async () => {
-    const { prisma, tariffs, ledger, wallet, debit } = makeDeps({});
+    const { prisma, tariffs, ledger, wallet, debit, debitOnce } = makeDeps({});
     const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
     const r = await svc.settleSms('ws1', { messageId: 'm1', text: 'hi' });
     expect(r).toBeNull();
     expect(debit).not.toHaveBeenCalled();
+    expect(debitOnce).not.toHaveBeenCalled();
   });
 
   it('never throws when the ledger debit fails (best-effort)', async () => {
-    const { prisma, tariffs, ledger, wallet, debit } = makeDeps({
+    const { prisma, tariffs, ledger, wallet, debitOnce } = makeDeps({
       SMS_SEGMENT: { unitCost: D('0.9'), amount: D('0.9'), quantity: D(1), currency: 'TRY', tariffId: 't' },
     });
-    debit.mockRejectedValueOnce(new Error('db down'));
+    debitOnce.mockRejectedValueOnce(new Error('db down'));
     const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
     await expect(svc.settleSms('ws1', { messageId: 'm1', text: 'hi' })).resolves.toBeTruthy();
   });
@@ -104,31 +108,32 @@ describe('ConversationSpendService', () => {
 
   describe('settleCampaignSms', () => {
     it('prices an SMS by segment count and debits the ledger keyed by recipientId — no Message row to stamp', async () => {
-      const { prisma, tariffs, ledger, wallet, debit } = makeDeps({
+      const { prisma, tariffs, ledger, wallet, debitOnce } = makeDeps({
         SMS_SEGMENT: { unitCost: D('0.9'), amount: D('1.8'), quantity: D(2), currency: 'TRY', tariffId: 't' },
       });
       const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
       const r = await svc.settleCampaignSms('ws1', { recipientId: 'r1', text: 'a'.repeat(200) }); // 2 segments
       expect(r?.quantity).toBe(2);
-      expect(debit).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', reason: 'SMS', ref: 'r1', quantity: 2 }));
+      expect(debitOnce).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', reason: 'SMS', ref: 'r1', quantity: 2 }));
       // Unlike settleSms, there is no Message row for a campaign recipient —
       // this must never touch prisma.message.
       expect(prisma.message.update).not.toHaveBeenCalled();
     });
 
     it('returns null and does not debit when no tariff is configured (same unpriced path as settleSms)', async () => {
-      const { prisma, tariffs, ledger, wallet, debit } = makeDeps({});
+      const { prisma, tariffs, ledger, wallet, debit, debitOnce } = makeDeps({});
       const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
       const r = await svc.settleCampaignSms('ws1', { recipientId: 'r1', text: 'hi' });
       expect(r).toBeNull();
       expect(debit).not.toHaveBeenCalled();
+      expect(debitOnce).not.toHaveBeenCalled();
     });
 
     it('never throws when the ledger debit fails (best-effort)', async () => {
-      const { prisma, tariffs, ledger, wallet, debit } = makeDeps({
+      const { prisma, tariffs, ledger, wallet, debitOnce } = makeDeps({
         SMS_SEGMENT: { unitCost: D('0.9'), amount: D('0.9'), quantity: D(1), currency: 'TRY', tariffId: 't' },
       });
-      debit.mockRejectedValueOnce(new Error('db down'));
+      debitOnce.mockRejectedValueOnce(new Error('db down'));
       const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
       await expect(svc.settleCampaignSms('ws1', { recipientId: 'r1', text: 'hi' })).resolves.toBeTruthy();
     });
@@ -146,11 +151,11 @@ describe('ConversationSpendService', () => {
     });
 
     it('debits the growth wallet (clamped debitUpTo) for SMS settled under an armed AUTONOMOUS budget', async () => {
-      const { prisma, tariffs, ledger, wallet, debit } = makeDeps(SMS_PRICED, { autonomyLevel: 'AUTONOMOUS' });
+      const { prisma, tariffs, ledger, wallet, debitOnce } = makeDeps(SMS_PRICED, { autonomyLevel: 'AUTONOMOUS' });
       const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
       await svc.settleSms('ws1', { messageId: 'm1', text: 'a'.repeat(200), budgetId: 'b1' });
       // budget partition: the ledger entry must carry the budgetId
-      expect(debit).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', budgetId: 'b1' }));
+      expect(debitOnce).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', budgetId: 'b1' }));
       expect(wallet.debitUpTo).toHaveBeenCalledTimes(1);
       const [ws, movement] = wallet.debitUpTo.mock.calls[0];
       expect(ws).toBe('ws1');
@@ -170,13 +175,13 @@ describe('ConversationSpendService', () => {
     });
 
     it('forwards the budgetId to the ledger and draws the wallet for WhatsApp', async () => {
-      const { prisma, tariffs, ledger, wallet, debit } = makeDeps(
+      const { prisma, tariffs, ledger, wallet, debitOnce } = makeDeps(
         { WA_MARKETING: { unitCost: D('0.36'), amount: D('0.36'), quantity: D(1), currency: 'TRY', tariffId: 't' } },
         { autonomyLevel: 'AUTONOMOUS' },
       );
       const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
       await svc.settleWhatsApp('ws1', { messageId: 'm2', category: 'MARKETING', budgetId: 'b1' });
-      expect(debit).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'WHATSAPP', budgetId: 'b1' }));
+      expect(debitOnce).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'WHATSAPP', budgetId: 'b1' }));
       expect(wallet.debitUpTo).toHaveBeenCalledWith('ws1', expect.objectContaining({
         kind: 'ENGINE_SPEND', ref: 'engine:WHATSAPP:m2',
       }));

@@ -68,7 +68,9 @@ export class ConversationSpendService {
     const priced = await this.tariffs.price(workspaceId, 'SMS', 'SMS_SEGMENT', segments, opts.country ?? 'TR');
     if (!priced) return this.unpriced('SMS', workspaceId);
     await this.safe(async () => {
-      await this.ledger.debit(workspaceId, {
+      // debitOnce: ref-deduped so a replayed settlement (future retry path,
+      // crash-recovery re-run) can never double-bill the same recipient.
+      await this.ledger.debitOnce(workspaceId, {
         channel: 'SMS',
         amount: priced.amount,
         reason: 'SMS',
@@ -135,7 +137,9 @@ export class ConversationSpendService {
     extraStamp: Prisma.MessageUpdateInput,
   ): Promise<void> {
     await this.safe(async () => {
-      await this.ledger.debit(workspaceId, {
+      // debitOnce: ref-deduped (messageId) — a replayed settlement no-ops
+      // instead of double-billing; same safety as the wallet drawdown below.
+      await this.ledger.debitOnce(workspaceId, {
         channel,
         amount,
         reason,
