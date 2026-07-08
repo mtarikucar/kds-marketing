@@ -28,7 +28,6 @@ export function setupSwagger(app: INestApplication): void {
       'platform',
     )
     .addApiKey({ type: 'apiKey', name: 'x-internal-token', in: 'header' }, 'internal-token')
-    .addApiKey({ type: 'apiKey', name: 'x-research-token', in: 'header' }, 'research-token')
     .addApiKey({ type: 'apiKey', name: 'x-ingest-token', in: 'header' }, 'ingest-token')
     .build();
 

@@ -50,7 +50,10 @@ describe('Booking conferencing config (e2e)', () => {
       dailyLeadQuota: 100,
       maxUsers: 50,
       maxResearchProfiles: 10,
-      limits: {},
+      // maxCalendars:-1 (unlimited) so BookingService.create takes the fast-path
+      // that calls the mocked bookingCalendar.create; a missing key maps to 0,
+      // which routes into the un-stubbed $transaction cap path and 500s.
+      limits: { maxCalendars: -1 },
     } as never);
     ctx.prisma.workspaceAddOn.findMany.mockResolvedValue([] as never);
   };
