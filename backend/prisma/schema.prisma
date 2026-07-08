@@ -859,6 +859,26 @@ model CallAnalysis {
   @@map("call_analyses")
 }
 
+/// NetGSM hub — raw inbound webhook archive + idempotency guard. One row per
+/// received provider event; duplicates (NetGSM retries) upsert onto the same
+/// row via the unique key instead of double-processing. `processedAt` is
+/// stamped by the domain consumers (Phase 3+); Phase 0 only archives.
+model NetgsmWebhookEvent {
+  id          String    @id @default(uuid())
+  workspaceId String
+  purpose     String // 'events' | 'iys' | 'voice-report' | 'autocall-report'
+  /// Provider-side unique id (unique_id/gorevid/transactionid); a sha256 of the
+  /// raw body when the payload carries no id.
+  externalId  String
+  payload     Json
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@unique([workspaceId, purpose, externalId])
+  @@index([workspaceId, receivedAt])
+  @@map("netgsm_webhook_events")
+}
+
 /// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
 /// one at a time (click-to-dial reusing SalesCallService, single-line). The rep
 /// previews each lead, dials, logs the outcome, and the queue auto-advances.
