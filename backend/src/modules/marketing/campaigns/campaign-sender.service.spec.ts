@@ -278,7 +278,9 @@ describe('CampaignSenderService.launchScheduled', () => {
     prisma = {
       campaign: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findFirst: jest.fn().mockResolvedValue({ id: 'c1', workspaceId: WS, abMode: null }),
+        // Reflects a freshly-flipped row, as a re-read right after a successful
+        // guarded updateMany would see.
+        findFirst: jest.fn().mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abMode: null, abDecideAt: null }),
         update: jest.fn().mockResolvedValue({}),
       },
       campaignRecipient: {
@@ -310,17 +312,42 @@ describe('CampaignSenderService.launchScheduled', () => {
     );
   });
 
-  it('does nothing when the guard misses (already cancelled/force-launched — count 0, no batch kicked)', async () => {
+  it('no-ops when a guard miss (count 0) re-reads to a status that is neither SCHEDULED nor SENDING (cancelled meanwhile)', async () => {
     prisma.campaign.updateMany.mockResolvedValue({ count: 0 });
+    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'CANCELLED', abMode: null });
 
     await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
 
-    expect(prisma.campaign.findFirst).not.toHaveBeenCalled();
+    expect(prisma.campaign.findFirst).toHaveBeenCalled();
     expect(scheduledJobs.schedule).not.toHaveBeenCalled();
   });
 
+  it('retry after a crash between the flip and the batch schedule: a second invocation (count 0, already SENDING) still schedules the batch job', async () => {
+    // First attempt: the guarded flip succeeds, but the handler crashes before
+    // it finishes scheduling the batch job (simulated by making schedule()
+    // throw). The runner would mark this job PENDING again for a retry.
+    scheduledJobs.schedule.mockRejectedValueOnce(new Error('boom mid-handler'));
+    await expect(
+      (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } }),
+    ).rejects.toThrow('boom mid-handler');
+    expect(prisma.campaign.updateMany).toHaveBeenCalledTimes(1);
+
+    // Retry: the campaign is now already SENDING (flipped by the first
+    // attempt), so the guarded updateMany claims count 0 this time. The
+    // handler must still (re-)schedule the batch job rather than no-op.
+    prisma.campaign.updateMany.mockResolvedValue({ count: 0 });
+    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abMode: null });
+    scheduledJobs.schedule.mockReset().mockResolvedValue('job-2');
+
+    await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'campaign.batch', dedupKey: 'c1', workspaceId: WS }),
+    );
+  });
+
   it('A/B WINNER: schedules the ab.decide job (test window measured from NOW) when a HELD remainder exists', async () => {
-    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, abMode: 'WINNER' });
+    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abMode: 'WINNER', abDecideAt: null });
     prisma.campaignRecipient.count.mockResolvedValue(8); // held remainder
 
     await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
@@ -334,8 +361,23 @@ describe('CampaignSenderService.launchScheduled', () => {
     );
   });
 
+  it('A/B WINNER: does NOT recompute abDecideAt on a retry when it is already set (preserves the original fire-time-relative window)', async () => {
+    const existingAbDecideAt = new Date(Date.now() + 1234);
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'c1', workspaceId: WS, status: 'SENDING', abMode: 'WINNER', abDecideAt: existingAbDecideAt,
+    });
+    prisma.campaignRecipient.count.mockResolvedValue(8); // held remainder still not released
+
+    await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(prisma.campaign.update).not.toHaveBeenCalled();
+    expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'campaign.ab.decide', dedupKey: 'ab-decide:c1', runAt: existingAbDecideAt }),
+    );
+  });
+
   it('A/B WINNER mode with no HELD remainder does not schedule ab.decide (nothing to release later)', async () => {
-    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, abMode: 'WINNER' });
+    prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING', abMode: 'WINNER', abDecideAt: null });
     prisma.campaignRecipient.count.mockResolvedValue(0);
 
     await (svc as any).launchScheduled({ payload: { workspaceId: WS, campaignId: 'c1' } });

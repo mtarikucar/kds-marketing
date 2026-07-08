@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -89,6 +89,45 @@ describe('CampaignsPage — launch a campaign with a future scheduledAt', () => 
     expect(within(dialog).getByText(/Schedule this campaign\?/i)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /Schedule/i }));
     expect(post).toHaveBeenCalledWith('/campaigns/c1/launch');
+  });
+});
+
+// The "Send at" datetime-local picker gets a `min` of "now" (so the native
+// control itself flags an obviously-past pick) and a live form-hint warning
+// once a past time is actually entered — distinct from the future-scheduled
+// confirm-dialog copy above, which only applies after Launch is clicked.
+describe('CampaignsPage — schedule picker past-time warning', () => {
+  beforeEach(() => {
+    get.mockReset();
+    post.mockClear();
+    get.mockImplementation((url: string) =>
+      url === '/campaigns' ? Promise.resolve({ data: DRAFT }) : Promise.resolve({ data: [] }),
+    );
+  });
+
+  it('sets min="now" (minute precision) and swaps the hint to a past-time warning once a past value is entered', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }));
+
+    const input = (await screen.findByLabelText('Send at (optional)')) as HTMLInputElement;
+    expect(input).toHaveAttribute('type', 'datetime-local');
+    // Well-formed "YYYY-MM-DDTHH:mm", close to now — an exact-time assertion
+    // would be flaky across the tick this test runs on.
+    expect(input.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(Math.abs(new Date(input.min).getTime() - Date.now())).toBeLessThan(60_000);
+
+    expect(screen.getByText('Leave blank to send immediately when you launch.')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '2000-01-01T00:00' } });
+    expect(
+      await screen.findByText('This time is in the past — the campaign will be sent immediately.'),
+    ).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '2999-01-01T00:00' } });
+    await waitFor(() =>
+      expect(screen.getByText('Leave blank to send immediately when you launch.')).toBeInTheDocument(),
+    );
   });
 });
 

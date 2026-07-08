@@ -275,13 +275,15 @@ describe('CampaignsService', () => {
   // (audience frozen at the original launch() call). Editing scheduledAt must
   // move that job, not just the DB column.
   describe('update — reschedule a SCHEDULED campaign', () => {
-    it('reschedules the queued campaign.launch job to the new scheduledAt (cancel + schedule)', async () => {
+    it('reschedules the queued campaign.launch job to the new scheduledAt via schedule()\'s dedup collapse (no explicit cancel needed)', async () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
       const newScheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
 
       await svc.update(WS, 'c1', { scheduledAt: newScheduledAt.toISOString() });
 
-      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
+      // schedule()'s dedupKey lookup updates the existing PENDING row's runAt in
+      // place, so a cancel-then-create isn't needed for the reschedule-to-future path.
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
       expect(scheduledJobs.schedule).toHaveBeenCalledWith(
         expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND, dedupKey: 'c1', runAt: newScheduledAt }),
       );

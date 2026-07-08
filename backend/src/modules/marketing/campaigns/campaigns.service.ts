@@ -184,12 +184,16 @@ export class CampaignsService {
     // job, not just the DB column — otherwise the stale job still fires at the
     // OLD time regardless of what the operator just picked.
     if (existing.status === 'SCHEDULED' && dto.scheduledAt !== undefined) {
-      await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
       // Read the new scheduledAt from `data` (what we just asked Prisma to
       // persist) rather than `updated` — trusting the write we issued rather
       // than however a given Prisma client/mock happens to shape its return.
       const newScheduledAt: Date | null = data.scheduledAt;
       if (newScheduledAt && newScheduledAt.getTime() > Date.now() + SCHEDULE_TOLERANCE_MS) {
+        // No explicit cancel first: schedule()'s dedupKey lookup collapses onto
+        // the existing PENDING campaign.launch row for this campaign (it
+        // UPDATEs runAt/payload in place rather than returning the stale row
+        // untouched — verified in scheduled-job.service.ts), so this alone
+        // moves the job to the new time.
         await this.scheduledJobs.schedule({
           workspaceId,
           kind: CAMPAIGN_LAUNCH_KIND,
@@ -199,10 +203,11 @@ export class CampaignsService {
         });
       } else {
         // Cleared, or moved to a non-future time: nothing is left to fire the
-        // launch — revert to DRAFT rather than stranding the campaign SCHEDULED
-        // with no queued job. The frozen recipients/links stay put; a later
-        // launch() re-freeze is idempotent (CampaignRecipient's
-        // @@unique([campaignId, leadId]) + skipDuplicates).
+        // launch — cancel the stale job and revert to DRAFT rather than
+        // stranding the campaign SCHEDULED with no queued job. The frozen
+        // recipients/links stay put; a later launch() re-freeze is idempotent
+        // (CampaignRecipient's @@unique([campaignId, leadId]) + skipDuplicates).
+        await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
         await this.prisma.campaign.update({ where: { id: existing.id }, data: { status: 'DRAFT' } });
         updated.status = 'DRAFT';
       }

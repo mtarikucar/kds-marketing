@@ -144,6 +144,25 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** The current moment as a datetime-local value (local time, minute
+ *  precision) — used as the schedule picker's `min` so the native control
+ *  itself refuses an obviously-past pick. */
+function nowDatetimeLocalValue(): string {
+  return toDatetimeLocalValue(new Date().toISOString());
+}
+
+/** True when a non-empty datetime-local field value (bare "YYYY-MM-DDTHH:mm",
+ *  parsed by the JS Date constructor as local time — same round-trip as
+ *  toDatetimeLocalValue) already lies in the past. Distinct from
+ *  isFutureSchedule, which reads a persisted campaign's full ISO scheduledAt
+ *  with the 30s launch tolerance; this drives the live in-form warning as the
+ *  operator picks a time. */
+function isPastDatetimeLocalValue(value: string | undefined): boolean {
+  if (!value) return false;
+  const t = new Date(value).getTime();
+  return !Number.isNaN(t) && t < Date.now();
+}
+
 // ── Cross-link: provision a Social Campaign from this blast ─────────────────────
 
 /**
@@ -204,6 +223,8 @@ export default function CampaignsPage() {
   });
   const selectedChannel = useWatch({ control: form.control, name: 'channel' });
   const selectedTemplateId = useWatch({ control: form.control, name: 'emailTemplateId' });
+  const scheduledAtField = useWatch({ control: form.control, name: 'scheduledAt' });
+  const scheduleIsPast = isPastDatetimeLocalValue(scheduledAtField);
   const [variantsOpen, setVariantsOpen] = useState(false);
 
   const { data: emailTemplates } = useQuery<EmailTemplateRow[]>({
@@ -462,10 +483,19 @@ export default function CampaignsPage() {
             {/* Schedule (optional) — leave blank to send immediately on Launch */}
             <Field
               label={t('campaigns.scheduledAt', 'Send at (optional)')}
-              hint={t('campaigns.scheduledAtHint', 'Leave blank to send immediately when you launch.')}
+              hint={
+                scheduleIsPast
+                  ? t('campaigns.scheduleInPast', 'This time is in the past — the campaign will be sent immediately.')
+                  : t('campaigns.scheduledAtHint', 'Leave blank to send immediately when you launch.')
+              }
             >
               {({ id }) => (
-                <Input id={id} type="datetime-local" {...form.register('scheduledAt')} />
+                <Input
+                  id={id}
+                  type="datetime-local"
+                  min={nowDatetimeLocalValue()}
+                  {...form.register('scheduledAt')}
+                />
               )}
             </Field>
 

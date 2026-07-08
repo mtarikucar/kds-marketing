@@ -1771,6 +1771,7 @@
     "cancelScheduledFailed": "Zamanlanmış gönderi iptal edilemedi",
     "scheduledAt": "Gönderim zamanı (opsiyonel)",
     "scheduledAtHint": "Hemen göndermek için boş bırakın.",
+    "scheduleInPast": "Bu zaman geçmişte — kampanya hemen gönderilir",
     "scheduledFor": "{{when}} için zamanlandı",
     "scheduleTitle": "Bu kampanya zamanlansın mı?",
     "scheduleDesc": "{{when}} tarihinde otomatik olarak gönderilecek.",

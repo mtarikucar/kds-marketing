@@ -62,34 +62,51 @@ export class CampaignSenderService implements OnModuleInit {
 
   /**
    * Fires at a SCHEDULED campaign's `scheduledAt` (queued by
-   * CampaignsService.launch/update). Atomically claims the SCHEDULED→SENDING
-   * flip — a guarded updateMany, so a campaign already cancelled (CANCELLED),
-   * already force-launched early (SENDING), or otherwise no longer SCHEDULED
-   * makes this a safe no-op (count 0, no batch kicked).
+   * CampaignsService.launch/update). Idempotent and count-independent by
+   * design: a retry after a crash must never be a silent no-op. If the guarded
+   * SCHEDULED→SENDING updateMany below claims count 0 because a PRIOR attempt
+   * already flipped the row and then crashed before reaching the batch-job
+   * schedule call, a naive "count 0 → return" here would re-enter, do nothing,
+   * and let the runner mark the retry DONE (it doesn't throw) — stranding the
+   * campaign SENDING forever with PENDING recipients and no batch job queued.
+   * So the count is only used to attempt the flip; what happens next is
+   * decided by re-reading the campaign's actual status, and every step past
+   * that is safe to repeat: schedule()'s dedupKey lookup collapses onto the
+   * existing PENDING row (updates runAt in place) instead of duplicating it.
    */
   private async launchScheduled(job: ClaimedJob): Promise<void> {
     const { workspaceId, campaignId } = job.payload;
-    const claimed = await this.prisma.campaign.updateMany({
+    await this.prisma.campaign.updateMany({
       where: { id: campaignId, workspaceId, status: 'SCHEDULED' },
       data: { status: 'SENDING', startedAt: new Date() },
     });
-    if (claimed.count === 0) return;
-
-    // A/B WINNER mode: the test-cohort window is measured from NOW (the real
-    // send start) — mirrors launch()'s immediate path, just computed here
-    // instead of at the original (pre-scheduledAt) freeze time. Only relevant
-    // if the freeze actually held back a remainder (winnerMode).
     const campaign = await this.prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
-    if (campaign && (campaign as any).abMode === 'WINNER') {
+    // Neither just-flipped nor already SENDING from an earlier attempt — the
+    // campaign was cancelled (or otherwise moved on) meanwhile. No-op.
+    if (!campaign || campaign.status !== 'SENDING') return;
+
+    // A/B WINNER mode: the test-cohort window is measured from the real send
+    // start — mirrors launch()'s immediate path, just computed here instead of
+    // at the original (pre-scheduledAt) freeze time. Only relevant if the
+    // freeze actually held back a remainder (winnerMode). abDecideAt is
+    // computed/persisted at most once: a retry that reaches this line again
+    // must not shift the test window forward each time it re-enters.
+    if ((campaign as any).abMode === 'WINNER') {
       const held = await this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, status: 'HOLD' } });
       if (held > 0) {
-        const abDecideAt = new Date(Date.now() + AB_TEST_WINDOW_MS);
-        await this.prisma.campaign.update({ where: { id: campaignId }, data: { abDecideAt } });
+        let abDecideAt = (campaign as any).abDecideAt as Date | null;
+        if (!abDecideAt) {
+          abDecideAt = new Date(Date.now() + AB_TEST_WINDOW_MS);
+          await this.prisma.campaign.update({ where: { id: campaignId }, data: { abDecideAt } });
+        }
         await this.scheduledJobs.schedule({
           workspaceId, kind: CAMPAIGN_AB_DECIDE_KIND, runAt: abDecideAt, dedupKey: `ab-decide:${campaignId}`, payload: { workspaceId, campaignId },
         });
       }
     }
+    // (Re-)ensure the batch job on every invocation — a retry that reaches this
+    // line after an earlier attempt already scheduled (or half-scheduled) one
+    // just collapses onto the same PENDING row.
     await this.scheduledJobs.schedule({
       workspaceId, kind: CAMPAIGN_BATCH_KIND, runAt: new Date(), dedupKey: campaignId, payload: { workspaceId, campaignId },
     });
