@@ -29,6 +29,21 @@ interface SealedPayload {
 }
 
 /**
+ * The SocialAccount.network must reflect the ASSET, not the OAuth flow it arrived
+ * through. Meta's single Login-for-Business returns BOTH Facebook Pages and linked
+ * Instagram accounts, and the flow may have been started as either FACEBOOK or
+ * INSTAGRAM — so a Page could otherwise be stored under INSTAGRAM. The publisher
+ * routes by `network` (FACEBOOK → Page /feed, INSTAGRAM → IG /media), so a Page
+ * mis-tagged INSTAGRAM silently fails to publish. Map the account type to its
+ * canonical network; other providers have a single asset type → keep the fallback.
+ */
+function resolveSocialNetwork(accountType: string, fallback: string): string {
+  if (accountType === 'PAGE') return 'FACEBOOK';
+  if (accountType === 'IG_BUSINESS') return 'INSTAGRAM';
+  return fallback;
+}
+
+/**
  * Orchestrates the OAuth connect flow: builds the signed authorize URL,
  * handles the provider callback (exchange → list assets → stash a sealed
  * pending row), and turns the user's asset selection into sealed SocialAccount
@@ -202,7 +217,8 @@ export class SocialOAuthService {
           await this.provisionAdAccount(workspaceId, asset, token);
           summary.adAccounts++;
         } else {
-          await this.upsertSocialAccount(workspaceId, row.network, asset, token, tokenExpiresAt, sealedRefresh);
+          const network = resolveSocialNetwork(asset.accountType, row.network);
+          await this.upsertSocialAccount(workspaceId, network, asset, token, tokenExpiresAt, sealedRefresh);
           summary.socialAccounts++;
           if (
             provisionMessaging.includes(asset.externalId) &&
