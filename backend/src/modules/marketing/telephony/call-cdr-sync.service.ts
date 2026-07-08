@@ -37,18 +37,31 @@ export class CallCdrSyncService {
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'call-cdr-sync' })
   async syncDue(): Promise<void> {
     await withAdvisoryLock(this.prisma, 'telephony:cdr-sync', async () => {
-      // Only workspaces that can possibly have CDR creds: an ACTIVE SMS channel
-      // (getCreds reads its sealed usercode/password). This supersedes the old
-      // `workspace.status === 'ACTIVE'` scan — that filter is dropped, not
-      // preserved, because workspace-active-but-no-SMS-channel workspaces have
-      // no creds to sync anyway. Saves a linear scan over every workspace each
-      // 5-min tick.
-      const channels = await this.prisma.channel.findMany({
-        where: { type: 'SMS', status: 'ACTIVE' },
-        select: { workspaceId: true },
-        distinct: ['workspaceId'],
-      });
-      const workspaces = channels.map((c) => ({ id: c.workspaceId }));
+      // Only workspaces that can possibly have CDR creds — mirroring getCreds()'s
+      // two credential sources below: an ACTIVE SMS channel (sealed usercode/
+      // password), OR an ACTIVE TelephonyConfig row (sealed username/password,
+      // same status field/values TelephonyConfigService.resolveForWorkspace
+      // filters on). This supersedes the old `workspace.status === 'ACTIVE'`
+      // scan — that filter is dropped, not preserved, because a workspace can be
+      // ACTIVE with neither source configured (nothing to sync). Two cheap
+      // indexed queries, deduped in code, beat a linear scan over every
+      // workspace each 5-min tick.
+      const [channels, telephonyConfigs] = await Promise.all([
+        this.prisma.channel.findMany({
+          where: { type: 'SMS', status: 'ACTIVE' },
+          select: { workspaceId: true },
+          distinct: ['workspaceId'],
+        }),
+        this.prisma.telephonyConfig.findMany({
+          where: { status: 'ACTIVE' },
+          select: { workspaceId: true },
+        }),
+      ]);
+      const workspaceIds = new Set<string>([
+        ...channels.map((c) => c.workspaceId),
+        ...telephonyConfigs.map((t) => t.workspaceId),
+      ]);
+      const workspaces = [...workspaceIds].map((id) => ({ id }));
       let updated = 0;
       for (const ws of workspaces) {
         try {

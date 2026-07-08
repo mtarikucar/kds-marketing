@@ -111,7 +111,10 @@ describe('CallCdrSyncService.syncDue (cron tick — workspace enumeration)', () 
   let svc: CallCdrSyncService;
 
   beforeEach(() => {
-    prisma = { channel: { findMany: jest.fn().mockResolvedValue([]) } };
+    prisma = {
+      channel: { findMany: jest.fn().mockResolvedValue([]) },
+      telephonyConfig: { findMany: jest.fn().mockResolvedValue([]) },
+    };
     registry = { resolveConfig: jest.fn() };
     cdr = { fetchCdr: jest.fn() };
     telephony = { resolveForWorkspace: jest.fn() };
@@ -131,8 +134,23 @@ describe('CallCdrSyncService.syncDue (cron tick — workspace enumeration)', () 
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it('does not sync a workspace without an ACTIVE SMS channel', async () => {
+  it('syncs a workspace that has only an ACTIVE TelephonyConfig (no SMS channel)', async () => {
+    prisma.channel.findMany.mockResolvedValue([]); // no SMS channel anywhere
+    prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-tel-only' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(prisma.telephonyConfig.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: 'ACTIVE' } }),
+    );
+    expect(spy).toHaveBeenCalledWith('ws-tel-only');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not sync a workspace without an ACTIVE SMS channel or TelephonyConfig', async () => {
     prisma.channel.findMany.mockResolvedValue([]); // no ACTIVE SMS channel anywhere
+    prisma.telephonyConfig.findMany.mockResolvedValue([]); // no ACTIVE TelephonyConfig anywhere
     const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
 
     await svc.syncDue();
@@ -149,5 +167,16 @@ describe('CallCdrSyncService.syncDue (cron tick — workspace enumeration)', () 
     expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenCalledWith('ws-a');
     expect(spy).toHaveBeenCalledWith('ws-b');
+  });
+
+  it('dedupes a workspace present in both the SMS-channel and TelephonyConfig sources', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ workspaceId: 'ws-both' }]);
+    prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-both' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('ws-both');
   });
 });
