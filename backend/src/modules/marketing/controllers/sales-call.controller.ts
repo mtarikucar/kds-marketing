@@ -75,7 +75,7 @@ export class SalesCallController {
 
   /**
    * The call's recording URL, if one has been retrieved (Epic 13 call-recording —
-   * stamped by the RecordingSyncService when NetGSM exposes the download API).
+   * populated from the NetGSM CDR/webhook recording fields, Phase 3/4).
    * Reuses the rep-scoped get, so a REP only sees their own calls' recordings.
    */
   @Get(':id/recording')

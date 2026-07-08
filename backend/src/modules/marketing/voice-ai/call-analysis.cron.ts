@@ -13,7 +13,7 @@ import { CallAnalysisService } from './call-analysis.service';
  * lock; best-effort per row (a failure is logged, never aborts the sweep).
  *
  * Inert until both STT (recordings → text) and Claude are configured — mirrors
- * the RecordingSyncService inert-guard convention.
+ * the same inert-guard convention used by other Epic 13 sweeps.
  */
 @Injectable()
 export class CallAnalysisCron {
@@ -38,7 +38,7 @@ export class CallAnalysisCron {
       'voice:call-analysis',
       async () => {
         const since = new Date(Date.now() - CallAnalysisCron.WINDOW_MS);
-        // System-global read (a system job, like RecordingSyncService): CONNECTED
+        // System-global read (a system job, like AdsPullService): CONNECTED
         // calls with a recording, ended in the window. Over-fetch a little so that
         // after excluding already-analyzed calls we can still fill a batch.
         const candidates = await this.prisma.salesCall.findMany({
