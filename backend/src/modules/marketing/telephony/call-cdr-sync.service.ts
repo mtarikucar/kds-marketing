@@ -37,10 +37,18 @@ export class CallCdrSyncService {
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'call-cdr-sync' })
   async syncDue(): Promise<void> {
     await withAdvisoryLock(this.prisma, 'telephony:cdr-sync', async () => {
-      const workspaces = await this.prisma.workspace.findMany({
-        where: { status: 'ACTIVE' },
-        select: { id: true },
+      // Only workspaces that can possibly have CDR creds: an ACTIVE SMS channel
+      // (getCreds reads its sealed usercode/password). This supersedes the old
+      // `workspace.status === 'ACTIVE'` scan — that filter is dropped, not
+      // preserved, because workspace-active-but-no-SMS-channel workspaces have
+      // no creds to sync anyway. Saves a linear scan over every workspace each
+      // 5-min tick.
+      const channels = await this.prisma.channel.findMany({
+        where: { type: 'SMS', status: 'ACTIVE' },
+        select: { workspaceId: true },
+        distinct: ['workspaceId'],
       });
+      const workspaces = channels.map((c) => ({ id: c.workspaceId }));
       let updated = 0;
       for (const ws of workspaces) {
         try {

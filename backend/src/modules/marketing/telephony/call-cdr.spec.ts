@@ -1,6 +1,12 @@
 import { normalizeRecords } from '../../netgsm/santral/netgsm-cdr.client';
 import { CallCdrSyncService } from './call-cdr-sync.service';
 
+jest.mock('../../../common/scheduling/advisory-lock', () => ({
+  withAdvisoryLock: jest.fn(async (_p: any, _n: any, cb: () => Promise<void>) => {
+    await cb();
+  }),
+}));
+
 describe('normalizeRecords — defensive CDR parsing', () => {
   it('parses a flat array with string duration', () => {
     const out = normalizeRecords([{ destination: '5551234567', duration: '42', recording: 'http://r/1' }]);
@@ -94,5 +100,54 @@ describe('CallCdrSyncService.syncWorkspace', () => {
       expect.any(String),
       expect.any(String),
     );
+  });
+});
+
+describe('CallCdrSyncService.syncDue (cron tick — workspace enumeration)', () => {
+  let prisma: any;
+  let registry: any;
+  let cdr: any;
+  let telephony: any;
+  let svc: CallCdrSyncService;
+
+  beforeEach(() => {
+    prisma = { channel: { findMany: jest.fn().mockResolvedValue([]) } };
+    registry = { resolveConfig: jest.fn() };
+    cdr = { fetchCdr: jest.fn() };
+    telephony = { resolveForWorkspace: jest.fn() };
+    svc = new CallCdrSyncService(prisma, registry, cdr, telephony);
+  });
+
+  it('syncs a workspace that has an ACTIVE SMS channel', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ workspaceId: 'ws-with-sms' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(prisma.channel.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { type: 'SMS', status: 'ACTIVE' } }),
+    );
+    expect(spy).toHaveBeenCalledWith('ws-with-sms');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not sync a workspace without an ACTIVE SMS channel', async () => {
+    prisma.channel.findMany.mockResolvedValue([]); // no ACTIVE SMS channel anywhere
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('syncs each distinct workspace exactly once', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ workspaceId: 'ws-a' }, { workspaceId: 'ws-b' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledWith('ws-a');
+    expect(spy).toHaveBeenCalledWith('ws-b');
   });
 });
