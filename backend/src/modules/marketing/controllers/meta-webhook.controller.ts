@@ -5,6 +5,7 @@ import { PublicChannelResolverService } from '../channels/public-channel-resolve
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { ConversationIngressService } from '../channels/conversation-ingress.service';
 import { MessageReceiptService } from '../channels/message-receipt.service';
+import { MetaLeadgenIngestService } from '../channels/meta-leadgen-ingest.service';
 
 /** body.object → our ChannelType. */
 const TYPE_BY_OBJECT: Record<string, string> = {
@@ -30,6 +31,7 @@ export class MetaWebhookController {
     private readonly registry: ChannelAdapterRegistry,
     private readonly ingress: ConversationIngressService,
     private readonly receipts: MessageReceiptService,
+    private readonly leadgen: MetaLeadgenIngestService,
   ) {}
 
   @Get('webhook')
@@ -104,6 +106,22 @@ export class MetaWebhookController {
       if (adapter.parseStatusUpdates) {
         const updates = adapter.parseStatusUpdates(config, { object: body.object, entry: [entry] });
         if (updates.length) await this.receipts.apply(channel.workspaceId, updates);
+      }
+      // Meta Lead Ads (Instant Form) submissions arrive on the SAME page webhook
+      // as Messenger, but under entry[].changes[] with field==='leadgen' (not
+      // entry[].messaging[]). Fetch + create the lead with the page token we
+      // already resolved. Best-effort per change: one bad form never rejects the
+      // shared (already-200-ACKed) process() promise.
+      for (const ch of entry?.changes ?? []) {
+        if (ch?.field === 'leadgen' && ch?.value?.leadgen_id) {
+          await this.leadgen
+            .ingest(
+              { id: channel.id, workspaceId: channel.workspaceId, externalId: channel.externalId },
+              config,
+              ch.value,
+            )
+            .catch((e) => this.logger.error(`leadgen ingest failed: ${e?.message ?? e}`));
+        }
       }
     }
   }

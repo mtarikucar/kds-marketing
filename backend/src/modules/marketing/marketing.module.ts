@@ -118,6 +118,7 @@ import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
 import { ConversationIngressService } from './channels/conversation-ingress.service';
+import { MetaLeadgenIngestService } from './channels/meta-leadgen-ingest.service';
 import { ConversationStreamService } from './channels/conversation-stream.service';
 import { MessageSenderService } from './channels/message-sender.service';
 import { MessageReceiptService } from './channels/message-receipt.service';
@@ -670,6 +671,7 @@ import { WalletService } from './wallet/wallet.service';
     MessageSenderService,
     MessageReceiptService,
     ConversationIngressService,
+    MetaLeadgenIngestService,
     ConversationsService,
     ConversationAiEngineService,
     PublicChannelResolverService,
