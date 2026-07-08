@@ -40,7 +40,7 @@ export default function LandingFooter() {
           {/* Brand */}
           <div>
             <Link to="/" className="flex items-center gap-2.5" aria-label="Jeeta">
-              <img src="/logo.png" alt="" className="h-9 w-9 rounded-xl object-cover ring-1 ring-white/10" />
+              <img src="/logo-mark.png" alt="" className="h-9 w-9 rounded-xl object-cover ring-1 ring-white/10" />
               <span className="font-display text-xl font-bold tracking-tight text-white">Jeeta</span>
             </Link>
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-slate-400">

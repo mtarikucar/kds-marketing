@@ -24,17 +24,18 @@ export default function Hero() {
       <div aria-hidden className="pointer-events-none absolute inset-0">
         {/* base vertical gradient */}
         <div className="absolute inset-0 bg-gradient-to-b from-[#0a0e1f] via-[#0b1024] to-[#0d1430]" />
-        {/* Soft indigo + violet glows. Rendered as radial GRADIENTS, not
-            `filter: blur()` on solid circles — large blur radii (blur-[120px])
-            repaint catastrophically slowly on iOS Safari and were the main cause
-            of the landing-page jank on iPhone. Gradients give the same look for a
-            fraction of the GPU cost. */}
+        {/* Soft Jeeta-brand glows — blue swoosh (top-left) + a subtle orange
+            growth-arrow accent (top-right), echoing the logo. Rendered as radial
+            GRADIENTS, not `filter: blur()` on solid circles — large blur radii
+            (blur-[120px]) repaint catastrophically slowly on iOS Safari and were
+            the main cause of the landing-page jank on iPhone. Gradients give the
+            same look for a fraction of the GPU cost. */}
         <div
           className="absolute inset-0"
           style={{
             backgroundImage:
-              'radial-gradient(40rem 40rem at 6% -8%, rgba(79,70,229,0.30), transparent 62%),' +
-              'radial-gradient(34rem 34rem at 96% 10%, rgba(124,58,237,0.24), transparent 62%)',
+              'radial-gradient(40rem 40rem at 6% -8%, rgba(36,88,230,0.34), transparent 62%),' +
+              'radial-gradient(34rem 34rem at 96% 10%, rgba(245,98,15,0.16), transparent 62%)',
           }}
         />
         {/* fine grid, fading out toward the bottom */}
@@ -54,10 +55,10 @@ export default function Hero() {
           {/* Copy */}
           <div className="text-center lg:text-left">
             <span
-              className="inline-flex animate-slide-up items-center gap-2 rounded-full bg-white/5 px-3.5 py-1.5 text-xs font-medium text-indigo-200 ring-1 ring-inset ring-white/10 motion-reduce:animate-none"
+              className="inline-flex animate-slide-up items-center gap-2 rounded-full bg-white/5 px-3.5 py-1.5 text-xs font-medium text-primary-200 ring-1 ring-inset ring-white/10 motion-reduce:animate-none"
               style={load(0)}
             >
-              <Sparkles className="h-3.5 w-3.5 text-indigo-300" />
+              <Sparkles className="h-3.5 w-3.5 text-primary-300" />
               {t('landing.hero.badge')}
             </span>
 
@@ -66,7 +67,7 @@ export default function Hero() {
               style={load(80)}
             >
               {t('landing.hero.titleLead')}{' '}
-              <span className="bg-gradient-to-r from-indigo-300 via-primary-400 to-violet-300 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-primary-300 via-primary-100 to-primary-400 bg-clip-text text-transparent">
                 {t('landing.hero.titleAccent')}
               </span>
             </h1>
@@ -79,7 +80,7 @@ export default function Hero() {
             </p>
 
             <p
-              className="mx-auto mt-3 max-w-xl animate-slide-up text-sm font-medium text-indigo-200/80 motion-reduce:animate-none lg:mx-0"
+              className="mx-auto mt-3 max-w-xl animate-slide-up text-sm font-medium text-primary-200/80 motion-reduce:animate-none lg:mx-0"
               style={load(200)}
             >
               {t('landing.hero.audience')}

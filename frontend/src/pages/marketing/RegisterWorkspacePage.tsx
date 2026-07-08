@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Building2 } from 'lucide-react';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { passwordSchema } from '../../features/marketing/schemas';
@@ -86,9 +85,11 @@ export default function RegisterWorkspacePage() {
         <Card>
           <CardHeader>
             <div className="flex flex-col items-center gap-3 pb-2">
-              <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
-                <Building2 className="h-6 w-6 text-primary-foreground" aria-hidden="true" />
-              </div>
+              <img
+                src="/logo-mark.png"
+                alt="Jeeta"
+                className="h-14 w-14 rounded-2xl object-cover shadow-sm ring-1 ring-black/5"
+              />
               <div className="text-center">
                 <h1 className="font-display text-h2 text-foreground">
                   {t('register.title', 'Create your workspace')}

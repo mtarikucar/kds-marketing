@@ -145,9 +145,11 @@ export default function MarketingSidebar({
           collapsed ? 'justify-center px-3' : 'gap-2.5 px-5',
         )}
       >
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary-hover shadow-sm">
-          <span className="text-sm font-bold text-primary-foreground">M</span>
-        </div>
+        <img
+          src="/logo-mark.png"
+          alt="Jeeta"
+          className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-sm ring-1 ring-black/5"
+        />
         {!collapsed && (
           <>
             <span className="flex-1 truncate font-display text-base font-semibold text-foreground">

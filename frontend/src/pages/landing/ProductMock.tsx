@@ -42,7 +42,7 @@ export default function ProductMock() {
       <div
         aria-hidden
         className="absolute -inset-6 -z-10 rounded-[2rem]"
-        style={{ background: 'radial-gradient(closest-side, rgba(99,102,241,0.22), transparent)' }}
+        style={{ background: 'radial-gradient(closest-side, rgba(36,88,230,0.22), transparent)' }}
       />
 
       <div className="overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/10">
@@ -53,7 +53,7 @@ export default function ProductMock() {
           <span className="h-3 w-3 rounded-full bg-[#28c840]" />
           <div className="mx-auto flex items-center gap-1.5 rounded-md bg-white px-3 py-1 text-[11px] font-medium text-slate-400 ring-1 ring-slate-200">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            app.jeeta.co/dashboard
+            app.jeetagrowth.com/dashboard
           </div>
         </div>
 

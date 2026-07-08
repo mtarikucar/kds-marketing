@@ -16,9 +16,16 @@
     --card-foreground: #14151a;
     --popover: #ffffff;
     --popover-foreground: #14151a;
-    --primary: #4f46e5;
+    --primary: #2458e6;
     --primary-foreground: #ffffff;
-    --primary-hover: #4338ca;
+    --primary-hover: #1d48c4;
+    /* Jeeta brand accents: navy (structure/brand-dark) + orange (growth/CTA). */
+    --brand-navy: #0f2350;
+    --brand-navy-foreground: #ffffff;
+    --brand-accent: #f5620f;
+    --brand-accent-foreground: #ffffff;
+    --brand-accent-hover: #da560d;
+    --brand-accent-subtle: #fff2ea;
     --secondary: #f4f5f7;
     --secondary-foreground: #14151a;
     --muted: #f4f5f7;
@@ -42,9 +49,9 @@
     --border: #e7e8ec;
     --border-strong: #d5d7de;
     --input: #d5d7de;
-    --ring: #4f46e5;
-    --chart-1:#4f46e5;--chart-2:#059669;--chart-3:#f59e0b;--chart-4:#e11d48;
-    --chart-5:#0284c7;--chart-6:#7c3aed;--chart-7:#0d9488;--chart-8:#64748b;
+    --ring: #2458e6;
+    --chart-1:#2458e6;--chart-2:#f5620f;--chart-3:#0f2350;--chart-4:#059669;
+    --chart-5:#e11d48;--chart-6:#7c3aed;--chart-7:#0d9488;--chart-8:#64748b;
     --radius: 0.5rem;
   }
   :root.dark {
@@ -58,9 +65,15 @@
     --card-foreground: #ecedf1;
     --popover: #1b1d27;
     --popover-foreground: #ecedf1;
-    --primary: #6e68f2;
-    --primary-foreground: #ffffff;
-    --primary-hover: #837cf6;
+    --primary: #6e8ff5;
+    --primary-foreground: #0b0c11;
+    --primary-hover: #86a0f7;
+    --brand-navy: #1b2e5e;
+    --brand-navy-foreground: #ffffff;
+    --brand-accent: #fb7a2e;
+    --brand-accent-foreground: #0b0c11;
+    --brand-accent-hover: #fc8f4c;
+    --brand-accent-subtle: #2a1608;
     --secondary: #171922;
     --secondary-foreground: #ecedf1;
     --muted: #171922;
@@ -84,7 +97,9 @@
     --border: #262936;
     --border-strong: #343847;
     --input: #343847;
-    --ring: #6e68f2;
+    --ring: #6e8ff5;
+    --chart-1:#6e8ff5;--chart-2:#fb7a2e;--chart-3:#93a7d6;--chart-4:#10b981;
+    --chart-5:#fb7185;--chart-6:#a78bfa;--chart-7:#2dd4bf;--chart-8:#94a3b8;
   }
 }
 

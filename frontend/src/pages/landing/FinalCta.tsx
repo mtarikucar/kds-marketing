@@ -19,8 +19,8 @@ export default function FinalCta() {
               className="pointer-events-none absolute inset-0"
               style={{
                 backgroundImage:
-                  'radial-gradient(22rem 22rem at 50% -10%, rgba(79,70,229,0.32), transparent 60%),' +
-                  'radial-gradient(18rem 18rem at 88% 108%, rgba(124,58,237,0.22), transparent 60%)',
+                  'radial-gradient(22rem 22rem at 50% -10%, rgba(36,88,230,0.34), transparent 60%),' +
+                  'radial-gradient(18rem 18rem at 88% 108%, rgba(245,98,15,0.18), transparent 60%)',
               }}
             />
 
