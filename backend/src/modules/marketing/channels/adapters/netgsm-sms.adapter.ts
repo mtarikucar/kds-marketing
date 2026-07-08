@@ -121,10 +121,15 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
    *  n:n batching is Task 5). `SmsV2Client.send` never throws: every failure
    *  (transport, unexpected response, provider error code) resolves to an
    *  `ok:false` result, so retriability is read off the result rather than a
-   *  caught exception. Retriable = code 80 (rate limit, same as legacy) OR an
-   *  empty `code` (SmsV2Client's bucket for transport/timeout failures and
-   *  unparseable responses) — mirroring attemptLegacy's "network + HTTP-5xx +
-   *  code 80 retries, everything else is final" rule one level up the stack. */
+   *  caught exception. Retriable = code 80 (rate limit, same as legacy) OR
+   *  `result.transport` (a genuine transport/timeout failure — the request
+   *  never reached NetGSM, so nothing was sent and a retry is safe). Crucially
+   *  this does NOT retry merely on an empty `code`: an HTTP response that came
+   *  back but couldn't be parsed means NetGSM may already have accepted and
+   *  sent the message, and retrying that would risk billing/sending a
+   *  duplicate SMS — mirroring attemptLegacy's "network + HTTP-5xx + code 80
+   *  retries, everything else (including a received-but-unparseable
+   *  response) is final" rule one level up the stack. */
   private async attemptV2(
     creds: NetgsmCreds,
     msgheader: string,
@@ -142,7 +147,7 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
       externalMessageId: null,
       status: 'FAILED',
       error: result.message ?? `NetGSM ${result.code || '?'}`,
-      retriable: result.retriable || result.code === '',
+      retriable: result.retriable || result.transport,
     };
   }
 

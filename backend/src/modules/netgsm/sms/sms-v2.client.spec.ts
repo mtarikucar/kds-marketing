@@ -25,7 +25,7 @@ describe('SmsV2Client', () => {
         startdate: '081020261200',
         stopdate: '081020261300',
       });
-      expect(r).toEqual({ ok: true, code: '00', jobid: '26702360000000000123', message: null, retriable: false });
+      expect(r).toEqual({ ok: true, code: '00', jobid: '26702360000000000123', message: null, retriable: false, transport: false });
       const [call] = requestSpy.mock.calls;
       expect(call[0].path).toBe('/sms/rest/v2/send');
       expect(call[0].method).toBe('POST');
@@ -82,6 +82,7 @@ describe('SmsV2Client', () => {
       expect(r.ok).toBe(false);
       expect(r.code).toBe('80');
       expect(r.retriable).toBe(true);
+      expect(r.transport).toBe(false);
     });
 
     it('parses a bare non-JSON error code body tolerantly', async () => {
@@ -92,15 +93,16 @@ describe('SmsV2Client', () => {
       expect(r.message).toMatch(/kimlik|IP/i);
     });
 
-    it('a transport error (rejected promise) returns a non-throwing failure result', async () => {
+    it('a transport error (rejected promise) returns a non-throwing failure result flagged as retriable transport failure', async () => {
       jest.spyOn(rest, 'request').mockRejectedValue(new Error('down'));
       const r = await client.send(creds, { msgheader: 'HDR1', messages: [{ msg: 'a', no: '05551112233' }] });
       expect(r.ok).toBe(false);
       expect(r.jobid).toBeNull();
       expect(r.retriable).toBe(false);
+      expect(r.transport).toBe(true);
     });
 
-    it('an unrecognized non-JSON body with no code is a non-retriable failure', async () => {
+    it('an unrecognized non-JSON body with no code is a non-retriable, non-transport failure (a response WAS received)', async () => {
       jest.spyOn(rest, 'request').mockResolvedValue({
         httpStatus: 502, body: null, rawText: '<html>Bad Gateway</html>',
       } as any);
@@ -108,6 +110,7 @@ describe('SmsV2Client', () => {
       expect(r.ok).toBe(false);
       expect(r.message).toMatch(/502/);
       expect(r.retriable).toBe(false);
+      expect(r.transport).toBe(false);
     });
   });
 

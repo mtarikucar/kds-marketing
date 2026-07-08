@@ -8,6 +8,13 @@ export interface SmsV2SendResult {
   jobid: string | null;
   message: string | null;
   retriable: boolean;
+  /** True ONLY when the request never reached NetGSM at all (a thrown
+   *  network/timeout error in `doSend`'s catch branch) — nothing was ever
+   *  accepted, so a retry is safe. False for every other outcome, including
+   *  an HTTP response that came back but couldn't be parsed: NetGSM may
+   *  already have accepted and sent the message, so retrying risks a
+   *  duplicate billed SMS. */
+  transport: boolean;
 }
 
 export interface SmsV2ReportRow {
@@ -90,7 +97,12 @@ const OTP_MAX_SEGMENT_CHARS = 155;
  * responses vary in casing across accounts/docs revisions and sometimes answer
  * a bare legacy status code instead of JSON), mirroring `BalanceClient`.
  * Retriable is `true` ONLY for code '80' (rate limit) — every other error
- * needs a fix, not a retry (mirrors `interpretNetgsmSend`).
+ * needs a fix, not a retry (mirrors `interpretNetgsmSend`). `doSend` also sets
+ * `transport: true` ONLY when the request threw before/without ever getting an
+ * HTTP response (genuine network/timeout failure — nothing was sent, safe to
+ * retry); every other outcome — including a 200 whose body couldn't be parsed
+ * — sets `transport: false`, because NetGSM may already have accepted and
+ * sent the message and a blind retry there would risk a duplicate billed SMS.
  */
 @Injectable()
 export class SmsV2Client {
@@ -122,7 +134,7 @@ export class SmsV2Client {
   async otp(creds: NetgsmCreds, req: SmsV2OtpRequest): Promise<SmsV2SendResult> {
     const validationError = this.validateOtp(req.msg, req.no);
     if (validationError) {
-      return { ok: false, code: '', jobid: null, message: validationError, retriable: false };
+      return { ok: false, code: '', jobid: null, message: validationError, retriable: false, transport: false };
     }
     const normalizedNo = this.normalizeDomesticMobile(req.no) as string;
     return this.doSend('/sms/rest/v2/otp', creds, {
@@ -137,17 +149,23 @@ export class SmsV2Client {
     try {
       ({ httpStatus, body: respBody, rawText } = await this.rest.request({ path, method: 'POST', creds, body }));
     } catch (e: any) {
-      // Transport-level failure (timeout/DNS). Message is already cred-scrubbed
-      // by NetgsmRestClient; safe to log for send-path visibility.
+      // Transport-level failure (timeout/DNS) — the request never reached
+      // NetGSM (no HTTP response at all), so nothing could have been sent:
+      // safe to retry. Message is already cred-scrubbed by NetgsmRestClient;
+      // safe to log for send-path visibility.
       this.logger.warn(`netgsm v2 ${path} transport error: ${e?.message ?? e}`);
-      return { ok: false, code: '', jobid: null, message: e?.message ?? 'NetGSM erişilemedi', retriable: false };
+      return { ok: false, code: '', jobid: null, message: e?.message ?? 'NetGSM erişilemedi', retriable: false, transport: true };
     }
     const code = this.extractCode(respBody, rawText);
     if (code == null) {
+      // An HTTP response WAS received but its body couldn't be parsed —
+      // NetGSM may already have accepted/sent the message, so this is NOT a
+      // transport failure and must not be retried (would risk a duplicate
+      // billed SMS).
       return {
         ok: false, code: '', jobid: null,
         message: `NetGSM beklenmedik yanıt döndürdü (HTTP ${httpStatus}).`,
-        retriable: false,
+        retriable: false, transport: false,
       };
     }
     if (code !== '00') {
@@ -157,10 +175,10 @@ export class SmsV2Client {
       return {
         ok: false, code, jobid: null,
         message: netgsmErrorMessage(code),
-        retriable: RETRIABLE_CODES.has(code),
+        retriable: RETRIABLE_CODES.has(code), transport: false,
       };
     }
-    return { ok: true, code, jobid: respBody?.jobid != null ? String(respBody.jobid) : null, message: null, retriable: false };
+    return { ok: true, code, jobid: respBody?.jobid != null ? String(respBody.jobid) : null, message: null, retriable: false, transport: false };
   }
 
   /** Caller chunks jobids to ≤50 per NetGSM's documented per-call limit. */

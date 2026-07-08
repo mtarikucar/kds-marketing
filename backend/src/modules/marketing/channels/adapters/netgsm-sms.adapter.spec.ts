@@ -176,8 +176,10 @@ describe('NetgsmSmsAdapter.send — legacy error mapping, retry & timeout', () =
  * `NetgsmSmsAdapter.send` calls `SmsV2Client.send` directly (no `fetch` here —
  * that's `SmsV2Client`'s job via `NetgsmRestClient`), mapping `jobid` onto
  * `externalMessageId` and mirroring the legacy retry semantics: code 80 +
- * "transport/unexpected-response" (SmsV2Client's empty-`code` bucket) retry,
- * everything else is final.
+ * a genuine transport failure (`result.transport === true` — the request
+ * never reached NetGSM) retry; a received-but-unparseable response (empty
+ * `code`, `transport: false`) does NOT retry, since NetGSM may already have
+ * accepted/sent the message and retrying would risk a duplicate billed SMS.
  */
 describe('NetgsmSmsAdapter.send — v2 default path', () => {
   let adapter: NetgsmSmsAdapter;
@@ -244,11 +246,11 @@ describe('NetgsmSmsAdapter.send — v2 default path', () => {
     expect(smsV2Send).toHaveBeenCalledTimes(3);
   });
 
-  it('retries a transport-level failure (empty code), then succeeds', async () => {
+  it('retries a genuine transport-level failure (transport:true), then succeeds', async () => {
     jest.useFakeTimers();
     smsV2Send
-      .mockResolvedValueOnce({ ok: false, code: '', jobid: null, message: 'NetGSM erişilemedi', retriable: false })
-      .mockResolvedValue({ ok: true, code: '00', jobid: '9', message: null, retriable: false });
+      .mockResolvedValueOnce({ ok: false, code: '', jobid: null, message: 'NetGSM erişilemedi', retriable: false, transport: true })
+      .mockResolvedValue({ ok: true, code: '00', jobid: '9', message: null, retriable: false, transport: false });
     const config = { secrets, public: {} } as any;
     const p = adapter.send({ config, to: '+905551112233', text: 'x' });
     await jest.runAllTimersAsync();
@@ -257,9 +259,9 @@ describe('NetgsmSmsAdapter.send — v2 default path', () => {
     expect(smsV2Send).toHaveBeenCalledTimes(2);
   });
 
-  it('gives up after MAX_ATTEMPTS on a persistent transport failure (empty code)', async () => {
+  it('gives up after MAX_ATTEMPTS on a persistent genuine transport failure (transport:true)', async () => {
     jest.useFakeTimers();
-    smsV2Send.mockResolvedValue({ ok: false, code: '', jobid: null, message: 'NetGSM erişilemedi', retriable: false });
+    smsV2Send.mockResolvedValue({ ok: false, code: '', jobid: null, message: 'NetGSM erişilemedi', retriable: false, transport: true });
     const config = { secrets, public: {} } as any;
     const p = adapter.send({ config, to: '+905551112233', text: 'x' });
     await jest.runAllTimersAsync();
@@ -267,6 +269,18 @@ describe('NetgsmSmsAdapter.send — v2 default path', () => {
     expect(res.status).toBe('FAILED');
     expect(res.error).toMatch(/erişilemedi/i);
     expect(smsV2Send).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT retry a received-but-unparseable response (empty code, transport:false) — avoids a duplicate billed SMS', async () => {
+    smsV2Send.mockResolvedValue({
+      ok: false, code: '', jobid: null,
+      message: 'NetGSM beklenmedik yanıt döndürdü (HTTP 200).',
+      retriable: false, transport: false,
+    });
+    const config = { secrets, public: {} } as any;
+    const res = await adapter.send({ config, to: '+905551112233', text: 'x' });
+    expect(res.status).toBe('FAILED');
+    expect(smsV2Send).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT retry a permanent İYS code (51) — exactly one attempt', async () => {
