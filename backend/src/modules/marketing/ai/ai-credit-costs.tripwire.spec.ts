@@ -18,6 +18,8 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'media.video.generate',
       'research.qualify',
       'review.reply_draft',
+      'voice.analysis',
+      'voice.copilot',
       'voice.turn',
       'workflow.ai_classify',
       'workflow.ai_generate',

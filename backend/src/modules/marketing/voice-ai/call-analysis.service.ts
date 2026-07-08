@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
+import { creditCost } from '../ai/ai-credit-costs';
 import { SttService } from './stt.service';
 
 export type CallAnalysisStatus = 'OK' | 'SKIPPED' | 'FAILED';
@@ -16,15 +17,10 @@ export interface CallAnalysisResult {
  * (summary/sentiment/score/actionItems/topics) and persists one CallAnalysis
  * row per call. Credit-metered: reserve before the LLM call, refund if Claude
  * (or parse) throws so an errored analysis isn't billed.
- *
- * Cost is the `voice.analysis` action — but that key is not in the credit-cost
- * map yet (added in Phase 5.2), so the numeric literal 3 is used directly here.
  */
 @Injectable()
 export class CallAnalysisService {
   private readonly logger = new Logger(CallAnalysisService.name);
-  /** voice.analysis cost — literal until the cost-map entry lands in Phase 5.2. */
-  private static readonly COST = 3;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -45,7 +41,7 @@ export class CallAnalysisService {
     const stt = await this.stt.transcribeUrl(call.recordingUrl);
     if (!stt || !stt.text) return { status: 'FAILED', reason: 'no transcript' };
 
-    const cost = CallAnalysisService.COST;
+    const cost = creditCost('voice.analysis');
     await this.credits.reserve(call.workspaceId, cost);
 
     let parsed: ParsedAnalysis;
