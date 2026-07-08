@@ -3,6 +3,7 @@ import { NetsantralClient } from './santral/netsantral.client';
 import { NetgsmCdrClient } from './santral/netgsm-cdr.client';
 import { NetgsmRestClient } from './core/netgsm-rest.client';
 import { AccountRateBudgeter } from './core/account-rate-budgeter';
+import { BalanceClient } from './balance/balance.client';
 
 /**
  * NetGSM hub — owns ALL communication with NetGSM (SMS REST v2, İYS,
@@ -13,7 +14,7 @@ import { AccountRateBudgeter } from './core/account-rate-budgeter';
  * Spec: docs/superpowers/specs/2026-07-08-netgsm-full-integration-design.md
  */
 @Module({
-  providers: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter],
-  exports: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter],
+  providers: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient],
+  exports: [NetsantralClient, NetgsmCdrClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient],
 })
 export class NetgsmModule {}
