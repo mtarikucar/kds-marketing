@@ -216,7 +216,7 @@ describe('SmsV2Client', () => {
       expect(requestSpy).not.toHaveBeenCalled();
     });
 
-    it.each(['çÇğĞıİöÖşŞüÜ'.split('')])('rejects the Turkish character %s', async (ch) => {
+    it.each('çÇğĞıİöÖşŞüÜ'.split(''))('rejects the Turkish character %s', async (ch) => {
       const r = await client.otp(creds, { ...baseReq, msg: `code${ch}` });
       expect(r.ok).toBe(false);
     });

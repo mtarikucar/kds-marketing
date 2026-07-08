@@ -137,6 +137,9 @@ export class SmsV2Client {
     try {
       ({ httpStatus, body: respBody, rawText } = await this.rest.request({ path, method: 'POST', creds, body }));
     } catch (e: any) {
+      // Transport-level failure (timeout/DNS). Message is already cred-scrubbed
+      // by NetgsmRestClient; safe to log for send-path visibility.
+      this.logger.warn(`netgsm v2 ${path} transport error: ${e?.message ?? e}`);
       return { ok: false, code: '', jobid: null, message: e?.message ?? 'NetGSM erişilemedi', retriable: false };
     }
     const code = this.extractCode(respBody, rawText);
