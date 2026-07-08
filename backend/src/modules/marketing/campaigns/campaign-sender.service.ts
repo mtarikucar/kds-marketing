@@ -342,12 +342,36 @@ export class CampaignSenderService implements OnModuleInit {
 
     if (result.ok) {
       const jobid = result.jobid;
-      const now = new Date();
-      await Promise.all(
-        eligible.map((e) =>
-          this.mark(e.recipientId, 'SENT', { messageId: jobid, netgsmJobId: jobid, referansId: e.recipientId, sentAt: now }),
-        ),
-      );
+      const ids = eligible.map((e) => e.recipientId);
+      // ONE atomic guarded UPDATE for the whole batch — not N Promise.all(update())
+      // calls. The N-call form left a crash-between-marks window: if the process
+      // died after marking some rows SENT but before the rest, the still-SENDING
+      // survivors get reclaimed to PENDING by the stranded-SENDING sweep at the
+      // top of batch() and RESENT on the next tick — up to BATCH_SIZE (50)
+      // duplicate billed SMS from a single crash (the old per-recipient path's
+      // window was ≤1 message). Guarding on status:'SENDING' (this claim's
+      // current state) makes the marks all-or-nothing in one round-trip: either
+      // every row here flips to SENT together, or — if the process crashes
+      // before this statement commits — none do, and the reclaim sweep retries
+      // the whole batch next tick, which is safe because nothing was actually
+      // double-sent.
+      //
+      // Residual, irreducible window: a crash between NetGSM accepting the
+      // batch (this jobid returned) and this statement committing still leaves
+      // the rows in SENDING, gets reclaimed to PENDING, and RESENDS the whole
+      // batch — no single statement on our side can close a gap that spans two
+      // systems (the wire send and our own mark). Task 6's DLR reconciliation
+      // (which correlates provider report rows back by referansId = this
+      // recipient's own id) is the backstop to detect/report such a duplicate
+      // after the fact; a future provider-side dedupe keyed on referansId
+      // before resending an unresolved jobid would close it further.
+      await this.prisma.$executeRaw`
+        UPDATE "campaign_recipients"
+           SET "status" = 'SENT', "messageId" = ${jobid}, "netgsmJobId" = ${jobid},
+               "referansId" = "id", "sentAt" = NOW()
+         WHERE "id" = ANY(${ids}) AND "workspaceId" = ${workspaceId}
+           AND "campaignId" = ${campaignId} AND "status" = 'SENDING'
+      `;
       if (jobid) {
         const existing = Array.isArray(campaign.netgsmJobIds) ? (campaign.netgsmJobIds as string[]) : [];
         if (!existing.includes(jobid)) {
@@ -368,8 +392,14 @@ export class CampaignSenderService implements OnModuleInit {
       // Code 80 (rate limit) or a genuine transport failure — nothing reached
       // NetGSM (or NetGSM asked us to back off), so revert the claim to
       // PENDING and let the next scheduled batch tick retry these recipients.
+      // Guarded on status:'SENDING' (this claim's current state): between the
+      // claim and this revert, the tracking service can flip a recipient to a
+      // terminal state (e.g. UNSUBSCRIBED, from an inbound STOP/opt-out
+      // processed concurrently) — without the guard, an unconditional
+      // id-only WHERE would stomp that terminal state back to PENDING and
+      // re-send to someone who just opted out.
       await this.prisma.campaignRecipient.updateMany({
-        where: { id: { in: ids }, workspaceId, campaignId },
+        where: { id: { in: ids }, workspaceId, campaignId, status: 'SENDING' },
         data: { status: 'PENDING' },
       });
       return;

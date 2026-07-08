@@ -269,6 +269,10 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
 
   beforeEach(() => {
     prisma = {
+      // Success-path SENT marks are now ONE atomic guarded `$executeRaw` UPDATE
+      // instead of N per-recipient `update()` calls (FINDING 2 fix) — default
+      // to "all rows matched" so existing tests don't need to know about it.
+      $executeRaw: jest.fn().mockResolvedValue(3),
       campaign: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'c1',
@@ -344,19 +348,31 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     expect(smsV2.send.mock.calls[0][1].iysfilter).toBe('11');
   });
 
-  it('on success: stamps netgsmJobId/referansId/messageId on each SENT recipient and appends the jobid to Campaign.netgsmJobIds', async () => {
+  it('on success: marks every recipient SENT via ONE atomic guarded UPDATE (messageId/netgsmJobId/referansId/sentAt) and appends the jobid to Campaign.netgsmJobIds', async () => {
     smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-123', message: null, retriable: false, transport: false });
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
 
-    const sentUpdates = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
-    expect(sentUpdates).toHaveLength(3);
-    for (const call of sentUpdates) {
-      expect(call[0].data.netgsmJobId).toBe('job-123');
-      expect(call[0].data.messageId).toBe('job-123');
-      expect(call[0].data.referansId).toBe(call[0].where.id);
-      expect(call[0].data.sentAt).toBeInstanceOf(Date);
-    }
+    // FINDING 2 fix: a single `$executeRaw` UPDATE for the whole batch, not N
+    // per-recipient `update()` calls — a crash mid-marks can no longer strand
+    // some rows SENT and others SENDING (the latter get reclaimed to PENDING
+    // and RESENT by the next tick, duplicating the SMS).
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const [sql, ...values] = prisma.$executeRaw.mock.calls[0];
+    const text = Array.isArray(sql) ? sql.join('?') : String(sql);
+    expect(text).toContain(`"status" = 'SENT'`);
+    expect(text).toContain('"messageId"');
+    expect(text).toContain('"netgsmJobId"');
+    expect(text).toContain('"referansId" = "id"');
+    expect(text).toContain('"sentAt" = NOW()');
+    expect(text).toContain('ANY(');
+    // Guarded on status = 'SENDING' so the write is scoped to exactly the rows
+    // this batch claimed (never a terminal state set concurrently).
+    expect(text).toContain(`"status" = 'SENDING'`);
+    // Params, in the order they're interpolated: messageId, netgsmJobId, ids,
+    // workspaceId, campaignId.
+    expect(values).toEqual(['job-123', 'job-123', ['r1', 'r2', 'r3'], WS, 'c1']);
+
     const jobIdsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.netgsmJobIds !== undefined);
     expect(jobIdsUpdate[0].data.netgsmJobIds).toEqual(['job-123']);
     expect(quota.refund).not.toHaveBeenCalled();
@@ -385,6 +401,7 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     const failed = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'FAILED');
     expect(failed).toHaveLength(3);
     expect(failed[0][0].data.error).toContain('kod 40');
+    expect(quota.refund).toHaveBeenCalledTimes(1);
     expect(quota.refund).toHaveBeenCalledWith(WS, 'SMS', 3);
     expect(findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls)).toBeUndefined();
   });
@@ -394,12 +411,38 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
 
+    expect(quota.refund).toHaveBeenCalledTimes(1);
     expect(quota.refund).toHaveBeenCalledWith(WS, 'SMS', 3);
     const revert = findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls);
     expect(revert).toBeTruthy();
     expect(revert[0].where.id.in.sort()).toEqual(['r1', 'r2', 'r3']);
+    // FINDING 1 guard: the revert's WHERE is scoped to status:'SENDING' — see
+    // the dedicated test below for why (a concurrently-UNSUBSCRIBED row must
+    // not be stomped back to PENDING and re-sent).
+    expect(revert[0].where.status).toBe('SENDING');
     const failed = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'FAILED');
     expect(failed).toHaveLength(0);
+  });
+
+  it('FINDING 1: the code-80 revert-to-PENDING WHERE is guarded on status:\'SENDING\', so a row that moved to a terminal state (e.g. UNSUBSCRIBED via a concurrent opt-out) between claim and revert is left alone instead of being stomped back to PENDING and re-sent', async () => {
+    smsV2.send.mockResolvedValue({ ok: false, code: '80', jobid: null, message: 'rate limited', retriable: true, transport: false });
+    // Simulate the DB honoring the guard: r2 was flipped to UNSUBSCRIBED by the
+    // tracking service (inbound STOP) between the claim and this revert, so only
+    // 2 of the 3 claimed ids actually match `status:'SENDING'` and get reverted.
+    prisma.campaignRecipient.updateMany.mockImplementation(async ({ where }: any) => {
+      if (where?.id?.in && where?.status === 'SENDING') return { count: 2 }; // r2 excluded — still UNSUBSCRIBED
+      return { count: 1 };
+    });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const revert = findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls);
+    expect(revert).toBeTruthy();
+    // The WHERE must carry status:'SENDING' — without it, this updateMany would
+    // match on id alone and unconditionally overwrite ANY row's status
+    // (including a terminal UNSUBSCRIBED) back to PENDING, causing a re-send to
+    // someone who just opted out.
+    expect(revert[0].where).toEqual({ id: { in: expect.arrayContaining(['r1', 'r2', 'r3']) }, workspaceId: WS, campaignId: 'c1', status: 'SENDING' });
   });
 
   it('a transport failure reverts every claimed recipient to PENDING and refunds', async () => {
@@ -407,10 +450,12 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
 
+    expect(quota.refund).toHaveBeenCalledTimes(1);
     expect(quota.refund).toHaveBeenCalledWith(WS, 'SMS', 3);
     const revert = findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls);
     expect(revert).toBeTruthy();
     expect(revert[0].where.id.in.sort()).toEqual(['r1', 'r2', 'r3']);
+    expect(revert[0].where.status).toBe('SENDING');
   });
 
   it('excludes an opted-out recipient before the batch call (mixed opt-out)', async () => {
