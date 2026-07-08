@@ -179,6 +179,7 @@
         "ok": "Kimlik bilgileri NetGSM ile doğrulandı",
         "badCreds": "NetGSM kimlik bilgilerini reddetti",
         "unreachable": "NetGSM'e ulaşılamadı — bir süre sonra tekrar deneyin",
+        "notConfigured": "Önce Netsantral kimlik bilgilerinizi kaydedin, ardından doğrulayın.",
         "cdrProdOnly": "Çağrı kayıtları (CDR) yalnızca üretim sunucusunun IP'sinden doğrulanabilir"
       },
       "dialogDesc": "NetGSM Netsantral API kimlik bilgilerinizi ve 0850 trunk'ını girin. Tarayıcı içi webphone için WebRTC URL'lerini ekleyin ve aşağıda her temsilciye bir telefon veya dahili tanımlayın.",

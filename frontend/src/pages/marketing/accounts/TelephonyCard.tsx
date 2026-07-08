@@ -131,19 +131,38 @@ export function TelephonyCard() {
 }
 
 /**
- * Disambiguate the /telephony/verify response into a single tone + message:
- * the /balance probe is the real credential check (works from any IP); the
- * CDR leg is only ever reachable from NetGSM's allow-listed prod IP, so its
- * absence is expected almost everywhere except production and gets its own
- * informational note rather than being folded into the main verdict.
+ * Disambiguate the /telephony/verify response into a tone + localized headline
+ * + optional secondary detail line:
+ * - The headline ALWAYS comes from an i18n key — `balance.message` is a raw
+ *   provider string (from the backend's netgsm-error map) that is always in
+ *   Turkish, regardless of the viewer's locale, so it must never displace the
+ *   localized copy as the primary message.
+ * - `balance.message`, when present, is still useful diagnostics, so it's
+ *   rendered underneath as a smaller secondary `detail` line instead.
+ * - `configured === false` (no Netsantral credentials saved yet) gets its own
+ *   distinct copy instead of folding into the generic "unreachable" bucket.
+ * - The /balance probe is the real credential check (works from any IP); the
+ *   CDR leg is only ever reachable from NetGSM's allow-listed prod IP, so its
+ *   absence is expected almost everywhere except production and gets its own
+ *   informational note rather than being folded into the main verdict.
  */
 function describeVerifyResult(
   result: VerifyResult,
   t: (key: string, fallback: string) => string,
-): { tone: CalloutTone; message: string; showCdrNote: boolean } {
+): { tone: CalloutTone; message: string; detail: string | null; showCdrNote: boolean } {
+  if (!result.configured) {
+    return {
+      tone: 'warning',
+      message: t('accounts.tel.verify.notConfigured', 'Save your Netsantral credentials first, then verify.'),
+      detail: null,
+      showCdrNote: false,
+    };
+  }
+
   const credsValid = result.balance?.credsValid ?? null;
   const cdrConfirmed = !!result.cdr && 'httpStatus' in result.cdr;
-  const showCdrNote = result.configured && !cdrConfirmed;
+  const showCdrNote = !cdrConfirmed;
+  const detail = result.balance?.message || null;
 
   if (credsValid === true) {
     const credit = result.balance?.credit;
@@ -152,19 +171,22 @@ function describeVerifyResult(
       message:
         t('accounts.tel.verify.ok', 'Credentials verified with NetGSM') +
         (credit ? ` — ${credit} TL` : ''),
+      detail: null,
       showCdrNote,
     };
   }
   if (credsValid === false) {
     return {
       tone: 'danger',
-      message: result.balance?.message || t('accounts.tel.verify.badCreds', 'NetGSM rejected these credentials'),
+      message: t('accounts.tel.verify.badCreds', 'NetGSM rejected these credentials'),
+      detail,
       showCdrNote,
     };
   }
   return {
     tone: 'warning',
     message: t('accounts.tel.verify.unreachable', "Couldn't reach NetGSM — try again in a moment"),
+    detail,
     showCdrNote,
   };
 }
@@ -273,6 +295,9 @@ function TelephonyDialog({
           {outcome && (
             <Callout tone={outcome.tone}>
               <p>{outcome.message}</p>
+              {outcome.detail && (
+                <p className="text-caption text-muted-foreground">{outcome.detail}</p>
+              )}
               {outcome.showCdrNote && (
                 <p className="text-caption text-muted-foreground">
                   {t('accounts.tel.verify.cdrProdOnly', 'Call log (CDR) can only be confirmed from the production server IP')}

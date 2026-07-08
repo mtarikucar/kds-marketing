@@ -54,6 +54,23 @@ interface AgentRow {
   name: string;
 }
 
+/** POST /channels/:id/verify response — `details` echoes the adapter's
+ *  healthCheck (e.g. NetGSM's live /balance probe for SMS): `credsValid` is
+ *  `false` for rejected credentials vs `null`/absent when the provider
+ *  couldn't be reached at all (transient outage). `message` is a raw
+ *  provider diagnostic string (not localized), so it is only ever shown as
+ *  secondary detail underneath the i18n headline, never as the headline
+ *  itself. */
+interface VerifyResponse {
+  ok: boolean;
+  details?: {
+    credsValid?: boolean | null;
+    message?: string | null;
+    code?: string | null;
+    [key: string]: unknown;
+  };
+}
+
 // ── Channel status badge ──────────────────────────────────────────────────────
 
 function statusTone(status: string) {
@@ -95,14 +112,21 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
   });
 
   const verify = useMutation({
-    mutationFn: (id: string) => marketingApi.post(`/channels/${id}/verify`),
+    mutationFn: (id: string) => marketingApi.post<VerifyResponse>(`/channels/${id}/verify`),
     onSuccess: ({ data }) => {
       invalidate();
-      toast[data?.ok ? 'success' : 'error'](
-        data?.ok
-          ? t('channels.verifyOk', 'Channel verified ✓')
-          : t('channels.verifyFail', 'Verification failed — check credentials'),
-      );
+      const ok = !!data?.ok;
+      // Headline is ALWAYS the localized copy — `details.message` is a raw
+      // provider string (e.g. NetGSM's Turkish error map) and must never
+      // replace it. On failure, surface that message as secondary toast
+      // description so the operator can tell a rejected credential
+      // (details.credsValid === false) apart from a transient/unreachable
+      // probe (credsValid null/absent) instead of just a generic failure.
+      const headline = ok
+        ? t('channels.verifyOk', 'Channel verified ✓')
+        : t('channels.verifyFail', 'Verification failed — check credentials');
+      const detail = !ok ? (data?.details?.message ?? undefined) : undefined;
+      toast[ok ? 'success' : 'error'](headline, detail ? { description: detail } : undefined);
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('channels.verifyFail', 'Verification failed — check credentials')),
   });

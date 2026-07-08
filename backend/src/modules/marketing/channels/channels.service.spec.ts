@@ -138,3 +138,88 @@ describe('ChannelsService — mask()', () => {
     delete process.env.META_WEBHOOK_VERIFY_TOKEN;
   });
 });
+
+/**
+ * Focused tests for ChannelsService.verify() — the generic POST
+ * /channels/:id/verify path used by ChannelsSettingsPage. It must pass the
+ * adapter's healthCheck `details` straight through (unstripped) so the
+ * settings UI can distinguish a rejected credential (`credsValid: false`)
+ * from a transient/unreachable probe (`credsValid: null`), and surface the
+ * provider's diagnostic `message`/`code` as secondary detail.
+ */
+describe('ChannelsService — verify()', () => {
+  function makeVerifyService(channelRow: any, adapter: { healthCheck: jest.Mock }) {
+    const prisma = {
+      channel: {
+        findFirst: jest.fn().mockResolvedValue(channelRow),
+        update: jest.fn().mockResolvedValue(channelRow),
+      },
+    } as any;
+    const registry = {
+      get: jest.fn().mockReturnValue(adapter),
+      resolveConfig: jest.fn().mockReturnValue({
+        channelId: channelRow.id,
+        workspaceId: channelRow.workspaceId,
+        type: channelRow.type,
+        externalId: null,
+        secrets: {},
+        public: {},
+      }),
+    } as any;
+    const resolver = {} as any;
+    return { svc: new ChannelsService(prisma, registry, resolver), prisma, registry };
+  }
+
+  it('surfaces credsValid:false + message + code so the UI can show a rejected-credential reason', async () => {
+    const adapter = {
+      healthCheck: jest.fn().mockResolvedValue({
+        ok: false,
+        details: { credsValid: false, message: 'Kullanıcı adı veya şifre hatalı', code: '30' },
+      }),
+    };
+    const { svc, prisma } = makeVerifyService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS' },
+      adapter,
+    );
+    const result = await svc.verify('ws-1', 'ch-1');
+    expect(result.ok).toBe(false);
+    expect(result.details).toMatchObject({
+      credsValid: false,
+      message: 'Kullanıcı adı veya şifre hatalı',
+      code: '30',
+    });
+    // A rejected credential is not a successful verify — lastVerifiedAt must
+    // not be bumped.
+    expect(prisma.channel.update).not.toHaveBeenCalled();
+  });
+
+  it('surfaces credsValid:null distinctly from credsValid:false (unreachable vs rejected)', async () => {
+    const adapter = {
+      healthCheck: jest.fn().mockResolvedValue({
+        ok: false,
+        details: { credsValid: null, message: null, code: null },
+      }),
+    };
+    const { svc } = makeVerifyService({ id: 'ch-2', workspaceId: 'ws-1', type: 'SMS' }, adapter);
+    const result = await svc.verify('ws-1', 'ch-2');
+    expect(result.ok).toBe(false);
+    expect(result.details?.credsValid).toBeNull();
+  });
+
+  it('on success, bumps lastVerifiedAt and still returns details', async () => {
+    const adapter = {
+      healthCheck: jest.fn().mockResolvedValue({
+        ok: true,
+        details: { credsValid: true, credit: '100', code: null, message: null },
+      }),
+    };
+    const { svc, prisma } = makeVerifyService({ id: 'ch-3', workspaceId: 'ws-1', type: 'SMS' }, adapter);
+    const result = await svc.verify('ws-1', 'ch-3');
+    expect(result.ok).toBe(true);
+    expect(result.details).toMatchObject({ credsValid: true, credit: '100' });
+    expect(prisma.channel.update).toHaveBeenCalledWith({
+      where: { id: 'ch-3' },
+      data: { lastVerifiedAt: expect.any(Date) },
+    });
+  });
+});
