@@ -76,7 +76,6 @@ export class WorkflowsService {
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxWorkflows;
     const data = {
-      workspaceId,
       name: dto.name,
       description: dto.description ?? null,
       trigger: dsl.trigger as any,
@@ -84,9 +83,11 @@ export class WorkflowsService {
       goal: (dsl.goal ?? null) as any,
       status: 'DRAFT',
     };
-    // Unlimited plan — no cap to race against.
+    // Unlimited plan — no cap to race against. workspaceId is spread inline at
+    // every create call site so the scope is visible to the multi-tenant
+    // arch-fitness scanner (not hoisted where the regex can't see it).
     if (limit === -1) {
-      return this.prisma.workflow.create({ data });
+      return this.prisma.workflow.create({ data: { workspaceId, ...data } });
     }
     // Serialize the count-check + create per workspace under an advisory xact-lock:
     // a bare count-then-create lets two concurrent requests at (limit-1) BOTH pass
@@ -98,7 +99,7 @@ export class WorkflowsService {
       if (count >= limit) {
         throw new BadRequestException(`Workflow limit reached (${limit}) — upgrade your package`);
       }
-      return tx.workflow.create({ data });
+      return tx.workflow.create({ data: { workspaceId, ...data } });
     });
   }
 
