@@ -2,7 +2,11 @@
 <html lang="tr">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <!-- PNG favicons only. When icon links are declared, browsers use them and
+         do NOT auto-probe /favicon.ico, so no legacy .ico is needed. (The prod
+         edge/build pipeline was 404-ing the committed favicon.ico while serving
+         every sibling PNG; dropping the .ico dependency sidesteps that and is
+         the modern default.) -->
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
