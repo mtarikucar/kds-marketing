@@ -1,5 +1,5 @@
 import { RecordingSyncService } from './recording-sync.service';
-import { NetsantralClient } from './netsantral.client';
+import { NetsantralClient } from '../../netgsm/santral/netsantral.client';
 
 jest.mock('../../../common/scheduling/advisory-lock', () => ({
   withAdvisoryLock: jest.fn(async (_p: any, _n: any, cb: () => Promise<void>) => { await cb(); }),

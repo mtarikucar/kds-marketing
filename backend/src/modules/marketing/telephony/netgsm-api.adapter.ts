@@ -3,7 +3,7 @@ import {
   TelephonyProvider, TelephonyCapability, PrepareCallRequest, PreparedCall,
 } from './telephony-provider.interface';
 import { TelephonyProviderRegistry } from './telephony-provider.registry';
-import { NetsantralClient } from './netsantral.client';
+import { NetsantralClient } from '../../netgsm/santral/netsantral.client';
 
 /**
  * NetGSM Netsantral (cloud PBX) provider: places the call server-side so it

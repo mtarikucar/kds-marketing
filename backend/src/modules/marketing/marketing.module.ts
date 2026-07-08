@@ -76,7 +76,6 @@ import { DialerService } from './services/dialer.service';
 import { TelephonyProviderRegistry } from './telephony/telephony-provider.registry';
 import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
-import { NetsantralClient } from './telephony/netsantral.client';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { RecordingSyncService } from './telephony/recording-sync.service';
 import { NetgsmCdrClient } from './telephony/netgsm-cdr.client';
@@ -628,7 +627,6 @@ import { WalletService } from './wallet/wallet.service';
     TelephonyProviderRegistry,
     NetgsmLiteAdapter,
     NetgsmApiAdapter,
-    NetsantralClient,
     TelephonyConfigService,
     RecordingSyncService,
     NetgsmCdrClient,

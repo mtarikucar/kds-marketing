@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
-import { NetsantralClient } from './netsantral.client';
+import { NetsantralClient } from '../../netgsm/santral/netsantral.client';
 import { TelephonyConfigService } from './telephony-config.service';
 
 /**
