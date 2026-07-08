@@ -51,8 +51,12 @@ describe('CampaignSenderService.batch', () => {
     const quota = { reserve: jest.fn(), refund: jest.fn() };
     // Inert by default: no ESP transport → platform-default From (null).
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
+    // Unused by this describe block's EMAIL-only fixtures (the SMS v2 batch
+    // path is only entered for campaign.channel === 'SMS' — see the dedicated
+    // 'SMS v2 batching' describe below), but still required by the constructor.
+    const smsV2 = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any,
     );
   });
 
@@ -227,5 +231,220 @@ describe('CampaignSenderService.batch', () => {
       await (svc as any).decideAbWinner({ payload: { workspaceId: WS, campaignId: 'c1' } });
       expect(prisma.campaignVariant.findMany).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * True n:n SMS batching (NetGSM REST v2, Task 5): the per-recipient claim +
+ * opt-out/render loop is unchanged, but eligible SMS recipients are collected
+ * and sent via ONE `SmsV2Client.send` call instead of N adapter round-trips.
+ */
+describe('CampaignSenderService.batch — SMS v2 batching', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let registry: { get: jest.Mock; resolveConfig: jest.Mock };
+  let quota: { reserve: jest.Mock; refund: jest.Mock };
+  let smsV2: { send: jest.Mock };
+  let svc: CampaignSenderService;
+
+  const resolvedConfig = {
+    channelId: 'ch1',
+    workspaceId: WS,
+    type: 'SMS',
+    externalId: null,
+    secrets: { usercode: 'u1', password: 'p1', msgheader: 'HDR1' },
+    public: {} as Record<string, unknown>,
+  };
+
+  function makeRecipients(n: number) {
+    return Array.from({ length: n }, (_, i) => ({ id: `r${i + 1}`, leadId: `l${i + 1}`, token: `t${i + 1}` }));
+  }
+
+  /** A revert-to-PENDING updateMany is shaped `{ where: { id: { in: [...] } }, data: { status: 'PENDING' } }`
+   *  — distinct from the unconditional SENDING→PENDING reclaim sweep at the top of batch(), which has
+   *  no `id.in` filter at all. Matching on `where.id?.in` tells the two apart. */
+  function findRevertToPendingCall(calls: any[]): any {
+    return calls.find((c: any) => c[0]?.where?.id?.in && c[0]?.data?.status === 'PENDING');
+  }
+
+  beforeEach(() => {
+    prisma = {
+      campaign: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'c1',
+          workspaceId: WS,
+          status: 'SENDING',
+          channel: 'SMS',
+          subject: null,
+          body: 'Hi there',
+          links: [],
+          iysMessageType: 'BILGILENDIRME',
+          netgsmJobIds: [],
+        }),
+        findUnique: jest.fn().mockResolvedValue({ stats: {} }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1', workspaceId: WS, type: 'SMS', status: 'ACTIVE', externalId: null, configSealed: 'sealed', configPublic: {},
+        }),
+      },
+      campaignRecipient: {
+        findMany: jest.fn().mockResolvedValue(makeRecipients(3)),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(0),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
+      campaignVariant: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
+      lead: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) => ({
+          id: where.id, phone: `0555000${where.id}`, smsOptOut: false,
+        })),
+      },
+    };
+    const config = { get: jest.fn().mockReturnValue('https://m.test') };
+    const scheduledJobs = { schedule: jest.fn() };
+    const runner = { registerHandler: jest.fn() };
+    registry = { get: jest.fn(), resolveConfig: jest.fn().mockReturnValue(resolvedConfig) };
+    quota = { reserve: jest.fn(), refund: jest.fn() };
+    smsV2 = { send: jest.fn() };
+    const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
+    const email = { sendPlainEmail: jest.fn(), sendCampaignEmail: jest.fn() };
+    svc = new CampaignSenderService(
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any,
+    );
+  });
+
+  it('sends 3 eligible recipients in ONE SmsV2Client.send call, each with its own referansId', async () => {
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-123', message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(smsV2.send).toHaveBeenCalledTimes(1);
+    const [creds, req] = smsV2.send.mock.calls[0];
+    expect(creds).toEqual({ usercode: 'u1', password: 'p1' });
+    expect(req.msgheader).toBe('HDR1');
+    expect(req.messages).toHaveLength(3);
+    expect(req.messages.map((m: any) => m.referansId)).toEqual(['r1', 'r2', 'r3']);
+    expect(req.iysfilter).toBe('0'); // BILGILENDIRME
+    // Quota is reserved per recipient before the batch call, exactly as the
+    // per-recipient path reserves before each adapter.send.
+    expect(quota.reserve).toHaveBeenCalledTimes(3);
+  });
+
+  it('passes iysfilter "11" for a TICARI campaign', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'SMS', body: 'Hi', links: [], iysMessageType: 'TICARI', netgsmJobIds: [],
+    });
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-1', message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(smsV2.send.mock.calls[0][1].iysfilter).toBe('11');
+  });
+
+  it('on success: stamps netgsmJobId/referansId/messageId on each SENT recipient and appends the jobid to Campaign.netgsmJobIds', async () => {
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-123', message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const sentUpdates = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
+    expect(sentUpdates).toHaveLength(3);
+    for (const call of sentUpdates) {
+      expect(call[0].data.netgsmJobId).toBe('job-123');
+      expect(call[0].data.messageId).toBe('job-123');
+      expect(call[0].data.referansId).toBe(call[0].where.id);
+      expect(call[0].data.sentAt).toBeInstanceOf(Date);
+    }
+    const jobIdsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.netgsmJobIds !== undefined);
+    expect(jobIdsUpdate[0].data.netgsmJobIds).toEqual(['job-123']);
+    expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  it('does not duplicate an already-recorded jobid in Campaign.netgsmJobIds', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'SMS', body: 'Hi', links: [],
+      iysMessageType: 'BILGILENDIRME', netgsmJobIds: ['job-123'],
+    });
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-123', message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const jobIdsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.netgsmJobIds !== undefined);
+    expect(jobIdsUpdate).toBeUndefined(); // already present → no-op write
+  });
+
+  it('provider code 40 marks every recipient FAILED (mapped message) and refunds the whole batch', async () => {
+    smsV2.send.mockResolvedValue({
+      ok: false, code: '40', jobid: null, message: 'Gönderici başlık (msgheader) hesapta tanımlı veya İYS onaylı değil (kod 40).', retriable: false, transport: false,
+    });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const failed = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'FAILED');
+    expect(failed).toHaveLength(3);
+    expect(failed[0][0].data.error).toContain('kod 40');
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'SMS', 3);
+    expect(findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls)).toBeUndefined();
+  });
+
+  it('provider code 80 (rate limit) reverts every claimed recipient to PENDING (no FAILED marks) and refunds', async () => {
+    smsV2.send.mockResolvedValue({ ok: false, code: '80', jobid: null, message: 'rate limited', retriable: true, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'SMS', 3);
+    const revert = findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls);
+    expect(revert).toBeTruthy();
+    expect(revert[0].where.id.in.sort()).toEqual(['r1', 'r2', 'r3']);
+    const failed = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'FAILED');
+    expect(failed).toHaveLength(0);
+  });
+
+  it('a transport failure reverts every claimed recipient to PENDING and refunds', async () => {
+    smsV2.send.mockResolvedValue({ ok: false, code: '', jobid: null, message: 'NetGSM erişilemedi', retriable: false, transport: true });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'SMS', 3);
+    const revert = findRevertToPendingCall(prisma.campaignRecipient.updateMany.mock.calls);
+    expect(revert).toBeTruthy();
+    expect(revert[0].where.id.in.sort()).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  it('excludes an opted-out recipient before the batch call (mixed opt-out)', async () => {
+    prisma.lead.findFirst.mockImplementation(async ({ where }: any) =>
+      where.id === 'l2'
+        ? { id: 'l2', phone: '05551112233', smsOptOut: true }
+        : { id: where.id, phone: `0555000${where.id}`, smsOptOut: false },
+    );
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-x', message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(smsV2.send).toHaveBeenCalledTimes(1);
+    const req = smsV2.send.mock.calls[0][1];
+    expect(req.messages).toHaveLength(2);
+    expect(req.messages.map((m: any) => m.referansId)).toEqual(['r1', 'r3']);
+    const skipped = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SKIPPED');
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0][0].where.id).toBe('r2');
+    // The opted-out recipient never reserved quota (only the 2 eligible ones did).
+    expect(quota.reserve).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to the legacy per-recipient adapter.send loop when the channel has useLegacySend=true', async () => {
+    registry.resolveConfig.mockReturnValue({ ...resolvedConfig, public: { useLegacySend: true } });
+    const adapterSend = jest.fn().mockResolvedValue({ externalMessageId: 'leg-1', status: 'SENT' });
+    registry.get.mockReturnValue({ send: adapterSend });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(smsV2.send).not.toHaveBeenCalled();
+    expect(adapterSend).toHaveBeenCalledTimes(3); // one round-trip per recipient — the legacy loop
+    const sent = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
+    expect(sent).toHaveLength(3);
+    expect(sent.every((c: any) => c[0].data.messageId === 'leg-1')).toBe(true);
   });
 });

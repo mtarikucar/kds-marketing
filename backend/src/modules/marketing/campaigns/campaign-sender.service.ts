@@ -8,6 +8,8 @@ import { ScheduledJobRunnerService, ClaimedJob } from '../scheduling/scheduled-j
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
+import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
+import { SmsV2Client, SmsV2SendResult } from '../../netgsm/sms/sms-v2.client';
 import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND } from './campaigns.service';
 
 const BATCH_SIZE = 50;
@@ -49,6 +51,7 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly registry: ChannelAdapterRegistry,
     private readonly quota: MessageQuotaService,
     private readonly sendingDomains: SendingDomainsService,
+    private readonly smsV2: SmsV2Client,
   ) {}
 
   onModuleInit(): void {
@@ -133,6 +136,26 @@ export class CampaignSenderService implements OnModuleInit {
       : [];
     const variantByKey = new Map(variants.map((v: any) => [v.key, v]));
 
+    // SMS true n:n batching: resolve the active SMS channel ONCE per tick (not
+    // per recipient) so eligible recipients can be collected and sent via a
+    // SINGLE SmsV2Client.send call instead of N adapter round-trips. A channel
+    // that opted back into the legacy GET API (`useLegacySend`), one with
+    // incomplete secrets, or a missing/inactive channel all fall through to the
+    // existing per-recipient `this.send()` path unchanged (it re-resolves the
+    // channel itself and fails/legacy-sends exactly as it does today).
+    let smsV2Config: ResolvedChannelConfig | null = null;
+    if (campaign.channel === 'SMS') {
+      const ch = await this.prisma.channel.findFirst({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } });
+      if (ch) {
+        const resolved = this.registry.resolveConfig(ch);
+        const { usercode, password, msgheader } = resolved.secrets;
+        if (resolved.public?.useLegacySend !== true && usercode && password && msgheader) {
+          smsV2Config = resolved;
+        }
+      }
+    }
+    const eligibleSms: Array<{ recipientId: string; phone: string; body: string }> = [];
+
     for (const r of recipients) {
       // Atomic claim: a concurrent batch — e.g. a slow run reaped after 15 min and
       // re-dispatched while still in flight — that re-read the same PENDING rows
@@ -173,12 +196,30 @@ export class CampaignSenderService implements OnModuleInit {
         campaign.channel === 'EMAIL' && srcHtml
           ? this.renderHtml(srcHtml as string, r.token, links)
           : undefined;
+      if (smsV2Config) {
+        // Defer the actual send: reserve this recipient's quota now (as today —
+        // reserve→send stays paired so a later batch-level failure can refund
+        // it), then collect for the single batched SmsV2Client.send call below.
+        try {
+          await this.quota.reserve(workspaceId, 'SMS');
+        } catch (e: any) {
+          await this.mark(r.id, 'FAILED', { error: (e?.message ?? String(e)).slice(0, 300) });
+          continue;
+        }
+        eligibleSms.push({ recipientId: r.id, phone: to, body });
+        continue;
+      }
+
       const result = await this.send(workspaceId, campaign.channel, to, srcSubject, body, html);
       if (result.ok) {
         await this.mark(r.id, 'SENT', { messageId: result.messageId, sentAt: new Date() });
       } else {
         await this.mark(r.id, 'FAILED', { error: result.error?.slice(0, 300) });
       }
+    }
+
+    if (smsV2Config && eligibleSms.length > 0) {
+      await this.sendSmsBatch(workspaceId, campaignId, campaign, smsV2Config, eligibleSms);
     }
 
     await this.recomputeStats(workspaceId, campaignId);
@@ -260,6 +301,81 @@ export class CampaignSenderService implements OnModuleInit {
     } catch (e: any) {
       return { ok: false, error: e?.message ?? String(e) };
     }
+  }
+
+  /**
+   * ONE `SmsV2Client.send` call carrying every eligible recipient of this tick
+   * (true n:n — each message keeps its own already-rendered body + referansId)
+   * instead of the N adapter round-trips the per-recipient path would cost.
+   * Quota for every recipient here was already reserved in the claim loop
+   * above; on any batch-level failure it is refunded in bulk (nothing was
+   * billed/sent for any of them — the call is all-or-nothing at the wire
+   * level). `iysfilter` is the commercial/informational passthrough (brandcode
+   * wiring is Phase 2); '11' for TICARI, '0' otherwise.
+   */
+  private async sendSmsBatch(
+    workspaceId: string,
+    campaignId: string,
+    campaign: { iysMessageType?: string | null; netgsmJobIds?: unknown },
+    config: ResolvedChannelConfig,
+    eligible: Array<{ recipientId: string; phone: string; body: string }>,
+  ): Promise<void> {
+    const { usercode, password, msgheader } = config.secrets;
+    const iysfilter = campaign.iysMessageType === 'TICARI' ? '11' : '0';
+    let result: SmsV2SendResult;
+    try {
+      result = await this.smsV2.send(
+        { usercode, password },
+        {
+          msgheader,
+          messages: eligible.map((e) => ({ msg: e.body, no: e.phone, referansId: e.recipientId })),
+          iysfilter,
+        },
+      );
+    } catch (e: any) {
+      // SmsV2Client.send is documented to never throw (every outcome resolves
+      // to an ok:false result) — this is a defensive backstop only. Treat it
+      // like any other non-retriable batch failure: nothing is known to have
+      // been sent, so fail closed rather than silently drop the batch.
+      result = { ok: false, code: '', jobid: null, message: e?.message ?? String(e), retriable: false, transport: false };
+    }
+
+    if (result.ok) {
+      const jobid = result.jobid;
+      const now = new Date();
+      await Promise.all(
+        eligible.map((e) =>
+          this.mark(e.recipientId, 'SENT', { messageId: jobid, netgsmJobId: jobid, referansId: e.recipientId, sentAt: now }),
+        ),
+      );
+      if (jobid) {
+        const existing = Array.isArray(campaign.netgsmJobIds) ? (campaign.netgsmJobIds as string[]) : [];
+        if (!existing.includes(jobid)) {
+          await this.prisma.campaign.update({
+            where: { id: campaignId },
+            data: { netgsmJobIds: [...existing, jobid] as Prisma.InputJsonValue },
+          });
+        }
+      }
+      return;
+    }
+
+    // Batch-level failure: no recipient here was actually sent — refund every
+    // reserved quota unit in one call.
+    await this.quota.refund(workspaceId, 'SMS', eligible.length);
+    const ids = eligible.map((e) => e.recipientId);
+    if (result.retriable || result.transport) {
+      // Code 80 (rate limit) or a genuine transport failure — nothing reached
+      // NetGSM (or NetGSM asked us to back off), so revert the claim to
+      // PENDING and let the next scheduled batch tick retry these recipients.
+      await this.prisma.campaignRecipient.updateMany({
+        where: { id: { in: ids }, workspaceId, campaignId },
+        data: { status: 'PENDING' },
+      });
+      return;
+    }
+    const error = (result.message ?? `NetGSM ${result.code || '?'}`).slice(0, 300);
+    await Promise.all(eligible.map((e) => this.mark(e.recipientId, 'FAILED', { error })));
   }
 
   /** Rewrite links to click-tracked URLs + append a mandatory unsubscribe footer. */
