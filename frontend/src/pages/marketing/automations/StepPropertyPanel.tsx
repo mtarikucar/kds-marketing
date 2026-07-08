@@ -7,6 +7,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/Select';
 import { stepMeta, type AnyStep } from './workflowGraph';
+import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
 import { BranchConditionBuilder } from './stepEditors/BranchConditionBuilder';
 import { UpdateLeadEditor } from './stepEditors/UpdateLeadEditor';
 import { AiClassifyEditor } from './stepEditors/AiClassifyEditor';
@@ -103,6 +104,20 @@ function StepFields({ step, onPatch, count }: { step: AnyStep; onPatch: (p: Reco
       {(step.type === 'send_email' || step.type === 'send_sms' || step.type === 'send_whatsapp' || step.type === 'send_webchat') && (
         <Labeled label={t('automations.body', 'Message')}>
           <Textarea className="min-h-24" value={step.body ?? ''} onChange={(e) => onPatch({ body: e.target.value })} />
+          {step.type === 'send_sms' && (
+            <p className="text-[11px] text-muted-foreground mt-1">
+              {(() => {
+                const body = step.body ?? '';
+                const segments = smsSegments(body, { reservedSuffixChars: NETGSM_HEADER_OVERHEAD_CHARS });
+                return t('automations.smsCounter', {
+                  defaultValue: '{{chars}} characters · {{segments}} segment{{plural}}',
+                  chars: body.length,
+                  segments,
+                  plural: segments === 1 ? '' : 's',
+                });
+              })()}
+            </p>
+          )}
         </Labeled>
       )}
       {step.type === 'ai_generate' && (

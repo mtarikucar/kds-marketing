@@ -91,6 +91,49 @@ describe('ConversationSpendService', () => {
     await expect(svc.settleSms('ws1', { messageId: 'm1', text: 'hi' })).resolves.toBeTruthy();
   });
 
+  it('the unpriced (no-tariff) path logs at debug, never warn — a workspace with no SMS tariff must not warn-spam the logs on every send', async () => {
+    const { prisma, tariffs, ledger, wallet } = makeDeps({});
+    const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
+    const debugSpy = jest.spyOn((svc as any).logger, 'debug').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
+    const r = await svc.settleSms('ws1', { messageId: 'm1', text: 'hi' });
+    expect(r).toBeNull();
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('no SMS tariff'));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  describe('settleCampaignSms', () => {
+    it('prices an SMS by segment count and debits the ledger keyed by recipientId — no Message row to stamp', async () => {
+      const { prisma, tariffs, ledger, wallet, debit } = makeDeps({
+        SMS_SEGMENT: { unitCost: D('0.9'), amount: D('1.8'), quantity: D(2), currency: 'TRY', tariffId: 't' },
+      });
+      const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
+      const r = await svc.settleCampaignSms('ws1', { recipientId: 'r1', text: 'a'.repeat(200) }); // 2 segments
+      expect(r?.quantity).toBe(2);
+      expect(debit).toHaveBeenCalledWith('ws1', expect.objectContaining({ channel: 'SMS', reason: 'SMS', ref: 'r1', quantity: 2 }));
+      // Unlike settleSms, there is no Message row for a campaign recipient —
+      // this must never touch prisma.message.
+      expect(prisma.message.update).not.toHaveBeenCalled();
+    });
+
+    it('returns null and does not debit when no tariff is configured (same unpriced path as settleSms)', async () => {
+      const { prisma, tariffs, ledger, wallet, debit } = makeDeps({});
+      const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
+      const r = await svc.settleCampaignSms('ws1', { recipientId: 'r1', text: 'hi' });
+      expect(r).toBeNull();
+      expect(debit).not.toHaveBeenCalled();
+    });
+
+    it('never throws when the ledger debit fails (best-effort)', async () => {
+      const { prisma, tariffs, ledger, wallet, debit } = makeDeps({
+        SMS_SEGMENT: { unitCost: D('0.9'), amount: D('0.9'), quantity: D(1), currency: 'TRY', tariffId: 't' },
+      });
+      debit.mockRejectedValueOnce(new Error('db down'));
+      const svc = new ConversationSpendService(prisma, tariffs, ledger, wallet);
+      await expect(svc.settleCampaignSms('ws1', { recipientId: 'r1', text: 'hi' })).resolves.toBeTruthy();
+    });
+  });
+
   describe('engine wallet drawdown (Growth Autopilot D4)', () => {
     const SMS_PRICED = {
       SMS_SEGMENT: { unitCost: D('0.9'), amount: D('1.8'), quantity: D(2), currency: 'TRY', tariffId: 't' },

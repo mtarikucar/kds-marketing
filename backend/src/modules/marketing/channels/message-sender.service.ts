@@ -6,6 +6,7 @@ import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { MessageQuotaService } from './message-quota.service';
 import { ConversationStreamService } from './conversation-stream.service';
 import { OutboundMedia, OutboundTemplate } from './channel-adapter.interface';
+import { ConversationSpendService } from '../budget/conversation-spend.service';
 
 export interface SendMessageInput {
   workspaceId: string;
@@ -39,6 +40,7 @@ export class MessageSenderService {
     private readonly quota: MessageQuotaService,
     private readonly outbox: OutboxService,
     private readonly stream: ConversationStreamService,
+    private readonly conversationSpend: ConversationSpendService,
   ) {}
 
   async send(input: SendMessageInput) {
@@ -132,6 +134,20 @@ export class MessageSenderService {
 
     // Best-effort live fan-out, only after the tx has committed.
     this.stream.push(workspaceId, { kind: 'message', conversationId, payload: message });
+
+    // Price + debit the per-segment SMS cost against the growth budget. Best-
+    // effort and fire-and-forget: ConversationSpendService.settleSms never
+    // throws (its internal errors are caught and logged), but the `.catch`
+    // here is a defensive backstop — a billing hiccup must NEVER fail (or even
+    // delay) a send that already reached the customer.
+    if (channel.type === 'SMS' && result.status === 'SENT') {
+      this.conversationSpend
+        .settleSms(workspaceId, { messageId: message.id, text })
+        .catch((err) =>
+          this.logger.warn(`SMS settlement failed for message ${message.id}: ${String((err as Error)?.message ?? err)}`),
+        );
+    }
+
     return message;
   }
 }

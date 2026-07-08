@@ -55,8 +55,9 @@ describe('CampaignSenderService.batch', () => {
     // path is only entered for campaign.channel === 'SMS' — see the dedicated
     // 'SMS v2 batching' describe below), but still required by the constructor.
     const smsV2 = { send: jest.fn() };
+    const conversationSpend = { settleCampaignSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any,
     );
   });
 
@@ -295,8 +296,9 @@ describe('CampaignSenderService.launchScheduled', () => {
     const quota = { reserve: jest.fn(), refund: jest.fn() };
     const sendingDomains = { resolveFrom: jest.fn() };
     const smsV2 = { send: jest.fn() };
+    const conversationSpend = { settleCampaignSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any,
     );
   });
 
@@ -398,6 +400,7 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
   let registry: { get: jest.Mock; resolveConfig: jest.Mock };
   let quota: { reserve: jest.Mock; refund: jest.Mock };
   let smsV2: { send: jest.Mock };
+  let conversationSpend: { settleCampaignSms: jest.Mock };
   let svc: CampaignSenderService;
 
   const resolvedConfig = {
@@ -468,8 +471,9 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     smsV2 = { send: jest.fn() };
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
     const email = { sendPlainEmail: jest.fn(), sendCampaignEmail: jest.fn() };
+    conversationSpend = { settleCampaignSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any,
     );
   });
 
@@ -529,6 +533,38 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     const jobIdsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.netgsmJobIds !== undefined);
     expect(jobIdsUpdate[0].data.netgsmJobIds).toEqual(['job-123']);
     expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  it('settles the per-segment SMS cost for every SENT recipient, keyed by recipientId + its fully-rendered text', async () => {
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-123', message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(conversationSpend.settleCampaignSms).toHaveBeenCalledTimes(3);
+    const ids = conversationSpend.settleCampaignSms.mock.calls.map((c: any) => c[1].recipientId).sort();
+    expect(ids).toEqual(['r1', 'r2', 'r3']);
+    // Every call carries the workspaceId + the recipient's own rendered body
+    // (the Stop-footer-appended text actually sent), not the raw campaign body.
+    for (const [ws, opts] of conversationSpend.settleCampaignSms.mock.calls) {
+      expect(ws).toBe(WS);
+      expect(opts.text).toContain('Hi there');
+      expect(opts.text).toContain('Stop:');
+    }
+  });
+
+  it('[P0] a settlement failure for one recipient never blocks settling the others, or the batch itself', async () => {
+    smsV2.send.mockResolvedValue({ ok: true, code: '00', jobid: 'job-123', message: null, retriable: false, transport: false });
+    conversationSpend.settleCampaignSms.mockImplementation(async (_ws: string, opts: any) => {
+      if (opts.recipientId === 'r2') throw new Error('tariff lookup failed');
+      return { amount: 1, quantity: 1, unitCost: 1 };
+    });
+
+    await expect((svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } })).resolves.toBeUndefined();
+
+    expect(conversationSpend.settleCampaignSms).toHaveBeenCalledTimes(3);
+    // The batch itself still completed: every recipient was marked SENT via the
+    // one atomic guarded UPDATE, unaffected by the r2 settlement throw.
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('does not duplicate an already-recorded jobid in Campaign.netgsmJobIds', async () => {

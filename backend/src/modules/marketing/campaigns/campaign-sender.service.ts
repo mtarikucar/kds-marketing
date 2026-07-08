@@ -10,6 +10,7 @@ import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
 import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
 import { SmsV2Client, SmsV2SendResult } from '../../netgsm/sms/sms-v2.client';
+import { ConversationSpendService } from '../budget/conversation-spend.service';
 import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND, CAMPAIGN_LAUNCH_KIND, AB_TEST_WINDOW_MS } from './campaigns.service';
 
 const BATCH_SIZE = 50;
@@ -52,6 +53,7 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly quota: MessageQuotaService,
     private readonly sendingDomains: SendingDomainsService,
     private readonly smsV2: SmsV2Client,
+    private readonly conversationSpend: ConversationSpendService,
   ) {}
 
   onModuleInit(): void {
@@ -434,6 +436,25 @@ export class CampaignSenderService implements OnModuleInit {
           });
         }
       }
+      // Settle the per-segment SMS cost for every recipient just marked SENT —
+      // best-effort, one settlement per recipient so a single pricing/ledger
+      // blip can never sink the rest of the batch (or, worse, the already-
+      // wire-sent batch itself). `e.body` is each recipient's fully-rendered
+      // text (already carrying the mandatory unsubscribe "Stop:" footer
+      // `render()` appended above), so the billed segment count matches
+      // exactly what NetGSM received. Campaign recipients have no Message row
+      // to stamp — `settleCampaignSms` writes only the SpendLedger entry.
+      await Promise.allSettled(
+        eligible.map((e) =>
+          this.conversationSpend
+            .settleCampaignSms(workspaceId, { recipientId: e.recipientId, text: e.body })
+            .catch((err) =>
+              this.logger.warn(
+                `campaign SMS settlement failed for recipient ${e.recipientId}: ${String((err as Error)?.message ?? err)}`,
+              ),
+            ),
+        ),
+      );
       return;
     }
 

@@ -11,6 +11,7 @@ import {
   Users,
 } from 'lucide-react';
 import { Button, IconButton, Card, ScrollArea, Badge } from '@/components/ui';
+import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
 
 interface MessageRow {
   id: string;
@@ -190,35 +191,50 @@ export function ThreadPane({
       </ScrollArea>
 
       {/* Reply composer */}
-      <div className="p-3 border-t border-border flex gap-2 shrink-0">
-        <input
-          value={draft}
-          onChange={(e) => onDraftChange(e.target.value)}
-          onKeyDown={(e) => {
-            // Mirror the Send button's disabled guard (incl. !isSending): without
-            // it, pressing Enter again while a reply is still in flight fires a
-            // second send of the (not-yet-cleared) draft — a duplicate message to
-            // the live customer.
-            if (e.key === 'Enter' && !e.shiftKey && draft.trim() && !isSending) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-          placeholder={t(
-            'inbox.replyPlaceholder',
-            'Type a reply… (this pauses the AI)',
-          )}
-          className="flex-1 h-9 px-3 rounded-lg border border-border-strong bg-surface text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-primary transition-colors"
-        />
-        <Button
-          size="md"
-          onClick={onSend}
-          disabled={!draft.trim() || isSending}
-          loading={isSending}
-          aria-label={t('inbox.send', 'Send')}
-        >
-          <Send className="w-4 h-4" />
-        </Button>
+      <div className="p-3 border-t border-border shrink-0">
+        <div className="flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onKeyDown={(e) => {
+              // Mirror the Send button's disabled guard (incl. !isSending): without
+              // it, pressing Enter again while a reply is still in flight fires a
+              // second send of the (not-yet-cleared) draft — a duplicate message to
+              // the live customer.
+              if (e.key === 'Enter' && !e.shiftKey && draft.trim() && !isSending) {
+                e.preventDefault();
+                onSend();
+              }
+            }}
+            placeholder={t(
+              'inbox.replyPlaceholder',
+              'Type a reply… (this pauses the AI)',
+            )}
+            className="flex-1 h-9 px-3 rounded-lg border border-border-strong bg-surface text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-primary transition-colors"
+          />
+          <Button
+            size="md"
+            onClick={onSend}
+            disabled={!draft.trim() || isSending}
+            loading={isSending}
+            aria-label={t('inbox.send', 'Send')}
+          >
+            <Send className="w-4 h-4" />
+          </Button>
+        </div>
+        {channelLabel === 'SMS' && (
+          <p className="text-[11px] text-muted-foreground mt-1 px-0.5">
+            {(() => {
+              const segments = smsSegments(draft, { reservedSuffixChars: NETGSM_HEADER_OVERHEAD_CHARS });
+              return t('inbox.smsCounter', {
+                defaultValue: '{{chars}} characters · {{segments}} segment{{plural}}',
+                chars: draft.length,
+                segments,
+                plural: segments === 1 ? '' : 's',
+              });
+            })()}
+          </p>
+        )}
       </div>
     </Card>
   );

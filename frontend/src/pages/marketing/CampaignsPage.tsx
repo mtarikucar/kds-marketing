@@ -25,6 +25,7 @@ import { useEntitlements } from '../../features/marketing/hooks/useEntitlements'
 import { VariantsDialog } from './campaigns/VariantsDialog';
 import { CampaignDetailDialog } from './campaigns/CampaignDetailDialog';
 import { plainTextBody } from './campaigns/plainText';
+import { smsSegments, CAMPAIGN_SMS_RESERVED_SUFFIX_CHARS } from '@/lib/smsSegments';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -223,6 +224,8 @@ export default function CampaignsPage() {
   });
   const selectedChannel = useWatch({ control: form.control, name: 'channel' });
   const selectedTemplateId = useWatch({ control: form.control, name: 'emailTemplateId' });
+  const bodyValue = useWatch({ control: form.control, name: 'body' }) ?? '';
+  const bodySmsSegments = smsSegments(bodyValue, { reservedSuffixChars: CAMPAIGN_SMS_RESERVED_SUFFIX_CHARS });
   const scheduledAtField = useWatch({ control: form.control, name: 'scheduledAt' });
   const scheduleIsPast = isPastDatetimeLocalValue(scheduledAtField);
   const [variantsOpen, setVariantsOpen] = useState(false);
@@ -667,14 +670,26 @@ export default function CampaignsPage() {
                   required={!htmlAttached}
                 >
                   {({ id, invalid }) => (
-                    <Textarea
-                      id={id}
-                      aria-invalid={invalid}
-                      className="min-h-40"
-                      maxLength={20000}
-                      placeholder="Hi {{lead.contactPerson}}, …"
-                      {...form.register('body')}
-                    />
+                    <>
+                      <Textarea
+                        id={id}
+                        aria-invalid={invalid}
+                        className="min-h-40"
+                        maxLength={20000}
+                        placeholder="Hi {{lead.contactPerson}}, …"
+                        {...form.register('body')}
+                      />
+                      {selectedChannel === 'SMS' && (
+                        <p className="text-caption text-muted-foreground mt-1">
+                          {t('campaigns.smsCounter', {
+                            defaultValue: '{{chars}} characters · {{segments}} segment{{plural}}',
+                            chars: bodyValue.length,
+                            segments: bodySmsSegments,
+                            plural: bodySmsSegments === 1 ? '' : 's',
+                          })}
+                        </p>
+                      )}
+                    </>
                   )}
                 </Field>
               );
