@@ -46,7 +46,10 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
   const refresh = (s: DialSession) => { setSession(s); setNotes(''); setDuration(''); setActiveCallId(null); };
 
   const dial = useMutation({
-    mutationFn: () => marketingApi.post(`/dialer/sessions/${session!.id}/dial`).then((r) => r.data as { dialUri: string; mode: string }),
+    mutationFn: () =>
+      marketingApi
+        .post(`/dialer/sessions/${session!.id}/dial`)
+        .then((r) => r.data as { dialUri: string; mode: string; call: { id: string } }),
     onSuccess: (res) => {
       // Click-to-dial (netgsm-lite) hands back a tel: URI for the softphone;
       // api-dial (Netsantral) originates server-side with an empty dialUri — give
@@ -61,7 +64,11 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
         // Also hand it the SalesCall id (Phase 3 Task 5) so its in-call
         // controls panel can show hangup/transfer immediately — including
         // for bridge-mode calls, which never touch this tab's SIP session.
-        expectRingback(session?.current?.lead.phone ?? undefined, session?.current?.callId ?? undefined);
+        // Must come from THIS dial's response (`res.call.id`), not
+        // `session.current.callId` — the session snapshot's callId is only
+        // populated by the backend AFTER dial() completes, so it's still
+        // null/stale for a fresh queue item at the moment this fires.
+        expectRingback(session?.current?.lead.phone ?? undefined, res.call?.id ?? undefined);
       } else if (res.dialUri) {
         window.location.href = res.dialUri;
       }
