@@ -301,6 +301,7 @@
       "telephony": "Telefon & aramalar",
       "voiceAi": "Sesli AI",
       "voiceCampaigns": "Sesli kampanyalar",
+      "fax": "Faks",
       "invoicing": "Faturalama",
       "commissions": "Komisyonlar",
       "installations": "Kurulumlar",
@@ -842,6 +843,20 @@
       "title": "Bu müşteri adayı silinsin mi?",
       "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
     }
+  },
+  "fax": {
+    "action": "Faks gönder",
+    "dialogTitle": "Faks gönder",
+    "dialogDesc": "NetGSM üzerinden bir faks numarasına PDF belge gönder.",
+    "to": "Alıcı faks numarası",
+    "header": "Kapak başlığı (opsiyonel)",
+    "document": "PDF belge",
+    "choosePdf": "PDF seç",
+    "toRequired": "Alıcı faks numarası gerekli.",
+    "fileRequired": "Fakslanacak bir PDF seçin.",
+    "send": "Faks gönder",
+    "sent": "Faks gönderime alındı",
+    "sendFailed": "Faks gönderilemedi"
   },
   "createLead": {
     "titleNew": "Yeni lead",
@@ -1534,7 +1549,8 @@
     "agents": "AI ajanları",
     "knowledgeDocs": "Bilgi belgeleri",
     "aiCreditsWord": "AI kredisi",
-    "messagesWord": "mesaj"
+    "messagesWord": "mesaj",
+    "faxWord": "Faks"
   },
   "commission": {
     "detailTitle": "Komisyon detayı",

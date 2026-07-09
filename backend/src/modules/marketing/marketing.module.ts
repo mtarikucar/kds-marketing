@@ -191,6 +191,10 @@ import { CampaignSmsStatsService } from './campaigns/campaign-sms-stats.service'
 import { VoiceReportConsumer } from './campaigns/voice-report.consumer';
 // NetGSM Phase 5 Task 4 — POST /campaigns/voice/audio (.wav → audioid).
 import { VoiceAudioUploadService } from './campaigns/voice-audio-upload.service';
+// NetGSM Phase 6 Task 1 — POST /fax/send (PDF → NetGSM fax job), the
+// send-fax action surfaced on the lead/conversation views.
+import { FaxController } from './controllers/fax.controller';
+import { FaxSendService } from './campaigns/fax-send.service';
 
 // Phase F P5 — funnels/sites + forms + booking.
 import { MarketingSitesController } from './controllers/marketing-sites.controller';
@@ -560,6 +564,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingWorkflowsController,
     MarketingCampaignsController,
     CampaignTrackingController,
+    FaxController,
     MarketingSitesController,
     MarketingBookingController,
     PublicSiteController,
@@ -788,6 +793,8 @@ import { WalletService } from './wallet/wallet.service';
     VoiceReportConsumer,
     // NetGSM Phase 5 Task 4 — voice-campaign audio upload (.wav → audioid).
     VoiceAudioUploadService,
+    // NetGSM Phase 6 Task 1 — send-fax action (PDF → NetGSM fax job).
+    FaxSendService,
     // Phase F P5 — funnels: page/form CRUD + AI draft, the safe block renderer,
     // public form submit, and booking (registers the booking.reminder handler).
     SitesService,

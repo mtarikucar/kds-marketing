@@ -57,6 +57,9 @@ const PACKAGES = [
       // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
       // plan-tier feature; false everywhere else (purchasable as an add-on).
       voiceCampaigns: false,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 100,
@@ -107,6 +110,9 @@ const PACKAGES = [
       // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
       // plan-tier feature; false everywhere else (purchasable as an add-on).
       voiceCampaigns: false,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 500,
@@ -160,6 +166,9 @@ const PACKAGES = [
       // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
       // plan-tier feature; false everywhere else (purchasable as an add-on).
       voiceCampaigns: false,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 2000,
@@ -212,6 +221,9 @@ const PACKAGES = [
       socialCampaigns: true,
       // NetGSM Phase 5 — voice campaigns (TTS/audio blasts): SCALE grants it.
       voiceCampaigns: true,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 6000,
@@ -263,6 +275,8 @@ const PACKAGES = [
       socialCampaigns: true,
       // NetGSM Phase 5 — voice campaigns (TTS/audio blasts): OPERATOR grants it.
       voiceCampaigns: true,
+      // NetGSM Phase 6 Task 1 — fax: OPERATOR grants it (no customer tier does).
+      fax: true,
     },
     limits: {
       aiCreditsMonthly: -1,

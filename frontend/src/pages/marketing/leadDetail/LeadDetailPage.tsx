@@ -3,9 +3,11 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { ArrowLeft, Pencil, Trash2, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2, CheckCircle2, Printer } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useBreadcrumbLabel } from '../../../features/marketing/hooks/useBreadcrumbLabel';
+import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { sendFax } from '../../../features/marketing/api/fax.service';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
@@ -54,6 +56,7 @@ import OffersTab from './OffersTab';
 import TasksTab from './TasksTab';
 import ConvertDialog from './ConvertDialog';
 import { useConvertDialog } from './useConvertDialog';
+import SendFaxDialog from './SendFaxDialog';
 
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -70,8 +73,10 @@ export default function LeadDetailPage() {
     d ? new Date(d).toLocaleDateString(locale) : '';
   const user = useMarketingAuthStore((s) => s.user);
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  const { has } = useEntitlements();
 
   const convert = useConvertDialog();
+  const [faxOpen, setFaxOpen] = useState(false);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
 
@@ -176,6 +181,15 @@ export default function LeadDetailPage() {
     onError: (err: any) => toast.error(err?.response?.data?.message || 'Failed to convert lead'),
   });
 
+  const faxMutation = useMutation({
+    mutationFn: (data: { to: string; file: File; header?: string }) => sendFax(data),
+    onSuccess: () => {
+      setFaxOpen(false);
+      toast.success(t('fax.sent', 'Fax queued for delivery'));
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message || t('fax.sendFailed', 'Failed to send fax')),
+  });
+
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const deleteMutation = useMutation({
     mutationFn: () => deleteLead(id!),
@@ -268,6 +282,11 @@ export default function LeadDetailPage() {
                 onAssigned={invalidate}
               />
             </div>
+            {has('fax') && (
+              <Button variant="outline" size="sm" onClick={() => setFaxOpen(true)}>
+                <Printer className="h-4 w-4" /> {t('fax.action', 'Send fax')}
+              </Button>
+            )}
             <Button variant="outline" size="sm" asChild>
               <Link to={`/leads/${id}/edit`}>
                 <Pencil className="h-4 w-4" /> Edit
@@ -378,6 +397,16 @@ export default function LeadDetailPage() {
         onSubmit={(data) => convertMutation.mutate(data)}
         isPending={convertMutation.isPending}
       />
+
+      {has('fax') && (
+        <SendFaxDialog
+          open={faxOpen}
+          onOpenChange={setFaxOpen}
+          defaultTo={lead.phone ?? ''}
+          onSubmit={(data) => faxMutation.mutate(data)}
+          isPending={faxMutation.isPending}
+        />
+      )}
     </div>
   );
 }

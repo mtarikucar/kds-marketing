@@ -23,6 +23,7 @@ describe('entitlements — feature-key drift tripwire', () => {
       'campaigns',
       'commissions',
       'conversationAi',
+      'fax',
       'funnels',
       'installations',
       'invoicing',
@@ -123,7 +124,7 @@ describe('entitlements — feature-key drift tripwire', () => {
  * user-toggleable) and documenting why instead.
  */
 describe('entitlements — activatedModules backfill-note tripwire', () => {
-  const KEYS_REQUIRING_BACKFILL = ['sms', 'voiceCampaigns'] as const;
+  const KEYS_REQUIRING_BACKFILL = ['sms', 'voiceCampaigns', 'fax'] as const;
 
   // NetGSM SMS v2 Task 12 — `smsOtp` is a FEATURE_KEYS member added AFTER
   // 20260702160000_workspace_activated_modules, same as `sms` was, but it
@@ -147,6 +148,17 @@ describe('entitlements — activatedModules backfill-note tripwire', () => {
   // despite being entitled by its plan.
   it('voiceCampaigns is NOT excluded from TOGGLEABLE_MODULE_KEYS (plan-entitled — backfill required)', () => {
     expect(TOGGLEABLE_MODULE_KEYS).toContain('voiceCampaigns');
+  });
+
+  // NetGSM Phase 6 Task 1 — `fax` is the SAME shape as `voiceCampaigns`, just
+  // entitled on a narrower tier: `true` ONLY on OPERATOR (seed-packages.ts),
+  // so it's STILL a genuine Settings > Modules toggle for that workspace
+  // (present in TOGGLEABLE_MODULE_KEYS) — a workspace that had already
+  // customized its activatedModules allow-list BEFORE this key existed needs
+  // the backfill migration below, or an OPERATOR workspace would silently
+  // lose fax on deploy despite being entitled by its plan.
+  it('fax is NOT excluded from TOGGLEABLE_MODULE_KEYS (plan-entitled — backfill required)', () => {
+    expect(TOGGLEABLE_MODULE_KEYS).toContain('fax');
   });
 
   it('every key needing a backfill has a reversible migration on disk', () => {

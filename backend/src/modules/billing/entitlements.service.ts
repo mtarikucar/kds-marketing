@@ -52,6 +52,16 @@ export const FEATURE_KEYS = [
   // TOGGLEABLE_MODULE_KEYS below (no exclusion) and the activatedModules
   // backfill migration 20260709175000.
   'voiceCampaigns',
+  // NetGSM Phase 6 Task 1 — fax (two-step `/fax/send` multipart + `/fax/receive`
+  // poll). OPPOSITE tiering from voiceCampaigns: `true` ONLY on OPERATOR (see
+  // seed-packages.ts — no paid customer tier grants it by default), `false`
+  // everywhere else, and ALSO purchasable standalone as a WorkspaceAddOn
+  // (`feature.fax`, ADDON_GRANTS['fax_package']) for every non-OPERATOR
+  // workspace. Because OPERATOR grants it `true` in-plan it's still a real
+  // Settings > Modules toggle for that workspace — see TOGGLEABLE_MODULE_KEYS
+  // below (no exclusion) and the activatedModules backfill migration
+  // 20260710120000.
+  'fax',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -75,6 +85,10 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
  * a workspace can switch off — it just ALSO happens to be purchasable as a
  * standalone add-on on lower tiers. Because it's toggleable, it needed the
  * backfill migration (20260709175000) — see the backfill-note tripwire.
+ * `fax` is the SAME shape as `voiceCampaigns`, just entitled on a narrower
+ * tier (`true` on OPERATOR only, see seed-packages.ts) — still not excluded
+ * here, still a genuine Settings > Modules toggle for the workspace(s) it's
+ * entitled on, and it needed its own backfill migration (20260710120000).
  */
 export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter(
   (k) => k !== 'autoAssign' && k !== 'smsOtp',

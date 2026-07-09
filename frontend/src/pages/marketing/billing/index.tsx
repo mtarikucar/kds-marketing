@@ -294,6 +294,14 @@ export default function BillingPage() {
                   priceTRY: '₺1.490',
                   priceUSD: '$45',
                 },
+                {
+                  // NetGSM Phase 6 Task 1 — unlocks the `fax` feature
+                  // (send/receive) for every non-OPERATOR plan.
+                  code: 'fax_package',
+                  label: t('billing.faxWord', 'Fax'),
+                  priceTRY: '₺990',
+                  priceUSD: '$29',
+                },
               ].map((addon) => (
                 <div
                   key={addon.code}

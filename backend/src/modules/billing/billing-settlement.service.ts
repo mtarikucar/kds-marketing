@@ -25,6 +25,9 @@ const ADDON_GRANTS: Record<string, Record<string, number>> = {
   // grant it via the plan already) — this add-on just ALSO ORs it on for
   // lower tiers, same `feature.*` mechanism.
   voice_campaigns_package: { 'feature.voiceCampaigns': 1 },
+  // NetGSM Phase 6 Task 1 — same `feature.*` OR mechanism: unlocks `fax` for
+  // any workspace below OPERATOR (which already grants it via the plan).
+  fax_package: { 'feature.fax': 1 },
 };
 
 /**

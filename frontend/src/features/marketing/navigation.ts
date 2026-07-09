@@ -105,6 +105,12 @@ export type FeatureKey =
   // purchasable standalone as a WorkspaceAddOn on lower tiers. UNLIKE
   // smsOtp, this IS a Settings > Modules toggle (see the MODULE_META row).
   | 'voiceCampaigns'
+  // NetGSM Phase 6 Task 1 — fax (two-step `/fax/send` multipart + `/fax/receive`
+  // poll). Granted on the OPERATOR plan only AND purchasable standalone as a
+  // WorkspaceAddOn on every other tier. Same shape as voiceCampaigns: IS a
+  // Settings > Modules toggle (see the MODULE_META row) — gates the "Send fax"
+  // action on the lead/conversation views.
+  | 'fax'
   // Platform-level inert features (env-gated; surfaced via /billing/summary so the
   // nav hides them until ops enables the feature, instead of showing a 503 button).
   | 'prospecting'

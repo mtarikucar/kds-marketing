@@ -59,6 +59,10 @@ const ADDON_PRICES: Record<string, { TRY: number; USD: number; name: string }> =
   // which already grants it as part of the plan. Recurring, same as the
   // other add-ons above.
   voice_campaigns_package: { TRY: 1490, USD: 45, name: 'Voice campaigns add-on' },
+  // NetGSM Phase 6 Task 1 — unlocks the `fax` feature (two-step /fax/send +
+  // /fax/receive) for every non-OPERATOR workspace (OPERATOR already grants
+  // it as part of the internal plan). Recurring, same as the other add-ons.
+  fax_package: { TRY: 990, USD: 29, name: 'Fax add-on' },
 };
 
 /**
