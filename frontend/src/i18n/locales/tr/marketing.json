@@ -237,6 +237,7 @@
       "iysFirstSync": "İlk İYS onay senkronizasyonu tamamlandı",
       "recordingStorage": "Çağrı kaydı depolama (R2) yapılandırıldı",
       "recordingsReceiving": "Kayıtlar depolanıyor",
+      "voiceReportWebhook": "Sesli kampanya sonuç bildirimi webhook URL'si",
       "repsCount": "{{count}} temsilcide dahili tanımlı",
       "detail": {
         "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
@@ -246,7 +247,8 @@
         "headersUnavailable": "Henüz kontrol edilemedi — SMS kanalında kayıtlı bir gönderici başlığı yok ya da NetGSM'in onaylı başlık listesi şu an alınamıyor.",
         "eventsWebhookReceivingHint": "URL'yi panele kaydedip test araması yapın",
         "recordingStorageKvkkHint": "KVKK, aramanın kaydedildiğinin arayana bildirilmesini zorunlu kılar — kaydı açmadan önce bunu IVR/karşılama anonsunuza ekleyin.",
-        "recordingsReceivingHint": "Kayıtların depolandığını doğrulamak için kaydı açık bir arama yapıp tamamlayın"
+        "recordingsReceivingHint": "Kayıtların depolandığını doğrulamak için kaydı açık bir arama yapıp tamamlayın",
+        "voiceReportWebhookHint": "Her VOICE kampanya çağrısında otomatik olarak ayarlanır — manuel yapıştırma gerekmez"
       }
     },
     "tab": {

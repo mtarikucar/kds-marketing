@@ -45,6 +45,10 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   // NetGSM Phase 4 Task 7 — recordingsReceiving's remedy hint, shown only
   // while the row is 'unknown' (no recorded call has landed yet).
   recordingsReceivingHint: 'Place and finish a recorded call to verify recordings are being stored',
+  // NetGSM Phase 5 Task 3 — voiceReportWebhook is a read-only reference URL
+  // (campaign-sender.service.ts mints it automatically per VOICE send), not
+  // a manual paste step like eventsWebhookUrl — this hint explains why.
+  voiceReportWebhookHint: 'Set automatically on every VOICE campaign call — nothing to paste manually',
 };
 
 /**
@@ -80,6 +84,7 @@ export function NetgsmOnboardingCard() {
       iysFirstSync: 'First İYS consent sync confirmed',
       recordingStorage: 'Call recording storage (R2) configured',
       recordingsReceiving: 'Recordings being stored',
+      voiceReportWebhook: 'Voice-campaign report webhook URL',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

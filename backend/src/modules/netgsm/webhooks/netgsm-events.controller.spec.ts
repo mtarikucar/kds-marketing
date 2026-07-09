@@ -555,6 +555,157 @@ describe('NetgsmEventsController — iys', () => {
 });
 
 /**
+ * Voice-campaign report push (NetGSM Phase 5 Task 3). Voice PUSHES call
+ * outcomes (unlike SMS's DLR poll) — a single call can get multiple
+ * distinct-state pushes, so the archive key is scoped by state (`durum`),
+ * exactly like `events`' scenario-scoped externalId.
+ */
+describe('NetgsmEventsController — voice-report', () => {
+  const KEY = Buffer.alloc(32, 7).toString('base64');
+  let prisma: any;
+  let outbox: any;
+  let controller: NetgsmEventsController;
+
+  beforeEach(() => {
+    process.env.MARKETING_SECRET_KEY = KEY;
+    prisma = {
+      netgsmWebhookEvent: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    outbox = { append: jest.fn().mockResolvedValue('outbox-id') };
+    controller = new NetgsmEventsController(prisma, outbox);
+  });
+
+  afterEach(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  it('archives + publishes a single-object body, externalId scoped by relationid:state', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+    const body = { relationid: 'recip-1', durum: '1', bilsec: '42', push_button: '1' };
+
+    const res = await controller.voiceReport('ws-1', token, body);
+
+    expect(res).toEqual({ ok: true });
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'voice-report', externalId: 'recip-1:1', payload: body }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledWith({
+      type: 'marketing.voice.report.v1',
+      tenantId: null,
+      payload: {
+        workspaceId: 'ws-1',
+        relationid: 'recip-1',
+        state: '1',
+        bilsec: 42,
+        pushButton: '1',
+        recordLink: null,
+      },
+      idempotencyKey: 'ws-1:voice-report:recip-1:1',
+    });
+  });
+
+  it('tolerates numeric JSON fields (durum/bilsec/push_button as bare numbers, not strings)', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+    const body = { relationid: 'recip-2', durum: 3, bilsec: 0, push_button: 2 };
+
+    await controller.voiceReport('ws-1', token, body);
+
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ relationid: 'recip-2', state: '3', bilsec: 0, pushButton: '2' }),
+      }),
+    );
+  });
+
+  it('an array body fans out: archives every element, publishes ONLY the NEW one', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+    const elA = { relationid: 'recip-a', durum: '3' }; // already archived by a previous delivery
+    const elB = { relationid: 'recip-b', durum: '1', bilsec: '10' };
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'recip-a:3' }]);
+
+    const res = await controller.voiceReport('ws-1', token, [elA, elB]);
+
+    expect(res).toEqual({ ok: true });
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'voice-report', externalId: 'recip-b:1', payload: elB }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: 'ws-1:voice-report:recip-b:1' }),
+    );
+  });
+
+  it('the SAME call getting a NEW distinct state (e.g. an intermediate push followed by the final outcome) archives + publishes BOTH, never colliding', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+    const relationid = 'recip-multi-1';
+
+    await controller.voiceReport('ws-1', token, { relationid, durum: '2' });
+    await controller.voiceReport('ws-1', token, { relationid, durum: '1', bilsec: '15' });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(2);
+    const archivedIds = prisma.netgsmWebhookEvent.createMany.mock.calls.map((c: any) => c[0].data[0].externalId);
+    expect(archivedIds).toEqual([`${relationid}:2`, `${relationid}:1`]);
+    expect(outbox.append).toHaveBeenCalledTimes(2);
+  });
+
+  it('the SAME call+state delivered twice (genuine redelivery) dedupes to ONE archived row + ONE publish', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+    const body = { relationid: 'recip-redeliver', durum: '1', bilsec: '20' };
+
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([]);
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([{ externalId: 'recip-redeliver:1' }]);
+
+    await controller.voiceReport('ws-1', token, body);
+    await controller.voiceReport('ws-1', token, body);
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+  });
+
+  it('an element with no resolvable relationid is archived but NEVER published (fails closed — this controller never guesses)', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+    const body = { durum: '1', bilsec: '5' };
+
+    await expect(controller.voiceReport('ws-1', token, body)).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(1);
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('acks ok on an empty array without touching prisma or the outbox', async () => {
+    const token = netgsmWebhookToken('ws-1', 'voice-report');
+
+    await expect(controller.voiceReport('ws-1', token, [])).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bad token with NotFoundException and never touches prisma or the outbox', async () => {
+    await expect(controller.voiceReport('ws-1', 'bad-token', { relationid: 'recip-1', durum: '1' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
+    expect(prisma.netgsmWebhookEvent.createMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('rejects a token minted for a different purpose (e.g. events)', async () => {
+    const eventsToken = netgsmWebhookToken('ws-1', 'events');
+
+    await expect(
+      controller.voiceReport('ws-1', eventsToken, { relationid: 'recip-1', durum: '1' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/**
  * Throttling (NetGSM Phase 3 Task 6, Phase-0 finding): NetGSM pushes every
  * tenant's santral events AND İYS push-backs from a small, fixed set of its
  * own server IPs — the global 300 req/min PER-IP ThrottlerGuard would 429 that
@@ -576,5 +727,9 @@ describe('NetgsmEventsController — throttling', () => {
 
   it('the iys route also skips it (İYS push-back is NetGSM-originated too, same shared IPs)', () => {
     expect(skipsThrottle('iys')).toBe(true);
+  });
+
+  it('the voice-report route also skips it (voicesms report is NetGSM-originated too, same shared IPs)', () => {
+    expect(skipsThrottle('voiceReport')).toBe(true);
   });
 });

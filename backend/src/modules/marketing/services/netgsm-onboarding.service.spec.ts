@@ -506,4 +506,19 @@ describe('NetgsmOnboardingService', () => {
       key: 'recordingsReceiving', state: 'ok', detail: undefined,
     });
   });
+
+  it('voiceReportWebhook: always unknown (no provisioning read-back), carrying the minted per-workspace voice-report URL', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws-1');
+    const row = items.find((i) => i.key === 'voiceReportWebhook');
+    expect(row?.state).toBe('unknown');
+    expect(row?.url).toContain('/api/public/netgsm/ws-1/');
+    expect(row?.url).toContain('/voice-report');
+    expect(row?.detail).toBe('voiceReportWebhookHint');
+  });
 });

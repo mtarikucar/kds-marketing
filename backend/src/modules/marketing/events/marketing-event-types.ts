@@ -109,6 +109,25 @@ export const MarketingEventTypes = {
   // TRIGGER_EVENT_MAP, see that file); usable today by anything that
   // subscribes directly via DomainEventBus.
   CallMissed: "marketing.call.missed.v1",
+
+  // Voice-campaign report push (NetGSM Phase 5 Task 3) — one event per NEW
+  // (relationid, state) pair the unified public receiver
+  // (NetgsmEventsController's `voice-report` route) archives from NetGSM's
+  // voicesms report push. Voice PUSHES call outcomes (unlike SMS, which is
+  // DLR-polled); a single call can receive multiple distinct-state pushes,
+  // each archived + published independently (mirrors the `events` route's
+  // one-call/many-scenarios shape). Consumed by VoiceReportConsumer
+  // (marketing/campaigns), which correlates purely by `relationid` (=
+  // CampaignRecipient.id) — never netgsmJobId/referansId, the SMS DLR-poll
+  // reconciler's own unscoped signal.
+  VoiceReport: "marketing.voice.report.v1",
+
+  // Press-1 → workflow trigger (NetGSM Phase 5 Task 3) — emitted by
+  // VoiceReportConsumer when a voice-report's pushButton matches one of the
+  // campaign's configured voiceConfig.keys. Backs the `voice_keypress`
+  // workflow trigger (WorkflowTriggerService's EVENT_FOR_TRIGGER); filter on
+  // trigger.key to react to a specific digit (e.g. "pressed 1 -> create task").
+  VoiceKeypress: "marketing.voice.keypress.v1",
 } as const;
 
 export type MarketingEventType =
@@ -299,4 +318,45 @@ export interface MarketingCallMissedPayload {
   salesCallId: string;
   leadId: string | null;
   customerNum: string | null;
+}
+
+/**
+ * Voice-campaign report push (marketing.voice.report.v1). Emitted once per
+ * NEW (relationid, state) element the unified NetGSM webhook receiver
+ * archives (NetgsmEventsController's `voice-report` route, hub-owned so it
+ * stays business-logic free). The producer uses the literal event-type
+ * string rather than importing this file, same reasoning as
+ * MarketingIysConsentPayload/MarketingCallEventPayload above; this interface
+ * is the canonical contract VoiceReportConsumer types its handler against.
+ */
+export interface MarketingVoiceReportPayload {
+  workspaceId: string;
+  /** = CampaignRecipient.id, stamped as `relationid` at send time (see
+   *  campaign-sender.service.ts's `sendVoice`). */
+  relationid: string;
+  /** Raw durum/state as reported by NetGSM. The exact vocabulary isn't
+   *  live-verified (see VoiceReportConsumer.mapVoiceState's own caveat). */
+  state: string | null;
+  /** Talk seconds (bilsec), when the call carries one. */
+  bilsec: number | null;
+  /** DTMF digit the callee pressed (push_button), when present. */
+  pushButton: string | null;
+  /** Call-recording URL (record_link), when present. CampaignRecipient has
+   *  no dedicated column for this yet — see VoiceReportConsumer. */
+  recordLink: string | null;
+}
+
+/**
+ * Press-1 → workflow trigger (marketing.voice.keypress.v1). Emitted by
+ * VoiceReportConsumer when a voice-report's pushButton matches one of the
+ * campaign's configured `voiceConfig.keys`. `leadId`/`campaignId`/
+ * `recipientId` let a workflow react (and a future action look up either
+ * row) without a re-read; filter on trigger.key for a specific digit.
+ */
+export interface MarketingVoiceKeypressPayload {
+  workspaceId: string;
+  leadId: string;
+  campaignId: string;
+  recipientId: string;
+  key: string;
 }

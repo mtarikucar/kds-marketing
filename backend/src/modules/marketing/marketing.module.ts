@@ -177,6 +177,9 @@ import { CampaignsService } from './campaigns/campaigns.service';
 import { CampaignSenderService } from './campaigns/campaign-sender.service';
 import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
 import { CampaignSmsStatsService } from './campaigns/campaign-sms-stats.service';
+// NetGSM Phase 5 Task 3 — voice-campaign report webhook consumer: writes
+// CampaignRecipient voiceState/pushButton/talkSec + press-1 keypress trigger.
+import { VoiceReportConsumer } from './campaigns/voice-report.consumer';
 
 // Phase F P5 — funnels/sites + forms + booking.
 import { MarketingSitesController } from './controllers/marketing-sites.controller';
@@ -760,6 +763,9 @@ import { WalletService } from './wallet/wallet.service';
     // Slow reconciler (15-min tick): NetGSM per-jobid stats() rollups
     // (delivered/undelivered/blacklist/iysNotValid/…) into campaign.stats.sms.
     CampaignSmsStatsService,
+    // NetGSM Phase 5 Task 3 — voice-report webhook consumer (registers its
+    // bus subscription on init, like TelephonyEventConsumer/IysWebhookConsumer).
+    VoiceReportConsumer,
     // Phase F P5 — funnels: page/form CRUD + AI draft, the safe block renderer,
     // public form submit, and booking (registers the booking.reminder handler).
     SitesService,

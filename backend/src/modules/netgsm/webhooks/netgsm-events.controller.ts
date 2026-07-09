@@ -5,7 +5,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { payloadDigest, verifyNetgsmWebhookToken } from './netgsm-webhook.util';
 import { normalizeSantralEvent } from './santral-event-normalizer';
 
-type WebhookPurpose = 'events' | 'iys';
+type WebhookPurpose = 'events' | 'iys' | 'voice-report';
 interface WebhookRow {
   el: Record<string, unknown>;
   externalId: string;
@@ -26,15 +26,15 @@ interface WebhookRow {
  * dedupe (202). Domain consumers (screen-pop, CDR upsert, İYS apply) attach
  * in Phases 2/3/5 by reading NetgsmWebhookEvent / subscribing to bus events.
  *
- * `@SkipThrottle()` on BOTH routes below (NetGSM Phase 3 Task 6, Phase-0
- * finding): NetGSM pushes every tenant's santral events AND İYS push-backs
- * from a small, fixed set of its own server IPs — machine traffic, not a
- * browser's. The global 300 req/min PER-IP `ThrottlerGuard` (app-wide
- * `APP_GUARD`) would throttle that shared IP into 429s under real call/İYS
- * volume across many tenants, exactly like `InternalEventsController`'s own
- * `@SkipThrottle()` for core's single egress IP. The future voice/autocall
- * report route (Phase 5 — not built yet) is the same shape and should carry
- * it too when it's added.
+ * `@SkipThrottle()` on every route below (NetGSM Phase 3 Task 6, Phase-0
+ * finding): NetGSM pushes every tenant's santral events, İYS push-backs, AND
+ * voice-campaign reports from a small, fixed set of its own server IPs —
+ * machine traffic, not a browser's. The global 300 req/min PER-IP
+ * `ThrottlerGuard` (app-wide `APP_GUARD`) would throttle that shared IP into
+ * 429s under real call/İYS/voice volume across many tenants, exactly like
+ * `InternalEventsController`'s own `@SkipThrottle()` for core's single egress
+ * IP. The future autocall-report route (Phase 5 Task 5 — not built yet) is
+ * the same shape and should carry it too when it's added.
  */
 @Controller('public/netgsm')
 export class NetgsmEventsController {
@@ -221,6 +221,82 @@ export class NetgsmEventsController {
   }
 
   /**
+   * Voice-campaign report push (NetGSM Phase 5 Task 3). Voice DOES push call
+   * outcomes (unlike SMS, which is DLR-polled) — body may be a lone object or
+   * an array, same tolerant shape as `events` above. A single call can get
+   * MULTIPLE distinct-state pushes over its lifetime (an intermediate signal
+   * followed by the final outcome), so the archive key is scoped by state,
+   * exactly like `events`' scenario-scoped externalId:
+   * `${relationidPart}:${stateToken}`. A genuine redelivery of the SAME
+   * call+state collapses onto the SAME archived row (no re-publish); a
+   * DIFFERENT state for the SAME call gets its own row and its own publish —
+   * VoiceReportConsumer (marketing/campaigns) is the one that decides which
+   * state, if any, actually updates `CampaignRecipient` (it never regresses a
+   * terminal ANSWERED outcome).
+   *
+   * Correlates purely by `relationid` (= `CampaignRecipient.id`, stamped at
+   * send time — see campaign-sender.service.ts's `sendVoice`) — an element
+   * with no resolvable relationid is archived for audit but never published,
+   * same fail-closed treatment as `events`' unrecognized scenario / `iys`'s
+   * unrecognized status/type above (this controller stays business-logic
+   * free; it never touches CampaignRecipient itself). Field reads use
+   * `numOrStr` (not the string-only `stringField`) because NetGSM's JSON body
+   * may carry `durum`/`bilsec`/`push_button` as either a string or a bare
+   * number — the exact wire shape isn't live-verified, same "researched, not
+   * yet live-verified" status `VoicesmsSendClient` itself carries.
+   */
+  @Post(':workspaceId/:token/voice-report')
+  @HttpCode(202)
+  @SkipThrottle()
+  async voiceReport(
+    @Param('workspaceId') workspaceId: string,
+    @Param('token') token: string,
+    @Body() body: unknown,
+  ): Promise<{ ok: true }> {
+    if (!verifyNetgsmWebhookToken(workspaceId, 'voice-report', token)) throw new NotFoundException();
+    const elements = Array.isArray(body) ? body : [body ?? {}];
+    if (elements.length === 0) return { ok: true };
+
+    const rows: WebhookRow[] = elements.map((raw) => {
+      const el = (raw ?? {}) as Record<string, unknown>;
+      const relationPart = this.numOrStr(el, ['relationid', 'relationId', 'RelationID']) ?? payloadDigest(el);
+      const stateToken = this.numOrStr(el, ['durum', 'state', 'status']) ?? payloadDigest(el);
+      return { el, externalId: `${relationPart}:${stateToken}` };
+    });
+
+    const fresh = await this.archiveFresh(workspaceId, 'voice-report', rows);
+    if (fresh.length === 0) return { ok: true };
+
+    for (const r of fresh) {
+      const relationid = this.numOrStr(r.el, ['relationid', 'relationId', 'RelationID']);
+      if (!relationid) {
+        this.logger.warn(`voice-report: element ${r.externalId} has no relationid — archived, not published`);
+        continue;
+      }
+      const state = this.numOrStr(r.el, ['durum', 'state', 'status']);
+      const bilsec = this.numberField(r.el, ['bilsec', 'talksec', 'duration', 'sure']);
+      const pushButton = this.numOrStr(r.el, ['push_button', 'pushbutton', 'pushButton', 'tus', 'tuş']);
+      const recordLink = this.stringField(r.el, ['record_link', 'recordlink', 'recordLink', 'recordingUrl']);
+
+      await this.outbox.append({
+        type: 'marketing.voice.report.v1',
+        tenantId: null,
+        payload: {
+          workspaceId,
+          relationid,
+          state: state ?? null,
+          bilsec,
+          pushButton: pushButton ?? null,
+          recordLink: recordLink ?? null,
+        },
+        idempotencyKey: `${workspaceId}:voice-report:${r.externalId}`,
+      });
+    }
+
+    return { ok: true };
+  }
+
+  /**
    * Shared read-existing→insert-missing fan-out helper for both array-shaped
    * (`iys`) and array-or-wrapped-object-shaped (`events`) batches. `createMany`
    * alone can't report WHICH rows were new (it only returns a count), so
@@ -275,6 +351,36 @@ export class NetgsmEventsController {
     for (const k of keys) {
       const v = obj[k];
       if (typeof v === 'string' && v) return v;
+    }
+    return null;
+  }
+
+  /**
+   * `voice-report`-route only — like `stringField`, but also accepts a bare
+   * JSON number (stringified), since NetGSM's voicesms report may carry
+   * `durum`/`push_button`/`relationid` as either a string or a number (the
+   * exact wire shape isn't live-verified — see `voiceReport`'s docstring).
+   */
+  private numOrStr(obj: Record<string, unknown>, keys: string[]): string | null {
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === 'string' && v) return v;
+      if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    }
+    return null;
+  }
+
+  /** `voice-report`-route only — `bilsec` (talk seconds) read as a real
+   *  number regardless of whether NetGSM sends it as a JSON number or a
+   *  numeric string. Returns null when absent/unparseable. */
+  private numberField(obj: Record<string, unknown>, keys: string[]): number | null {
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      if (typeof v === 'string' && v.trim() !== '') {
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
     }
     return null;
   }

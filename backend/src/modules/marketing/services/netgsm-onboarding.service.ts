@@ -202,6 +202,19 @@ export class NetgsmOnboardingService {
     });
     items.push({ key: 'iysFirstSync', state: firstSync ? 'ok' : 'unknown' });
 
+    // NetGSM Phase 5 Task 3 — voice-campaign report webhook. Like
+    // eventsWebhookUrl above, NetGSM never confirms back that it actually
+    // POSTs to this URL (no provisioning read-back), so it's always
+    // 'unknown' with the URL to paste into `voicesms/send`'s own `url` field
+    // (campaign-sender.service.ts mints it automatically per VOICE send —
+    // this row is a read-only reference/diagnostic, not a manual paste step).
+    items.push({
+      key: 'voiceReportWebhook',
+      state: 'unknown',
+      url: netgsmWebhookUrl(base, workspaceId, 'voice-report') ?? undefined,
+      detail: 'voiceReportWebhookHint',
+    });
+
     return { items };
   }
 

@@ -1,5 +1,6 @@
 import { WorkflowTriggerService } from './workflow-trigger.service';
 import { TRIGGER_TYPES } from './workflow-dsl.schema';
+import { MarketingEventTypes } from '../events/marketing-event-types';
 
 /**
  * The trigger matcher: on a domain event it starts only ACTIVE workflows whose
@@ -53,5 +54,31 @@ describe('WorkflowTriggerService', () => {
     const h = build([]);
     h.svc.onModuleInit();
     expect(h.bus.on).toHaveBeenCalledTimes(TRIGGER_TYPES.length);
+  });
+
+  // NetGSM Phase 5 Task 3 — press-1 on a VOICE campaign call. Asserts the
+  // 'voice_keypress' trigger type is actually wired to
+  // MarketingEventTypes.VoiceKeypress in EVENT_FOR_TRIGGER: if that mapping
+  // were missing, `bus.on` would be called with `undefined` instead, which
+  // this pins down explicitly (the generic length-only assertion above
+  // wouldn't catch it).
+  it('wires the voice_keypress trigger to marketing.voice.keypress.v1 on init', () => {
+    const h = build([]);
+    h.svc.onModuleInit();
+    expect(h.bus.on).toHaveBeenCalledWith(MarketingEventTypes.VoiceKeypress, expect.any(Function));
+  });
+
+  it('starts a workflow whose trigger is voice_keypress, filtered by trigger.key', async () => {
+    const h = build([
+      { id: 'wf-voice', status: 'ACTIVE', trigger: { type: 'voice_keypress', filters: [{ field: 'trigger.key', op: 'eq', value: '1' }] } },
+    ]);
+    const keypressEvent = {
+      payload: { workspaceId: WS, leadId: 'lead-1', campaignId: 'camp-1', recipientId: 'recip-1', key: '1' },
+      tenantId: null,
+    } as any;
+
+    await (h.svc as any).onEvent('voice_keypress', keypressEvent);
+
+    expect(h.executor.start).toHaveBeenCalledTimes(1);
   });
 });
