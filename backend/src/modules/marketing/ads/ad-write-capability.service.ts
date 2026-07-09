@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { isMetaAdsConfigured } from './ads.types';
+import {
+  isMetaAdsConfigured,
+  isTiktokAdsConfigured,
+  isLinkedinAdsConfigured,
+  isGoogleAdsConfigured,
+} from './ads.types';
 
 export interface AdWriteCapabilities {
   provider: string;
@@ -37,30 +42,30 @@ export class AdWriteCapabilityService {
     },
     TIKTOK: {
       provider: 'TIKTOK',
-      setBudget: false,
-      pauseResume: false,
+      setBudget: true,
+      pauseResume: true,
       createCampaign: false,
       duplicate: false,
-      syncAudience: false,
-      note: 'Read-only today; Business Ads Management write client pending.',
+      syncAudience: true,
+      note: 'Campaign budget + pause/resume + DMP audience upload; gated on TikTok Business creds.',
     },
     LINKEDIN: {
       provider: 'LINKEDIN',
-      setBudget: false,
-      pauseResume: false,
+      setBudget: true,
+      pauseResume: true,
       createCampaign: false,
       duplicate: false,
-      syncAudience: false,
-      note: 'Read-only today; needs rw_ads scope + campaign-update client.',
+      syncAudience: true,
+      note: 'Campaign budget + pause/resume + DMP segment upload; needs rw_ads/rw_dmp_segments scope.',
     },
     GOOGLE: {
       provider: 'GOOGLE',
-      setBudget: false,
-      pauseResume: false,
+      setBudget: true,
+      pauseResume: true,
       createCampaign: false,
       duplicate: false,
       syncAudience: false,
-      note: 'Not integrated; Google Ads API + developer token pending.',
+      note: 'Budget + pause/resume via the Google Ads API (needs a developer token + connected account).',
     },
   };
 
@@ -83,6 +88,12 @@ export class AdWriteCapabilityService {
     return cap.setBudget && cap.configured;
   }
 
+  /** True when we can pause/resume an entity on this provider now. */
+  canPauseResume(provider: string): boolean {
+    const cap = this.get(provider);
+    return cap.pauseResume && cap.configured;
+  }
+
   /** True when a CRM segment can be synced to this provider as an audience now. */
   canSyncAudience(provider: string): boolean {
     const cap = this.get(provider);
@@ -97,6 +108,12 @@ export class AdWriteCapabilityService {
     switch (provider) {
       case 'META':
         return isMetaAdsConfigured();
+      case 'TIKTOK':
+        return isTiktokAdsConfigured();
+      case 'LINKEDIN':
+        return isLinkedinAdsConfigured();
+      case 'GOOGLE':
+        return isGoogleAdsConfigured();
       default:
         return false; // no live write path wired yet
     }
