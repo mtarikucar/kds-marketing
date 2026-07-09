@@ -40,8 +40,13 @@ export class SalesCallService {
 
   /**
    * Reserve the sales line and return a dial URI. Enforces the provider's
-   * single-line concurrency: at most `maxConcurrentCalls` may be INITIATED at
-   * once. A stale INITIATED call is auto-cancelled so the line never deadlocks.
+   * concurrency: at most `maxConcurrentCalls` may be INITIATED at once —
+   * scoped to the whole WORKSPACE for the single-line lite provider
+   * (maxConcurrentCalls===1, one shared 0850 number), or scoped PER REP for a
+   * multi-line provider like netsantral (maxConcurrentCalls===50) so one
+   * busy rep never blocks a teammate's dial on a trunk with capacity to spare
+   * (NetGSM Phase 3 Task 6). A stale INITIATED call is auto-cancelled, same
+   * scope, so the line/rep never deadlocks on an abandoned row.
    *
    * The provider/registry mechanics stay workspace-agnostic (the telephony
    * line is infrastructure, not tenant data) — but every SalesCall row read
@@ -79,8 +84,22 @@ export class SalesCallService {
     }
     const provider = this.registry.get(providerId);
 
+    // Concurrency scope: the single-line lite provider (maxConcurrentCalls===1
+    // — one shared company 0850 number) must stay scoped to the WHOLE
+    // WORKSPACE, exactly as before. A multi-line provider (netsantral, 50) has
+    // capacity PER REP, not per workspace — scoping that check to the whole
+    // workspace would let one busy rep's own INITIATED row block every OTHER
+    // rep's dial attempt on a trunk that has 49 other lines free (Phase-0
+    // finding; NetGSM Phase 3 Task 6). The stale-auto-cancel sweep below is
+    // scoped identically, so a rep's own abandoned INITIATED row is only ever
+    // cleared against (and only ever counts toward) THEIR OWN limit.
+    const perRep = provider.maxConcurrentCalls > 1;
+    const concurrencyScope: Prisma.SalesCallWhereInput = perRep
+      ? { workspaceId, marketingUserId, status: 'INITIATED' }
+      : { workspaceId, status: 'INITIATED' };
+
     const active = await this.prisma.salesCall.findMany({
-      where: { workspaceId, status: 'INITIATED' },
+      where: concurrencyScope,
       orderBy: { startedAt: 'desc' },
       select: { id: true, startedAt: true },
     });
@@ -99,7 +118,9 @@ export class SalesCallService {
     const liveCount = active.length - stale.length;
     if (liveCount >= provider.maxConcurrentCalls) {
       throw new ConflictException(
-        'Sales line is busy — log or cancel the active call first',
+        perRep
+          ? 'You already have an active call — log or cancel it first'
+          : 'Sales line is busy — log or cancel the active call first',
       );
     }
 

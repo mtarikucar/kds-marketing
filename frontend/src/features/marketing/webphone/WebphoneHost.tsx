@@ -31,6 +31,15 @@ interface ScreenPopPayload {
   internalNum: string | null;
 }
 
+/** The `call_status` event payload TelephonyEventConsumer pushes on the same
+ *  stream (NetGSM Phase 3 Task 6) — the PBX-CONFIRMED leg state for a call,
+ *  independent of any SIP session in THIS browser tab (a bridge-mode call has
+ *  none at all, so it's the only signal that ever moves its status pill). */
+interface CallStatusPayload {
+  salesCallId: string;
+  status: string;
+}
+
 /** A screen-pop is only "fresh enough" to merge into a SIP `ringing` state (or
  *  vice-versa) within this window — generous, since the webhook round-trip
  *  (santral -> outbox -> consumer -> SSE) is typically slower than the direct
@@ -132,6 +141,11 @@ export default function WebphoneHost() {
   // of the SIP `state.status` because a bridge-mode call never reaches
   // `incall` here at all (see `activeCallIdSetter`'s doc above).
   const [activeCallId, setActiveCallIdState] = useState<string | null>(null);
+  // NetGSM Phase 3 Task 6 — the last `call_status` SSE frame received, for the
+  // live status pill. Tracked independently of `state.status` for the exact
+  // same reason as `activeCallId` above: a bridge-mode call has no SIP leg in
+  // this tab at all, so this is the ONLY signal that ever moves its pill.
+  const [callStatus, setCallStatus] = useState<CallStatusPayload | null>(null);
   const prevSipStatusRef = useRef<WebphoneState['status']>('idle');
   const navigate = useNavigate();
   const { t } = useTranslation('marketing');
@@ -158,6 +172,15 @@ export default function WebphoneHost() {
     activeCallIdSetter = setActiveCallIdState;
     return () => { activeCallIdSetter = null; };
   }, []);
+
+  // Once there's no active call at all, any earlier call_status is stale —
+  // clear the pill along with it. (Kept intentionally simple: activeCallId
+  // already goes through null between calls via the SIP incall->other
+  // transition below and CallControlsPanel's onCallEnded, so this is the one
+  // reset point that matters — no need to also diff "did the id change".)
+  useEffect(() => {
+    if (activeCallId === null) setCallStatus(null);
+  }, [activeCallId]);
 
   useEffect(() => {
     if (!cfg || !audioRef.current || wpRef.current) return;
@@ -204,12 +227,14 @@ export default function WebphoneHost() {
     };
   }, [cfg]);
 
-  // ── Screen-pop SSE (NetGSM Phase 3 Task 3/4) ──────────────────────────────
+  // ── Screen-pop + live call-status SSE (NetGSM Phase 3 Task 3/4/6) ─────────
   // We deliberately do NOT use EventSource here (same reasoning as InboxPage's
   // conversations stream): it can't set an Authorization header, so the only
   // way to authenticate it would be leaking the access token into the query
   // string. Instead: fetch() + Bearer header, hand-parsed text/event-stream
-  // frames, with a 3s reconnect — mirrors InboxPage's stream exactly.
+  // frames, with a 3s reconnect — mirrors InboxPage's stream exactly. The SAME
+  // connection carries both `screen_pop` (Task 3) and `call_status` (Task 6)
+  // frames — one authenticated stream per rep, not two.
   useEffect(() => {
     if (!telephonyEntitled || !accessToken) return;
 
@@ -225,6 +250,10 @@ export default function WebphoneHost() {
       if (dataLines.length === 0) return;
       try {
         const data = JSON.parse(dataLines.join('\n'));
+        if (data?.kind === 'call_status' && data.payload?.salesCallId && data.payload?.status) {
+          setCallStatus({ salesCallId: data.payload.salesCallId, status: data.payload.status });
+          return;
+        }
         if (data?.kind !== 'screen_pop' || !data.payload) return;
         const payload = data.payload as ScreenPopPayload;
         const sipState = wpRef.current?.getState();
@@ -367,14 +396,66 @@ export default function WebphoneHost() {
     />
   );
 
-  // The status pill / audio element / copilot need an actual webphone config;
-  // the ringing dialog and in-call controls above are independent (their own
-  // effects/props don't require it) and render regardless.
+  // Live status pill (Phase 3 Task 6) — independent of `cfg` for the SAME
+  // reason as the ringing dialog/in-call controls above: a bridge-mode rep
+  // (phone set, no dahili) has no SIP leg AT ALL, so the OLD pill below (fed
+  // purely by local `state.status`) never shows anything useful for their
+  // calls. This one is driven by the backend-confirmed `call_status` stream,
+  // falling back to "Calling…" the moment a call is known (`activeCallId`)
+  // but no PBX confirmation has arrived yet.
+  const liveStatus = activeCallId
+    ? callStatus?.salesCallId === activeCallId
+      ? callStatus.status
+      : 'INITIATED'
+    : null;
+  const liveStatusLabel = (status: string): string => {
+    switch (status) {
+      case 'INITIATED':
+        return t('webphone.liveStatus.initiated', 'Calling…');
+      case 'RINGING':
+        return t('webphone.liveStatus.ringing', 'Ringing…');
+      case 'CONNECTED':
+        return t('webphone.liveStatus.connected', 'Connected');
+      case 'NO_ANSWER':
+        return t('webphone.liveStatus.noAnswer', 'No answer');
+      case 'BUSY':
+        return t('webphone.liveStatus.busy', 'Busy');
+      case 'FAILED':
+        return t('webphone.liveStatus.failed', 'Call failed');
+      case 'CANCELLED':
+        return t('webphone.liveStatus.cancelled', 'Cancelled');
+      default:
+        return t('webphone.liveStatus.ended', 'Call ended');
+    }
+  };
+  const liveStatusDot =
+    liveStatus === 'CONNECTED'
+      ? 'bg-green-500'
+      : liveStatus === 'INITIATED' || liveStatus === 'RINGING'
+        ? 'bg-blue-500'
+        : liveStatus === 'CANCELLED'
+          ? 'bg-muted-foreground'
+          : 'bg-amber-500'; // NO_ANSWER / BUSY / FAILED / any other terminal
+  const liveStatusPill = liveStatus && (
+    <div
+      role="status"
+      className="fixed bottom-28 right-3 z-50 flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 shadow-md"
+    >
+      <span className={`h-2 w-2 rounded-full ${liveStatusDot}`} aria-hidden="true" />
+      <span className="text-caption text-foreground">{liveStatusLabel(liveStatus)}</span>
+    </div>
+  );
+
+  // The SIP-state status pill / audio element / copilot need an actual
+  // webphone config; the ringing dialog, in-call controls, and live status
+  // pill above are all independent (their own effects/props don't require it)
+  // and render regardless.
   if (!cfg) {
     return (
       <>
         {ringingDialog}
         {callControlsPanel}
+        {liveStatusPill}
       </>
     );
   }
@@ -404,6 +485,7 @@ export default function WebphoneHost() {
     <>
       {ringingDialog}
       {callControlsPanel}
+      {liveStatusPill}
       {/* Live-call copilot — only while a call is connected. Self-contained:
           listens to the rep's mic (Web Speech API) and surfaces AI suggestions. */}
       {state.status === 'incall' && (

@@ -62,6 +62,18 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  *    can react (see that event's docstring in marketing-event-types.ts for
  *    the TRIGGER_EVENT_MAP wiring note).
  *
+ *  - LIVE STATUS PILL (Task 6): on the `answer` claim (-> CONNECTED) and on
+ *    every terminal claim (`finalizeCall`'s claim, and `createInboundCall`'s
+ *    out-of-order-terminal create), pushes a `call_status` TelephonyStreamEvent
+ *    ({salesCallId, status}) via the SAME `TelephonyStreamService` the
+ *    screen-pop uses — `targetDahili` resolves the call's OWN attributed rep
+ *    first (`marketingUserId` -> `MarketingUser.dahili`), falling back to the
+ *    event's own `internal_num` (see `resolveTargetDahili`). This is the fix
+ *    for a bridge-mode call's status pill: a bridge call never has a SIP leg
+ *    in the rep's browser tab at all, so the OLD pill (driven purely by local
+ *    SIP state) never moved past "idle" for it — this stream carries the
+ *    PBX-confirmed truth regardless.
+ *
  * HARDENED INBOUND DETECTION (Task 1 MEDIUM follow-up): Task 1's
  * `normalizeSantralEvent` only recognizes `yon`/`direction` values that
  * literally start with "in"/"out" — a real santral payload using Turkish
@@ -223,7 +235,12 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     });
     if (claim.count === 0) {
       this.logger.log(`telephony answer event: call ${call.id} already terminal (${call.status}) — no-op`);
+      return;
     }
+    // Live status pill (NetGSM Phase 3 Task 6) — only on the ACTUAL claimed
+    // transition, never on the no-op branch above (a redelivered/late answer
+    // for an already-terminal call must never re-pop a "Connected" pill).
+    await this.pushCallStatus(workspaceId, call, 'CONNECTED', p.internalNum);
   }
 
   // ---------------------------------------------------------------------
@@ -303,6 +320,10 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`telephony ${p.kind} event: call ${call.id} already terminal (${call.status}) — no-op`);
       return;
     }
+    // Live status pill (Task 6): the FIRST hangup/cdr to actually flip this
+    // call terminal (the claim above) fires exactly once, same guard as the
+    // missed-call side effect below.
+    await this.pushCallStatus(workspaceId, call, status, p.internalNum);
 
     if (call.direction === 'INBOUND' && status === 'NO_ANSWER') {
       await this.handleMissedCall(workspaceId, call, p);
@@ -370,7 +391,13 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    if (this.isTerminal(initialStatus) && initialStatus === 'NO_ANSWER') {
+    if (this.isTerminal(initialStatus)) {
+      // Live status pill (Task 6): this out-of-order path IS a hangup/cdr —
+      // the row just never existed yet when it arrived — so the rep's pill
+      // deserves the same terminal push finalizeCall gives every other call.
+      await this.pushCallStatus(workspaceId, call, initialStatus, p.internalNum);
+    }
+    if (initialStatus === 'NO_ANSWER') {
       await this.handleMissedCall(workspaceId, call, p);
     }
   }
@@ -481,6 +508,55 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
         customerNum: p.customerNum,
       },
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // Live status pill (NetGSM Phase 3 Task 6) — pushed onto
+  // TelephonyStreamService as `kind: 'call_status'` so the rep's webphone can
+  // show a pill reflecting the REAL PBX-confirmed leg state (INITIATED is
+  // known client-side the moment the REST dial response returns; this stream
+  // covers the two transitions only the santral webhook can confirm:
+  // CONNECTED on `answer`, and a terminal status on `hangup`/`cdr` — the exact
+  // gap for a bridge-mode call, which never has a SIP leg in this tab at all).
+  // ---------------------------------------------------------------------
+
+  private async pushCallStatus(
+    workspaceId: string,
+    call: { id: string; marketingUserId: string | null },
+    status: string,
+    internalNum: string | null | undefined,
+  ): Promise<void> {
+    const targetDahili = await this.resolveTargetDahili(workspaceId, call.marketingUserId, internalNum ?? null);
+    this.telephonyStream.push(workspaceId, {
+      kind: 'call_status',
+      targetDahili,
+      payload: { salesCallId: call.id, status },
+    });
+  }
+
+  /** The call's OWN attributed rep (marketingUserId -> MarketingUser.dahili)
+   *  is the correct routing key — it's stable regardless of which extension
+   *  the event itself carries (e.g. a bridge-mode call's `internal_num` may
+   *  not even be the rep's own dahili, or may be absent entirely). Falls back
+   *  to the event's own `internal_num` only when the call has no attributed
+   *  rep (an unmatched inbound call) — same fallback order as `handleAnswer`'s
+   *  answeredBy resolution. Broadcast (null) when neither resolves; the
+   *  payload carries no sensitive data (just id + status), so a stray
+   *  broadcast is harmless — a rep's own pill only reacts to a payload whose
+   *  `salesCallId` matches their own known active call. */
+  private async resolveTargetDahili(
+    workspaceId: string,
+    marketingUserId: string | null,
+    internalNum: string | null,
+  ): Promise<string | null> {
+    if (marketingUserId) {
+      const rep = await this.prisma.marketingUser.findFirst({
+        where: { id: marketingUserId, workspaceId },
+        select: { dahili: true },
+      });
+      if (rep?.dahili) return rep.dahili;
+    }
+    return internalNum ?? null;
   }
 
   // ---------------------------------------------------------------------

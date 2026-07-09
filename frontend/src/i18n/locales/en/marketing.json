@@ -1794,6 +1794,16 @@
       "transferSuccess": "Call transferred",
       "transferFailed": "Transfer failed",
       "cancel": "Cancel"
+    },
+    "liveStatus": {
+      "initiated": "Calling…",
+      "ringing": "Ringing…",
+      "connected": "Connected",
+      "noAnswer": "No answer",
+      "busy": "Busy",
+      "failed": "Call failed",
+      "cancelled": "Cancelled",
+      "ended": "Call ended"
     }
   },
   "voiceAiSettings": {

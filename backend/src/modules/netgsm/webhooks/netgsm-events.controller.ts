@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, Logger, NotFoundException, Param, Post } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { payloadDigest, verifyNetgsmWebhookToken } from './netgsm-webhook.util';
@@ -24,6 +25,16 @@ interface WebhookRow {
  * only MARKETING_SECRET_KEY holders can mint. Phase 0: verify + archive +
  * dedupe (202). Domain consumers (screen-pop, CDR upsert, İYS apply) attach
  * in Phases 2/3/5 by reading NetgsmWebhookEvent / subscribing to bus events.
+ *
+ * `@SkipThrottle()` on BOTH routes below (NetGSM Phase 3 Task 6, Phase-0
+ * finding): NetGSM pushes every tenant's santral events AND İYS push-backs
+ * from a small, fixed set of its own server IPs — machine traffic, not a
+ * browser's. The global 300 req/min PER-IP `ThrottlerGuard` (app-wide
+ * `APP_GUARD`) would throttle that shared IP into 429s under real call/İYS
+ * volume across many tenants, exactly like `InternalEventsController`'s own
+ * `@SkipThrottle()` for core's single egress IP. The future voice/autocall
+ * report route (Phase 5 — not built yet) is the same shape and should carry
+ * it too when it's added.
  */
 @Controller('public/netgsm')
 export class NetgsmEventsController {
@@ -70,6 +81,7 @@ export class NetgsmEventsController {
    */
   @Post(':workspaceId/:token/events')
   @HttpCode(202)
+  @SkipThrottle()
   async events(
     @Param('workspaceId') workspaceId: string,
     @Param('token') token: string,
@@ -148,6 +160,7 @@ export class NetgsmEventsController {
    */
   @Post(':workspaceId/:token/iys')
   @HttpCode(202)
+  @SkipThrottle()
   async iys(
     @Param('workspaceId') workspaceId: string,
     @Param('token') token: string,

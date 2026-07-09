@@ -2006,6 +2006,16 @@
       "transferSuccess": "Görüşme aktarıldı",
       "transferFailed": "Aktarma başarısız oldu",
       "cancel": "Vazgeç"
+    },
+    "liveStatus": {
+      "initiated": "Aranıyor…",
+      "ringing": "Çalıyor…",
+      "connected": "Görüşmede",
+      "noAnswer": "Cevap yok",
+      "busy": "Meşgul",
+      "failed": "Görüşme başarısız",
+      "cancelled": "İptal edildi",
+      "ended": "Görüşme sona erdi"
     }
   },
   "voiceAiSettings": {

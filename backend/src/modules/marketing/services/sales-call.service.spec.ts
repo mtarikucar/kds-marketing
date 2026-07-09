@@ -89,6 +89,86 @@ describe('SalesCallService', () => {
       expect(prisma.salesCall.create).toHaveBeenCalled();
     });
 
+    // ── Per-rep concurrency (NetGSM Phase 3 Task 6) ─────────────────────────
+    describe('concurrency scope', () => {
+      it('netsantral (maxConcurrentCalls>1): rep A already has an INITIATED call, but rep B can still dial — the occupancy check is scoped to THIS rep, not the whole workspace', async () => {
+        const apiProvider = {
+          id: 'netgsm-netsantral',
+          maxConcurrentCalls: 50,
+          prepareOutboundCall: jest.fn().mockResolvedValue({ providerId: 'netgsm-netsantral', dialUri: '', mode: 'api', externalCallId: null }),
+        };
+        registry.get.mockReturnValue(apiProvider);
+        prisma.marketingUser.findFirst.mockResolvedValue({ dahili: null, phone: null } as any);
+        telephonyConfig.resolveForWorkspace.mockResolvedValue(null);
+        // Rep B's own occupancy query comes back empty — rep A's busy call is
+        // irrelevant to it (a real Prisma `where: {marketingUserId: repB}`
+        // would never return rep A's row; the mock just simulates that).
+        prisma.salesCall.findMany.mockResolvedValue([]);
+        prisma.salesCall.create.mockResolvedValue({ id: 'call-repB' } as any);
+
+        await svc.startCall(WS, 'rep-B', { toPhone: '05551234567' } as any);
+
+        expect(prisma.salesCall.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { workspaceId: WS, marketingUserId: 'rep-B', status: 'INITIATED' } }),
+        );
+        expect(apiProvider.prepareOutboundCall).toHaveBeenCalled();
+      });
+
+      it("netsantral: THIS rep is already AT their own cap -> rejects with the per-rep message (a multi-line provider's cap is still enforceable per rep, just at a higher number)", async () => {
+        // A synthetic cap of 2 makes "at capacity" reachable in a unit test;
+        // the real netsantral value (50) exercises the exact same `perRep`
+        // branch — see the "rep A busy, rep B unaffected" test above for that.
+        const apiProvider = { id: 'netgsm-netsantral', maxConcurrentCalls: 2, prepareOutboundCall: jest.fn() };
+        registry.get.mockReturnValue(apiProvider);
+        prisma.marketingUser.findFirst.mockResolvedValue({ dahili: null, phone: null } as any);
+        telephonyConfig.resolveForWorkspace.mockResolvedValue(null);
+        prisma.salesCall.findMany.mockResolvedValue([
+          { id: 'c-own-1', startedAt: new Date() },
+          { id: 'c-own-2', startedAt: new Date() },
+        ] as any);
+
+        await expect(svc.startCall(WS, REP, { toPhone: '05551234567' } as any)).rejects.toMatchObject({
+          message: expect.stringContaining('You already have an active call'),
+        });
+        expect(apiProvider.prepareOutboundCall).not.toHaveBeenCalled();
+      });
+
+      it('lite (maxConcurrentCalls===1): stays scoped to the whole WORKSPACE — one rep busy still blocks another', async () => {
+        // Default beforeEach provider is already `netgsm-lite` maxConcurrentCalls:1.
+        prisma.salesCall.findMany.mockResolvedValue([{ id: 'c-other-rep', startedAt: new Date() }] as any);
+
+        await expect(svc.startCall(WS, 'rep-other', { toPhone: '05551234567' } as any)).rejects.toBeInstanceOf(ConflictException);
+        expect(prisma.salesCall.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { workspaceId: WS, status: 'INITIATED' } }),
+        );
+      });
+
+      it('per-rep stale-cancel sweep is scoped the same way as the occupancy check', async () => {
+        const apiProvider = {
+          id: 'netgsm-netsantral',
+          maxConcurrentCalls: 50,
+          prepareOutboundCall: jest.fn().mockResolvedValue({ providerId: 'netgsm-netsantral', dialUri: '', mode: 'api', externalCallId: null }),
+        };
+        registry.get.mockReturnValue(apiProvider);
+        prisma.marketingUser.findFirst.mockResolvedValue({ dahili: null, phone: null } as any);
+        telephonyConfig.resolveForWorkspace.mockResolvedValue(null);
+        prisma.salesCall.findMany.mockResolvedValue([
+          { id: 'c-stale-rep', startedAt: new Date(Date.now() - 60 * 60 * 1000) },
+        ] as any);
+        prisma.salesCall.updateMany.mockResolvedValue({ count: 1 } as any);
+        prisma.salesCall.create.mockResolvedValue({ id: 'call-new' } as any);
+
+        await svc.startCall(WS, REP, { toPhone: '05551234567' } as any);
+
+        expect(prisma.salesCall.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { workspaceId: WS, marketingUserId: REP, status: 'INITIATED' } }),
+        );
+        expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: { in: ['c-stale-rep'] }, workspaceId: WS } }),
+        );
+      });
+    });
+
     it('rejects when the linked lead does not exist in the workspace', async () => {
       prisma.lead.findFirst.mockResolvedValue(null);
       await expect(

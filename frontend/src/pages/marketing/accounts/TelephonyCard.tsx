@@ -131,6 +131,19 @@ export function TelephonyCard() {
 }
 
 /**
+ * True only when the CDR leg genuinely confirmed (an httpStatus 2xx AND no
+ * NetGSM error `code` in the body) — see the CDR-note fix note below for why
+ * `'httpStatus' in cdr` alone is not sufficient.
+ */
+function cdrConfirmedOk(cdr: VerifyResult['cdr']): boolean {
+  if (!cdr || !('httpStatus' in cdr)) return false; // {skipped}/{error} — transport-level failure
+  const { httpStatus, body } = cdr;
+  if (httpStatus < 200 || httpStatus >= 300) return false;
+  const errorCode = body && typeof body === 'object' ? (body as Record<string, unknown>).code : undefined;
+  return errorCode == null;
+}
+
+/**
  * Disambiguate the /telephony/verify response into a tone + localized headline
  * + optional secondary detail line:
  * - The headline ALWAYS comes from an i18n key — `balance.message` is a raw
@@ -145,6 +158,17 @@ export function TelephonyCard() {
  *   CDR leg is only ever reachable from NetGSM's allow-listed prod IP, so its
  *   absence is expected almost everywhere except production and gets its own
  *   informational note rather than being folded into the main verdict.
+ *
+ * CDR-note fix (Phase-0 deferral, NetGSM Phase 3 Task 6): `cdr.testFetch`
+ * (backend `CallCdrSyncService.testFetch` -> `NetgsmCdrClient.fetchRaw`)
+ * ALWAYS returns `{httpStatus, body}` as long as NetGSM's server answered at
+ * all — including a pre-auth rejection off-prod, which NetGSM returns as
+ * HTTP 200 with an error envelope `{code: "30", error: "..."}` in the body
+ * (see `netgsm-cdr.client.ts`'s own comment on that envelope shape). So
+ * `'httpStatus' in cdr` alone is NOT proof the CDR leg actually authenticated
+ * — it only proves the transport didn't fail. The note must also show
+ * whenever the body carries a NetGSM error `code`, or the HTTP status itself
+ * isn't 2xx.
  */
 function describeVerifyResult(
   result: VerifyResult,
@@ -160,8 +184,7 @@ function describeVerifyResult(
   }
 
   const credsValid = result.balance?.credsValid ?? null;
-  const cdrConfirmed = !!result.cdr && 'httpStatus' in result.cdr;
-  const showCdrNote = !cdrConfirmed;
+  const showCdrNote = !cdrConfirmedOk(result.cdr);
   const detail = result.balance?.message || null;
 
   if (credsValid === true) {

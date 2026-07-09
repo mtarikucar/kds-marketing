@@ -217,6 +217,9 @@ function sseFetchMock(frames: string[]) {
 const screenPopFrame = (payload: Record<string, unknown>) =>
   `data: ${JSON.stringify({ kind: 'screen_pop', payload })}\n\n`;
 
+const callStatusFrame = (payload: Record<string, unknown>) =>
+  `data: ${JSON.stringify({ kind: 'call_status', payload })}\n\n`;
+
 describe('WebphoneHost — screen-pop SSE correlation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -422,5 +425,76 @@ describe('WebphoneHost — in-call controls panel', () => {
     act(() => emit({ status: 'registered' })); // hangup
     expect(screen.queryByRole('button', { name: /transfer/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^hold$/i })).not.toBeInTheDocument();
+  });
+});
+
+// ── Live status pill driven by call_status SSE (Phase 3 Task 6) ───────────
+
+describe('WebphoneHost — live status pill (call_status SSE)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fakeState = { status: 'registered' };
+    subscriber = null;
+  });
+
+  it('shows a "Calling…" pill once the active call id is known but no call_status has arrived yet — the exact bridge-mode gap this fixes (no SIP leg ever moves the OLD pill)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no sse')));
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => setActiveCallId('call-1'));
+
+    expect(await screen.findByText(/calling/i)).toBeInTheDocument();
+  });
+
+  it('shows "Connected" once a call_status CONNECTED frame arrives for the active call', async () => {
+    vi.stubGlobal('fetch', sseFetchMock([callStatusFrame({ salesCallId: 'call-1', status: 'CONNECTED' })]));
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => setActiveCallId('call-1'));
+
+    expect(await screen.findByText(/connected/i)).toBeInTheDocument();
+  });
+
+  it('shows the terminal label once a call_status NO_ANSWER frame arrives', async () => {
+    vi.stubGlobal('fetch', sseFetchMock([callStatusFrame({ salesCallId: 'call-1', status: 'NO_ANSWER' })]));
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => setActiveCallId('call-1'));
+
+    expect(await screen.findByText(/no answer/i)).toBeInTheDocument();
+  });
+
+  it('ignores a call_status for a DIFFERENT salesCallId — the pill still shows "Calling…" for the actually-active call', async () => {
+    vi.stubGlobal('fetch', sseFetchMock([callStatusFrame({ salesCallId: 'call-OTHER', status: 'CONNECTED' })]));
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => setActiveCallId('call-1'));
+
+    expect(await screen.findByText(/calling/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^connected$/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the pill once the active call ends (activeCallId -> null)', async () => {
+    vi.stubGlobal('fetch', sseFetchMock([callStatusFrame({ salesCallId: 'call-1', status: 'CONNECTED' })]));
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    act(() => setActiveCallId('call-1'));
+    expect(await screen.findByText(/connected/i)).toBeInTheDocument();
+
+    act(() => setActiveCallId(null));
+
+    await waitFor(() => expect(screen.queryByText(/connected/i)).not.toBeInTheDocument());
+  });
+
+  it('renders no pill at all when there is no active call', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no sse')));
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

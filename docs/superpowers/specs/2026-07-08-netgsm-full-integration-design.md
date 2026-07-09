@@ -146,7 +146,7 @@ Hub skeleton + core; strangler moves; **BalanceClient + real "Verify"** on SMS c
 - **Webphone inbound UX**: auto-answer ONLY the originate ring-back (correlate with a just-started outbound SalesCall); genuine inbound INVITEs get the ringing dialog (fixes the auto-answer privacy/mic hazard).
 - **In-call controls**: NetsantralClient hangup/xfer/atxfer/muteaudio (need live unique_id from events — this is why call control depends on the webhook); webphone hold/mute via SIP.js session methods; DTMF keypad; transfer picker listing teammates' dahilis. New endpoints under sales-call controller behind `telephony` + leads.write.
 - **Live status**: SalesCall status pill driven by Answer/Hangup events (INITIATED→RINGING→CONNECTED→ENDED).
-- Fix: `maxConcurrentCalls` enforcement per-rep not per-workspace where the provider supports it.
+- Fix (shipped Phase 3 Task 6): `maxConcurrentCalls` enforcement is per-rep where the provider supports it (netsantral, 50 lines) — one busy rep no longer blocks a teammate; the single-line lite provider (1) stays per-workspace.
 
 ### Phase 4 — Recording pipeline + queues + stats + voicemail
 - **Recording**: `recordCalls` toggle on TelephonyConfig → pass caller_record/called_record on linkup/originate (KVKK: settings card links announcement guidance); ingest from webhook `seskaydi` (instant) + CDR `recording` field (reconciliation) → download `&tomp3` → R2 → `recordingStorageKey`; retention job honoring `recordingRetentionDays`; in-app `<audio>` player from own storage (replaces raw cross-origin tokenized link); CallAnalysis STT reads the stored file (no more link-longevity dependency).

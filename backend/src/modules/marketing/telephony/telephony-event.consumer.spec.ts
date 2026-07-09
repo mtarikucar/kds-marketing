@@ -375,9 +375,18 @@ describe('TelephonyEventConsumer', () => {
       expect(outbox.append).toHaveBeenCalledWith(
         expect.objectContaining({ type: MarketingEventTypes.CallMissed, payload: expect.objectContaining({ salesCallId: 'call-8' }) }),
       );
-      // But NOT a screen-pop — this call already ended by the time this
-      // out-of-order hangup created the row; there is nothing left to "pop".
-      expect(telephonyStream.push).not.toHaveBeenCalled();
+      // No screen-pop — this call already ended by the time this out-of-order
+      // hangup created the row; there is nothing left to "pop". It DOES still
+      // get a call_status push (Task 6) — the rep's live pill still deserves
+      // to see the terminal state, even for a call whose row was born already
+      // ended (no marketingUserId here, so it falls back to the event's own
+      // internal_num, which is null too -> broadcast).
+      expect(telephonyStream.push).toHaveBeenCalledTimes(1);
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: null,
+        payload: { salesCallId: 'call-8', status: 'NO_ANSWER' },
+      });
     });
 
     it('a redelivered/out-of-order inbound_call against an already-upserted row fills blanks but never regresses status', async () => {
@@ -618,6 +627,108 @@ describe('TelephonyEventConsumer', () => {
 
       await expect(handle(makeEvent('evt-13', { kind: 'answer', uniqueId: 'uid-none' }))).resolves.toBeUndefined();
       expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('call_status SSE push (Task 6 — live status pill)', () => {
+    it('answer -> pushes call_status CONNECTED, targetDahili resolved from the call\'s OWN rep (marketingUserId -> MarketingUser.dahili)', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-20',
+        workspaceId: 'ws-1',
+        direction: 'OUTBOUND',
+        status: 'INITIATED',
+        externalCallId: 'uid-20',
+        marketingUserId: 'rep-20',
+        answeredByUserId: null,
+      });
+      // First findFirst call is handleAnswer's own answeredBy lookup (by
+      // internal_num); the SECOND is pushCallStatus's resolveTargetDahili
+      // lookup (by the call's marketingUserId).
+      (prisma.marketingUser.findFirst as jest.Mock)
+        .mockResolvedValueOnce({ id: 'rep-20' })
+        .mockResolvedValueOnce({ dahili: '210' });
+
+      await handle(makeEvent('evt-20', { kind: 'answer', uniqueId: 'uid-20', internalNum: '999' }));
+
+      expect(prisma.marketingUser.findFirst).toHaveBeenNthCalledWith(2, {
+        where: { id: 'rep-20', workspaceId: 'ws-1' },
+        select: { dahili: true },
+      });
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: '210', // the REP's own dahili, not the event's internal_num ('999')
+        payload: { salesCallId: 'call-20', status: 'CONNECTED' },
+      });
+    });
+
+    it('answer -> falls back to the event\'s internal_num when the call has no attributed rep', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-21',
+        workspaceId: 'ws-1',
+        direction: 'INBOUND',
+        status: 'RINGING',
+        externalCallId: 'uid-21',
+        marketingUserId: null,
+        answeredByUserId: null,
+      });
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce(null); // answeredBy lookup: no match
+
+      await handle(makeEvent('evt-21', { kind: 'answer', uniqueId: 'uid-21', internalNum: '104' }));
+
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: '104',
+        payload: { salesCallId: 'call-21', status: 'CONNECTED' },
+      });
+    });
+
+    it('answer -> does NOT push when the call is already terminal (no-op claim)', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-22',
+        workspaceId: 'ws-1',
+        status: 'CONNECTED',
+        marketingUserId: 'rep-22',
+      });
+      (prisma.salesCall.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+
+      await handle(makeEvent('evt-22', { kind: 'answer', uniqueId: 'uid-22', internalNum: '104' }));
+
+      expect(telephonyStream.push).not.toHaveBeenCalled();
+    });
+
+    it('hangup/cdr -> pushes call_status with the final terminal status once the claim actually flips the call', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-23',
+        workspaceId: 'ws-1',
+        direction: 'OUTBOUND',
+        status: 'INITIATED',
+        externalCallId: 'uid-23',
+        marketingUserId: 'rep-23',
+      });
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ dahili: '230' });
+
+      await handle(makeEvent('evt-23', { kind: 'hangup', uniqueId: 'uid-23', durationSec: 30, status: 'ANSWERED' }));
+
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: '230',
+        payload: { salesCallId: 'call-23', status: 'CONNECTED' },
+      });
+    });
+
+    it('hangup/cdr -> does NOT push when the claim is a no-op (already terminal / redelivered)', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-24',
+        workspaceId: 'ws-1',
+        direction: 'OUTBOUND',
+        status: 'CONNECTED',
+        marketingUserId: 'rep-24',
+      });
+      (prisma.salesCall.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+
+      await handle(makeEvent('evt-24', { kind: 'hangup', crmId: 'call-24', durationSec: 0, status: 'NOANSWER' }));
+
+      expect(telephonyStream.push).not.toHaveBeenCalled();
     });
   });
 

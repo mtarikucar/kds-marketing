@@ -7,9 +7,12 @@ import { filter } from 'rxjs/operators';
  *  - `screen_pop`: an inbound call arriving for a specific extension —
  *    carries the resolved lead + call context so the rep sees a caller card
  *    before/as they answer (see TelephonyEventConsumer.handleInboundCall).
- *  - `call_status`: live INITIATED->RINGING->CONNECTED->ENDED transitions for
- *    a call, driving the status pill (NetGSM Phase 3 Task 6 — not built yet;
- *    the kind is reserved now so this event shape never needs to change).
+ *  - `call_status`: live CONNECTED/terminal transitions for a call, driving
+ *    the rep's status pill (NetGSM Phase 3 Task 6 — pushed by
+ *    TelephonyEventConsumer on `answer`/`hangup`/`cdr`; INITIATED/RINGING are
+ *    known client-side already, from the dial REST response and the SIP/
+ *    screen-pop ringing signal respectively, so only the PBX-confirmed
+ *    CONNECTED/NO_ANSWER/BUSY/FAILED transitions travel over this stream).
  */
 export interface TelephonyStreamEvent {
   kind: 'screen_pop' | 'call_status';

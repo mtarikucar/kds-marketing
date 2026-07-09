@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { NotFoundException } from '@nestjs/common';
 import { NetgsmEventsController } from './netgsm-events.controller';
 import { netgsmWebhookToken, payloadDigest } from './netgsm-webhook.util';
@@ -550,5 +551,30 @@ describe('NetgsmEventsController — iys', () => {
       skipDuplicates: true,
     });
     expect(outbox.append).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Throttling (NetGSM Phase 3 Task 6, Phase-0 finding): NetGSM pushes every
+ * tenant's santral events AND İYS push-backs from a small, fixed set of its
+ * own server IPs — the global 300 req/min PER-IP ThrottlerGuard would 429 that
+ * shared IP under real cross-tenant volume. `@SkipThrottle()` records
+ * `THROTTLER:SKIPdefault: true` as Reflect metadata on the handler — same
+ * fitness-test idiom as `public-write-throttle.arch.spec.ts`'s own
+ * `THROTTLER:LIMITdefault` check.
+ */
+describe('NetgsmEventsController — throttling', () => {
+  const SKIP_META = 'THROTTLER:SKIPdefault';
+
+  function skipsThrottle(method: string): unknown {
+    return Reflect.getMetadata(SKIP_META, (NetgsmEventsController.prototype as Record<string, unknown>)[method] as object);
+  }
+
+  it('the events route skips the global rate limiter', () => {
+    expect(skipsThrottle('events')).toBe(true);
+  });
+
+  it('the iys route also skips it (İYS push-back is NetGSM-originated too, same shared IPs)', () => {
+    expect(skipsThrottle('iys')).toBe(true);
   });
 });
