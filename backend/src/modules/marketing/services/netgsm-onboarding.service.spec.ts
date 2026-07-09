@@ -22,6 +22,14 @@ function telephonyMock() {
 function balanceMock() {
   return { fetchBalance: jest.fn() } as any;
 }
+function smsV2Mock() {
+  return { msgheaders: jest.fn() } as any;
+}
+/** Default: no sealed secrets (mirrors an unconfigured/absent channel) — the
+ *  senderHeaders-specific tests override resolveConfig's return value. */
+function registryMock() {
+  return { resolveConfig: jest.fn().mockReturnValue({ secrets: {}, public: {} }) } as any;
+}
 
 describe('NetgsmOnboardingService', () => {
   it('smsChannel: missing when no ACTIVE SMS channel exists', async () => {
@@ -30,7 +38,7 @@ describe('NetgsmOnboardingService', () => {
     prisma.marketingUser.count.mockResolvedValue(0);
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
-    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(items.find((i) => i.key === 'smsChannel')).toEqual({ key: 'smsChannel', state: 'missing' });
     expect(items.find((i) => i.key === 'moUrl')).toEqual({ key: 'moUrl', state: 'missing' });
@@ -42,7 +50,7 @@ describe('NetgsmOnboardingService', () => {
     prisma.marketingUser.count.mockResolvedValue(0);
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
-    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(items.find((i) => i.key === 'smsChannel')).toEqual({ key: 'smsChannel', state: 'ok' });
     const moUrl = items.find((i) => i.key === 'moUrl');
@@ -58,7 +66,7 @@ describe('NetgsmOnboardingService', () => {
     telephony.resolveForWorkspace.mockResolvedValue({ username: 'u', password: 'p', trunk: '850' });
     const balance = balanceMock();
     balance.fetchBalance.mockResolvedValue({ ok: true, credsValid: true, code: null, credit: '10 TL', packages: [], message: null });
-    const svc = new NetgsmOnboardingService(prisma, telephony, balance);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balance, smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(balance.fetchBalance).toHaveBeenCalledWith({ usercode: 'u', password: 'p' });
     const smsCreds = items.find((i) => i.key === 'smsCredsLive');
@@ -76,7 +84,7 @@ describe('NetgsmOnboardingService', () => {
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
     const balance = balanceMock();
-    const svc = new NetgsmOnboardingService(prisma, telephony, balance);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balance, smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(balance.fetchBalance).not.toHaveBeenCalled();
     const smsCreds = items.find((i) => i.key === 'smsCredsLive');
@@ -92,7 +100,7 @@ describe('NetgsmOnboardingService', () => {
     telephony.resolveForWorkspace.mockResolvedValue({ username: 'u', password: 'p', trunk: '850' });
     const balance = balanceMock();
     balance.fetchBalance.mockResolvedValue({ ok: true, credsValid: true, code: null, credit: null, packages: [], message: null });
-    const svc = new NetgsmOnboardingService(prisma, telephony, balance);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balance, smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(items.find((i) => i.key === 'telephonyConfig')).toEqual({ key: 'telephonyConfig', state: 'ok' });
   });
@@ -103,7 +111,7 @@ describe('NetgsmOnboardingService', () => {
     prisma.marketingUser.count.mockResolvedValue(2);
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
-    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(prisma.marketingUser.count).toHaveBeenCalledWith({ where: { workspaceId: 'ws', dahili: { not: null } } });
     expect(items.find((i) => i.key === 'repsWithDahili')).toEqual({ key: 'repsWithDahili', state: 'ok', detail: '2' });
@@ -115,7 +123,7 @@ describe('NetgsmOnboardingService', () => {
     prisma.marketingUser.count.mockResolvedValue(0);
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
-    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(items.find((i) => i.key === 'repsWithDahili')).toEqual({ key: 'repsWithDahili', state: 'missing', detail: '0' });
   });
@@ -126,7 +134,7 @@ describe('NetgsmOnboardingService', () => {
     prisma.marketingUser.count.mockResolvedValue(0);
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
-    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws-1');
     const events = items.find((i) => i.key === 'eventsWebhookUrl');
     expect(events?.state).toBe('unknown');
@@ -141,7 +149,7 @@ describe('NetgsmOnboardingService', () => {
     prisma.marketingUser.count.mockResolvedValue(0);
     const telephony = telephonyMock();
     telephony.resolveForWorkspace.mockResolvedValue(null);
-    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws');
     expect(items.find((i) => i.key === 'otpPackage')).toEqual({
       key: 'otpPackage', state: 'unknown', detail: 'otpPackageHint',
@@ -157,7 +165,7 @@ describe('NetgsmOnboardingService', () => {
     telephony.resolveForWorkspace.mockResolvedValue({ username: 'u', password: 'p', trunk: '850' });
     const balance = balanceMock();
     balance.fetchBalance.mockReturnValue(new Promise(() => {})); // never resolves — simulates a hung NetGSM call
-    const svc = new NetgsmOnboardingService(prisma, telephony, balance);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balance, smsV2Mock(), registryMock());
 
     const pending = svc.checklist('ws');
     await jest.advanceTimersByTimeAsync(6000);
@@ -165,5 +173,90 @@ describe('NetgsmOnboardingService', () => {
 
     expect(items.find((i) => i.key === 'smsCredsLive')?.state).toBe('unknown');
     expect(items.find((i) => i.key === 'santralCredsLive')?.state).toBe('unknown');
+  });
+
+  it('senderHeaders: unknown when no ACTIVE SMS channel exists (nothing to probe)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const smsV2 = smsV2Mock();
+    const registry = registryMock();
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2, registry);
+    const { items } = await svc.checklist('ws');
+    expect(registry.resolveConfig).not.toHaveBeenCalled();
+    expect(smsV2.msgheaders).not.toHaveBeenCalled();
+    expect(items.find((i) => i.key === 'senderHeaders')).toEqual({
+      key: 'senderHeaders', state: 'unknown', detail: 'headersUnavailable',
+    });
+  });
+
+  it('senderHeaders: unknown when the channel exists but has no sealed usercode/password/msgheader yet', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1' });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const smsV2 = smsV2Mock();
+    const registry = registryMock(); // default: secrets: {}
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2, registry);
+    const { items } = await svc.checklist('ws');
+    expect(smsV2.msgheaders).not.toHaveBeenCalled();
+    expect(items.find((i) => i.key === 'senderHeaders')).toEqual({
+      key: 'senderHeaders', state: 'unknown', detail: 'headersUnavailable',
+    });
+  });
+
+  it('senderHeaders: unknown when the msgheader-list endpoint is unavailable (creds live otherwise)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1' });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const smsV2 = smsV2Mock();
+    smsV2.msgheaders.mockResolvedValue({ ok: false, headers: [] });
+    const registry = registryMock();
+    registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u', password: 'p', msgheader: 'BRAND' }, public: {} });
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2, registry);
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'senderHeaders')).toEqual({
+      key: 'senderHeaders', state: 'unknown', detail: 'headersUnavailable',
+    });
+  });
+
+  it('senderHeaders: ok with the approved-list count as detail when the configured msgheader is in the account\'s approved list', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1' });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const smsV2 = smsV2Mock();
+    smsV2.msgheaders.mockResolvedValue({ ok: true, headers: ['BRAND', 'OTHERHDR', 'THIRDHDR'] });
+    const registry = registryMock();
+    registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u', password: 'p', msgheader: 'BRAND' }, public: {} });
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2, registry);
+    const { items } = await svc.checklist('ws');
+    expect(smsV2.msgheaders).toHaveBeenCalledWith({ usercode: 'u', password: 'p' });
+    expect(items.find((i) => i.key === 'senderHeaders')).toEqual({
+      key: 'senderHeaders', state: 'ok', detail: '3',
+    });
+  });
+
+  it('senderHeaders: missing, naming the configured header, when it is NOT in the account\'s approved list', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1' });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const smsV2 = smsV2Mock();
+    smsV2.msgheaders.mockResolvedValue({ ok: true, headers: ['OTHERHDR'] });
+    const registry = registryMock();
+    registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u', password: 'p', msgheader: 'BRAND' }, public: {} });
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2, registry);
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'senderHeaders')).toEqual({
+      key: 'senderHeaders', state: 'missing', detail: 'BRAND',
+    });
   });
 });

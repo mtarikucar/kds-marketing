@@ -29,6 +29,11 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   // instead of pretending to check it live.
   otpPackageHint:
     "Can't be checked without sending a real code — if OTP sends fail with NetGSM error 60, the OTP package isn't active on this NetGSM account yet.",
+  // NetGSM SMS v2 Task 13 — senderHeaders degrades to 'unknown' (rather than a
+  // false 'missing') when there's no SMS channel/creds/msgheader to check yet,
+  // or NetGSM's own approved-header list endpoint is temporarily unreachable.
+  headersUnavailable:
+    "Can't be checked yet — no sender header saved on the SMS channel, or NetGSM's approved-header list is temporarily unavailable.",
 };
 
 /**
@@ -57,6 +62,7 @@ export function NetgsmOnboardingCard() {
       repsWithDahili: 'Reps with a dahili (extension)',
       eventsWebhookUrl: 'Events webhook URL',
       otpPackage: 'SMS OTP package',
+      senderHeaders: 'Sender header (msgheader) İYS-approved',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

@@ -2,8 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { TelephonyConfigService } from '../telephony/telephony-config.service';
 import { BalanceClient, BalanceResult } from '../../netgsm/balance/balance.client';
+import { SmsV2Client } from '../../netgsm/sms/sms-v2.client';
 import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 import { netgsmMoCallbackUrl } from '../channels/netgsm-callback.util';
+import { ChannelAdapterRegistry, ChannelRowLike } from '../channels/channel-adapter.registry';
 
 export interface OnboardingItem {
   key: string;
@@ -36,6 +38,8 @@ export class NetgsmOnboardingService {
     private readonly prisma: PrismaService,
     private readonly telephony: TelephonyConfigService,
     private readonly balance: BalanceClient,
+    private readonly smsV2: SmsV2Client,
+    private readonly registry: ChannelAdapterRegistry,
   ) {}
 
   async checklist(workspaceId: string): Promise<{ items: OnboardingItem[] }> {
@@ -44,7 +48,7 @@ export class NetgsmOnboardingService {
 
     const sms = await this.prisma.channel.findFirst({
       where: { workspaceId, type: 'SMS', status: 'ACTIVE' },
-      select: { id: true },
+      select: { id: true, workspaceId: true, type: true, externalId: true, configSealed: true, configPublic: true },
     });
     items.push({ key: 'smsChannel', state: sms ? 'ok' : 'missing' });
     items.push({
@@ -86,6 +90,15 @@ export class NetgsmOnboardingService {
     items.push({ key: 'telephonyConfig', state: cfg ? 'ok' : 'missing' });
     items.push({ key: 'santralCredsLive', state: smsCreds.state, detail: smsCreds.detail });
 
+    // NetGSM SMS v2 Task 13 — whether the ACTIVE SMS channel's configured
+    // msgheader (sealed onto the channel row, NOT the shared Netsantral creds
+    // probed above) is actually İYS-approved on the account. Live-checked via
+    // the same SmsV2Client.msgheaders() endpoint NetgsmSmsAdapter.healthCheck
+    // already probes (see netgsm-sms.adapter.ts) — this row just surfaces the
+    // same signal on the onboarding checklist instead of only after a manual
+    // "Verify" click in channel settings.
+    items.push(await this.checkSenderHeader(sms));
+
     const dahiliCount = await this.prisma.marketingUser.count({
       where: { workspaceId, dahili: { not: null } },
     });
@@ -99,6 +112,32 @@ export class NetgsmOnboardingService {
     });
 
     return { items };
+  }
+
+  /** `senderHeaders` row: resolves the ACTIVE SMS channel's own sealed creds +
+   *  configured msgheader (never the shared Netsantral creds — this is the
+   *  actual SMS-send credential path), fetches the account's İYS-approved
+   *  header list live, and compares. No channel / no sealed creds / the
+   *  header-list endpoint being unavailable all degrade to 'unknown' rather
+   *  than a false 'missing' — mirrors probeBalance's "never hang or lie about
+   *  an outage" rule. */
+  private async checkSenderHeader(sms: ChannelRowLike | null): Promise<OnboardingItem> {
+    if (!sms) {
+      return { key: 'senderHeaders', state: 'unknown', detail: 'headersUnavailable' };
+    }
+    const { secrets } = this.registry.resolveConfig(sms);
+    const { usercode, password, msgheader } = secrets;
+    if (!usercode || !password || !msgheader) {
+      return { key: 'senderHeaders', state: 'unknown', detail: 'headersUnavailable' };
+    }
+    const headersResult = await this.smsV2.msgheaders({ usercode, password });
+    if (!headersResult.ok) {
+      return { key: 'senderHeaders', state: 'unknown', detail: 'headersUnavailable' };
+    }
+    if (headersResult.headers.includes(msgheader)) {
+      return { key: 'senderHeaders', state: 'ok', detail: String(headersResult.headers.length) };
+    }
+    return { key: 'senderHeaders', state: 'missing', detail: msgheader };
   }
 
   /** Bounds the /balance probe to BALANCE_PROBE_TIMEOUT_MS so a NetGSM outage
