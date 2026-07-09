@@ -221,6 +221,7 @@
       "santralCredsLive": "Netsantral kimlik bilgileri canlı doğrulandı",
       "repsWithDahili": "Dahili tanımlı temsilciler",
       "eventsWebhookUrl": "Olay webhook URL'si",
+      "eventsWebhookReceiving": "Santral olayları alınıyor",
       "otpPackage": "SMS OTP paketi",
       "senderHeaders": "Gönderici başlığı İYS onaylı",
       "iysWebhook": "İYS geri bildirim webhook'u kayıtlı",
@@ -232,7 +233,8 @@
         "noSantralConfig": "Henüz kontrol edilmedi — Netsantral kimlik bilgisi kayıtlı değil",
         "eventsWebhookHint": "Netsantral panel > Ayarlar > Genel Ayarlar > API Talep Ayarları'na yapıştırın",
         "otpPackageHint": "Gerçek bir kod gönderilmeden kontrol edilemez — OTP gönderimleri NetGSM hata 60 ile başarısız oluyorsa, bu NetGSM hesabında OTP paketi henüz aktif değildir.",
-        "headersUnavailable": "Henüz kontrol edilemedi — SMS kanalında kayıtlı bir gönderici başlığı yok ya da NetGSM'in onaylı başlık listesi şu an alınamıyor."
+        "headersUnavailable": "Henüz kontrol edilemedi — SMS kanalında kayıtlı bir gönderici başlığı yok ya da NetGSM'in onaylı başlık listesi şu an alınamıyor.",
+        "eventsWebhookReceivingHint": "URL'yi panele kaydedip test araması yapın"
       }
     },
     "tab": {

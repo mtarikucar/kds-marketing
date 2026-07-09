@@ -17,6 +17,10 @@ function prismaMock() {
     // NetGSM Phase 2 Task 6 — iysFirstSync's live check. Default: no job
     // found (mirrors a workspace with no consent changes yet).
     iysSyncJob: { findFirst: jest.fn().mockResolvedValue(null) },
+    // NetGSM Phase 3 Task 7 — eventsWebhookReceiving's live check. Default:
+    // no recent events (mirrors a workspace that hasn't registered/tested
+    // the events webhook yet).
+    netgsmWebhookEvent: { count: jest.fn().mockResolvedValue(0) },
   } as any;
 }
 function telephonyMock() {
@@ -144,6 +148,41 @@ describe('NetgsmOnboardingService', () => {
     expect(events?.url).toContain('/api/public/netgsm/ws-1/');
     expect(events?.url).toContain('/events');
     expect(events?.detail).toBe('eventsWebhookHint');
+  });
+
+  it('eventsWebhookReceiving: unknown with the register+test hint when no events-purpose webhook has landed in the last 7 days', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    prisma.netgsmWebhookEvent.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(prisma.netgsmWebhookEvent.count).toHaveBeenCalledWith({
+      where: {
+        workspaceId: 'ws-1',
+        purpose: 'events',
+        receivedAt: { gte: expect.any(Date) },
+      },
+    });
+    expect(items.find((i) => i.key === 'eventsWebhookReceiving')).toEqual({
+      key: 'eventsWebhookReceiving', state: 'unknown', detail: 'eventsWebhookReceivingHint',
+    });
+  });
+
+  it('eventsWebhookReceiving: ok (no detail) once at least one events-purpose webhook has landed in the last 7 days', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    prisma.netgsmWebhookEvent.count.mockResolvedValue(3);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'eventsWebhookReceiving')).toEqual({
+      key: 'eventsWebhookReceiving', state: 'ok', detail: undefined,
+    });
   });
 
   it('iysWebhook: missing (with the minted per-workspace İYS URL) when no ACTIVE SMS channel exists', async () => {

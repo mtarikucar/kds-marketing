@@ -111,6 +111,26 @@ export class NetgsmOnboardingService {
       detail: 'eventsWebhookHint',
     });
 
+    // NetGSM Phase 3 Task 7 — NetGSM never confirms whether it actually
+    // POSTs to eventsWebhookUrl above (no provisioning read-back), so this
+    // is the only live signal that the URL was pasted into Netsantral's
+    // panel correctly: has ANY events-purpose webhook actually landed for
+    // this workspace in the last 7 days. Degrades to 'unknown' (never
+    // 'missing') rather than a false negative — silence could equally mean
+    // "not registered yet" or "registered, but nobody called this week".
+    const recentEventsCount = await this.prisma.netgsmWebhookEvent.count({
+      where: {
+        workspaceId,
+        purpose: 'events',
+        receivedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+      },
+    });
+    items.push({
+      key: 'eventsWebhookReceiving',
+      state: recentEventsCount > 0 ? 'ok' : 'unknown',
+      detail: recentEventsCount > 0 ? undefined : 'eventsWebhookReceivingHint',
+    });
+
     // NetGSM Phase 2 Task 4 — İYS push-back webhook. Unlike eventsWebhookUrl
     // (always 'unknown' — there's no live signal NetGSM actually pushes to
     // it), THIS row has a real signal: ChannelsService.registerIysWebhook

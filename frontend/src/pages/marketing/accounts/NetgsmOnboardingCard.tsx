@@ -34,6 +34,9 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   // or NetGSM's own approved-header list endpoint is temporarily unreachable.
   headersUnavailable:
     "Can't be checked yet — no sender header saved on the SMS channel, or NetGSM's approved-header list is temporarily unavailable.",
+  // NetGSM Phase 3 Task 7 — eventsWebhookReceiving's remedy hint, shown only
+  // while the row is 'unknown' (no events-purpose webhook has landed yet).
+  eventsWebhookReceivingHint: 'Register the URL in the panel and place a test call',
 };
 
 /**
@@ -61,6 +64,7 @@ export function NetgsmOnboardingCard() {
       santralCredsLive: 'Netsantral credentials verified live',
       repsWithDahili: 'Reps with a dahili (extension)',
       eventsWebhookUrl: 'Events webhook URL',
+      eventsWebhookReceiving: 'Switchboard events webhook receiving traffic',
       otpPackage: 'SMS OTP package',
       senderHeaders: 'Sender header (msgheader) İYS-approved',
       iysWebhook: 'İYS push-back webhook registered',
