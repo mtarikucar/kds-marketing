@@ -93,7 +93,7 @@ describe('RecordingIngestService', () => {
       expect(Buffer.isBuffer(uploadArg.buffer)).toBe(true);
 
       expect(prisma.salesCall.updateMany).toHaveBeenCalledWith({
-        where: { id: 'call-1', recordingStorageKey: null },
+        where: { id: 'call-1', workspaceId: 'ws-1', recordingStorageKey: null },
         data: { recordingStorageKey: 'netgsm-recordings/ws-1/call-1.mp3' },
       });
       // watermark ALWAYS advances

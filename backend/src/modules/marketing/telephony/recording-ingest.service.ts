@@ -147,7 +147,7 @@ export class RecordingIngestService {
     // concurrent/duplicate ingest attempt for the same call is a no-op here,
     // never double-stamps or clobbers an already-stored key.
     const stamped = await this.prisma.salesCall.updateMany({
-      where: { id: call.id, recordingStorageKey: null },
+      where: { id: call.id, workspaceId: call.workspaceId, recordingStorageKey: null },
       data: { recordingStorageKey: key },
     });
     return stamped.count > 0;
