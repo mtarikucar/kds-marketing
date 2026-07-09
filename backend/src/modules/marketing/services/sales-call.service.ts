@@ -19,6 +19,16 @@ import { MarketingUserPayload } from '../types';
 import { paginated } from '../../../common/pagination';
 
 /**
+ * Final-review HIGH-2 fix — statuses `logCall` may still attach a manual
+ * outcome onto: `INITIATED` (pre-webhook, the rep is the source of truth) or
+ * an already webhook-finalized terminal outcome (TelephonyEventConsumer/
+ * CallCdrSyncService got there first). `CANCELLED` is deliberately excluded —
+ * that status only ever comes from startCall's own stale-sweep/origination-
+ * failure paths, never a call a rep would still need to log an outcome for.
+ */
+const LOGGABLE_STATUSES = ['INITIATED', 'CONNECTED', 'NO_ANSWER', 'BUSY', 'FAILED'];
+
+/**
  * Marketing sales-call log over the single company Netgsm line. Phase 2 is
  * click-to-dial + manual logging behind the TelephonyProvider abstraction, so
  * upgrading to Netgsm's API/webhooks later is a registry swap. SalesCall only
@@ -181,8 +191,22 @@ export class SalesCallService {
   }
 
   /**
-   * Record the outcome of an INITIATED call. Frees the line, mirrors onto the
-   * lead timeline (if linked), and emits marketing.call.logged.v1.
+   * Record the outcome of a call. Frees the line, mirrors onto the lead
+   * timeline (if linked), and emits marketing.call.logged.v1.
+   *
+   * Final-review HIGH-2 fix: once TelephonyEventConsumer/CallCdrSyncService
+   * finalize a call in seconds, a still-INITIATED row is the exception, not
+   * the rule — most calls this rep dialed/answered are ALREADY
+   * CONNECTED/NO_ANSWER/BUSY/FAILED by the time they open the "log outcome"
+   * modal. The pre-fix code only ever allowed `status === 'INITIATED'`,
+   * 409ing every one of those and silently dropping the rep's notes
+   * (ClickToDialButton's modal surfaced the error; DialerPage swallowed it).
+   * `outcomeLoggedAt` — independent of `status` — is the real "has a HUMAN
+   * already recorded this?" signal now: this MERGES onto a webhook-finalized
+   * row (attach notes, keep the webhook's ground-truth status/duration)
+   * rather than reject it outright. CANCELLED (startCall's own stale-sweep/
+   * origination-failure paths) and a genuine second manual log both still
+   * 409 — see LOGGABLE_STATUSES / the atomic claim below.
    */
   async logCall(workspaceId: string, id: string, marketingUserId: string, dto: LogCallDto) {
     // Scoped pre-check; the update below is keyed by this resolved row. The
@@ -193,40 +217,59 @@ export class SalesCallService {
     if (call.marketingUserId !== marketingUserId) {
       throw new ForbiddenException('You can only log your own calls');
     }
-    if (call.status !== 'INITIATED') {
+    if (!LOGGABLE_STATUSES.includes(call.status)) {
       throw new ConflictException('Call already logged');
     }
 
     const now = new Date();
+    // Pre-webhook: no santral/CDR confirmation has arrived yet, so the rep IS
+    // the source of truth for status/duration — unchanged from the pre-fix
+    // behavior. Already webhook-finalized: that status/duration is ground
+    // truth; the rep's dto.status/dto.durationSec are informational-only at
+    // this point and are deliberately NOT applied — only notes + the
+    // manual-log stamp are new information.
+    const preWebhook = call.status === 'INITIATED';
     const updated = await this.prisma.$transaction(async (tx) => {
-      // Atomic claim INSIDE the tx: only the first logger flips INITIATED→<status>.
-      // The pre-check above is racy on its own, so two concurrent logCall calls
-      // could both reach here and BOTH mirror a CALL activity. The compound WHERE
-      // lets exactly one win; the loser sees count 0 and aborts (no double row).
+      // Atomic claim INSIDE the tx, scoped to outcomeLoggedAt (NOT status) —
+      // this is what lets it claim equally whether the row is still
+      // INITIATED or already webhook-finalized. Two concurrent logCall calls
+      // (or a genuine second manual log after the first already succeeded)
+      // race this same WHERE; the loser sees count 0 and 409s (no double
+      // mirror, no double-logged row).
       const claim = await tx.salesCall.updateMany({
-        where: { id, workspaceId, status: 'INITIATED' },
-        data: {
-          status: dto.status,
-          durationSec: dto.durationSec ?? null,
-          notes: dto.notes ?? null,
-          endedAt: now,
-        },
+        where: { id, workspaceId, outcomeLoggedAt: null },
+        data: preWebhook
+          ? {
+              status: dto.status,
+              durationSec: dto.durationSec ?? null,
+              notes: dto.notes ?? null,
+              endedAt: now,
+              outcomeLoggedAt: now,
+            }
+          : {
+              notes: dto.notes ?? null,
+              outcomeLoggedAt: now,
+            },
       });
       if (claim.count === 0) {
         throw new ConflictException('Call already logged');
       }
       const row = await tx.salesCall.findUniqueOrThrow({ where: { id } });
 
-      // Mirror onto the lead timeline so the rep's call history lives with the
-      // lead (duration in minutes, per LeadActivity's convention).
+      // Mirror onto the lead timeline so the rep's call history lives with
+      // the lead (duration in minutes, per LeadActivity's convention). Reads
+      // back from `row` — the REAL final status/duration, whether that's the
+      // rep's own (pre-webhook path) or the webhook's ground truth (merge
+      // path) — rather than trusting dto directly, so both paths share one
+      // mirror/outbox implementation.
       if (call.leadId) {
         await tx.leadActivity.create({
           data: {
             type: 'CALL',
-            title: `Sales call: ${dto.status}`,
+            title: `Sales call: ${row.status}`,
             description: dto.notes ?? undefined,
-            outcome: this.outcomeFor(dto.status),
-            duration: dto.durationSec ? Math.round(dto.durationSec / 60) : undefined,
+            outcome: this.outcomeFor(row.status as SalesCallOutcome),
+            duration: row.durationSec ? Math.round(row.durationSec / 60) : undefined,
             leadId: call.leadId,
             createdById: marketingUserId,
           },
@@ -241,8 +284,8 @@ export class SalesCallService {
             callId: id,
             marketingUserId,
             leadId: call.leadId,
-            status: dto.status,
-            durationSec: dto.durationSec ?? null,
+            status: row.status,
+            durationSec: row.durationSec ?? null,
             occurredAt: now.toISOString(),
           },
         },

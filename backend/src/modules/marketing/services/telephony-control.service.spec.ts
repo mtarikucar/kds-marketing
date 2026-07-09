@@ -26,10 +26,11 @@ describe('TelephonyControlService', () => {
     svc = new TelephonyControlService(prisma as any, telephonyConfig as any, client as any);
   });
 
-  const liveCall = (overrides: Partial<{ id: string; workspaceId: string; marketingUserId: string | null; externalCallId: string | null }> = {}) => ({
+  const liveCall = (overrides: Partial<{ id: string; workspaceId: string; marketingUserId: string | null; answeredByUserId: string | null; externalCallId: string | null }> = {}) => ({
     id: 'call-1',
     workspaceId: WS,
     marketingUserId: REP.id,
+    answeredByUserId: null,
     externalCallId: 'u-live-1',
     ...overrides,
   });
@@ -40,8 +41,8 @@ describe('TelephonyControlService', () => {
       await expect(svc.hangup(WS, 'call-x', REP)).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it("403s when a REP tries to control another rep's call", async () => {
-      prisma.salesCall.findFirst.mockResolvedValue(liveCall({ marketingUserId: 'someone-else' }) as any);
+    it("403s when a REP tries to control another rep's call (not the owner, nor the one who answered it)", async () => {
+      prisma.salesCall.findFirst.mockResolvedValue(liveCall({ marketingUserId: 'someone-else', answeredByUserId: null }) as any);
       await expect(svc.hangup(WS, 'call-1', REP)).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -49,6 +50,22 @@ describe('TelephonyControlService', () => {
       prisma.salesCall.findFirst.mockResolvedValue(liveCall({ marketingUserId: 'someone-else' }) as any);
       await svc.hangup(WS, 'call-1', MANAGER);
       expect(client.hangup).toHaveBeenCalledWith(CREDS, 'u-live-1');
+    });
+
+    // ── MEDIUM-1 fix: the REP who ANSWERED a hunt-group/unmatched call ──
+    it('allows a REP who is answeredByUserId (not marketingUserId) to hang up a call routed through a hunt group', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue(
+        liveCall({ marketingUserId: null, answeredByUserId: REP.id }) as any,
+      );
+      await svc.hangup(WS, 'call-1', REP);
+      expect(client.hangup).toHaveBeenCalledWith(CREDS, 'u-live-1');
+    });
+
+    it("still 403s an UNRELATED rep even when the call has an answeredByUserId (someone else's)", async () => {
+      prisma.salesCall.findFirst.mockResolvedValue(
+        liveCall({ marketingUserId: null, answeredByUserId: 'other-rep' }) as any,
+      );
+      await expect(svc.hangup(WS, 'call-1', REP)).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('400s when the call has no live externalCallId yet', async () => {

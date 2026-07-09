@@ -868,6 +868,13 @@ model SalesCall {
   /// an `inbound_call` santral event (the extension started ringing). Null
   /// for OUTBOUND calls (startedAt already captures their origination time).
   ringingAt          DateTime?
+  /// Final-review HIGH-2 fix — stamped the FIRST time a rep manually logs an
+  /// outcome (SalesCallService.logCall), independent of `status` (which the
+  /// santral webhook/CDR poll may already have finalized before the rep gets
+  /// to it). The atomic claim `updateMany({where:{outcomeLoggedAt:null}})` is
+  /// what lets logCall MERGE notes onto an already webhook-finalized row
+  /// instead of 409ing, while still rejecting a genuine second manual log.
+  outcomeLoggedAt    DateTime?
   startedAt          DateTime  @default(now())
   endedAt            DateTime?
   createdAt          DateTime  @default(now())

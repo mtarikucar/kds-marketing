@@ -21,7 +21,15 @@ import { TransferCallDto, MuteCallDto } from '../dto/telephony-control.dto';
  * 400s for it: there is no live PBX leg to control.
  *
  * Ownership mirrors SalesCallService.get: a REP may only control their own
- * calls; MANAGER/OWNER may control any call in the workspace.
+ * calls; MANAGER/OWNER may control any call in the workspace. Final-review
+ * MEDIUM-1 fix: "their own" also includes a call the REP personally
+ * answered (`SalesCall.answeredByUserId`) even when `marketingUserId` is
+ * null/someone-else — an inbound call to an unmatched extension or a
+ * hunt-group route has no attributed owner (or the wrong one) until
+ * TelephonyEventConsumer.handleAnswer stamps `answeredByUserId` from the
+ * santral `answer` event's own internal_num, so without this a rep who
+ * genuinely picked up the phone could never hang up/transfer/mute the call
+ * they're actively on.
  */
 @Injectable()
 export class TelephonyControlService {
@@ -79,7 +87,11 @@ export class TelephonyControlService {
   ): Promise<{ call: { id: string; externalCallId: string }; creds: NetsantralCreds }> {
     const call = await this.prisma.salesCall.findFirst({ where: { id: callId, workspaceId } });
     if (!call) throw new NotFoundException('Call not found');
-    if (user.role === 'REP' && call.marketingUserId !== user.id) {
+    // MEDIUM-1 fix: the REP who ANSWERED the call (answeredByUserId) may
+    // control it too, not just the call's attributed marketingUserId owner —
+    // an unmatched/hunt-group inbound call's marketingUserId can be null or a
+    // different rep entirely even though THIS rep is the one actually on it.
+    if (user.role === 'REP' && call.marketingUserId !== user.id && call.answeredByUserId !== user.id) {
       throw new ForbiddenException('You can only control your own calls');
     }
     if (!call.externalCallId) {

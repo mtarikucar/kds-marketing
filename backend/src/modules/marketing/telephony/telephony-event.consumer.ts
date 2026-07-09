@@ -72,7 +72,13 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  *    for a bridge-mode call's status pill: a bridge call never has a SIP leg
  *    in the rep's browser tab at all, so the OLD pill (driven purely by local
  *    SIP state) never moved past "idle" for it — this stream carries the
- *    PBX-confirmed truth regardless.
+ *    PBX-confirmed truth regardless. Final-review HIGH-1 fix: `finalizeCall`'s
+ *    CONNECTED blank-fill path (see IDEMPOTENCY below) pushes a synthetic
+ *    `status: 'ENDED'` — not `SalesCall.status` (which has no such value,
+ *    and stays CONNECTED) — so a rep's pill can tell "still connected" apart
+ *    from "the connected call just ended", without re-pushing `CONNECTED`
+ *    (already pushed once by the `answer` claim) and looking like nothing
+ *    happened.
  *
  * HARDENED INBOUND DETECTION (Task 1 MEDIUM follow-up): Task 1's
  * `normalizeSantralEvent` only recognizes `yon`/`direction` values that
@@ -87,7 +93,7 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  * 'inbound_call'` OR `direction === 'INBOUND'`, never relying on `direction`
  * alone.
  *
- * IDEMPOTENCY, four layers:
+ * IDEMPOTENCY, five layers:
  *  - `DomainEvent.id` dedupe (bounded in-memory Set — same idiom as
  *    IysWebhookConsumer/NetgsmBlacklistSyncService) guards the outbox
  *    worker's orphan-reclaim sweep re-dispatching the same row.
@@ -96,6 +102,15 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  *    ('INITIATED','RINGING')` — a call already CONNECTED/NO_ANSWER/BUSY/
  *    FAILED/CANCELLED can never be regressed (a late RINGING after CONNECTED,
  *    a redelivered hangup, a cdr the CDR poll already consumed — all no-op).
+ *  - Final-review HIGH-1 fix — CONNECTED blank-fill: when that monotonic
+ *    claim misses because a call is ALREADY CONNECTED (the common case: an
+ *    earlier `answer` event already flipped it), `finalizeCall` no longer
+ *    just gives up — it separately stamps `endedAt` and fills
+ *    `durationSec`/`recordingUrl` wherever THIS hangup/cdr carries them and
+ *    the row doesn't have them yet, each field guarded by its own
+ *    `WHERE ... IS NULL` so a redelivered hangup (or a cdr arriving after an
+ *    earlier hangup already ended the call) is a true no-op — never a
+ *    double-write, never a double pill.
  *  - Blank-fill only for redelivered/out-of-order `inbound_call` events
  *    against an already-created row (`fillInboundBlanks`) — never touches
  *    status.
@@ -296,16 +311,37 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
-  /** Atomic monotonic claim: only the FIRST hangup/cdr to reach a still-open
-   *  call flips it terminal. A redelivered event, a race between two events
-   *  for the same call, or a call the CDR poll already finalized all
-   *  collapse to a no-op (claim.count === 0). */
+  /**
+   * Atomic monotonic claim: only the FIRST hangup/cdr to reach a still-open
+   * (INITIATED/RINGING) call flips it terminal in one shot — this is
+   * UNCHANGED for the never-answered outcome (NO_ANSWER/BUSY/FAILED) and for
+   * the rarer case where no separate `answer` webhook ever arrived and this
+   * hangup/cdr is the FIRST signal the call was actually answered (`status`
+   * computed CONNECTED by `terminalStatusFor`).
+   *
+   * Final-review HIGH-1 fix: the OLD code stopped entirely when this claim's
+   * WHERE missed (`claim.count === 0`) — which is exactly what happens for
+   * the COMMON case of an answered call: `handleAnswer` already flipped the
+   * row CONNECTED, so the subsequent hangup/cdr's claim (scoped to
+   * INITIATED/RINGING) never matches, and `endedAt`/`durationSec`/
+   * `recordingUrl` were silently discarded forever — the terminal pill never
+   * pushed either. A CONNECTED call's correct FINAL status IS CONNECTED
+   * (`SalesCall.status` has no separate ENDED value), so instead of a status
+   * transition this is a BLANK-FILL: stamp `endedAt` and fill
+   * `durationSec`/`recordingUrl` only where still NULL, one guarded
+   * `updateMany` per field so hangup-then-cdr and cdr-then-hangup both
+   * converge on the richest data without ever regressing a non-null value
+   * back to null (and a genuinely-already-terminal NO_ANSWER/BUSY/FAILED/
+   * CANCELLED row — `status !== 'CONNECTED'` — is correctly left untouched,
+   * matching the OLD no-op for that case).
+   */
   private async finalizeCall(
     workspaceId: string,
     call: SalesCall,
     p: MarketingCallEventPayload,
     status: string,
   ): Promise<void> {
+    const now = new Date();
     const claim = await this.prisma.salesCall.updateMany({
       where: { id: call.id, workspaceId, status: { in: NON_TERMINAL_STATUSES } },
       data: {
@@ -313,21 +349,62 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
         externalCallId: call.externalCallId ?? p.uniqueId ?? null,
         durationSec: p.durationSec ?? null,
         recordingUrl: p.recording ?? null,
-        endedAt: new Date(),
+        endedAt: now,
       },
     });
-    if (claim.count === 0) {
+
+    if (claim.count > 0) {
+      // Live status pill (Task 6): the FIRST hangup/cdr to actually flip this
+      // call terminal (the claim above) fires exactly once, same guard as
+      // the missed-call side effect below. Unchanged.
+      await this.pushCallStatus(workspaceId, call, status, p.internalNum);
+      if (call.direction === 'INBOUND' && status === 'NO_ANSWER') {
+        await this.handleMissedCall(workspaceId, call, p);
+      }
+      return;
+    }
+
+    // HIGH-1 blank-fill: the row is no longer INITIATED/RINGING. Stamp
+    // endedAt only if still null (this is what makes a REDELIVERED hangup a
+    // true no-op — the second delivery finds endedAt already set and skips
+    // it), then separately backfill durationSec/recordingUrl wherever THIS
+    // event carries them and the row doesn't have them yet — deliberately
+    // NOT gated on endedAt still being null, so a bare hangup (no bilsec)
+    // followed later by a cdr (bilsec + recording) still fills those two
+    // fields even though endedAt was already stamped by the earlier hangup.
+    const endedFill = await this.prisma.salesCall.updateMany({
+      where: { id: call.id, workspaceId, status: 'CONNECTED', endedAt: null },
+      data: { endedAt: now },
+    });
+    if (p.durationSec != null) {
+      await this.prisma.salesCall.updateMany({
+        where: { id: call.id, workspaceId, status: 'CONNECTED', durationSec: null },
+        data: { durationSec: p.durationSec },
+      });
+    }
+    if (p.recording) {
+      await this.prisma.salesCall.updateMany({
+        where: { id: call.id, workspaceId, status: 'CONNECTED', recordingUrl: null },
+        data: { recordingUrl: p.recording },
+      });
+    }
+
+    if (endedFill.count === 0) {
+      // Either genuinely already-terminal NO_ANSWER/BUSY/FAILED/CANCELLED
+      // (status !== 'CONNECTED', the OLD no-op case — unchanged), or endedAt
+      // was already stamped by an earlier hangup/cdr for this same call
+      // (redelivery, or a cdr arriving after an earlier hangup already ended
+      // it) — idempotent no-op either way; never double-pill.
       this.logger.log(`telephony ${p.kind} event: call ${call.id} already terminal (${call.status}) — no-op`);
       return;
     }
-    // Live status pill (Task 6): the FIRST hangup/cdr to actually flip this
-    // call terminal (the claim above) fires exactly once, same guard as the
-    // missed-call side effect below.
-    await this.pushCallStatus(workspaceId, call, status, p.internalNum);
-
-    if (call.direction === 'INBOUND' && status === 'NO_ANSWER') {
-      await this.handleMissedCall(workspaceId, call, p);
-    }
+    // The CONNECTED call just reached its ended state for the FIRST time.
+    // `CONNECTED` itself was already pushed once by `handleAnswer` — pushing
+    // it again here would look like nothing new happened. `ENDED` is a
+    // synthetic terminal marker (not a `SalesCall.status` value — the enum
+    // has none) purely for this pill, so the rep's UI can tell "still
+    // connected" apart from "the connected call just ended".
+    await this.pushCallStatus(workspaceId, call, 'ENDED', p.internalNum);
   }
 
   // ---------------------------------------------------------------------
@@ -368,10 +445,14 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
       // in the workspace — trim the lead card to the minimum needed to greet a
       // caller (no CRM-internal `status`, no `phone` already carried as
       // customerNum) so an unrelated rep can't harvest pipeline data off a ring.
-      const broadcast = (p.internalNum ?? null) === null;
+      // MEDIUM-2 fix: route on the STRIPPED dahili (see `stripTrunkSuffix`) so
+      // a full `<dahili>-<trunk>` internal_num still reaches the right rep's
+      // SSE stream (which filters on their bare MarketingUser.dahili).
+      const targetDahili = stripTrunkSuffix(p.internalNum);
+      const broadcast = targetDahili === null;
       this.telephonyStream.push(workspaceId, {
         kind: 'screen_pop',
-        targetDahili: p.internalNum ?? null,
+        targetDahili,
         payload: {
           customerNum: p.customerNum ?? null,
           lead: lead
@@ -556,7 +637,10 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
       });
       if (rep?.dahili) return rep.dahili;
     }
-    return internalNum ?? null;
+    // MEDIUM-2 fix: the event's own internal_num may carry NetGSM's full
+    // `<dahili>-<trunk>` form (e.g. '101-8508407303') — strip it so this
+    // fallback still matches the bare dahili the rep's SSE stream filters on.
+    return stripTrunkSuffix(internalNum);
   }
 
   // ---------------------------------------------------------------------
@@ -564,11 +648,14 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
   // ---------------------------------------------------------------------
 
   /** null when unmatched — an inbound call to an unowned/unregistered
-   *  extension still gets a SalesCall row, just with no rep attributed. */
+   *  extension still gets a SalesCall row, just with no rep attributed.
+   *  Final-review MEDIUM-2 fix: strips a trailing `-<trunk>` suffix (see
+   *  `stripTrunkSuffix`) before matching MarketingUser.dahili. */
   private async resolveMarketingUserByDahili(workspaceId: string, internalNum: string | null): Promise<string | null> {
-    if (!internalNum) return null;
+    const dahili = stripTrunkSuffix(internalNum);
+    if (!dahili) return null;
     const rep = await this.prisma.marketingUser.findFirst({
-      where: { workspaceId, dahili: internalNum, status: 'ACTIVE' },
+      where: { workspaceId, dahili, status: 'ACTIVE' },
       select: { id: true },
     });
     return rep?.id ?? null;
@@ -692,4 +779,20 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
 function last10(phone?: string | null): string {
   const d = (phone ?? '').replace(/\D/g, '');
   return d.length >= 10 ? d.slice(-10) : d;
+}
+
+/**
+ * Final-review MEDIUM-2 fix: the SIP/santral layer sometimes reports
+ * `internal_num` in NetGSM's full `<dahili>-<trunk>` form (e.g.
+ * '101-8508407303') rather than the bare extension `MarketingUser.dahili`
+ * stores — strip a trailing `-<digits>` trunk suffix so rep-resolve and SSE
+ * routing (screen-pop `targetDahili`, the live-status pill's
+ * `resolveTargetDahili` fallback) still match on the bare '101'. A no-op for
+ * an already-bare value (no trailing `-<digits>` to strip) or a null/empty
+ * input.
+ */
+function stripTrunkSuffix(internalNum: string | null | undefined): string | null {
+  if (!internalNum) return null;
+  const stripped = internalNum.replace(/-\d+$/, '');
+  return stripped || null;
 }

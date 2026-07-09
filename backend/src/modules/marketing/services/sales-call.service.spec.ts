@@ -225,7 +225,7 @@ describe('SalesCallService', () => {
   });
 
   describe('logCall', () => {
-    it('records the outcome, mirrors a CALL activity onto the lead, and emits the event', async () => {
+    it('still-INITIATED path (unchanged): applies the manual status+duration+endedAt, mirrors a CALL activity, sets outcomeLoggedAt, and emits the event', async () => {
       prisma.salesCall.findFirst.mockResolvedValue({
         id: 'call-1',
         workspaceId: WS,
@@ -233,10 +233,10 @@ describe('SalesCallService', () => {
         status: 'INITIATED',
         leadId: 'lead-1',
       } as any);
-      // logCall now claims the row atomically (updateMany WHERE status=INITIATED)
-      // then re-reads it, so a concurrent duplicate can't double-mirror.
+      // logCall now claims the row atomically scoped to outcomeLoggedAt (NOT
+      // status) then re-reads it, so a concurrent duplicate can't double-mirror.
       prisma.salesCall.updateMany.mockResolvedValue({ count: 1 } as any);
-      prisma.salesCall.findUniqueOrThrow.mockResolvedValue({ id: 'call-1', status: 'CONNECTED' } as any);
+      prisma.salesCall.findUniqueOrThrow.mockResolvedValue({ id: 'call-1', status: 'CONNECTED', durationSec: 120 } as any);
 
       await svc.logCall(WS, 'call-1', REP, {
         status: 'CONNECTED',
@@ -250,8 +250,13 @@ describe('SalesCallService', () => {
       );
       expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'call-1', workspaceId: WS, status: 'INITIATED' },
-          data: expect.objectContaining({ status: 'CONNECTED', durationSec: 120, endedAt: expect.any(Date) }),
+          where: { id: 'call-1', workspaceId: WS, outcomeLoggedAt: null },
+          data: expect.objectContaining({
+            status: 'CONNECTED',
+            durationSec: 120,
+            endedAt: expect.any(Date),
+            outcomeLoggedAt: expect.any(Date),
+          }),
         }),
       );
       expect(prisma.leadActivity.create).toHaveBeenCalledWith(
@@ -285,7 +290,45 @@ describe('SalesCallService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('rejects logging an already-logged call', async () => {
+    // ── HIGH-2 fix: merge onto a webhook-finalized row instead of 409ing ──
+    it('merges onto a webhook-finalized CONNECTED row: keeps the webhook status/duration as ground truth, attaches notes, sets outcomeLoggedAt, mirrors + emits using the REAL row', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue({
+        id: 'call-1',
+        workspaceId: WS,
+        marketingUserId: REP,
+        status: 'CONNECTED', // TelephonyEventConsumer already finalized this
+        leadId: 'lead-1',
+      } as any);
+      prisma.salesCall.updateMany.mockResolvedValue({ count: 1 } as any); // outcomeLoggedAt was null -> claimed
+      prisma.salesCall.findUniqueOrThrow.mockResolvedValue({ id: 'call-1', status: 'CONNECTED', durationSec: 87 } as any);
+
+      await svc.logCall(WS, 'call-1', REP, {
+        status: 'NO_ANSWER', // the rep's guess — must NOT be applied
+        durationSec: 999, // ditto
+        notes: 'customer wants a callback',
+      } as any);
+
+      expect(prisma.salesCall.updateMany).toHaveBeenCalledWith({
+        where: { id: 'call-1', workspaceId: WS, outcomeLoggedAt: null },
+        data: { notes: 'customer wants a callback', outcomeLoggedAt: expect.any(Date) },
+      });
+      // Mirror + outbox reflect the REAL (webhook) row, not the rep's dto.
+      expect(prisma.leadActivity.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            title: 'Sales call: CONNECTED',
+            outcome: 'POSITIVE',
+            duration: 1, // 87s -> round(1.45) = 1 min
+          }),
+        }),
+      );
+      expect(outbox.append.mock.calls[0][0]).toMatchObject({
+        type: 'marketing.call.logged.v1',
+        payload: expect.objectContaining({ callId: 'call-1', status: 'CONNECTED', durationSec: 87 }),
+      });
+    });
+
+    it('a SECOND logCall on an already manually-logged row rejects with Conflict (outcomeLoggedAt claim loses)', async () => {
       prisma.salesCall.findFirst.mockResolvedValue({
         id: 'call-1',
         workspaceId: WS,
@@ -293,9 +336,26 @@ describe('SalesCallService', () => {
         status: 'CONNECTED',
         leadId: null,
       } as any);
+      prisma.salesCall.updateMany.mockResolvedValue({ count: 0 } as any); // outcomeLoggedAt already non-null
+
       await expect(
         svc.logCall(WS, 'call-1', REP, { status: 'NO_ANSWER' } as any),
       ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.leadActivity.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects logging a CANCELLED call outright (pre-check — never even attempts the atomic claim)', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue({
+        id: 'call-1',
+        workspaceId: WS,
+        marketingUserId: REP,
+        status: 'CANCELLED', // startCall's own stale-sweep/origination-failure path
+        leadId: null,
+      } as any);
+      await expect(
+        svc.logCall(WS, 'call-1', REP, { status: 'NO_ANSWER' } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
     });
 
     it('404s a call from another workspace (scoped lookup misses)', async () => {

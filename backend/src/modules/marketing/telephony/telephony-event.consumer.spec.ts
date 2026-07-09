@@ -151,7 +151,7 @@ describe('TelephonyEventConsumer', () => {
       );
     });
 
-    it('never re-finalizes an already-terminal call (idempotent — the CDR poll or a redelivery may have gotten there first)', async () => {
+    it('never regresses an already-CONNECTED call\'s STATUS, and never re-fires missed-call side effects for it (status monotonic — HIGH-1 blank-fill is a separate concern, covered below)', async () => {
       (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
         id: 'call-4',
         workspaceId: 'ws-1',
@@ -161,14 +161,28 @@ describe('TelephonyEventConsumer', () => {
         marketingUserId: 'rep-1',
         leadId: 'lead-1',
       });
-      (prisma.salesCall.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 }); // claim WHERE didn't match
+      (prisma.salesCall.updateMany as jest.Mock)
+        .mockResolvedValueOnce({ count: 0 }) // claim (a): status not IN (INITIATED, RINGING) — no match
+        .mockResolvedValueOnce({ count: 1 }) // HIGH-1 blank-fill: endedAt was null — filled now
+        .mockResolvedValueOnce({ count: 1 }); // durationSec (0, still != null) blank-fill
 
       await handle(makeEvent('evt-4', { kind: 'hangup', uniqueId: 'uid-4', direction: 'INBOUND', durationSec: 0, status: 'NOANSWER' }));
 
-      // Status monotonic: CONNECTED must not be regressed to NO_ANSWER, and the
-      // missed-call side effects must never fire for a call that was already terminal.
+      // Status monotonic: CONNECTED must never be regressed to NO_ANSWER (the
+      // claim(a) WHERE never matches a CONNECTED row), and the missed-call
+      // side effects — scoped strictly to the claim(a) branch — must never
+      // fire for a call that was already answered.
       expect(prisma.marketingTask.create).not.toHaveBeenCalled();
       expect(outbox.append).not.toHaveBeenCalled();
+      // The blank-fill DID run (HIGH-1 fix) — this is the ENDED pill, not a
+      // status regression. No marketingUser.findFirst mock configured here ->
+      // resolves undefined -> resolveTargetDahili falls back to the event's
+      // own (absent) internal_num -> null (broadcast).
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: null,
+        payload: { salesCallId: 'call-4', status: 'ENDED' },
+      });
     });
   });
 
@@ -716,7 +730,7 @@ describe('TelephonyEventConsumer', () => {
       });
     });
 
-    it('hangup/cdr -> does NOT push when the claim is a no-op (already terminal / redelivered)', async () => {
+    it('hangup/cdr -> does NOT push when a REDELIVERED event finds the call fully finalized already (endedAt/durationSec/recordingUrl all non-null — HIGH-1 idempotency: no double-write, no double-pill)', async () => {
       (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
         id: 'call-24',
         workspaceId: 'ws-1',
@@ -724,11 +738,194 @@ describe('TelephonyEventConsumer', () => {
         status: 'CONNECTED',
         marketingUserId: 'rep-24',
       });
-      (prisma.salesCall.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+      (prisma.salesCall.updateMany as jest.Mock)
+        .mockResolvedValueOnce({ count: 0 }) // claim (a): not INITIATED/RINGING
+        .mockResolvedValueOnce({ count: 0 }) // endedAt blank-fill: already non-null (redelivery)
+        .mockResolvedValueOnce({ count: 0 }); // durationSec blank-fill: already non-null
 
       await handle(makeEvent('evt-24', { kind: 'hangup', crmId: 'call-24', durationSec: 0, status: 'NOANSWER' }));
 
       expect(telephonyStream.push).not.toHaveBeenCalled();
+    });
+
+    it('an answered call\'s hangup is discovered blank-fill (HIGH-1 core fix): CONNECTED row with a null endedAt gets endedAt/durationSec/recordingUrl filled and pushes an ENDED pill', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-30',
+        workspaceId: 'ws-1',
+        direction: 'OUTBOUND',
+        status: 'CONNECTED', // already flipped by an earlier 'answer' event
+        externalCallId: 'uid-30',
+        marketingUserId: 'rep-30',
+        answeredByUserId: 'rep-30',
+      });
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ dahili: '301' });
+      (prisma.salesCall.updateMany as jest.Mock)
+        .mockResolvedValueOnce({ count: 0 }) // claim (a): CONNECTED is not INITIATED/RINGING
+        .mockResolvedValueOnce({ count: 1 }) // endedAt was null -> filled
+        .mockResolvedValueOnce({ count: 1 }) // durationSec was null -> filled
+        .mockResolvedValueOnce({ count: 1 }); // recordingUrl was null -> filled
+
+      await handle(
+        makeEvent('evt-30', {
+          kind: 'hangup',
+          crmId: 'call-30',
+          durationSec: 42,
+          recording: 'https://rec.example/30.mp3',
+          status: 'ANSWERED',
+        }),
+      );
+
+      expect(prisma.salesCall.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 'call-30', workspaceId: 'ws-1', status: { in: ['INITIATED', 'RINGING'] } },
+        data: {
+          status: 'CONNECTED',
+          externalCallId: 'uid-30',
+          durationSec: 42,
+          recordingUrl: 'https://rec.example/30.mp3',
+          endedAt: expect.any(Date),
+        },
+      });
+      expect(prisma.salesCall.updateMany).toHaveBeenNthCalledWith(2, {
+        where: { id: 'call-30', workspaceId: 'ws-1', status: 'CONNECTED', endedAt: null },
+        data: { endedAt: expect.any(Date) },
+      });
+      expect(prisma.salesCall.updateMany).toHaveBeenNthCalledWith(3, {
+        where: { id: 'call-30', workspaceId: 'ws-1', status: 'CONNECTED', durationSec: null },
+        data: { durationSec: 42 },
+      });
+      expect(prisma.salesCall.updateMany).toHaveBeenNthCalledWith(4, {
+        where: { id: 'call-30', workspaceId: 'ws-1', status: 'CONNECTED', recordingUrl: null },
+        data: { recordingUrl: 'https://rec.example/30.mp3' },
+      });
+      // The terminal pill: 'ENDED', not 'CONNECTED' again (that pill already
+      // fired once, from the earlier 'answer' event) — this is the NEW
+      // signal telling the rep's UI the call is actually over now.
+      expect(telephonyStream.push).toHaveBeenCalledTimes(1);
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: '301',
+        payload: { salesCallId: 'call-30', status: 'ENDED' },
+      });
+    });
+
+    it('a bare hangup (no bilsec/recording) followed by a cdr (bilsec + recording) fills duration/recording from the cdr without a second pill', async () => {
+      const callSnapshot = {
+        id: 'call-31',
+        workspaceId: 'ws-1',
+        direction: 'OUTBOUND',
+        status: 'CONNECTED',
+        externalCallId: 'uid-31',
+        marketingUserId: 'rep-31',
+      };
+
+      // Event 1: hangup, no duration/recording carried — only endedAt fills.
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(callSnapshot);
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ dahili: '311' });
+      (prisma.salesCall.updateMany as jest.Mock)
+        .mockResolvedValueOnce({ count: 0 }) // claim (a): no match, CONNECTED
+        .mockResolvedValueOnce({ count: 1 }); // endedAt was null -> filled now
+      // durationSec/recordingUrl are both null in the payload -> no fill calls attempted.
+
+      await handle(makeEvent('evt-31a', { kind: 'hangup', crmId: 'call-31', durationSec: null, recording: null }));
+
+      expect(prisma.salesCall.updateMany).toHaveBeenCalledTimes(2);
+      expect(telephonyStream.push).toHaveBeenCalledTimes(1);
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: '311',
+        payload: { salesCallId: 'call-31', status: 'ENDED' },
+      });
+
+      // Event 2: the cdr sweep/webhook arrives later with the real duration +
+      // recording — endedAt is already set by event 1, so this is a
+      // fill-only pass: no second pill (and so no second resolveTargetDahili
+      // lookup either — no marketingUser.findFirst mock needed here).
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(callSnapshot);
+      (prisma.salesCall.updateMany as jest.Mock)
+        .mockResolvedValueOnce({ count: 0 }) // claim (a): still no match
+        .mockResolvedValueOnce({ count: 0 }) // endedAt: already non-null from event 1
+        .mockResolvedValueOnce({ count: 1 }) // durationSec: was null -> filled from cdr
+        .mockResolvedValueOnce({ count: 1 }); // recordingUrl: was null -> filled from cdr
+
+      await handle(makeEvent('evt-31b', { kind: 'cdr', crmId: 'call-31', durationSec: 42, recording: 'https://rec.example/31.mp3' }));
+
+      // Event 2's 4 calls (claim, endedAt-fill, durationSec-fill,
+      // recordingUrl-fill) are calls #3-6 overall (event 1 used #1-2).
+      expect(prisma.salesCall.updateMany).toHaveBeenNthCalledWith(5, {
+        where: { id: 'call-31', workspaceId: 'ws-1', status: 'CONNECTED', durationSec: null },
+        data: { durationSec: 42 },
+      });
+      expect(prisma.salesCall.updateMany).toHaveBeenNthCalledWith(6, {
+        where: { id: 'call-31', workspaceId: 'ws-1', status: 'CONNECTED', recordingUrl: null },
+        data: { recordingUrl: 'https://rec.example/31.mp3' },
+      });
+      // Still only ONE pill push total — event 2 never re-ends an already-ended call.
+      expect(telephonyStream.push).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('dahili trunk-suffix tolerance (MEDIUM-2)', () => {
+    it('resolves the rep by the BARE dahili when internal_num carries the full <dahili>-<trunk> form', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null); // no existing row for this uniqueId
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'rep-101' }); // dahili match
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce(null);
+      (prisma.salesCall.create as jest.Mock).mockResolvedValueOnce({
+        id: 'call-40',
+        workspaceId: 'ws-1',
+        leadId: null,
+        marketingUserId: 'rep-101',
+        direction: 'INBOUND',
+        status: 'RINGING',
+      });
+
+      await handle(
+        makeEvent('evt-40', {
+          kind: 'inbound_call',
+          uniqueId: 'uid-40',
+          customerNum: '05551112233',
+          internalNum: '101-8508407303', // NetGSM's full dahili-trunk form
+          direction: 'INBOUND',
+        }),
+      );
+
+      // The rep-resolve query matches the BARE dahili ('101'), not the raw
+      // suffixed internal_num.
+      expect(prisma.marketingUser.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: 'ws-1', dahili: '101', status: 'ACTIVE' } }),
+      );
+      // The screen-pop also targets the stripped, bare dahili — the rep's own
+      // SSE stream filters on their bare MarketingUser.dahili.
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'screen_pop',
+        targetDahili: '101',
+        payload: {
+          customerNum: '05551112233',
+          lead: null,
+          salesCallId: 'call-40',
+          internalNum: '101-8508407303', // raw form preserved for display/debug
+        },
+      });
+    });
+
+    it('resolveTargetDahili\'s no-marketingUserId fallback also strips the trunk suffix before routing the call_status pill', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'call-41',
+        workspaceId: 'ws-1',
+        direction: 'INBOUND',
+        status: 'RINGING',
+        externalCallId: 'uid-41',
+        marketingUserId: null, // no attributed rep -> resolveTargetDahili falls back to internal_num
+        answeredByUserId: null,
+      });
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce(null); // answeredBy lookup: no dahili match either
+
+      await handle(makeEvent('evt-41', { kind: 'answer', uniqueId: 'uid-41', internalNum: '101-8508407303' }));
+
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'call_status',
+        targetDahili: '101', // stripped, not the raw '101-8508407303'
+        payload: { salesCallId: 'call-41', status: 'CONNECTED' },
+      });
     });
   });
 
