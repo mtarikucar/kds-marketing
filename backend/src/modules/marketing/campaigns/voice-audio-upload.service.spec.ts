@@ -82,6 +82,13 @@ describe('VoiceAudioUploadService.upload', () => {
     expect(voicesmsSend.upload).not.toHaveBeenCalled();
   });
 
+  it('rejects a magic-byte spoof (.wav name + audio/wav mimetype but non-RIFF bytes, e.g. a PE/exe) BEFORE calling NetGSM', async () => {
+    // Both client-controlled fields say wav; the actual bytes are a PE header.
+    const file = wavFile({ originalname: 'payload.wav', mimetype: 'audio/wav', buffer: Buffer.from('MZ\x90\x00\x03\x00\x00\x00PE\x00\x00') });
+    await expect(svc.upload(WORKSPACE, file)).rejects.toBeInstanceOf(BadRequestException);
+    expect(voicesmsSend.upload).not.toHaveBeenCalled();
+  });
+
   it('rejects a spoofed .wav extension carrying a non-wav mimetype with 400', async () => {
     const file = wavFile({ originalname: 'jingle.wav', mimetype: 'audio/mpeg' });
 

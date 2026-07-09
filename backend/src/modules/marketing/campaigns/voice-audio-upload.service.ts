@@ -66,15 +66,26 @@ export class VoiceAudioUploadService {
     if (file.buffer.length > MAX_UPLOAD_BYTES || size > MAX_UPLOAD_BYTES) {
       throw new BadRequestException("Ses dosyası NetGSM sınırı olan 4MB'ı aşıyor.");
     }
-    // The reported mimetype is authoritative whenever present (a mismatched
-    // extension can't override an honestly-reported non-wav Content-Type);
-    // only when it's absent/blank (some browsers/proxies omit it for wav) do
-    // we fall back to the filename extension.
+    // Content-type AND extension are both client-controlled and spoofable, so
+    // neither is trusted alone — the authoritative check is the actual bytes:
+    // a real WAV is a RIFF container tagged "WAVE" (bytes 0-3 "RIFF", 8-11
+    // "WAVE"). We require that magic header AND a sane extension/mimetype, so a
+    // .exe relabelled `audio/wav` (or a .wav-named PE file) is rejected here,
+    // before the workspace's real NetGSM creds ever forward it.
+    // Magic bytes are the authority; a BLANK ext or mime is tolerated (some
+    // browsers/proxies omit them for wav), but a POSITIVELY-WRONG ext (.mp3) or
+    // mime (audio/mpeg) is still rejected.
     const name = (file.originalname ?? '').toLowerCase().trim();
     const mime = (file.mimetype ?? '').toLowerCase().trim();
-    const isWav = mime ? WAV_MIME_TYPES.has(mime) : name.endsWith('.wav');
-    if (!isWav) {
-      throw new BadRequestException('Yalnızca .wav ses dosyaları kabul edilir.');
+    const extOk = name === '' || name.endsWith('.wav');
+    const mimeOk = mime === '' || WAV_MIME_TYPES.has(mime);
+    const b = file.buffer;
+    const magicOk =
+      b.length >= 12 &&
+      b.toString('ascii', 0, 4) === 'RIFF' &&
+      b.toString('ascii', 8, 12) === 'WAVE';
+    if (!extOk || !mimeOk || !magicOk) {
+      throw new BadRequestException('Yalnızca geçerli .wav ses dosyaları kabul edilir.');
     }
   }
 
