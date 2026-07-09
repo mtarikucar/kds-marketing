@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Phone, Wrench, DollarSign, BarChart3, KeyRound, Inbox, Zap, Megaphone,
   Globe, Star, Sparkles, Bot, Mic, Banknote, Camera, CalendarRange,
-  GraduationCap, FlaskConical, MessageSquare,
+  GraduationCap, FlaskConical, MessageSquare, PhoneOutgoing,
 } from 'lucide-react';
 import marketingApi from '../../../../features/marketing/api/marketingApi';
 import { useEntitlements } from '../../../../features/marketing/hooks/useEntitlements';
@@ -27,6 +27,7 @@ const MODULE_META: { key: string; labelKey: string; label: string; icon: LucideI
   { key: 'research', labelKey: 'modules.keys.research', label: 'Research', icon: FlaskConical },
   { key: 'telephony', labelKey: 'modules.keys.telephony', label: 'Phone & calls', icon: Phone },
   { key: 'voiceAi', labelKey: 'modules.keys.voiceAi', label: 'Voice AI', icon: Mic },
+  { key: 'voiceCampaigns', labelKey: 'modules.keys.voiceCampaigns', label: 'Voice campaigns', icon: PhoneOutgoing },
   { key: 'invoicing', labelKey: 'modules.keys.invoicing', label: 'Invoicing', icon: Banknote },
   { key: 'commissions', labelKey: 'modules.keys.commissions', label: 'Commissions', icon: DollarSign },
   { key: 'installations', labelKey: 'modules.keys.installations', label: 'Installations', icon: Wrench },

@@ -54,6 +54,9 @@ const PACKAGES = [
       research: true,
       mediaGen: false,
       socialCampaigns: false,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
+      // plan-tier feature; false everywhere else (purchasable as an add-on).
+      voiceCampaigns: false,
     },
     limits: {
       aiCreditsMonthly: 100,
@@ -101,6 +104,9 @@ const PACKAGES = [
       research: true,
       mediaGen: false,
       socialCampaigns: false,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
+      // plan-tier feature; false everywhere else (purchasable as an add-on).
+      voiceCampaigns: false,
     },
     limits: {
       aiCreditsMonthly: 500,
@@ -151,6 +157,9 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
+      // plan-tier feature; false everywhere else (purchasable as an add-on).
+      voiceCampaigns: false,
     },
     limits: {
       aiCreditsMonthly: 2000,
@@ -201,6 +210,8 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts): SCALE grants it.
+      voiceCampaigns: true,
     },
     limits: {
       aiCreditsMonthly: 6000,
@@ -250,6 +261,8 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts): OPERATOR grants it.
+      voiceCampaigns: true,
     },
     limits: {
       aiCreditsMonthly: -1,

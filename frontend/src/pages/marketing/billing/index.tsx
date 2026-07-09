@@ -286,6 +286,14 @@ export default function BillingPage() {
                   priceTRY: '₺490',
                   priceUSD: '$15',
                 },
+                {
+                  // NetGSM Phase 5 Task 1 — unlocks the `voiceCampaigns`
+                  // feature (TTS/audio voice blasts) for plans below SCALE.
+                  code: 'voice_campaigns_package',
+                  label: t('billing.voiceCampaignsWord', 'Voice campaigns'),
+                  priceTRY: '₺1.490',
+                  priceUSD: '$45',
+                },
               ].map((addon) => (
                 <div
                   key={addon.code}

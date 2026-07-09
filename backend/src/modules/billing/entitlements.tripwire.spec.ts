@@ -35,6 +35,7 @@ describe('entitlements — feature-key drift tripwire', () => {
       'socialCampaigns',
       'telephony',
       'voiceAi',
+      'voiceCampaigns',
       'workflows',
     ]);
   });
@@ -122,7 +123,7 @@ describe('entitlements — feature-key drift tripwire', () => {
  * user-toggleable) and documenting why instead.
  */
 describe('entitlements — activatedModules backfill-note tripwire', () => {
-  const KEYS_REQUIRING_BACKFILL = ['sms'] as const;
+  const KEYS_REQUIRING_BACKFILL = ['sms', 'voiceCampaigns'] as const;
 
   // NetGSM SMS v2 Task 12 — `smsOtp` is a FEATURE_KEYS member added AFTER
   // 20260702160000_workspace_activated_modules, same as `sms` was, but it
@@ -135,6 +136,17 @@ describe('entitlements — activatedModules backfill-note tripwire', () => {
   // to ALSO add it to KEYS_REQUIRING_BACKFILL + ship the migration.
   it('smsOtp is excluded from TOGGLEABLE_MODULE_KEYS (add-on-only — no backfill needed)', () => {
     expect(TOGGLEABLE_MODULE_KEYS).not.toContain('smsOtp');
+  });
+
+  // NetGSM Phase 5 Task 1 — `voiceCampaigns` is the OPPOSITE case from
+  // `smsOtp`: it's `true` on SCALE/OPERATOR (seed-packages.ts), so it IS a
+  // genuine Settings > Modules toggle (present in TOGGLEABLE_MODULE_KEYS,
+  // unlike smsOtp) — meaning a workspace that had already customized its
+  // activatedModules allow-list BEFORE this key existed needs the backfill
+  // migration below, or it would silently lose voice campaigns on deploy
+  // despite being entitled by its plan.
+  it('voiceCampaigns is NOT excluded from TOGGLEABLE_MODULE_KEYS (plan-entitled — backfill required)', () => {
+    expect(TOGGLEABLE_MODULE_KEYS).toContain('voiceCampaigns');
   });
 
   it('every key needing a backfill has a reversible migration on disk', () => {

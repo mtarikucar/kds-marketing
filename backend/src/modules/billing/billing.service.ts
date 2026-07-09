@@ -54,6 +54,11 @@ const ADDON_PRICES: Record<string, { TRY: number; USD: number; name: string }> =
   // lead phone verification). Recurring like the AI boosts above (rides the
   // subscription period, renews with it).
   sms_otp_package: { TRY: 490, USD: 15, name: 'SMS OTP verification package' },
+  // NetGSM Phase 5 Task 1 — unlocks the `voiceCampaigns` feature (TTS/audio
+  // voice blasts + press-1 workflow triggers) for workspaces below SCALE,
+  // which already grants it as part of the plan. Recurring, same as the
+  // other add-ons above.
+  voice_campaigns_package: { TRY: 1490, USD: 45, name: 'Voice campaigns add-on' },
 };
 
 /**

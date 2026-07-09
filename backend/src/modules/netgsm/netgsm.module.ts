@@ -3,6 +3,7 @@ import { NetsantralClient } from './santral/netsantral.client';
 import { NetgsmCdrClient } from './santral/netgsm-cdr.client';
 import { NetgsmStatisticsClient } from './santral/netgsm-statistics.client';
 import { VoicesmsClient } from './voice/voicesms.client';
+import { VoicesmsSendClient } from './voice/voicesms-send.client';
 import { NetgsmRestClient } from './core/netgsm-rest.client';
 import { AccountRateBudgeter } from './core/account-rate-budgeter';
 import { BalanceClient } from './balance/balance.client';
@@ -21,7 +22,7 @@ import { NetgsmEventsController } from './webhooks/netgsm-events.controller';
  */
 @Module({
   controllers: [NetgsmEventsController],
-  providers: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient],
-  exports: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient],
+  providers: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, VoicesmsSendClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient],
+  exports: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, VoicesmsSendClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient],
 })
 export class NetgsmModule {}

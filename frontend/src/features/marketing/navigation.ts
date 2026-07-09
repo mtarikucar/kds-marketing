@@ -100,6 +100,11 @@ export type FeatureKey =
   // MODULE_META row for it) — see entitlements.service.ts's
   // TOGGLEABLE_MODULE_KEYS comment for why.
   | 'smsOtp'
+  // NetGSM Phase 5 — voice campaigns (TTS/audio blasts via `/voicesms/send`,
+  // press-1 workflow triggers). Granted on SCALE/OPERATOR plans AND
+  // purchasable standalone as a WorkspaceAddOn on lower tiers. UNLIKE
+  // smsOtp, this IS a Settings > Modules toggle (see the MODULE_META row).
+  | 'voiceCampaigns'
   // Platform-level inert features (env-gated; surfaced via /billing/summary so the
   // nav hides them until ops enables the feature, instead of showing a 503 button).
   | 'prospecting'

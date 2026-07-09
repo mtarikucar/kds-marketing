@@ -43,6 +43,15 @@ export const FEATURE_KEYS = [
   // (`feature.smsOtp`) turns it on. See TOGGLEABLE_MODULE_KEYS below for why
   // it's excluded from the Settings > Modules toggle list.
   'smsOtp',
+  // NetGSM Phase 5 — voice campaigns (TTS/audio blasts via `/voicesms/send`,
+  // press-1 workflow triggers). UNLIKE smsOtp, this one IS plan-entitled
+  // (SCALE + OPERATOR grant it `true`, see seed-packages.ts) as well as
+  // purchasable standalone as a WorkspaceAddOn (`feature.voiceCampaigns`,
+  // ADDON_GRANTS['voice_campaigns_package']) for lower tiers. Because it's
+  // granted in some plans, it IS a real Settings > Modules toggle — see
+  // TOGGLEABLE_MODULE_KEYS below (no exclusion) and the activatedModules
+  // backfill migration 20260709175000.
+  'voiceCampaigns',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -61,6 +70,11 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
  * means the allow-list intersection in compute() below never touches it, so
  * an add-on grant takes effect regardless of any workspace's module
  * customization — correct, since a purchased add-on isn't a "module" at all.
+ * `voiceCampaigns` is deliberately NOT excluded here (unlike `smsOtp`): it IS
+ * `true` on some plans (SCALE/OPERATOR), so it's a genuine user-facing module
+ * a workspace can switch off — it just ALSO happens to be purchasable as a
+ * standalone add-on on lower tiers. Because it's toggleable, it needed the
+ * backfill migration (20260709175000) — see the backfill-note tripwire.
  */
 export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter(
   (k) => k !== 'autoAssign' && k !== 'smsOtp',
