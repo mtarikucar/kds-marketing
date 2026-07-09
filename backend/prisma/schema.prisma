@@ -911,6 +911,30 @@ model NetgsmWebhookEvent {
   @@map("netgsm_webhook_events")
 }
 
+/// İYS push queue — one row per consent change to prove to İYS. Outbox-style:
+/// PENDING → SENT (refid stamped) → CONFIRMED, or FAILED → retried with
+/// backoff → DLQ after 8 attempts (surfaced on the SMS channel card).
+model IysSyncJob {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  recipient   String // E.164 phone (or email for EPOSTA)
+  type        String // MESAJ | ARAMA | EPOSTA
+  status      String   @default("PENDING") // PENDING | SENT | CONFIRMED | FAILED | DLQ
+  direction   String // ONAY | RET
+  consentAt   DateTime
+  source      String?
+  refid       String?
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([status, updatedAt])
+  @@map("iys_sync_jobs")
+}
+
 /// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
 /// one at a time (click-to-dial reusing SalesCallService, single-line). The rep
 /// previews each lead, dials, logs the outcome, and the queue auto-advances.
