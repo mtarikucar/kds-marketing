@@ -40,7 +40,7 @@ describe('CallCdrSyncService.syncWorkspace', () => {
   beforeEach(() => {
     prisma = {
       channel: { findMany: jest.fn().mockResolvedValue([{ id: 'sms1', type: 'SMS', status: 'ACTIVE' }]) },
-      salesCall: { findMany: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+      salesCall: { findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     registry = { resolveConfig: jest.fn().mockReturnValue({ secrets: { usercode: 'u', password: 'p' } }) };
     cdr = { fetchCdr: jest.fn() };
@@ -56,19 +56,28 @@ describe('CallCdrSyncService.syncWorkspace', () => {
 
     const n = await svc.syncWorkspace('ws');
     expect(n).toBe(1);
-    expect(prisma.salesCall.update).toHaveBeenCalledWith(
+    expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'c1' },
+        // status-guarded so the live event webhook is never regressed
+        where: { id: 'c1', workspaceId: 'ws', status: 'INITIATED' },
         data: expect.objectContaining({ status: 'CONNECTED', durationSec: 42, recordingUrl: 'http://rec/1' }),
       }),
     );
+  });
+
+  it('does NOT count a call the webhook already finalized (updateMany count 0)', async () => {
+    prisma.salesCall.findMany.mockResolvedValue([{ id: 'c1', toPhone: '5060687100', startedAt: new Date() }]);
+    cdr.fetchCdr.mockResolvedValue([{ destination: '5060687100', duration: 42 }]);
+    prisma.salesCall.updateMany.mockResolvedValueOnce({ count: 0 }); // webhook won the race
+    const n = await svc.syncWorkspace('ws');
+    expect(n).toBe(0);
   });
 
   it('marks a zero-duration match as NO_ANSWER', async () => {
     prisma.salesCall.findMany.mockResolvedValue([{ id: 'c1', toPhone: '5060687100', startedAt: new Date() }]);
     cdr.fetchCdr.mockResolvedValue([{ destination: '905060687100', duration: 0 }]);
     await svc.syncWorkspace('ws');
-    expect(prisma.salesCall.update).toHaveBeenCalledWith(
+    expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'NO_ANSWER', durationSec: 0 }) }),
     );
   });
@@ -85,7 +94,7 @@ describe('CallCdrSyncService.syncWorkspace', () => {
     cdr.fetchCdr.mockResolvedValue([{ destination: '5060687100', duration: 30 }]);
     const n = await svc.syncWorkspace('ws');
     expect(n).toBe(0);
-    expect(prisma.salesCall.update).not.toHaveBeenCalled();
+    expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
   });
 
   it('falls back to telephony-config creds when there is no SMS channel', async () => {

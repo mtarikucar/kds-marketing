@@ -104,8 +104,13 @@ export class CallCdrSyncService {
       if (!bucket || bucket.length === 0) continue;
       const rec = bucket.shift()!; // consume one match
       const connected = rec.duration > 0;
-      await this.prisma.salesCall.update({
-        where: { id: call.id },
+      // Guard on status:'INITIATED' (updateMany, not update) so the live event
+      // webhook — which may have finalized this row during the CDR-fetch window
+      // — is never clobbered/regressed by this reconciliation backstop. The
+      // consumer holds the same monotonic discipline; whichever finalizes first
+      // wins, the other is a no-op.
+      const res = await this.prisma.salesCall.updateMany({
+        where: { id: call.id, workspaceId, status: 'INITIATED' },
         data: {
           status: connected ? 'CONNECTED' : 'NO_ANSWER',
           durationSec: rec.duration,
@@ -113,7 +118,7 @@ export class CallCdrSyncService {
           endedAt: new Date(),
         },
       });
-      updated++;
+      if (res.count > 0) updated++;
     }
     return updated;
   }
