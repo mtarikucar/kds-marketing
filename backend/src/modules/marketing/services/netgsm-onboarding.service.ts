@@ -202,6 +202,16 @@ export class NetgsmOnboardingService {
     });
     items.push({ key: 'iysFirstSync', state: firstSync ? 'ok' : 'unknown' });
 
+    // NetGSM Phase 5 Task 7 — Voice SMS + Otomatik Arama (autocall) are BOTH
+    // separate paid add-ons on top of the base NetGSM account, and (like
+    // otpPackage above) there is no read-only probe for either — only a real
+    // voicesms/send or autocallservice call reveals whether they're active,
+    // and NetGSM answers the same generic no-package error (code 60,
+    // netgsm-error.map.ts) either way. So this row is always 'unknown' with a
+    // detail naming both add-ons and error 60 — activating them is a portal
+    // step (NetGSM sales/panel), not something this app can do or verify.
+    items.push({ key: 'voicePackage', state: 'unknown', detail: 'voicePackageHint' });
+
     // NetGSM Phase 5 Task 3 — voice-campaign report webhook. Like
     // eventsWebhookUrl above, NetGSM never confirms back that it actually
     // POSTs to this URL (no provisioning read-back), so it's always
@@ -214,6 +224,14 @@ export class NetgsmOnboardingService {
       url: netgsmWebhookUrl(base, workspaceId, 'voice-report') ?? undefined,
       detail: 'voiceReportWebhookHint',
     });
+
+    // NetGSM Phase 5 Task 7 — the autocall parallel dialer (autocall.client.ts)
+    // REQUIRES a Netsantral queue with logged-in agents to have anywhere to
+    // connect an answered call to (see autocall.client.ts's own doc comment);
+    // that queue/agent-login state lives entirely in NetGSM's Netsantral
+    // portal, so there is nothing to read back here either — always
+    // 'unknown' with a detail pointing at the portal-only setup step.
+    items.push({ key: 'autocallQueue', state: 'unknown', detail: 'autocallQueueHint' });
 
     return { items };
   }

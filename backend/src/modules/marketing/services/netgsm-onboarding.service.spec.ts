@@ -521,4 +521,30 @@ describe('NetgsmOnboardingService', () => {
     expect(row?.url).toContain('/voice-report');
     expect(row?.detail).toBe('voiceReportWebhookHint');
   });
+
+  it('voicePackage: always unknown with the error-60 explainer detail (no live probe — Voice SMS + Otomatik Arama are separate paid add-ons NetGSM never reports back on)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'voicePackage')).toEqual({
+      key: 'voicePackage', state: 'unknown', detail: 'voicePackageHint',
+    });
+  });
+
+  it('autocallQueue: always unknown with the portal queue/agents reminder (Netsantral-side, no API read-back)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'autocallQueue')).toEqual({
+      key: 'autocallQueue', state: 'unknown', detail: 'autocallQueueHint',
+    });
+  });
 });

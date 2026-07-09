@@ -49,6 +49,15 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   // (campaign-sender.service.ts mints it automatically per VOICE send), not
   // a manual paste step like eventsWebhookUrl — this hint explains why.
   voiceReportWebhookHint: 'Set automatically on every VOICE campaign call — nothing to paste manually',
+  // NetGSM Phase 5 Task 7 — voicePackage has no live probe (same reasoning as
+  // otpPackage): only a real voicesms/send or autocallservice call reveals
+  // whether either add-on is active, and both fail the same way (code 60).
+  voicePackageHint:
+    "Can't be checked without sending a real voice call — Voice SMS and Otomatik Arama (auto-dialer) are separate paid NetGSM add-ons; sends fail with NetGSM error 60 until each is activated on your account.",
+  // NetGSM Phase 5 Task 7 — autocallQueue is entirely Netsantral-portal state
+  // (queue existence + agent login), nothing this app can read or set.
+  autocallQueueHint:
+    'The auto-dialer needs a Netsantral queue with logged-in agents to connect answered calls to — set this up in the Netsantral panel.',
 };
 
 /**
@@ -84,7 +93,9 @@ export function NetgsmOnboardingCard() {
       iysFirstSync: 'First İYS consent sync confirmed',
       recordingStorage: 'Call recording storage (R2) configured',
       recordingsReceiving: 'Recordings being stored',
+      voicePackage: 'Voice SMS / Otomatik Arama package',
       voiceReportWebhook: 'Voice-campaign report webhook URL',
+      autocallQueue: 'Netsantral queue with logged-in agents',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

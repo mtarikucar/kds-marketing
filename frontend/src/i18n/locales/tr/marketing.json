@@ -237,7 +237,9 @@
       "iysFirstSync": "İlk İYS onay senkronizasyonu tamamlandı",
       "recordingStorage": "Çağrı kaydı depolama (R2) yapılandırıldı",
       "recordingsReceiving": "Kayıtlar depolanıyor",
+      "voicePackage": "Sesli SMS / Otomatik Arama paketi",
       "voiceReportWebhook": "Sesli kampanya sonuç bildirimi webhook URL'si",
+      "autocallQueue": "Oturum açmış temsilcili Netsantral kuyruğu",
       "repsCount": "{{count}} temsilcide dahili tanımlı",
       "detail": {
         "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
@@ -248,7 +250,9 @@
         "eventsWebhookReceivingHint": "URL'yi panele kaydedip test araması yapın",
         "recordingStorageKvkkHint": "KVKK, aramanın kaydedildiğinin arayana bildirilmesini zorunlu kılar — kaydı açmadan önce bunu IVR/karşılama anonsunuza ekleyin.",
         "recordingsReceivingHint": "Kayıtların depolandığını doğrulamak için kaydı açık bir arama yapıp tamamlayın",
-        "voiceReportWebhookHint": "Her VOICE kampanya çağrısında otomatik olarak ayarlanır — manuel yapıştırma gerekmez"
+        "voiceReportWebhookHint": "Her VOICE kampanya çağrısında otomatik olarak ayarlanır — manuel yapıştırma gerekmez",
+        "voicePackageHint": "Gerçek bir sesli arama gönderilmeden kontrol edilemez — Sesli SMS ve Otomatik Arama, NetGSM hesabınızda ayrı ayrı satın alınması gereken ücretli paketlerdir; her biri aktif edilene kadar gönderimler NetGSM hata 60 ile başarısız olur.",
+        "autocallQueueHint": "Otomatik Arama'nın, yanıtlanan çağrıları aktarabilmesi için oturum açmış temsilcileri olan bir Netsantral kuyruğuna ihtiyacı vardır — bunu Netsantral panelinden kurun."
       }
     },
     "tab": {
