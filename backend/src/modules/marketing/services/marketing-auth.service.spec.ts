@@ -155,6 +155,10 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
     });
   });
 
+  // Review fix round 1 (Finding 6) — the response used to leak which 2FA
+  // factor the account uses ({sent:false} for TOTP vs {sent:true}/a thrown
+  // exception for SMS). It's now uniformly {sent:true} regardless of factor
+  // or delivery outcome; the SMS send itself stays best-effort.
   describe('resendTwoFactorSms()', () => {
     it('re-issues a code for an SMS-armed account', async () => {
       const { prisma, smsOtp, svc } = make();
@@ -169,18 +173,28 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
       );
     });
 
-    it('is a safe no-op for a TOTP-armed account', async () => {
+    it('is a safe no-op for a TOTP-armed account — but the response is now indistinguishable from the SMS-armed case', async () => {
       const { prisma, smsOtp, svc } = make();
       prisma.marketingUser.findUnique.mockResolvedValue(baseUser({ twoFactorSecret: 'sealed-secret' }));
       const out = await svc.resendTwoFactorSms('tok');
-      expect(out).toEqual({ sent: false });
+      expect(out).toEqual({ sent: true });
       expect(smsOtp.issue).not.toHaveBeenCalled();
     });
 
-    it('rejects when the SMS-armed account has no phone on file', async () => {
-      const { prisma, svc } = make();
+    it('never throws when the SMS-armed account has no phone on file — uniform {sent:true}, no factor-revealing exception', async () => {
+      const { prisma, smsOtp, svc } = make();
       prisma.marketingUser.findUnique.mockResolvedValue(baseUser({ phone: null }));
-      await expect(svc.resendTwoFactorSms('tok')).rejects.toBeInstanceOf(BadRequestException);
+      const out = await svc.resendTwoFactorSms('tok');
+      expect(out).toEqual({ sent: true });
+      expect(smsOtp.issue).not.toHaveBeenCalled();
+    });
+
+    it('a NetGSM/SmsOtpService failure during resend never fails the call (best-effort, mirrors login())', async () => {
+      const { prisma, smsOtp, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+      smsOtp.issue.mockRejectedValue(new Error('NetGSM unreachable'));
+      const out = await svc.resendTwoFactorSms('tok');
+      expect(out).toEqual({ sent: true });
     });
   });
 
@@ -193,10 +207,13 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
       const out: any = await svc.verify2fa('tok', '123456');
 
       expect(out.accessToken).toBe('challenge-tok');
+      // Review fix round 1 (Finding 2) — verify() now requires the user's
+      // current phone, binding the proof to the number the code was texted to.
       expect(smsOtp.verify).toHaveBeenCalledWith(
         'ws1',
         { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: 'u1' },
         '123456',
+        '05551234567',
       );
     });
 
@@ -220,6 +237,70 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
       // The consumed backup code is removed so it can't be reused.
       const data = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data;
       expect(data.twoFactorBackupCodes).toEqual([]);
+    });
+  });
+
+  // Review fix round 1 (Finding 1 — 2FA channel hijack): a phone change on an
+  // account with SMS 2FA armed re-points where future login challenges get
+  // texted — this must require currentPassword re-verification, mirroring
+  // changePassword's existing currentPassword precedent. TOTP-armed and
+  // no-2FA accounts, and non-phone edits, are all unaffected.
+  describe('updateProfile()', () => {
+    it('rejects a phone change on an SMS-2FA-armed account with no currentPassword', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+      await expect(
+        svc.updateProfile('u1', { phone: '05559999999' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a phone change on an SMS-2FA-armed account with a WRONG currentPassword', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+      await expect(
+        svc.updateProfile('u1', { phone: '05559999999', currentPassword: 'not-the-password' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a phone change on an SMS-2FA-armed account WITH a valid currentPassword', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+      await svc.updateProfile('u1', { phone: '05559999999', currentPassword: PASSWORD });
+      // currentPassword must never leak into the actual DB write.
+      const data = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data;
+      expect(data).toEqual({ phone: '05559999999' });
+    });
+
+    it('does NOT gate a phone change on a TOTP-armed account (unaffected)', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(baseUser({ twoFactorSecret: 'sealed-secret' }));
+      await svc.updateProfile('u1', { phone: '05559999999' });
+      expect(prisma.marketingUser.update).toHaveBeenCalled();
+    });
+
+    it('does NOT gate a phone change on a no-2FA account (unaffected)', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(
+        baseUser({ twoFactorEnabled: false, twoFactorSecret: null }),
+      );
+      await svc.updateProfile('u1', { phone: '05559999999' });
+      expect(prisma.marketingUser.update).toHaveBeenCalled();
+    });
+
+    it('does NOT gate when the "new" phone is actually unchanged', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(baseUser()); // phone: '05551234567'
+      await svc.updateProfile('u1', { phone: '05551234567' });
+      expect(prisma.marketingUser.update).toHaveBeenCalled();
+    });
+
+    it('never runs the SMS-2FA/phone pre-check at all for a non-phone edit', async () => {
+      const { prisma, svc } = make();
+      await svc.updateProfile('u1', { firstName: 'New' });
+      expect(prisma.marketingUser.findUnique).not.toHaveBeenCalled();
+      expect(prisma.marketingUser.update).toHaveBeenCalled();
     });
   });
 });

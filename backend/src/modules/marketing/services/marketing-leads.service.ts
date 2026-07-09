@@ -518,7 +518,14 @@ export class MarketingLeadsService {
     return { sent: true };
   }
 
-  /** NetGSM SMS v2 Task 12 — step 2: verify the code and stamp phoneVerifiedAt. */
+  /** NetGSM SMS v2 Task 12 — step 2: verify the code and stamp phoneVerifiedAt.
+   *  Review fix round 1 (Finding 2) — passes the lead's CURRENT phone (read
+   *  fresh, right here) into SmsOtpService.verify, which now requires it to
+   *  equal the phone the pending code was issued to. Without this, a code
+   *  texted to the lead's number at `start` time could still confirm a claim
+   *  after the lead's phone was edited to a different number before
+   *  `confirm` — the swap now makes verify() fail instead of silently
+   *  stamping phoneVerifiedAt on a number that was never actually proven. */
   async verifyPhoneConfirm(workspaceId: string, id: string, code: string) {
     const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
     if (!lead) throw new NotFoundException('Lead not found');
@@ -526,6 +533,7 @@ export class MarketingLeadsService {
       workspaceId,
       { purpose: 'LEAD_PHONE_VERIFY', targetType: 'LEAD', targetId: id },
       code,
+      lead.phone,
     );
     if (!result.ok) {
       throw new BadRequestException(result.message ?? 'Invalid verification code');

@@ -162,7 +162,7 @@ describe('TwoFactorService', () => {
     it('enableSms verifies the code, flips the flag, keeps twoFactorSecret null, and issues backup codes', async () => {
       const { prisma, smsOtp, svc } = makeSvc();
       prisma.marketingUser.findUnique.mockResolvedValue({
-        id: 'u1', workspaceId: 'ws1', twoFactorEnabled: false, twoFactorSecret: null,
+        id: 'u1', workspaceId: 'ws1', phone: '05551234567', twoFactorEnabled: false, twoFactorSecret: null,
       } as any);
       (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
       smsOtp.verify.mockResolvedValue({ ok: true });
@@ -172,6 +172,14 @@ describe('TwoFactorService', () => {
       const data = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data;
       expect(data.twoFactorEnabled).toBe(true);
       expect(data.twoFactorSecret).toBeNull();
+      // Review fix round 1 (Finding 2) — verify() now requires the target's
+      // current phone.
+      expect(smsOtp.verify).toHaveBeenCalledWith(
+        'ws1',
+        { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: 'u1' },
+        '123456',
+        '05551234567',
+      );
     });
 
     it('enableSms refuses re-enrolling over an already-active factor (no code-free bypass)', async () => {
@@ -192,16 +200,19 @@ describe('TwoFactorService', () => {
     it('disable verifies via SmsOtpService when the active factor is SMS (twoFactorSecret null)', async () => {
       const { prisma, smsOtp, svc } = makeSvc();
       prisma.marketingUser.findUnique.mockResolvedValue({
-        id: 'u1', workspaceId: 'ws1', twoFactorEnabled: true, twoFactorSecret: null, twoFactorBackupCodes: [],
+        id: 'u1', workspaceId: 'ws1', phone: '05551234567', twoFactorEnabled: true, twoFactorSecret: null, twoFactorBackupCodes: [],
       } as any);
       (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
       smsOtp.verify.mockResolvedValue({ ok: true });
       const out: any = await svc.disable('u1', '123456');
       expect(out.enabled).toBe(false);
+      // Review fix round 1 (Finding 2) — verify() now requires the target's
+      // current phone, so the disable-reauth call must pass it too.
       expect(smsOtp.verify).toHaveBeenCalledWith(
         'ws1',
         { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: 'u1' },
         '123456',
+        '05551234567',
       );
     });
 

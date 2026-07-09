@@ -165,22 +165,29 @@ export class MarketingAuthService {
   /** NetGSM SMS v2 Task 12 — re-send the SMS challenge code for a pending 2FA
    *  login (e.g. the first text was lost/delayed). No-op-safe for a TOTP-armed
    *  account: there is nothing to resend, so it just re-validates the
-   *  challenge and returns without contacting NetGSM. */
+   *  challenge and returns without contacting NetGSM.
+   *
+   *  Review fix round 1 (Finding 6): the response used to differ by factor —
+   *  `{sent:false}` for TOTP, `{sent:true}`/a thrown exception for SMS (no
+   *  phone on file, or a NetGSM failure). A caller who already cleared the
+   *  password step (this endpoint only needs a valid challengeToken) could
+   *  use that difference to fingerprint which 2FA factor the account uses.
+   *  The response is now uniformly `{sent:true}` regardless of factor or
+   *  delivery outcome — the SMS send itself stays best-effort (mirrors
+   *  login()'s NetGSM-outage handling: the client can't retry any harder
+   *  than calling this endpoint again either way). */
   async resendTwoFactorSms(challengeToken: string) {
     const user = await this.loadChallengeUser(challengeToken);
-    if (user.twoFactorSecret) {
-      return { sent: false };
-    }
-    if (!user.phone) {
-      throw new BadRequestException('No phone number on file to text a code to.');
-    }
-    const result = await this.smsOtp.issue(
-      user.workspaceId,
-      { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
-      user.phone,
-    );
-    if (!result.ok) {
-      throw new BadRequestException(result.message ?? 'Could not send the verification code.');
+    if (!user.twoFactorSecret && user.phone) {
+      try {
+        await this.smsOtp.issue(
+          user.workspaceId,
+          { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
+          user.phone,
+        );
+      } catch (e: any) {
+        this.logger.warn(`2fa sms resend failed: ${e?.message ?? e}`);
+      }
     }
     return { sent: true };
   }
@@ -210,6 +217,7 @@ export class MarketingAuthService {
               user.workspaceId,
               { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
               code,
+              user.phone,
             )
           ).ok;
     }
@@ -556,13 +564,52 @@ export class MarketingAuthService {
     return { ...user, workspace };
   }
 
+  /**
+   * Review fix round 1 (Finding 1 — 2FA channel hijack): an authenticated
+   * session used to be able to change `phone` with no re-auth at all. For an
+   * account with SMS 2FA armed (`twoFactorEnabled && !twoFactorSecret`), the
+   * profile's `phone` IS the address future login challenges get texted to —
+   * a hijacked session could silently repoint it to an attacker-controlled
+   * number, and the legitimate owner would never see the next 2FA code.
+   * Gate exactly that combination (SMS-2FA armed + phone actually changing)
+   * behind `currentPassword`, mirroring `changePassword`'s existing
+   * currentPassword re-check — the precedent already established in this
+   * service for a sensitive account change. TOTP-armed and no-2FA accounts
+   * are unaffected; non-phone edits on an SMS-armed account are unaffected.
+   */
   async updateProfile(
     userId: string,
-    data: { firstName?: string; lastName?: string; phone?: string },
+    data: { firstName?: string; lastName?: string; phone?: string; currentPassword?: string },
   ) {
+    const { currentPassword, ...profileData } = data;
+
+    if (profileData.phone !== undefined) {
+      const user = await this.prisma.marketingUser.findUnique({
+        where: { id: userId },
+        select: { phone: true, password: true, twoFactorEnabled: true, twoFactorSecret: true },
+      });
+      if (!user) {
+        throw new BadRequestException('User not found');
+      }
+
+      const phoneChanging = profileData.phone !== user.phone;
+      const smsTwoFactorArmed = user.twoFactorEnabled && !user.twoFactorSecret;
+      if (phoneChanging && smsTwoFactorArmed) {
+        if (!currentPassword) {
+          throw new BadRequestException(
+            'Confirm your current password to change your phone number while SMS-based 2FA is enabled.',
+          );
+        }
+        const isValid = await bcrypt.compare(currentPassword, user.password);
+        if (!isValid) {
+          throw new BadRequestException('Current password is incorrect');
+        }
+      }
+    }
+
     return this.prisma.marketingUser.update({
       where: { id: userId },
-      data,
+      data: profileData,
       select: {
         id: true,
         email: true,

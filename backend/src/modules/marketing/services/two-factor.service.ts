@@ -136,7 +136,7 @@ export class TwoFactorService {
         'Two-factor authentication is already enabled. Disable it first to re-enroll.',
       );
     }
-    const result = await this.smsOtp.verify(u.workspaceId, smsFactorTarget(userId), code);
+    const result = await this.smsOtp.verify(u.workspaceId, smsFactorTarget(userId), code, u.phone);
     if (!result.ok) {
       throw new BadRequestException(result.message ?? 'Invalid verification code');
     }
@@ -169,7 +169,7 @@ export class TwoFactorService {
       !okBackup &&
       (u.twoFactorSecret
         ? verifyTotp(openTotpSecret(u.twoFactorSecret), code)
-        : (await this.smsOtp.verify(u.workspaceId, smsFactorTarget(userId), code)).ok);
+        : (await this.smsOtp.verify(u.workspaceId, smsFactorTarget(userId), code, u.phone)).ok);
     if (!okFactor && !okBackup) throw new BadRequestException('Invalid verification code');
     await this.prisma.marketingUser.update({
       where: { id: userId },
