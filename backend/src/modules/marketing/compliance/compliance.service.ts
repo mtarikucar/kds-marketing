@@ -51,21 +51,38 @@ export class ComplianceService {
     });
     const field = OPT_OUT_FIELD[type];
     if (field) {
-      // granted=false → opted OUT (true); granted=true → opted IN (false).
-      await this.prisma.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
       if (field === 'smsOptOut') {
+        // The flip + the follow-on blacklist-sync event both happen inside
+        // emitSmsOptEvent's own transaction (see its docstring).
         await this.emitSmsOptEvent(workspaceId, leadId, granted, record.id);
+      } else {
+        // granted=false → opted OUT (true); granted=true → opted IN (false).
+        await this.prisma.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
       }
     }
     return record;
   }
 
   /**
-   * Mirrors an SMS opt-out/opt-in transition to NetgsmBlacklistSyncService via
-   * the outbox (defense-in-depth NetGSM account-blacklist sync — see that
-   * service's docstring). Best-effort: the consent itself is already durably
-   * recorded above, so a failure enqueueing the follow-on sync event is
-   * logged rather than failing the whole request.
+   * Flips the lead's smsOptOut flag and mirrors the transition to
+   * NetgsmBlacklistSyncService via the outbox (defense-in-depth NetGSM
+   * account-blacklist sync — see that service's docstring), both inside ONE
+   * $transaction — the standard outbox idiom used by every other producer in
+   * this codebase (state write + event insert atomic together when the
+   * append succeeds).
+   *
+   * The one difference from those producers: this event is best-effort — the
+   * opt-out flag itself is the durable compliance record; the blacklist sync
+   * is only defense-in-depth (İYS + the app's own smsOptOut gates are
+   * primary) — so a failure reading the lead's phone OR appending the event
+   * must NEVER fail the request or undo the flip. A plain try/catch around
+   * those two steps is NOT enough to protect the flip: Postgres aborts the
+   * WHOLE transaction the instant any statement inside it errors, and Prisma
+   * silently turns the eventual COMMIT into a no-op ROLLBACK even when the JS
+   * error was caught (verified empirically against a real Postgres instance —
+   * a caught inner error still discarded every earlier write in the same
+   * interactive transaction). The SAVEPOINT below isolates the read+append:
+   * on failure, only that sub-scope rolls back and the flip commits normally.
    */
   private async emitSmsOptEvent(
     workspaceId: string,
@@ -73,19 +90,29 @@ export class ComplianceService {
     granted: boolean,
     consentRecordId: string,
   ): Promise<void> {
-    const lead = await this.prisma.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
-    if (!lead?.phone) return; // nothing to sync without a phone number
     const eventType = granted ? MarketingEventTypes.SmsOptedIn : MarketingEventTypes.SmsOptedOut;
-    try {
-      await this.outbox.append({
-        type: eventType,
-        tenantId: null,
-        payload: { workspaceId, leadId, phone: lead.phone } satisfies MarketingSmsOptStatusPayload,
-        idempotencyKey: `${workspaceId}:${leadId}:${eventType}:consent:${consentRecordId}`,
-      });
-    } catch (e: any) {
-      this.logger.warn(`Failed to enqueue ${eventType} for lead=${leadId}: ${e?.message ?? e}`);
-    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.lead.update({ where: { id: leadId }, data: { smsOptOut: !granted } });
+      await tx.$executeRawUnsafe('SAVEPOINT sp_sms_opt_event');
+      try {
+        const lead = await tx.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+        if (lead?.phone) {
+          await this.outbox.append(
+            {
+              type: eventType,
+              tenantId: null,
+              payload: { workspaceId, leadId, phone: lead.phone } satisfies MarketingSmsOptStatusPayload,
+              idempotencyKey: `${workspaceId}:${leadId}:${eventType}:consent:${consentRecordId}`,
+            },
+            tx,
+          );
+        }
+        await tx.$executeRawUnsafe('RELEASE SAVEPOINT sp_sms_opt_event');
+      } catch (e: any) {
+        await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_sms_opt_event');
+        this.logger.warn(`Failed to enqueue ${eventType} for lead=${leadId}: ${e?.message ?? e}`);
+      }
+    });
   }
 
   async getConsents(workspaceId: string, leadId: string) {

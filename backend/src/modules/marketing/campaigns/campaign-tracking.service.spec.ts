@@ -32,6 +32,11 @@ describe('CampaignTrackingService', () => {
       // bump() now increments the counter via an atomic jsonb_set UPDATE.
       $executeRawUnsafe: jest.fn().mockResolvedValue(1),
     };
+    // emitSmsOptOutEvent wraps the flip + phone read + outbox append in one
+    // $transaction; the mock just runs the callback against the same mock
+    // client (tx === prisma), matching the established test idiom elsewhere
+    // (e.g. review-sync.service.spec.ts).
+    prisma.$transaction = jest.fn((fn: any) => fn(prisma));
     outbox = { append: jest.fn().mockResolvedValue('evt-1') };
     svc = new CampaignTrackingService(prisma as any, outbox as any);
   });
@@ -115,6 +120,7 @@ describe('CampaignTrackingService', () => {
         payload: { workspaceId: WS, leadId: 'lead-1', phone: '05551112233' },
         idempotencyKey: 'ws-1:lead-1:marketing.sms.optout.v1:unsub:r1',
       }),
+      expect.anything(), // the tx client the flip + append share
     );
   });
 
@@ -131,5 +137,22 @@ describe('CampaignTrackingService', () => {
     prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
     outbox.append.mockRejectedValue(new Error('outbox down'));
     await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+  });
+
+  it('does not fail the unsubscribe when the phone lookup (findUnique) rejects, and still bumps the UNSUBSCRIBED status', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    prisma.lead.findUnique.mockRejectedValue(new Error('db down'));
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(outbox.append).not.toHaveBeenCalled();
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead-1', workspaceId: WS },
+      data: { smsOptOut: true },
+    });
+    // The read failure must not skip the UNSUBSCRIBED status bump either.
+    expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'r1', status: { not: 'UNSUBSCRIBED' } } }),
+    );
   });
 });

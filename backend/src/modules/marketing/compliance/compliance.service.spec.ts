@@ -9,6 +9,11 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
+  // emitSmsOptEvent wraps the flip + phone read + outbox append in one
+  // $transaction; the mock just runs the callback against the same mock
+  // client (tx === prisma), matching the established test idiom elsewhere
+  // (e.g. review-sync.service.spec.ts).
+  (prisma.$transaction as unknown as jest.Mock) = jest.fn((fn: any) => fn(prisma));
   const outbox = { append: jest.fn().mockResolvedValue('evt-1') };
   return { prisma, outbox, svc: new ComplianceService(prisma as any, outbox as any) };
 }
@@ -60,6 +65,7 @@ describe('ComplianceService', () => {
         payload: { workspaceId: WS, leadId: 'lead-1', phone: '05551112233' },
         idempotencyKey: 'ws-1:lead-1:marketing.sms.optout.v1:consent:cr-1',
       }),
+      prisma, // the tx client (mocked as the same prisma instance) the flip + append share
     );
   });
 
@@ -74,6 +80,7 @@ describe('ComplianceService', () => {
 
     expect(outbox.append).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'marketing.sms.optin.v1' }),
+      prisma,
     );
   });
 
@@ -98,6 +105,20 @@ describe('ComplianceService', () => {
     outbox.append.mockRejectedValue(new Error('outbox down'));
 
     await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).resolves.toMatchObject({ id: 'cr-4' });
+  });
+
+  it('does not fail the consent write when the phone lookup (findUnique) rejects', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-5' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockRejectedValue(new Error('db down'));
+
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).resolves.toMatchObject({ id: 'cr-5' });
+    expect(prisma.lead.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'lead-1' }, data: { smsOptOut: true } }),
+    );
+    expect(outbox.append).not.toHaveBeenCalled();
   });
 
   it('does not touch opt-out flags for DATA_PROCESSING consent', async () => {
