@@ -47,9 +47,24 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
 
   // Ring-back correlation window — a timestamp (not a boolean) so "cleared" and
   // "expired" are the same check (`ringbackUntil === null || Date.now() > ringbackUntil`).
+  // `expectedDigits` is the last-10 of the number THIS rep just dialed (when
+  // known) so the window is number-matched, not just time-matched (see M2 in
+  // task-4-report.md): an unrelated genuine inbound landing inside the 30s
+  // window must NOT be silently auto-answered just because the timing lines up.
   let ringbackUntil: number | null = null;
-  const armRingbackWindow = () => { ringbackUntil = Date.now() + RINGBACK_WINDOW_MS; };
-  const clearRingbackWindow = () => { ringbackUntil = null; };
+  let expectedDigits: string | null = null;
+  /** mirrors the backend's own private `last10` helpers (e.g.
+   *  telephony-event.consumer.ts, call-cdr-sync.service.ts) — last-10-digit
+   *  comparison sidesteps +90/0/country-code formatting differences. */
+  const last10 = (raw: string | null | undefined): string | null => {
+    const d = (raw ?? '').replace(/[^\d]/g, '');
+    return d.length ? d.slice(-10) : null;
+  };
+  const armRingbackWindow = (dialedNumber?: string) => {
+    ringbackUntil = Date.now() + RINGBACK_WINDOW_MS;
+    expectedDigits = last10(dialedNumber);
+  };
+  const clearRingbackWindow = () => { ringbackUntil = null; expectedDigits = null; };
   const isExpectingRingback = () => ringbackUntil !== null && Date.now() <= ringbackUntil;
 
   /** Turkish-friendly digit normalisation, then a sip: target. */
@@ -123,14 +138,31 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
             // can ask the rep to explicitly accept/reject.
             onCallReceived: async () => {
               if (isExpectingRingback()) {
-                clearRingbackWindow();
-                try {
-                  await user!.answer();
-                  set({ status: 'incall' });
-                } catch (e: any) {
-                  set({ status: 'registered', error: e?.message ?? 'answer failed' });
+                const remoteDigits = last10(inviteCallerNumber());
+                // Match if we never learned the dialed number's digits, or the
+                // INVITE's remote identity is unavailable (best-effort — see
+                // `inviteCallerNumber`'s own doc on why that's often the case),
+                // or the digits agree. An INVITE whose remote identity IS
+                // available and DISAGREES is a genuine, unrelated inbound call
+                // that happens to land inside the window — never auto-answer
+                // it; fall through to the normal ringing/incoming path below,
+                // leaving the window armed for the real ring-back that may
+                // still follow.
+                const isRingbackMatch = expectedDigits === null || remoteDigits === null || remoteDigits === expectedDigits;
+                if (isRingbackMatch) {
+                  // Single-use: consume the window on the first matching
+                  // INVITE so a second, concurrent INVITE (e.g. two
+                  // unavailable-identity calls inside the same window) is
+                  // treated as a genuine inbound call, not auto-answered again.
+                  clearRingbackWindow();
+                  try {
+                    await user!.answer();
+                    set({ status: 'incall' });
+                  } catch (e: any) {
+                    set({ status: 'registered', error: e?.message ?? 'answer failed' });
+                  }
+                  return;
                 }
-                return;
               }
               set({ status: 'ringing', incoming: { number: inviteCallerNumber() } });
             },
@@ -152,9 +184,26 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
       if (!user) throw new Error('webphone not started');
       // Arm the ring-back window BEFORE placing the call: NetGSM's dahili/
       // API-mode originate can ring the extension back almost immediately.
-      armRingbackWindow();
+      armRingbackWindow(number);
       await user.call(toTarget(number));
       set({ status: 'incall', lastNumber: number });
+    },
+
+    /**
+     * Publicly arm the ring-back-expectation window WITHOUT placing a SIP
+     * `call()` — for a call THIS rep just originated via REST (POST
+     * `/calls/start` or `/dialer/sessions/:id/dial`, Netsantral api-dial
+     * mode). Those flows never touch this store's own `call()` (the browser
+     * never places the SIP INVITE — NetGSM's `originate` rings the extension
+     * server-side), so nothing else would arm this window for them, and the
+     * extension ring-back would surface the accept/reject dialog instead of
+     * auto-answering silently. `WebphoneHost` exposes a module-level
+     * singleton so `ClickToDialButton` / `DialerPage` can reach the one
+     * app-wide webphone instance and call this right after a successful
+     * api-mode dial.
+     */
+    expectRingback(dialedNumber?: string) {
+      armRingbackWindow(dialedNumber);
     },
 
     /** Accept a genuine inbound call the UI is showing (status `ringing`). */

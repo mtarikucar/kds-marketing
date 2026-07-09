@@ -7,15 +7,25 @@ const hangup = vi.fn().mockResolvedValue(undefined);
 const answer = vi.fn().mockResolvedValue(undefined);
 const decline = vi.fn().mockResolvedValue(undefined);
 let captured: any;
+let capturedInstance: any;
 vi.mock('sip.js/lib/platform/web', () => ({
   SimpleUser: vi.fn().mockImplementation((server: string, opts: any) => {
     captured = { server, opts };
-    return {
+    capturedInstance = {
       connect, register, call, hangup, answer, decline,
       unregister: vi.fn(), disconnect: vi.fn(), delegate: opts.delegate,
     };
+    return capturedInstance;
   }),
 }));
+
+/** Simulate the INVITE's remote identity being available (see
+ *  `inviteCallerNumber`'s doc in webphone.store.ts — it reaches the
+ *  runtime-accessible, TypeScript-private `session` field). `undefined`
+ *  (the default after `start()`) simulates the common "unavailable" case. */
+const setInviteRemoteNumber = (num: string | undefined) => {
+  capturedInstance.session = num ? { remoteIdentity: { uri: { user: num } } } : undefined;
+};
 
 import { createWebphone } from './webphone.store';
 
@@ -134,6 +144,60 @@ describe('webphone store', () => {
 
     expect(answer).not.toHaveBeenCalled();
     expect(wp.getState().status).toBe('ringing');
+  });
+
+  // ── expectRingback() public method + number-matched correlation (H1/M2) ───
+
+  it('expectRingback() arms the ring-back window independently of call() (REST-originated click-to-dial)', async () => {
+    const wp = createWebphone(document.createElement('audio'));
+    await wp.start(cfg);
+
+    wp.expectRingback('+90 555 111 22 33'); // no wp.call() — the dial happened server-side via REST
+    await captured.opts.delegate.onCallReceived();
+
+    expect(call).not.toHaveBeenCalled(); // never placed a SIP INVITE ourselves
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(wp.getState().status).toBe('incall');
+  });
+
+  it('auto-answers when the INVITE remote identity matches the number armed via expectRingback()', async () => {
+    const wp = createWebphone(document.createElement('audio'));
+    await wp.start(cfg);
+    wp.expectRingback('+90 555 111 22 33');
+    setInviteRemoteNumber('905551112233'); // same number, different formatting — last-10 still matches
+
+    await captured.opts.delegate.onCallReceived();
+
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(wp.getState().status).toBe('incall');
+  });
+
+  it('does NOT auto-answer a genuine inbound whose number does not match the number armed via expectRingback() (M2)', async () => {
+    const wp = createWebphone(document.createElement('audio'));
+    await wp.start(cfg);
+    wp.expectRingback('+90 555 111 22 33');
+    setInviteRemoteNumber('905559998877'); // a DIFFERENT, unrelated genuine inbound caller
+
+    await captured.opts.delegate.onCallReceived();
+
+    expect(answer).not.toHaveBeenCalled();
+    expect(wp.getState().status).toBe('ringing');
+    expect(wp.getState().incoming).toEqual({ number: '905559998877' });
+  });
+
+  it('a mismatched INVITE leaves the window armed for the real ring-back that follows (M2 residual)', async () => {
+    const wp = createWebphone(document.createElement('audio'));
+    await wp.start(cfg);
+    wp.expectRingback('+90 555 111 22 33');
+    setInviteRemoteNumber('905559998877'); // unrelated genuine inbound arrives first
+    await captured.opts.delegate.onCallReceived();
+    expect(answer).not.toHaveBeenCalled();
+
+    setInviteRemoteNumber('905551112233'); // the actual ring-back arrives next, still inside the window
+    await captured.opts.delegate.onCallReceived();
+
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(wp.getState().status).toBe('incall');
   });
 
   it('answerIncoming() answers a ringing genuine inbound call', async () => {

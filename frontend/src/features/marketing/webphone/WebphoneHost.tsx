@@ -36,6 +36,48 @@ interface ScreenPopPayload {
  *  WSS INVITE, but events for two DIFFERENT calls should never merge. */
 const SCREEN_POP_FRESHNESS_MS = 5_000;
 
+/** mirrors the backend's own private `last10` helpers (e.g.
+ *  telephony-event.consumer.ts, call-cdr-sync.service.ts) and
+ *  webphone.store.ts's copy — last-10-digit comparison sidesteps
+ *  +90/0/country-code formatting differences between the two channels
+ *  (SIP INVITE vs. the screen-pop SSE payload). */
+const last10 = (raw: string | null | undefined): string | null => {
+  const d = (raw ?? '').replace(/[^\d]/g, '');
+  return d.length ? d.slice(-10) : null;
+};
+
+/** True if either number is unknown (best-effort — can't rule out a match;
+ *  mirrors the ring-back best-effort matching in webphone.store.ts) or both
+ *  are known and their last-10 digits agree. False (never merge) only when
+ *  BOTH are known and they disagree — that's the "foreign screen-pop" case
+ *  Finding M3 targets: a broadcast pop meant for another rep's unrelated
+ *  ringing call must not attach its lead card here. */
+const numbersMayCorrelate = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const da = last10(a);
+  const db = last10(b);
+  return da === null || db === null || da === db;
+};
+
+/** App-wide singleton reference to the one mounted WebphoneHost's webphone
+ *  instance (there is exactly one, mounted once in MarketingLayout — see the
+ *  module doc below). Lets a REST-originated click-to-dial call site
+ *  (ClickToDialButton's `/calls/start`, DialerPage's
+ *  `/dialer/sessions/:id/dial`, both api-dial mode) that never touches the
+ *  webphone store directly still arm the ring-back-expectation window before
+ *  NetGSM's server-side `originate` rings the extension back — otherwise that
+ *  ring-back INVITE surfaces the accept/reject dialog instead of
+ *  auto-answering silently (see Finding H1 in task-4-report.md). `null`
+ *  whenever no WebphoneHost is mounted (config not loaded yet, entitlement
+ *  gate, or a unit test) — callers use `expectRingback` below, which just
+ *  no-ops rather than throwing. */
+let activeWebphone: { expectRingback: (dialedNumber?: string) => void } | null = null;
+
+/** Arm the ring-back-expectation window on the one app-wide webphone
+ *  instance. No-op if no WebphoneHost is currently mounted. */
+export function expectRingback(dialedNumber?: string) {
+  activeWebphone?.expectRingback(dialedNumber);
+}
+
 /**
  * App-wide webphone host: mounted once in MarketingLayout so the rep's NetGSM
  * dahili stays REGISTERED on every page (not just the Telephony Settings panel).
@@ -82,14 +124,25 @@ export default function WebphoneHost() {
     if (!cfg || !audioRef.current || wpRef.current) return;
     const wp = createWebphone(audioRef.current);
     wpRef.current = wp;
+    activeWebphone = wp;
     const unsub = wp.subscribe((s) => {
       setState(s);
       if (s.status === 'ringing') {
         // A screen-pop that arrived just before this SIP INVITE (order isn't
         // guaranteed across the two channels) — merge it in now instead of
-        // waiting for one that will never come.
+        // waiting for one that will never come. Freshness AND number-match
+        // both required (Finding M3): a stale or FOREIGN screen-pop (meant for
+        // another rep's unrelated ringing call, e.g. a broadcast pop) must
+        // never attach its lead card to THIS ringing call.
         const pending = pendingScreenPopRef.current;
-        if (pending && Date.now() - pending.at < SCREEN_POP_FRESHNESS_MS) setScreenPop(pending.payload);
+        if (
+          pending &&
+          Date.now() - pending.at < SCREEN_POP_FRESHNESS_MS &&
+          numbersMayCorrelate(pending.payload.customerNum, s.incoming?.number)
+        ) {
+          setScreenPop(pending.payload);
+          pendingScreenPopRef.current = null; // consumed — can't re-attach to a later call
+        }
       } else {
         setScreenPop(null);
       }
@@ -99,6 +152,7 @@ export default function WebphoneHost() {
       unsub();
       wp.stop();
       wpRef.current = null;
+      activeWebphone = null;
     };
   }, [cfg]);
 
@@ -125,10 +179,23 @@ export default function WebphoneHost() {
         const data = JSON.parse(dataLines.join('\n'));
         if (data?.kind !== 'screen_pop' || !data.payload) return;
         const payload = data.payload as ScreenPopPayload;
-        pendingScreenPopRef.current = { payload, at: Date.now() };
-        if (wpRef.current?.getState().status === 'ringing') {
+        const sipState = wpRef.current?.getState();
+        // Number-matched merge (Finding M3): only attach this screen-pop to
+        // an already-ringing SIP call if the numbers correlate — otherwise a
+        // broadcast pop for another rep's unrelated ringing call would attach
+        // its lead card here (wrong lead shown; Accept navigates to the wrong
+        // lead). A mismatch just falls through to the informational toast
+        // below instead of the dialog merge.
+        if (sipState?.status === 'ringing' && numbersMayCorrelate(payload.customerNum, sipState.incoming?.number)) {
           setScreenPop(payload);
+          pendingScreenPopRef.current = null; // consumed — can't re-attach to a later call
+        } else if (sipState?.status === 'ringing') {
+          // Ringing, but this pop is for a DIFFERENT call (number mismatch) —
+          // keep it pending (a still-fresh future ringing call it DOES match
+          // may yet consume it) and ignore it for the current one.
+          pendingScreenPopRef.current = { payload, at: Date.now() };
         } else {
+          pendingScreenPopRef.current = { payload, at: Date.now() };
           // No SIP leg ringing on THIS device right now — either a bridge-mode
           // call (rings the rep's real phone, no webphone leg to answer here)
           // or the INVITE simply hasn't landed yet. Either way there's nothing

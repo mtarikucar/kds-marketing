@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import WebphoneHost from './WebphoneHost';
+import WebphoneHost, { expectRingback } from './WebphoneHost';
 import type { WebphoneState } from './webphone.store';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
@@ -53,6 +53,7 @@ const rejectIncoming = vi.fn().mockResolvedValue(undefined);
 const hangup = vi.fn().mockResolvedValue(undefined);
 const start = vi.fn().mockResolvedValue(undefined);
 const stop = vi.fn().mockResolvedValue(undefined);
+const expectRingbackFn = vi.fn();
 let fakeState: WebphoneState = { status: 'registered' };
 
 vi.mock('./webphone.store', () => ({
@@ -68,6 +69,7 @@ vi.mock('./webphone.store', () => ({
     answerIncoming,
     rejectIncoming,
     call: vi.fn(),
+    expectRingback: expectRingbackFn,
   }),
 }));
 
@@ -102,6 +104,20 @@ describe('WebphoneHost — screen-pop ringing dialog', () => {
     renderHost();
     await waitFor(() => expect(start).toHaveBeenCalled());
     expect(screen.queryByText(/incoming call/i)).not.toBeInTheDocument();
+  });
+
+  // ── Module-level `activeWebphone` singleton (Finding H1) ──────────────────
+  it('sets the activeWebphone singleton on mount (forwarding expectRingback) and clears it on unmount', async () => {
+    const { unmount } = renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    expectRingback('5551234567');
+    expect(expectRingbackFn).toHaveBeenCalledWith('5551234567');
+
+    unmount();
+    expectRingbackFn.mockClear();
+    expectRingback('5551234567'); // no WebphoneHost mounted now — must no-op, not throw
+    expect(expectRingbackFn).not.toHaveBeenCalled();
   });
 
   it('shows the ringing dialog with just the number when the SIP INVITE has no matched lead', async () => {
@@ -234,5 +250,58 @@ describe('WebphoneHost — screen-pop SSE correlation', () => {
     await userEvent.click(screen.getByRole('button', { name: /accept/i }));
     expect(answerIncoming).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/leads/lead-1');
+  });
+
+  // ── Number-matched merge + single-use ref (Finding M3) ────────────────────
+
+  it('does NOT merge a stale/foreign screen-pop into an unrelated ringing call (number mismatch)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      sseFetchMock([
+        screenPopFrame({
+          customerNum: '5559998877', // a pop meant for a DIFFERENT call (e.g. broadcast to another rep)
+          lead: { id: 'lead-1', businessName: 'Acme A.Ş.' },
+          salesCallId: 'sc-1',
+          internalNum: '101',
+        }),
+      ]),
+    );
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    // This rep's own, unrelated genuine call rings for a DIFFERENT number.
+    emit({ status: 'ringing', incoming: { number: '5551112233' } });
+
+    expect(await screen.findByText(/incoming call/i)).toBeInTheDocument();
+    expect(screen.getByText('5551112233')).toBeInTheDocument();
+    expect(screen.queryByText('Acme A.Ş.')).not.toBeInTheDocument(); // foreign lead card never attaches
+    expect(screen.getByText(/unknown caller/i)).toBeInTheDocument();
+    expect(answerIncoming).not.toHaveBeenCalled();
+  });
+
+  it('clears pendingScreenPopRef once merged, so it cannot silently re-attach to a later ringing call', async () => {
+    vi.stubGlobal(
+      'fetch',
+      sseFetchMock([
+        screenPopFrame({
+          customerNum: '5559998877',
+          lead: { id: 'lead-1', businessName: 'Acme A.Ş.' },
+          salesCallId: 'sc-1',
+          internalNum: '101',
+        }),
+      ]),
+    );
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    emit({ status: 'ringing', incoming: { number: '5559998877' } }); // matches — merges + consumes
+    expect(await screen.findByText('Acme A.Ş.')).toBeInTheDocument();
+
+    emit({ status: 'registered' }); // first call ends
+    emit({ status: 'ringing', incoming: { number: '5559998877' } }); // a SECOND, unrelated call — coincidentally same number
+
+    // The already-consumed screen-pop must not reattach to this new, later call.
+    expect(await screen.findByText(/incoming call/i)).toBeInTheDocument();
+    expect(screen.queryByText('Acme A.Ş.')).not.toBeInTheDocument();
   });
 });

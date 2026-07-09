@@ -6,6 +6,7 @@ import marketingApi from '../api/marketingApi';
 import { PhoneInput } from '@/components/ui/PhoneInput';
 import type { SalesCall, StartCallResult } from '../types';
 import { CALL_OUTCOMES } from '../types';
+import { expectRingback } from '../webphone/WebphoneHost';
 
 const errMsg = (err: any, fallback: string) => err?.response?.data?.message || fallback;
 
@@ -42,6 +43,12 @@ export default function ClickToDialButton({
         // request was accepted — the extension only actually rings if a device
         // (the webphone) is registered on it. Keep the copy honest (not "ringing").
         toast.success('Call request sent — your extension will ring (keep the webphone open).');
+        // Finding H1: this REST dial never touches webphone.store.ts's own
+        // `call()`, so nothing else arms the ring-back-expectation window —
+        // without this, the extension ring-back INVITE would surface the
+        // accept/reject dialog instead of auto-answering silently. Reach the
+        // app-wide webphone instance via WebphoneHost's module singleton.
+        expectRingback(phone.trim());
       } else if (data.dialUri) {
         window.location.href = data.dialUri; // click-to-dial hands off to the device
       }

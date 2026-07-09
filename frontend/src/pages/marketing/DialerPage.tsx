@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { PhoneCall, SkipForward, Play, X, CheckCircle2 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { expectRingback } from '../../features/marketing/webphone/WebphoneHost';
 import {
   PageHeader, Card, CardContent, Button, Input, Field, Badge, Progress, EmptyState,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -47,8 +48,17 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
       // Click-to-dial (netgsm-lite) hands back a tel: URI for the softphone;
       // api-dial (Netsantral) originates server-side with an empty dialUri — give
       // the rep explicit feedback in that mode so the button isn't a silent no-op.
-      if (res.dialUri) window.location.href = res.dialUri;
-      else toast.success(t('dialer.calling', { defaultValue: 'Calling… answer your handset.' }));
+      if (res.mode === 'api') {
+        toast.success(t('dialer.calling', { defaultValue: 'Calling… answer your handset.' }));
+        // Finding H1: this REST dial never touches webphone.store.ts's own
+        // `call()`, so nothing else arms the ring-back-expectation window —
+        // without this, the extension ring-back INVITE would surface the
+        // accept/reject dialog instead of auto-answering silently. Reach the
+        // app-wide webphone instance via WebphoneHost's module singleton.
+        expectRingback(session?.current?.lead.phone ?? undefined);
+      } else if (res.dialUri) {
+        window.location.href = res.dialUri;
+      }
     },
     onError: (e) => toast.error(apiErr(e, 'Could not start the call — log or cancel the active one first')),
   });
