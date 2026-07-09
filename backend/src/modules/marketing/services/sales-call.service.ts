@@ -94,12 +94,13 @@ export class SalesCallService {
     // scoped identically, so a rep's own abandoned INITIATED row is only ever
     // cleared against (and only ever counts toward) THEIR OWN limit.
     const perRep = provider.maxConcurrentCalls > 1;
-    const concurrencyScope: Prisma.SalesCallWhereInput = perRep
-      ? { workspaceId, marketingUserId, status: 'INITIATED' }
-      : { workspaceId, status: 'INITIATED' };
 
     const active = await this.prisma.salesCall.findMany({
-      where: concurrencyScope,
+      // workspaceId kept inline (not spread from a variable) so the
+      // workspace-scoping arch fitness test can statically see the scope.
+      // perRep (multi-line netsantral) also scopes to THIS rep; the single
+      // shared-line lite provider stays workspace-wide.
+      where: { workspaceId, status: 'INITIATED', ...(perRep ? { marketingUserId } : {}) },
       orderBy: { startedAt: 'desc' },
       select: { id: true, startedAt: true },
     });
