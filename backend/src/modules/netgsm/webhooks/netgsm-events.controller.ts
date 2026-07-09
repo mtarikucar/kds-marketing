@@ -5,7 +5,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { payloadDigest, verifyNetgsmWebhookToken } from './netgsm-webhook.util';
 import { normalizeSantralEvent } from './santral-event-normalizer';
 
-type WebhookPurpose = 'events' | 'iys' | 'voice-report';
+type WebhookPurpose = 'events' | 'iys' | 'voice-report' | 'autocall-report';
 interface WebhookRow {
   el: Record<string, unknown>;
   externalId: string;
@@ -28,13 +28,12 @@ interface WebhookRow {
  *
  * `@SkipThrottle()` on every route below (NetGSM Phase 3 Task 6, Phase-0
  * finding): NetGSM pushes every tenant's santral events, İYS push-backs, AND
- * voice-campaign reports from a small, fixed set of its own server IPs —
+ * voice/autocall reports from a small, fixed set of its own server IPs —
  * machine traffic, not a browser's. The global 300 req/min PER-IP
  * `ThrottlerGuard` (app-wide `APP_GUARD`) would throttle that shared IP into
  * 429s under real call/İYS/voice volume across many tenants, exactly like
  * `InternalEventsController`'s own `@SkipThrottle()` for core's single egress
- * IP. The future autocall-report route (Phase 5 Task 5 — not built yet) is
- * the same shape and should carry it too when it's added.
+ * IP.
  */
 @Controller('public/netgsm')
 export class NetgsmEventsController {
@@ -290,6 +289,71 @@ export class NetgsmEventsController {
           recordLink: recordLink ?? null,
         },
         idempotencyKey: `${workspaceId}:voice-report:${r.externalId}`,
+      });
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * Auto-dialer per-attempt report push (NetGSM Phase 5 Task 5). Body shape
+   * per the facts: `{JobID, called, unique_id, status}` — one push per call
+   * ATTEMPT (a number can be retried `retry_count` times, each attempt its
+   * own `unique_id`), may arrive as a lone object or an array, same tolerant
+   * shape as `events`/`voice-report` above.
+   *
+   * Archive key is `${jobIdPart}:${uniqueIdPart}` — `unique_id` already
+   * identifies ONE attempt uniquely (unlike voice-report's `relationid`,
+   * which can receive multiple distinct-state pushes for the SAME call), so
+   * no extra state-token scoping is needed: a genuine redelivery of the same
+   * attempt dedupes to one archived row, and every distinct attempt (a retry,
+   * or a different number) gets its own.
+   *
+   * Correlates purely by `JobID` (= `AutocallClient.addAutocall`'s returned
+   * `jobId`/`listId`, best-effort assumed to be the SAME identifier echoed
+   * back here — NOT live-verified, see AutocallClient's docstring) — an
+   * element with no resolvable JobID is archived for audit but never
+   * published, same fail-closed treatment as every other route on this
+   * controller (business-logic free: AutocallReportConsumer, not this
+   * controller, resolves the session/lead).
+   */
+  @Post(':workspaceId/:token/autocall-report')
+  @HttpCode(202)
+  @SkipThrottle()
+  async autocallReport(
+    @Param('workspaceId') workspaceId: string,
+    @Param('token') token: string,
+    @Body() body: unknown,
+  ): Promise<{ ok: true }> {
+    if (!verifyNetgsmWebhookToken(workspaceId, 'autocall-report', token)) throw new NotFoundException();
+    const elements = Array.isArray(body) ? body : [body ?? {}];
+    if (elements.length === 0) return { ok: true };
+
+    const rows: WebhookRow[] = elements.map((raw) => {
+      const el = (raw ?? {}) as Record<string, unknown>;
+      const jobPart = this.numOrStr(el, ['JobID', 'jobid', 'jobId', 'listid', 'listId']) ?? payloadDigest(el);
+      const uniquePart = this.numOrStr(el, ['unique_id', 'uniqueid', 'uniqueId']) ?? payloadDigest(el);
+      return { el, externalId: `${jobPart}:${uniquePart}` };
+    });
+
+    const fresh = await this.archiveFresh(workspaceId, 'autocall-report', rows);
+    if (fresh.length === 0) return { ok: true };
+
+    for (const r of fresh) {
+      const jobId = this.numOrStr(r.el, ['JobID', 'jobid', 'jobId', 'listid', 'listId']);
+      if (!jobId) {
+        this.logger.warn(`autocall-report: element ${r.externalId} has no JobID — archived, not published`);
+        continue;
+      }
+      const called = this.stringField(r.el, ['called', 'no', 'number']);
+      const uniqueId = this.numOrStr(r.el, ['unique_id', 'uniqueid', 'uniqueId']);
+      const status = this.stringField(r.el, ['status', 'durum']);
+
+      await this.outbox.append({
+        type: 'marketing.autocall.report.v1',
+        tenantId: null,
+        payload: { workspaceId, jobId, called: called ?? null, uniqueId: uniqueId ?? null, status: status ?? null },
+        idempotencyKey: `${workspaceId}:autocall-report:${r.externalId}`,
       });
     }
 

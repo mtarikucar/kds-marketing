@@ -706,6 +706,146 @@ describe('NetgsmEventsController — voice-report', () => {
 });
 
 /**
+ * Auto-dialer per-attempt report push (NetGSM Phase 5 Task 5). Unlike
+ * voice-report, `unique_id` already identifies ONE attempt uniquely, so the
+ * archive key is `JobID:unique_id` — no extra state-token scoping needed.
+ */
+describe('NetgsmEventsController — autocall-report', () => {
+  const KEY = Buffer.alloc(32, 7).toString('base64');
+  let prisma: any;
+  let outbox: any;
+  let controller: NetgsmEventsController;
+
+  beforeEach(() => {
+    process.env.MARKETING_SECRET_KEY = KEY;
+    prisma = {
+      netgsmWebhookEvent: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    outbox = { append: jest.fn().mockResolvedValue('outbox-id') };
+    controller = new NetgsmEventsController(prisma, outbox);
+  });
+
+  afterEach(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  it('archives + publishes a single-object body, externalId scoped by JobID:unique_id', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+    const body = { JobID: 'job-1', called: '905551112233', unique_id: 'u-1', status: 'ANSWERED' };
+
+    const res = await controller.autocallReport('ws-1', token, body);
+
+    expect(res).toEqual({ ok: true });
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'autocall-report', externalId: 'job-1:u-1', payload: body }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledWith({
+      type: 'marketing.autocall.report.v1',
+      tenantId: null,
+      payload: { workspaceId: 'ws-1', jobId: 'job-1', called: '905551112233', uniqueId: 'u-1', status: 'ANSWERED' },
+      idempotencyKey: 'ws-1:autocall-report:job-1:u-1',
+    });
+  });
+
+  it('tolerates numeric JobID/unique_id (bare JSON numbers, not strings)', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+    const body = { JobID: 42, called: '905551112233', unique_id: 7, status: 'NO_ANSWER' };
+
+    await controller.autocallReport('ws-1', token, body);
+
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ jobId: '42', uniqueId: '7' }) }),
+    );
+  });
+
+  it('an array body fans out: archives every element, publishes ONLY the NEW one', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+    const elA = { JobID: 'job-1', unique_id: 'u-a' }; // already archived by a previous delivery
+    const elB = { JobID: 'job-1', unique_id: 'u-b', called: '905551112255', status: 'BUSY' };
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'job-1:u-a' }]);
+
+    const res = await controller.autocallReport('ws-1', token, [elA, elB]);
+
+    expect(res).toEqual({ ok: true });
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'autocall-report', externalId: 'job-1:u-b', payload: elB }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'ws-1:autocall-report:job-1:u-b' }));
+  });
+
+  it('a retry of the SAME number gets its OWN unique_id — archives + publishes both, never colliding', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+    const body1 = { JobID: 'job-1', called: '905551112233', unique_id: 'attempt-1', status: 'NO_ANSWER' };
+    const body2 = { JobID: 'job-1', called: '905551112233', unique_id: 'attempt-2', status: 'ANSWERED' };
+
+    await controller.autocallReport('ws-1', token, body1);
+    await controller.autocallReport('ws-1', token, body2);
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(2);
+    const archivedIds = prisma.netgsmWebhookEvent.createMany.mock.calls.map((c: any) => c[0].data[0].externalId);
+    expect(archivedIds).toEqual(['job-1:attempt-1', 'job-1:attempt-2']);
+    expect(outbox.append).toHaveBeenCalledTimes(2);
+  });
+
+  it('the SAME attempt delivered twice (genuine redelivery) dedupes to ONE archived row + ONE publish', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+    const body = { JobID: 'job-1', called: '905551112233', unique_id: 'attempt-redeliver', status: 'ANSWERED' };
+
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([]);
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([{ externalId: 'job-1:attempt-redeliver' }]);
+
+    await controller.autocallReport('ws-1', token, body);
+    await controller.autocallReport('ws-1', token, body);
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+  });
+
+  it('an element with no resolvable JobID is archived but NEVER published (fails closed)', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+    const body = { called: '905551112233', unique_id: 'u-1', status: 'ANSWERED' };
+
+    await expect(controller.autocallReport('ws-1', token, body)).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(1);
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('acks ok on an empty array without touching prisma or the outbox', async () => {
+    const token = netgsmWebhookToken('ws-1', 'autocall-report');
+
+    await expect(controller.autocallReport('ws-1', token, [])).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bad token with NotFoundException and never touches prisma or the outbox', async () => {
+    await expect(
+      controller.autocallReport('ws-1', 'bad-token', { JobID: 'job-1', unique_id: 'u-1' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
+    expect(prisma.netgsmWebhookEvent.createMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('rejects a token minted for a different purpose (e.g. voice-report)', async () => {
+    const voiceToken = netgsmWebhookToken('ws-1', 'voice-report');
+
+    await expect(
+      controller.autocallReport('ws-1', voiceToken, { JobID: 'job-1', unique_id: 'u-1' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/**
  * Throttling (NetGSM Phase 3 Task 6, Phase-0 finding): NetGSM pushes every
  * tenant's santral events AND İYS push-backs from a small, fixed set of its
  * own server IPs — the global 300 req/min PER-IP ThrottlerGuard would 429 that
@@ -731,5 +871,9 @@ describe('NetgsmEventsController — throttling', () => {
 
   it('the voice-report route also skips it (voicesms report is NetGSM-originated too, same shared IPs)', () => {
     expect(skipsThrottle('voiceReport')).toBe(true);
+  });
+
+  it('the autocall-report route also skips it (autocall attempt report is NetGSM-originated too, same shared IPs)', () => {
+    expect(skipsThrottle('autocallReport')).toBe(true);
   });
 });

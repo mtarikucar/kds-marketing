@@ -3492,5 +3492,24 @@
     "campaignName": "Haftalık plan — {{date}}",
     "provisioned": "Haftan planlanıyor — her taslağı burada inceleyip onayla.",
     "error": "Plan oluşturulamadı"
+  },
+  "dialer": {
+    "parallel": {
+      "title": "Paralel mod",
+      "subtitle": "Birçok kişiyi aynı anda canlı bir temsilci kuyruğuna arayın.",
+      "toggleLabel": "Paralel mod",
+      "prereqNote": "NetGSM'in ücretli \"Otomatik Arama\" eklentisini ve temsilcilerin oturum açtığı bir Netsantral kuyruğunu gerektirir — önce ikisini de NetGSM panelinden kurun.",
+      "queueLabel": "Kuyruk",
+      "progress": "{{added}} eklendi / {{pending}} bekliyor",
+      "added": "{{n}} eklendi",
+      "pending": "{{n}} bekliyor",
+      "skipped": "{{n}} atlandı",
+      "failed": "{{n}} başarısız",
+      "queueName": "Netsantral kuyruk adı",
+      "queueNamePlaceholder": "örn. sales-queue",
+      "iysType": "Mesaj türü",
+      "ticari": "Ticari (TİCARİ)",
+      "bilgilendirme": "Bilgilendirme (BİLGİLENDİRME)"
+    }
   }
 }

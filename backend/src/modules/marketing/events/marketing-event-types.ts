@@ -128,6 +128,17 @@ export const MarketingEventTypes = {
   // workflow trigger (WorkflowTriggerService's EVENT_FOR_TRIGGER); filter on
   // trigger.key to react to a specific digit (e.g. "pressed 1 -> create task").
   VoiceKeypress: "marketing.voice.keypress.v1",
+
+  // Auto-dialer per-attempt report push (NetGSM Phase 5 Task 5) — one event
+  // per NEW (JobID, unique_id) element the unified public receiver
+  // (NetgsmEventsController's `autocall-report` route) archives from
+  // NetGSM's `/autocallservice` attempt webhook. A number can be retried
+  // several times; each attempt gets its own unique_id and its own event
+  // (unlike VoiceReport, no extra state-token scoping is needed). Consumed
+  // by AutocallReportConsumer (marketing/campaigns), which correlates by
+  // `jobId` == AutocallSession.netgsmListId, then matches `called` to the
+  // session's own AutocallSessionItem rows by phone.
+  AutocallReport: "marketing.autocall.report.v1",
 } as const;
 
 export type MarketingEventType =
@@ -359,4 +370,30 @@ export interface MarketingVoiceKeypressPayload {
   campaignId: string;
   recipientId: string;
   key: string;
+}
+
+/**
+ * Auto-dialer per-attempt report push (marketing.autocall.report.v1).
+ * Emitted once per NEW (JobID, unique_id) element the unified NetGSM webhook
+ * receiver archives (NetgsmEventsController's `autocall-report` route,
+ * hub-owned so it stays business-logic free). The producer uses the literal
+ * event-type string rather than importing this file, same reasoning as
+ * MarketingIysConsentPayload/MarketingCallEventPayload above; this interface
+ * is the canonical contract AutocallReportConsumer types its handler against.
+ */
+export interface MarketingAutocallReportPayload {
+  workspaceId: string;
+  /** = AutocallClient.addAutocall's returned jobId/listId (best-effort
+   *  assumed to be the SAME identifier echoed back here — see
+   *  AutocallClient's docstring for the "not live-verified" caveat). */
+  jobId: string;
+  /** The dialed number, as NetGSM echoes it — matched against
+   *  AutocallSessionItem.phone (normalized) to resolve the lead. */
+  called: string | null;
+  /** This ONE attempt's identifier — a retried number gets a new one per try. */
+  uniqueId: string | null;
+  /** Raw status as reported by NetGSM. Vocabulary NOT researched/pinned down
+   *  (unlike voice-report's durum 1/2/3/7) — kept verbatim; see
+   *  AutocallReportConsumer for how it's stored. */
+  status: string | null;
 }

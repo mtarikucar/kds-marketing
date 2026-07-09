@@ -2716,5 +2716,24 @@
     "campaignName": "Weekly plan — {{date}}",
     "provisioned": "Your week is being planned — review and approve each draft here.",
     "error": "Could not generate a plan"
+  },
+  "dialer": {
+    "parallel": {
+      "title": "Parallel mode",
+      "subtitle": "Dial many leads at once into a live agent queue.",
+      "toggleLabel": "Parallel mode",
+      "prereqNote": "Requires the paid NetGSM \"Otomatik Arama\" add-on and a Netsantral queue with logged-in agents — set both up in the NetGSM panel first.",
+      "queueLabel": "Queue",
+      "progress": "{{added}} added / {{pending}} pending",
+      "added": "{{n}} added",
+      "pending": "{{n}} pending",
+      "skipped": "{{n}} skipped",
+      "failed": "{{n}} failed",
+      "queueName": "Netsantral queue name",
+      "queueNamePlaceholder": "e.g. sales-queue",
+      "iysType": "Message type",
+      "ticari": "Commercial (TİCARİ)",
+      "bilgilendirme": "Informational (BİLGİLENDİRME)"
+    }
   }
 }

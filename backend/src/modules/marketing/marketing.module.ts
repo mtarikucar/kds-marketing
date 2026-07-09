@@ -73,6 +73,11 @@ import { SalesCallController } from './controllers/sales-call.controller';
 import { SalesCallService } from './services/sales-call.service';
 import { DialerController } from './controllers/dialer.controller';
 import { DialerService } from './services/dialer.service';
+// NetGSM Phase 5 Task 5 — parallel power-dialer ("parallel mode"), the
+// autocallservice-backed counterpart to DialerService's preview queue.
+import { AutocallDialerController } from './controllers/autocall-dialer.controller';
+import { AutocallDialerService } from './services/autocall-dialer.service';
+import { AutocallReportConsumer } from './campaigns/autocall-report.consumer';
 import { TelephonyProviderRegistry } from './telephony/telephony-provider.registry';
 import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
@@ -525,6 +530,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingDistributionController,
     SalesCallController,
     DialerController,
+    AutocallDialerController,
     TelephonyConfigController,
     WebphoneConfigController,
     TelephonyStreamController,
@@ -670,6 +676,11 @@ import { WalletService } from './wallet/wallet.service';
     // Phase 2 telephony: sales-call log + single-line Netgsm provider.
     SalesCallService,
     DialerService,
+    // NetGSM Phase 5 Task 5 — parallel power-dialer service (registers the
+    // autocall.stream ScheduledJob handler on init) + its attempt-webhook
+    // consumer (registers its bus subscription on init).
+    AutocallDialerService,
+    AutocallReportConsumer,
     TelephonyProviderRegistry,
     NetgsmLiteAdapter,
     NetgsmApiAdapter,

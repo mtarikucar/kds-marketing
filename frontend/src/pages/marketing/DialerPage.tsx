@@ -1,22 +1,162 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { PhoneCall, SkipForward, Play, X, CheckCircle2 } from 'lucide-react';
+import { PhoneCall, SkipForward, Play, X, CheckCircle2, Users } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { expectRingback, setActiveCallId } from '../../features/marketing/webphone/WebphoneHost';
 import {
-  PageHeader, Card, CardContent, Button, Input, Field, Badge, Progress, EmptyState,
+  PageHeader, Card, CardContent, Button, Input, Field, Badge, Progress, EmptyState, Callout, Switch,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui';
 
 interface CurrentLead { itemId: string; callId: string | null; lead: { id: string; businessName: string | null; contactPerson: string | null; phone: string | null; status: string; city: string | null } }
 interface DialSession { id: string; status: string; currentIndex: number; total: number; done: number; current: CurrentLead | null }
 
+/** Auto-dialer ("parallel mode") session summary — NetGSM Phase 5 Task 5. */
+interface AutocallSession {
+  id: string;
+  status: string;
+  queueName: string;
+  netgsmListId: string;
+  total: number;
+  pending: number;
+  added: number;
+  skipped: number;
+  failed: number;
+}
+
 const OUTCOMES = ['CONNECTED', 'NO_ANSWER', 'BUSY', 'FAILED', 'CANCELLED'] as const;
 
 function apiErr(e: any, fallback: string): string {
   return e?.response?.data?.message ?? fallback;
+}
+
+/**
+ * Parallel power-dialer toggle (NetGSM Phase 5 Task 5) — dials many leads at
+ * once into a live NetGSM autocall list routed at a staffed Netsantral queue,
+ * unlike the preview queue above (one lead at a time, single line). Requires
+ * the paid "Otomatik Arama" add-on + a pre-staffed queue in the NetGSM panel;
+ * this app cannot verify either, so the prerequisite is surfaced as a note
+ * rather than a blocking check.
+ */
+function ParallelModeSection({ status, search }: { status: string; search: string }) {
+  const { t } = useTranslation('marketing');
+  const queryClient = useQueryClient();
+  const [queueName, setQueueName] = useState('');
+  const [iysType, setIysType] = useState<'TICARI' | 'BILGILENDIRME'>('TICARI');
+
+  const active = useQuery({
+    queryKey: ['dialer-parallel-active'],
+    queryFn: () => marketingApi.get('/dialer/parallel/active').then((r) => r.data as AutocallSession | null),
+  });
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['dialer-parallel-active'] });
+
+  const start = useMutation({
+    mutationFn: () =>
+      marketingApi
+        .post('/dialer/parallel/start', {
+          status: status || undefined,
+          search: search || undefined,
+          queueName,
+          iysMessageType: iysType,
+        })
+        .then((r) => r.data as AutocallSession),
+    onSuccess: refresh,
+    onError: (e) => toast.error(apiErr(e, 'Could not start the parallel session')),
+  });
+
+  const stop = useMutation({
+    mutationFn: () => marketingApi.post('/dialer/parallel/stop', { sessionId: active.data!.id }).then((r) => r.data),
+    onSuccess: refresh,
+    onError: (e) => toast.error(apiErr(e, 'Could not stop the parallel session')),
+  });
+
+  const session = active.data ?? null;
+  const busy = start.isPending || stop.isPending;
+
+  return (
+    <Card className="max-w-lg">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('dialer.parallel.title', { defaultValue: 'Parallel mode' })}</p>
+              <p className="text-xs text-muted-foreground">
+                {t('dialer.parallel.subtitle', { defaultValue: 'Dial many leads at once into a live agent queue.' })}
+              </p>
+            </div>
+          </div>
+          <Switch
+            aria-label={t('dialer.parallel.toggleLabel', { defaultValue: 'Parallel mode' })}
+            checked={!!session}
+            disabled={busy || (!session && !queueName.trim())}
+            onCheckedChange={(checked) => {
+              if (checked) start.mutate();
+              else stop.mutate();
+            }}
+          />
+        </div>
+
+        <Callout tone="info">
+          {t('dialer.parallel.prereqNote', {
+            defaultValue:
+              'Requires the paid NetGSM "Otomatik Arama" add-on and a Netsantral queue with logged-in agents — set both up in the NetGSM panel first.',
+          })}
+        </Callout>
+
+        {session ? (
+          <div className="space-y-2 text-sm">
+            <p className="text-foreground">
+              {t('dialer.parallel.queueLabel', { defaultValue: 'Queue' })}: <span className="font-medium">{session.queueName}</span>
+            </p>
+            <div className="flex items-center gap-2">
+              <Progress value={session.total ? ((session.added + session.skipped + session.failed) / session.total) * 100 : 0} className="flex-1" />
+              <span className="text-xs font-medium text-muted-foreground">
+                {t('dialer.parallel.progress', {
+                  defaultValue: '{{added}} added / {{pending}} pending',
+                  added: session.added,
+                  pending: session.pending,
+                })}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge tone="success" size="sm">{t('dialer.parallel.added', { defaultValue: '{{n}} added', n: session.added })}</Badge>
+              <Badge tone="neutral" size="sm">{t('dialer.parallel.pending', { defaultValue: '{{n}} pending', n: session.pending })}</Badge>
+              <Badge tone="warning" size="sm">{t('dialer.parallel.skipped', { defaultValue: '{{n}} skipped', n: session.skipped })}</Badge>
+              {session.failed > 0 && <Badge tone="danger" size="sm">{t('dialer.parallel.failed', { defaultValue: '{{n}} failed', n: session.failed })}</Badge>}
+            </div>
+          </div>
+        ) : (
+          <>
+            <Field label={t('dialer.parallel.queueName', { defaultValue: 'Netsantral queue name' })}>
+              {({ id }) => (
+                <Input
+                  id={id}
+                  value={queueName}
+                  onChange={(e) => setQueueName(e.target.value)}
+                  placeholder={t('dialer.parallel.queueNamePlaceholder', { defaultValue: 'e.g. sales-queue' })}
+                />
+              )}
+            </Field>
+            <Field label={t('dialer.parallel.iysType', { defaultValue: 'Message type' })}>
+              {({ id }) => (
+                <Select value={iysType} onValueChange={(v) => setIysType(v as 'TICARI' | 'BILGILENDIRME')}>
+                  <SelectTrigger id={id}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="TICARI">{t('dialer.parallel.ticari', { defaultValue: 'Commercial (TİCARİ)' })}</SelectItem>
+                    <SelectItem value="BILGILENDIRME">{t('dialer.parallel.bilgilendirme', { defaultValue: 'Informational (BİLGİLENDİRME)' })}</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </Field>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 /**
@@ -128,6 +268,8 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
             </Button>
           </CardContent>
         </Card>
+
+        <ParallelModeSection status={status} search={search} />
       </div>
     );
   }

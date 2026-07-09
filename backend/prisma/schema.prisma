@@ -1014,6 +1014,61 @@ model DialSessionItem {
   @@map("dial_session_items")
 }
 
+/// NetGSM Phase 5 Task 5 — a PARALLEL auto-dialer session: a NetGSM
+/// "Devamlı Dinamik" autocall list that dials a queue of agents in parallel
+/// (unlike DialSession's preview one-at-a-time click-to-dial). One ACTIVE
+/// session per workspace at a time. `netgsmListId` is the id `AutocallClient.
+/// addAutocall` returned — passed to every subsequent addNumber/deleteNumber/
+/// updateListStatus/reportAutocall call AND matched against the per-attempt
+/// webhook's `JobID` (best-effort assumed to be the same identifier — see
+/// AutocallClient's docstring).
+model AutocallSession {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  startedByUserId String
+  status          String    @default("ACTIVE") // ACTIVE | STOPPED
+  netgsmListId    String
+  queueName       String
+  iysfilter       String // '0' | '11' | '12' — the classification the list was created with
+  brandCode       String?
+  retryCount      Int?
+  total           Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  stoppedAt       DateTime?
+
+  items AutocallSessionItem[]
+
+  @@index([workspaceId, status])
+  @@map("autocall_sessions")
+}
+
+/// One lead streamed into an AutocallSession's NetGSM list. `status` tracks
+/// OUR OWN streaming state (has addNumber been called for it yet); `
+/// lastAttemptStatus`/`lastUniqueId`/`attemptedAt` are populated by the
+/// per-attempt webhook consumer (AutocallReportConsumer) — a retried number
+/// gets a new unique_id per try, so these three always reflect the MOST
+/// RECENT attempt only (no full attempt history is kept — see the Task 5
+/// report for why this was kept minimal).
+model AutocallSessionItem {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  autocallSessionId String
+  leadId            String
+  phone             String
+  status            String    @default("PENDING") // PENDING | ADDED | SKIPPED_DNC | SKIPPED_IYS | FAILED
+  lastAttemptStatus String?
+  lastUniqueId      String?
+  attemptedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  session AutocallSession @relation(fields: [autocallSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([autocallSessionId, leadId])
+  @@index([workspaceId])
+  @@map("autocall_session_items")
+}
+
 /// Phase-3 installation ops (inside the marketing context). A crew is an
 /// install team with a per-day job capacity used for availability checks.
 model InstallationCrew {

@@ -5,8 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DialerPage from './DialerPage';
 
 const postMock = vi.fn();
+const getMock = vi.fn();
 vi.mock('../../features/marketing/api/marketingApi', () => ({
-  default: { post: (...args: unknown[]) => postMock(...args) },
+  default: {
+    post: (...args: unknown[]) => postMock(...args),
+    get: (...args: unknown[]) => getMock(...args),
+  },
 }));
 
 const toastSuccess = vi.fn();
@@ -84,6 +88,7 @@ describe('DialerPage — ring-back arming (Finding H1/M2)', () => {
       if (url === '/dialer/sessions') return Promise.resolve({ data: session });
       return Promise.resolve({ data: {} });
     });
+    getMock.mockResolvedValue({ data: null }); // no active parallel session by default
   });
 
   it('arms the ring-back window with the FRESH SalesCall id from the dial response (not the stale pre-dial session state)', async () => {
@@ -120,5 +125,83 @@ describe('DialerPage — ring-back arming (Finding H1/M2)', () => {
 
     await waitFor(() => expect(window.location.href).toBe('tel:+905551112233'));
     expect(expectRingbackMock).not.toHaveBeenCalled();
+  });
+});
+
+const parallelSession = {
+  id: 'auto-1',
+  status: 'ACTIVE',
+  queueName: 'sales-queue',
+  netgsmListId: 'job-1',
+  total: 10,
+  pending: 6,
+  added: 3,
+  skipped: 1,
+  failed: 0,
+};
+
+describe('DialerPage — parallel mode (NetGSM Phase 5 Task 5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    postMock.mockResolvedValue({ data: {} });
+    getMock.mockResolvedValue({ data: null }); // no active session on load
+  });
+
+  it('shows the paid-add-on + queue-with-agents prerequisite note', async () => {
+    renderPage();
+    expect(await screen.findByText(/Otomatik Arama.*add-on/i)).toBeTruthy();
+    expect(screen.getByText(/queue with logged-in agents/i)).toBeTruthy();
+  });
+
+  it('the toggle is disabled until a queue name is entered', async () => {
+    renderPage();
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith('/dialer/parallel/active'));
+    const toggle = screen.getByRole('switch', { name: /parallel mode/i });
+    expect(toggle).toBeDisabled();
+
+    await userEvent.type(screen.getByPlaceholderText(/sales-queue/i), 'sales-queue');
+    expect(toggle).not.toBeDisabled();
+  });
+
+  it('turning the toggle ON starts a session with the entered queue name + message type', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/dialer/parallel/start') return Promise.resolve({ data: parallelSession });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith('/dialer/parallel/active'));
+
+    await userEvent.type(screen.getByPlaceholderText(/sales-queue/i), 'sales-queue');
+    await userEvent.click(screen.getByRole('switch', { name: /parallel mode/i }));
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith('/dialer/parallel/start', {
+        status: undefined,
+        search: undefined,
+        queueName: 'sales-queue',
+        iysMessageType: 'TICARI',
+      }),
+    );
+  });
+
+  it('shows progress once a session is active and turning the toggle OFF stops it', async () => {
+    getMock.mockResolvedValue({ data: parallelSession });
+    postMock.mockImplementation((url: string) => {
+      if (url === '/dialer/parallel/stop') return Promise.resolve({ data: { id: parallelSession.id, status: 'STOPPED' } });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+
+    await screen.findByText('sales-queue');
+    // The i18n mock returns the raw '{{n}} added'-style template unsubstituted
+    // (it doesn't interpolate, unlike real i18next), so assert on the
+    // computed, untranslated progress value instead: (added+skipped+failed)/total.
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40');
+
+    const toggle = screen.getByRole('switch', { name: /parallel mode/i });
+    expect(toggle).not.toBeDisabled();
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/dialer/parallel/stop', { sessionId: 'auto-1' }));
   });
 });
