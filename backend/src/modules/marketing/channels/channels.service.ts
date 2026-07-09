@@ -25,6 +25,8 @@ import { assertMetaSecrets, isMetaChannelType } from './meta-config.util';
 import { metaWebhookCallbackUrl } from './meta-callback.util';
 import { assertLinkedinEngagementSecrets } from './linkedin-config.util';
 import { tiktokWebhookCallbackUrl } from './tiktok-callback.util';
+import { IysClient } from '../../netgsm/iys/iys.client';
+import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -58,6 +60,7 @@ export class ChannelsService {
     private readonly registry: ChannelAdapterRegistry,
     private readonly resolver: PublicChannelResolverService,
     private readonly entitlements: EntitlementsService,
+    private readonly iysClient: IysClient,
   ) {}
 
   /**
@@ -296,6 +299,65 @@ export class ChannelsService {
       });
     }
     return health;
+  }
+
+  /**
+   * İYS push-back registration (NetGSM Phase 2 Task 4) — SMS channel card
+   * action. Mints this workspace's İYS webhook URL
+   * (`netgsmWebhookUrl(base, workspaceId, 'iys')`) and asks NetGSM to
+   * register it as the push-back target for consent changes, using this
+   * SAME channel's sealed usercode/password + its `configPublic.brandCode`
+   * (the same İYS creds resolution `IysSyncService.resolveCreds` uses).
+   * Stamps `configPublic.iysWebhookRegistered` on SUCCESS only, so
+   * `NetgsmOnboardingService`'s `iysWebhook` checklist row reflects reality
+   * rather than "we tried" — a failed registration must be retried, and a
+   * stale `true` would hide that from the operator.
+   *
+   * Gating note: this rides the SAME `assertChannelFeature` gate as every
+   * other SMS channel action here (feature `sms`) for now. Per the owner
+   * decision (Phase 2 plan, Task 6) İYS is bundled FREE with the
+   * `campaigns` feature — Task 6 lands the dedicated
+   * `@RequiresFeature('campaigns')` checklist/brandCode UI wiring; this
+   * action deliberately stays on the channel's existing gate until then
+   * rather than invent a parallel one that Task 6 would just replace.
+   */
+  async registerIysWebhook(workspaceId: string, id: string) {
+    const c = await this.prisma.channel.findFirst({ where: { id, workspaceId, type: 'SMS' } });
+    if (!c) throw new NotFoundException('SMS channel not found');
+    await this.assertChannelFeature(workspaceId, c.type);
+
+    const { secrets, public: pub } = this.registry.resolveConfig(c);
+    const usercode = secrets?.usercode;
+    const password = secrets?.password;
+    const brandCode = typeof pub?.brandCode === 'string' ? pub.brandCode.trim() : '';
+    if (!usercode || !password) {
+      throw new BadRequestException('SMS channel has no NetGSM credentials configured yet');
+    }
+    if (!brandCode) {
+      throw new BadRequestException('İYS marka kodu (brandCode) is not configured on this channel yet');
+    }
+
+    const url = netgsmWebhookUrl(process.env.PUBLIC_BASE_URL, workspaceId, 'iys');
+    if (!url) {
+      throw new ServiceUnavailableException('PUBLIC_BASE_URL / MARKETING_SECRET_KEY is not configured');
+    }
+
+    const result = await this.iysClient.registerWebhook({ usercode, password, brandCode }, url);
+    if (!result.ok) {
+      throw new BadRequestException(result.message ?? 'İYS webhook kaydı başarısız');
+    }
+
+    await this.prisma.channel.update({
+      where: { id: c.id },
+      data: {
+        configPublic: {
+          ...((c.configPublic as Record<string, unknown> | null) ?? {}),
+          iysWebhookRegistered: true,
+        },
+      },
+    });
+
+    return { ok: true, url };
   }
 
   private seal(secrets: Record<string, string>): string {

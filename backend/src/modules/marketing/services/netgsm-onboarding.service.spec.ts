@@ -143,6 +143,42 @@ describe('NetgsmOnboardingService', () => {
     expect(events?.detail).toBe('eventsWebhookHint');
   });
 
+  it('iysWebhook: missing (with the minted per-workspace İYS URL) when no ACTIVE SMS channel exists', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    const iysWebhook = items.find((i) => i.key === 'iysWebhook');
+    expect(iysWebhook?.state).toBe('missing');
+    expect(iysWebhook?.url).toContain('/api/public/netgsm/ws-1/');
+    expect(iysWebhook?.url).toContain('/iys');
+  });
+
+  it('iysWebhook: missing when the ACTIVE SMS channel exists but has not registered yet', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1', configPublic: {} });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'iysWebhook')?.state).toBe('missing');
+  });
+
+  it('iysWebhook: ok once configPublic.iysWebhookRegistered is stamped true by a successful registration', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1', configPublic: { iysWebhookRegistered: true } });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'iysWebhook')?.state).toBe('ok');
+  });
+
   it('otpPackage: always unknown with the error-60 explainer detail (no live probe — sending a real OTP would be a wasted, user-facing send)', async () => {
     const prisma = prismaMock();
     prisma.channel.findFirst.mockResolvedValue(null);

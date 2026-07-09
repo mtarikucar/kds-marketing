@@ -81,6 +81,17 @@ export const MarketingEventTypes = {
   // CampaignTrackingService (public campaign-unsubscribe route).
   SmsOptedOut: "marketing.sms.optout.v1",
   SmsOptedIn: "marketing.sms.optin.v1",
+
+  // İYS push-back webhook (NetGSM Phase 2 Task 4) — one event per NEW
+  // consent-change element the unified public receiver
+  // (NetgsmEventsController's `iys` route, hub-owned) archives from İYS's
+  // (unsigned, array-shaped) push. IysWebhookConsumer subscribes and applies
+  // the ONAY/RET to the matching lead's MARKETING_SMS consent via
+  // ComplianceService.recordConsent, tagging the source
+  // `IYS_<originalSource>` so ComplianceService/IysSyncService can
+  // recognize — and never re-enqueue — an İYS-ORIGINATED change (would
+  // otherwise be a feedback loop back to İYS).
+  IysConsentReceived: "marketing.iys.consent.v1",
 } as const;
 
 export type MarketingEventType =
@@ -208,4 +219,27 @@ export interface MarketingSmsOptStatusPayload {
   workspaceId: string;
   leadId: string;
   phone: string;
+}
+
+/**
+ * İYS push-back consent change (marketing.iys.consent.v1). Emitted once per
+ * NEW array element the unified NetGSM webhook receiver archives. The
+ * producer (NetgsmEventsController, hub-owned so it stays business-logic
+ * free — it never resolves a lead itself) uses the literal event-type
+ * string rather than importing this file, so the hub never takes a
+ * compile-time dependency on the marketing bounded context; this interface
+ * is the canonical contract IysWebhookConsumer types its handler against.
+ */
+export interface MarketingIysConsentPayload {
+  workspaceId: string;
+  /** Raw recipient as reported by İYS (phone for MESAJ/ARAMA, email for EPOSTA). */
+  recipient: string;
+  /** İYS consent type: MESAJ (SMS) | ARAMA (call) | EPOSTA (email). Only
+   *  MESAJ is applied this phase — ARAMA lands with Phase 5 voice campaigns,
+   *  EPOSTA is out of scope for this program (see IysWebhookConsumer). */
+  type: string;
+  status: 'ONAY' | 'RET';
+  /** İYS source code as reported by the push (e.g. HS_WEB, HS_MESAJ). */
+  source: string;
+  transactionId: string;
 }

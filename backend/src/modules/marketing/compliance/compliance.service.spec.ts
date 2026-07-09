@@ -163,6 +163,28 @@ describe('ComplianceService', () => {
     );
   });
 
+  // Phase 2 Task 4 — anti-feedback-loop: an İYS-ORIGINATED consent apply
+  // (IysWebhookConsumer) tags meta.source `IYS_<originalSource>`. That must
+  // flow straight through to IysSyncService.enqueueConsent (which has its
+  // own guard to skip enqueueing entirely for such a source) — every OTHER
+  // caller's app-level source tag ('form', 'crm', …) must NOT be forwarded
+  // as-is (it isn't a valid İYS source code), so it still collapses to the
+  // fixed 'HS_WEB' default (asserted above).
+  it('passes an IYS_-prefixed meta.source straight through to the İYS enqueue (so its anti-feedback-loop guard can see it)', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-6b' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', true, { source: 'IYS_HS_MESAJ' });
+
+    expect(iysSync.enqueueConsent).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ source: 'IYS_HS_MESAJ' }),
+    );
+  });
+
   it('still asks IysSyncService to enqueue (with recipient undefined) when the lead has no phone — enqueueConsent itself is the no-op gate', async () => {
     const { prisma, iysSync, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);

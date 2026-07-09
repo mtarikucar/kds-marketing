@@ -111,6 +111,18 @@ export class NetgsmOnboardingService {
       detail: 'eventsWebhookHint',
     });
 
+    // NetGSM Phase 2 Task 4 — İYS push-back webhook. Unlike eventsWebhookUrl
+    // (always 'unknown' — there's no live signal NetGSM actually pushes to
+    // it), THIS row has a real signal: ChannelsService.registerIysWebhook
+    // stamps `configPublic.iysWebhookRegistered` on the SMS channel only
+    // after NetGSM confirms the registration succeeded, so 'ok'/'missing'
+    // reflects reality rather than "we tried".
+    items.push({
+      key: 'iysWebhook',
+      state: (sms?.configPublic as Record<string, unknown> | null)?.iysWebhookRegistered ? 'ok' : 'missing',
+      url: netgsmWebhookUrl(base, workspaceId, 'iys') ?? undefined,
+    });
+
     return { items };
   }
 

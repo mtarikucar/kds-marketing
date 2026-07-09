@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ChannelsService } from './channels.service';
 import * as secretBox from '../../../common/crypto/secret-box.helper';
 
@@ -18,7 +18,8 @@ describe('ChannelsService — mask()', () => {
     const prisma = { channel: { findMany: jest.fn().mockResolvedValue([channelRow]) } } as any;
     const registry = {} as any;
     const resolver = {} as any;
-    return new ChannelsService(prisma, registry, resolver, makeEntitlements());
+    const iysClient = {} as any;
+    return new ChannelsService(prisma, registry, resolver, makeEntitlements(), iysClient);
   }
 
   beforeEach(() => {
@@ -177,7 +178,14 @@ describe('ChannelsService — verify()', () => {
       }),
     } as any;
     const resolver = {} as any;
-    return { svc: new ChannelsService(prisma, registry, resolver, entitlements), prisma, registry, entitlements };
+    const iysClient = { registerWebhook: jest.fn() } as any;
+    return {
+      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient),
+      prisma,
+      registry,
+      entitlements,
+      iysClient,
+    };
   }
 
   it('surfaces credsValid:false + message + code so the UI can show a rejected-credential reason', async () => {
@@ -292,7 +300,13 @@ describe('ChannelsService — create()/update() feature gate', () => {
     } as any;
     const registry = { has: jest.fn().mockReturnValue(true) } as any;
     const resolver = { byExternalId: jest.fn().mockResolvedValue(null) } as any;
-    return { svc: new ChannelsService(prisma, registry, resolver, entitlements), prisma, registry, entitlements };
+    const iysClient = { registerWebhook: jest.fn() } as any;
+    return {
+      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient),
+      prisma,
+      registry,
+      entitlements,
+    };
   }
 
   it('create() blocks an SMS channel when the workspace lacks sms', async () => {
@@ -329,5 +343,138 @@ describe('ChannelsService — create()/update() feature gate', () => {
     prisma.channel.findFirst.mockResolvedValue({ id: 'ch-1', type: 'SMS', configSealed: null });
     await svc.update('ws-1', 'ch-1', { name: 'Renamed' });
     expect(prisma.channel.update).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Focused tests for ChannelsService.registerIysWebhook() (NetGSM Phase 2
+ * Task 4) — mints the workspace's İYS webhook URL and asks NetGSM to
+ * register it, using the SMS channel's own sealed usercode/password +
+ * configPublic.brandCode. Stamps configPublic.iysWebhookRegistered only on
+ * a genuine NetGSM success.
+ */
+describe('ChannelsService — registerIysWebhook()', () => {
+  const PUBLIC_BASE_URL = 'https://app.example.com';
+
+  function makeRegisterService(
+    channelRow: any,
+    iysClient: { registerWebhook: jest.Mock } = { registerWebhook: jest.fn() },
+    entitlements = makeEntitlements(),
+    secrets: Record<string, string> = { usercode: 'u1', password: 'p1' },
+  ) {
+    const prisma = {
+      channel: {
+        findFirst: jest.fn().mockResolvedValue(channelRow),
+        update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...channelRow, ...data })),
+      },
+    } as any;
+    const registry = {
+      resolveConfig: jest.fn().mockReturnValue({
+        channelId: channelRow?.id,
+        workspaceId: channelRow?.workspaceId,
+        type: channelRow?.type,
+        externalId: null,
+        secrets,
+        public: (channelRow?.configPublic as Record<string, unknown>) ?? {},
+      }),
+    } as any;
+    const resolver = {} as any;
+    return {
+      svc: new ChannelsService(prisma, registry, resolver, entitlements, iysClient as any),
+      prisma,
+      registry,
+    };
+  }
+
+  beforeEach(() => {
+    process.env.PUBLIC_BASE_URL = PUBLIC_BASE_URL;
+    process.env.MARKETING_SECRET_KEY = Buffer.alloc(32).toString('base64');
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  it('registers the webhook with NetGSM and stamps configPublic.iysWebhookRegistered on success', async () => {
+    const iysClient = { registerWebhook: jest.fn().mockResolvedValue({ ok: true, code: '00', message: null }) };
+    const { svc, prisma } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: { brandCode: 'BRAND1' } },
+      iysClient,
+    );
+
+    const result = await svc.registerIysWebhook('ws-1', 'ch-1');
+
+    expect(result.ok).toBe(true);
+    expect(iysClient.registerWebhook).toHaveBeenCalledWith(
+      { usercode: 'u1', password: 'p1', brandCode: 'BRAND1' },
+      expect.stringContaining('/api/public/netgsm/ws-1/'),
+    );
+    expect(prisma.channel.update).toHaveBeenCalledWith({
+      where: { id: 'ch-1' },
+      data: { configPublic: { brandCode: 'BRAND1', iysWebhookRegistered: true } },
+    });
+  });
+
+  it('throws NotFoundException when the channel does not exist (or is not SMS)', async () => {
+    const { svc, prisma } = makeRegisterService(null);
+    await expect(svc.registerIysWebhook('ws-1', 'missing')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.channel.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks when the workspace lacks the sms feature', async () => {
+    const iysClient = { registerWebhook: jest.fn() };
+    const { svc } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: {} },
+      iysClient,
+      makeEntitlements({ conversationAi: true, sms: false }),
+    );
+    await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(iysClient.registerWebhook).not.toHaveBeenCalled();
+  });
+
+  it('throws BadRequestException when the channel has no NetGSM credentials configured yet', async () => {
+    const iysClient = { registerWebhook: jest.fn() };
+    const { svc } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: { brandCode: 'BRAND1' } },
+      iysClient,
+      makeEntitlements(),
+      {}, // no sealed usercode/password
+    );
+    await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(iysClient.registerWebhook).not.toHaveBeenCalled();
+  });
+
+  it('throws BadRequestException when brandCode is not configured on the channel', async () => {
+    const iysClient = { registerWebhook: jest.fn() };
+    const { svc } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: {} }, // no brandCode
+      iysClient,
+    );
+    await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(iysClient.registerWebhook).not.toHaveBeenCalled();
+  });
+
+  it('throws BadRequestException carrying NetGSM\'s message when registration fails', async () => {
+    const iysClient = {
+      registerWebhook: jest.fn().mockResolvedValue({ ok: false, code: '30', message: 'Kullanıcı adı veya şifre hatalı' }),
+    };
+    const { svc, prisma } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: { brandCode: 'BRAND1' } },
+      iysClient,
+    );
+    await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toThrow('Kullanıcı adı veya şifre hatalı');
+    expect(prisma.channel.update).not.toHaveBeenCalled();
+  });
+
+  it('throws ServiceUnavailableException when PUBLIC_BASE_URL is not configured (no URL to register)', async () => {
+    delete process.env.PUBLIC_BASE_URL;
+    const iysClient = { registerWebhook: jest.fn() };
+    const { svc } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: { brandCode: 'BRAND1' } },
+      iysClient,
+    );
+    await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(iysClient.registerWebhook).not.toHaveBeenCalled();
   });
 });

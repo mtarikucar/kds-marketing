@@ -97,6 +97,36 @@ describe('IysSyncService', () => {
       });
       expect(tx.iysSyncJob.create).not.toHaveBeenCalled();
     });
+
+    // Phase 2 Task 4 — ANTI-FEEDBACK-LOOP GUARD (critical): a consent change
+    // that itself originated from İYS's push-back webhook is tagged
+    // `source: 'IYS_<originalSource>'` by ComplianceService. Re-submitting it
+    // back to İYS would be a feedback loop, so enqueueConsent must skip
+    // creating the job entirely for any such source — regardless of
+    // direction/recipient otherwise being valid.
+    it('does NOT enqueue (anti-feedback-loop guard) when source is IYS_-prefixed, even with a valid recipient', async () => {
+      const tx = { iysSyncJob: { create: jest.fn() } };
+      await svc.enqueueConsent(tx as any, {
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        recipient: '05551112233',
+        direction: 'ONAY',
+        source: 'IYS_HS_MESAJ',
+      });
+      expect(tx.iysSyncJob.create).not.toHaveBeenCalled();
+    });
+
+    it('does NOT enqueue an IYS_-sourced RET either', async () => {
+      const tx = { iysSyncJob: { create: jest.fn() } };
+      await svc.enqueueConsent(tx as any, {
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        recipient: '05551112233',
+        direction: 'RET',
+        source: 'IYS_HS_WEB',
+      });
+      expect(tx.iysSyncJob.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('retryDlq', () => {

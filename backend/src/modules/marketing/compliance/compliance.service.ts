@@ -147,7 +147,15 @@ export class ComplianceService {
           leadId,
           recipient: lead?.phone,
           direction,
-          source: 'HS_WEB',
+          // İYS-ORIGINATED writes (IysWebhookConsumer, Phase 2 Task 4) tag
+          // meta.source `IYS_<originalSource>` — passed straight through here
+          // so IysSyncService.enqueueConsent's own IYS_ guard can catch it
+          // and skip re-submitting the change back to İYS (a feedback loop).
+          // Every OTHER caller (dashboard consent toggle, public unsubscribe
+          // link) still gets the fixed 'HS_WEB' İYS source code it always
+          // had — meta.source there is an APP-level tag ('form', 'crm', …),
+          // not an İYS source code, so it must never be forwarded as-is.
+          source: meta.source?.startsWith('IYS_') ? meta.source : 'HS_WEB',
           consentAt: new Date(),
         });
         await tx.$executeRawUnsafe('RELEASE SAVEPOINT sp_iys_enqueue');

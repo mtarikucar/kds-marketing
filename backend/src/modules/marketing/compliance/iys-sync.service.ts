@@ -133,6 +133,13 @@ export class IysSyncService {
    *  `ComplianceService`/`CampaignTrackingService` do). */
   async enqueueConsent(tx: Prisma.TransactionClient, params: IysConsentEnqueueParams): Promise<void> {
     if (!params.recipient) return; // no phone -> nothing to prove to İYS
+    // ANTI-FEEDBACK-LOOP GUARD (Phase 2 Task 4 — CRITICAL, do not remove): a
+    // consent change that ITSELF originated from İYS's push-back webhook
+    // (IysWebhookConsumer, via ComplianceService.recordConsent) is tagged
+    // `source: 'IYS_<originalSource>'`. Re-submitting that same change back
+    // to İYS via /iys/add would be pointless at best (İYS already knows) and
+    // a genuine feedback loop at worst — so it is never enqueued.
+    if (params.source?.startsWith('IYS_')) return;
     await tx.iysSyncJob.create({
       data: {
         workspaceId: params.workspaceId,

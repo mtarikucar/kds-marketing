@@ -106,4 +106,15 @@ export class MarketingChannelsController {
   verify(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
     return this.channels.verify(actor.workspaceId, id);
   }
+
+  /** İYS push-back registration (NetGSM Phase 2 Task 4) — SMS channel card
+   *  action. No `@RequiresFeature` here — see create()/verify() above;
+   *  ChannelsService.registerIysWebhook resolves the `sms` gate itself (İYS
+   *  is bundled free with `campaigns` per the Phase 2 plan's Task 6, which
+   *  lands the dedicated feature-gate wiring). */
+  @Post(':id/iys/register-webhook')
+  @RequirePermission('settings.manage')
+  registerIysWebhook(@CurrentMarketingUser() actor: MarketingUserPayload, @Param('id') id: string) {
+    return this.channels.registerIysWebhook(actor.workspaceId, id);
+  }
 }

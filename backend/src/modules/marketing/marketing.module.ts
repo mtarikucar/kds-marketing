@@ -314,6 +314,9 @@ import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
 // NetGSM Phase 2 Task 3 — İYS auto-push (consent writes -> İYS proof queue).
 import { IysSyncService } from './compliance/iys-sync.service';
+// NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (applies
+// İYS-originated ONAY/RET onto the matching lead's MARKETING_SMS consent).
+import { IysWebhookConsumer } from './compliance/iys-webhook.consumer';
 // Epic E — funnel A/B experiments + surveys.
 // Epic F — 2FA/MFA (TOTP + NetGSM SMS v2 Task 12's SMS factor).
 import { TwoFactorController } from './controllers/two-factor.controller';
@@ -813,6 +816,9 @@ import { WalletService } from './wallet/wallet.service';
     ComplianceService,
     // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.
     IysSyncService,
+    // NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (subscribes via
+    // DomainEventBus on init).
+    IysWebhookConsumer,
     // Epic E — funnel A/B + surveys.
     // Epic F — 2FA (TOTP + SMS).
     TwoFactorService,
