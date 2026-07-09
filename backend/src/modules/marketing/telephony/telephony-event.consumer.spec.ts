@@ -284,6 +284,43 @@ describe('TelephonyEventConsumer', () => {
       });
     });
 
+    it('an UNROUTED inbound (no internal_num) broadcasts a screen-pop with a TRIMMED lead card (no phone/status leaked to every rep)', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null);
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce(null); // no dahili to resolve
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'lead-9',
+        assignedToId: 'rep-2',
+        businessName: 'Cafe Deniz',
+        contactPerson: 'Ayşe Yılmaz',
+        phone: '05551112233',
+        status: 'CONTACTED',
+      });
+      (prisma.salesCall.create as jest.Mock).mockResolvedValueOnce({
+        id: 'call-9',
+        workspaceId: 'ws-1',
+        leadId: 'lead-9',
+        marketingUserId: null,
+        direction: 'INBOUND',
+        status: 'RINGING',
+      });
+
+      await handle(
+        makeEvent('evt-9', { kind: 'inbound_call', uniqueId: 'uid-9', customerNum: '05551112233', internalNum: null }),
+      );
+
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'screen_pop',
+        targetDahili: null, // broadcast to every rep in the workspace
+        payload: {
+          customerNum: '05551112233',
+          // trimmed: only what a rep needs to greet the caller — NO phone (== customerNum) and NO CRM `status`
+          lead: { id: 'lead-9', businessName: 'Cafe Deniz', contactPerson: 'Ayşe Yılmaz' },
+          salesCallId: 'call-9',
+          internalNum: null,
+        },
+      });
+    });
+
     it('treats kind === inbound_call as inbound even when direction did not normalize (Task 1 MEDIUM hardening)', async () => {
       (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null);
       (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce(null);

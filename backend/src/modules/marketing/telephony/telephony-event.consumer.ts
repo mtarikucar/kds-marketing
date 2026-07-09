@@ -342,19 +342,27 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     }
 
     if (opts.screenPop) {
+      // A routed pop (targetDahili set) reaches exactly one rep, so the fuller
+      // card is fine. An UNROUTED pop (no internal_num) broadcasts to EVERY rep
+      // in the workspace — trim the lead card to the minimum needed to greet a
+      // caller (no CRM-internal `status`, no `phone` already carried as
+      // customerNum) so an unrelated rep can't harvest pipeline data off a ring.
+      const broadcast = (p.internalNum ?? null) === null;
       this.telephonyStream.push(workspaceId, {
         kind: 'screen_pop',
         targetDahili: p.internalNum ?? null,
         payload: {
           customerNum: p.customerNum ?? null,
           lead: lead
-            ? {
-                id: lead.id,
-                businessName: lead.businessName,
-                contactPerson: lead.contactPerson,
-                phone: lead.phone,
-                status: lead.status,
-              }
+            ? broadcast
+              ? { id: lead.id, businessName: lead.businessName, contactPerson: lead.contactPerson }
+              : {
+                  id: lead.id,
+                  businessName: lead.businessName,
+                  contactPerson: lead.contactPerson,
+                  phone: lead.phone,
+                  status: lead.status,
+                }
             : null,
           salesCallId: call.id,
           internalNum: p.internalNum ?? null,
