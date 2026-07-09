@@ -265,3 +265,151 @@ describe('CampaignsPage — channel picker SMS gate', () => {
     expect(screen.getByRole('option', { name: 'SMS' })).toBeInTheDocument();
   });
 });
+
+// NetGSM Phase 5 Task 4 — VOICE is gated on its own `voiceCampaigns` feature,
+// hidden from the channel picker exactly like SMS is gated on `sms`.
+describe('CampaignsPage — channel picker VOICE gate', () => {
+  const ONE = [{ id: 'c1', name: 'Promo', channel: 'EMAIL', status: 'DRAFT', stats: null }];
+
+  function mockEntitlements(features: Record<string, boolean>) {
+    get.mockImplementation((url: string) => {
+      if (url === '/campaigns') return Promise.resolve({ data: ONE });
+      if (url === '/billing/summary') {
+        return Promise.resolve({ data: { entitlements: { features, entitledModules: [] } } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+  }
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockClear();
+  });
+
+  async function openChannelListbox(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }));
+    const trigger = await screen.findByRole('combobox', { name: 'Channel' });
+    await user.click(trigger);
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+  }
+
+  it('hides the VOICE option when the workspace lacks the voiceCampaigns feature', async () => {
+    mockEntitlements({ sms: true, voiceCampaigns: false });
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openChannelListbox(user);
+    expect(screen.queryByRole('option', { name: 'VOICE' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'EMAIL' })).toBeInTheDocument();
+  });
+
+  it('shows the VOICE option when the workspace has the voiceCampaigns feature', async () => {
+    mockEntitlements({ sms: true, voiceCampaigns: true });
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openChannelListbox(user);
+    expect(screen.getByRole('option', { name: 'VOICE' })).toBeInTheDocument();
+  });
+});
+
+// NetGSM Phase 5 Task 4 — the VOICE composer: TTS/audio-upload toggle, the
+// keypress→note mapping editor, and the reused İYS TİCARİ/BİLGİLENDİRME
+// selector, plus that submit builds voiceConfig (msg XOR audioid + keys).
+describe('CampaignsPage — VOICE composer', () => {
+  // Non-empty (mirrors every other describe block in this file) — an empty
+  // list renders EmptyState's OWN "New campaign" button too, colliding with
+  // PageHeader's, so `findByRole('button', { name: 'New campaign' })` would
+  // otherwise match two elements.
+  const ONE = [{ id: 'c1', name: 'Existing', channel: 'EMAIL', status: 'DRAFT', stats: null }];
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockClear();
+    post.mockResolvedValue({ data: { recipients: 0 } });
+    get.mockImplementation((url: string) => {
+      if (url === '/campaigns') return Promise.resolve({ data: ONE });
+      if (url === '/billing/summary') {
+        return Promise.resolve({
+          data: { entitlements: { features: { sms: true, voiceCampaigns: true }, entitledModules: [] } },
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+  });
+
+  async function openVoiceComposer(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }));
+    const trigger = await screen.findByRole('combobox', { name: 'Channel' });
+    await user.click(trigger);
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+    await user.click(screen.getByRole('option', { name: 'VOICE' }));
+  }
+
+  it('renders the TTS text field, the İYS selector, and the keypress editor by default', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openVoiceComposer(user);
+
+    expect(await screen.findByLabelText(/^Spoken text \(TTS\)/)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'İYS message type' })).toBeInTheDocument();
+    expect(screen.getByText('Keypress actions (press-N)')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Upload \.wav/i })).not.toBeInTheDocument();
+  });
+
+  it('switches to the audio-upload mode and hides the TTS field', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openVoiceComposer(user);
+
+    await user.click(await screen.findByRole('combobox', { name: 'Voice message type' }));
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+    await user.click(screen.getByRole('option', { name: 'Upload audio file' }));
+
+    expect(screen.queryByLabelText('Spoken text (TTS)')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Upload \.wav/i })).toBeInTheDocument();
+  });
+
+  it('adds a keypress mapping row (digit + note)', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openVoiceComposer(user);
+
+    await user.click(await screen.findByRole('button', { name: /Add keypress mapping/i }));
+    const note = await screen.findByPlaceholderText(/Note \(optional\)/i);
+    await user.type(note, 'Interested — connect to sales');
+    expect(note).toHaveValue('Interested — connect to sales');
+  });
+
+  it('blocks submit when neither TTS text nor an uploaded audioid is set', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openVoiceComposer(user);
+
+    await user.type(await screen.findByLabelText(/^Name/), 'Voice blast');
+    await user.type(await screen.findByLabelText(/^Internal label/), 'internal note');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('builds voiceConfig (msg + keys) and posts it on submit', async () => {
+    const user = userEvent.setup();
+    render(<CampaignsPage />, { wrapper });
+    await openVoiceComposer(user);
+
+    await user.type(await screen.findByLabelText(/^Name/), 'Voice blast');
+    await user.type(await screen.findByLabelText(/^Internal label/), 'internal note');
+    await user.type(await screen.findByLabelText(/^Spoken text \(TTS\)/), 'Hello, this is a reminder call.');
+    await user.click(await screen.findByRole('button', { name: /Add keypress mapping/i }));
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/campaigns', expect.objectContaining({
+      channel: 'VOICE',
+      voiceConfig: expect.objectContaining({
+        msg: 'Hello, this is a reminder call.',
+        keys: ['1'],
+      }),
+    })));
+  });
+});

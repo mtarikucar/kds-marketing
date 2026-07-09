@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useForm, useWatch, Controller, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -17,6 +17,8 @@ import {
   Pencil,
   BarChart3,
   XCircle,
+  Upload,
+  CheckCircle2,
 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { listEmailTemplates, getEmailTemplate, type EmailTemplateRow } from '../../features/marketing/api/email-templates.service';
@@ -68,9 +70,15 @@ interface CampaignRow {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const CHANNELS = ['EMAIL', 'SMS', 'WHATSAPP'] as const;
+const CHANNELS = ['EMAIL', 'SMS', 'WHATSAPP', 'VOICE'] as const;
 const FILTER_FIELDS = ['status', 'city', 'businessType', 'priority', 'source'] as const;
 const OPS = ['eq', 'neq', 'in', 'contains', 'gte', 'lte'] as const;
+
+// NetGSM Phase 5 — a VOICE campaign's TTS-text-vs-uploaded-audio toggle.
+const VOICE_MODES = ['TTS', 'AUDIO'] as const;
+// DTMF digits the callee may press for a press-N branch capture (mirrors the
+// backend's VoiceConfigDto.keys — plain "0".."9" strings, ArrayMaxSize(10)).
+const VOICE_DIGITS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +86,17 @@ const filterRowSchema = z.object({
   field: z.string(),
   op: z.string(),
   value: z.string(),
+});
+
+// A keypress→note row in the composer's mapping editor. Only `digit` is ever
+// sent to the backend (as an entry in voiceConfig.keys); `label` is a
+// same-session authoring aid (e.g. "1 = interested, connect to sales") that
+// helps the operator remember what to wire up on the Automations page's
+// voice_keypress trigger — VoiceConfigDto has no label field, so it is not
+// persisted and will be blank again the next time a saved campaign is edited.
+const voiceKeyRowSchema = z.object({
+  digit: z.string(),
+  label: z.string().max(200).optional(),
 });
 
 const IYS_MESSAGE_TYPES = ['BILGILENDIRME', 'TICARI'] as const;
@@ -93,11 +112,18 @@ const campaignSchema = z
     filters: z.array(filterRowSchema),
     // datetime-local value ("YYYY-MM-DDTHH:mm"), local time — '' = send immediately.
     scheduledAt: z.string().optional(),
-    // İYS classification (SMS channel only) — TICARI = commercial (requires
+    // İYS classification (SMS/VOICE channels) — TICARI = commercial (requires
     // İYS consent, hard-blocked pre-send when unconfirmed), BILGILENDIRME =
     // informational/transactional (İYS-exempt). Default is the safer,
     // exempt option.
     iysMessageType: z.enum(IYS_MESSAGE_TYPES),
+    // VOICE (NetGSM Phase 5) — mirrors the backend's voiceConfig: exactly one
+    // of msg (TTS text)/audioid (uploaded .wav) is required; voiceMode picks
+    // which one the form currently edits.
+    voiceMode: z.enum(VOICE_MODES),
+    voiceMsg: z.string().max(2000).optional(),
+    voiceAudioId: z.string().optional(),
+    voiceKeys: z.array(voiceKeyRowSchema),
   })
   // The plain-text body is only mandatory when there's no HTML to fall back on.
   // With an HTML template attached we auto-derive the plain-text version, so an
@@ -105,6 +131,20 @@ const campaignSchema = z
   .superRefine((v, ctx) => {
     if (!v.bodyHtml?.trim() && !v.body.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['body'], message: 'Required' });
+    }
+    // Mirrors the backend's CampaignsService.assertVoiceConfig — msg XOR
+    // audioid, checked against whichever mode is currently selected so a
+    // stale value left over from switching modes never satisfies it.
+    if (v.channel === 'VOICE') {
+      const hasMsg = v.voiceMode === 'TTS' && !!v.voiceMsg?.trim();
+      const hasAudio = v.voiceMode === 'AUDIO' && !!v.voiceAudioId?.trim();
+      if (!hasMsg && !hasAudio) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: v.voiceMode === 'AUDIO' ? ['voiceAudioId'] : ['voiceMsg'],
+          message: 'Required',
+        });
+      }
     }
   });
 type CampaignFormValues = z.infer<typeof campaignSchema>;
@@ -119,6 +159,10 @@ const DEFAULT_VALUES: CampaignFormValues = {
   filters: [],
   scheduledAt: '',
   iysMessageType: 'BILGILENDIRME',
+  voiceMode: 'TTS',
+  voiceMsg: '',
+  voiceAudioId: '',
+  voiceKeys: [],
 };
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
@@ -206,8 +250,11 @@ export default function CampaignsPage() {
   const { has } = useEntitlements();
   // SMS is its own feature (split off `conversationAi` for the NetGSM SMS v2
   // program) — hide it from the channel picker when the workspace isn't
-  // entitled, instead of letting the create call 403 on submit.
-  const availableChannels = CHANNELS.filter((c) => c !== 'SMS' || has('sms'));
+  // entitled, instead of letting the create call 403 on submit. VOICE
+  // (NetGSM Phase 5) is gated the same way on its own `voiceCampaigns` feature.
+  const availableChannels = CHANNELS.filter(
+    (c) => (c !== 'SMS' || has('sms')) && (c !== 'VOICE' || has('voiceCampaigns')),
+  );
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<string>('');
   const [aiGoal, setAiGoal] = useState('');
@@ -237,6 +284,16 @@ export default function CampaignsPage() {
   const scheduledAtField = useWatch({ control: form.control, name: 'scheduledAt' });
   const scheduleIsPast = isPastDatetimeLocalValue(scheduledAtField);
   const [variantsOpen, setVariantsOpen] = useState(false);
+
+  // VOICE (NetGSM Phase 5) — TTS-text-vs-audio-upload mode + the uploaded
+  // audioid (set by the file picker's mutation below).
+  const voiceMode = useWatch({ control: form.control, name: 'voiceMode' });
+  const voiceAudioId = useWatch({ control: form.control, name: 'voiceAudioId' });
+  const voiceFileRef = useRef<HTMLInputElement>(null);
+  const { fields: voiceKeyFields, append: appendVoiceKey, remove: removeVoiceKey } = useFieldArray({
+    control: form.control,
+    name: 'voiceKeys',
+  });
 
   const { data: emailTemplates } = useQuery<EmailTemplateRow[]>({
     queryKey: ['marketing', 'email-templates'],
@@ -289,10 +346,42 @@ export default function CampaignsPage() {
       })),
       scheduledAt: toDatetimeLocalValue(full.scheduledAt),
       iysMessageType: full.iysMessageType === 'TICARI' ? 'TICARI' : 'BILGILENDIRME',
+      // VOICE (NetGSM Phase 5) — reopen in whichever mode the saved
+      // voiceConfig actually used; audioid wins if somehow both are set.
+      // Keypress labels are a same-session-only aid (see voiceKeyRowSchema's
+      // comment) — reopening a saved campaign shows the digits with blank notes.
+      voiceMode: full.voiceConfig?.audioid ? 'AUDIO' : 'TTS',
+      voiceMsg: full.voiceConfig?.msg ?? '',
+      voiceAudioId: full.voiceConfig?.audioid ?? '',
+      voiceKeys: Array.isArray(full.voiceConfig?.keys)
+        ? full.voiceConfig.keys.map((digit: string) => ({ digit: String(digit), label: '' }))
+        : [],
     });
     setAiGoal('');
     setFormOpen(true);
   };
+
+  // Upload a .wav for a VOICE campaign's audio mode — POSTs to the Task 4
+  // endpoint and stashes the returned audioid straight into the form.
+  const uploadVoiceAudio = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await marketingApi.post('/campaigns/voice/audio', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return data.audioid as string;
+    },
+    onSuccess: (audioid) => {
+      form.setValue('voiceAudioId', audioid, { shouldValidate: true });
+      toast.success(t('campaigns.voiceAudioUploaded', 'Audio uploaded'));
+    },
+    onError: (e: any) =>
+      toast.error(e.response?.data?.message ?? t('campaigns.voiceAudioUploadFailed', 'Upload failed')),
+    onSettled: () => {
+      if (voiceFileRef.current) voiceFileRef.current.value = '';
+    },
+  });
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const buildPayload = (values: CampaignFormValues) => ({
@@ -322,10 +411,24 @@ export default function CampaignsPage() {
     // above) does NOT treat '' as "skip validation" — only null/undefined do.
     // So clearing the picker must send null, not ''.
     scheduledAt: values.scheduledAt ? new Date(values.scheduledAt).toISOString() : null,
-    // Only meaningful for SMS — the service itself also normalizes any other
-    // channel back to BILGILENDIRME, but sending the honest value only for
-    // SMS keeps the payload legible.
-    iysMessageType: values.channel === 'SMS' ? values.iysMessageType : 'BILGILENDIRME',
+    // Meaningful for SMS/VOICE only — the service itself also normalizes any
+    // other channel back to BILGILENDIRME, but sending the honest value only
+    // for those two keeps the payload legible.
+    iysMessageType:
+      values.channel === 'SMS' || values.channel === 'VOICE' ? values.iysMessageType : 'BILGILENDIRME',
+    // VOICE (NetGSM Phase 5) — msg XOR audioid (per the currently-selected
+    // mode) + the configured DTMF digits (deduped; labels are UI-only, see
+    // voiceKeyRowSchema). Omitted entirely for every other channel — the
+    // backend forces voiceConfig to null there regardless.
+    ...(values.channel === 'VOICE'
+      ? {
+          voiceConfig: {
+            ...(values.voiceMode === 'TTS' ? { msg: values.voiceMsg?.trim() || undefined } : {}),
+            ...(values.voiceMode === 'AUDIO' ? { audioid: values.voiceAudioId?.trim() || undefined } : {}),
+            keys: Array.from(new Set(values.voiceKeys.map((k) => k.digit).filter(Boolean))),
+          },
+        }
+      : {}),
   });
 
   const save = useMutation({
@@ -624,9 +727,10 @@ export default function CampaignsPage() {
               </div>
             </Callout>
 
-            {/* İYS message type (SMS only) — legal classification the sender's
-                pre-send preflight hard-blocks on for TİCARİ. */}
-            {selectedChannel === 'SMS' && (
+            {/* İYS message type (SMS/VOICE) — legal classification the sender's
+                pre-send preflight hard-blocks on for TİCARİ (ARAMA consent for
+                VOICE, MESAJ consent for SMS). */}
+            {(selectedChannel === 'SMS' || selectedChannel === 'VOICE') && (
               <Field
                 label={t('campaigns.iysMessageType', 'İYS message type')}
                 hint={
@@ -663,6 +767,159 @@ export default function CampaignsPage() {
                   />
                 )}
               </Field>
+            )}
+
+            {/* VOICE (NetGSM Phase 5) — TTS text OR uploaded .wav, then a
+                keypress→note mapping editor for press-N branch capture. */}
+            {selectedChannel === 'VOICE' && (
+              <div className="space-y-4 rounded-lg border border-border p-4">
+                <Field
+                  label={t('campaigns.voiceMode', 'Voice message type')}
+                  hint={t(
+                    'campaigns.voiceModeHint',
+                    'Play a built-in text-to-speech message, or upload a pre-recorded .wav.',
+                  )}
+                >
+                  {({ id }) => (
+                    <Controller
+                      control={form.control}
+                      name="voiceMode"
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger id={id}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="TTS">{t('campaigns.voiceModeTts', 'Text-to-speech')}</SelectItem>
+                            <SelectItem value="AUDIO">{t('campaigns.voiceModeAudio', 'Upload audio file')}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  )}
+                </Field>
+
+                {voiceMode === 'TTS' && (
+                  <Field
+                    label={t('campaigns.voiceMsg', 'Spoken text (TTS)')}
+                    error={form.formState.errors.voiceMsg?.message}
+                    required
+                  >
+                    {({ id, invalid }) => (
+                      <Textarea
+                        id={id}
+                        aria-invalid={invalid}
+                        className="min-h-24"
+                        maxLength={2000}
+                        placeholder={t('campaigns.voiceMsgPlaceholder', 'Hello {{lead.contactPerson}}, this is…')}
+                        {...form.register('voiceMsg')}
+                      />
+                    )}
+                  </Field>
+                )}
+
+                {voiceMode === 'AUDIO' && (
+                  <Field
+                    label={t('campaigns.voiceAudio', 'Audio file (.wav, max 4MB)')}
+                    error={form.formState.errors.voiceAudioId?.message}
+                    required
+                  >
+                    {() => (
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={voiceFileRef}
+                          type="file"
+                          accept=".wav,audio/wav,audio/x-wav,audio/wave"
+                          hidden
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) uploadVoiceAudio.mutate(file);
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          loading={uploadVoiceAudio.isPending}
+                          onClick={() => voiceFileRef.current?.click()}
+                        >
+                          <Upload className="h-4 w-4" aria-hidden="true" />
+                          {t('campaigns.voiceAudioUpload', 'Upload .wav')}
+                        </Button>
+                        {voiceAudioId ? (
+                          <Badge tone="success" size="sm">
+                            <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                            {t('campaigns.voiceAudioReady', 'Audio ready')}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    )}
+                  </Field>
+                )}
+
+                {/* Keypress→note mapping — only the digit is persisted
+                    (voiceConfig.keys); the note is a same-session aid for
+                    setting up the matching voice_keypress workflow trigger
+                    on the Automations page. */}
+                <div>
+                  <p className="text-caption font-medium text-muted-foreground mb-2">
+                    {t('campaigns.voiceKeys', 'Keypress actions (press-N)')}
+                  </p>
+                  <p className="text-caption text-muted-foreground mb-2">
+                    {t(
+                      'campaigns.voiceKeysHint',
+                      'Callers pressing a mapped digit fire a voice_keypress trigger you can react to in Automations. Notes here are just for your reference.',
+                    )}
+                  </p>
+                  <div className="space-y-2">
+                    {voiceKeyFields.map((f, i) => (
+                      <div key={f.id} className="flex flex-wrap gap-2">
+                        <Controller
+                          control={form.control}
+                          name={`voiceKeys.${i}.digit`}
+                          render={({ field }) => (
+                            <Select value={field.value} onValueChange={field.onChange}>
+                              <SelectTrigger className="w-20">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {VOICE_DIGITS.map((d) => (
+                                  <SelectItem key={d} value={d}>{d}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        />
+                        <Input
+                          placeholder={t('campaigns.voiceKeyLabel', 'Note (optional) — e.g. interested, connect to sales')}
+                          className="flex-1 min-w-[10rem]"
+                          maxLength={200}
+                          {...form.register(`voiceKeys.${i}.label`)}
+                        />
+                        <IconButton
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('campaigns.removeKeyMapping', 'Remove mapping')}
+                          className="text-danger hover:bg-danger-subtle"
+                          onClick={() => removeVoiceKey(i)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </IconButton>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      disabled={voiceKeyFields.length >= 10}
+                      onClick={() => appendVoiceKey({ digit: '1', label: '' })}
+                      className="text-xs text-primary hover:underline flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Plus className="h-3 w-3" aria-hidden="true" />
+                      {t('campaigns.addKeyMapping', 'Add keypress mapping')}
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* Subject (EMAIL only) */}
@@ -716,10 +973,14 @@ export default function CampaignsPage() {
                 <Field
                   label={htmlAttached
                     ? t('campaigns.bodyPlainFallback', 'Plain-text fallback')
-                    : t('campaigns.body', 'Message')}
+                    : selectedChannel === 'VOICE'
+                      ? t('campaigns.bodyVoiceLabel', 'Internal label')
+                      : t('campaigns.body', 'Message')}
                   hint={htmlAttached
                     ? t('campaigns.bodyPlainFallbackHint', 'Optional — auto-generated from your template if left blank.')
-                    : undefined}
+                    : selectedChannel === 'VOICE'
+                      ? t('campaigns.bodyVoiceHint', 'For your reference only — not read aloud. The spoken message is set above.')
+                      : undefined}
                   error={form.formState.errors.body?.message}
                   required={!htmlAttached}
                 >
