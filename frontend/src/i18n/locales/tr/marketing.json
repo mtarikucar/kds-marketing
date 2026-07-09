@@ -589,6 +589,19 @@
     "failed": "Giriş yapılamadı. Lütfen tekrar deneyin.",
     "networkError": "Bağlantı hatası. Lütfen tekrar deneyin."
   },
+  "profile": {
+    "menuItem": "Profili düzenle",
+    "dialogTitle": "Profili düzenle",
+    "dialogDescription": "Ad, soyad ve telefon numaranızı güncelleyin.",
+    "firstNameLabel": "Ad",
+    "lastNameLabel": "Soyad",
+    "phoneLabel": "Telefon numarası",
+    "phoneHint": "SMS ile iki adımlı doğrulama etkinse kodlar bu numaraya gönderilir.",
+    "currentPasswordLabel": "Telefon numarasını değiştirmek için mevcut şifreniz",
+    "currentPasswordRequired": "Devam etmek için mevcut şifrenizi girin.",
+    "updateSuccess": "Profil güncellendi",
+    "updateError": "Profil güncellenemedi"
+  },
   "dashboard": {
     "title": "Gösterge Paneli",
     "subtitle": "Performansa bir bakış",

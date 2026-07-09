@@ -12,6 +12,7 @@ import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
 import { useOnboardingStore } from '../../../store/onboardingStore';
 import { useTourStore } from '../../../store/tourStore';
+import { useTwoFactorStatus } from '../hooks/useTwoFactorStatus';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
@@ -75,6 +76,25 @@ const changePasswordSchema = z.object({
 
 type ChangePasswordValues = z.infer<typeof changePasswordSchema>;
 
+// currentPassword is intentionally NOT required here — it's only mandatory
+// when the phone number is dirty on an SMS-2FA-armed account, a condition
+// that depends on runtime query/dirty state the static schema can't see.
+// That check runs by hand right before submit (see onEditProfile below).
+const editProfileSchema = z.object({
+  firstName: z.string().trim().min(1, 'First name is required'),
+  lastName: z.string().trim().min(1, 'Last name is required'),
+  phone: z.string().trim().optional(),
+  currentPassword: z.string().optional(),
+});
+
+type EditProfileValues = z.infer<typeof editProfileSchema>;
+
+function apiErrorMessage(e: unknown): string | undefined {
+  const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data
+    ?.message;
+  return Array.isArray(msg) ? msg[0] : msg;
+}
+
 /** OS-appropriate hint for the command-palette shortcut. */
 const isMac =
   typeof navigator !== 'undefined' &&
@@ -82,7 +102,7 @@ const isMac =
 const PALETTE_SHORTCUT = isMac ? '⌘K' : 'Ctrl K';
 
 export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => void } = {}) {
-  const { user, logout } = useMarketingAuthStore();
+  const { user, logout, updateUser } = useMarketingAuthStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
@@ -92,6 +112,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
 
   // --- Notifications ---
   const { data: unreadCount } = useQuery({
@@ -140,6 +161,93 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
     onError: (err: any) => {
       toast.error(err.response?.data?.message || 'Failed to change password');
     },
+  });
+
+  // --- Edit Profile ---
+  const editProfileForm = useForm<EditProfileValues>({
+    resolver: zodResolver(editProfileSchema),
+    defaultValues: { firstName: '', lastName: '', phone: '', currentPassword: '' },
+  });
+
+  // Only fetch 2FA status once the dialog is actually open — no point paying
+  // for the request on every authenticated page load.
+  const twoFactorStatus = useTwoFactorStatus(showEditProfile);
+
+  const watchedPhone = editProfileForm.watch('phone');
+  const originalPhone = (user?.phone ?? '').trim();
+  const phoneDirty = (watchedPhone ?? '').trim() !== originalPhone;
+
+  // Precise signal when the 2FA status query has resolved. If a phone-related
+  // 400 comes back anyway (query failed, stale cache, etc.) `forcedPasswordField`
+  // reveals the field retroactively — see changePassword-style onError below.
+  const [forcedPasswordField, setForcedPasswordField] = useState(false);
+  const smsTwoFactorArmed = Boolean(
+    twoFactorStatus.data?.enabled && twoFactorStatus.data?.method === 'SMS',
+  );
+  const needsCurrentPassword = forcedPasswordField || (phoneDirty && smsTwoFactorArmed);
+
+  const openEditProfile = () => {
+    editProfileForm.reset({
+      firstName: user?.firstName ?? '',
+      lastName: user?.lastName ?? '',
+      phone: user?.phone ?? '',
+      currentPassword: '',
+    });
+    setForcedPasswordField(false);
+    setShowEditProfile(true);
+  };
+
+  const closeEditProfile = () => {
+    setShowEditProfile(false);
+    setForcedPasswordField(false);
+    editProfileForm.reset();
+  };
+
+  const editProfileMutation = useMutation({
+    mutationFn: (values: EditProfileValues) => {
+      const payload: Record<string, unknown> = {
+        firstName: values.firstName.trim(),
+        lastName: values.lastName.trim(),
+        phone: values.phone?.trim() || undefined,
+      };
+      if (needsCurrentPassword) payload.currentPassword = values.currentPassword;
+      return marketingApi.patch('/auth/profile', payload).then((r) => r.data);
+    },
+    onSuccess: (data: { firstName?: string; lastName?: string; phone?: string | null }) => {
+      updateUser({
+        firstName: data.firstName,
+        lastName: data.lastName,
+        phone: data.phone ?? undefined,
+      });
+      toast.success(t('profile.updateSuccess', 'Profile updated'));
+      closeEditProfile();
+    },
+    onError: (e: unknown) => {
+      const msg = apiErrorMessage(e);
+      // The backend's currentPassword messages ("Confirm your current
+      // password…" / "Current password is incorrect") both mention
+      // "password" — route those to the field itself rather than a toast.
+      if (msg && /password/i.test(msg)) {
+        setForcedPasswordField(true);
+        editProfileForm.setError('currentPassword', { type: 'server', message: msg });
+        return;
+      }
+      toast.error(msg || t('profile.updateError', 'Failed to update profile'));
+    },
+  });
+
+  const onEditProfile = editProfileForm.handleSubmit((values) => {
+    if (needsCurrentPassword && !values.currentPassword) {
+      editProfileForm.setError('currentPassword', {
+        type: 'required',
+        message: t(
+          'profile.currentPasswordRequired',
+          'Enter your current password to continue.',
+        ),
+      });
+      return;
+    }
+    editProfileMutation.mutate(values);
   });
 
   const handleLogout = () => {
@@ -344,6 +452,9 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
                   {t('tour.reopen', 'Take a tour')}
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem onSelect={openEditProfile}>
+                {t('profile.menuItem', 'Edit profile')}
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setShowChangePassword(true)}>
                 Change Password
               </DropdownMenuItem>
@@ -418,6 +529,105 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               </Button>
               <Button type="submit" loading={changePasswordMutation.isPending}>
                 Change Password
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Profile Dialog */}
+      <Dialog
+        open={showEditProfile}
+        onOpenChange={(open) => {
+          if (!open) closeEditProfile();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('profile.dialogTitle', 'Edit profile')}</DialogTitle>
+            <DialogDescription>
+              {t('profile.dialogDescription', 'Update your name and phone number.')}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={onEditProfile} className="flex flex-col gap-4">
+            <Field
+              label={t('profile.firstNameLabel', 'First name')}
+              error={editProfileForm.formState.errors.firstName?.message}
+              required
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input
+                  id={id}
+                  autoComplete="given-name"
+                  aria-invalid={invalid || undefined}
+                  aria-describedby={describedBy}
+                  {...editProfileForm.register('firstName')}
+                />
+              )}
+            </Field>
+            <Field
+              label={t('profile.lastNameLabel', 'Last name')}
+              error={editProfileForm.formState.errors.lastName?.message}
+              required
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input
+                  id={id}
+                  autoComplete="family-name"
+                  aria-invalid={invalid || undefined}
+                  aria-describedby={describedBy}
+                  {...editProfileForm.register('lastName')}
+                />
+              )}
+            </Field>
+            <Field
+              label={t('profile.phoneLabel', 'Phone number')}
+              hint={t('profile.phoneHint', 'Used for SMS two-factor codes if enabled.')}
+              error={editProfileForm.formState.errors.phone?.message}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input
+                  id={id}
+                  type="tel"
+                  autoComplete="tel"
+                  placeholder="+905XXXXXXXXX"
+                  aria-invalid={invalid || undefined}
+                  aria-describedby={describedBy}
+                  {...editProfileForm.register('phone')}
+                />
+              )}
+            </Field>
+            {/* Only shown when changing the phone on an SMS-2FA-armed account
+                (or after the backend has told us it's required — see
+                editProfileMutation.onError). Without this, that combination
+                used to hit a bare 400 with nowhere to enter the password. */}
+            {needsCurrentPassword && (
+              <Field
+                label={t(
+                  'profile.currentPasswordLabel',
+                  'Current password to change your phone number',
+                )}
+                error={editProfileForm.formState.errors.currentPassword?.message}
+                required
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Input
+                    id={id}
+                    type="password"
+                    autoComplete="current-password"
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={describedBy}
+                    {...editProfileForm.register('currentPassword')}
+                  />
+                )}
+              </Field>
+            )}
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={closeEditProfile}>
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button type="submit" loading={editProfileMutation.isPending}>
+                {t('common.save', 'Save')}
               </Button>
             </DialogFooter>
           </form>

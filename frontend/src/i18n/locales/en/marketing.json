@@ -416,6 +416,19 @@
     "failed": "Could not sign in. Please try again.",
     "networkError": "Connection error. Please try again."
   },
+  "profile": {
+    "menuItem": "Edit profile",
+    "dialogTitle": "Edit profile",
+    "dialogDescription": "Update your name and phone number.",
+    "firstNameLabel": "First name",
+    "lastNameLabel": "Last name",
+    "phoneLabel": "Phone number",
+    "phoneHint": "Used for SMS two-factor codes if enabled.",
+    "currentPasswordLabel": "Current password to change your phone number",
+    "currentPasswordRequired": "Enter your current password to continue.",
+    "updateSuccess": "Profile updated",
+    "updateError": "Failed to update profile"
+  },
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Performance at a glance",
