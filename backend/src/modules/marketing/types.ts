@@ -24,6 +24,10 @@ export interface MarketingUserPayload {
   /** Epic F — when set, the custom role's granular permission set overrides the
    * legacy OWNER/MANAGER/REP mapping (resolved by PermissionsGuard). */
   customRoleId?: string | null;
+  /** NetGSM Phase 3 Task 3 — the rep's webphone extension (MarketingUser.dahili),
+   * the routing key for the telephony screen-pop SSE stream. Only populated by
+   * guards that select it (currently SseTokenGuard); undefined elsewhere. */
+  dahili?: string | null;
 }
 
 /** Epic D1 — position of a workspace in the agency / sub-account hierarchy.

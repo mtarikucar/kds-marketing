@@ -50,6 +50,9 @@ export class SseTokenGuard implements CanActivate {
           role: true,
           status: true,
           tokenVersion: true,
+          // NetGSM Phase 3 Task 3 — the telephony screen-pop stream filters
+          // by the rep's own extension; only this guard needs it.
+          dahili: true,
         },
       });
       if (!user || user.status !== 'ACTIVE' || user.role === 'SYSTEM') {

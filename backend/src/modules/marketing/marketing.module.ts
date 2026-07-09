@@ -82,7 +82,10 @@ import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
 // marketing.telephony.call_event.v1: INBOUND/missed SalesCalls + crm_id
 // correlation for OUTBOUND hangup/cdr).
 import { TelephonyEventConsumer } from './telephony/telephony-event.consumer';
+// NetGSM Phase 3 Task 3 — per-workspace SSE fan-out for screen-pop/call-status.
+import { TelephonyStreamService } from './telephony/telephony-stream.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
+import { TelephonyStreamController } from './controllers/telephony-stream.controller';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
@@ -501,6 +504,7 @@ import { WalletService } from './wallet/wallet.service';
     DialerController,
     TelephonyConfigController,
     WebphoneConfigController,
+    TelephonyStreamController,
     NetgsmOnboardingController,
     InstallationController,
     SalesTargetController,
@@ -646,6 +650,10 @@ import { WalletService } from './wallet/wallet.service';
     CallCdrSyncService,
     // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
     TelephonyEventConsumer,
+    // NetGSM Phase 3 Task 3 — per-workspace SSE fan-out (screen-pop, live
+    // call status), pushed to by TelephonyEventConsumer, read by
+    // TelephonyStreamController's GET /marketing/telephony/stream.
+    TelephonyStreamService,
     NetgsmOnboardingService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).

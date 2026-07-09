@@ -49,6 +49,7 @@ describe('TelephonyEventConsumer', () => {
   let bus: { on: jest.Mock; off: jest.Mock };
   let outbox: { append: jest.Mock };
   let autoAssigner: { pickAssignee: jest.Mock };
+  let telephonyStream: { push: jest.Mock };
   let svc: TelephonyEventConsumer;
 
   const handle = (e: DomainEvent<MarketingCallEventPayload>) => (svc as any).handle(e);
@@ -58,7 +59,8 @@ describe('TelephonyEventConsumer', () => {
     bus = { on: jest.fn(), off: jest.fn() };
     outbox = { append: jest.fn().mockResolvedValue('evt-out-1') };
     autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
-    svc = new TelephonyEventConsumer(prisma as any, bus as any, outbox as any, autoAssigner as any);
+    telephonyStream = { push: jest.fn() };
+    svc = new TelephonyEventConsumer(prisma as any, bus as any, outbox as any, autoAssigner as any, telephonyStream as any);
 
     (prisma.salesCall.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
   });
@@ -174,7 +176,14 @@ describe('TelephonyEventConsumer', () => {
     it('creates an INBOUND SalesCall, resolves the rep by dahili, links the lead, and mirrors a CALL activity', async () => {
       (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null); // no existing row for this uniqueId
       (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'rep-1' }); // dahili match
-      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'lead-1', assignedToId: 'rep-1' });
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce({
+        id: 'lead-1',
+        assignedToId: 'rep-1',
+        businessName: 'Cafe Deniz',
+        contactPerson: 'Ayşe Yılmaz',
+        phone: '05551112233',
+        status: 'CONTACTED',
+      });
       (prisma.salesCall.create as jest.Mock).mockResolvedValueOnce({
         id: 'call-5',
         workspaceId: 'ws-1',
@@ -227,9 +236,27 @@ describe('TelephonyEventConsumer', () => {
           createdById: 'rep-1',
         },
       });
+      // Screen-pop (Task 3): pushed onto the workspace's telephony stream,
+      // routed by internal_num, carrying a compact lead card + the SalesCall id.
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'screen_pop',
+        targetDahili: '104',
+        payload: {
+          customerNum: '05551112233',
+          lead: {
+            id: 'lead-1',
+            businessName: 'Cafe Deniz',
+            contactPerson: 'Ayşe Yılmaz',
+            phone: '05551112233',
+            status: 'CONTACTED',
+          },
+          salesCallId: 'call-5',
+          internalNum: '104',
+        },
+      });
     });
 
-    it('unmatched extension -> marketingUserId stays null (no crash)', async () => {
+    it('unmatched extension -> marketingUserId stays null (no crash), and the screen-pop still fires with lead: null (no rep owns the extension, but the call itself is still worth surfacing)', async () => {
       (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null);
       (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce(null); // no dahili match
       (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce(null);
@@ -250,6 +277,11 @@ describe('TelephonyEventConsumer', () => {
         expect.objectContaining({ data: expect.objectContaining({ marketingUserId: null }) }),
       );
       expect(prisma.leadActivity.create).not.toHaveBeenCalled();
+      expect(telephonyStream.push).toHaveBeenCalledWith('ws-1', {
+        kind: 'screen_pop',
+        targetDahili: '999',
+        payload: { customerNum: '05559998877', lead: null, salesCallId: 'call-6', internalNum: '999' },
+      });
     });
 
     it('treats kind === inbound_call as inbound even when direction did not normalize (Task 1 MEDIUM hardening)', async () => {
@@ -306,6 +338,9 @@ describe('TelephonyEventConsumer', () => {
       expect(outbox.append).toHaveBeenCalledWith(
         expect.objectContaining({ type: MarketingEventTypes.CallMissed, payload: expect.objectContaining({ salesCallId: 'call-8' }) }),
       );
+      // But NOT a screen-pop — this call already ended by the time this
+      // out-of-order hangup created the row; there is nothing left to "pop".
+      expect(telephonyStream.push).not.toHaveBeenCalled();
     });
 
     it('a redelivered/out-of-order inbound_call against an already-upserted row fills blanks but never regresses status', async () => {
@@ -329,6 +364,8 @@ describe('TelephonyEventConsumer', () => {
       });
       // ...but status is never touched by this path.
       expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
+      // A redelivery of a call already surfaced never re-pops it.
+      expect(telephonyStream.push).not.toHaveBeenCalled();
     });
   });
 
@@ -365,6 +402,8 @@ describe('TelephonyEventConsumer', () => {
       expect(prisma.leadActivity.create).not.toHaveBeenCalled();
       expect(prisma.marketingTask.create).not.toHaveBeenCalled();
       expect(outbox.append).not.toHaveBeenCalled();
+      // ...nor a second screen-pop for the same physical call.
+      expect(telephonyStream.push).not.toHaveBeenCalled();
     });
 
     it('the out-of-order hangup/cdr upsert path losing the race to a P2002 also re-fetches and skips duplicate side effects', async () => {

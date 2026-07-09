@@ -6,6 +6,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes, MarketingCallEventPayload } from '../events/marketing-event-types';
 import { localMsisdnVariants, normalizePhone } from '../utils/lead-normalize';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
+import { TelephonyStreamService } from './telephony-stream.service';
 
 /** A call is still "in flight" in exactly these two statuses; anything else is terminal. */
 const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
@@ -43,7 +44,14 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  *    CALL LeadActivity mirror, attributed to the resolved rep or — absent
  *    one — the workspace's SYSTEM sentinel user (same idiom as
  *    ConversationIngressService/FormsService), skipped entirely if neither
- *    exists (LeadActivity.createdById is NOT NULL).
+ *    exists (LeadActivity.createdById is NOT NULL). Immediately after a
+ *    FRESH inbound row is created (never on the redelivered-blank-fill path,
+ *    nor on the out-of-order hangup/cdr upsert — see `createInboundCall`'s
+ *    `screenPop` option), pushes a `screen_pop` TelephonyStreamEvent onto
+ *    TelephonyStreamService keyed by `internal_num` (the routing key the
+ *    rep's SSE stream — Task 3's `GET /marketing/telephony/stream` — filters
+ *    on by their own MarketingUser.dahili) so the rep's webphone can surface
+ *    a caller card (customer number + matched lead, if any) as the call rings.
  *
  *  - MISSED CALL: an inbound call whose terminal status resolves to
  *    NO_ANSWER (no duration, and/or a status token that isn't
@@ -120,6 +128,7 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     private readonly bus: DomainEventBus,
     private readonly outbox: OutboxService,
     private readonly autoAssigner: LeadAutoAssignerService,
+    private readonly telephonyStream: TelephonyStreamService,
   ) {}
 
   onModuleInit(): void {
@@ -173,7 +182,11 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
       await this.fillInboundBlanks(existing, p);
       return;
     }
-    await this.createInboundCall(workspaceId, p, 'RINGING');
+    // screenPop: true — this is the FIRST sighting of the call (genuinely
+    // ringing right now), the only moment a screen-pop is meaningful. The
+    // out-of-order upsert from handleTerminal below never sets it: a call
+    // that already ended has nothing to "pop" for.
+    await this.createInboundCall(workspaceId, p, 'RINGING', { screenPop: true });
   }
 
   private async fillInboundBlanks(call: SalesCall, p: MarketingCallEventPayload): Promise<void> {
@@ -305,6 +318,7 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     workspaceId: string,
     p: MarketingCallEventPayload,
     initialStatus: string,
+    opts: { screenPop?: boolean } = {},
   ): Promise<void> {
     const marketingUserId = await this.resolveMarketingUserByDahili(workspaceId, p.internalNum);
     const lead = await this.findLeadByPhone(workspaceId, p.customerNum);
@@ -313,9 +327,10 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
     if (!created) {
       // Lost a concurrent-insert race for this (workspaceId, externalCallId) —
       // the winning insert already ran (or is about to run) this same
-      // method's side effects below for the row it created. Re-running them
-      // here would double the lead-activity mirror and the missed-call
-      // follow-up/event, so this is a deliberate no-op.
+      // method's side effects below (including the screen-pop push) for the
+      // row it created. Re-running them here would double the lead-activity
+      // mirror, the missed-call follow-up/event, and the screen-pop, so this
+      // is a deliberate no-op.
       this.logger.log(
         `telephony inbound create: concurrent duplicate for externalCallId=${p.uniqueId} — using existing row ${call.id}`,
       );
@@ -324,6 +339,27 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
 
     if (lead) {
       await this.mirrorLeadActivity(workspaceId, lead.id, marketingUserId, `Inbound call: ${initialStatus}`, initialStatus);
+    }
+
+    if (opts.screenPop) {
+      this.telephonyStream.push(workspaceId, {
+        kind: 'screen_pop',
+        targetDahili: p.internalNum ?? null,
+        payload: {
+          customerNum: p.customerNum ?? null,
+          lead: lead
+            ? {
+                id: lead.id,
+                businessName: lead.businessName,
+                contactPerson: lead.contactPerson,
+                phone: lead.phone,
+                status: lead.status,
+              }
+            : null,
+          salesCallId: call.id,
+          internalNum: p.internalNum ?? null,
+        },
+      });
     }
 
     if (this.isTerminal(initialStatus) && initialStatus === 'NO_ANSWER') {
@@ -455,17 +491,27 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Canonical phone match — reuses the SAME util IysWebhookConsumer uses
-   *  rather than forking a third copy (Phase 2 Task 4's LOW residual). */
+   *  rather than forking a third copy (Phase 2 Task 4's LOW residual). The
+   *  extra display fields (businessName/contactPerson/phone/status) feed the
+   *  screen-pop's compact lead card — same minimal shape DialerService
+   *  already selects for its own click-to-dial card. */
   private async findLeadByPhone(
     workspaceId: string,
     customerNum: string | null,
-  ): Promise<{ id: string; assignedToId: string | null } | null> {
+  ): Promise<{
+    id: string;
+    assignedToId: string | null;
+    businessName: string;
+    contactPerson: string;
+    phone: string | null;
+    status: string;
+  } | null> {
     const normalized = normalizePhone(customerNum);
     if (!normalized) return null;
     const variants = localMsisdnVariants(normalized);
     return this.prisma.lead.findFirst({
       where: { workspaceId, phoneNormalized: { in: variants }, mergedIntoId: null, deletedAt: null },
-      select: { id: true, assignedToId: true },
+      select: { id: true, assignedToId: true, businessName: true, contactPerson: true, phone: true, status: true },
       orderBy: { createdAt: 'desc' },
     });
   }
