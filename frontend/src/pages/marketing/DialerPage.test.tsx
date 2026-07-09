@@ -37,6 +37,13 @@ vi.mock('../../features/marketing/webphone/WebphoneHost', () => ({
   setActiveCallId: (...a: unknown[]) => setActiveCallIdMock(...a),
 }));
 
+// Parallel mode is gated on the voiceCampaigns entitlement (backend route is
+// @RequiresFeature('voiceCampaigns')); grant it so the section renders in tests.
+const hasMock = vi.fn((_k: string) => true);
+vi.mock('../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: hasMock }),
+}));
+
 const session = {
   id: 'sess-1',
   status: 'ACTIVE',

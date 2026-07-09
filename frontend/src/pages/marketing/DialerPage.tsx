@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { PhoneCall, SkipForward, Play, X, CheckCircle2, Users } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { useEntitlements } from '../../features/marketing/hooks/useEntitlements';
 import { expectRingback, setActiveCallId } from '../../features/marketing/webphone/WebphoneHost';
 import {
   PageHeader, Card, CardContent, Button, Input, Field, Badge, Progress, EmptyState, Callout, Switch,
@@ -43,11 +44,15 @@ function apiErr(e: any, fallback: string): string {
 function ParallelModeSection({ status, search }: { status: string; search: string }) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
+  const { has } = useEntitlements();
+  const entitled = has('voiceCampaigns'); // paid add-on / SCALE+ — the backend route is @RequiresFeature('voiceCampaigns')
   const [queueName, setQueueName] = useState('');
   const [iysType, setIysType] = useState<'TICARI' | 'BILGILENDIRME'>('TICARI');
 
   const active = useQuery({
     queryKey: ['dialer-parallel-active'],
+    // Don't fire the request for an unentitled workspace — it would 403 silently.
+    enabled: entitled,
     queryFn: () => marketingApi.get('/dialer/parallel/active').then((r) => r.data as AutocallSession | null),
   });
 
@@ -75,6 +80,11 @@ function ParallelModeSection({ status, search }: { status: string; search: strin
 
   const session = active.data ?? null;
   const busy = start.isPending || stop.isPending;
+
+  // Hide the whole parallel-mode card unless the feature is granted (the backend
+  // route is @RequiresFeature('voiceCampaigns')). Placed after all hooks so the
+  // hook order stays stable across renders.
+  if (!entitled) return null;
 
   return (
     <Card className="max-w-lg">
