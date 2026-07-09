@@ -87,4 +87,38 @@ describe('AdRulesService — scaling engine', () => {
     expect(actions[0]).toMatchObject({ ok: false });
     expect(actions[0].detail).toMatch(/no campaign daily budget/);
   });
+
+  it('PAUSE fires when trailing ROAS is below threshold (revenue/spend)', async () => {
+    // revenue 90 / spend 300 = 0.3 ROAS, below the 1.0 break-even threshold → pause.
+    prisma.adRule.findFirst.mockResolvedValue(rule({ metric: 'ROAS', operator: 'LT', threshold: 1, action: 'PAUSE', actionValue: null }));
+    mgmt.campaigns.mockResolvedValue([{ id: 'c1', name: 'C1', status: 'ACTIVE', dailyBudget: 50 }]);
+    prisma.adMetric.findMany.mockResolvedValue([{ campaignId: 'c1', spend: 300, impressions: 2000, clicks: 40, leads: 3, revenue: 90 }]);
+    const { actions } = await svc.runNow('ws', 'r1');
+    expect(mgmt.setStatus).toHaveBeenCalledWith('ws', 'acc', 'c1', 'PAUSED');
+    expect(actions[0]).toMatchObject({ action: 'PAUSE', ok: true });
+  });
+
+  it('INCREASE_BUDGET fires when trailing REVENUE exceeds threshold (sum of revenue)', async () => {
+    // two days summing to 800 revenue, over the 500 threshold → scale up.
+    prisma.adRule.findFirst.mockResolvedValue(rule({ metric: 'REVENUE', operator: 'GT', threshold: 500 }));
+    mgmt.campaigns.mockResolvedValue([{ id: 'c1', name: 'C1', status: 'ACTIVE', dailyBudget: 50 }]);
+    prisma.adMetric.findMany.mockResolvedValue([
+      { campaignId: 'c1', spend: 100, impressions: 1000, clicks: 50, leads: 5, revenue: 500 },
+      { campaignId: 'c1', spend: 100, impressions: 1000, clicks: 50, leads: 5, revenue: 300 },
+    ]);
+    const { actions } = await svc.runNow('ws', 'r1');
+    expect(mgmt.setDailyBudget).toHaveBeenCalledWith('ws', 'acc', 'c1', 60); // 50 * 1.2
+    expect(actions[0]).toMatchObject({ ok: true });
+  });
+
+  it('CPA with zero leads is a div-by-zero → metric skipped, no action', async () => {
+    // spend 100 / leads 0 = undefined CPA → omitted, so a "CPA > 20" rule never fires.
+    prisma.adRule.findFirst.mockResolvedValue(rule({ metric: 'CPA', operator: 'GT', threshold: 20, action: 'PAUSE', actionValue: null }));
+    mgmt.campaigns.mockResolvedValue([{ id: 'c1', name: 'C1', status: 'ACTIVE', dailyBudget: 50 }]);
+    prisma.adMetric.findMany.mockResolvedValue([{ campaignId: 'c1', spend: 100, impressions: 500, clicks: 10, leads: 0, revenue: 0 }]);
+    const { actions } = await svc.runNow('ws', 'r1');
+    expect(mgmt.setStatus).not.toHaveBeenCalled();
+    expect(mgmt.setDailyBudget).not.toHaveBeenCalled();
+    expect(actions).toHaveLength(0);
+  });
 });

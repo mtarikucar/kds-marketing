@@ -158,6 +158,18 @@ export class BudgetExecutorService {
    * The shared per-channel commit + credential-gated live-write loop — the
    * money-safety core both lanes (APPROVED and AUTO) run through unchanged.
    */
+  /** The pacer's recommended daily spend cap for this budget (0 when unset). */
+  private async paceCap(workspaceId: string, budgetId: string): Promise<number> {
+    const row = await this.prisma.pacingState.findUnique({
+      where: { budgetId_channel: { budgetId, channel: '' } },
+      select: { recommendedDailyCap: true, workspaceId: true },
+    });
+    // Scope guard: the pacing row is workspace-owned; ignore a mismatch.
+    if (!row || row.workspaceId !== workspaceId) return 0;
+    const cap = row.recommendedDailyCap ? Number(row.recommendedDailyCap) : 0;
+    return Number.isFinite(cap) && cap > 0 ? cap : 0;
+  }
+
   private async commitAndPush(
     workspaceId: string,
     budgetId: string,
@@ -175,6 +187,15 @@ export class BudgetExecutorService {
       accountByChannel.set(channel, acc);
       return acc;
     };
+
+    // PID pace coupling: the pacer's recommendedDailyCap is the daily spend the
+    // ideal-curve controller allows today. If the sum of the allocations' daily
+    // budgets would exceed it, throttle the LIVE pushes proportionally so the
+    // pace actually caps spend (the internal plan still commits the full target,
+    // so the pacer keeps steering). NEVER scales up — factor is clamped to (0,1].
+    const cap = await this.paceCap(workspaceId, budgetId);
+    const totalIntended = after.reduce((s, a) => s + (a.budget > 0 ? a.budget : 0), 0);
+    const paceFactor = cap > 0 && totalIntended > cap ? cap / totalIntended : 1;
 
     const results: ChannelResult[] = [];
     for (const a of after) {
@@ -208,9 +229,12 @@ export class BudgetExecutorService {
         results.push({ ...base, applied: false, note: 'plan committed; skipped live write for a non-positive budget' });
         continue;
       }
+      // Throttle the live push to the pace cap (never below a rounded 0.01).
+      const liveBudget = paceFactor < 1 ? Math.max(0.01, Math.round(a.budget * paceFactor * 100) / 100) : a.budget;
       try {
-        await this.ads.setDailyBudget(workspaceId, account.id, ref, a.budget);
-        results.push({ ...base, applied: true, note: `daily budget pushed to ${a.channel}` });
+        await this.ads.setDailyBudget(workspaceId, account.id, ref, liveBudget);
+        const throttled = paceFactor < 1 ? ` (throttled to pace cap: ${liveBudget})` : '';
+        results.push({ ...base, applied: true, note: `daily budget pushed to ${a.channel}${throttled}` });
       } catch (e) {
         results.push({ ...base, applied: false, note: `live write failed: ${e instanceof Error ? e.message : 'error'}` });
       }

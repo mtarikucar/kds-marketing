@@ -30,7 +30,7 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { AdRulesService } from '../ads/ad-rules.service';
 
-const METRICS = ['SPEND', 'CPL', 'CTR', 'LEADS', 'CLICKS', 'IMPRESSIONS'];
+const METRICS = ['SPEND', 'CPL', 'CTR', 'LEADS', 'CLICKS', 'IMPRESSIONS', 'ROAS', 'REVENUE', 'CPA'];
 const OPERATORS = ['GT', 'LT', 'GTE', 'LTE'];
 const ACTIONS = ['INCREASE_BUDGET', 'DECREASE_BUDGET', 'PAUSE', 'RESUME'];
 

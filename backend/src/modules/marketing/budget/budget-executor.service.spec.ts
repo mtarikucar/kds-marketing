@@ -16,6 +16,7 @@ describe('BudgetExecutorService', () => {
     budget?: any;
     canWrite?: (p: string) => boolean;
     metaAccount?: any;
+    paceCap?: number | null;
   } = {}) {
     const prisma = {
       approvalRequest: { findFirst: jest.fn().mockResolvedValue(overrides.approval ?? null) },
@@ -23,6 +24,11 @@ describe('BudgetExecutorService', () => {
       adAccount: { findFirst: jest.fn().mockResolvedValue(overrides.metaAccount ?? null) },
       budgetAllocation: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       autopilotRun: { create: jest.fn().mockResolvedValue({ id: 'run1' }) },
+      pacingState: {
+        findUnique: jest.fn().mockResolvedValue(
+          overrides.paceCap != null ? { recommendedDailyCap: overrides.paceCap, workspaceId: WS } : null,
+        ),
+      },
     };
     const approvals = { markApplied: jest.fn().mockResolvedValue({}) };
     const capability = { canWriteBudget: jest.fn((p: string) => (overrides.canWrite ? overrides.canWrite(p) : false)) };
@@ -118,13 +124,18 @@ describe('BudgetExecutorService.applyAutonomous (Growth Autopilot spec D6/D8)', 
   const WS = 'ws1';
   const AFTER = [{ channel: 'META', campaignRef: 'c1', budget: 120 }];
 
-  function makeAuto(overrides: { budget?: any; canWrite?: (p: string) => boolean; metaAccount?: any } = {}) {
+  function makeAuto(overrides: { budget?: any; canWrite?: (p: string) => boolean; metaAccount?: any; paceCap?: number | null } = {}) {
     const prisma = {
       approvalRequest: { findFirst: jest.fn() },
       growthBudget: { findFirst: jest.fn().mockResolvedValue(overrides.budget ?? null) },
       adAccount: { findFirst: jest.fn().mockResolvedValue(overrides.metaAccount ?? null) },
       budgetAllocation: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       autopilotRun: { create: jest.fn().mockResolvedValue({ id: 'run-auto' }) },
+      pacingState: {
+        findUnique: jest.fn().mockResolvedValue(
+          overrides.paceCap != null ? { recommendedDailyCap: overrides.paceCap, workspaceId: WS } : null,
+        ),
+      },
     };
     const approvals = { markApplied: jest.fn(), enqueue: jest.fn() };
     const capability = { canWriteBudget: jest.fn((p: string) => (overrides.canWrite ? overrides.canWrite(p) : false)) };
@@ -156,6 +167,38 @@ describe('BudgetExecutorService.applyAutonomous (Growth Autopilot spec D6/D8)', 
     expect(prisma.approvalRequest.findFirst).not.toHaveBeenCalled();
     expect(approvals.enqueue).not.toHaveBeenCalled();
     expect(approvals.markApplied).not.toHaveBeenCalled();
+  });
+
+  it('throttles the live push to the PID pace cap while committing the full plan target', async () => {
+    // Two META campaigns totalling 200/day; the pacer only allows 100/day today.
+    const after = [
+      { channel: 'META', campaignRef: 'c1', budget: 120 },
+      { channel: 'META', campaignRef: 'c2', budget: 80 },
+    ];
+    const { svc, prisma, ads } = makeAuto({
+      budget: autonomousBudget,
+      canWrite: (p) => p === 'META',
+      metaAccount: { id: 'acc-1' },
+      paceCap: 100,
+    });
+    await svc.applyAutonomous(WS, 'b1', after, 'run-cap');
+    // factor = 100/200 = 0.5 → live pushes halved (120→60, 80→40); sum = 100 = cap.
+    const pushed = ads.setDailyBudget.mock.calls.map((c: any[]) => c[3]);
+    expect(pushed).toEqual([60, 40]);
+    // The internal plan still commits the FULL target (pacer keeps steering).
+    const planned = prisma.budgetAllocation.updateMany.mock.calls.map((c: any[]) => Number(c[0].data.plannedAmount));
+    expect(planned).toEqual([120, 80]);
+  });
+
+  it('does NOT throttle when the total is within the pace cap (never scales up)', async () => {
+    const { svc, ads } = makeAuto({
+      budget: autonomousBudget,
+      canWrite: (p) => p === 'META',
+      metaAccount: { id: 'acc-1' },
+      paceCap: 500, // well above the 120 total
+    });
+    await svc.applyAutonomous(WS, 'b1', AFTER, 'run-nocap');
+    expect(ads.setDailyBudget).toHaveBeenCalledWith(WS, 'acc-1', 'c1', 120);
   });
 
   it('refuses when the env flag is off (ships dark) — nothing committed', async () => {
