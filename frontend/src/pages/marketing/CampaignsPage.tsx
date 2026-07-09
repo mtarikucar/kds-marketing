@@ -80,6 +80,8 @@ const filterRowSchema = z.object({
   value: z.string(),
 });
 
+const IYS_MESSAGE_TYPES = ['BILGILENDIRME', 'TICARI'] as const;
+
 const campaignSchema = z
   .object({
     name: z.string().min(1, 'Required').max(120),
@@ -91,6 +93,11 @@ const campaignSchema = z
     filters: z.array(filterRowSchema),
     // datetime-local value ("YYYY-MM-DDTHH:mm"), local time — '' = send immediately.
     scheduledAt: z.string().optional(),
+    // İYS classification (SMS channel only) — TICARI = commercial (requires
+    // İYS consent, hard-blocked pre-send when unconfirmed), BILGILENDIRME =
+    // informational/transactional (İYS-exempt). Default is the safer,
+    // exempt option.
+    iysMessageType: z.enum(IYS_MESSAGE_TYPES),
   })
   // The plain-text body is only mandatory when there's no HTML to fall back on.
   // With an HTML template attached we auto-derive the plain-text version, so an
@@ -111,6 +118,7 @@ const DEFAULT_VALUES: CampaignFormValues = {
   emailTemplateId: '',
   filters: [],
   scheduledAt: '',
+  iysMessageType: 'BILGILENDIRME',
 };
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
@@ -280,6 +288,7 @@ export default function CampaignsPage() {
         value: Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? ''),
       })),
       scheduledAt: toDatetimeLocalValue(full.scheduledAt),
+      iysMessageType: full.iysMessageType === 'TICARI' ? 'TICARI' : 'BILGILENDIRME',
     });
     setAiGoal('');
     setFormOpen(true);
@@ -313,6 +322,10 @@ export default function CampaignsPage() {
     // above) does NOT treat '' as "skip validation" — only null/undefined do.
     // So clearing the picker must send null, not ''.
     scheduledAt: values.scheduledAt ? new Date(values.scheduledAt).toISOString() : null,
+    // Only meaningful for SMS — the service itself also normalizes any other
+    // channel back to BILGILENDIRME, but sending the honest value only for
+    // SMS keeps the payload legible.
+    iysMessageType: values.channel === 'SMS' ? values.iysMessageType : 'BILGILENDIRME',
   });
 
   const save = useMutation({
@@ -610,6 +623,47 @@ export default function CampaignsPage() {
                 </Button>
               </div>
             </Callout>
+
+            {/* İYS message type (SMS only) — legal classification the sender's
+                pre-send preflight hard-blocks on for TİCARİ. */}
+            {selectedChannel === 'SMS' && (
+              <Field
+                label={t('campaigns.iysMessageType', 'İYS message type')}
+                hint={
+                  form.watch('iysMessageType') === 'TICARI'
+                    ? t(
+                        'campaigns.iysMessageTypeTicariHint',
+                        'Commercial (ads/promotions) — requires İYS consent. Recipients without approval are skipped automatically before sending.',
+                      )
+                    : t(
+                        'campaigns.iysMessageTypeBilgiHint',
+                        'Informational (order/appointment/account updates) — exempt from İYS consent.',
+                      )
+                }
+              >
+                {({ id }) => (
+                  <Controller
+                    control={form.control}
+                    name="iysMessageType"
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger id={id}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="BILGILENDIRME">
+                            {t('campaigns.iysBilgilendirme', 'Bilgilendirme (informational)')}
+                          </SelectItem>
+                          <SelectItem value="TICARI">
+                            {t('campaigns.iysTicari', 'Ticari (commercial)')}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                )}
+              </Field>
+            )}
 
             {/* Subject (EMAIL only) */}
             {selectedChannel === 'EMAIL' && (

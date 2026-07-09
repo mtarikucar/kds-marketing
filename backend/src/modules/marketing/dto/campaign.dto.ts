@@ -42,6 +42,13 @@ export class CreateCampaignDto {
 
   @IsOptional() @IsDateString()
   scheduledAt?: string;
+
+  /** İYS (İleti Yönetim Sistemi) message classification — SMS campaigns only.
+   *  TICARI = commercial (requires İYS consent, hard-blocked pre-send when
+   *  unconfirmed); BILGILENDIRME = informational/transactional (İYS-exempt).
+   *  Defaults to BILGILENDIRME in the service when omitted. */
+  @IsOptional() @IsIn(['TICARI', 'BILGILENDIRME'])
+  iysMessageType?: string;
 }
 
 export class UpdateCampaignDto {
@@ -65,6 +72,10 @@ export class UpdateCampaignDto {
 
   @IsOptional() @IsDateString()
   scheduledAt?: string;
+
+  /** See CreateCampaignDto.iysMessageType. */
+  @IsOptional() @IsIn(['TICARI', 'BILGILENDIRME'])
+  iysMessageType?: string;
 }
 
 export class CampaignVariantDto {

@@ -127,7 +127,7 @@ export class CampaignsService {
     return this.getVariants(workspaceId, campaignId);
   }
 
-  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string }) {
+  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string; iysMessageType?: string }) {
     if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(dto.channel)) {
       throw new BadRequestException('Invalid channel');
     }
@@ -155,6 +155,12 @@ export class CampaignsService {
         emailTemplateId: dto.emailTemplateId || null,
         audienceFilter: (dto.audienceFilter ?? []) as Prisma.InputJsonValue,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
+        // İYS classification only means anything for SMS — force it to the
+        // exempt default on every other channel so a stray value never
+        // silently rides along on an EMAIL/WHATSAPP campaign (the sender's
+        // TİCARİ preflight only ever reads it on the SMS branch anyway, but
+        // this keeps the stored value honest for CampaignsPage.tsx's own display).
+        iysMessageType: dto.channel === 'SMS' && dto.iysMessageType === 'TICARI' ? 'TICARI' : 'BILGILENDIRME',
         status: 'DRAFT',
       },
     });
@@ -175,6 +181,12 @@ export class CampaignsService {
     if (data.subject === '') data.subject = null;
     if (data.bodyHtml === '') data.bodyHtml = null;
     if (data.emailTemplateId === '') data.emailTemplateId = null;
+    // Same SMS-only normalization as create(): channel itself isn't editable
+    // (not in the field loop above), so `existing.channel` is this campaign's
+    // permanent channel — force the exempt default on anything else.
+    if (dto.iysMessageType !== undefined) {
+      data.iysMessageType = existing.channel === 'SMS' && dto.iysMessageType === 'TICARI' ? 'TICARI' : 'BILGILENDIRME';
+    }
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
     const updated = await this.prisma.campaign.update({ where: { id: existing.id }, data });

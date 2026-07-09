@@ -10,11 +10,20 @@ import { MessageQuotaService } from '../channels/message-quota.service';
 import { SendingDomainsService } from '../sending-domains/sending-domains.service';
 import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
 import { SmsV2Client, SmsV2SendResult } from '../../netgsm/sms/sms-v2.client';
+import { IysClient, IysSearchResult } from '../../netgsm/iys/iys.client';
+import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { ConversationSpendService } from '../budget/conversation-spend.service';
 import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND, CAMPAIGN_LAUNCH_KIND, AB_TEST_WINDOW_MS } from './campaigns.service';
 
 const BATCH_SIZE = 50;
 const BATCH_INTERVAL_SEC = 60; // ~50 sends/min throttle
+/** İYS's documented per-account rate limit — shared across the WHOLE İYS
+ *  surface (this preflight's `/iys/search` calls contend for the same
+ *  AccountRateBudgeter bucket, `'iys'`, as iys-sync.service.ts's `/iys/add`
+ *  worker; that's intentional, mirroring NetGSM's own aggregate per-account
+ *  cap rather than a per-endpoint one). */
+const IYS_SEARCH_BUDGET_LIMIT = 10;
+const IYS_SEARCH_BUDGET_WINDOW_MS = 60_000;
 
 /** Pair each link with its original index, ordered longest-first — so a tracked
  *  rewrite replaces a longer URL before a shorter URL that is its prefix, while
@@ -54,6 +63,8 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly sendingDomains: SendingDomainsService,
     private readonly smsV2: SmsV2Client,
     private readonly conversationSpend: ConversationSpendService,
+    private readonly iysClient: IysClient,
+    private readonly budgeter: AccountRateBudgeter,
   ) {}
 
   onModuleInit(): void {
@@ -374,14 +385,19 @@ export class CampaignSenderService implements OnModuleInit {
   }
 
   /**
-   * ONE `SmsV2Client.send` call carrying every eligible recipient of this tick
+   * ONE `SmsV2Client.send` call carrying every SENDABLE recipient of this tick
    * (true n:n — each message keeps its own already-rendered body + referansId)
    * instead of the N adapter round-trips the per-recipient path would cost.
-   * Quota for every recipient here was already reserved in the claim loop
-   * above; on any batch-level failure it is refunded in bulk (nothing was
-   * billed/sent for any of them — the call is all-or-nothing at the wire
-   * level). `iysfilter` is the commercial/informational passthrough (brandcode
-   * wiring is Phase 2); '11' for TICARI, '0' otherwise.
+   * Quota for every recipient in `eligible` was already reserved in the claim
+   * loop above; `iysPreflight` refunds the reservation for anyone it pulls
+   * OUT of the send (blocked/deferred/aborted) before we ever get here, so
+   * the remaining batch-level refund below only ever covers `sendable`.
+   * `iysfilter` is the commercial/informational passthrough — '11' for
+   * TICARI, '0' otherwise. NOTE: `SmsV2SendRequest` (sms-v2.client.ts) has no
+   * `brandcode` field today, so the v2 send itself cannot thread it through —
+   * defense-in-depth server-side enforcement is via `iysfilter` alone until
+   * that request shape is extended (tracked as a follow-up, out of this
+   * task's scope).
    */
   private async sendSmsBatch(
     workspaceId: string,
@@ -391,14 +407,30 @@ export class CampaignSenderService implements OnModuleInit {
     eligible: Array<{ recipientId: string; phone: string; body: string }>,
   ): Promise<void> {
     const { usercode, password, msgheader } = config.secrets;
-    const iysfilter = campaign.iysMessageType === 'TICARI' ? '11' : '0';
+    const isTicari = campaign.iysMessageType === 'TICARI';
+    const iysfilter = isTicari ? '11' : '0';
+
+    let sendable = eligible;
+    if (isTicari) {
+      const cleared = await this.iysPreflight(workspaceId, campaignId, config, eligible);
+      // null = hard fail-closed abort: iysPreflight already reverted every
+      // claimed recipient to PENDING, refunded their quota, and stamped
+      // iysUnavailable — nothing left to do this tick.
+      if (cleared === null) return;
+      sendable = cleared;
+      // Everyone was blocked (RET/YOK) or deferred (budget exhausted) this
+      // tick — iysPreflight already handled their side effects; there's
+      // simply nobody left to hand to SmsV2Client.send.
+      if (sendable.length === 0) return;
+    }
+
     let result: SmsV2SendResult;
     try {
       result = await this.smsV2.send(
         { usercode, password },
         {
           msgheader,
-          messages: eligible.map((e) => ({ msg: e.body, no: e.phone, referansId: e.recipientId })),
+          messages: sendable.map((e) => ({ msg: e.body, no: e.phone, referansId: e.recipientId })),
           iysfilter,
         },
       );
@@ -412,7 +444,7 @@ export class CampaignSenderService implements OnModuleInit {
 
     if (result.ok) {
       const jobid = result.jobid;
-      const ids = eligible.map((e) => e.recipientId);
+      const ids = sendable.map((e) => e.recipientId);
       // ONE atomic guarded UPDATE for the whole batch — not N Promise.all(update())
       // calls. The N-call form left a crash-between-marks window: if the process
       // died after marking some rows SENT but before the rest, the still-SENDING
@@ -460,7 +492,7 @@ export class CampaignSenderService implements OnModuleInit {
       // exactly what NetGSM received. Campaign recipients have no Message row
       // to stamp — `settleCampaignSms` writes only the SpendLedger entry.
       await Promise.allSettled(
-        eligible.map((e) =>
+        sendable.map((e) =>
           this.conversationSpend
             .settleCampaignSms(workspaceId, { recipientId: e.recipientId, text: e.body })
             .catch((err) =>
@@ -474,9 +506,11 @@ export class CampaignSenderService implements OnModuleInit {
     }
 
     // Batch-level failure: no recipient here was actually sent — refund every
-    // reserved quota unit in one call.
-    await this.quota.refund(workspaceId, 'SMS', eligible.length);
-    const ids = eligible.map((e) => e.recipientId);
+    // reserved quota unit in one call. Scoped to `sendable` (not the original
+    // `eligible`): iysPreflight already refunded anyone it pulled out
+    // (blocked/deferred) before we ever reached the wire send.
+    await this.quota.refund(workspaceId, 'SMS', sendable.length);
+    const ids = sendable.map((e) => e.recipientId);
     if (result.retriable || result.transport) {
       // Code 80 (rate limit) or a genuine transport failure — nothing reached
       // NetGSM (or NetGSM asked us to back off), so revert the claim to
@@ -494,7 +528,154 @@ export class CampaignSenderService implements OnModuleInit {
       return;
     }
     const error = (result.message ?? `NetGSM ${result.code || '?'}`).slice(0, 300);
-    await Promise.all(eligible.map((e) => this.mark(e.recipientId, 'FAILED', { error })));
+    await Promise.all(sendable.map((e) => this.mark(e.recipientId, 'FAILED', { error })));
+  }
+
+  /**
+   * TİCARİ pre-send İYS hard-block (owner decision: full-auto + fail-closed).
+   * Narrows `eligible` down to the recipients actually cleared to receive a
+   * commercial send this tick:
+   *   - RET or YOK (İYS holds no record at all) → permanently SKIPPED, folded
+   *     into `campaign.stats.iysBlocked`. Per İYS's model, no record proves no
+   *     consent for TİCARİ — this preflight has no signal to tell an ordinary
+   *     consumer number from a tacir/esnaf one (which the ticari ileti
+   *     mevzuatı otherwise exempts from the İYS opt-in requirement), so YOK is
+   *     treated as blocked here too; an operator who KNOWS a given number is
+   *     tacir/esnaf can still reach it outside this automatic gate.
+   *   - ONAY → sendable.
+   *   - The per-account İYS search budget (10/min, shared with iys-sync's
+   *     `/iys/add`) is exhausted for a given recipient → SOFT unreachable:
+   *     just that recipient is reverted to PENDING (its quota refunded) for
+   *     the next tick; recipients already cleared ONAY earlier in this SAME
+   *     tick still proceed to send. This is normal throttling, not a
+   *     compliance failure.
+   *   - A genuine `/iys/search` failure (transport/API error, or a response
+   *     İYS answered with none of the three documented statuses) → HARD
+   *     unreachable: we cannot prove consent for ANYONE this tick, so the
+   *     WHOLE batch aborts (every claimed recipient — including any already
+   *     bucketed ONAY earlier in this loop — reverts to PENDING, nothing
+   *     sent, nothing FAILED) and `campaign.stats.iysUnavailable` is stamped.
+   *     Returns `null` in this case; the caller sends nothing.
+   *   - No `brandCode` configured on the channel → we can't even build the
+   *     İYS auth header, so this is the same HARD abort, checked up front
+   *     before any search call is made.
+   */
+  private async iysPreflight(
+    workspaceId: string,
+    campaignId: string,
+    config: ResolvedChannelConfig,
+    eligible: Array<{ recipientId: string; phone: string; body: string }>,
+  ): Promise<Array<{ recipientId: string; phone: string; body: string }> | null> {
+    const { usercode, password } = config.secrets;
+    const brandCode = typeof config.public?.brandCode === 'string' ? (config.public.brandCode as string).trim() : '';
+    if (!brandCode) {
+      this.logger.warn(
+        `campaign ${campaignId}: TİCARİ send blocked — no İYS brandCode configured on the SMS channel; failing closed`,
+      );
+      await this.abortTicariTick(workspaceId, campaignId, eligible);
+      return null;
+    }
+    const creds = { usercode, password, brandCode };
+
+    const sendable: Array<{ recipientId: string; phone: string; body: string }> = [];
+    const blocked: Array<{ recipientId: string; phone: string; body: string }> = [];
+    const deferred: Array<{ recipientId: string; phone: string; body: string }> = [];
+    // Cache within THIS tick only (a fresh Map per call) — several recipients
+    // rarely share one phone, but when they do this saves a redundant search
+    // call (and the budget unit it would have spent).
+    const cache = new Map<string, IysSearchResult>();
+
+    for (const r of eligible) {
+      let res = cache.get(r.phone);
+      if (!res) {
+        if (!this.budgeter.tryTake(usercode, 'iys', IYS_SEARCH_BUDGET_LIMIT, IYS_SEARCH_BUDGET_WINDOW_MS)) {
+          deferred.push(r);
+          continue;
+        }
+        res = await this.iysClient.search(creds, r.phone, 'MESAJ');
+        cache.set(r.phone, res);
+      }
+      if (!res.ok || res.status === null) {
+        // A thrown/API error (ok:false) and an ok:true-but-unclassifiable
+        // status are treated identically: neither tells us anything we can
+        // act on, so — fail closed — abort the whole tick rather than guess.
+        this.logger.warn(
+          `campaign ${campaignId}: İYS search failed for a recipient (${res.message ?? 'unclassifiable response'}) — aborting the TİCARİ batch tick`,
+        );
+        await this.abortTicariTick(workspaceId, campaignId, eligible);
+        return null;
+      }
+      if (res.status === 'RET' || res.status === 'YOK') {
+        blocked.push(r);
+      } else {
+        sendable.push(r); // ONAY
+      }
+    }
+
+    if (blocked.length > 0) {
+      await Promise.all(
+        blocked.map((r) => this.mark(r.recipientId, 'SKIPPED', { error: 'İYS: izin yok (RET/kayıt yok)' })),
+      );
+      await this.quota.refund(workspaceId, 'SMS', blocked.length);
+      await this.bumpStat(campaignId, 'iysBlocked', blocked.length);
+    }
+    if (deferred.length > 0) {
+      const ids = deferred.map((r) => r.recipientId);
+      await this.prisma.campaignRecipient.updateMany({
+        where: { id: { in: ids }, workspaceId, campaignId, status: 'SENDING' },
+        data: { status: 'PENDING' },
+      });
+      await this.quota.refund(workspaceId, 'SMS', deferred.length);
+    }
+    return sendable;
+  }
+
+  /**
+   * Fail-closed abort for a TİCARİ tick: nothing in `eligible` was actually
+   * sent, so every one of them reverts to PENDING (guarded on status:
+   * 'SENDING', same as the code-80/transport-failure reverts below — a
+   * concurrent opt-out must not get stomped back to PENDING) and its quota
+   * reservation is refunded in bulk. `campaign.stats.iysUnavailable` is
+   * stamped (merged, never clobbering delivered/undelivered/iysBlocked or
+   * anything else already sitting in the blob) so ops can see WHY nothing
+   * went out. The campaign itself stays SENDING — the existing batch
+   * reschedule (in `batch()`) retries next tick.
+   */
+  private async abortTicariTick(
+    workspaceId: string,
+    campaignId: string,
+    eligible: Array<{ recipientId: string; phone: string; body: string }>,
+  ): Promise<void> {
+    const ids = eligible.map((r) => r.recipientId);
+    await this.prisma.campaignRecipient.updateMany({
+      where: { id: { in: ids }, workspaceId, campaignId, status: 'SENDING' },
+      data: { status: 'PENDING' },
+    });
+    await this.quota.refund(workspaceId, 'SMS', eligible.length);
+    const s = await this.currentStats(campaignId);
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { stats: { ...s, iysUnavailable: true } as Prisma.InputJsonValue },
+    });
+  }
+
+  /** Current `Campaign.stats` blob (or `{}` if unset/malformed) — the
+   *  read half of the read-modify-write merge every stats writer in this
+   *  file uses so no field this method doesn't own is ever clobbered. */
+  private async currentStats(campaignId: string): Promise<Record<string, unknown>> {
+    const c = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { stats: true } });
+    return c?.stats && typeof c.stats === 'object' ? (c.stats as Record<string, unknown>) : {};
+  }
+
+  /** Increments one numeric counter in `Campaign.stats` by `delta`, merging
+   *  (spread-preserve) over whatever else is already in the blob. */
+  private async bumpStat(campaignId: string, key: string, delta: number): Promise<void> {
+    const s = await this.currentStats(campaignId);
+    const current = Number(s[key]) || 0;
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { stats: { ...s, [key]: current + delta } as Prisma.InputJsonValue },
+    });
   }
 
   /** Rewrite links to click-tracked URLs + append a mandatory unsubscribe footer. */

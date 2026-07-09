@@ -1815,7 +1815,12 @@
     "clicked": "tıklandı",
     "unsub": "abonelikten çıktı",
     "launch": "Başlat",
-    "empty": "Henüz kampanya yok — bir tane oluşturun, metni AI yazsın."
+    "empty": "Henüz kampanya yok — bir tane oluşturun, metni AI yazsın.",
+    "iysMessageType": "İYS mesaj türü",
+    "iysMessageTypeTicariHint": "Ticari (reklam/promosyon) — İYS onayı gerektirir. Onayı olmayan alıcılar gönderim öncesi otomatik olarak atlanır.",
+    "iysMessageTypeBilgiHint": "Bilgilendirme (sipariş/randevu/hesap bildirimleri) — İYS onayından muaftır.",
+    "iysBilgilendirme": "Bilgilendirme",
+    "iysTicari": "Ticari"
   },
   "sites": {
     "title": "Funnel & Sayfalar",
