@@ -15,11 +15,34 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
+/**
+ * NetGSM Phase 5 (voice campaigns) — TTS/audio blast config for a VOICE
+ * campaign. Exactly one of `msg`/`audioid` is required; that cross-field rule
+ * isn't expressible with a single class-validator decorator, so it's enforced
+ * in CampaignsService.create/update (mirrors the `channel === 'SMS'`
+ * feature-entitlement check there, which is also business logic rather than
+ * shape validation).
+ */
+export class VoiceConfigDto {
+  /** Built-in Turkish TTS text — one of msg/audioid must be set. */
+  @IsOptional() @IsString() @MaxLength(2000)
+  msg?: string;
+
+  /** An `audioid` returned by the voicesms upload endpoint (Task 4). */
+  @IsOptional() @IsString() @MaxLength(64)
+  audioid?: string;
+
+  /** DTMF digits (press-1 style) the callee may press for a branch capture —
+   *  Task 3 wires the keypress → workflow trigger. */
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) @MaxLength(4, { each: true })
+  keys?: string[];
+}
+
 export class CreateCampaignDto {
   @IsString() @IsNotEmpty() @MaxLength(120)
   name: string;
 
-  @IsIn(['EMAIL', 'SMS', 'WHATSAPP'])
+  @IsIn(['EMAIL', 'SMS', 'WHATSAPP', 'VOICE'])
   channel: string;
 
   @IsOptional() @IsString() @MaxLength(200)
@@ -43,12 +66,16 @@ export class CreateCampaignDto {
   @IsOptional() @IsDateString()
   scheduledAt?: string;
 
-  /** İYS (İleti Yönetim Sistemi) message classification — SMS campaigns only.
-   *  TICARI = commercial (requires İYS consent, hard-blocked pre-send when
-   *  unconfirmed); BILGILENDIRME = informational/transactional (İYS-exempt).
-   *  Defaults to BILGILENDIRME in the service when omitted. */
+  /** İYS (İleti Yönetim Sistemi) message classification — SMS/VOICE campaigns
+   *  only. TICARI = commercial (requires İYS consent, hard-blocked pre-send
+   *  when unconfirmed); BILGILENDIRME = informational/transactional
+   *  (İYS-exempt). Defaults to BILGILENDIRME in the service when omitted. */
   @IsOptional() @IsIn(['TICARI', 'BILGILENDIRME'])
   iysMessageType?: string;
+
+  /** Required (msg or audioid) for a VOICE campaign — see VoiceConfigDto. */
+  @IsOptional() @ValidateNested() @Type(() => VoiceConfigDto)
+  voiceConfig?: VoiceConfigDto;
 }
 
 export class UpdateCampaignDto {
@@ -76,6 +103,10 @@ export class UpdateCampaignDto {
   /** See CreateCampaignDto.iysMessageType. */
   @IsOptional() @IsIn(['TICARI', 'BILGILENDIRME'])
   iysMessageType?: string;
+
+  /** See CreateCampaignDto.voiceConfig. */
+  @IsOptional() @ValidateNested() @Type(() => VoiceConfigDto)
+  voiceConfig?: VoiceConfigDto;
 }
 
 export class CampaignVariantDto {

@@ -1957,6 +1957,14 @@ model Campaign {
   /// NetGSM SMS v2 batch jobids for this campaign (string[]) — input to the
   /// DLR poll / stats reconciler that fans out per-jobid report queries.
   netgsmJobIds     Json?
+  /// NetGSM Phase 5 (voice campaigns): TTS/audio blast config —
+  /// `{ msg?: string (built-in Turkish TTS text), audioid?: string (an
+  /// uploaded .wav id from voicesms/upload), keys?: string[] (DTMF digits
+  /// eligible for a press-N branch capture — Task 3 wires the keypress →
+  /// workflow trigger) }`. Exactly one of msg/audioid is required for a VOICE
+  /// campaign — validated in CampaignsService.create/update, not at the
+  /// schema level. Unused by every other channel.
+  voiceConfig      Json?
   /// Cross-linkage (AI Social Content Studio §6.3): the companion SocialCampaign
   /// provisioned from this blast. Nullable — manual/legacy campaigns have none.
   socialCampaignId String?
@@ -2035,6 +2043,23 @@ model CampaignRecipient {
   deliveryStatus String? // DELIVERED | FAILED | PENDING (from report status enum)
   deliveredAt    DateTime?
   errorCode      String? // provider status/errorCode for failures
+  /// NetGSM Phase 5 (voice campaigns): outcome fields populated by the
+  /// voice-report webhook (Task 3) — voice PUSHES call outcomes (unlike SMS's
+  /// poll-based DLR), correlated back to this row by `relationid` = this
+  /// recipient's own id (sent as `voicesms/send`'s `relationid` — see
+  /// campaign-sender.service.ts's `sendVoice`). voiceState mirrors NetGSM's
+  /// documented durum/state (answered/no-answer/busy/failed, exact vocabulary
+  /// pinned down in Task 3); pushButton is the DTMF digit the callee pressed
+  /// (press-1 style); talkSec is the billable talk duration. Deliberately
+  /// NOT netgsmJobId/referansId above — those two columns are the SMS v2
+  /// DLR-poll reconciler's own signal (netgsm-dlr-poll.service.ts's
+  /// pollV2Campaigns selects ANY recipient row with netgsmJobId set,
+  /// regardless of campaign.channel), so stamping a voice call's jobid there
+  /// would leak it into that poller's next /sms/rest/v2/report batch — the
+  /// call's own jobid rides the plain, unindexed `messageId` instead.
+  voiceState String?
+  pushButton String?
+  talkSec    Int?
 
   createdAt DateTime @default(now())
 

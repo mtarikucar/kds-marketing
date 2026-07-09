@@ -12,6 +12,8 @@ import { ResolvedChannelConfig } from '../channels/channel-adapter.interface';
 import { SmsV2Client, SmsV2SendResult } from '../../netgsm/sms/sms-v2.client';
 import { IysClient, IysSearchResult } from '../../netgsm/iys/iys.client';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
+import { VoicesmsSendClient, VoicesmsSendResult } from '../../netgsm/voice/voicesms-send.client';
+import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 import { ConversationSpendService } from '../budget/conversation-spend.service';
 import { toIysMsisdn } from '../utils/lead-normalize';
 import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND, CAMPAIGN_LAUNCH_KIND, AB_TEST_WINDOW_MS } from './campaigns.service';
@@ -66,6 +68,7 @@ export class CampaignSenderService implements OnModuleInit {
     private readonly conversationSpend: ConversationSpendService,
     private readonly iysClient: IysClient,
     private readonly budgeter: AccountRateBudgeter,
+    private readonly voicesmsSend: VoicesmsSendClient,
   ) {}
 
   onModuleInit(): void {
@@ -246,9 +249,48 @@ export class CampaignSenderService implements OnModuleInit {
       await this.abortTicariTick(workspaceId, campaignId, []);
     }
 
-    const eligibleSms: Array<{ recipientId: string; phone: string; body: string }> = [];
+    // VOICE (NetGSM Phase 5): `/voicesms/send` authenticates with the SAME
+    // usercode/password as the SMS REST APIs — there is no separate
+    // "VOICE channel" row for this (Channel.type==='VOICE' is a DIFFERENT,
+    // unrelated feature: the Twilio-based AI voice-agent bridge). Reuse the
+    // ACTIVE SMS channel's account exactly like NetgsmVoicemailPollService
+    // already does for the sibling receive-side voicesms client.
+    let voiceConfig: { usercode: string; password: string; brandCode: string } | null = null;
+    if (campaign.channel === 'VOICE') {
+      const ch = await this.prisma.channel.findFirst({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } });
+      if (ch) {
+        const resolved = this.registry.resolveConfig(ch);
+        const { usercode, password } = resolved.secrets;
+        if (usercode && password) {
+          voiceConfig = {
+            usercode,
+            password,
+            brandCode: typeof resolved.public?.brandCode === 'string' ? (resolved.public.brandCode as string).trim() : '',
+          };
+        }
+      }
+    }
 
-    for (const r of ticariLegacyBlocked ? [] : recipients) {
+    // No usercode/password resolvable at all this tick (no ACTIVE SMS
+    // channel, or its secrets are incomplete) — voicesms/send has no
+    // anonymous mode, so nothing can be sent regardless of İYS
+    // classification. Mirrors `ticariLegacyBlocked`'s "the whole tick has
+    // nothing it CAN do" shape: the claim loop below never runs for VOICE
+    // this tick, and it self-heals (retries every tick) once ops fixes the
+    // channel. A brandCode that's present-but-missing is a DIFFERENT,
+    // TİCARİ-only case, checked inside iysArmaPreflight below — mirroring
+    // iysPreflight's own brandCode gate for SMS.
+    const voiceCredsBlocked = campaign.channel === 'VOICE' && !voiceConfig;
+    if (voiceCredsBlocked) {
+      this.logger.warn(
+        `campaign ${campaignId}: VOICE campaign cannot run this tick — no ACTIVE SMS channel with usercode/password resolvable (voicesms/send reuses that account's credentials)`,
+      );
+    }
+
+    const eligibleSms: Array<{ recipientId: string; phone: string; body: string }> = [];
+    const eligibleVoice: Array<{ recipientId: string; phone: string }> = [];
+
+    for (const r of ticariLegacyBlocked || voiceCredsBlocked ? [] : recipients) {
       // Atomic claim: a concurrent batch — e.g. a slow run reaped after 15 min and
       // re-dispatched while still in flight — that re-read the same PENDING rows
       // cannot also process this recipient. Only one updateMany flips PENDING→
@@ -271,6 +313,26 @@ export class CampaignSenderService implements OnModuleInit {
         await this.mark(r.id, 'SKIPPED');
         continue;
       }
+
+      // VOICE: no body/variant rendering — the TTS text/audioid lives in
+      // campaign.voiceConfig, not campaign.body (which VOICE only uses as a
+      // display label), and there is no unsubscribe-footer concept for a
+      // phone call. `voicesms/send` has no batch shape (unlike
+      // SmsV2Client.send), so collect for the per-recipient loop below
+      // rather than a single batched call. `voiceConfig` is guaranteed
+      // non-null here — `voiceCredsBlocked` already forced this loop to `[]`
+      // otherwise.
+      if (campaign.channel === 'VOICE') {
+        try {
+          await this.quota.reserve(workspaceId, 'VOICE');
+        } catch (e: any) {
+          await this.mark(r.id, 'FAILED', { error: (e?.message ?? String(e)).slice(0, 300) });
+          continue;
+        }
+        eligibleVoice.push({ recipientId: r.id, phone: to });
+        continue;
+      }
+
       // Resolve this recipient's content: their assigned A/B variant if any,
       // else the campaign control.
       const variant = (r as any).variantKey ? variantByKey.get((r as any).variantKey) : null;
@@ -329,6 +391,10 @@ export class CampaignSenderService implements OnModuleInit {
       await this.sendSmsBatch(workspaceId, campaignId, campaign, smsV2Config, eligibleSms);
     }
 
+    if (voiceConfig && eligibleVoice.length > 0) {
+      await this.sendVoice(workspaceId, campaignId, campaign, voiceConfig, eligibleVoice);
+    }
+
     await this.recomputeStats(workspaceId, campaignId);
 
     const remaining = await this.prisma.campaignRecipient.count({ where: { workspaceId, campaignId, status: 'PENDING' } });
@@ -357,6 +423,12 @@ export class CampaignSenderService implements OnModuleInit {
     if (channel === 'EMAIL') return !!lead.emailOptOut;
     if (channel === 'SMS') return !!lead.smsOptOut;
     if (channel === 'WHATSAPP') return !!lead.waOptOut;
+    // VOICE (NetGSM Phase 5): Lead has no dedicated call/voice opt-out flag
+    // yet — reuse smsOptOut as the nearest proxy (both channels ring the
+    // same lead phone number). A dedicated callOptOut/voiceOptOut column is
+    // a follow-up; until then, the TİCARİ ARAMA İYS preflight below is the
+    // authoritative compliance gate for commercial voice sends anyway.
+    if (channel === 'VOICE') return !!lead.smsOptOut;
     return false;
   }
 
@@ -365,6 +437,7 @@ export class CampaignSenderService implements OnModuleInit {
     if (channel === 'EMAIL') return lead.email ?? null;
     if (channel === 'SMS') return lead.phone ?? null;
     if (channel === 'WHATSAPP') return lead.whatsapp || lead.phone || null;
+    if (channel === 'VOICE') return lead.phone ?? null;
     return null;
   }
 
@@ -694,6 +767,206 @@ export class CampaignSenderService implements OnModuleInit {
       data: { status: 'PENDING' },
     });
     await this.quota.refund(workspaceId, 'SMS', eligible.length);
+    const s = await this.currentStats(campaignId);
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { stats: { ...s, iysUnavailable: true } as Prisma.InputJsonValue },
+    });
+  }
+
+  /**
+   * VOICE campaign send (NetGSM Phase 5) — `/voicesms/send` has NO batch
+   * shape (unlike `SmsV2Client.send`): it's a per-number call, so every
+   * eligible recipient of this tick gets its own `VoicesmsSendClient.send`
+   * round-trip, throttled by the SAME BATCH_SIZE/BATCH_INTERVAL_SEC cadence
+   * that already paces every `campaign.batch` tick — NetGSM's docs don't pin
+   * a per-minute cap for this endpoint the way they do for
+   * `/voicesms/receive` (2/min) or `/autocallservice` (10/min), so there is
+   * no separate `AccountRateBudgeter` bucket for it here.
+   *
+   * `relationid` is this recipient's own `CampaignRecipient.id` — Task 3's
+   * voice-report webhook consumer correlates purely by that id, so (unlike
+   * the SMS v2 batch path) nothing needs to be stamped on `netgsmJobId`/
+   * `referansId` on success: those two columns are the SMS DLR-poll
+   * reconciler's OWN signal (`netgsm-dlr-poll.service.ts`'s
+   * `pollV2Campaigns` selects ANY recipient row with `netgsmJobId` set, not
+   * scoped to `campaign.channel === 'SMS'`) — stamping them here would leak
+   * a voice call's jobid into that poller's next `/sms/rest/v2/report`
+   * batch. The call's own jobid rides the plain, unindexed `messageId`
+   * instead (mirrors the legacy per-recipient SMS path's own `messageId`
+   * stamp).
+   *
+   * No `ConversationSpendService.settleVoice` call here (unlike
+   * `sendSmsBatch`'s per-segment SMS settlement): `settleVoice` prices by
+   * billable minutes from the call's actual talk duration, which isn't known
+   * at send time — only once Task 3's voice-report webhook lands `talkSec`.
+   * Settlement is deferred to that report consumer.
+   */
+  private async sendVoice(
+    workspaceId: string,
+    campaignId: string,
+    campaign: { iysMessageType?: string | null; voiceConfig?: unknown },
+    creds: { usercode: string; password: string; brandCode: string },
+    eligible: Array<{ recipientId: string; phone: string }>,
+  ): Promise<void> {
+    const isTicari = campaign.iysMessageType === 'TICARI';
+    const iysfilter: '0' | '11' = isTicari ? '11' : '0';
+    const vc = (campaign.voiceConfig && typeof campaign.voiceConfig === 'object' ? campaign.voiceConfig : {}) as {
+      msg?: string;
+      audioid?: string;
+      keys?: string[];
+    };
+
+    let sendable = eligible;
+    if (isTicari) {
+      const cleared = await this.iysArmaPreflight(workspaceId, campaignId, creds, eligible);
+      // null = hard fail-closed abort: iysArmaPreflight already reverted every
+      // claimed recipient to PENDING, refunded their quota, and stamped
+      // iysUnavailable — nothing left to do this tick.
+      if (cleared === null) return;
+      sendable = cleared;
+      // Everyone was blocked (RET/YOK) or deferred (budget exhausted) this
+      // tick — iysArmaPreflight already handled their side effects.
+      if (sendable.length === 0) return;
+    }
+
+    const base = this.config.get<string>('PUBLIC_BASE_URL') ?? '';
+    const reportUrl = netgsmWebhookUrl(base, workspaceId, 'voice-report') ?? undefined;
+
+    for (const r of sendable) {
+      let result: VoicesmsSendResult;
+      try {
+        result = await this.voicesmsSend.send(
+          { usercode: creds.usercode, password: creds.password },
+          {
+            ...(vc.msg ? { msg: vc.msg } : {}),
+            ...(vc.audioid ? { audioid: vc.audioid } : {}),
+            no: r.phone,
+            iysfilter,
+            ...(isTicari && creds.brandCode ? { brandcode: creds.brandCode } : {}),
+            relationid: r.recipientId,
+            ...(reportUrl ? { url: reportUrl } : {}),
+            ...(vc.keys && vc.keys.length ? { keys: vc.keys } : {}),
+          },
+        );
+      } catch (e: any) {
+        // VoicesmsSendClient.send is documented to never throw (every outcome
+        // resolves to an ok:false result) — this is a defensive backstop only.
+        result = {
+          ok: false, code: '', jobid: null, relationid: r.recipientId,
+          message: e?.message ?? String(e), retriable: false, transport: false,
+        };
+      }
+
+      if (result.ok) {
+        await this.mark(r.recipientId, 'SENT', { messageId: result.jobid, sentAt: new Date() });
+        continue;
+      }
+      if (result.retriable || result.transport) {
+        // Code 80 (rate limit) or a genuine transport failure — nothing
+        // reached NetGSM (or NetGSM asked us to back off): revert the claim
+        // to PENDING and let the next scheduled batch tick retry. Guarded on
+        // status:'SENDING' — a concurrent opt-out must not get stomped back.
+        await this.prisma.campaignRecipient.updateMany({
+          where: { id: r.recipientId, workspaceId, campaignId, status: 'SENDING' },
+          data: { status: 'PENDING' },
+        });
+        await this.quota.refund(workspaceId, 'VOICE');
+        continue;
+      }
+      await this.quota.refund(workspaceId, 'VOICE');
+      await this.mark(r.recipientId, 'FAILED', { error: (result.message ?? `NetGSM ${result.code || '?'}`).slice(0, 300) });
+    }
+  }
+
+  /**
+   * TİCARİ pre-send İYS hard-block for VOICE campaigns — same owner decision
+   * and shape as `iysPreflight` (SMS's MESAJ preflight), but the consent type
+   * is ARAMA (voice/call), not MESAJ. Shares the SAME `AccountRateBudgeter`
+   * bucket (`'iys'`) and limit as `iysPreflight` and `iys-sync.service.ts`'s
+   * `/iys/add` worker: `/iys/search` is one endpoint with a `type` param, and
+   * NetGSM's rate cap is documented per-account/aggregate, not per-type.
+   */
+  private async iysArmaPreflight(
+    workspaceId: string,
+    campaignId: string,
+    creds: { usercode: string; password: string; brandCode: string },
+    eligible: Array<{ recipientId: string; phone: string }>,
+  ): Promise<Array<{ recipientId: string; phone: string }> | null> {
+    if (!creds.brandCode) {
+      this.logger.warn(
+        `campaign ${campaignId}: TİCARİ voice send blocked — no İYS brandCode configured on the ACTIVE SMS channel; failing closed`,
+      );
+      await this.abortTicariVoiceTick(workspaceId, campaignId, eligible);
+      return null;
+    }
+    const iysCreds = { usercode: creds.usercode, password: creds.password, brandCode: creds.brandCode };
+
+    const sendable: Array<{ recipientId: string; phone: string }> = [];
+    const blocked: Array<{ recipientId: string; phone: string; reason: string }> = [];
+    const deferred: Array<{ recipientId: string; phone: string }> = [];
+    // Cache within THIS tick only — keyed on the NORMALIZED wire phone, same
+    // dedupe rationale as iysPreflight's own cache.
+    const cache = new Map<string, IysSearchResult>();
+
+    for (const r of eligible) {
+      const wirePhone = toIysMsisdn(r.phone);
+      if (!wirePhone) {
+        blocked.push({ ...r, reason: 'İYS: numara doğrulanamadı (geçersiz alıcı telefonu)' });
+        continue;
+      }
+      let res = cache.get(wirePhone);
+      if (!res) {
+        if (!this.budgeter.tryTake(creds.usercode, 'iys', IYS_SEARCH_BUDGET_LIMIT, IYS_SEARCH_BUDGET_WINDOW_MS)) {
+          deferred.push(r);
+          continue;
+        }
+        res = await this.iysClient.search(iysCreds, wirePhone, 'ARAMA');
+        cache.set(wirePhone, res);
+      }
+      if (!res.ok || res.status === null) {
+        this.logger.warn(
+          `campaign ${campaignId}: İYS ARAMA search failed for a recipient (${res.message ?? 'unclassifiable response'}) — aborting the TİCARİ voice batch tick`,
+        );
+        await this.abortTicariVoiceTick(workspaceId, campaignId, eligible);
+        return null;
+      }
+      if (res.status === 'RET' || res.status === 'YOK') {
+        blocked.push({ ...r, reason: 'İYS: arama izni yok (RET/kayıt yok)' });
+      } else {
+        sendable.push(r); // ONAY
+      }
+    }
+
+    if (blocked.length > 0) {
+      await Promise.all(blocked.map((r) => this.mark(r.recipientId, 'SKIPPED', { error: r.reason })));
+      await this.quota.refund(workspaceId, 'VOICE', blocked.length);
+      await this.bumpStat(campaignId, 'iysBlocked', blocked.length);
+    }
+    if (deferred.length > 0) {
+      const ids = deferred.map((r) => r.recipientId);
+      await this.prisma.campaignRecipient.updateMany({
+        where: { id: { in: ids }, workspaceId, campaignId, status: 'SENDING' },
+        data: { status: 'PENDING' },
+      });
+      await this.quota.refund(workspaceId, 'VOICE', deferred.length);
+    }
+    return sendable;
+  }
+
+  /** Fail-closed abort for a TİCARİ voice tick — same shape as
+   *  `abortTicariTick` (SMS), scoped to the 'VOICE' quota channel. */
+  private async abortTicariVoiceTick(
+    workspaceId: string,
+    campaignId: string,
+    eligible: Array<{ recipientId: string; phone: string }>,
+  ): Promise<void> {
+    const ids = eligible.map((r) => r.recipientId);
+    await this.prisma.campaignRecipient.updateMany({
+      where: { id: { in: ids }, workspaceId, campaignId, status: 'SENDING' },
+      data: { status: 'PENDING' },
+    });
+    await this.quota.refund(workspaceId, 'VOICE', eligible.length);
     const s = await this.currentStats(campaignId);
     await this.prisma.campaign.update({
       where: { id: campaignId },

@@ -62,8 +62,12 @@ describe('CampaignSenderService.batch', () => {
     // 'SMS v2 batching' describe below), but still required by the constructor.
     const iysClient = { search: jest.fn() };
     const budgeter = { tryTake: jest.fn().mockReturnValue(true) };
+    // Unused by this describe block's EMAIL-only fixtures (the VOICE branch
+    // only runs for campaign.channel === 'VOICE' — see the dedicated 'VOICE
+    // campaign sends' describe below), but still required by the constructor.
+    const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -313,8 +317,9 @@ describe('CampaignSenderService.launchScheduled', () => {
     const conversationSpend = { settleCampaignSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
     const iysClient = { search: jest.fn() };
     const budgeter = { tryTake: jest.fn().mockReturnValue(true) };
+    const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -505,8 +510,9 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     // preflight' describe below), but still required by the constructor.
     iysClient = { search: jest.fn() };
     budgeter = { tryTake: jest.fn().mockReturnValue(true) };
+    const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -850,8 +856,9 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
     // individual tests narrow this to exercise RET/YOK/error/exhaustion.
     iysClient = { search: jest.fn().mockResolvedValue({ ok: true, status: 'ONAY', message: null }) };
     budgeter = { tryTake: jest.fn().mockReturnValue(true) };
+    const voicesmsSend = { send: jest.fn() };
     svc = new CampaignSenderService(
-      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any,
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
   });
 
@@ -1060,5 +1067,363 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
     expect(statsUpdate[0].data.stats.iysBlocked).toBe(1);
     expect(smsV2.send).toHaveBeenCalledTimes(1);
     expect(smsV2.send.mock.calls[0][1].messages.map((m: any) => m.referansId).sort()).toEqual(['r2', 'r3']);
+  });
+});
+
+/**
+ * VOICE campaigns (NetGSM Phase 5 Task 2): `voicesms/send` has no batch shape
+ * (unlike SmsV2Client.send) — every eligible recipient gets its own
+ * VoicesmsSendClient.send round-trip, throttled by the existing
+ * BATCH_SIZE/BATCH_INTERVAL_SEC cadence. Creds are resolved from the ACTIVE
+ * SMS channel (voicesms/send reuses that same NetGSM account), and a TİCARİ
+ * campaign runs an İYS ARAMA preflight (not MESAJ) mirroring the SMS
+ * preflight's fail-closed contract.
+ */
+describe('CampaignSenderService.batch — VOICE campaigns', () => {
+  const WS = 'ws-1';
+  let prisma: any;
+  let registry: { get: jest.Mock; resolveConfig: jest.Mock };
+  let quota: { reserve: jest.Mock; refund: jest.Mock };
+  let voicesmsSend: { send: jest.Mock };
+  let iysClient: { search: jest.Mock };
+  let budgeter: { tryTake: jest.Mock };
+  let svc: CampaignSenderService;
+
+  const resolvedConfig = {
+    channelId: 'ch1',
+    workspaceId: WS,
+    type: 'SMS',
+    externalId: null,
+    secrets: { usercode: 'u1', password: 'p1' },
+    public: {} as Record<string, unknown>,
+  };
+  /** A TİCARİ-ready channel config carrying the İYS brandCode voicesms/send's
+   *  `brandcode` field + the ARAMA preflight both need. */
+  const resolvedConfigWithBrandCode = { ...resolvedConfig, public: { brandCode: 'BR1' } };
+
+  function makeRecipients(n: number) {
+    return Array.from({ length: n }, (_, i) => ({ id: `r${i + 1}`, leadId: `l${i + 1}`, token: `t${i + 1}` }));
+  }
+
+  /** A per-recipient revert-to-PENDING call: `where.id` is a bare string (one
+   *  recipient), distinct from the unconditional top-of-batch stranded-SENDING
+   *  sweep (no `id` key at all) and from the SMS batch path's bulk `id.in`
+   *  revert (VOICE has no batch shape, so its revert is always singular). */
+  function findRevertToPendingCalls(calls: any[]): any[] {
+    return calls.filter((c: any) => typeof c[0]?.where?.id === 'string' && c[0]?.data?.status === 'PENDING');
+  }
+
+  beforeAll(() => {
+    process.env.MARKETING_SECRET_KEY = Buffer.from('k'.repeat(32)).toString('base64');
+  });
+  afterAll(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  beforeEach(() => {
+    prisma = {
+      campaign: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'VOICE', subject: null,
+          body: 'Voice campaign', links: [], iysMessageType: 'BILGILENDIRME',
+          voiceConfig: { msg: 'Merhaba, bu bir duyurudur.' },
+        }),
+        findUnique: jest.fn().mockResolvedValue({ stats: {} }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      channel: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ch1', workspaceId: WS, type: 'SMS', status: 'ACTIVE', externalId: null, configSealed: 'sealed', configPublic: {},
+        }),
+      },
+      campaignRecipient: {
+        findMany: jest.fn().mockResolvedValue(makeRecipients(3)),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(0),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
+      campaignVariant: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
+      lead: {
+        // A valid, distinct TR-mobile-shaped phone per lead — same fixture
+        // shape the SMS describes above use (toIysMsisdn() must normalize it
+        // for the ARAMA preflight tests below).
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) => ({
+          id: where.id, phone: `0555${where.id.replace(/\D/g, '').padStart(7, '0')}`, smsOptOut: false,
+        })),
+      },
+    };
+    const config = { get: jest.fn().mockReturnValue('https://m.test') };
+    const scheduledJobs = { schedule: jest.fn() };
+    const runner = { registerHandler: jest.fn() };
+    registry = { get: jest.fn(), resolveConfig: jest.fn().mockReturnValue(resolvedConfig) };
+    quota = { reserve: jest.fn(), refund: jest.fn() };
+    const smsV2 = { send: jest.fn() };
+    const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
+    const email = { sendPlainEmail: jest.fn(), sendCampaignEmail: jest.fn() };
+    const conversationSpend = { settleCampaignSms: jest.fn() };
+    // Default: every recipient İYS-cleared ONAY — individual tests narrow
+    // this to exercise RET/YOK/error/exhaustion, same as the SMS preflight
+    // describe above.
+    iysClient = { search: jest.fn().mockResolvedValue({ ok: true, status: 'ONAY', message: null }) };
+    budgeter = { tryTake: jest.fn().mockReturnValue(true) };
+    voicesmsSend = { send: jest.fn() };
+    svc = new CampaignSenderService(
+      prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
+    );
+  });
+
+  it('sends every eligible recipient via VoicesmsSendClient.send (msg/no/relationid/iysfilter "0") and includes the voice-report webhook url', async () => {
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(voicesmsSend.send).toHaveBeenCalledTimes(3);
+    const [creds, req] = voicesmsSend.send.mock.calls[0];
+    expect(creds).toEqual({ usercode: 'u1', password: 'p1' });
+    expect(req.msg).toBe('Merhaba, bu bir duyurudur.');
+    expect(req.audioid).toBeUndefined();
+    expect(req.iysfilter).toBe('0');
+    expect(req.relationid).toBe('r1');
+    expect(req.no).toMatch(/^0555/);
+    expect(req.brandcode).toBeUndefined(); // BİLGİLENDİRME never sends a brandcode
+    expect(req.url).toContain('/api/public/netgsm/');
+    expect(req.url).toContain('voice-report');
+    // Every recipient's own relationid is distinct.
+    expect(voicesmsSend.send.mock.calls.map((c: any) => c[1].relationid).sort()).toEqual(['r1', 'r2', 'r3']);
+    expect(quota.reserve).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses audioid instead of msg when the campaign voiceConfig carries one', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'VOICE', body: 'Voice campaign', links: [],
+      iysMessageType: 'BILGILENDIRME', voiceConfig: { audioid: 'aud-123' },
+    });
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const req = voicesmsSend.send.mock.calls[0][1];
+    expect(req.audioid).toBe('aud-123');
+    expect(req.msg).toBeUndefined();
+  });
+
+  it('passes keys[] (DTMF map) through to voicesms/send when configured', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'VOICE', body: 'Voice campaign', links: [],
+      iysMessageType: 'BILGILENDIRME', voiceConfig: { msg: 'Merhaba', keys: ['1', '2'] },
+    });
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(voicesmsSend.send.mock.calls[0][1].keys).toEqual(['1', '2']);
+  });
+
+  it('on success: marks the recipient SENT with messageId=jobid, WITHOUT stamping netgsmJobId/referansId (those are the SMS DLR-poll reconciler\'s own signal)', async () => {
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-xyz', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const sent = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
+    expect(sent).toHaveLength(3);
+    for (const call of sent) {
+      expect(call[0].data.messageId).toBe('call-xyz');
+      expect(call[0].data.netgsmJobId).toBeUndefined();
+      expect(call[0].data.referansId).toBeUndefined();
+      expect(call[0].data.sentAt).toBeInstanceOf(Date);
+    }
+    expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  it('passes iysfilter "11" + brandcode for a TİCARİ campaign (every recipient ARAMA-cleared ONAY)', async () => {
+    prisma.campaign.findFirst.mockResolvedValue({
+      id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'VOICE', body: 'Voice campaign', links: [],
+      iysMessageType: 'TICARI', voiceConfig: { msg: 'Merhaba' },
+    });
+    registry.resolveConfig.mockReturnValue(resolvedConfigWithBrandCode);
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(iysClient.search.mock.calls[0][2]).toBe('ARAMA'); // consent type ARAMA, not MESAJ
+    expect(voicesmsSend.send).toHaveBeenCalledTimes(3);
+    for (const call of voicesmsSend.send.mock.calls) {
+      expect(call[1].iysfilter).toBe('11');
+      expect(call[1].brandcode).toBe('BR1');
+    }
+  });
+
+  it('a provider error (non-retriable) marks the recipient FAILED and refunds its quota', async () => {
+    voicesmsSend.send.mockResolvedValue({ ok: false, code: '40', jobid: null, relationid: null, message: 'invalid number', retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const failed = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'FAILED');
+    expect(failed).toHaveLength(3);
+    expect(failed[0][0].data.error).toContain('invalid number');
+    expect(quota.refund).toHaveBeenCalledTimes(3);
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'VOICE');
+  });
+
+  it('a rate-limit (retriable) response reverts the recipient to PENDING (not FAILED) and refunds', async () => {
+    voicesmsSend.send.mockResolvedValue({ ok: false, code: '80', jobid: null, relationid: null, message: 'rate limited', retriable: true, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const reverts = findRevertToPendingCalls(prisma.campaignRecipient.updateMany.mock.calls);
+    expect(reverts.map((c: any) => c[0].where.id).sort()).toEqual(['r1', 'r2', 'r3']);
+    expect(reverts.every((c: any) => c[0].where.status === 'SENDING')).toBe(true);
+    const failed = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'FAILED');
+    expect(failed).toHaveLength(0);
+    expect(quota.refund).toHaveBeenCalledTimes(3);
+  });
+
+  it('a transport failure reverts the recipient to PENDING and refunds', async () => {
+    voicesmsSend.send.mockResolvedValue({ ok: false, code: '', jobid: null, relationid: null, message: 'NetGSM erişilemedi', retriable: false, transport: true });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    const reverts = findRevertToPendingCalls(prisma.campaignRecipient.updateMany.mock.calls);
+    expect(reverts).toHaveLength(3);
+  });
+
+  it('excludes an opted-out recipient (smsOptOut proxy) before ever reserving quota or calling voicesms/send for it', async () => {
+    prisma.lead.findFirst.mockImplementation(async ({ where }: any) =>
+      where.id === 'l2'
+        ? { id: 'l2', phone: '05551112233', smsOptOut: true }
+        : { id: where.id, phone: `0555000${where.id}`, smsOptOut: false },
+    );
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(voicesmsSend.send).toHaveBeenCalledTimes(2);
+    const skipped = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SKIPPED');
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0][0].where.id).toBe('r2');
+    expect(quota.reserve).toHaveBeenCalledTimes(2);
+  });
+
+  it('no ACTIVE SMS channel configured (no creds resolvable) — sends nothing this tick and leaves every recipient PENDING', async () => {
+    prisma.channel.findFirst.mockResolvedValue(null);
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(voicesmsSend.send).not.toHaveBeenCalled();
+    // Nothing claimed (PENDING→SENDING) or marked any terminal state.
+    const claims = prisma.campaignRecipient.updateMany.mock.calls.filter((c: any) => c[0]?.data?.status === 'SENDING');
+    expect(claims).toHaveLength(0);
+    const terminalMarks = prisma.campaignRecipient.update.mock.calls.filter((c: any) =>
+      ['SENT', 'FAILED', 'SKIPPED'].includes(c[0].data.status),
+    );
+    expect(terminalMarks).toHaveLength(0);
+  });
+
+  describe('TİCARİ İYS ARAMA preflight', () => {
+    beforeEach(() => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'VOICE', body: 'Voice campaign', links: [],
+        iysMessageType: 'TICARI', voiceConfig: { msg: 'Merhaba' },
+      });
+      registry.resolveConfig.mockReturnValue(resolvedConfigWithBrandCode);
+      voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+    });
+
+    it('RET is blocked (SKIPPED) + counted into stats.iysBlocked; ONAY recipients still get called', async () => {
+      iysClient.search.mockImplementation(async (_creds: any, phone: string) => (
+        phone.endsWith('1') ? { ok: true, status: 'RET', message: null } : { ok: true, status: 'ONAY', message: null }
+      ));
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      const skipped = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SKIPPED');
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0][0].where.id).toBe('r1');
+      expect(skipped[0][0].data.error).toContain('İYS');
+      expect(voicesmsSend.send).toHaveBeenCalledTimes(2);
+      const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats?.iysBlocked !== undefined);
+      expect(statsUpdate[0].data.stats.iysBlocked).toBe(1);
+      expect(quota.refund).toHaveBeenCalledWith(WS, 'VOICE', 1);
+    });
+
+    it('YOK is treated as blocked exactly like RET', async () => {
+      iysClient.search.mockImplementation(async (_creds: any, phone: string) => (
+        phone.endsWith('2') ? { ok: true, status: 'YOK', message: null } : { ok: true, status: 'ONAY', message: null }
+      ));
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      const skipped = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SKIPPED');
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0][0].where.id).toBe('r2');
+    });
+
+    it('a genuine İYS search error aborts the WHOLE tick: zero calls placed, every recipient reverts to PENDING, iysUnavailable stamped', async () => {
+      iysClient.search.mockImplementation(async (_creds: any, phone: string) => (
+        phone.endsWith('2') ? { ok: false, status: null, message: 'NetGSM erişilemedi' } : { ok: true, status: 'ONAY', message: null }
+      ));
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(voicesmsSend.send).not.toHaveBeenCalled();
+      const terminalMarks = prisma.campaignRecipient.update.mock.calls.filter((c: any) =>
+        ['SENT', 'FAILED', 'SKIPPED'].includes(c[0].data.status),
+      );
+      expect(terminalMarks).toHaveLength(0);
+      const revert = prisma.campaignRecipient.updateMany.mock.calls.find(
+        (c: any) => c[0]?.where?.id?.in && c[0]?.data?.status === 'PENDING',
+      );
+      expect(revert).toBeTruthy();
+      expect(revert[0].where.id.in.sort()).toEqual(['r1', 'r2', 'r3']);
+      expect(quota.refund).toHaveBeenCalledWith(WS, 'VOICE', 3);
+      const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats?.iysUnavailable !== undefined);
+      expect(statsUpdate[0].data.stats.iysUnavailable).toBe(true);
+    });
+
+    it('a missing brandCode aborts the WHOLE tick the same way, before any budget check or search call', async () => {
+      registry.resolveConfig.mockReturnValue(resolvedConfig); // no brandCode
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(budgeter.tryTake).not.toHaveBeenCalled();
+      expect(iysClient.search).not.toHaveBeenCalled();
+      expect(voicesmsSend.send).not.toHaveBeenCalled();
+      const revert = prisma.campaignRecipient.updateMany.mock.calls.find(
+        (c: any) => c[0]?.where?.id?.in && c[0]?.data?.status === 'PENDING',
+      );
+      expect(revert).toBeTruthy();
+      expect(quota.refund).toHaveBeenCalledWith(WS, 'VOICE', 3);
+      const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats?.iysUnavailable !== undefined);
+      expect(statsUpdate[0].data.stats.iysUnavailable).toBe(true);
+    });
+
+    it('budget exhaustion is a SOFT per-recipient defer: ONAY-cleared recipients still get called this tick, the unchecked one just reverts to PENDING', async () => {
+      budgeter.tryTake.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(iysClient.search).toHaveBeenCalledTimes(2);
+      expect(voicesmsSend.send).toHaveBeenCalledTimes(2);
+      const revert = prisma.campaignRecipient.updateMany.mock.calls.find(
+        (c: any) => c[0]?.where?.id?.in && c[0]?.data?.status === 'PENDING',
+      );
+      expect(revert).toBeTruthy();
+      expect(revert[0].where.id.in).toEqual(['r3']);
+      const skipped = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SKIPPED');
+      expect(skipped).toHaveLength(0);
+      expect(quota.refund).toHaveBeenCalledWith(WS, 'VOICE', 1);
+    });
+  });
+
+  it('a BİLGİLENDİRME campaign skips the ARAMA preflight entirely — no budget check, no search calls, calls placed with iysfilter "0"', async () => {
+    voicesmsSend.send.mockResolvedValue({ ok: true, code: '00', jobid: 'call-1', relationid: null, message: null, retriable: false, transport: false });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(budgeter.tryTake).not.toHaveBeenCalled();
+    expect(iysClient.search).not.toHaveBeenCalled();
+    expect(voicesmsSend.send).toHaveBeenCalledTimes(3);
+    expect(voicesmsSend.send.mock.calls[0][1].iysfilter).toBe('0');
   });
 });

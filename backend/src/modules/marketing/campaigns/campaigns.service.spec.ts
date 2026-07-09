@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { CampaignsService, CAMPAIGN_BATCH_KIND, CAMPAIGN_LAUNCH_KIND } from './campaigns.service';
 
 /**
@@ -349,6 +350,90 @@ describe('CampaignsService', () => {
       await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi' });
       await svc.create(WS, { name: 'N', channel: 'WHATSAPP', body: 'Hi' });
       expect(entitlements.getEffective).not.toHaveBeenCalled();
+    });
+  });
+
+  // NetGSM Phase 5 Task 2: VOICE campaigns require the `voiceCampaigns`
+  // feature (same shape of gate as SMS above) AND a voiceConfig carrying
+  // msg or audioid (voicesms/send accepts exactly one of them).
+  describe('create/update — VOICE campaigns', () => {
+    beforeEach(() => {
+      prisma.campaign.create = jest.fn().mockResolvedValue({ id: 'c1' });
+    });
+
+    it('blocks a VOICE campaign when the workspace lacks the voiceCampaigns feature', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: false } });
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { msg: 'Merhaba' } }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('requires voiceConfig with msg or audioid — rejects when neither is set', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: {} }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a VOICE campaign with only msg (TTS text)', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { msg: 'Merhaba' } });
+      expect(prisma.campaign.create).toHaveBeenCalled();
+      expect(prisma.campaign.create.mock.calls[0][0].data.voiceConfig).toEqual({ msg: 'Merhaba' });
+    });
+
+    it('accepts a VOICE campaign with only audioid (no msg)', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { audioid: 'aud-1' } });
+      expect(prisma.campaign.create).toHaveBeenCalled();
+      expect(prisma.campaign.create.mock.calls[0][0].data.voiceConfig).toEqual({ audioid: 'aud-1' });
+    });
+
+    it('applies iysMessageType TICARI for a VOICE campaign (same as SMS)', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await svc.create(WS, {
+        name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { msg: 'Merhaba' }, iysMessageType: 'TICARI',
+      });
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
+    });
+
+    it('never sets voiceConfig on a non-VOICE campaign even if one is passed', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', voiceConfig: { msg: 'stray' } } as any);
+      expect(prisma.campaign.create.mock.calls[0][0].data.voiceConfig).toBe(Prisma.JsonNull);
+    });
+
+    it('update: re-validates voiceConfig on an existing VOICE campaign and rejects clearing both msg and audioid', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'VOICE' });
+      await expect(svc.update(WS, 'c1', { voiceConfig: {} })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('update: accepts a valid voiceConfig edit on a VOICE campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'VOICE' });
+      await svc.update(WS, 'c1', { voiceConfig: { audioid: 'aud-2' } });
+      expect(prisma.campaign.update.mock.calls[0][0].data.voiceConfig).toEqual({ audioid: 'aud-2' });
+    });
+
+    it('update: ignores a voiceConfig edit on a non-VOICE campaign (no cross-field validation, no write)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'SMS' });
+      await svc.update(WS, 'c1', { voiceConfig: {} });
+      expect(prisma.campaign.update.mock.calls[0][0].data.voiceConfig).toBeUndefined();
+    });
+
+    it('update: applies iysMessageType TICARI for an existing VOICE campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'VOICE' });
+      await svc.update(WS, 'c1', { iysMessageType: 'TICARI' });
+      expect(prisma.campaign.update.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
+    });
+
+    it('buildAudienceWhere VOICE requires a phone and reuses the smsOptOut proxy', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'VOICE', []);
+      expect(w.smsOptOut).toBe(false);
+      expect(w.phone).toEqual({ not: null });
     });
   });
 });

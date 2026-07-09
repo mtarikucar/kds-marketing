@@ -127,8 +127,8 @@ export class CampaignsService {
     return this.getVariants(workspaceId, campaignId);
   }
 
-  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string; iysMessageType?: string }) {
-    if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(dto.channel)) {
+  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string; iysMessageType?: string; voiceConfig?: { msg?: string; audioid?: string; keys?: string[] } }) {
+    if (!['EMAIL', 'SMS', 'WHATSAPP', 'VOICE'].includes(dto.channel)) {
       throw new BadRequestException('Invalid channel');
     }
     // SMS is its own sellable feature (split off `conversationAi` for the
@@ -144,6 +144,21 @@ export class CampaignsService {
         });
       }
     }
+    // VOICE campaigns (NetGSM Phase 5, `voiceCampaigns`) — same shape of gate
+    // as SMS above, plus a msg-or-audioid shape check on voiceConfig (the
+    // DTO only validates field TYPES, not the cross-field "at least one of
+    // msg/audioid" business rule).
+    if (dto.channel === 'VOICE') {
+      const effective = await this.entitlements.getEffective(workspaceId);
+      if (!effective.features.voiceCampaigns) {
+        throw new ForbiddenException({
+          message: 'This feature requires a higher package',
+          feature: 'voiceCampaigns',
+          code: 'FEATURE_NOT_IN_PACKAGE',
+        });
+      }
+      this.assertVoiceConfig(dto.voiceConfig);
+    }
     return this.prisma.campaign.create({
       data: {
         workspaceId,
@@ -155,15 +170,30 @@ export class CampaignsService {
         emailTemplateId: dto.emailTemplateId || null,
         audienceFilter: (dto.audienceFilter ?? []) as Prisma.InputJsonValue,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
-        // İYS classification only means anything for SMS — force it to the
-        // exempt default on every other channel so a stray value never
+        // İYS classification only means anything for SMS/VOICE — force it to
+        // the exempt default on every other channel so a stray value never
         // silently rides along on an EMAIL/WHATSAPP campaign (the sender's
-        // TİCARİ preflight only ever reads it on the SMS branch anyway, but
-        // this keeps the stored value honest for CampaignsPage.tsx's own display).
-        iysMessageType: dto.channel === 'SMS' && dto.iysMessageType === 'TICARI' ? 'TICARI' : 'BILGILENDIRME',
+        // TİCARİ preflight only ever reads it on those two branches anyway,
+        // but this keeps the stored value honest for CampaignsPage.tsx's own display).
+        iysMessageType:
+          (dto.channel === 'SMS' || dto.channel === 'VOICE') && dto.iysMessageType === 'TICARI'
+            ? 'TICARI'
+            : 'BILGILENDIRME',
+        voiceConfig: dto.channel === 'VOICE' ? (dto.voiceConfig as Prisma.InputJsonValue) : Prisma.JsonNull,
         status: 'DRAFT',
       },
     });
+  }
+
+  /** Cross-field business rule the DTO's per-field decorators can't express:
+   *  a VOICE campaign's voiceConfig must be present and carry msg OR audioid
+   *  (NetGSM's voicesms/send accepts exactly one of them). */
+  private assertVoiceConfig(voiceConfig: { msg?: string; audioid?: string } | undefined): void {
+    const hasMsg = typeof voiceConfig?.msg === 'string' && voiceConfig.msg.trim().length > 0;
+    const hasAudio = typeof voiceConfig?.audioid === 'string' && voiceConfig.audioid.trim().length > 0;
+    if (!hasMsg && !hasAudio) {
+      throw new BadRequestException('voiceConfig must include either msg (TTS text) or audioid (uploaded audio)');
+    }
   }
 
   async update(workspaceId: string, id: string, dto: any) {
@@ -181,11 +211,21 @@ export class CampaignsService {
     if (data.subject === '') data.subject = null;
     if (data.bodyHtml === '') data.bodyHtml = null;
     if (data.emailTemplateId === '') data.emailTemplateId = null;
-    // Same SMS-only normalization as create(): channel itself isn't editable
-    // (not in the field loop above), so `existing.channel` is this campaign's
-    // permanent channel — force the exempt default on anything else.
+    // Same SMS/VOICE-only normalization as create(): channel itself isn't
+    // editable (not in the field loop above), so `existing.channel` is this
+    // campaign's permanent channel — force the exempt default on anything else.
     if (dto.iysMessageType !== undefined) {
-      data.iysMessageType = existing.channel === 'SMS' && dto.iysMessageType === 'TICARI' ? 'TICARI' : 'BILGILENDIRME';
+      data.iysMessageType =
+        (existing.channel === 'SMS' || existing.channel === 'VOICE') && dto.iysMessageType === 'TICARI'
+          ? 'TICARI'
+          : 'BILGILENDIRME';
+    }
+    // voiceConfig is only editable on a VOICE campaign (mirrors channel-scoped
+    // iysMessageType above) — re-validated the same way create() does, since
+    // an edit could otherwise clear both msg AND audioid on a draft.
+    if (dto.voiceConfig !== undefined && existing.channel === 'VOICE') {
+      this.assertVoiceConfig(dto.voiceConfig);
+      data.voiceConfig = dto.voiceConfig;
     }
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
@@ -434,6 +474,12 @@ export class CampaignsService {
     }
     else if (channel === 'SMS') { where.smsOptOut = false; where.phone = { not: null }; }
     else if (channel === 'WHATSAPP') { where.waOptOut = false; where.OR = [{ whatsapp: { not: null } }, { phone: { not: null } }]; }
+    // VOICE (NetGSM Phase 5): same phone reachability as SMS. Lead has no
+    // dedicated call/voice opt-out flag yet — `smsOptOut` is reused as the
+    // nearest proxy (both ring the same lead phone number); a dedicated
+    // callOptOut/voiceOptOut column is a follow-up (see campaign-sender.
+    // service.ts's isOptedOut for the same reuse on the send-time recheck).
+    else if (channel === 'VOICE') { where.smsOptOut = false; where.phone = { not: null }; }
 
     const filters = Array.isArray(audienceFilter) ? (audienceFilter as AudienceFilter[]) : [];
     for (const f of filters) {
