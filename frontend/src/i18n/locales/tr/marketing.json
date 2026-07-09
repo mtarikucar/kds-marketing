@@ -1837,7 +1837,9 @@
     "iysMessageTypeTicariHint": "Ticari (reklam/promosyon) — İYS onayı gerektirir. Onayı olmayan alıcılar gönderim öncesi otomatik olarak atlanır.",
     "iysMessageTypeBilgiHint": "Bilgilendirme (sipariş/randevu/hesap bildirimleri) — İYS onayından muaftır.",
     "iysBilgilendirme": "Bilgilendirme",
-    "iysTicari": "Ticari"
+    "iysTicari": "Ticari",
+    "iysBlockedLabel": "İYS engelli",
+    "iysUnavailableLabel": "İYS erişilemedi"
   },
   "sites": {
     "title": "Funnel & Sayfalar",

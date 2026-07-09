@@ -31,7 +31,11 @@ interface CampaignFull {
   name: string;
   channel: string;
   status: string;
-  stats?: (Record<string, number> & { sms?: CampaignSmsStats }) | null;
+  // iysBlocked (RET/YOK/invalid-phone tally) and iysUnavailable (a TİCARİ
+  // tick aborted closed — see campaign-sender.service.ts's iysPreflight/
+  // abortTicariTick) are rendered as their own dedicated badges below,
+  // never through the generic numeric-badge loop.
+  stats?: (Record<string, number> & { sms?: CampaignSmsStats; iysUnavailable?: boolean }) | null;
 }
 
 /** Known NetGSM delivery buckets get their own labeled cell; everything else
@@ -120,11 +124,25 @@ export function CampaignDetailDialog({ campaignId, onClose }: CampaignDetailDial
               {Object.entries(c.stats ?? {}).map(([k, v]) =>
                 // `sms` is a nested rollup object rendered separately below —
                 // never a plain badge value (would crash: objects aren't valid JSX children).
-                k === 'sms' || typeof v !== 'number' ? null : (
+                // `iysBlocked`/`iysUnavailable` get their own translated badges
+                // below instead of the raw "iysBlocked: 3" key/value pair.
+                k === 'sms' || k === 'iysBlocked' || k === 'iysUnavailable' || typeof v !== 'number' ? null : (
                   <Badge key={k} tone="neutral">{k}: {v}</Badge>
                 ),
               )}
             </div>
+            {(!!c.stats?.iysBlocked || c.stats?.iysUnavailable) && (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                {!!c.stats?.iysBlocked && (
+                  <Badge tone="warning">
+                    {t('campaigns.iysBlockedLabel', 'İYS engelli')}: {c.stats.iysBlocked}
+                  </Badge>
+                )}
+                {c.stats?.iysUnavailable && (
+                  <Badge tone="danger">{t('campaigns.iysUnavailableLabel', 'İYS erişilemedi')}</Badge>
+                )}
+              </div>
+            )}
             {c.stats?.sms && (
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="font-medium">{t('campaigns.smsDelivery', 'Delivery (NetGSM)')}:</span>

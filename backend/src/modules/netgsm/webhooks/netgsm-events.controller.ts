@@ -77,6 +77,11 @@ export class NetgsmEventsController {
    * schema-drift field rename, garbage) is logged and left unpublished — this
    * is a compliance signal, so an ambiguous element must never be coerced
    * into granting marketing permission.
+   *
+   * TYPE IS STRICT TOO — never defaulted to MESAJ. Only 'MESAJ'/'ARAMA'/
+   * 'EPOSTA' publish; an unrecognized/missing type is archived but not
+   * published, same fail-closed treatment as an unrecognized status (a
+   * missing type must never be silently assumed to be SMS consent).
    */
   @Post(':workspaceId/:token/iys')
   @HttpCode(202)
@@ -123,8 +128,20 @@ export class NetgsmEventsController {
         continue;
       }
       const status = statusRaw;
+      // TYPE IS STRICT TRI-STATE TOO — never fail-open to MESAJ. Only an
+      // element whose type is EXACTLY 'MESAJ'/'ARAMA'/'EPOSTA' is published;
+      // anything else (missing, a typo, a schema-drift rename) is logged and
+      // left unpublished (still archived above regardless, for audit) —
+      // defaulting an unrecognized type to MESAJ would let IysWebhookConsumer
+      // apply an ARAMA/EPOSTA (or outright garbage) row's ONAY/RET as if it
+      // were SMS marketing consent, which it was never proven to be.
+      const typeRaw = (this.stringField(r.el, ['type']) ?? '').toUpperCase();
+      if (typeRaw !== 'MESAJ' && typeRaw !== 'ARAMA' && typeRaw !== 'EPOSTA') {
+        this.logger.warn(`unrecognized İYS type: ${typeRaw || '(empty)'} — element ${r.externalId} archived, not published`);
+        continue;
+      }
+      const type = typeRaw;
       const recipient = this.stringField(r.el, ['recipient', 'msisdn', 'gsmnumber']) ?? '';
-      const type = this.stringField(r.el, ['type']) ?? 'MESAJ';
       const source = this.stringField(r.el, ['source', 'kaynak']) ?? '';
       const transactionId =
         this.stringField(r.el, ['transactionid']) ?? this.stringField(r.el, ['submitid']) ?? r.externalId;

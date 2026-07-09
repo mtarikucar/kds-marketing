@@ -13,6 +13,7 @@ import { SmsV2Client, SmsV2SendResult } from '../../netgsm/sms/sms-v2.client';
 import { IysClient, IysSearchResult } from '../../netgsm/iys/iys.client';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { ConversationSpendService } from '../budget/conversation-spend.service';
+import { toIysMsisdn } from '../utils/lead-normalize';
 import { CAMPAIGN_BATCH_KIND, CAMPAIGN_AB_DECIDE_KIND, CAMPAIGN_LAUNCH_KIND, AB_TEST_WINDOW_MS } from './campaigns.service';
 
 const BATCH_SIZE = 50;
@@ -220,9 +221,34 @@ export class CampaignSenderService implements OnModuleInit {
         }
       }
     }
+
+    // TİCARİ hard-block, legacy-channel case (owner decision: fail-closed for
+    // TİCARİ — see iysPreflight's docstring for the same contract on the REST
+    // v2 path). The legacy per-recipient path (this.send() → NetgsmSmsAdapter's
+    // legacy /sms/send/get) has NO İYS search and no iysfilter at all —
+    // iysPreflight/sendSmsBatch only ever run when `smsV2Config` is set. A
+    // TİCARİ campaign stuck here (channel opted back into useLegacySend, or
+    // missing v2 creds/msgheader) can never prove İYS consent, so the whole
+    // tick is skipped BEFORE the per-recipient claim loop below ever runs —
+    // nothing in `recipients` gets claimed (PENDING→SENDING) or sent this
+    // tick. Falling through to the normal end-of-batch() flow (recomputeStats
+    // + the `remaining > 0` reschedule) means this retries every tick, same
+    // self-healing shape as abortTicariTick's revert-to-PENDING, until ops
+    // fixes the channel config. BİLGİLENDİRME campaigns are unaffected — only
+    // TİCARİ requires proof of consent — so they still fall through to the
+    // legacy loop below exactly as before.
+    const ticariLegacyBlocked =
+      campaign.channel === 'SMS' && campaign.iysMessageType === 'TICARI' && !smsV2Config;
+    if (ticariLegacyBlocked) {
+      this.logger.warn(
+        `campaign ${campaignId}: TİCARİ campaign cannot run on a legacy-send channel — İYS preflight requires REST v2`,
+      );
+      await this.abortTicariTick(workspaceId, campaignId, []);
+    }
+
     const eligibleSms: Array<{ recipientId: string; phone: string; body: string }> = [];
 
-    for (const r of recipients) {
+    for (const r of ticariLegacyBlocked ? [] : recipients) {
       // Atomic claim: a concurrent batch — e.g. a slow run reaped after 15 min and
       // re-dispatched while still in flight — that re-read the same PENDING rows
       // cannot also process this recipient. Only one updateMany flips PENDING→
@@ -535,6 +561,10 @@ export class CampaignSenderService implements OnModuleInit {
    * TİCARİ pre-send İYS hard-block (owner decision: full-auto + fail-closed).
    * Narrows `eligible` down to the recipients actually cleared to receive a
    * commercial send this tick:
+   *   - A phone that can't normalize to İYS's canonical 90XXXXXXXXXX
+   *     domestic-mobile wire shape (`toIysMsisdn`) → permanently SKIPPED,
+   *     same bucket as RET/YOK — there is no shape to even ask İYS about, so
+   *     it can never be verified. Never sent to `/iys/search` as raw input.
    *   - RET or YOK (İYS holds no record at all) → permanently SKIPPED, folded
    *     into `campaign.stats.iysBlocked`. Per İYS's model, no record proves no
    *     consent for TİCARİ — this preflight has no signal to tell an ordinary
@@ -578,22 +608,36 @@ export class CampaignSenderService implements OnModuleInit {
     const creds = { usercode, password, brandCode };
 
     const sendable: Array<{ recipientId: string; phone: string; body: string }> = [];
-    const blocked: Array<{ recipientId: string; phone: string; body: string }> = [];
+    const blocked: Array<{ recipientId: string; phone: string; body: string; reason: string }> = [];
     const deferred: Array<{ recipientId: string; phone: string; body: string }> = [];
     // Cache within THIS tick only (a fresh Map per call) — several recipients
     // rarely share one phone, but when they do this saves a redundant search
-    // call (and the budget unit it would have spent).
+    // call (and the budget unit it would have spent). Keyed on the NORMALIZED
+    // wire phone (not the raw `r.phone`), so two recipients whose raw phone
+    // happens to be spelled differently (0-prefixed vs +90 vs bare-10) but is
+    // the SAME number still dedup onto one search call.
     const cache = new Map<string, IysSearchResult>();
 
     for (const r of eligible) {
-      let res = cache.get(r.phone);
+      // İYS's wire format is the 90XXXXXXXXXX domestic-mobile shape (no `+`) —
+      // `r.phone` is whatever shape the lead's phone happened to be typed in
+      // (0-prefixed, +90, bare-10, ...). A phone that can't reduce to a TR
+      // mobile at all can never be verified against İYS — treat it as blocked
+      // (same bucket/side-effects as RET/YOK) with its own clear reason,
+      // rather than either silently sending it or aborting the whole tick.
+      const wirePhone = toIysMsisdn(r.phone);
+      if (!wirePhone) {
+        blocked.push({ ...r, reason: 'İYS: numara doğrulanamadı (geçersiz alıcı telefonu)' });
+        continue;
+      }
+      let res = cache.get(wirePhone);
       if (!res) {
         if (!this.budgeter.tryTake(usercode, 'iys', IYS_SEARCH_BUDGET_LIMIT, IYS_SEARCH_BUDGET_WINDOW_MS)) {
           deferred.push(r);
           continue;
         }
-        res = await this.iysClient.search(creds, r.phone, 'MESAJ');
-        cache.set(r.phone, res);
+        res = await this.iysClient.search(creds, wirePhone, 'MESAJ');
+        cache.set(wirePhone, res);
       }
       if (!res.ok || res.status === null) {
         // A thrown/API error (ok:false) and an ok:true-but-unclassifiable
@@ -606,16 +650,14 @@ export class CampaignSenderService implements OnModuleInit {
         return null;
       }
       if (res.status === 'RET' || res.status === 'YOK') {
-        blocked.push(r);
+        blocked.push({ ...r, reason: 'İYS: izin yok (RET/kayıt yok)' });
       } else {
         sendable.push(r); // ONAY
       }
     }
 
     if (blocked.length > 0) {
-      await Promise.all(
-        blocked.map((r) => this.mark(r.recipientId, 'SKIPPED', { error: 'İYS: izin yok (RET/kayıt yok)' })),
-      );
+      await Promise.all(blocked.map((r) => this.mark(r.recipientId, 'SKIPPED', { error: r.reason })));
       await this.quota.refund(workspaceId, 'SMS', blocked.length);
       await this.bumpStat(campaignId, 'iysBlocked', blocked.length);
     }

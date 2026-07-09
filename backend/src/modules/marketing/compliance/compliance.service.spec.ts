@@ -282,6 +282,13 @@ describe('ComplianceService', () => {
     expect(iysSync.retryDlq).toHaveBeenCalledWith(WS);
   });
 
+  it('iysDlqCount delegates to IysSyncService.dlqCount for the workspace', async () => {
+    const { iysSync, svc } = makeSvc();
+    iysSync.dlqCount = jest.fn().mockResolvedValue({ count: 5 });
+    await expect(svc.iysDlqCount(WS)).resolves.toEqual({ count: 5 });
+    expect(iysSync.dlqCount).toHaveBeenCalledWith(WS);
+  });
+
   it('does not touch opt-out flags for DATA_PROCESSING consent', async () => {
     const { prisma, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);

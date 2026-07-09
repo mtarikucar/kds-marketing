@@ -82,4 +82,14 @@ export class ComplianceController {
   retryIys(@CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.retryIys(u.workspaceId);
   }
+
+  /** Phase 2 Task 6 — read-only count of DLQ İYS auto-push jobs, so the SMS
+   *  channel card knows whether to show the warning badge + retry action.
+   *  Guarded the same as `iys/retry` (MANAGER + settings.manage) since it's
+   *  the same DLQ this workspace's manager can already act on. */
+  @Get('iys/dlq-count')
+  @RequirePermission('settings.manage')
+  iysDlqCount(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.iysDlqCount(u.workspaceId);
+  }
 }

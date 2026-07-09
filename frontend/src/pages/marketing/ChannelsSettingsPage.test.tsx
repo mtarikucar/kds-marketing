@@ -224,4 +224,49 @@ describe('ChannelsSettingsPage', () => {
       });
     });
   });
+
+  /**
+   * NetGSM Phase 2 Task 6 — the İYS auto-push DLQ warning + one-click retry
+   * (POST /marketing/compliance/iys/retry) on the SMS channel card. The count
+   * (GET /marketing/compliance/iys/dlq-count) is workspace-scoped, so it's
+   * fetched once regardless of how many SMS channels exist.
+   */
+  describe('SMS channel card — İYS DLQ warning + retry', () => {
+    async function renderWithDlqCount(count: number) {
+      const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+      marketingApi.get.mockImplementation((url: string) => {
+        if (url === '/channels') {
+          return Promise.resolve({
+            data: [
+              { id: 'ch1', type: 'SMS', name: 'SMS line', status: 'ACTIVE', configuredSecrets: ['usercode'], configPublic: { brandCode: 'BRAND1' }, agentProfileId: null },
+            ],
+          });
+        }
+        if (url === '/compliance/iys/dlq-count') {
+          return Promise.resolve({ data: { count } });
+        }
+        return Promise.resolve({ data: [] });
+      });
+      render(<ChannelsSettingsPage />, { wrapper });
+      await screen.findByText('SMS line');
+      return marketingApi;
+    }
+
+    it('shows no DLQ warning/retry button when there are zero DLQ jobs', async () => {
+      await renderWithDlqCount(0);
+      expect(screen.queryByRole('button', { name: /yeniden dene/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/İYS senkronizasyonu başarısız oldu/i)).not.toBeInTheDocument();
+    });
+
+    it('shows the DLQ warning + retry button when DLQ jobs exist, and retrying calls the retry endpoint', async () => {
+      const marketingApi = await renderWithDlqCount(3);
+      expect(await screen.findByText(/İYS senkronizasyonu başarısız oldu/i)).toBeInTheDocument();
+
+      marketingApi.post.mockResolvedValue({ data: { count: 3 } });
+      await userEvent.click(screen.getByRole('button', { name: /yeniden dene/i }));
+
+      expect(marketingApi.post).toHaveBeenCalledWith('/compliance/iys/retry');
+      expect(toast.success).toHaveBeenCalled();
+    });
+  });
 });

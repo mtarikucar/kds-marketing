@@ -482,8 +482,12 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
       },
       campaignVariant: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
       lead: {
+        // A valid, distinct TR-mobile-shaped phone per lead (last digit =
+        // the lead's own index) — NOT a real phone, but must reduce to a
+        // valid 10-digit domestic mobile so toIysMsisdn() normalizes it
+        // (the TİCARİ preflight below blocks anything that doesn't).
         findFirst: jest.fn().mockImplementation(async ({ where }: any) => ({
-          id: where.id, phone: `0555000${where.id}`, smsOptOut: false,
+          id: where.id, phone: `0555${where.id.replace(/\D/g, '').padStart(7, '0')}`, smsOptOut: false,
         })),
       },
     };
@@ -825,8 +829,11 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
       },
       campaignVariant: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
       lead: {
+        // A valid, distinct TR-mobile-shaped phone per lead (last digit =
+        // the lead's own index) — the TİCARİ preflight normalizes/validates
+        // this via toIysMsisdn() before ever searching İYS.
         findFirst: jest.fn().mockImplementation(async ({ where }: any) => ({
-          id: where.id, phone: `0555000${where.id}`, smsOptOut: false,
+          id: where.id, phone: `0555${where.id.replace(/\D/g, '').padStart(7, '0')}`, smsOptOut: false,
         })),
       },
     };
@@ -850,7 +857,9 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
 
   it('RET recipient is SKIPPED with the İYS error and counted into stats.iysBlocked; ONAY recipients still send', async () => {
     iysClient.search.mockImplementation(async (_creds: any, phone: string) => (
-      phone.endsWith('l1') ? { ok: true, status: 'RET', message: null } : { ok: true, status: 'ONAY', message: null }
+      // r1/l1's normalized wire phone ends in '1' (see makeRecipients/lead
+      // fixture) — distinct from r2/r3's '...2'/'...3'.
+      phone.endsWith('1') ? { ok: true, status: 'RET', message: null } : { ok: true, status: 'ONAY', message: null }
     ));
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
@@ -874,7 +883,7 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
 
   it('YOK (İYS holds no record) is treated as blocked exactly like RET', async () => {
     iysClient.search.mockImplementation(async (_creds: any, phone: string) => (
-      phone.endsWith('l2') ? { ok: true, status: 'YOK', message: null } : { ok: true, status: 'ONAY', message: null }
+      phone.endsWith('2') ? { ok: true, status: 'YOK', message: null } : { ok: true, status: 'ONAY', message: null }
     ));
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
@@ -898,7 +907,7 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
 
   it('a genuine İYS search error aborts the WHOLE tick: zero sends, every recipient reverts to PENDING, iysUnavailable stamped', async () => {
     iysClient.search.mockImplementation(async (_creds: any, phone: string) => (
-      phone.endsWith('l2') ? { ok: false, status: null, message: 'NetGSM erişilemedi' } : { ok: true, status: 'ONAY', message: null }
+      phone.endsWith('2') ? { ok: false, status: null, message: 'NetGSM erişilemedi' } : { ok: true, status: 'ONAY', message: null }
     ));
 
     await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
@@ -976,5 +985,80 @@ describe('CampaignSenderService.batch — TİCARİ İYS preflight', () => {
     // failure — iysUnavailable is reserved for the hard-abort paths only.
     const unavailableUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats?.iysUnavailable !== undefined);
     expect(unavailableUpdate).toBeUndefined();
+  });
+
+  // Final-review MUST-FIX H1: the legacy per-recipient send path (this.send()
+  // → NetgsmSmsAdapter's legacy /sms/send/get) has NO İYS search and no
+  // iysfilter at all — iysPreflight/sendSmsBatch only ever run when
+  // `smsV2Config` is set (REST v2). A TİCARİ campaign stuck on a channel that
+  // opted back into useLegacySend (or is missing v2 creds) must never fall
+  // through to that unchecked legacy loop.
+  describe('legacy-send channel (H1: TİCARİ hard-block)', () => {
+    it('a TİCARİ campaign on a legacy-send channel sends NOTHING this tick: no v2 batch call, no legacy adapter call, nothing claimed/marked, iysUnavailable stamped', async () => {
+      registry.resolveConfig.mockReturnValue({ ...resolvedConfig, public: { ...resolvedConfig.public, useLegacySend: true } });
+      const adapterSend = jest.fn();
+      registry.get.mockReturnValue({ send: adapterSend });
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      // Neither send path is ever reached — the legacy per-recipient adapter
+      // (which has no İYS check at all) never gets a chance to run.
+      expect(smsV2.send).not.toHaveBeenCalled();
+      expect(adapterSend).not.toHaveBeenCalled();
+      expect(iysClient.search).not.toHaveBeenCalled();
+      // No recipient is claimed (PENDING→SENDING) or marked any terminal
+      // state — they stay exactly PENDING as the batch found them.
+      const claims = prisma.campaignRecipient.updateMany.mock.calls.filter((c: any) => c[0]?.data?.status === 'SENDING');
+      expect(claims).toHaveLength(0);
+      const terminalMarks = prisma.campaignRecipient.update.mock.calls.filter((c: any) =>
+        ['SENT', 'FAILED', 'SKIPPED'].includes(c[0].data.status),
+      );
+      expect(terminalMarks).toHaveLength(0);
+      const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats?.iysUnavailable !== undefined);
+      expect(statsUpdate[0].data.stats.iysUnavailable).toBe(true);
+    });
+
+    it('a BİLGİLENDİRME campaign on the SAME legacy-send channel is unaffected — sends normally via the legacy per-recipient loop', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SENDING', channel: 'SMS', subject: null, body: 'Hi there', links: [],
+        iysMessageType: 'BILGILENDIRME', netgsmJobIds: [],
+      });
+      registry.resolveConfig.mockReturnValue({ ...resolvedConfig, public: { ...resolvedConfig.public, useLegacySend: true } });
+      const adapterSend = jest.fn().mockResolvedValue({ externalMessageId: 'leg-1', status: 'SENT' });
+      registry.get.mockReturnValue({ send: adapterSend });
+
+      await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+      expect(adapterSend).toHaveBeenCalledTimes(3);
+      const sent = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
+      expect(sent).toHaveLength(3);
+      expect(iysClient.search).not.toHaveBeenCalled(); // BİLGİLENDİRME never runs the preflight
+    });
+  });
+
+  // Final-review MUST-FIX H2: İYS's wire format is 90XXXXXXXXXX (no `+`) —
+  // `r.phone` is whatever shape the lead's phone was typed in. A phone that
+  // can't reduce to a TR mobile at all must be blocked (can't verify), never
+  // silently searched/sent as raw input.
+  it('H2: a recipient whose phone cannot normalize to a TR mobile is blocked (SKIPPED) without ever calling İYS search for it; the other ONAY-cleared recipients still send', async () => {
+    prisma.lead.findFirst.mockImplementation(async ({ where }: any) => (
+      where.id === 'l1'
+        ? { id: 'l1', phone: '02121234567', smsOptOut: false } // a landline — not a TR mobile
+        : { id: where.id, phone: `0555${where.id.replace(/\D/g, '').padStart(7, '0')}`, smsOptOut: false }
+    ));
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    // r1's phone never reaches İYS at all — only r2/r3 (valid mobiles) are searched.
+    expect(iysClient.search).toHaveBeenCalledTimes(2);
+    const skipped = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SKIPPED');
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0][0].where.id).toBe('r1');
+    expect(skipped[0][0].data.error).toContain('İYS');
+    // Same bucket/side-effects as RET/YOK: counted into iysBlocked, quota refunded.
+    const statsUpdate = prisma.campaign.update.mock.calls.find((c: any) => c[0].data.stats?.iysBlocked !== undefined);
+    expect(statsUpdate[0].data.stats.iysBlocked).toBe(1);
+    expect(smsV2.send).toHaveBeenCalledTimes(1);
+    expect(smsV2.send.mock.calls[0][1].messages.map((m: any) => m.referansId).sort()).toEqual(['r2', 'r3']);
   });
 });

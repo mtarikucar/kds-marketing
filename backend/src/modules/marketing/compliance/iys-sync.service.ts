@@ -6,6 +6,7 @@ import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { IysClient, IysConsentRow, IysConsentType } from '../../netgsm/iys/iys.client';
+import { toIysMsisdn } from '../utils/lead-normalize';
 
 export type IysConsentDirection = 'ONAY' | 'RET';
 
@@ -106,7 +107,11 @@ function fmtIysDate(d: Date): string {
  *    `POST /marketing/compliance/iys/retry`). A row is ONLY ever stamped
  *    `SENT` when the batch's `refids` count matches exactly — never on a
  *    guess — so a consent proof can never be silently and permanently
- *    misattributed or dropped.
+ *    misattributed or dropped. Every recipient is normalized to İYS's
+ *    canonical `90XXXXXXXXXX` wire shape (`toIysMsisdn`) right before it's
+ *    sent — a phone that can't reduce to a TR mobile at all is never
+ *    forwarded to İYS; it fails immediately (both here and at enqueue time
+ *    in `enqueueConsent`) with `lastError: 'invalid recipient phone'`.
  *
  * The worker never throws out of a tick: a bad workspace/account is caught and
  * logged so it can never stall another workspace's turn, and the top-level
@@ -140,6 +145,13 @@ export class IysSyncService {
     // to İYS via /iys/add would be pointless at best (İYS already knows) and
     // a genuine feedback loop at worst — so it is never enqueued.
     if (params.source?.startsWith('IYS_')) return;
+    // A phone that can never reduce to İYS's canonical 90XXXXXXXXXX
+    // domestic-mobile wire shape (garbage, a landline, a foreign number) must
+    // never sit as a silently-retrying PENDING row — `drainWorkspace` would
+    // just fail it forever anyway (it normalizes/validates again right
+    // before the wire send). Fail it here instead, immediately, with a
+    // `lastError` an operator can act on straight away.
+    const valid = toIysMsisdn(params.recipient) !== null;
     await tx.iysSyncJob.create({
       data: {
         workspaceId: params.workspaceId,
@@ -149,8 +161,17 @@ export class IysSyncService {
         direction: params.direction,
         consentAt: params.consentAt ?? new Date(),
         source: params.source,
+        ...(valid ? {} : { status: 'FAILED', lastError: 'invalid recipient phone' }),
       },
     });
+  }
+
+  /** Manager-visible count of DLQ İYS auto-push jobs for this workspace —
+   *  drives the SMS channel card's warning badge + "Yeniden dene" retry
+   *  action. Read-only, scoped to ONE workspace (never cross-tenant). */
+  async dlqCount(workspaceId: string): Promise<{ count: number }> {
+    const count = await this.prisma.iysSyncJob.count({ where: { workspaceId, status: 'DLQ' } });
+    return { count };
   }
 
   /** Manager-triggered reset: DLQ → PENDING, attempts=0, lastError cleared —
@@ -226,20 +247,39 @@ export class IysSyncService {
       return { processed: 0, sent: 0 };
     }
 
+    // Defense in depth: normalize (and validate) every job's recipient to
+    // İYS's canonical 90XXXXXXXXXX wire shape right before it's ever sent —
+    // `enqueueConsent` already rejects an unnormalizable phone up front, but
+    // a row written before that check shipped (or by some future path that
+    // bypasses `enqueueConsent`) must still never reach `/iys/add` with a raw,
+    // un-normalized (or outright invalid) phone. Fails through the SAME
+    // backoff/DLQ machinery as any other error, never silently dropped.
+    const prepared: Array<{ job: PendingJob; wireRecipient: string }> = [];
+    const invalid: PendingJob[] = [];
+    for (const j of jobs) {
+      const wireRecipient = toIysMsisdn(j.recipient);
+      if (wireRecipient) prepared.push({ job: j, wireRecipient });
+      else invalid.push(j);
+    }
+    if (invalid.length > 0) {
+      await this.markFailedBatch(invalid, 'invalid recipient phone');
+    }
+
     let processed = 0;
     let sent = 0;
-    for (const batch of chunk(jobs, IYS_ADD_MAX_ROWS)) {
+    for (const batch of chunk(prepared, IYS_ADD_MAX_ROWS)) {
       if (!this.budgeter.tryTake(creds.usercode, 'iys', IYS_BUDGET_LIMIT, IYS_BUDGET_WINDOW_MS)) {
         break; // account budget exhausted this minute — remaining batches resume next tick, untouched
       }
       processed += batch.length;
+      const jobBatch = batch.map((b) => b.job);
       const result = await this.client.add(
         { usercode: creds.usercode, password: creds.password, brandCode: creds.brandCode },
-        batch.map((j) => this.toWireRow(j)),
+        batch.map((b) => this.toWireRow(b.job, b.wireRecipient)),
       );
-      if (result.ok && result.refids.length === batch.length) {
-        await this.markSent(batch, result.refids);
-        sent += batch.length;
+      if (result.ok && result.refids.length === jobBatch.length) {
+        await this.markSent(jobBatch, result.refids);
+        sent += jobBatch.length;
       } else if (result.ok) {
         // `extractRefids` DROPS (not nulls-out) any row whose refid key didn't
         // match a known alias, so a short `refids` array means every entry
@@ -250,19 +290,19 @@ export class IysSyncService {
         // consent-proof loss, worst for RET/opt-out). Treat it exactly like
         // any other failed attempt so it backs off and escalates to DLQ.
         await this.markFailedBatch(
-          batch,
-          `refid count mismatch: expected ${batch.length} got ${result.refids.length}`,
+          jobBatch,
+          `refid count mismatch: expected ${jobBatch.length} got ${result.refids.length}`,
         );
       } else {
-        await this.markFailedBatch(batch, result.message ?? 'İYS add başarısız');
+        await this.markFailedBatch(jobBatch, result.message ?? 'İYS add başarısız');
       }
     }
     return { processed, sent };
   }
 
-  private toWireRow(job: PendingJob): IysConsentRow {
+  private toWireRow(job: PendingJob, wireRecipient: string): IysConsentRow {
     return {
-      recipient: job.recipient,
+      recipient: wireRecipient,
       type: job.type as IysConsentType,
       status: job.direction as 'ONAY' | 'RET',
       consentDate: fmtIysDate(job.consentAt),

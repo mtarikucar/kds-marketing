@@ -1625,7 +1625,9 @@
     "iysMessageTypeTicariHint": "Commercial (ads/promotions) — requires İYS consent. Recipients without approval are skipped automatically before sending.",
     "iysMessageTypeBilgiHint": "Informational (order/appointment/account updates) — exempt from İYS consent.",
     "iysBilgilendirme": "Bilgilendirme (informational)",
-    "iysTicari": "Ticari (commercial)"
+    "iysTicari": "Ticari (commercial)",
+    "iysBlockedLabel": "İYS blocked",
+    "iysUnavailableLabel": "İYS unreachable"
   },
   "sites": {
     "title": "Funnels & Pages",

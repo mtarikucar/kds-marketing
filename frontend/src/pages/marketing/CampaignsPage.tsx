@@ -866,6 +866,22 @@ export default function CampaignsPage() {
                         {c.stats.unsubscribed ?? 0} {t('campaigns.unsub', 'unsub')}
                       </p>
                     )}
+                    {/* İYS visibility (NetGSM Phase 2 Task 6): iysBlocked is a
+                        per-recipient RET/YOK/invalid-phone tally (BİLGİLENDİRME
+                        campaigns never bump it); iysUnavailable means a TİCARİ
+                        tick aborted closed (nothing sent) — surfaced here so an
+                        operator doesn't have to open the detail dialog to learn
+                        why a TİCARİ campaign looks stalled. */}
+                    {!!c.stats?.iysBlocked && (
+                      <p className="text-caption text-warning mt-0.5">
+                        {t('campaigns.iysBlockedLabel', 'İYS engelli')}: {c.stats.iysBlocked}
+                      </p>
+                    )}
+                    {!!c.stats?.iysUnavailable && (
+                      <p className="text-caption text-danger mt-0.5">
+                        {t('campaigns.iysUnavailableLabel', 'İYS erişilemedi')}
+                      </p>
+                    )}
                   </div>
                 </div>
 

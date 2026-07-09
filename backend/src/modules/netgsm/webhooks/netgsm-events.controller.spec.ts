@@ -192,7 +192,7 @@ describe('NetgsmEventsController — iys', () => {
     expect(outbox.append).not.toHaveBeenCalled();
   });
 
-  it('defaults type to MESAJ when absent, but NEVER fails open on status: an element with no recognizable status is archived and NOT published', async () => {
+  it('an element missing BOTH type and status is archived but NEVER published (fails closed on missing status first)', async () => {
     const token = netgsmWebhookToken('ws-1', 'iys');
     const el = { transactionid: 'tx-9', recipient: '905551112233' };
 
@@ -204,6 +204,35 @@ describe('NetgsmEventsController — iys', () => {
       skipDuplicates: true,
     });
     expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  // Final-review MUST-FIX M4: `type` used to default to 'MESAJ' when absent —
+  // this defaulted an ARAMA/EPOSTA (or outright garbage) element's ONAY/RET
+  // to SMS marketing consent, which was never proven. Type is now strict
+  // tri-state, same fail-closed treatment as status.
+  it("type tri-state — an element with a valid status but an unrecognized type is archived but NEVER published (never defaulted to MESAJ)", async () => {
+    const token = netgsmWebhookToken('ws-1', 'iys');
+    const el = { transactionid: 'tx-badtype', recipient: '905551112233', type: 'GARBAGE', status: 'ONAY', source: 'HS_WEB' };
+
+    await expect(controller.iys('ws-1', token, [el])).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'iys', externalId: 'tx-badtype', payload: el }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it("type tri-state — 'ARAMA' and 'EPOSTA' are recognized types and DO publish (the consumer, not this controller, decides only MESAJ is applied this phase)", async () => {
+    const token = netgsmWebhookToken('ws-1', 'iys');
+    const elArama = { transactionid: 'tx-arama', recipient: '905551112233', type: 'ARAMA', status: 'ONAY', source: 'HS_WEB' };
+    const elEposta = { transactionid: 'tx-eposta', recipient: 'a@b.com', type: 'EPOSTA', status: 'RET', source: 'HS_WEB' };
+
+    await controller.iys('ws-1', token, [elArama, elEposta]);
+
+    expect(outbox.append).toHaveBeenCalledTimes(2);
+    expect(outbox.append).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ type: 'ARAMA' }) }));
+    expect(outbox.append).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ type: 'EPOSTA' }) }));
   });
 
   it("status tri-state — explicit 'ONAY' publishes a granted consent event", async () => {

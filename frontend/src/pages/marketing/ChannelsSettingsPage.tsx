@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Badge } from '@/components/ui/Badge';
 import { Card, CardContent } from '@/components/ui/Card';
+import { Callout } from '@/components/ui/Callout';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Input } from '@/components/ui/Input';
@@ -389,6 +390,7 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
  */
 function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () => void }) {
   const { t } = useTranslation('marketing');
+  const queryClient = useQueryClient();
   const savedPublic = (channel.configPublic as Record<string, unknown> | null) ?? {};
   const savedBrandCode = typeof savedPublic.brandCode === 'string' ? savedPublic.brandCode : '';
   const savedIysDefault = savedPublic.iysDefault === 'TICARI' ? 'TICARI' : 'BILGILENDIRME';
@@ -396,6 +398,32 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
 
   const [brandCode, setBrandCode] = useState(savedBrandCode);
   const [iysDefault, setIysDefault] = useState<string>(savedIysDefault);
+
+  // İYS auto-push DLQ (NetGSM Phase 2 Task 3/6) — workspace-scoped, not
+  // per-channel, but read from here since this is the one place an operator
+  // manages İYS for SMS. Silently renders nothing (no badge) on a load error
+  // or while a workspace has zero DLQ rows — this is a "heads up" surface,
+  // not a critical path.
+  const dlqQuery = useQuery<{ count: number }>({
+    queryKey: ['marketing', 'compliance', 'iysDlqCount'],
+    queryFn: () => marketingApi.get('/compliance/iys/dlq-count').then((r) => r.data),
+    staleTime: 30_000,
+  });
+
+  const retryDlq = useMutation({
+    mutationFn: () => marketingApi.post<{ count: number }>('/compliance/iys/retry'),
+    onSuccess: ({ data }) => {
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'compliance', 'iysDlqCount'] });
+      toast.success(
+        t('channels.iysDlqRetried', {
+          defaultValue: '{{count}} job(s) queued for retry',
+          count: data?.count ?? 0,
+        }),
+      );
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('channels.iysDlqRetryFailed', 'Could not retry the failed jobs')),
+  });
 
   const save = useMutation({
     mutationFn: () =>
@@ -477,6 +505,25 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
           "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir.",
         )}
       </p>
+      {/* İYS auto-push DLQ warning (NetGSM Phase 2 Task 6): a job escalates
+          here after 8 failed attempts (bad creds, brandCode, or a standing
+          NetGSM rejection) — surfaced with a one-click retry rather than
+          leaving it silently stuck until someone thinks to check the DB. */}
+      {!!dlqQuery.data?.count && (
+        <Callout tone="warning" className="p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-caption">
+              {t('channels.iysDlqBacklog', {
+                defaultValue: '{{count}} İYS senkronizasyonu başarısız oldu (DLQ)',
+                count: dlqQuery.data.count,
+              })}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => retryDlq.mutate()} loading={retryDlq.isPending}>
+              {t('channels.iysDlqRetry', 'Yeniden dene')}
+            </Button>
+          </div>
+        </Callout>
+      )}
     </div>
   );
 }

@@ -127,6 +127,41 @@ describe('IysSyncService', () => {
       });
       expect(tx.iysSyncJob.create).not.toHaveBeenCalled();
     });
+
+    // Final-review MUST-FIX H2: a phone that can never reduce to a TR mobile
+    // (a landline, garbage, ...) must never sit as a silently-retrying
+    // PENDING row — fail it immediately with an actionable lastError.
+    it('creates an immediately-FAILED job with lastError "invalid recipient phone" when the recipient is not a TR mobile', async () => {
+      const tx = { iysSyncJob: { create: jest.fn().mockResolvedValue({}) } };
+      await svc.enqueueConsent(tx as any, {
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        recipient: '02121234567', // a landline, not a mobile
+        direction: 'ONAY',
+        source: 'HS_WEB',
+      });
+      expect(tx.iysSyncJob.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          recipient: '02121234567',
+          status: 'FAILED',
+          lastError: 'invalid recipient phone',
+        }),
+      });
+    });
+
+    it('still creates a normal PENDING job for a valid phone in another shape (+90/bare-10)', async () => {
+      const tx = { iysSyncJob: { create: jest.fn().mockResolvedValue({}) } };
+      await svc.enqueueConsent(tx as any, {
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        recipient: '+905551112233',
+        direction: 'ONAY',
+        source: 'HS_WEB',
+      });
+      const data = tx.iysSyncJob.create.mock.calls[0][0].data;
+      expect(data.status).toBeUndefined(); // defaults to PENDING — no override
+      expect(data.lastError).toBeUndefined();
+    });
   });
 
   describe('retryDlq', () => {
@@ -158,14 +193,18 @@ describe('IysSyncService', () => {
 
       expect(client.add).toHaveBeenCalledWith(
         { usercode: 'u1', password: 'p1', brandCode: 'BR1' },
-        [{ recipient: '05551112233', type: 'MESAJ', status: 'ONAY', consentDate: '2026-07-08 13:00:00', source: 'HS_WEB' }],
+        // recipient is normalized to İYS's canonical 90XXXXXXXXXX wire shape
+        // (no `+`), never the raw 0-prefixed phone as stored on the job.
+        [{ recipient: '905551112233', type: 'MESAJ', status: 'ONAY', consentDate: '2026-07-08 13:00:00', source: 'HS_WEB' }],
       );
       expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({ where: { id: 'job-1' }, data: { status: 'SENT', refid: 'ref-1' } });
       expect(out).toEqual({ processed: 1, sent: 1 });
     });
 
     it('chunks a batch of 501 due jobs into two add() calls (≤500 each)', async () => {
-      const jobs = Array.from({ length: 501 }, (_, i) => job({ id: `job-${i}`, recipient: `0555${i}` }));
+      // Each row needs a real (valid, normalizable) TR mobile — a padded
+      // 7-digit suffix keeps every one of the 501 rows distinct and valid.
+      const jobs = Array.from({ length: 501 }, (_, i) => job({ id: `job-${i}`, recipient: `0555${String(i).padStart(7, '0')}` }));
       prisma.iysSyncJob.findMany.mockResolvedValue(jobs as any);
       prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
       registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' } });
@@ -323,6 +362,41 @@ describe('IysSyncService', () => {
       prisma.channel.findMany.mockRejectedValue(new Error('db down'));
 
       await expect(svc.drain()).resolves.toEqual({ processed: 0, sent: 0 });
+    });
+
+    // Final-review MUST-FIX H2 (defense in depth): a row whose recipient
+    // can't normalize to a TR mobile must never reach /iys/add — enqueueConsent
+    // already catches this at insert time, but a pre-existing/legacy row (or
+    // one written by some future path) must still fail safely here instead.
+    it('marks a job with an unnormalizable recipient FAILED immediately, without ever including it in an /iys/add call', async () => {
+      const good = job({ id: 'job-good', recipient: '05551112233' });
+      const bad = job({ id: 'job-bad', recipient: '02121234567' }); // landline, not a mobile
+      prisma.iysSyncJob.findMany.mockResolvedValue([good, bad] as any);
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
+      registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' } });
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: ['ref-1'], message: null });
+
+      await svc.drain();
+
+      // Only the valid recipient is ever sent to NetGSM.
+      expect(client.add).toHaveBeenCalledTimes(1);
+      expect(client.add.mock.calls[0][1]).toEqual([
+        { recipient: '905551112233', type: 'MESAJ', status: 'ONAY', consentDate: '2026-07-08 13:00:00', source: 'HS_WEB' },
+      ]);
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({ where: { id: 'job-good' }, data: { status: 'SENT', refid: 'ref-1' } });
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({
+        where: { id: 'job-bad' },
+        data: { status: 'FAILED', attempts: 1, lastError: 'invalid recipient phone' },
+      });
+    });
+  });
+
+  describe('dlqCount', () => {
+    it('counts DLQ jobs scoped to the workspace', async () => {
+      prisma.iysSyncJob.count = jest.fn().mockResolvedValue(4);
+      const out = await svc.dlqCount('ws-1');
+      expect(prisma.iysSyncJob.count).toHaveBeenCalledWith({ where: { workspaceId: 'ws-1', status: 'DLQ' } });
+      expect(out).toEqual({ count: 4 });
     });
   });
 });

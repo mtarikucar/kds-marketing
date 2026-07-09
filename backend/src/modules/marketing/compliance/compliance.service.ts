@@ -339,4 +339,10 @@ export class ComplianceService {
   retryIys(workspaceId: string) {
     return this.iysSync.retryDlq(workspaceId);
   }
+
+  /** Read-only DLQ count (Phase 2 Task 6) — drives the SMS channel card's
+   *  warning badge + retry action, scoped to the caller's workspace. */
+  iysDlqCount(workspaceId: string) {
+    return this.iysSync.dlqCount(workspaceId);
+  }
 }

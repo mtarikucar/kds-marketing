@@ -89,6 +89,37 @@ describe('CampaignDetailDialog', () => {
     expect(screen.queryByText(/sms:/i)).not.toBeInTheDocument();
   });
 
+  // NetGSM Phase 2 Task 6 (M1 fix): surface stats.iysBlocked/iysUnavailable
+  // as their own dedicated, translated badges — not the raw generic
+  // "iysBlocked: 3" key/value pair, and not silently dropped (iysUnavailable
+  // is a boolean, which the generic numeric-only badge loop skips).
+  it('shows a dedicated İYS blocked badge and never the raw generic one', async () => {
+    get.mockImplementation((url: string) =>
+      url.endsWith('/recipients')
+        ? Promise.resolve({ data: [] })
+        : Promise.resolve({
+            data: { id: 'c1', name: 'TICARI Blast', channel: 'SMS', status: 'SENDING', stats: { recipients: 10, sent: 7, iysBlocked: 3 } },
+          }),
+    );
+    render(<CampaignDetailDialog campaignId="c1" onClose={vi.fn()} />, { wrapper });
+    await screen.findByText('TICARI Blast');
+    expect(screen.getByText('İYS engelli: 3')).toBeInTheDocument();
+    expect(screen.queryByText('iysBlocked: 3')).not.toBeInTheDocument();
+  });
+
+  it('shows an İYS unreachable warning when stats.iysUnavailable is stamped', async () => {
+    get.mockImplementation((url: string) =>
+      url.endsWith('/recipients')
+        ? Promise.resolve({ data: [] })
+        : Promise.resolve({
+            data: { id: 'c1', name: 'Stuck Blast', channel: 'SMS', status: 'SENDING', stats: { recipients: 10, sent: 0, iysUnavailable: true } },
+          }),
+    );
+    render(<CampaignDetailDialog campaignId="c1" onClose={vi.fn()} />, { wrapper });
+    await screen.findByText('Stuck Blast');
+    expect(screen.getByText('İYS erişilemedi')).toBeInTheDocument();
+  });
+
   it('provisions a social campaign from this blast via the prefill endpoint and navigates to it', async () => {
     get.mockImplementation((url: string) =>
       url.endsWith('/recipients')
