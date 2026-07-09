@@ -1,11 +1,18 @@
 import { BadRequestException } from '@nestjs/common';
 import * as client from './meta-ads-management.client';
+import * as tiktok from './tiktok-ads.client';
+import * as linkedin from './linkedin-ads.client';
 import { AdManagementService } from './ad-management.service';
+import { AdWriteCapabilityService } from './ad-write-capability.service';
 
 jest.mock('./meta-ads-management.client');
+jest.mock('./tiktok-ads.client');
+jest.mock('./linkedin-ads.client');
 jest.mock('../../../common/crypto/secret-box.helper', () => ({ openSecret: () => 'TOKEN' }));
 
 const mClient = client as jest.Mocked<typeof client>;
+const mTiktok = tiktok as jest.Mocked<typeof tiktok>;
+const mLinkedin = linkedin as jest.Mocked<typeof linkedin>;
 
 describe('AdManagementService', () => {
   let prisma: any;
@@ -14,18 +21,21 @@ describe('AdManagementService', () => {
   beforeAll(() => {
     process.env.META_APP_ID = 'app';
     process.env.META_APP_SECRET = 'secret';
+    process.env.TIKTOK_BUSINESS_APP_ID = 'a';
+    process.env.TIKTOK_BUSINESS_APP_SECRET = 'b';
+    process.env.LINKEDIN_ADS_CLIENT_ID = 'c';
+    process.env.LINKEDIN_ADS_CLIENT_SECRET = 'd';
   });
   afterAll(() => {
-    delete process.env.META_APP_ID;
-    delete process.env.META_APP_SECRET;
+    for (const k of ['META_APP_ID', 'META_APP_SECRET', 'TIKTOK_BUSINESS_APP_ID', 'TIKTOK_BUSINESS_APP_SECRET', 'LINKEDIN_ADS_CLIENT_ID', 'LINKEDIN_ADS_CLIENT_SECRET']) delete process.env[k];
   });
   beforeEach(() => {
     prisma = { adAccount: { findFirst: jest.fn(), update: jest.fn().mockResolvedValue({}) } };
-    svc = new AdManagementService(prisma);
+    svc = new AdManagementService(prisma, new AdWriteCapabilityService());
     jest.clearAllMocks();
   });
 
-  const metaAcc = () => ({ id: 'acc', workspaceId: 'ws', provider: 'META', externalAdId: 'act_1', accessToken: 'sealed' });
+  const metaAcc = () => ({ id: 'acc', workspaceId: 'ws', provider: 'META', externalAdId: 'act_1', accessToken: 'sealed', currency: 'TRY' });
 
   it('rejects management on a non-Meta account', async () => {
     prisma.adAccount.findFirst.mockResolvedValue({ id: 'acc', provider: 'TIKTOK', accessToken: 'x' });
@@ -62,5 +72,32 @@ describe('AdManagementService', () => {
     expect(prisma.adAccount.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'TOKEN_EXPIRED' }) }),
     );
+  });
+
+  it('setDailyBudget on TikTok passes MAJOR units (no ×100)', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'tt', workspaceId: 'ws', provider: 'TIKTOK', externalAdId: 'adv-1', accessToken: 'x', currency: 'TRY' });
+    mTiktok.setTiktokCampaignBudget.mockResolvedValue({ ok: true, id: 'c1' });
+    await svc.setDailyBudget('ws', 'tt', 'c1', 75);
+    expect(mTiktok.setTiktokCampaignBudget).toHaveBeenCalledWith('TOKEN', 'adv-1', 'c1', 75);
+    expect(mClient.updateEntity).not.toHaveBeenCalled();
+  });
+
+  it('setStatus on TikTok routes to the status endpoint', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'tt', workspaceId: 'ws', provider: 'TIKTOK', externalAdId: 'adv-1', accessToken: 'x', currency: 'TRY' });
+    mTiktok.setTiktokCampaignStatus.mockResolvedValue({ ok: true, id: 'c1' });
+    await svc.setStatus('ws', 'tt', 'c1', 'PAUSED');
+    expect(mTiktok.setTiktokCampaignStatus).toHaveBeenCalledWith('TOKEN', 'adv-1', 'c1', 'PAUSED');
+  });
+
+  it('setDailyBudget on LinkedIn passes major units + currency (and needs a currency)', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'li', workspaceId: 'ws', provider: 'LINKEDIN', externalAdId: '512', accessToken: 'x', currency: 'USD' });
+    mLinkedin.updateLinkedinCampaign.mockResolvedValue({ ok: true, id: 'c1' });
+    await svc.setDailyBudget('ws', 'li', 'c1', 40);
+    expect(mLinkedin.updateLinkedinCampaign).toHaveBeenCalledWith('TOKEN', 'c1', { dailyBudgetMajor: 40, currencyCode: 'USD' });
+  });
+
+  it('setDailyBudget on LinkedIn without a currency is rejected', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'li', workspaceId: 'ws', provider: 'LINKEDIN', externalAdId: '512', accessToken: 'x', currency: null });
+    await expect(svc.setDailyBudget('ws', 'li', 'c1', 40)).rejects.toBeInstanceOf(BadRequestException);
   });
 });

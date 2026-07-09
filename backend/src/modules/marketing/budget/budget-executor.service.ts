@@ -163,10 +163,18 @@ export class BudgetExecutorService {
     budgetId: string,
     after: AfterAllocation[],
   ): Promise<{ results: ChannelResult[]; applied: number; skipped: number }> {
-    // Resolve a Meta ad account once (only when Meta is cred-write-capable).
-    const metaAccount = this.capability.canWriteBudget('META')
-      ? await this.prisma.adAccount.findFirst({ where: { workspaceId, provider: 'META' }, select: { id: true } })
-      : null;
+    // Lazily resolve the connected ad account per channel (only for channels the
+    // matrix says we can write to now). Cached so N allocations on one channel
+    // hit the DB once.
+    const accountByChannel = new Map<string, { id: string } | null>();
+    const accountFor = async (channel: string): Promise<{ id: string } | null> => {
+      if (accountByChannel.has(channel)) return accountByChannel.get(channel)!;
+      const acc = this.capability.canWriteBudget(channel)
+        ? await this.prisma.adAccount.findFirst({ where: { workspaceId, provider: channel }, select: { id: true } })
+        : null;
+      accountByChannel.set(channel, acc);
+      return acc;
+    };
 
     const results: ChannelResult[] = [];
     for (const a of after) {
@@ -179,21 +187,21 @@ export class BudgetExecutorService {
         data: { plannedAmount: new Prisma.Decimal(Number.isFinite(a.budget) ? a.budget : 0) },
       });
 
-      // (2) Live ad-platform push — strictly gated.
+      // (2) Live ad-platform push — strictly gated. Any channel the write-capability
+      // matrix marks live (META/TIKTOK/LINKEDIN when configured) flows through here;
+      // a channel that is capability-off, has no connected account, or lacks a
+      // campaign ref degrades to a committed-plan-only NO_LIVE_WRITE.
       if (!this.capability.canWriteBudget(a.channel)) {
         results.push({ ...base, applied: false, note: `plan committed; no live write capability for ${a.channel}` });
-        continue;
-      }
-      if (a.channel !== 'META') {
-        results.push({ ...base, applied: false, note: `plan committed; ${a.channel} write client not available yet` });
         continue;
       }
       if (!ref) {
         results.push({ ...base, applied: false, note: 'plan committed; channel-level rollup has no ad entity to write' });
         continue;
       }
-      if (!metaAccount) {
-        results.push({ ...base, applied: false, note: 'plan committed; no Meta ad account connected' });
+      const account = await accountFor(a.channel);
+      if (!account) {
+        results.push({ ...base, applied: false, note: `plan committed; no ${a.channel} ad account connected` });
         continue;
       }
       if (!(a.budget > 0)) {
@@ -201,8 +209,8 @@ export class BudgetExecutorService {
         continue;
       }
       try {
-        await this.ads.setDailyBudget(workspaceId, metaAccount.id, ref, a.budget);
-        results.push({ ...base, applied: true, note: 'daily budget pushed to Meta' });
+        await this.ads.setDailyBudget(workspaceId, account.id, ref, a.budget);
+        results.push({ ...base, applied: true, note: `daily budget pushed to ${a.channel}` });
       } catch (e) {
         results.push({ ...base, applied: false, note: `live write failed: ${e instanceof Error ? e.message : 'error'}` });
       }
