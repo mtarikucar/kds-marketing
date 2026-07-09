@@ -312,6 +312,8 @@ import { AttributionService } from './analytics/attribution.service';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
+// NetGSM Phase 2 Task 3 — İYS auto-push (consent writes -> İYS proof queue).
+import { IysSyncService } from './compliance/iys-sync.service';
 // Epic E — funnel A/B experiments + surveys.
 // Epic F — 2FA/MFA (TOTP + NetGSM SMS v2 Task 12's SMS factor).
 import { TwoFactorController } from './controllers/two-factor.controller';
@@ -809,6 +811,8 @@ import { WalletService } from './wallet/wallet.service';
     AttributionService,
     // Epic F (compliance).
     ComplianceService,
+    // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.
+    IysSyncService,
     // Epic E — funnel A/B + surveys.
     // Epic F — 2FA (TOTP + SMS).
     TwoFactorService,

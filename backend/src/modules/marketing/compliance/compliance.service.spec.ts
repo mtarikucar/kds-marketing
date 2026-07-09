@@ -9,13 +9,14 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
-  // emitSmsOptEvent wraps the flip + phone read + outbox append in one
-  // $transaction; the mock just runs the callback against the same mock
-  // client (tx === prisma), matching the established test idiom elsewhere
-  // (e.g. review-sync.service.spec.ts).
+  // emitSmsOptEvent wraps the flip + phone read + outbox append + İYS enqueue
+  // in one $transaction; the mock just runs the callback against the same
+  // mock client (tx === prisma), matching the established test idiom
+  // elsewhere (e.g. review-sync.service.spec.ts).
   (prisma.$transaction as unknown as jest.Mock) = jest.fn((fn: any) => fn(prisma));
   const outbox = { append: jest.fn().mockResolvedValue('evt-1') };
-  return { prisma, outbox, svc: new ComplianceService(prisma as any, outbox as any) };
+  const iysSync = { enqueueConsent: jest.fn().mockResolvedValue(undefined), retryDlq: jest.fn() };
+  return { prisma, outbox, iysSync, svc: new ComplianceService(prisma as any, outbox as any, iysSync as any) };
 }
 
 // requestExport now reads every personal-data category in parallel; default them
@@ -108,7 +109,7 @@ describe('ComplianceService', () => {
   });
 
   it('does not fail the consent write when the phone lookup (findUnique) rejects', async () => {
-    const { prisma, outbox, svc } = makeSvc();
+    const { prisma, outbox, iysSync, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-5' });
     (prisma.lead.update as jest.Mock).mockResolvedValue({});
@@ -119,6 +120,103 @@ describe('ComplianceService', () => {
       expect.objectContaining({ where: { id: 'lead-1' }, data: { smsOptOut: true } }),
     );
     expect(outbox.append).not.toHaveBeenCalled();
+    expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  // Phase 2 Task 3 — İYS auto-push: MARKETING_SMS consent enqueues an
+  // IysSyncJob (ONAY on grant, RET on revoke) via IysSyncService, inside the
+  // SAME transaction as the smsOptOut flip + blacklist-mirror outbox event —
+  // its own independent savepoint (see emitSmsOptEvent's docstring).
+  it('MARKETING_SMS revoke (granted=false) enqueues an İYS RET job', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-6' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false, { source: 'form' });
+
+    expect(iysSync.enqueueConsent).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({
+        workspaceId: WS,
+        leadId: 'lead-1',
+        recipient: '05551112233',
+        direction: 'RET',
+        source: 'HS_WEB',
+      }),
+    );
+  });
+
+  it('MARKETING_SMS grant (granted=true) enqueues an İYS ONAY job', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-7' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', true);
+
+    expect(iysSync.enqueueConsent).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ direction: 'ONAY', recipient: '05551112233' }),
+    );
+  });
+
+  it('still asks IysSyncService to enqueue (with recipient undefined) when the lead has no phone — enqueueConsent itself is the no-op gate', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-8' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: null });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false);
+
+    expect(iysSync.enqueueConsent).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ recipient: null }),
+    );
+  });
+
+  it('does not fail the consent write when the İYS enqueue throws', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-9' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+    iysSync.enqueueConsent.mockRejectedValue(new Error('iys down'));
+
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).resolves.toMatchObject({ id: 'cr-9' });
+  });
+
+  it('does not fail the consent write, and still enqueues nothing, when the İYS enqueue phone lookup rejects', async () => {
+    const { prisma, outbox, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-10' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockRejectedValue(new Error('db down'));
+
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).resolves.toMatchObject({ id: 'cr-10' });
+    expect(outbox.append).not.toHaveBeenCalled();
+    expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  it('does NOT enqueue an İYS job for MARKETING_EMAIL consent', async () => {
+    const { prisma, iysSync, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-11' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false, { source: 'form' });
+
+    expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  it('manager retry delegates to IysSyncService.retryDlq for the workspace', async () => {
+    const { iysSync, svc } = makeSvc();
+    iysSync.retryDlq.mockResolvedValue({ count: 2 });
+    await expect(svc.retryIys(WS)).resolves.toEqual({ count: 2 });
+    expect(iysSync.retryDlq).toHaveBeenCalledWith(WS);
   });
 
   it('does not touch opt-out flags for DATA_PROCESSING consent', async () => {

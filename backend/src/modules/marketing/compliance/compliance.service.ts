@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
+import { IysSyncService } from './iys-sync.service';
 
 const OPT_OUT_FIELD: Record<string, 'emailOptOut' | 'smsOptOut' | 'waOptOut'> = {
   MARKETING_EMAIL: 'emailOptOut',
@@ -28,6 +29,7 @@ export class ComplianceService {
   constructor(
     private prisma: PrismaService,
     private readonly outbox: OutboxService,
+    private readonly iysSync: IysSyncService,
   ) {}
 
   private async assertLead(workspaceId: string, leadId: string) {
@@ -83,6 +85,14 @@ export class ComplianceService {
    * a caught inner error still discarded every earlier write in the same
    * interactive transaction). The SAVEPOINT below isolates the read+append:
    * on failure, only that sub-scope rolls back and the flip commits normally.
+   *
+   * Phase 2 Task 3 (İYS auto-push) adds a SECOND, INDEPENDENT savepoint block
+   * right after this one that enqueues an IysSyncJob via IysSyncService — its
+   * own savepoint (not shared with the blacklist-mirror block above) so a
+   * failure in EITHER best-effort mirror can never take down the other, and
+   * neither can ever touch the smsOptOut flip itself. Only MARKETING_SMS
+   * consent maps to İYS (type MESAJ) — ARAMA (call consent) lands with
+   * Phase 5's voice campaigns.
    */
   private async emitSmsOptEvent(
     workspaceId: string,
@@ -91,6 +101,7 @@ export class ComplianceService {
     consentRecordId: string,
   ): Promise<void> {
     const eventType = granted ? MarketingEventTypes.SmsOptedIn : MarketingEventTypes.SmsOptedOut;
+    const direction = granted ? 'ONAY' : 'RET';
     await this.prisma.$transaction(async (tx) => {
       await tx.lead.update({ where: { id: leadId }, data: { smsOptOut: !granted } });
       await tx.$executeRawUnsafe('SAVEPOINT sp_sms_opt_event');
@@ -111,6 +122,23 @@ export class ComplianceService {
       } catch (e: any) {
         await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_sms_opt_event');
         this.logger.warn(`Failed to enqueue ${eventType} for lead=${leadId}: ${e?.message ?? e}`);
+      }
+
+      await tx.$executeRawUnsafe('SAVEPOINT sp_iys_enqueue');
+      try {
+        const lead = await tx.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+        await this.iysSync.enqueueConsent(tx, {
+          workspaceId,
+          leadId,
+          recipient: lead?.phone,
+          direction,
+          source: 'HS_WEB',
+          consentAt: new Date(),
+        });
+        await tx.$executeRawUnsafe('RELEASE SAVEPOINT sp_iys_enqueue');
+      } catch (e: any) {
+        await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_iys_enqueue');
+        this.logger.warn(`Failed to enqueue İYS sync job for lead=${leadId}: ${e?.message ?? e}`);
       }
     });
   }
@@ -279,5 +307,11 @@ export class ComplianceService {
       orderBy: { requestedAt: 'desc' },
       take: 100,
     });
+  }
+
+  /** Manager-triggered reset for the İYS auto-push DLQ (Phase 2 Task 3):
+   *  DLQ → PENDING, attempts=0, scoped to the caller's workspace. */
+  retryIys(workspaceId: string) {
+    return this.iysSync.retryDlq(workspaceId);
   }
 }

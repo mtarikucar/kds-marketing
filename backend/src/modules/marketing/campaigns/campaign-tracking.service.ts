@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
+import { IysSyncService } from '../compliance/iys-sync.service';
 
 /**
  * Resolves the unguessable per-recipient token behind open/click/unsubscribe
@@ -17,6 +18,7 @@ export class CampaignTrackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxService,
+    private readonly iysSync: IysSyncService,
   ) {}
 
   async open(token: string): Promise<void> {
@@ -106,6 +108,14 @@ export class CampaignTrackingService {
    * every earlier write in the same interactive transaction). The SAVEPOINT
    * below isolates the read+append: on failure, only that sub-scope rolls
    * back and the flip commits normally.
+   *
+   * Phase 2 Task 3 (İYS auto-push) adds a SECOND, INDEPENDENT savepoint block
+   * right after this one that enqueues an IysSyncJob (direction RET — a
+   * public unsubscribe is always an opt-out) via IysSyncService — its own
+   * savepoint (not shared with the blacklist-mirror block above) so a
+   * failure in EITHER best-effort mirror can never take down the other, and
+   * neither can ever touch the smsOptOut flip or the UNSUBSCRIBED status
+   * bump that runs right after this call returns.
    */
   private async emitSmsOptOutEvent(workspaceId: string, leadId: string, recipientId: string): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
@@ -128,6 +138,23 @@ export class CampaignTrackingService {
       } catch (e: any) {
         await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_sms_optout_event');
         this.logger.warn(`Failed to enqueue ${MarketingEventTypes.SmsOptedOut} for lead=${leadId}: ${e?.message ?? e}`);
+      }
+
+      await tx.$executeRawUnsafe('SAVEPOINT sp_iys_enqueue');
+      try {
+        const lead = await tx.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+        await this.iysSync.enqueueConsent(tx, {
+          workspaceId,
+          leadId,
+          recipient: lead?.phone,
+          direction: 'RET',
+          source: 'HS_MESAJ',
+          consentAt: new Date(),
+        });
+        await tx.$executeRawUnsafe('RELEASE SAVEPOINT sp_iys_enqueue');
+      } catch (e: any) {
+        await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_iys_enqueue');
+        this.logger.warn(`Failed to enqueue İYS sync job for lead=${leadId}: ${e?.message ?? e}`);
       }
     });
   }

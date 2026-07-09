@@ -72,4 +72,14 @@ export class ComplianceController {
   erasure(@Param('leadId') leadId: string, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.requestErasure(u.workspaceId, leadId, u.id);
   }
+
+  /** Phase 2 Task 3 (İYS auto-push) — manager retry: flips this workspace's
+   *  DLQ IysSyncJob rows back to PENDING (attempts=0) so the next worker
+   *  tick retries them. */
+  @Post('iys/retry')
+  @Audit({ action: 'compliance.iys.retry', resourceType: 'workspace' })
+  @RequirePermission('settings.manage')
+  retryIys(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.retryIys(u.workspaceId);
+  }
 }
