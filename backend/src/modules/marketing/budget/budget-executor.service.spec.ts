@@ -29,6 +29,7 @@ describe('BudgetExecutorService', () => {
           overrides.paceCap != null ? { recommendedDailyCap: overrides.paceCap, workspaceId: WS } : null,
         ),
       },
+      adRuleLog: { findFirst: jest.fn().mockResolvedValue((overrides as any).recentRuleWrite ? { id: 'log-1' } : null) },
     };
     const approvals = { markApplied: jest.fn().mockResolvedValue({}) };
     const capability = { canWriteBudget: jest.fn((p: string) => (overrides.canWrite ? overrides.canWrite(p) : false)) };
@@ -136,6 +137,7 @@ describe('BudgetExecutorService.applyAutonomous (Growth Autopilot spec D6/D8)', 
           overrides.paceCap != null ? { recommendedDailyCap: overrides.paceCap, workspaceId: WS } : null,
         ),
       },
+      adRuleLog: { findFirst: jest.fn().mockResolvedValue((overrides as any).recentRuleWrite ? { id: 'log-1' } : null) },
     };
     const approvals = { markApplied: jest.fn(), enqueue: jest.fn() };
     const capability = { canWriteBudget: jest.fn((p: string) => (overrides.canWrite ? overrides.canWrite(p) : false)) };
@@ -199,6 +201,20 @@ describe('BudgetExecutorService.applyAutonomous (Growth Autopilot spec D6/D8)', 
     });
     await svc.applyAutonomous(WS, 'b1', AFTER, 'run-nocap');
     expect(ads.setDailyBudget).toHaveBeenCalledWith(WS, 'acc-1', 'c1', 120);
+  });
+
+  it('defers the live push when an ad-rule wrote this campaign recently (writer coordination)', async () => {
+    const { svc, prisma, ads } = makeAuto({
+      budget: autonomousBudget,
+      canWrite: (p) => p === 'META',
+      metaAccount: { id: 'acc-1' },
+      recentRuleWrite: true, // a tactical ad-rule already changed c1's budget
+    } as any);
+    const r = await svc.applyAutonomous(WS, 'b1', AFTER, 'run-defer');
+    // Plan still commits, but the autopilot does NOT clobber the rule's fresh change.
+    expect(prisma.budgetAllocation.updateMany).toHaveBeenCalledTimes(1);
+    expect(ads.setDailyBudget).not.toHaveBeenCalled();
+    expect(r.results[0].note).toMatch(/deferred to a recent ad-rule/);
   });
 
   it('refuses when the env flag is off (ships dark) — nothing committed', async () => {

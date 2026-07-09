@@ -42,23 +42,36 @@ export class BudgetPerformanceSource {
     const since = new Date(now.getTime() - BudgetPerformanceSource.WINDOW_DAYS * 86_400_000);
     const metrics = await this.prisma.adMetric.findMany({
       where: { workspaceId, date: { gte: since } },
-      select: { spend: true, revenue: true, leads: true, adAccount: { select: { provider: true } } },
+      select: { spend: true, revenue: true, leads: true, campaignId: true, adAccount: { select: { provider: true } } },
     });
 
-    // Aggregate spend/revenue/leads per allocator channel.
-    const byChannel = new Map<string, { spend: number; revenue: number; conversions: number }>();
-    for (const m of metrics) {
-      const channel = PROVIDER_CHANNEL[m.adAccount?.provider ?? ''];
-      if (!channel) continue;
-      const agg = byChannel.get(channel) ?? { spend: 0, revenue: 0, conversions: 0 };
+    // Aggregate BOTH per (channel, campaign) — so the entry-based allocator sees
+    // each campaign's OWN true ROAS instead of the channel blend — AND per channel
+    // (for channel-rollup allocations that carry no campaignRef).
+    type Agg = { spend: number; revenue: number; conversions: number };
+    const empty = (): Agg => ({ spend: 0, revenue: 0, conversions: 0 });
+    const byCampaign = new Map<string, Agg>();
+    const byChannel = new Map<string, Agg>();
+    const bump = (map: Map<string, Agg>, key: string, m: (typeof metrics)[number]) => {
+      const agg = map.get(key) ?? empty();
       agg.spend += num(m.spend);
       agg.revenue += num(m.revenue);
       agg.conversions += m.leads ?? 0;
-      byChannel.set(channel, agg);
+      map.set(key, agg);
+    };
+    for (const m of metrics) {
+      const channel = PROVIDER_CHANNEL[m.adAccount?.provider ?? ''];
+      if (!channel) continue;
+      bump(byCampaign, `${channel}:${m.campaignId ?? ''}`, m);
+      bump(byChannel, channel, m);
     }
 
     return allocations.map((a) => {
-      const agg = byChannel.get(a.channel) ?? { spend: 0, revenue: 0, conversions: 0 };
+      // Campaign allocation → that campaign's own perf; channel-rollup (no
+      // campaignRef) → the channel total.
+      const agg = a.campaignRef
+        ? byCampaign.get(`${a.channel}:${a.campaignRef}`) ?? empty()
+        : byChannel.get(a.channel) ?? empty();
       return {
         channel: a.channel,
         campaignRef: a.campaignRef,

@@ -158,6 +158,26 @@ export class BudgetExecutorService {
    * The shared per-channel commit + credential-gated live-write loop — the
    * money-safety core both lanes (APPROVED and AUTO) run through unchanged.
    */
+  /** Minutes an ad-rule budget change on a campaign blocks an autopilot push. */
+  private static readonly WRITER_COORD_MIN = 60;
+
+  /** True when a tactical ad-rule wrote a budget change to this campaign recently. */
+  private async recentRuleBudgetWrite(workspaceId: string, campaignRef: string): Promise<boolean> {
+    if (!campaignRef) return false;
+    const since = new Date(Date.now() - BudgetExecutorService.WRITER_COORD_MIN * 60_000);
+    const recent = await this.prisma.adRuleLog.findFirst({
+      where: {
+        workspaceId,
+        entityId: campaignRef,
+        action: { in: ['INCREASE_BUDGET', 'DECREASE_BUDGET'] },
+        ok: true,
+        createdAt: { gte: since },
+      },
+      select: { id: true },
+    });
+    return !!recent;
+  }
+
   /** The pacer's recommended daily spend cap for this budget (0 when unset). */
   private async paceCap(workspaceId: string, budgetId: string): Promise<number> {
     const row = await this.prisma.pacingState.findUnique({
@@ -227,6 +247,14 @@ export class BudgetExecutorService {
       }
       if (!(a.budget > 0)) {
         results.push({ ...base, applied: false, note: 'plan committed; skipped live write for a non-positive budget' });
+        continue;
+      }
+      // Writer coordination: if a tactical ad-rule pushed a budget change to this
+      // same campaign within the coordination window, DEFER — don't let the
+      // autopilot clobber the rule's fresh decision (prevents the two writers
+      // thrashing the same Meta campaign). The plan still commits.
+      if (await this.recentRuleBudgetWrite(workspaceId, ref)) {
+        results.push({ ...base, applied: false, note: `plan committed; deferred to a recent ad-rule budget change on ${ref}` });
         continue;
       }
       // Throttle the live push to the pace cap (never below a rounded 0.01).
