@@ -219,7 +219,7 @@ describe('NetgsmMoPollService.poll', () => {
 
       await service.poll();
 
-      const expectedHash = createHash('sha256').update(`${row.no} ${row.msg} ${row.date}`).digest('hex');
+      const expectedHash = createHash('sha256').update(`${row.no}\0${row.msg}\0${row.date}`).digest('hex');
       expect(ingress.ingest).toHaveBeenCalledWith(
         { id: 'ch-1', workspaceId: 'w1', type: 'SMS' },
         expect.objectContaining({ externalMessageId: `netgsm-mo-digest:${expectedHash}` }),

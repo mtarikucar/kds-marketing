@@ -154,7 +154,7 @@ export class NetgsmMoPollService {
         this.logger.warn(
           `netgsm-mo-poll: recovered ${recovered} message(s) the push webhook missed for channel=${channel.id} account=${account.usercode}`,
         );
-        await this.stampRecovery(channel.id);
+        await this.stampRecovery(channel.workspaceId, channel.id);
       }
     }
 
@@ -207,7 +207,7 @@ export class NetgsmMoPollService {
    *  branch is expected to be rare in practice. */
   private digestId(msg: SmsV2InboxMessage): string {
     const hash = createHash('sha256')
-      .update(`${msg.no} ${msg.msg} ${msg.date ?? ''}`)
+      .update(`${msg.no}\0${msg.msg}\0${msg.date ?? ''}`)
       .digest('hex');
     return `netgsm-mo-digest:${hash}`;
   }
@@ -218,9 +218,9 @@ export class NetgsmMoPollService {
    *  `rollupCampaignStats` merge pattern, so a concurrent settings save (which
    *  replaces `configPublic` wholesale — see ChannelsService.update) loses at
    *  most this one field's staleness, never the reverse. */
-  private async stampRecovery(channelId: string): Promise<void> {
+  private async stampRecovery(workspaceId: string, channelId: string): Promise<void> {
     const fresh = await this.prisma.channel.findFirst({
-      where: { id: channelId },
+      where: { id: channelId, workspaceId },
       select: { configPublic: true },
     });
     const pub =
