@@ -1,4 +1,5 @@
-import { linkedinRest, LinkedinResult } from '../../../common/util/linkedin-api.util';
+import { linkedinRest, LinkedinResult, linkedinApiVersion } from '../../../common/util/linkedin-api.util';
+import { safeFetch } from '../../../common/util/safe-fetch';
 import { AdMetricRow } from './ads.types';
 
 /**
@@ -84,4 +85,75 @@ function ymd(iso: string): { y: number; m: number; d: number } {
 function isoFromParts(y: number, m: number, d: number): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${y}-${pad(m)}-${pad(d)}`;
+}
+
+// ── WRITE (campaign management) ──────────────────────────────────────────────
+
+const LINKEDIN_API_BASE = 'https://api.linkedin.com';
+
+/** WRITE result, mirroring MetaWriteResult { ok, id?, error?, isAuthError? }. */
+export interface LinkedinWriteResult {
+  ok: boolean;
+  id?: string;
+  error?: string;
+  isAuthError?: boolean;
+}
+
+/**
+ * Partial-update a LinkedIn ad campaign (status and/or daily budget).
+ *
+ * LinkedIn's rest.li PARTIAL_UPDATE requires the `X-RestLi-Method: PARTIAL_UPDATE`
+ * header, which the shared `linkedinRest` transport does not emit — so, like
+ * `linkedinUpload`, this composes the request directly over safeFetch, reusing
+ * the same header set linkedinRest builds (Bearer + LinkedIn-Version +
+ * X-Restli-Protocol-Version) plus the method override. Without that header
+ * LinkedIn treats the POST as a full replace/create, so it is load-bearing.
+ *
+ * `dailyBudget` is a MoneyAmount → `currencyCode` is REQUIRED (from
+ * AdAccount.currency); the caller guard-throws when currency is unknown rather
+ * than sending an invalid amount. Status enum ACTIVE/PAUSED passes straight
+ * through. Success is 204 No Content. Never throws — returns a result: 401 →
+ * isAuthError (reauth); 403 → permission/scope, NOT reauth. Legacy equivalent is
+ * POST /v2/adCampaignsV2/{id}.
+ */
+export async function updateLinkedinCampaign(
+  token: string,
+  campaignId: string,
+  patch: { status?: 'ACTIVE' | 'PAUSED'; dailyBudgetMajor?: number; currencyCode?: string },
+): Promise<LinkedinWriteResult> {
+  const $set: Record<string, unknown> = {};
+  if (patch.status) $set.status = patch.status;
+  if (patch.dailyBudgetMajor != null) {
+    $set.dailyBudget = { amount: String(patch.dailyBudgetMajor), currencyCode: patch.currencyCode };
+  }
+
+  let res: Response;
+  try {
+    res = await safeFetch(`${LINKEDIN_API_BASE}/rest/adCampaigns/${campaignId}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'LinkedIn-Version': linkedinApiVersion(),
+        'X-Restli-Protocol-Version': '2.0.0',
+        'X-RestLi-Method': 'PARTIAL_UPDATE',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ patch: { $set } }),
+      timeoutMs: 20_000,
+    });
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? 'network error').slice(0, 400), isAuthError: false };
+  }
+
+  // 204 No Content on success — do NOT read the (empty) body.
+  if (res.ok) return { ok: true, id: campaignId };
+
+  // 401 = invalid/expired token → reauth. 403 = permission/scope → NOT reauth.
+  const body: any = await res.json().catch(() => null);
+  const message = String(body?.message ?? `LinkedIn HTTP ${res.status}`).slice(0, 300);
+  return {
+    ok: false,
+    error: `LinkedIn campaign update ${res.status}: ${message}`,
+    isAuthError: res.status === 401,
+  };
 }

@@ -65,3 +65,101 @@ export async function pullTiktokInsights(
   } while (page <= totalPages);
   return rows;
 }
+
+// ── WRITE (campaign management) ──────────────────────────────────────────────
+//
+// TikTok Business Ads Management writes, mirroring the read transport above
+// (safeFetch → business-api.tiktok.com/open_api/v1.3, 'Access-Token' header,
+// {code,message,data} envelope where code===0 is success). Unlike the read
+// pulls these NEVER throw — they return a TiktokWriteResult (same shape as
+// MetaWriteResult) so the service can flip the account to needs-reauth on an
+// auth failure and surface a plain error otherwise.
+
+const TIKTOK_API_BASE = 'https://business-api.tiktok.com/open_api/v1.3';
+
+/** WRITE result, mirroring MetaWriteResult { ok, id?, error?, isAuthError? }. */
+export interface TiktokWriteResult {
+  ok: boolean;
+  id?: string;
+  error?: string;
+  isAuthError?: boolean;
+}
+
+/**
+ * True when a TikTok response code/message signals a token/permission failure
+ * that needs a reconnect. Same set matched on the read path
+ * (ad-account.service.ts): 40001/40002 (param/permission), 40100–40110
+ * (token/session). A non-auth code (e.g. 50000 server) stays retry-friendly.
+ */
+function isTiktokAuthFailure(code: any, message: any): boolean {
+  return /access[_ ]?token|auth|not authorized|invalid token|\b(4000[12]|4010\d|40110)\b/i.test(
+    `${code} ${message}`,
+  );
+}
+
+/** Generic POST helper for the v1.3 write endpoints. Never throws. */
+async function tiktokWrite(
+  token: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<TiktokWriteResult> {
+  let res: Response;
+  try {
+    res = await safeFetch(`${TIKTOK_API_BASE}/${path}`, {
+      method: 'POST',
+      headers: { 'Access-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      timeoutMs: 20_000,
+    });
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? 'network error').slice(0, 400), isAuthError: false };
+  }
+  const json: any = await res.json().catch(() => ({}));
+  if (json?.code !== 0) {
+    // Carry the numeric code so the caller can classify auth failures reliably.
+    return {
+      ok: false,
+      error: `TikTok write [${json?.code}]: ${String(json?.message ?? res.status).slice(0, 300)}`,
+      isAuthError: isTiktokAuthFailure(json?.code, json?.message),
+    };
+  }
+  return { ok: true, id: undefined };
+}
+
+/**
+ * Set a TikTok campaign's daily budget. `dailyBudgetMajor` is in the
+ * advertiser's ACCOUNT-CURRENCY MAJOR units (e.g. 50.00) — NOT Meta-style minor
+ * units, so the caller must NOT ×100. `budget_mode: 'BUDGET_MODE_DAY'` is
+ * mandatory or TikTok rejects the update. POSTs /campaign/update/.
+ */
+export function setTiktokCampaignBudget(
+  token: string,
+  advertiserId: string,
+  campaignId: string,
+  dailyBudgetMajor: number,
+): Promise<TiktokWriteResult> {
+  return tiktokWrite(token, 'campaign/update/', {
+    advertiser_id: advertiserId,
+    campaign_id: campaignId,
+    budget: dailyBudgetMajor,
+    budget_mode: 'BUDGET_MODE_DAY',
+  });
+}
+
+/**
+ * Pause/resume a TikTok campaign. Status lives on its OWN endpoint
+ * (/campaign/status/update/) — NOT /campaign/update/ — and is set via
+ * `operation_status` over a `campaign_ids` array: ACTIVE→ENABLE, PAUSED→DISABLE.
+ */
+export function setTiktokCampaignStatus(
+  token: string,
+  advertiserId: string,
+  campaignId: string,
+  status: 'ACTIVE' | 'PAUSED',
+): Promise<TiktokWriteResult> {
+  return tiktokWrite(token, 'campaign/status/update/', {
+    advertiser_id: advertiserId,
+    campaign_ids: [campaignId],
+    operation_status: status === 'ACTIVE' ? 'ENABLE' : 'DISABLE',
+  });
+}
