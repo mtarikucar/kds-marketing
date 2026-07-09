@@ -18,6 +18,19 @@ jest.mock('../../../common/util/meta-graph.util', () => ({
 jest.mock('../../../common/crypto/secret-box.helper', () => ({
   openSecret: jest.fn((s: string) => s),
 }));
+// Keep the user-data builders real; stub only the network sends.
+jest.mock('../ads/tiktok-capi.client', () => ({
+  ...jest.requireActual('../ads/tiktok-capi.client'),
+  sendTiktokEvent: jest.fn(),
+}));
+jest.mock('../ads/google-ads-conversions.client', () => ({
+  ...jest.requireActual('../ads/google-ads-conversions.client'),
+  uploadClickConversion: jest.fn(),
+}));
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { sendTiktokEvent } = require('../ads/tiktok-capi.client') as { sendTiktokEvent: jest.Mock };
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { uploadClickConversion } = require('../ads/google-ads-conversions.client') as { uploadClickConversion: jest.Mock };
 
 const mockGraph = metaGraphFetch as jest.Mock;
 
@@ -78,6 +91,8 @@ describe('MetaCapiConsumer', () => {
     process.env.META_APP_ID = 'app';
     process.env.META_APP_SECRET = 'secret';
     delete process.env.META_CAPI_TEST_EVENT_CODE;
+    // Keep other providers OFF for the Meta-focused tests.
+    for (const k of ['TIKTOK_BUSINESS_APP_ID', 'TIKTOK_BUSINESS_APP_SECRET', 'GOOGLE_ADS_DEVELOPER_TOKEN', 'GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN']) delete process.env[k];
     prisma = {
       adAccount: {
         findFirst: jest.fn().mockResolvedValue(account),
@@ -88,8 +103,18 @@ describe('MetaCapiConsumer', () => {
     };
     bus = { on: jest.fn(), off: jest.fn() };
     mockGraph.mockReset().mockResolvedValue({ ok: true, error: null });
+    sendTiktokEvent.mockReset().mockResolvedValue({ ok: true });
+    uploadClickConversion.mockReset().mockResolvedValue({ ok: true });
     svc = new MetaCapiConsumer(prisma as any, bus as any);
   });
+
+  const tiktokEnv = () => { process.env.TIKTOK_BUSINESS_APP_ID = 'a'; process.env.TIKTOK_BUSINESS_APP_SECRET = 'b'; };
+  const googleEnv = () => {
+    process.env.GOOGLE_ADS_DEVELOPER_TOKEN = 'd';
+    process.env.GOOGLE_ADS_CLIENT_ID = 'c';
+    process.env.GOOGLE_ADS_CLIENT_SECRET = 's';
+    process.env.GOOGLE_ADS_REFRESH_TOKEN = 'r';
+  };
 
   const ev = (type: string, payload: any) => ({
     id: 'evt-100',
@@ -175,5 +200,43 @@ describe('MetaCapiConsumer', () => {
     expect(prisma.adAccount.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'acc-1' }, data: expect.objectContaining({ status: 'TOKEN_EXPIRED' }) }),
     );
+  });
+
+  it('TikTok: fires CompletePayment with hashed email + ttclid when configured', async () => {
+    tiktokEnv();
+    delete process.env.META_APP_ID; // isolate to TikTok
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'tt-1', tiktokPixelCode: 'PX', accessToken: 'tt-token', currency: 'TRY' });
+    prisma.leadAttribution.findUnique.mockResolvedValue({ clickId: 'ttclid-9', clickIdType: 'TTCLID', ctwaClid: null, createdAt: new Date() });
+    await (svc as any).send('evt-tt', WS, 'lead-1', { value: 120, currency: 'TRY', occurredAt: '2026-07-02T00:00:00Z' });
+    expect(sendTiktokEvent).toHaveBeenCalledTimes(1);
+    const [token, pixel, event] = sendTiktokEvent.mock.calls[0];
+    expect(token).toBe('tt-token');
+    expect(pixel).toBe('PX');
+    expect(event).toMatchObject({ event: 'CompletePayment', event_id: 'evt-tt', properties: { value: 120, currency: 'TRY' } });
+    expect(event.user.email).toEqual([hex('ada@x.com')]);
+    expect(event.user.ttclid).toBe('ttclid-9');
+    expect(mockGraph).not.toHaveBeenCalled(); // Meta off
+  });
+
+  it('Google: uploads a click conversion with gclid when configured', async () => {
+    googleEnv();
+    delete process.env.META_APP_ID; // isolate to Google
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'g-1', googleConversionActionId: 'customers/1/conversionActions/9', accessToken: 'refresh-tok', externalAdId: '123-456-7890', currency: 'TRY' });
+    prisma.leadAttribution.findUnique.mockResolvedValue({ clickId: 'gclid-9', clickIdType: 'GCLID', ctwaClid: null, createdAt: new Date() });
+    await (svc as any).send('evt-g', WS, 'lead-1', { value: 300, currency: 'TRY', occurredAt: '2026-07-02T00:00:00Z' });
+    expect(uploadClickConversion).toHaveBeenCalledTimes(1);
+    const [refresh, customerId, conversion] = uploadClickConversion.mock.calls[0];
+    expect(refresh).toBe('refresh-tok');
+    expect(customerId).toBe('123-456-7890');
+    expect(conversion).toMatchObject({ gclid: 'gclid-9', conversionAction: 'customers/1/conversionActions/9', conversionValue: 300, currencyCode: 'TRY' });
+  });
+
+  it('Google: skips upload when the click id is not a GCLID', async () => {
+    googleEnv();
+    delete process.env.META_APP_ID;
+    prisma.adAccount.findFirst.mockResolvedValue({ id: 'g-1', googleConversionActionId: 'ca', accessToken: 'r', externalAdId: '1', currency: 'TRY' });
+    prisma.leadAttribution.findUnique.mockResolvedValue({ clickId: 'fbclid-x', clickIdType: 'FBCLID', ctwaClid: null, createdAt: new Date() });
+    await (svc as any).send('evt-g2', WS, 'lead-1', { value: 10, currency: 'TRY', occurredAt: '2026-07-02T00:00:00Z' });
+    expect(uploadClickConversion).not.toHaveBeenCalled();
   });
 });

@@ -3751,6 +3751,11 @@ model AdAccount {
   // accessToken is reused. Feeding real CRM outcomes (won/paid) back to Meta.
   pixelId        String?
   capiToken      String?   @db.Text // SEALED
+  // Per-provider server-side conversion destinations (non-secret). TikTok Events
+  // API needs the pixel code; Google Ads offline upload needs the conversion
+  // action resource id. Null → that provider's conversion feedback stays inert.
+  tiktokPixelCode          String?
+  googleConversionActionId String?
   lastPulledAt   DateTime?
   lastError      String?   @db.Text
   createdAt      DateTime  @default(now())
