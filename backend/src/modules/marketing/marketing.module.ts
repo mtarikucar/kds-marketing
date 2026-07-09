@@ -380,6 +380,8 @@ import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
 import { LinkedinAdsOAuthController } from './ads/linkedin-ads-oauth.controller';
 import { LinkedinAdsOAuthService } from './ads/linkedin-ads-oauth.service';
+import { GoogleAdsOAuthController } from './ads/google-ads-oauth.controller';
+import { GoogleAdsOAuthService } from './ads/google-ads-oauth.service';
 // TikTok-for-Business OAuth (ads module — NOT social-planner)
 import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
 import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
@@ -585,6 +587,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingMediaWebhookController,
     SocialCampaignsController,
     LinkedinAdsOAuthController,
+    GoogleAdsOAuthController,
   ],
   providers: [
     // Services
@@ -841,6 +844,7 @@ import { WalletService } from './wallet/wallet.service';
     SocialTokenRefreshService,
     // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
     LinkedinAdsOAuthService,
+    GoogleAdsOAuthService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
