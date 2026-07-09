@@ -126,6 +126,7 @@ import { PublicChannelResolverService } from './channels/public-channel-resolver
 import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
 import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
+import { NetgsmMoPollService } from './channels/netgsm-mo-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
 import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
@@ -679,6 +680,10 @@ import { WalletService } from './wallet/wallet.service';
     // locked sweeper that resolves still-pending outbound SMS via the report API.
     NetgsmReportClient,
     NetgsmDlrPollService,
+    // Backup for the MO (inbound SMS) push webhook: hourly re-poll of NetGSM's
+    // inbox() so panel misconfiguration (wrong/missing callback URL) doesn't
+    // silently drop customer replies with no error visible to us.
+    NetgsmMoPollService,
     // Blacklist sync (defense-in-depth): mirrors lead smsOptOut transitions
     // onto NetGSM's account-level blacklist — subscribes via DomainEventBus.
     NetgsmBlacklistSyncService,

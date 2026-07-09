@@ -1627,6 +1627,7 @@
     "verifyFailCreds": "Doğrulama başarısız — bilgileri kontrol edin",
     "verifyUnreachable": "NetGSM'e ulaşılamadı — tekrar deneyin",
     "verifyHeaderNotApproved": "Gönderici başlık bu hesapta onaylı değil",
+    "moWebhookMissing": "MO webhook'u mesaj kaçırıyor — panel URL'sini kontrol edin",
     "verify": "Doğrula",
     "secretsSet": "ayarlı bilgiler",
     "public": "herkese açık web sohbet",

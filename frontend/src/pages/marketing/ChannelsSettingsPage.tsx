@@ -84,6 +84,18 @@ function statusTone(status: string) {
   return 'neutral' as const;
 }
 
+/** True when the NetGSM MO-poll backup (netgsm-mo-poll.service.ts) stamped a
+ *  webhook-miss recovery within the last 48h — signals the push webhook (the
+ *  primary inbound path) is likely misconfigured (wrong/missing panel URL) and
+ *  silently dropping customer replies. */
+const MO_RECOVERY_BADGE_WINDOW_MS = 48 * 3_600_000;
+function isMoWebhookRecoveryRecent(lastMoPollRecovery: unknown): boolean {
+  if (typeof lastMoPollRecovery !== 'string') return false;
+  const stamped = new Date(lastMoPollRecovery).getTime();
+  if (Number.isNaN(stamped)) return false;
+  return Date.now() - stamped <= MO_RECOVERY_BADGE_WINDOW_MS;
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 // This page MANAGES existing channels (answering agent / verify / delete /
 // embed & callback URLs). Connecting a new channel now lives in the unified
@@ -225,6 +237,11 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
                           className="h-4 w-4 text-success"
                           aria-label={t('channels.verified', 'Verified')}
                         />
+                      )}
+                      {c.type === 'SMS' && isMoWebhookRecoveryRecent((c.configPublic as Record<string, unknown> | null)?.lastMoPollRecovery) && (
+                        <Badge tone="warning" size="sm">
+                          {t('channels.moWebhookMissing', 'MO webhook is missing messages — check the NetGSM panel URL')}
+                        </Badge>
                       )}
                     </div>
                     <p className="text-caption text-muted-foreground mt-0.5">
