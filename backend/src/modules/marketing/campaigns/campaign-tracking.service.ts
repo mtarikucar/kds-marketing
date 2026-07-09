@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { OutboxService } from '../../outbox/outbox.service';
+import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
 
 /**
  * Resolves the unguessable per-recipient token behind open/click/unsubscribe
@@ -10,7 +12,12 @@ import { PrismaService } from '../../../prisma/prisma.service';
  */
 @Injectable()
 export class CampaignTrackingService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(CampaignTrackingService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly outbox: OutboxService,
+  ) {}
 
   async open(token: string): Promise<void> {
     const r = await this.prisma.campaignRecipient.findUnique({ where: { token } });
@@ -59,6 +66,9 @@ export class CampaignTrackingService {
     });
     const field = campaign?.channel === 'EMAIL' ? 'emailOptOut' : campaign?.channel === 'SMS' ? 'smsOptOut' : 'waOptOut';
     await this.prisma.lead.updateMany({ where: { id: r.leadId, workspaceId: r.workspaceId }, data: { [field]: true } });
+    if (field === 'smsOptOut') {
+      await this.emitSmsOptOutEvent(r.workspaceId, r.leadId, r.id);
+    }
     if (r.status !== 'UNSUBSCRIBED') {
       // Race-safe claim: only the first hit flips the status + counts (the opt-out
       // above is idempotent and always runs, so consent is honored regardless).
@@ -69,6 +79,30 @@ export class CampaignTrackingService {
       if (claim.count === 1) await this.bump(r.campaignId, 'unsubscribed');
     }
     return true;
+  }
+
+  /**
+   * Mirrors an SMS unsubscribe onto NetgsmBlacklistSyncService via the outbox
+   * (defense-in-depth NetGSM account-blacklist sync — see that service's
+   * docstring). Best-effort: the opt-out flag is already durably set above,
+   * so a failure enqueueing the follow-on sync event is logged rather than
+   * failing the whole unsubscribe request. Keyed on the recipient row id so a
+   * retried/duplicate POST of the SAME unsubscribe click collapses into one
+   * outbox row.
+   */
+  private async emitSmsOptOutEvent(workspaceId: string, leadId: string, recipientId: string): Promise<void> {
+    const lead = await this.prisma.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+    if (!lead?.phone) return; // nothing to sync without a phone number
+    try {
+      await this.outbox.append({
+        type: MarketingEventTypes.SmsOptedOut,
+        tenantId: null,
+        payload: { workspaceId, leadId, phone: lead.phone } satisfies MarketingSmsOptStatusPayload,
+        idempotencyKey: `${workspaceId}:${leadId}:${MarketingEventTypes.SmsOptedOut}:unsub:${recipientId}`,
+      });
+    } catch (e: any) {
+      this.logger.warn(`Failed to enqueue ${MarketingEventTypes.SmsOptedOut} for lead=${leadId}: ${e?.message ?? e}`);
+    }
   }
 
   /**

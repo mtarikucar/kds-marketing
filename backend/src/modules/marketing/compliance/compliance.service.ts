@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { OutboxService } from '../../outbox/outbox.service';
+import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
 
 const OPT_OUT_FIELD: Record<string, 'emailOptOut' | 'smsOptOut' | 'waOptOut'> = {
   MARKETING_EMAIL: 'emailOptOut',
@@ -21,7 +23,12 @@ interface ConsentMeta {
  */
 @Injectable()
 export class ComplianceService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(ComplianceService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private readonly outbox: OutboxService,
+  ) {}
 
   private async assertLead(workspaceId: string, leadId: string) {
     const l = await this.prisma.lead.findFirst({
@@ -46,8 +53,39 @@ export class ComplianceService {
     if (field) {
       // granted=false → opted OUT (true); granted=true → opted IN (false).
       await this.prisma.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
+      if (field === 'smsOptOut') {
+        await this.emitSmsOptEvent(workspaceId, leadId, granted, record.id);
+      }
     }
     return record;
+  }
+
+  /**
+   * Mirrors an SMS opt-out/opt-in transition to NetgsmBlacklistSyncService via
+   * the outbox (defense-in-depth NetGSM account-blacklist sync — see that
+   * service's docstring). Best-effort: the consent itself is already durably
+   * recorded above, so a failure enqueueing the follow-on sync event is
+   * logged rather than failing the whole request.
+   */
+  private async emitSmsOptEvent(
+    workspaceId: string,
+    leadId: string,
+    granted: boolean,
+    consentRecordId: string,
+  ): Promise<void> {
+    const lead = await this.prisma.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+    if (!lead?.phone) return; // nothing to sync without a phone number
+    const eventType = granted ? MarketingEventTypes.SmsOptedIn : MarketingEventTypes.SmsOptedOut;
+    try {
+      await this.outbox.append({
+        type: eventType,
+        tenantId: null,
+        payload: { workspaceId, leadId, phone: lead.phone } satisfies MarketingSmsOptStatusPayload,
+        idempotencyKey: `${workspaceId}:${leadId}:${eventType}:consent:${consentRecordId}`,
+      });
+    } catch (e: any) {
+      this.logger.warn(`Failed to enqueue ${eventType} for lead=${leadId}: ${e?.message ?? e}`);
+    }
   }
 
   async getConsents(workspaceId: string, leadId: string) {

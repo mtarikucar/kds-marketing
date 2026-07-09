@@ -9,7 +9,8 @@ const WS = 'ws-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
-  return { prisma, svc: new ComplianceService(prisma as any) };
+  const outbox = { append: jest.fn().mockResolvedValue('evt-1') };
+  return { prisma, outbox, svc: new ComplianceService(prisma as any, outbox as any) };
 }
 
 // requestExport now reads every personal-data category in parallel; default them
@@ -39,6 +40,64 @@ describe('ComplianceService', () => {
     expect(prisma.lead.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'lead-1' }, data: { emailOptOut: true } }),
     );
+  });
+
+  it('MARKETING_SMS opt-out enqueues marketing.sms.optout.v1 with the lead phone', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-1' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false, { source: 'form' });
+
+    expect(prisma.lead.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'lead-1' }, data: { smsOptOut: true } }),
+    );
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'marketing.sms.optout.v1',
+        payload: { workspaceId: WS, leadId: 'lead-1', phone: '05551112233' },
+        idempotencyKey: 'ws-1:lead-1:marketing.sms.optout.v1:consent:cr-1',
+      }),
+    );
+  });
+
+  it('MARKETING_SMS opt-in (granted=true) enqueues marketing.sms.optin.v1', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-2' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', true);
+
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'marketing.sms.optin.v1' }),
+    );
+  });
+
+  it('does NOT enqueue a blacklist-sync event when the lead has no phone', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-3' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: null });
+
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false);
+
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the consent write when the outbox append throws', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-4' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+    outbox.append.mockRejectedValue(new Error('outbox down'));
+
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).resolves.toMatchObject({ id: 'cr-4' });
   });
 
   it('does not touch opt-out flags for DATA_PROCESSING consent', async () => {

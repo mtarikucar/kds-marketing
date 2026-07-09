@@ -125,6 +125,7 @@ import { ConversationAiEngineService } from './channels/conversation-ai-engine.s
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
 import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
+import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
 import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
@@ -678,6 +679,9 @@ import { WalletService } from './wallet/wallet.service';
     // locked sweeper that resolves still-pending outbound SMS via the report API.
     NetgsmReportClient,
     NetgsmDlrPollService,
+    // Blacklist sync (defense-in-depth): mirrors lead smsOptOut transitions
+    // onto NetGSM's account-level blacklist — subscribes via DomainEventBus.
+    NetgsmBlacklistSyncService,
     LinkedinEngagementPollService,
     SseTokenGuard,
     // Phase F P3 — workflow automation: the trigger listener + executor (each

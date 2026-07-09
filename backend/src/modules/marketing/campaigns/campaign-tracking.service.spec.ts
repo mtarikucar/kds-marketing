@@ -8,6 +8,7 @@ import { CampaignTrackingService } from './campaign-tracking.service';
 describe('CampaignTrackingService', () => {
   const WS = 'ws-1';
   let prisma: any;
+  let outbox: { append: jest.Mock };
   let svc: CampaignTrackingService;
 
   beforeEach(() => {
@@ -24,11 +25,15 @@ describe('CampaignTrackingService', () => {
         findUnique: jest.fn().mockResolvedValue({ stats: {} }),
         update: jest.fn().mockResolvedValue({}),
       },
-      lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      lead: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({ phone: '05551112233' }),
+      },
       // bump() now increments the counter via an atomic jsonb_set UPDATE.
       $executeRawUnsafe: jest.fn().mockResolvedValue(1),
     };
-    svc = new CampaignTrackingService(prisma as any);
+    outbox = { append: jest.fn().mockResolvedValue('evt-1') };
+    svc = new CampaignTrackingService(prisma as any, outbox as any);
   });
 
   it('click returns the campaign-authored URL at the index', async () => {
@@ -92,5 +97,39 @@ describe('CampaignTrackingService', () => {
       where: { id: 'lead-1', workspaceId: WS },
       data: { waOptOut: true },
     });
+    // Non-SMS channels never trigger the NetGSM blacklist-sync event.
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('SMS unsubscribe enqueues marketing.sms.optout.v1 keyed on the recipient id', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead-1', workspaceId: WS },
+      data: { smsOptOut: true },
+    });
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'marketing.sms.optout.v1',
+        payload: { workspaceId: WS, leadId: 'lead-1', phone: '05551112233' },
+        idempotencyKey: 'ws-1:lead-1:marketing.sms.optout.v1:unsub:r1',
+      }),
+    );
+  });
+
+  it('SMS unsubscribe does NOT enqueue a blacklist-sync event when the lead has no phone', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    prisma.lead.findUnique.mockResolvedValue({ phone: null });
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the unsubscribe when the outbox append throws', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    outbox.append.mockRejectedValue(new Error('outbox down'));
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
   });
 });

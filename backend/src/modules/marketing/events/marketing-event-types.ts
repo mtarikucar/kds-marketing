@@ -72,6 +72,15 @@ export const MarketingEventTypes = {
   // course-completion certificate is issued. Backs the `certificate.issued`
   // workflow trigger; filter on trigger.courseId.
   CertificateIssued: "marketing.certificate.issued.v1",
+
+  // NetGSM blacklist sync (Phase 1 Task 10) — emitted whenever a lead's SMS
+  // opt-out flag flips, so NetgsmBlacklistSyncService can mirror the
+  // transition onto NetGSM's account-level SMS blacklist (defense-in-depth;
+  // İYS + the app-side smsOptOut checks remain the primary enforcement).
+  // Producers: ComplianceService (MARKETING_SMS consent writes) and
+  // CampaignTrackingService (public campaign-unsubscribe route).
+  SmsOptedOut: "marketing.sms.optout.v1",
+  SmsOptedIn: "marketing.sms.optin.v1",
 } as const;
 
 export type MarketingEventType =
@@ -186,4 +195,17 @@ export interface MarketingBookingLifecyclePayload {
   bookingId: string;
   calendarId?: string;
   occurredAt: string;
+}
+
+/**
+ * SMS opt-out/opt-in transition payload (marketing.sms.optout.v1 /
+ * marketing.sms.optin.v1). Self-contained: NetgsmBlacklistSyncService never
+ * reads the Lead row, so `phone` is carried directly. `phone` is the raw
+ * value stored on Lead.phone — the client normalizes it to NetGSM's local
+ * MSISDN format on the wire.
+ */
+export interface MarketingSmsOptStatusPayload {
+  workspaceId: string;
+  leadId: string;
+  phone: string;
 }
