@@ -78,6 +78,10 @@ import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
+// NetGSM Phase 3 Task 2 — telephony event consumer (subscribes
+// marketing.telephony.call_event.v1: INBOUND/missed SalesCalls + crm_id
+// correlation for OUTBOUND hangup/cdr).
+import { TelephonyEventConsumer } from './telephony/telephony-event.consumer';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
@@ -640,6 +644,8 @@ import { WalletService } from './wallet/wallet.service';
     NetgsmApiAdapter,
     TelephonyConfigService,
     CallCdrSyncService,
+    // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
+    TelephonyEventConsumer,
     NetgsmOnboardingService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).

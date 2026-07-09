@@ -836,26 +836,38 @@ model MarketingDistributionConfig {
 /// avoids back-relations). externalCallId / durationSec / recordingUrl are the
 /// seams a future Netgsm API/webhook provider fills.
 model SalesCall {
-  id                 String    @id @default(uuid())
-  workspaceId        String
-  marketingUserId    String
-  leadId             String?
-  direction          String    @default("OUTBOUND") // OUTBOUND, INBOUND
-  toPhone            String
-  providerId         String // 'netgsm-lite', ...
-  status             String    @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
-  externalCallId     String?
-  durationSec        Int?
+  id              String  @id @default(uuid())
+  workspaceId     String
+  /// Nullable (Phase 3 Task 2) — an INBOUND call to an extension that doesn't
+  /// match any MarketingUser.dahili has no rep to attribute it to. OUTBOUND
+  /// calls (SalesCallService.startCall) always set this from the actor.
+  marketingUserId String?
+  leadId          String?
+  direction       String  @default("OUTBOUND") // OUTBOUND, INBOUND
+  toPhone         String
+  providerId      String // 'netgsm-lite', ...
+  status          String  @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
+  externalCallId  String?
+  durationSec     Int?
   /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
   /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
-  billableSeconds    Int?
-  costAmount         Decimal?  @db.Decimal(14, 4)
-  recordingUrl       String?
+  billableSeconds Int?
+  costAmount      Decimal? @db.Decimal(14, 4)
+  recordingUrl    String?
   // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
   // the back of the queue (a CONNECTED call with no recording yet, or never), and
   // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
   recordingCheckedAt DateTime?
   notes              String?   @db.Text
+  /// Phase 3 Task 2 — the rep whose extension actually picked up (from the
+  /// santral `answer`/hangup event's internal_num → MarketingUser.dahili).
+  /// May differ from `marketingUserId` on an INBOUND call routed through a
+  /// hunt group; null until answered (or never, if unmatched/unanswered).
+  answeredByUserId String?
+  /// Phase 3 Task 2 — stamped when the INBOUND SalesCall row is created from
+  /// an `inbound_call` santral event (the extension started ringing). Null
+  /// for OUTBOUND calls (startedAt already captures their origination time).
+  ringingAt          DateTime?
   startedAt          DateTime  @default(now())
   endedAt            DateTime?
   createdAt          DateTime  @default(now())
@@ -865,6 +877,10 @@ model SalesCall {
   @@index([marketingUserId, startedAt(sort: Desc)])
   @@index([leadId])
   @@index([status])
+  // Phase 3 Task 2 — santral event correlation (crm_id/uniqueId → this row)
+  // upserts/reads by externalCallId on every inbound_call/answer/hangup/cdr
+  // event; without this the correlation query is a sequential scan.
+  @@index([externalCallId])
   @@map("sales_calls")
 }
 

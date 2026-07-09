@@ -101,6 +101,14 @@ export const MarketingEventTypes = {
   // treatment as IysConsentReceived above. The telephony consumer (Phase 3
   // Task 2) subscribes to write INBOUND/missed SalesCall rows + screen-pop.
   CallEvent: "marketing.telephony.call_event.v1",
+
+  // A missed inbound call (NetGSM Phase 3 Task 2) — emitted by
+  // TelephonyEventConsumer the first time an INBOUND SalesCall resolves to
+  // NO_ANSWER. Forward-compatible trigger source for workflow automation (a
+  // 'missed call' trigger — not yet wired into WorkflowTriggerService's
+  // TRIGGER_EVENT_MAP, see that file); usable today by anything that
+  // subscribes directly via DomainEventBus.
+  CallMissed: "marketing.call.missed.v1",
 } as const;
 
 export type MarketingEventType =
@@ -277,4 +285,18 @@ export interface MarketingCallEventPayload {
   recording: string | null;
   durationSec: number | null;
   raw: object;
+}
+
+/**
+ * A missed inbound call (marketing.call.missed.v1) — emitted by
+ * TelephonyEventConsumer the first time an INBOUND SalesCall resolves to
+ * NO_ANSWER (never re-emitted for the same call; the consumer's monotonic
+ * status guard only lets that transition happen once). `leadId`/`customerNum`
+ * let a future workflow trigger react without a re-read.
+ */
+export interface MarketingCallMissedPayload {
+  workspaceId: string;
+  salesCallId: string;
+  leadId: string | null;
+  customerNum: string | null;
 }
