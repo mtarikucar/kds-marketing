@@ -15,6 +15,11 @@ const ADDON_GRANTS: Record<string, Record<string, number>> = {
   // into the monthly meters (entitlements.service.ts), -1 packages absorb them.
   ai_credit_boost_500: { 'limit.aiCreditsMonthly': 500 },
   messages_boost_1000: { 'limit.messagesMonthly': 1000 },
+  // NetGSM SMS v2 Task 12 — `feature.*` grants OR onto the package's feature
+  // map (entitlements.service.ts) regardless of any workspace module
+  // customization (`smsOtp` is deliberately excluded from
+  // TOGGLEABLE_MODULE_KEYS — see entitlements.service.ts).
+  sms_otp_package: { 'feature.smsOtp': 1 },
 };
 
 /**

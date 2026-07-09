@@ -37,6 +37,12 @@ export const FEATURE_KEYS = [
   // API gate) — a leaner first-run; power users switch them on in Modules.
   'memberships',
   'research',
+  // NetGSM SMS v2 Task 12 — SMS OTP (2FA-SMS factor + lead phone verify) is a
+  // PAID NetGSM add-on (error 60 without the OTP package), sold standalone —
+  // `false` in every plan block; only a WorkspaceAddOn grant
+  // (`feature.smsOtp`) turns it on. See TOGGLEABLE_MODULE_KEYS below for why
+  // it's excluded from the Settings > Modules toggle list.
+  'smsOtp',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -44,9 +50,20 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
  * Feature keys that map to a user-facing MODULE a workspace can toggle on/off for
  * progressive disclosure (via Workspace.activatedModules). `autoAssign` is
  * background behaviour, not a surfaced module, so it is never toggled off here.
+ * `smsOtp` is excluded too: it's an add-on purchase, not a plan-entitled
+ * capability a workspace switches on/off in Modules — since it's `false` in
+ * every plan, listing it here would gain nothing FOR entitled workspaces, but
+ * it WOULD mean any workspace with a customized `activatedModules` allow-list
+ * (predating this key) needs a backfill migration to add it (see the
+ * `entitlements — activatedModules backfill-note tripwire` in
+ * entitlements.tripwire.spec.ts) purely to avoid the allow-list silently
+ * masking a paid add-on it never had a chance to include. Excluding it here
+ * means the allow-list intersection in compute() below never touches it, so
+ * an add-on grant takes effect regardless of any workspace's module
+ * customization — correct, since a purchased add-on isn't a "module" at all.
  */
 export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter(
-  (k) => k !== 'autoAssign',
+  (k) => k !== 'autoAssign' && k !== 'smsOtp',
 );
 
 /**

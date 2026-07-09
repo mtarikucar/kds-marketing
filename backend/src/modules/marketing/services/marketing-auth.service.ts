@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   BadRequestException,
   ConflictException,
@@ -14,6 +15,7 @@ import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 import { hashBackupCode, openTotpSecret, verifyTotp } from '../util/totp';
+import { SmsOtpService } from './sms-otp.service';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -42,10 +44,13 @@ function slugify(name: string): string {
 
 @Injectable()
 export class MarketingAuthService {
+  private readonly logger = new Logger(MarketingAuthService.name);
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private smsOtp: SmsOtpService,
   ) {}
 
   private bcryptCost(): number {
@@ -135,14 +140,85 @@ export class MarketingAuthService {
         { sub: user.id, type: 'marketing', tokenType: '2fa-challenge' },
         { secret: this.accessSecret(), expiresIn: '5m', algorithm: 'HS256' },
       );
+      // NetGSM SMS v2 Task 12 — the SMS factor (twoFactorSecret null) has no
+      // authenticator app to generate a code offline; the server must push
+      // one at challenge time. Best-effort: an SMS/NetGSM outage must not
+      // 500 the login endpoint — the user can retry via /auth/2fa/resend,
+      // and the challenge itself stays valid either way.
+      if (!user.twoFactorSecret && user.phone) {
+        try {
+          await this.smsOtp.issue(
+            user.workspaceId,
+            { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
+            user.phone,
+          );
+        } catch (e: any) {
+          this.logger.warn(`2fa sms challenge send failed: ${e?.message ?? e}`);
+        }
+      }
       return { twoFactorRequired: true, challengeToken };
     }
 
     return this.generateTokens(user);
   }
 
-  /** Epic F — complete a 2FA login: verify a TOTP or single-use backup code. */
+  /** NetGSM SMS v2 Task 12 — re-send the SMS challenge code for a pending 2FA
+   *  login (e.g. the first text was lost/delayed). No-op-safe for a TOTP-armed
+   *  account: there is nothing to resend, so it just re-validates the
+   *  challenge and returns without contacting NetGSM. */
+  async resendTwoFactorSms(challengeToken: string) {
+    const user = await this.loadChallengeUser(challengeToken);
+    if (user.twoFactorSecret) {
+      return { sent: false };
+    }
+    if (!user.phone) {
+      throw new BadRequestException('No phone number on file to text a code to.');
+    }
+    const result = await this.smsOtp.issue(
+      user.workspaceId,
+      { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
+      user.phone,
+    );
+    if (!result.ok) {
+      throw new BadRequestException(result.message ?? 'Could not send the verification code.');
+    }
+    return { sent: true };
+  }
+
+  /** Epic F — complete a 2FA login: verify a TOTP code, a fresh SMS code, or a
+   *  single-use backup code. */
   async verify2fa(challengeToken: string, code: string) {
+    const user = await this.loadChallengeUser(challengeToken);
+
+    // Backup-code check first: a pure lookup, unlike smsOtp.verify() which
+    // mutates the pending code's attempt counter on a miss — so completing
+    // login with a backup code never burns an attempt on an unrelated
+    // in-flight SMS challenge.
+    const hashes = (user.twoFactorBackupCodes as string[]) ?? [];
+    const h = hashBackupCode(code);
+    let ok = hashes.includes(h);
+    if (ok) {
+      await this.prisma.marketingUser.update({
+        where: { id: user.id },
+        data: { twoFactorBackupCodes: hashes.filter((x) => x !== h) },
+      });
+    } else {
+      ok = user.twoFactorSecret
+        ? verifyTotp(openTotpSecret(user.twoFactorSecret), code)
+        : (
+            await this.smsOtp.verify(
+              user.workspaceId,
+              { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
+              code,
+            )
+          ).ok;
+    }
+    if (!ok) throw new UnauthorizedException('Invalid 2FA code');
+    return this.generateTokens(user);
+  }
+
+  /** Decodes + validates a 2FA challenge token down to its live, 2FA-armed user. */
+  private async loadChallengeUser(challengeToken: string) {
     let payload: { sub?: string; type?: string; tokenType?: string };
     try {
       payload = await this.jwtService.verifyAsync(challengeToken, {
@@ -159,21 +235,7 @@ export class MarketingAuthService {
     if (!user || user.status !== 'ACTIVE' || !user.twoFactorEnabled) {
       throw new UnauthorizedException('Invalid 2FA challenge');
     }
-
-    let ok = !!user.twoFactorSecret && verifyTotp(openTotpSecret(user.twoFactorSecret), code);
-    if (!ok) {
-      const hashes = (user.twoFactorBackupCodes as string[]) ?? [];
-      const h = hashBackupCode(code);
-      if (hashes.includes(h)) {
-        ok = true;
-        await this.prisma.marketingUser.update({
-          where: { id: user.id },
-          data: { twoFactorBackupCodes: hashes.filter((x) => x !== h) },
-        });
-      }
-    }
-    if (!ok) throw new UnauthorizedException('Invalid 2FA code');
-    return this.generateTokens(user);
+    return user;
   }
 
   async refreshToken(token: string) {

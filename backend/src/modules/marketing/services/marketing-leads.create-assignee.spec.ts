@@ -34,6 +34,7 @@ describe('MarketingLeadsService — create() assignee guard', () => {
       { append: jest.fn().mockResolvedValue('o') } as any, // outbox
       cf as any, // customFields
       { verify: jest.fn().mockResolvedValue('VALID') } as any, // hygiene
+      {} as any, // smsOtp — unused here
     );
     prisma.lead.findFirst.mockResolvedValue(null); // no dedup match
     prisma.lead.create.mockResolvedValue({ id: 'lead-1' } as any);

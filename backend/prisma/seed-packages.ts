@@ -39,6 +39,9 @@ const PACKAGES = [
       apiAccess: false,
       conversationAi: true,
       sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: false,
       funnels: true,
@@ -83,6 +86,9 @@ const PACKAGES = [
       apiAccess: false,
       conversationAi: true,
       sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -130,6 +136,9 @@ const PACKAGES = [
       apiAccess: false,
       conversationAi: true,
       sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -177,6 +186,9 @@ const PACKAGES = [
       apiAccess: true,
       conversationAi: true,
       sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -223,6 +235,9 @@ const PACKAGES = [
       apiAccess: true,
       conversationAi: true,
       sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,

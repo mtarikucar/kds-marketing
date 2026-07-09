@@ -313,9 +313,11 @@ import { AttributionService } from './analytics/attribution.service';
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
 // Epic E — funnel A/B experiments + surveys.
-// Epic F — 2FA/MFA (TOTP).
+// Epic F — 2FA/MFA (TOTP + NetGSM SMS v2 Task 12's SMS factor).
 import { TwoFactorController } from './controllers/two-factor.controller';
 import { TwoFactorService } from './services/two-factor.service';
+// NetGSM SMS v2 Task 12 — shared OTP issue/verify (2FA-SMS + lead phone verify).
+import { SmsOtpService } from './services/sms-otp.service';
 // Epic B4 — Slack incoming-webhook notifications.
 import { SlackController } from './integrations/slack.controller';
 import { SlackService } from './integrations/slack.service';
@@ -808,8 +810,11 @@ import { WalletService } from './wallet/wallet.service';
     // Epic F (compliance).
     ComplianceService,
     // Epic E — funnel A/B + surveys.
-    // Epic F — 2FA.
+    // Epic F — 2FA (TOTP + SMS).
     TwoFactorService,
+    // NetGSM SMS v2 Task 12 — shared by TwoFactorService, MarketingAuthService
+    // (login SMS challenge) and MarketingLeadsService (lead phone verify).
+    SmsOtpService,
     // Epic B4 — Slack notify.
     SlackService,
     // Epic G — env-gated enterprise SSO (OIDC).

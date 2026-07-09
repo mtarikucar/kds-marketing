@@ -104,6 +104,9 @@ export interface Lead {
   companyId?: string | null;
   contactPerson: string;
   phone?: string;
+  /** NetGSM SMS v2 Task 12 — stamped when a rep confirms a live SMS OTP sent
+   *  to `phone`; null/undefined = unverified. Cleared when `phone` is edited. */
+  phoneVerifiedAt?: string | null;
   whatsapp?: string;
   email?: string;
   address?: string;

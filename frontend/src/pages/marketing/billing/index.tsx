@@ -278,6 +278,14 @@ export default function BillingPage() {
                   priceTRY: '₺190',
                   priceUSD: '$6',
                 },
+                {
+                  // NetGSM SMS v2 Task 12 — unlocks the `smsOtp` feature
+                  // (2FA-SMS factor + lead phone verification).
+                  code: 'sms_otp_package',
+                  label: t('billing.smsOtpWord', 'SMS OTP verification'),
+                  priceTRY: '₺490',
+                  priceUSD: '$15',
+                },
               ].map((addon) => (
                 <div
                   key={addon.code}

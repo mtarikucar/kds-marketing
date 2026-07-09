@@ -243,6 +243,11 @@ model Lead {
   emailBouncedAt      DateTime?
   smsOptOut           Boolean   @default(false)
   waOptOut            Boolean   @default(false)
+  /// NetGSM SMS v2 Task 12 — stamped when a rep confirms a live SMS OTP sent to
+  /// `phone` (SmsOtpService, gated by the `smsOtp` add-on). Null = unverified.
+  /// Cleared back to null whenever `phone` is edited to a different number, so
+  /// the badge never claims a number that was never actually verified.
+  phoneVerifiedAt     DateTime?
 
   // Epic A1 — workspace-defined custom fields. Shape is { "<defKey>": value };
   // values are validated/coerced against CustomFieldDef by CustomFieldsService
@@ -559,6 +564,33 @@ model ApiKey {
 
   @@index([workspaceId, status])
   @@map("api_keys")
+}
+
+/// NetGSM SMS v2 Task 12 — a single issued SMS OTP code (2FA-SMS enroll/login
+/// challenge OR lead phone verification). Mirrors ApiKey's "hash at rest,
+/// never store the raw secret" convention: `codeHash` is the SHA-256 of the
+/// 6-digit code, never the code itself. One row per issued code; `purpose` +
+/// `targetType` + `targetId` scope which flow/entity it belongs to so a stale
+/// code from one flow can never verify another. `attempts` caps brute force
+/// (SmsOtpService refuses once attempts >= maxAttempts); `consumedAt` makes a
+/// code single-use; `expiresAt` is the 3-minute TTL. The service also reads
+/// `createdAt` on the latest row per target to enforce a resend cooldown.
+model SmsOtpCode {
+  id          String    @id @default(uuid())
+  workspaceId String
+  purpose     String // TWO_FACTOR | LEAD_PHONE_VERIFY
+  targetType  String // USER | LEAD
+  targetId    String
+  phone       String
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  consumedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, purpose, targetType, targetId, createdAt], map: "sms_otp_codes_target_idx")
+  @@map("sms_otp_codes")
 }
 
 /// Epic B2 — an outbound webhook subscription. `events` is the JSON array of

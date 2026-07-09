@@ -63,6 +63,7 @@ describe('MarketingLeadsService — convert + reconcile', () => {
       outbox as any,
       { validateAndNormalize: jest.fn().mockResolvedValue({}) } as any, // customFields
       { verify: jest.fn().mockResolvedValue('UNKNOWN') } as any, // hygiene
+      {} as any, // smsOtp — unused by convert/reconcile
     );
     (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
     // The reconcile cron resolves the core-integrated workspace via the

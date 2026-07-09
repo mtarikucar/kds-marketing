@@ -50,6 +50,10 @@ const ADDON_PRICES: Record<string, { TRY: number; USD: number; name: string }> =
   // Phase F P1 — AI metering boosts (monthly recurring; fold via ADDON_GRANTS).
   ai_credit_boost_500: { TRY: 290, USD: 9, name: '+500 AI credits / month' },
   messages_boost_1000: { TRY: 190, USD: 6, name: '+1000 messages / month' },
+  // NetGSM SMS v2 Task 12 — unlocks the `smsOtp` feature (2FA-SMS factor +
+  // lead phone verification). Recurring like the AI boosts above (rides the
+  // subscription period, renews with it).
+  sms_otp_package: { TRY: 490, USD: 15, name: 'SMS OTP verification package' },
 };
 
 /**

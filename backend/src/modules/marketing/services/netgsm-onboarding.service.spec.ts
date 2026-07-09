@@ -135,6 +135,19 @@ describe('NetgsmOnboardingService', () => {
     expect(events?.detail).toBe('eventsWebhookHint');
   });
 
+  it('otpPackage: always unknown with the error-60 explainer detail (no live probe — sending a real OTP would be a wasted, user-facing send)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'otpPackage')).toEqual({
+      key: 'otpPackage', state: 'unknown', detail: 'otpPackageHint',
+    });
+  });
+
   it('degrades smsCredsLive/santralCredsLive to unknown when the balance probe does not answer within the timeout (no page hang on a NetGSM outage)', async () => {
     jest.useFakeTimers();
     const prisma = prismaMock();

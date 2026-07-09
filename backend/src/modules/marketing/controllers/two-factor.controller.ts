@@ -32,6 +32,22 @@ export class TwoFactorController {
     return this.svc.enable(u.id, dto.code);
   }
 
+  // SMS factor — NetGSM SMS v2 Task 12. Two-step, mirroring the TOTP
+  // enroll→enable shape: `sms/send` texts a fresh code (also doubles as the
+  // reauth step before `disable` when the active factor is already SMS),
+  // `sms/enable` verifies it and arms the factor.
+  @Post('sms/send')
+  @Audit({ action: '2fa.sms.send', resourceType: 'user' })
+  sendSmsCode(@CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.sendSmsCode(u.id);
+  }
+
+  @Post('sms/enable')
+  @Audit({ action: '2fa.sms.enable', resourceType: 'user' })
+  enableSms(@Body() dto: TwoFactorCodeDto, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.enableSms(u.id, dto.code);
+  }
+
   @Post('disable')
   @Audit({ action: '2fa.disable', resourceType: 'user' })
   disable(@Body() dto: TwoFactorCodeDto, @CurrentMarketingUser() u: MarketingUserPayload) {

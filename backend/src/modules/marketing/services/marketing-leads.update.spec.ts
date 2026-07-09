@@ -34,6 +34,7 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
       {} as any, // outbox — unused by update()
       { validateAndNormalize: jest.fn().mockResolvedValue({}) } as any, // customFields
       { verify: jest.fn().mockResolvedValue('UNKNOWN') } as any, // hygiene
+      {} as any, // smsOtp — unused by update()
     );
     prisma.lead.update.mockResolvedValue({ id: 'lead-1' } as any);
   });
@@ -96,6 +97,7 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
       prisma as any, {} as any, {} as any, {} as any, {} as any,
       { validateAndNormalize: jest.fn().mockResolvedValue({}) } as any,
       hygiene as any,
+      {} as any, // smsOtp
     );
 
     await svc.update(WS, 'lead-1', { email: 'fixed@biz.com' } as any, 'rep-1', 'REP');
@@ -123,5 +125,37 @@ describe('MarketingLeadsService.update — email-change dedup', () => {
 
     expect(prisma.lead.findFirst).toHaveBeenCalledTimes(1);
     expect(prisma.lead.update).toHaveBeenCalledTimes(1);
+  });
+
+  // NetGSM SMS v2 Task 12 — a verified stamp must not survive editing the
+  // number it attests to.
+  describe('phoneVerifiedAt reset on phone change', () => {
+    it('clears phoneVerifiedAt when the phone number actually changes', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ ...EXISTING_LEAD, phoneNormalized: '05551111111' });
+
+      await svc.update(WS, 'lead-1', { phone: '0555 222 22 22' } as any, 'rep-1', 'REP');
+
+      const data = prisma.lead.update.mock.calls[0][0].data;
+      expect(data.phoneVerifiedAt).toBeNull();
+    });
+
+    it('does NOT clear phoneVerifiedAt for a formatting-only edit (same normalized number)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ ...EXISTING_LEAD, phoneNormalized: '05551111111' });
+
+      // Same number, just re-punctuated — normalizes to the same key.
+      await svc.update(WS, 'lead-1', { phone: '0555-111-11-11' } as any, 'rep-1', 'REP');
+
+      const data = prisma.lead.update.mock.calls[0][0].data;
+      expect(data.phoneVerifiedAt).toBeUndefined();
+    });
+
+    it('does NOT touch phoneVerifiedAt when phone is absent from the DTO', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ ...EXISTING_LEAD, phoneNormalized: '05551111111' });
+
+      await svc.update(WS, 'lead-1', { notes: 'no phone in this edit' } as any, 'rep-1', 'REP');
+
+      const data = prisma.lead.update.mock.calls[0][0].data;
+      expect(data.phoneVerifiedAt).toBeUndefined();
+    });
   });
 });

@@ -73,6 +73,16 @@ export class NetgsmOnboardingService {
     }
     items.push(smsCreds);
 
+    // NetGSM SMS v2 Task 12 — whether the account's NetGSM OTP package is
+    // provisioned can only be observed by actually sending an OTP (there is
+    // no read-only probe), and NetGSM OTP is a paid, single-recipient surface
+    // — burning a real send just to populate a checklist row would be both
+    // wasteful and user-facing (an unwanted text). So this row is always
+    // 'unknown' with a detail explaining what NetGSM error 60 means; the
+    // settings card surfaces the SAME netgsmErrorMessage('60') text live the
+    // first time an actual OTP send hits it.
+    items.push({ key: 'otpPackage', state: 'unknown', detail: 'otpPackageHint' });
+
     items.push({ key: 'telephonyConfig', state: cfg ? 'ok' : 'missing' });
     items.push({ key: 'santralCredsLive', state: smsCreds.state, detail: smsCreds.detail });
 

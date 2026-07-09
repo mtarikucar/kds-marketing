@@ -94,6 +94,12 @@ export type FeatureKey =
   // switch on in Modules). Existing workspaces (activatedModules null) keep them.
   | 'memberships'
   | 'research'
+  // NetGSM SMS v2 Task 12 — SMS OTP (2FA-SMS factor + lead phone verification)
+  // is a PAID NetGSM add-on, sold standalone: `false` on every plan, only a
+  // purchased add-on turns it on. NOT a Settings > Modules toggle (there is no
+  // MODULE_META row for it) — see entitlements.service.ts's
+  // TOGGLEABLE_MODULE_KEYS comment for why.
+  | 'smsOtp'
   // Platform-level inert features (env-gated; surfaced via /billing/summary so the
   // nav hides them until ops enables the feature, instead of showing a 503 button).
   | 'prospecting'

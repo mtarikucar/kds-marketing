@@ -221,11 +221,13 @@
       "santralCredsLive": "Netsantral kimlik bilgileri canlı doğrulandı",
       "repsWithDahili": "Dahili tanımlı temsilciler",
       "eventsWebhookUrl": "Olay webhook URL'si",
+      "otpPackage": "SMS OTP paketi",
       "repsCount": "{{count}} temsilcide dahili tanımlı",
       "detail": {
         "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
         "noSantralConfig": "Henüz kontrol edilmedi — Netsantral kimlik bilgisi kayıtlı değil",
-        "eventsWebhookHint": "Netsantral panel > Ayarlar > Genel Ayarlar > API Talep Ayarları'na yapıştırın"
+        "eventsWebhookHint": "Netsantral panel > Ayarlar > Genel Ayarlar > API Talep Ayarları'na yapıştırın",
+        "otpPackageHint": "Gerçek bir kod gönderilmeden kontrol edilemez — OTP gönderimleri NetGSM hata 60 ile başarısız oluyorsa, bu NetGSM hesabında OTP paketi henüz aktif değildir."
       }
     },
     "tab": {
@@ -711,6 +713,18 @@
   },
   "leadDetail": {
     "back": "Lead'lere dön",
+    "verifyPhone": {
+      "button": "Telefonu doğrula",
+      "badge": "Doğrulandı",
+      "dialogTitle": "Telefon numarasını doğrula",
+      "dialogDesc": "{{phone}} numarasına 6 haneli bir kod gönderdik. Onaylamak için aşağıya girin.",
+      "codeLabel": "Doğrulama kodu",
+      "resend": "Kodu yeniden gönder",
+      "confirm": "Onayla",
+      "sendError": "Kod gönderilemedi",
+      "invalidCode": "Geçersiz kod",
+      "verified": "Telefon numarası doğrulandı"
+    },
     "tabs": {
       "activities": "Etkinlik",
       "offers": "Teklifler",

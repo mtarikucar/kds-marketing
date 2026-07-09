@@ -540,6 +540,18 @@
   },
   "leadDetail": {
     "back": "Back to leads",
+    "verifyPhone": {
+      "button": "Verify phone",
+      "badge": "Verified",
+      "dialogTitle": "Verify phone number",
+      "dialogDesc": "We texted a 6-digit code to {{phone}}. Enter it below to confirm this number.",
+      "codeLabel": "Verification code",
+      "resend": "Resend code",
+      "confirm": "Confirm",
+      "sendError": "Could not send the code",
+      "invalidCode": "Invalid code",
+      "verified": "Phone number verified"
+    },
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",

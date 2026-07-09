@@ -14,6 +14,8 @@ import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
 import { RequirePermission } from '../roles/require-permission.decorator';
+import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
+import { VerifyPhoneConfirmDto } from '../dto/verify-phone.dto';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
@@ -35,7 +37,10 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 
 @Controller('marketing/leads')
-@UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
+// FeatureGuard is a no-op for every route without a method-level
+// @RequiresFeature (see feature.guard.ts) — added here only for the
+// verify-phone routes below (gated on the `smsOtp` add-on).
+@UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 @MarketingRoute()
 export class MarketingLeadsController {
   constructor(
@@ -141,6 +146,31 @@ export class MarketingLeadsController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
   ) {
     return this.leadsService.update(actor.workspaceId, id, dto, actor.id, actor.role);
+  }
+
+  // NetGSM SMS v2 Task 12 — lead phone verification, behind the `smsOtp`
+  // add-on. `leads.write` mirrors the permission the plain lead PATCH uses.
+  @Post(':id/verify-phone/start')
+  @RequiresFeature('smsOtp')
+  @RequirePermission('leads.write')
+  @Audit({ action: 'lead.phone_verify.start', resourceType: 'lead', resourceIdParam: 'id' })
+  verifyPhoneStart(
+    @Param('id') id: string,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.leadsService.verifyPhoneStart(actor.workspaceId, id);
+  }
+
+  @Post(':id/verify-phone/confirm')
+  @RequiresFeature('smsOtp')
+  @RequirePermission('leads.write')
+  @Audit({ action: 'lead.phone_verify.confirm', resourceType: 'lead', resourceIdParam: 'id' })
+  verifyPhoneConfirm(
+    @Param('id') id: string,
+    @Body() dto: VerifyPhoneConfirmDto,
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+  ) {
+    return this.leadsService.verifyPhoneConfirm(actor.workspaceId, id, dto.code);
   }
 
   @Patch(':id/status')

@@ -16,7 +16,7 @@ describe('MarketingLeadsService.findAll — date range', () => {
     prisma = mockPrismaClient();
     svc = new MarketingLeadsService(
       prisma as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     );
     prisma.lead.findMany.mockResolvedValue([] as any);
     prisma.lead.count.mockResolvedValue(0 as any);

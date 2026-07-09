@@ -24,6 +24,11 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   viaSantralCreds: 'Probed via your shared Netsantral credentials',
   noSantralConfig: 'Not probed yet — no Netsantral credentials saved',
   eventsWebhookHint: 'Paste into: Netsantral panel > Settings > General Settings > API Request Settings',
+  // NetGSM SMS v2 Task 12 — there is no read-only probe for the OTP package
+  // (only a real send reveals it); explains what NetGSM error 60 means
+  // instead of pretending to check it live.
+  otpPackageHint:
+    "Can't be checked without sending a real code — if OTP sends fail with NetGSM error 60, the OTP package isn't active on this NetGSM account yet.",
 };
 
 /**
@@ -51,6 +56,7 @@ export function NetgsmOnboardingCard() {
       santralCredsLive: 'Netsantral credentials verified live',
       repsWithDahili: 'Reps with a dahili (extension)',
       eventsWebhookUrl: 'Events webhook URL',
+      otpPackage: 'SMS OTP package',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

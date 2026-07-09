@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { FEATURE_KEYS, LIMIT_KEYS } from './entitlements.service';
+import { FEATURE_KEYS, LIMIT_KEYS, TOGGLEABLE_MODULE_KEYS } from './entitlements.service';
 
 /**
  * Drift tripwire — the FEATURE_COLUMNS belt, ported. Three places must
@@ -31,6 +31,7 @@ describe('entitlements — feature-key drift tripwire', () => {
       'research',
       'reviews',
       'sms',
+      'smsOtp',
       'socialCampaigns',
       'telephony',
       'voiceAi',
@@ -122,6 +123,19 @@ describe('entitlements — feature-key drift tripwire', () => {
  */
 describe('entitlements — activatedModules backfill-note tripwire', () => {
   const KEYS_REQUIRING_BACKFILL = ['sms'] as const;
+
+  // NetGSM SMS v2 Task 12 — `smsOtp` is a FEATURE_KEYS member added AFTER
+  // 20260702160000_workspace_activated_modules, same as `sms` was, but it
+  // does NOT need a backfill migration: it's excluded from
+  // TOGGLEABLE_MODULE_KEYS (add-on-only, `false` in every plan, never a
+  // Settings > Modules toggle), so EntitlementsService.compute()'s
+  // allow-list intersection never iterates it — a customized
+  // activatedModules list has no way to mask it. Pin the exclusion here so a
+  // future refactor that folds smsOtp into TOGGLEABLE_MODULE_KEYS is forced
+  // to ALSO add it to KEYS_REQUIRING_BACKFILL + ship the migration.
+  it('smsOtp is excluded from TOGGLEABLE_MODULE_KEYS (add-on-only — no backfill needed)', () => {
+    expect(TOGGLEABLE_MODULE_KEYS).not.toContain('smsOtp');
+  });
 
   it('every key needing a backfill has a reversible migration on disk', () => {
     const migrationsRoot = path.resolve(__dirname, '../../../prisma/migrations');
