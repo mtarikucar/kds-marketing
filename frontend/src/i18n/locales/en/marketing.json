@@ -1431,6 +1431,7 @@
     "pauseAi": "Pause AI",
     "close": "Close",
     "failed": "failed",
+    "voicemail": "Voicemail",
     "replyPlaceholder": "Type a reply… (this pauses the AI)",
     "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
     "context": "Lead",

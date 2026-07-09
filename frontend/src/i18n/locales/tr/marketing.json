@@ -1632,6 +1632,7 @@
     "pauseAi": "AI'ı duraklat",
     "close": "Kapat",
     "failed": "başarısız",
+    "voicemail": "Sesli Mesaj",
     "replyPlaceholder": "Yanıt yazın… (AI'ı duraklatır)",
     "smsCounter": "{{chars}} karakter · {{segments}} segment",
     "context": "Lead",

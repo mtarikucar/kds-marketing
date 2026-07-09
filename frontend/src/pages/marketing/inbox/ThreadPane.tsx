@@ -9,6 +9,7 @@ import {
   User,
   ChevronLeft,
   Users,
+  Mic,
 } from 'lucide-react';
 import { Button, IconButton, Card, ScrollArea, Badge } from '@/components/ui';
 import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
@@ -20,6 +21,12 @@ interface MessageRow {
   body: string;
   status?: string;
   createdAt: string;
+  /** NetGSM Phase 4 Task 6 — a voicemail lands as an inbound Message tagged
+   *  `meta.raw.kind === 'VOICEMAIL'` (Message has no separate channel/type
+   *  column of its own). `audioUrl` is NetGSM's own provider-tokenized link
+   *  (an accepted fallback — see RecordingProxyController's docstring for the
+   *  same precedent with call recordings — never our R2 bucket's public URL). */
+  meta?: { raw?: { kind?: string; audioUrl?: string | null; durationSec?: number | null } } | null;
 }
 
 interface ThreadPaneProps {
@@ -160,32 +167,49 @@ export function ThreadPane({
       {/* Message thread */}
       <ScrollArea className="flex-1 p-4 bg-surface-muted/30">
         <div className="space-y-3">
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex ${m.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start'}`}
-            >
+          {messages.map((m) => {
+            const isVoicemail = m.meta?.raw?.kind === 'VOICEMAIL';
+            return (
               <div
-                className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm ${
-                  m.direction === 'OUTBOUND'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-surface border border-border text-foreground'
-                }`}
+                key={m.id}
+                className={`flex ${m.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start'}`}
               >
-                <div className="flex items-center gap-1 mb-0.5 opacity-70 text-[10px]">
-                  {m.authorType === 'AI' && <Sparkles className="w-3 h-3" />}
-                  {m.authorType === 'AGENT' && <User className="w-3 h-3" />}
-                  <span>{m.authorType}</span>
-                </div>
-                <div className="whitespace-pre-wrap break-words">{m.body}</div>
-                {m.status === 'FAILED' && (
-                  <div className="text-[10px] text-danger/80 mt-0.5">
-                    {t('inbox.failed', 'failed')}
+                <div
+                  className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm ${
+                    m.direction === 'OUTBOUND'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-surface border border-border text-foreground'
+                  }`}
+                >
+                  <div className="flex items-center gap-1 mb-0.5 opacity-70 text-[10px]">
+                    {m.authorType === 'AI' && <Sparkles className="w-3 h-3" />}
+                    {m.authorType === 'AGENT' && <User className="w-3 h-3" />}
+                    <span>{m.authorType}</span>
                   </div>
-                )}
+                  {isVoicemail && (
+                    <Badge tone="neutral" size="sm" className="mb-1 gap-1">
+                      <Mic className="w-3 h-3" aria-hidden="true" />
+                      {t('inbox.voicemail', 'Voicemail')}
+                    </Badge>
+                  )}
+                  <div className="whitespace-pre-wrap break-words">{m.body}</div>
+                  {isVoicemail && m.meta?.raw?.audioUrl && (
+                    <audio
+                      controls
+                      preload="none"
+                      src={m.meta.raw.audioUrl}
+                      className="mt-1.5 h-8 max-w-full"
+                    />
+                  )}
+                  {m.status === 'FAILED' && (
+                    <div className="text-[10px] text-danger/80 mt-0.5">
+                      {t('inbox.failed', 'failed')}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div ref={threadEndRef} />
         </div>
       </ScrollArea>

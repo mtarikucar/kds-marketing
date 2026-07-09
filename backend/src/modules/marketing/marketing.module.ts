@@ -151,6 +151,7 @@ import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
 import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
 import { NetgsmMoPollService } from './channels/netgsm-mo-poll.service';
+import { NetgsmVoicemailPollService } from './channels/netgsm-voicemail-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
 import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
@@ -735,6 +736,11 @@ import { WalletService } from './wallet/wallet.service';
     // inbox() so panel misconfiguration (wrong/missing callback URL) doesn't
     // silently drop customer replies with no error visible to us.
     NetgsmMoPollService,
+    // NetGSM Phase 4 Task 6 — voicemail (telesekreter) has no push webhook at
+    // all, so this hourly poll of /voicesms/receive IS the (only) path a
+    // voicemail reaches the shared inbox through, best-effort proxy-storing
+    // the recording into R2 and transcribing it for a text preview.
+    NetgsmVoicemailPollService,
     // Blacklist sync (defense-in-depth): mirrors lead smsOptOut transitions
     // onto NetGSM's account-level blacklist — subscribes via DomainEventBus.
     NetgsmBlacklistSyncService,
