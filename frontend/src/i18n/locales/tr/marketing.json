@@ -23,7 +23,8 @@
       "sources": "Lead Kaynakları",
       "regional": "Bölgesel",
       "conversion": "Dönüşüm",
-      "performance": "Performans"
+      "performance": "Performans",
+      "calls": "Aramalar"
     },
     "col": {
       "source": "Kaynak",
@@ -2019,6 +2020,14 @@
       "toggleSuccessBreak": "Moladasınız",
       "toggleFailed": "Durumunuz güncellenemedi"
     }
+  },
+  "inboundStats": {
+    "title": "Gelen aramalar (son 7 gün)",
+    "answered": "Cevaplanan",
+    "abandoned": "Cevapsız",
+    "avgWait": "Ort. bekleme",
+    "loadError": "Arama istatistikleri yüklenemedi.",
+    "offProdNote": "Arama istatistikleri yalnızca üretim sunucu IP'sinden doğrulanabilir (NetGSM izin listesi)."
   },
   "copilot": {
     "title": "Canlı Asistan",

@@ -23,7 +23,8 @@
       "sources": "Lead Sources",
       "regional": "Regional",
       "conversion": "Conversion",
-      "performance": "Performance"
+      "performance": "Performance",
+      "calls": "Calls"
     },
     "col": {
       "source": "Source",
@@ -1798,6 +1799,14 @@
       "toggleSuccessBreak": "You're on a break",
       "toggleFailed": "Could not update your status"
     }
+  },
+  "inboundStats": {
+    "title": "Inbound calls (last 7 days)",
+    "answered": "Answered",
+    "abandoned": "Abandoned",
+    "avgWait": "Avg wait",
+    "loadError": "Could not load call statistics.",
+    "offProdNote": "Call statistics can only be confirmed from the production server IP (NetGSM allow-list)."
   },
   "copilot": {
     "title": "Live Assistant",

@@ -100,6 +100,8 @@ import { TelephonyControlService } from './services/telephony-control.service';
 // (agentlogin/agentlogoff/agentpause), acting on the CALLING rep's own dahili.
 import { TelephonyQueueController } from './controllers/telephony-queue.controller';
 import { TelephonyQueueService } from './services/telephony-queue.service';
+import { TelephonyReportsController } from './controllers/telephony-reports.controller';
+import { TelephonyReportsService } from './services/telephony-reports.service';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
@@ -522,6 +524,7 @@ import { WalletService } from './wallet/wallet.service';
     TelephonyStreamController,
     TelephonyControlController,
     TelephonyQueueController,
+    TelephonyReportsController,
     NetgsmOnboardingController,
     InstallationController,
     SalesTargetController,
@@ -673,6 +676,8 @@ import { WalletService } from './wallet/wallet.service';
     TelephonyControlService,
     // NetGSM Phase 4 Task 4 — queue wallboard + agent presence.
     TelephonyQueueService,
+    // NetGSM Phase 4 Task 5 — inbound call statistics dashboard.
+    TelephonyReportsService,
     // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
     TelephonyEventConsumer,
     // NetGSM Phase 3 Task 3 — per-workspace SSE fan-out (screen-pop, live

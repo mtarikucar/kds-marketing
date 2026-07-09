@@ -15,6 +15,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('./ads/AdReportingPage', () => ({ default: () => <div>ads-page-stub</div> }));
 vi.mock('./PerformancePage', () => ({ default: () => <div>performance-page-stub</div> }));
 vi.mock('./analytics/AnalyticsPage', () => ({ default: () => <div>analytics-page-stub</div> }));
+vi.mock('./reports/InboundCallStatsPanel', () => ({ default: () => <div>inbound-stats-stub</div> }));
 
 vi.mock('../../features/marketing/api/marketingApi', () => ({
   default: { get: vi.fn(() => Promise.resolve({ data: [] })) },
@@ -27,6 +28,17 @@ vi.mock('../../store/marketingAuthStore', () => ({
     const state = { user: { role: auth.role }, isAuthenticated: true };
     return selector ? selector(state) : state;
   },
+}));
+
+// Mutable so each test can pick whether the workspace is telephony-entitled.
+const entitlements = vi.hoisted(() => ({ telephony: false }));
+vi.mock('../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({
+    isLoading: false,
+    isError: false,
+    features: { telephony: entitlements.telephony },
+    has: (key?: string) => (key ? !!(entitlements as Record<string, boolean>)[key] : true),
+  }),
 }));
 
 function renderAt(path: string) {
@@ -43,6 +55,7 @@ function renderAt(path: string) {
 describe('ReportsPage', () => {
   beforeEach(() => {
     auth.role = 'MANAGER';
+    entitlements.telephony = false;
   });
 
   it('renders the four unified tabs for a manager', () => {
@@ -107,6 +120,31 @@ describe('ReportsPage', () => {
     auth.role = 'REP';
     renderAt('/reports?tab=overview&sub=performance');
     expect(screen.queryByRole('tab', { name: /reports\.tabs\.performance/ })).not.toBeInTheDocument();
+    // Falls back to the sources report.
+    expect(screen.getByRole('tab', { name: /reports\.tabs\.sources/ })).toHaveAttribute(
+      'data-state',
+      'active',
+    );
+  });
+
+  it('hides the Calls overview sub-tab when the workspace is not telephony-entitled (even for a manager)', () => {
+    entitlements.telephony = false;
+    renderAt('/reports');
+    expect(screen.queryByRole('tab', { name: /reports\.tabs\.calls/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the Calls overview sub-tab for a telephony-entitled manager and renders the panel', async () => {
+    entitlements.telephony = true;
+    renderAt('/reports?tab=overview&sub=calls');
+    expect(screen.getByRole('tab', { name: /reports\.tabs\.calls/ })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByText('inbound-stats-stub')).toBeInTheDocument();
+  });
+
+  it('hides the Calls sub-tab for a non-manager even when telephony is entitled', () => {
+    auth.role = 'REP';
+    entitlements.telephony = true;
+    renderAt('/reports?tab=overview&sub=calls');
+    expect(screen.queryByRole('tab', { name: /reports\.tabs\.calls/ })).not.toBeInTheDocument();
     // Falls back to the sources report.
     expect(screen.getByRole('tab', { name: /reports\.tabs\.sources/ })).toHaveAttribute(
       'data-state',
