@@ -141,10 +141,14 @@ export class NetgsmIvrService {
     const ivrMenu = this.parseIvrMenu(pub.ivrMenu);
 
     // No DTMF yet → greet + present the keypad menu. A known caller gets a
-    // named greeting instead of the tenant's configured/default one; unknown
-    // callers are completely unaffected.
+    // named greeting ONLY when the workspace opts in — Caller-ID is spoofable,
+    // so speaking a lead's name to whoever calls from (or spoofs) their number
+    // is a PII exposure; default OFF, tenant flips `configPublic.ivrPersonalize`
+    // on to accept that trade-off. Unknown callers are always unaffected, and
+    // the OWNER-rep routing below is not gated (it discloses nothing to the caller).
     if (!dtmf) {
-      const greeting = lead?.contactPerson
+      const personalize = pub.ivrPersonalize === true;
+      const greeting = personalize && lead?.contactPerson
         ? `Merhaba ${lead.contactPerson} Bey/Hanım, aradığınız için teşekkürler.`
         : (pub.greeting as string) || (agent?.persona ? `Merhaba, ${agent.persona}.` : 'Merhaba, aradığınız için teşekkürler.');
       const menu = 'Bilgi almak için 1, bir temsilciye bağlanmak için 2 tuşlayın.';

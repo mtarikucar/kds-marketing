@@ -136,9 +136,11 @@ describe('NetgsmIvrService', () => {
     assignedTo: { dahili: '104', phone: '5559998877' },
   };
 
-  it('known caller (no DTMF): greets by name, stamps leadId on the VoiceCall row', async () => {
+  const CHANNEL_PERSONALIZE = { ...CHANNEL, configPublic: { ...CHANNEL.configPublic, ivrPersonalize: true } };
+
+  it('known caller (no DTMF) WITH ivrPersonalize opt-in: greets by name, stamps leadId on the VoiceCall row', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL_PERSONALIZE);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
 
@@ -154,6 +156,20 @@ describe('NetgsmIvrService', () => {
     const leadWhere = prisma.lead.findFirst.mock.calls[0][0].where;
     expect(leadWhere.workspaceId).toBe('ws-1');
     expect(leadWhere.phoneNormalized.in).toEqual(expect.arrayContaining(['5331234567', '05331234567', '905331234567']));
+  });
+
+  it('known caller WITHOUT ivrPersonalize (default off): does NOT speak the name (Caller-ID is spoofable), still stamps leadId', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL); // no ivrPersonalize flag
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
+
+    const r = await svc.handle(INPUT);
+
+    expect(r.data).not.toContain('Ahmet Yılmaz'); // name never spoken by default
+    expect(r.data).toContain('KDS Restorana hoş geldiniz.'); // tenant's generic greeting
+    // leadId is still stamped for the rep-facing log + routing (not caller-audible PII)
+    expect(prisma.voiceCall.upsert.mock.calls[0][0].create.leadId).toBe('lead-1');
   });
 
   it('unknown caller (no lead match): greeting + VoiceCall unaffected, leadId null', async () => {
