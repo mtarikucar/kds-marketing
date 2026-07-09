@@ -6,7 +6,7 @@ import { SitesService } from '../sites/sites.service';
 import { FormsService } from '../sites/forms.service';
 import { BookingService } from '../sites/booking.service';
 import { BookSlotDto, SlotsQueryDto, RescheduleTokenDto } from '../dto/public-site.dto';
-import { TelephonyCallbackDto } from '../dto/telephony-callback.dto';
+import { PublicTelephonyCallbackDto } from '../dto/telephony-callback.dto';
 import { TelephonyCallbackService } from '../services/telephony-callback.service';
 import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { readCookie, AFF_REF_COOKIE } from './public-referral.controller';
@@ -88,23 +88,49 @@ export class PublicSiteController {
   /**
    * "Leave your number, we call you now" (NetGSM Phase 5 Task 6) — the public
    * funnel/webchat 'callback' block's JS-free form target. `:ws` is the
-   * workspace id, same convention as `p/:ws/:slug`/`funnel/:ws/:slug`. Calls
-   * the EXACT SAME `TelephonyCallbackService.requestCallback` the
-   * authenticated `POST /marketing/telephony/callback` uses, so a visitor-
-   * submitted number is held to the identical İYS-mandatory, fail-closed
-   * compliance gate as a rep-triggered callback — nothing here bypasses it.
-   * Never leaks the underlying reason (İYS block, no PBX configured, ...)
-   * to an anonymous visitor — a generic "try again later" either way.
+   * workspace id, same convention as `p/:ws/:slug`/`funnel/:ws/:slug`.
+   *
+   * Final-review fix M2 (two layers, both enforced BEFORE
+   * `TelephonyCallbackService.requestCallback` is ever called):
+   *  (1) OPT-IN GATE — `SitesService.resolvePublicCallbackTarget` returns
+   *      null (→ 404) unless this workspace has actually PUBLISHED a
+   *      'callback' block somewhere; this route is not live-by-default for
+   *      every workspace id just because it exists in the code (a
+   *      workspace id is public in funnel URLs — a visitor who only knows
+   *      it must not be able to place a real outbound call at the tenant's
+   *      expense unless the tenant opted in by publishing the widget).
+   *  (2) TARGET BINDING — `redirectMenu`/`redirectType` come ONLY from that
+   *      resolved block's own config, never from the request body (the DTO
+   *      here, `PublicTelephonyCallbackDto`, doesn't even accept them) — a
+   *      visitor can only ever dial the tenant's own configured queue/IVR/
+   *      announcement, never an arbitrary PBX object name of their choosing.
+   *
+   * Past those two gates, calls the EXACT SAME
+   * `TelephonyCallbackService.requestCallback` the authenticated
+   * `POST /marketing/telephony/callback` uses, so the number is held to the
+   * identical İYS-mandatory, fail-closed compliance gate as a rep-triggered
+   * callback. Never leaks the underlying reason (İYS block, no PBX
+   * configured, ...) to an anonymous visitor — a generic "try again later"
+   * either way.
    */
   @Post('callback/:ws')
   @Throttle(PUBLIC_WRITE_THROTTLE)
   async requestCallback(
     @Param('ws') ws: string,
-    @Body() dto: TelephonyCallbackDto,
+    @Body() dto: PublicTelephonyCallbackDto,
     @Res() res: Response,
   ): Promise<void> {
+    const target = await this.sites.resolvePublicCallbackTarget(ws);
+    if (!target) {
+      res.status(404).type('html').send('<h1>404 — page not found</h1>');
+      return;
+    }
     try {
-      await this.callback.requestCallback(ws, dto);
+      await this.callback.requestCallback(ws, {
+        phone: dto.phone,
+        redirectMenu: target.redirectMenu,
+        redirectType: target.redirectType,
+      });
     } catch {
       res.status(400).type('html').send(
         callbackPage('Hata', 'Şu anda geri arama alamıyoruz', 'Lütfen daha sonra tekrar deneyin.'),

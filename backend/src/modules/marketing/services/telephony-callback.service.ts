@@ -4,8 +4,21 @@ import { TelephonyConfigService } from '../telephony/telephony-config.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { NetsantralClient } from '../../netgsm/santral/netsantral.client';
 import { IysClient } from '../../netgsm/iys/iys.client';
+import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
 import { toIysMsisdn } from '../utils/lead-normalize';
 import { TelephonyCallbackDto } from '../dto/telephony-callback.dto';
+
+/** İYS's documented per-account rate limit — SAME bucket/limit as
+ *  `campaign-sender.service.ts`'s `iysPreflight`/`iysArmaPreflight` and
+ *  `iys-sync.service.ts`'s `/iys/add` worker: `/iys/search` is one endpoint
+ *  contending for one aggregate per-account cap, not a per-caller one, so
+ *  this callback's search MUST share the same `AccountRateBudgeter` bucket
+ *  (`'iys'`) rather than get its own — otherwise an unauthenticated visitor
+ *  flooding this public endpoint (Final-review fix M1) could exhaust İYS's
+ *  real account-level budget on its own, driving the SAME account's TİCARİ
+ *  campaign preflights above into fail-closed İYS-unavailable aborts. */
+const IYS_SEARCH_BUDGET_LIMIT = 10;
+const IYS_SEARCH_BUDGET_WINDOW_MS = 60_000;
 
 /**
  * "Leave your number, we call you now" callback (NetGSM Phase 5 Task 6) —
@@ -24,6 +37,13 @@ import { TelephonyCallbackDto } from '../dto/telephony-callback.dto';
  * request — there is no "skip the check, this one's informational" path,
  * since a mis-classified callback is an unrecoverable real phone call, not a
  * reversible write.
+ *
+ * The `/iys/search` call is ALSO budget-gated (Final-review fix M1) through
+ * the same `AccountRateBudgeter` bucket the campaign preflights use — see the
+ * module-level comment above. On denial this fails closed with a 503 and
+ * never reaches `iysClient.search`/`client.dynamicRedirect`: a busy account
+ * budget is throttling, not a compliance verdict, so it must never be
+ * silently bypassed by placing the call anyway.
  */
 @Injectable()
 export class TelephonyCallbackService {
@@ -33,6 +53,7 @@ export class TelephonyCallbackService {
     private readonly registry: ChannelAdapterRegistry,
     private readonly client: NetsantralClient,
     private readonly iysClient: IysClient,
+    private readonly budgeter: AccountRateBudgeter,
   ) {}
 
   async requestCallback(workspaceId: string, dto: TelephonyCallbackDto): Promise<{ ok: true }> {
@@ -64,6 +85,12 @@ export class TelephonyCallbackService {
       throw new BadRequestException('Invalid phone number');
     }
 
+    // Budget-gate BEFORE the search call — same bucket/limit as every other
+    // İYS caller (see the module-level comment). Denial fails closed: never
+    // fall through to the search or the call placement.
+    if (!this.budgeter.tryTake(usercode, 'iys', IYS_SEARCH_BUDGET_LIMIT, IYS_SEARCH_BUDGET_WINDOW_MS)) {
+      throw new ServiceUnavailableException('İYS doğrulaması şu anda meşgul, birazdan tekrar deneyin');
+    }
     const consent = await this.iysClient.search({ usercode, password, brandCode }, wirePhone, 'ARAMA');
     if (!consent.ok || consent.status === null) {
       // İYS unreachable/unclassifiable — fail closed, never place the call.

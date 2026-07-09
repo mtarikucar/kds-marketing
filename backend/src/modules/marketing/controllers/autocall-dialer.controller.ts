@@ -12,14 +12,23 @@ import { StartAutocallSessionDto, StopAutocallSessionDto } from '../dto/autocall
 
 /**
  * Parallel power-dialer (NetGSM Phase 5 Task 5) — the "parallel mode"
- * counterpart to `DialerController`'s preview (one-at-a-time) queue. Guarded
- * by the SAME `telephony` feature key as the preview dialer; requires the
- * paid NetGSM "Otomatik Arama" add-on + a pre-staffed Netsantral queue at
+ * counterpart to `DialerController`'s preview (one-at-a-time) queue. Requires
+ * the paid NetGSM "Otomatik Arama" add-on + a pre-staffed Netsantral queue at
  * the NetGSM/provider level (this app cannot verify either — see
  * AutocallDialerService's docstring).
+ *
+ * Gated on `voiceCampaigns` (Final-review fix M4 — owner decision, per the
+ * Phase-5 plan): the parallel dialer is a premium voice surface, same
+ * SCALE+/add-on tier as the rest of the voice-campaign feature set (see
+ * MarketingCampaignsController's `voice/audio` upload endpoint and
+ * `FEATURE_KEYS`'s `voiceCampaigns` docstring in entitlements.service.ts) —
+ * NOT the base `telephony` key every other Netsantral-surface controller
+ * here uses. A workspace entitled to `telephony` (inbound/basic PBX) but not
+ * `voiceCampaigns` must not get the paid parallel dialer for free.
+ * `FeatureGuard` stays in the guard chain (tripwire).
  */
 @MarketingRoute()
-@RequiresFeature('telephony')
+@RequiresFeature('voiceCampaigns')
 @Controller('marketing/dialer/parallel')
 @UseGuards(MarketingGuard, MarketingRolesGuard, FeatureGuard, PermissionsGuard)
 export class AutocallDialerController {

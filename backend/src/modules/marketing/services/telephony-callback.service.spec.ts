@@ -9,6 +9,7 @@ describe('TelephonyCallbackService', () => {
   let registry: { resolveConfig: jest.Mock };
   let client: { dynamicRedirect: jest.Mock };
   let iysClient: { search: jest.Mock };
+  let budgeter: { tryTake: jest.Mock };
   let svc: TelephonyCallbackService;
 
   const WS = 'ws-1';
@@ -27,8 +28,9 @@ describe('TelephonyCallbackService', () => {
     };
     client = { dynamicRedirect: jest.fn().mockResolvedValue({ ok: true, callId: 'cb-1' }) };
     iysClient = { search: jest.fn().mockResolvedValue({ ok: true, status: 'ONAY', message: null }) };
+    budgeter = { tryTake: jest.fn().mockReturnValue(true) };
     prisma.channel.findFirst.mockResolvedValue(SMS_CHANNEL as any);
-    svc = new TelephonyCallbackService(prisma as any, telephonyConfig as any, registry as any, client as any, iysClient as any);
+    svc = new TelephonyCallbackService(prisma as any, telephonyConfig as any, registry as any, client as any, iysClient as any, budgeter as any);
   });
 
   it('happy path: resolves creds, checks İYS ARAMA ONAY, calls dynamicRedirect with iysfilter=11 + brandcode', async () => {
@@ -48,6 +50,20 @@ describe('TelephonyCallbackService', () => {
       iysfilter: '11',
       brandcode: 'BRAND1',
     });
+  });
+
+  // Final-review fix M1: an unbudgeted İYS search here let an unauthenticated
+  // flood of this public-reachable endpoint exhaust the account's real İYS
+  // rate cap and stall the tenant's TİCARİ campaign preflights. The search
+  // must be gated through the SAME AccountRateBudgeter bucket/limit
+  // ('iys', 10, 60_000) as every other İYS caller, and denial must fail
+  // closed (503) WITHOUT ever reaching iysClient.search or dynamicRedirect.
+  it('Final-review M1: budget-denied (503) — never calls İYS search or dynamicRedirect', async () => {
+    budgeter.tryTake.mockReturnValue(false);
+    await expect(svc.requestCallback(WS, DTO)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(budgeter.tryTake).toHaveBeenCalledWith('sms-user', 'iys', 10, 60_000);
+    expect(iysClient.search).not.toHaveBeenCalled();
+    expect(client.dynamicRedirect).not.toHaveBeenCalled();
   });
 
   it('refuses (503) when Netsantral is not configured for the workspace', async () => {

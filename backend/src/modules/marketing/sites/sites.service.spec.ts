@@ -88,3 +88,106 @@ describe('SitesService.create — quota-race safety', () => {
     expect(prisma.sitePage.create).toHaveBeenCalled();
   });
 });
+
+/**
+ * Final-review fix M2 — the public callback endpoint's opt-in gate + target
+ * binding both hinge on this resolver: it must find a tenant-published
+ * 'callback' block (never trusting visitor/request-body input for the
+ * dial target) across both directly-published SitePages AND published
+ * Funnels' step pages (whose underlying SitePage need not itself be
+ * independently published).
+ */
+describe('SitesService.resolvePublicCallbackTarget', () => {
+  const WS = 'ws-1';
+  function make(prisma: any) {
+    return new SitesService(prisma as never, null as never, null as never, null as never, null as never, null as never);
+  }
+  function basePrisma(overrides: any = {}) {
+    return {
+      sitePage: {
+        findMany: jest.fn().mockResolvedValue([]),
+        ...overrides.sitePage,
+      },
+      funnel: {
+        findMany: jest.fn().mockResolvedValue([]),
+        ...overrides.funnel,
+      },
+    };
+  }
+
+  it('returns null when no published SitePage or Funnel has a callback block', async () => {
+    const prisma = basePrisma();
+    const svc = make(prisma);
+    await expect(svc.resolvePublicCallbackTarget(WS)).resolves.toBeNull();
+    expect(prisma.sitePage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, published: true } }),
+    );
+  });
+
+  it('finds a callback block directly on a published SitePage', async () => {
+    const prisma = basePrisma({
+      sitePage: {
+        findMany: jest.fn().mockResolvedValue([{ blocks: [{ type: 'callback', redirectMenu: '850-queue-vip', redirectType: 'ivr' }] }]),
+      },
+    });
+    const svc = make(prisma);
+    await expect(svc.resolvePublicCallbackTarget(WS)).resolves.toEqual({
+      redirectMenu: '850-queue-vip',
+      redirectType: 'ivr',
+    });
+    // A hit on a directly-published page short-circuits — no need to also query funnels.
+    expect(prisma.funnel.findMany).not.toHaveBeenCalled();
+  });
+
+  it('defaults an invalid/missing redirectType to "queue"', async () => {
+    const prisma = basePrisma({
+      sitePage: { findMany: jest.fn().mockResolvedValue([{ blocks: [{ type: 'callback', redirectMenu: 'q1', redirectType: 'bogus' }] }]) },
+    });
+    const svc = make(prisma);
+    await expect(svc.resolvePublicCallbackTarget(WS)).resolves.toEqual({ redirectMenu: 'q1', redirectType: 'queue' });
+  });
+
+  it('ignores a callback block with an empty/missing redirectMenu (not eligible)', async () => {
+    const prisma = basePrisma({
+      sitePage: { findMany: jest.fn().mockResolvedValue([{ blocks: [{ type: 'callback', redirectMenu: '   ' }] }]) },
+    });
+    const svc = make(prisma);
+    await expect(svc.resolvePublicCallbackTarget(WS)).resolves.toBeNull();
+  });
+
+  it('falls back to a published Funnel step page when no directly-published SitePage has one — the step page itself need not be published', async () => {
+    const prisma = basePrisma({
+      sitePage: {
+        findMany: jest
+          .fn()
+          // 1st call: directly-published pages — none eligible.
+          .mockResolvedValueOnce([{ blocks: [{ type: 'hero', heading: 'x' }] }])
+          // 2nd call: the funnel step's page (fetched by id, published-agnostic).
+          .mockResolvedValueOnce([{ blocks: [{ type: 'callback', redirectMenu: 'funnel-queue', redirectType: 'announcement' }] }]),
+      },
+      funnel: {
+        findMany: jest.fn().mockResolvedValue([{ steps: [{ sitePageId: 'step-page-1' }] }]),
+      },
+    });
+    const svc = make(prisma);
+    await expect(svc.resolvePublicCallbackTarget(WS)).resolves.toEqual({
+      redirectMenu: 'funnel-queue',
+      redirectType: 'announcement',
+    });
+    expect(prisma.sitePage.findMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ where: { workspaceId: WS, id: { in: ['step-page-1'] } } }),
+    );
+  });
+
+  it('returns null when funnels exist but none reference a page with a callback block', async () => {
+    const prisma = basePrisma({
+      sitePage: {
+        findMany: jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([{ blocks: [{ type: 'hero' }] }]),
+      },
+      funnel: { findMany: jest.fn().mockResolvedValue([{ steps: [{ sitePageId: 'step-page-1' }] }]) },
+    });
+    const svc = make(prisma);
+    await expect(svc.resolvePublicCallbackTarget(WS)).resolves.toBeNull();
+  });
+});

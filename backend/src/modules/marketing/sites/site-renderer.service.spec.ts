@@ -102,7 +102,13 @@ describe('SiteRendererService', () => {
   });
 
   describe("'callback' block (NetGSM Phase 5 Task 6 — leave your number, we call you now)", () => {
-    it('renders a JS-free POST form to the public callback endpoint, carrying redirectMenu/redirectType as hidden fields', () => {
+    // Final-review fix M2: redirectMenu/redirectType are NO LONGER carried as
+    // hidden fields (the public endpoint now resolves the dial target itself,
+    // server-side, from the tenant's published block config — see
+    // SitesService.resolvePublicCallbackTarget — rather than trusting
+    // whatever the request body says). This block's own redirectMenu still
+    // gates whether the widget renders at all.
+    it('renders a JS-free POST form to the public callback endpoint, WITHOUT redirectMenu/redirectType in the markup', () => {
       const html = svc.render(
         { title: 'T', blocks: [{ type: 'callback', heading: 'Call me', redirectMenu: '850-queue-vip', redirectType: 'queue' }] },
         new Map(),
@@ -111,8 +117,8 @@ describe('SiteRendererService', () => {
       );
       expect(html).toContain('action="https://m.example/api/public/callback/ws-1"');
       expect(html).toContain('method="POST"');
-      expect(html).toContain('name="redirectMenu" value="850-queue-vip"');
-      expect(html).toContain('name="redirectType" value="queue"');
+      expect(html).not.toContain('redirectMenu');
+      expect(html).not.toContain('redirectType');
       expect(html).toContain('type="tel" name="phone" required');
       expect(html).not.toContain('<script');
     });
@@ -126,16 +132,6 @@ describe('SiteRendererService', () => {
       );
       expect(html).not.toContain('<script>x</script>');
       expect(html).toContain('&lt;script&gt;');
-    });
-
-    it('defaults an invalid/missing redirectType to "queue"', () => {
-      const html = svc.render(
-        { title: 'T', blocks: [{ type: 'callback', redirectMenu: 'q1', redirectType: 'not-a-real-type' }] },
-        new Map(),
-        'https://m.example',
-        { workspaceId: 'ws-1' },
-      );
-      expect(html).toContain('name="redirectType" value="queue"');
     });
 
     it('renders TR default copy when the page is Turkish (seo.lang), EN otherwise', () => {

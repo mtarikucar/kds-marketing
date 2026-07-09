@@ -137,20 +137,29 @@ export class SiteRendererService {
    * here) to the public callback endpoint (`PublicSiteController`), which
    * calls the identical `TelephonyCallbackService.requestCallback` the
    * authenticated `POST /marketing/telephony/callback` uses — same
-   * İYS-mandatory, fail-closed compliance gate either way. `redirectMenu`/
-   * `redirectType` are the WORKSPACE OWNER's own routing config (which
-   * pre-existing Netsantral queue/IVR/announcement this funnel feeds), not
-   * visitor input — carried as hidden fields, same idiom as the 'form'
-   * block's `formId`. Renders nothing (matches `formBlock`'s `if (!form)`
-   * guard) when the block wasn't configured with a target to redirect into,
-   * or when this page isn't being rendered for a specific workspace (only
-   * happens if a caller reuses the renderer outside the public site/funnel
-   * flow, which always passes one).
+   * İYS-mandatory, fail-closed compliance gate either way.
+   *
+   * `redirectMenu`/`redirectType` are NOT submitted by this form
+   * (Final-review fix M2 — previously carried as hidden fields, which meant
+   * anyone could POST arbitrary values straight to the endpoint bypassing
+   * this markup entirely): the public route now resolves the dial target
+   * itself, server-side, from the tenant's own published callback-block
+   * config (`SitesService.resolvePublicCallbackTarget`) — there is nothing
+   * target-shaped left in the request for a visitor to tamper with. This
+   * block's OWN `redirectMenu` still gates whether the WIDGET renders at
+   * all (unchanged — same guard as before), and by construction is the same
+   * target `resolvePublicCallbackTarget` will find and dial, since both read
+   * the identical block shape.
+   *
+   * Renders nothing (matches `formBlock`'s `if (!form)` guard) when the
+   * block wasn't configured with a target to redirect into, or when this
+   * page isn't being rendered for a specific workspace (only happens if a
+   * caller reuses the renderer outside the public site/funnel flow, which
+   * always passes one).
    */
   private callbackBlock(b: any, base: string, lang: string, workspaceId?: string): string {
     const redirectMenu = typeof b?.redirectMenu === 'string' ? b.redirectMenu.trim() : '';
     if (!workspaceId || !redirectMenu) return '';
-    const redirectType = ['queue', 'ivr', 'announcement'].includes(b?.redirectType) ? b.redirectType : 'queue';
     const tr = lang.startsWith('tr');
     const heading = b?.heading || (tr ? 'Sizi hemen arayalım' : "We'll call you right now");
     const phoneLabel = b?.phoneLabel || (tr ? 'Telefon numaranız' : 'Your phone number');
@@ -159,8 +168,6 @@ export class SiteRendererService {
       `<section class="s"><h2>${esc(heading)}</h2>` +
       (b?.text ? `<p>${esc(b.text)}</p>` : '') +
       `<form method="POST" action="${base}/api/public/callback/${esc(workspaceId)}">` +
-      `<input type="hidden" name="redirectMenu" value="${esc(redirectMenu)}">` +
-      `<input type="hidden" name="redirectType" value="${esc(redirectType)}">` +
       `<label>${esc(phoneLabel)}</label>` +
       `<input type="tel" name="phone" required>` +
       `<button class="btn" type="submit" style="margin-top:12px">${esc(submitText)}</button>` +

@@ -800,7 +800,21 @@ export class CampaignSenderService implements OnModuleInit {
    * `sendSmsBatch`'s per-segment SMS settlement): `settleVoice` prices by
    * billable minutes from the call's actual talk duration, which isn't known
    * at send time — only once Task 3's voice-report webhook lands `talkSec`.
-   * Settlement is deferred to that report consumer.
+   *
+   * CORRECTED (Final-review fix M3 — this docstring previously claimed
+   * settlement was "deferred to the report consumer"; that was aspirational,
+   * not true): `voice-report.consumer.ts`'s `VoiceReportConsumer.handle` only
+   * writes `voiceState`/`pushButton`/`talkSec` onto `CampaignRecipient` and
+   * rolls up `campaign.stats` — it contains NO `settleVoice`/ledger call.
+   * Every VOICE campaign send today debits ₺0; this is a genuine gap, not a
+   * deliberate deferral. TODO (real follow-up, out of this task's scope):
+   * price VOICE campaign minutes — needs (a) a voice campaign tariff and (b)
+   * a `settleVoice`-shaped call scoped to `CampaignRecipient` (mirroring
+   * `settleCampaignSms`'s ledger-only shape, since `CampaignRecipient` has no
+   * `costAmount` column to stamp the way `settleVoice`'s existing
+   * `voiceCall`/`salesCall` targets do) — most naturally wired into
+   * `VoiceReportConsumer.handle` once `talkSec` lands, since that's the only
+   * place the real billable duration becomes known.
    */
   private async sendVoice(
     workspaceId: string,
