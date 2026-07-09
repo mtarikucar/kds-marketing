@@ -19,7 +19,7 @@ import { Type } from 'class-transformer';
  * rotates the stored token.
  */
 export class ConnectAdAccountDto {
-  @IsString() @IsIn(['META', 'TIKTOK', 'LINKEDIN']) provider: string;
+  @IsString() @IsIn(['META', 'TIKTOK', 'LINKEDIN', 'GOOGLE']) provider: string;
   @IsString() @IsNotEmpty() @MaxLength(120) externalAdId: string;
   @IsOptional() @IsString() @MaxLength(160) displayName?: string;
   @IsString() @IsNotEmpty() @MaxLength(4000) accessToken: string;
@@ -35,7 +35,7 @@ export class ConnectAdAccountDto {
 export class AdMetricsQueryDto {
   @IsOptional() @IsDateString() from?: string;
   @IsOptional() @IsDateString() to?: string;
-  @IsOptional() @IsString() @IsIn(['META', 'TIKTOK', 'LINKEDIN']) provider?: string;
+  @IsOptional() @IsString() @IsIn(['META', 'TIKTOK', 'LINKEDIN', 'GOOGLE']) provider?: string;
 }
 
 /** Optional trailing-day window for a manual pull (default 7, bounded). */

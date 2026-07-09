@@ -1,8 +1,9 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
-import { isMetaAdsConfigured, isTiktokAdsConfigured, isLinkedinAdsConfigured } from './ads.types';
+import { isMetaAdsConfigured, isTiktokAdsConfigured, isLinkedinAdsConfigured, isGoogleAdsConfigured } from './ads.types';
 import { AdWriteCapabilityService } from './ad-write-capability.service';
+import { setCampaignBudget as setGoogleBudget, setCampaignStatus as setGoogleStatus } from './google-ads.client';
 import {
   listCampaigns,
   listAdSets,
@@ -92,7 +93,8 @@ export class AdManagementService {
     const configured =
       (account.provider === 'META' && isMetaAdsConfigured()) ||
       (account.provider === 'TIKTOK' && isTiktokAdsConfigured()) ||
-      (account.provider === 'LINKEDIN' && isLinkedinAdsConfigured());
+      (account.provider === 'LINKEDIN' && isLinkedinAdsConfigured()) ||
+      (account.provider === 'GOOGLE' && isGoogleAdsConfigured());
     if (!configured) {
       throw new BadRequestException(`${account.provider} ads is not configured on this platform`);
     }
@@ -160,7 +162,9 @@ export class AdManagementService {
         ? setTiktokCampaignStatus(token, account.externalAdId, entityId, status)
         : account.provider === 'LINKEDIN'
           ? updateLinkedinCampaign(token, entityId, { status })
-          : updateEntity(token, entityId, { status });
+          : account.provider === 'GOOGLE'
+            ? setGoogleStatus(token, account.externalAdId, entityId, status === 'ACTIVE' ? 'ENABLED' : 'PAUSED')
+            : updateEntity(token, entityId, { status });
     const r = await this.onResult(account.id, await write);
     if (!r.ok) throw new BadRequestException(r.error ?? 'Failed to update status');
     return { id: entityId, status };
@@ -182,6 +186,10 @@ export class AdManagementService {
         throw new BadRequestException('LinkedIn budget needs the ad account currency; reconnect the account');
       }
       write = updateLinkedinCampaign(token, entityId, { dailyBudgetMajor, currencyCode: account.currency });
+    } else if (account.provider === 'GOOGLE') {
+      // For Google the entity ref is the campaignBudget resource (Google models
+      // budgets as a separate resource the campaign references).
+      write = setGoogleBudget(token, account.externalAdId, entityId, dailyBudgetMajor);
     } else {
       write = updateEntity(token, entityId, { daily_budget: Math.round(dailyBudgetMajor * 100) });
     }

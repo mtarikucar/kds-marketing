@@ -14,17 +14,20 @@ import {
 import { pullMetaInsights } from './meta-ads.client';
 import { pullTiktokInsights } from './tiktok-ads.client';
 import { pullLinkedinInsights } from './linkedin-ads.client';
+import { pullGoogleInsights } from './google-ads.client';
+import { isGoogleAuthError } from './google-ads.util';
 import {
   isMetaAdsConfigured,
   isTiktokAdsConfigured,
   isLinkedinAdsConfigured,
+  isGoogleAdsConfigured,
   AdMetricRow,
 } from './ads.types';
 import { ConnectAdAccountDto } from '../dto/ad-account.dto';
 import { isMetaAuthError } from '../../../common/util/meta-graph.util';
 import { isLinkedinAuthError } from '../../../common/util/linkedin-api.util';
 
-const PROVIDERS = ['META', 'TIKTOK', 'LINKEDIN'];
+const PROVIDERS = ['META', 'TIKTOK', 'LINKEDIN', 'GOOGLE'];
 
 /**
  * Ad-account connection + metrics (GoHighLevel parity). Each workspace connects
@@ -44,6 +47,7 @@ export class AdAccountService {
       META: isMetaAdsConfigured(),
       TIKTOK: isTiktokAdsConfigured(),
       LINKEDIN: isLinkedinAdsConfigured(),
+      GOOGLE: isGoogleAdsConfigured(),
       secretBoxConfigured: isSecretBoxConfigured(),
     };
   }
@@ -69,7 +73,7 @@ export class AdAccountService {
 
   async connect(workspaceId: string, dto: ConnectAdAccountDto) {
     if (!PROVIDERS.includes(dto.provider)) {
-      throw new BadRequestException('provider must be META, TIKTOK or LINKEDIN');
+      throw new BadRequestException('provider must be META, TIKTOK, LINKEDIN or GOOGLE');
     }
     // Env-gate the user path the same way the cron sweep is gated, so the whole
     // feature is inert (and /status is truthful) when a provider isn't enabled.
@@ -195,6 +199,10 @@ export class AdAccountService {
         rows = await pullMetaInsights(token, account.externalAdId, from, to);
       } else if (account.provider === 'TIKTOK') {
         rows = await pullTiktokInsights(token, account.externalAdId, from, to);
+      } else if (account.provider === 'GOOGLE') {
+        // token here is the sealed OAuth REFRESH token; the client mints the
+        // ~1h access token itself, so no service-layer refresh is needed.
+        rows = await pullGoogleInsights(token, account.externalAdId, from, to);
       } else {
         rows = await pullLinkedinInsights(token, account.externalAdId, from, to);
       }
@@ -209,7 +217,8 @@ export class AdAccountService {
         (account.provider === 'META' && isMetaAuthError(e)) ||
         (account.provider === 'TIKTOK' &&
           /access[_ ]?token|auth|not authorized|invalid token|\b(4000[12]|4010\d|40110)\b/i.test(msg)) ||
-        (account.provider === 'LINKEDIN' && isLinkedinAuthError(e));
+        (account.provider === 'LINKEDIN' && isLinkedinAuthError(e)) ||
+        (account.provider === 'GOOGLE' && isGoogleAuthError(e));
       if (needsReauth) {
         await this.markReauth(account.id);
       } else {
@@ -289,6 +298,7 @@ export class AdAccountService {
   /** True when the provider's app credentials are present (platform-enabled). */
   private isProviderConfigured(provider: string): boolean {
     if (provider === 'META') return isMetaAdsConfigured();
+    if (provider === 'GOOGLE') return isGoogleAdsConfigured();
     if (provider === 'TIKTOK') return isTiktokAdsConfigured();
     return isLinkedinAdsConfigured();
   }
