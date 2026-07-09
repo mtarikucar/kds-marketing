@@ -139,7 +139,12 @@ describe('IysSyncService', () => {
       prisma.iysSyncJob.findMany.mockResolvedValue(jobs as any);
       prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
       registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' } });
-      client.add.mockResolvedValue({ ok: true, code: '00', refids: [], message: null });
+      client.add.mockImplementation(async (_creds: unknown, rows: unknown[]) => ({
+        ok: true,
+        code: '00',
+        refids: rows.map((_, i) => `ref-${i}`),
+        message: null,
+      }));
 
       await svc.drain();
 
@@ -154,7 +159,12 @@ describe('IysSyncService', () => {
       prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
       registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' } });
       budgeter.tryTake.mockReturnValueOnce(true).mockReturnValueOnce(false);
-      client.add.mockResolvedValue({ ok: true, code: '00', refids: [], message: null });
+      client.add.mockImplementation(async (_creds: unknown, rows: unknown[]) => ({
+        ok: true,
+        code: '00',
+        refids: rows.map((_, i) => `ref-${i}`),
+        message: null,
+      }));
 
       const out = await svc.drain();
 
@@ -230,6 +240,52 @@ describe('IysSyncService', () => {
       await svc.drain();
 
       expect(client.add).toHaveBeenCalled();
+    });
+
+    it('fails closed (does NOT stamp SENT) when add() returns ok with FEWER refids than rows in the batch', async () => {
+      // extractRefids drops any row whose refid key it didn't recognize,
+      // which would otherwise shift every later row's stamped refid out of
+      // alignment — a silent, non-self-healing consent-proof loss. A short
+      // refids array must be treated as a failed attempt instead.
+      const jobs = [job({ id: 'job-1' }), job({ id: 'job-2', recipient: '05559998877' })];
+      prisma.iysSyncJob.findMany.mockResolvedValue(jobs as any);
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
+      registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' } });
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: ['ref-1'], message: null });
+
+      const out = await svc.drain();
+
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledTimes(2);
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: { status: 'FAILED', attempts: 1, lastError: 'refid count mismatch: expected 2 got 1' },
+      });
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({
+        where: { id: 'job-2' },
+        data: { status: 'FAILED', attempts: 1, lastError: 'refid count mismatch: expected 2 got 1' },
+      });
+      // never a SENT stamp on a count mismatch — no row is permanently
+      // excluded from re-submission with a null/misattributed refid.
+      expect(prisma.iysSyncJob.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+      );
+      expect(out).toEqual({ processed: 2, sent: 0 });
+    });
+
+    it('escalates a refid count mismatch to DLQ once attempts reaches 8, same as any other failure', async () => {
+      prisma.iysSyncJob.findMany.mockResolvedValue([
+        job({ attempts: 7, updatedAt: new Date(Date.now() - 3_600_000 - 1_000) }),
+      ] as any);
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
+      registry.resolveConfig.mockReturnValue({ secrets: { usercode: 'u1', password: 'p1' }, public: { brandCode: 'BR1' } });
+      client.add.mockResolvedValue({ ok: true, code: '00', refids: [], message: null });
+
+      await svc.drain();
+
+      expect(prisma.iysSyncJob.update).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: { status: 'DLQ', attempts: 8, lastError: 'refid count mismatch: expected 1 got 0' },
+      });
     });
 
     it('never throws out of a tick when a workspace lookup fails unexpectedly', async () => {

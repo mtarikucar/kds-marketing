@@ -178,7 +178,7 @@ describe('ComplianceService', () => {
     );
   });
 
-  it('does not fail the consent write when the İYS enqueue throws', async () => {
+  it('does not fail the consent write when the İYS enqueue throws — ConsentRecord + flip still persist', async () => {
     const { prisma, iysSync, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
     (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-9' });
@@ -187,6 +187,47 @@ describe('ComplianceService', () => {
     iysSync.enqueueConsent.mockRejectedValue(new Error('iys down'));
 
     await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).resolves.toMatchObject({ id: 'cr-9' });
+    // the İYS enqueue is best-effort WITHIN the committed consent — its
+    // failure must never roll back the record write or the flip.
+    expect(prisma.consentRecord.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ workspaceId: WS, leadId: 'lead-1', type: 'MARKETING_SMS' }) }),
+    );
+    expect(prisma.lead.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'lead-1' }, data: { smsOptOut: true } }),
+    );
+  });
+
+  // Finding: the ConsentRecord write must live INSIDE the same $transaction
+  // as the smsOptOut flip (not a separate, earlier top-level create) so a
+  // committed ConsentRecord always has its matching flag state.
+  it('writes the ConsentRecord INSIDE the same $transaction as the smsOptOut flip, not before it', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.lead.findUnique as jest.Mock).mockResolvedValue({ phone: '05551112233' });
+    // Simulate the transaction never even opening (e.g. a pool-exhaustion
+    // failure) — if the create happened BEFORE $transaction was invoked (the
+    // pre-fix structure), it would have already been called regardless.
+    (prisma.$transaction as unknown as jest.Mock) = jest.fn().mockRejectedValue(new Error('tx open failed'));
+
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).rejects.toThrow('tx open failed');
+
+    expect(prisma.consentRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the ConsentRecord together with a failed smsOptOut flip — neither persists', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-x' });
+    (prisma.lead.update as jest.Mock).mockRejectedValue(new Error('flip failed'));
+
+    // Both writes happen inside the SAME $transaction callback (mocked here
+    // as a direct passthrough) — a real Postgres transaction rolls back
+    // EVERYTHING in that callback, including the just-created ConsentRecord,
+    // the instant lead.update throws. The rejection must propagate (not be
+    // swallowed) so the caller knows nothing committed.
+    await expect(svc.recordConsent(WS, 'lead-1', 'MARKETING_SMS', false)).rejects.toThrow('flip failed');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it('does not fail the consent write, and still enqueues nothing, when the İYS enqueue phone lookup rejects', async () => {

@@ -95,11 +95,18 @@ function fmtIysDate(d: Date): string {
  *    `IysClient.add` call, and stamps the outcome back onto each row. A budget
  *    denial simply stops that workspace's batches for this tick — the rows are
  *    untouched and picked up again next tick. Every other failure (missing
- *    creds/brandCode, or a NetGSM add() error) increments `attempts` + records
- *    `lastError`, applying an exponential backoff (1m→2m→4m→…capped at 1h)
- *    before the row is eligible again, and escalates to a terminal `DLQ` after
- *    8 attempts (surfaced as a warning badge + a manager retry endpoint —
- *    `ComplianceController`'s `POST /marketing/compliance/iys/retry`).
+ *    creds/brandCode, a NetGSM add() error, OR an `ok:true` response whose
+ *    `refids` array is shorter than the batch — `IysClient`'s refid
+ *    extraction drops any row whose refid key it didn't recognize, which
+ *    would otherwise shift every later row's stamped refid out of alignment)
+ *    increments `attempts` + records `lastError`, applying an exponential
+ *    backoff (1m→2m→4m→…capped at 1h) before the row is eligible again, and
+ *    escalates to a terminal `DLQ` after 8 attempts (surfaced as a warning
+ *    badge + a manager retry endpoint — `ComplianceController`'s
+ *    `POST /marketing/compliance/iys/retry`). A row is ONLY ever stamped
+ *    `SENT` when the batch's `refids` count matches exactly — never on a
+ *    guess — so a consent proof can never be silently and permanently
+ *    misattributed or dropped.
  *
  * The worker never throws out of a tick: a bad workspace/account is caught and
  * logged so it can never stall another workspace's turn, and the top-level
@@ -223,9 +230,22 @@ export class IysSyncService {
         { usercode: creds.usercode, password: creds.password, brandCode: creds.brandCode },
         batch.map((j) => this.toWireRow(j)),
       );
-      if (result.ok) {
+      if (result.ok && result.refids.length === batch.length) {
         await this.markSent(batch, result.refids);
         sent += batch.length;
+      } else if (result.ok) {
+        // `extractRefids` DROPS (not nulls-out) any row whose refid key didn't
+        // match a known alias, so a short `refids` array means every entry
+        // AFTER the first drop is misaligned with `batch` — there is no safe
+        // way to match by order any more. Fail closed: never stamp SENT on a
+        // count mismatch, or some rows would get an ok/null-refid stamp and be
+        // silently excluded from re-submission forever (a non-self-healing
+        // consent-proof loss, worst for RET/opt-out). Treat it exactly like
+        // any other failed attempt so it backs off and escalates to DLQ.
+        await this.markFailedBatch(
+          batch,
+          `refid count mismatch: expected ${batch.length} got ${result.refids.length}`,
+        );
       } else {
         await this.markFailedBatch(batch, result.message ?? 'İYS add başarısız');
       }
@@ -245,7 +265,9 @@ export class IysSyncService {
 
   /** Success path — refids are matched back to rows BY ORDER (this worker
    *  never resubmits a row that already carries a `refid`, so there is no
-   *  correction/dedup case to match by refid instead, in this phase). */
+   *  correction/dedup case to match by refid instead, in this phase). Only
+   *  ever called once the caller has confirmed `refids.length === batch.length`
+   *  — a short array is handled as a failed attempt instead (see caller). */
   private async markSent(batch: PendingJob[], refids: string[]): Promise<void> {
     await Promise.all(
       batch.map((job, i) =>
