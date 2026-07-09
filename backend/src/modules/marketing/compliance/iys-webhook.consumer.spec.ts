@@ -64,7 +64,12 @@ describe('IysWebhookConsumer', () => {
 
     expect(prisma.lead.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { workspaceId: 'ws-1', phoneNormalized: '05551112233', mergedIntoId: null, deletedAt: null },
+        where: {
+          workspaceId: 'ws-1',
+          phoneNormalized: { in: ['5551112233', '05551112233', '905551112233'] },
+          mergedIntoId: null,
+          deletedAt: null,
+        },
       }),
     );
     expect(compliance.recordConsent).toHaveBeenCalledWith('ws-1', 'lead-1', 'MARKETING_SMS', true, {
@@ -84,8 +89,37 @@ describe('IysWebhookConsumer', () => {
     await handle(makeEvent('evt-3', { recipient: '+90 555 111 22 33' }));
 
     expect(prisma.lead.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ phoneNormalized: '905551112233' }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({
+          phoneNormalized: { in: ['5551112233', '05551112233', '905551112233'] },
+        }),
+      }),
     );
+  });
+
+  it("reconciles İYS's 90-prefixed recipient against every phoneNormalized spelling a lead might be stored under (0-prefixed, +90/90-prefixed, bare-10-digit)", async () => {
+    // İYS sends '905551112233' (no +). A lead may have been created via a
+    // form entered as '05551112233', via SMS-channel ingress as '+905551112233'
+    // (which normalizePhone reduces to '905551112233'), or manually as bare
+    // '5551112233' — all three must be candidates in the SAME lookup.
+    await handle(makeEvent('evt-variants', { recipient: '905551112233' }));
+
+    expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          phoneNormalized: { in: ['5551112233', '05551112233', '905551112233'] },
+        }),
+      }),
+    );
+  });
+
+  it('never defaults an unrecognized status to a grant or revoke — skips before even querying for a lead', async () => {
+    await expect(
+      handle(makeEvent('evt-bad-status', { status: 'GARBAGE' as unknown as 'ONAY' | 'RET' })),
+    ).resolves.toBeUndefined();
+
+    expect(prisma.lead.findFirst).not.toHaveBeenCalled();
+    expect(compliance.recordConsent).not.toHaveBeenCalled();
   });
 
   it('dedupes a replayed event id — the same id is only processed once', async () => {

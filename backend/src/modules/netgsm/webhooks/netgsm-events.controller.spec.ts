@@ -192,14 +192,52 @@ describe('NetgsmEventsController — iys', () => {
     expect(outbox.append).not.toHaveBeenCalled();
   });
 
-  it('defaults status to ONAY when neither ONAY nor RET is recognized, and defaults type to MESAJ', async () => {
+  it('defaults type to MESAJ when absent, but NEVER fails open on status: an element with no recognizable status is archived and NOT published', async () => {
     const token = netgsmWebhookToken('ws-1', 'iys');
     const el = { transactionid: 'tx-9', recipient: '905551112233' };
+
+    await expect(controller.iys('ws-1', token, [el])).resolves.toEqual({ ok: true });
+
+    // Still archived for audit — the fail-closed behavior is ONLY about publishing.
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'iys', externalId: 'tx-9', payload: el }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it("status tri-state — explicit 'ONAY' publishes a granted consent event", async () => {
+    const token = netgsmWebhookToken('ws-1', 'iys');
+    const el = { transactionid: 'tx-onay', recipient: '905551112233', type: 'MESAJ', status: 'ONAY', source: 'HS_WEB' };
 
     await controller.iys('ws-1', token, [el]);
 
     expect(outbox.append).toHaveBeenCalledWith(
-      expect.objectContaining({ payload: expect.objectContaining({ status: 'ONAY', type: 'MESAJ' }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ status: 'ONAY' }) }),
     );
+  });
+
+  it("status tri-state — explicit 'RET' publishes a revoked consent event", async () => {
+    const token = netgsmWebhookToken('ws-1', 'iys');
+    const el = { transactionid: 'tx-ret', recipient: '905551112233', type: 'MESAJ', status: 'RET', source: 'HS_WEB' };
+
+    await controller.iys('ws-1', token, [el]);
+
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ status: 'RET' }) }),
+    );
+  });
+
+  it("status tri-state — an unrecognized/garbage status is archived but NEVER published (never fails open to ONAY)", async () => {
+    const token = netgsmWebhookToken('ws-1', 'iys');
+    const el = { transactionid: 'tx-garbage', recipient: '905551112233', type: 'MESAJ', status: 'garbage', source: 'HS_WEB' };
+
+    await expect(controller.iys('ws-1', token, [el])).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'iys', externalId: 'tx-garbage', payload: el }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).not.toHaveBeenCalled();
   });
 });

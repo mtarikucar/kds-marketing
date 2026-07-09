@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
 import { MarketingEventTypes, MarketingIysConsentPayload } from '../events/marketing-event-types';
-import { normalizePhone } from '../utils/lead-normalize';
+import { localMsisdnVariants, normalizePhone } from '../utils/lead-normalize';
 import { ComplianceService } from './compliance.service';
 
 /**
@@ -38,6 +38,20 @@ import { ComplianceService } from './compliance.service';
  * recipient (no lead matches the normalized phone in that workspace) is
  * likewise logged and skipped — İYS may hold consent rows for numbers this
  * CRM has never seen.
+ *
+ * PHONE MATCH: İYS's `recipient` arrives as `90XXXXXXXXXX` (no `+`), but this
+ * app's lead-creation paths do NOT reconcile that against 0-prefixed /
+ * bare-10-digit input before writing `phoneNormalized` (`normalizePhone` is a
+ * pure digit-strip). The lead lookup below therefore matches against every
+ * spelling `localMsisdnVariants` enumerates, not just the one İYS sent — an
+ * exact-match-only lookup here previously meant a real İYS opt-out could
+ * silently no-op as "unknown phone" against a lead stored under a different
+ * digit shape.
+ *
+ * FAIL-CLOSED ON STATUS: `status` is only ever 'ONAY' or 'RET' by contract
+ * (NetgsmEventsController.iys never publishes anything else), but this
+ * handler re-checks it anyway before treating it as a grant/revoke — an
+ * unrecognized value is skipped, never defaulted to granted=false or true.
  */
 @Injectable()
 export class IysWebhookConsumer implements OnModuleInit, OnModuleDestroy {
@@ -85,14 +99,34 @@ export class IysWebhookConsumer implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // Defense in depth: NetgsmEventsController.iys only ever forwards an
+    // exactly-'ONAY'/exactly-'RET' status (anything else is archived, never
+    // published — see that controller's docstring), but `status` arrives
+    // here as an untyped event payload, not a compiler-enforced union. A
+    // value that is somehow neither must be skipped, NOT defaulted to
+    // granted=false (that would silently write a bogus opt-out
+    // ConsentRecord for a signal that was never actually a RET).
+    if (status !== 'ONAY' && status !== 'RET') {
+      this.logger.warn(`iys webhook consent: event ${event.id} has unrecognized status '${status}' — skipping`);
+      return;
+    }
+
     const phoneNormalized = normalizePhone(recipient);
     if (!phoneNormalized) {
       this.logger.warn(`iys webhook consent: event ${event.id} has no usable recipient phone — skipping`);
       return;
     }
 
+    // Reconcile İYS's recipient shape (90XXXXXXXXXX, no +) against however
+    // THIS app's lead-creation paths happened to populate phoneNormalized
+    // (0-prefixed, bare-10-digit, or 90-prefixed — see localMsisdnVariants'
+    // docstring) — an exact-match lookup on one shape alone silently misses
+    // leads written via a different path, which is exactly how a real İYS
+    // opt-out previously went unapplied.
+    const phoneVariants = localMsisdnVariants(phoneNormalized);
+
     const lead = await this.prisma.lead.findFirst({
-      where: { workspaceId, phoneNormalized, mergedIntoId: null, deletedAt: null },
+      where: { workspaceId, phoneNormalized: { in: phoneVariants }, mergedIntoId: null, deletedAt: null },
       select: { id: true },
       orderBy: { createdAt: 'desc' },
     });

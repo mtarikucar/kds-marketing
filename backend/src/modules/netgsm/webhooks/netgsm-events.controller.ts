@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, NotFoundException, Param, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Logger, NotFoundException, Param, Post } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { payloadDigest, verifyNetgsmWebhookToken } from './netgsm-webhook.util';
@@ -12,6 +12,8 @@ import { payloadDigest, verifyNetgsmWebhookToken } from './netgsm-webhook.util';
  */
 @Controller('public/netgsm')
 export class NetgsmEventsController {
+  private readonly logger = new Logger(NetgsmEventsController.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxService,
@@ -67,6 +69,14 @@ export class NetgsmEventsController {
    * `MarketingEventTypes.IysConsentReceived` (marketing-event-types.ts) —
    * kept as a literal here rather than imported, so the hub never takes a
    * compile-time dependency on the marketing bounded context.
+   *
+   * STATUS IS STRICT TRI-STATE — never fail-open to ONAY. Every element is
+   * archived regardless (the raw payload is always kept for audit), but only
+   * an element whose status is EXACTLY 'ONAY' or EXACTLY 'RET' is published
+   * as a `marketing.iys.consent.v1` consent event. Anything else (a typo, a
+   * schema-drift field rename, garbage) is logged and left unpublished — this
+   * is a compliance signal, so an ambiguous element must never be coerced
+   * into granting marketing permission.
    */
   @Post(':workspaceId/:token/iys')
   @HttpCode(202)
@@ -103,10 +113,18 @@ export class NetgsmEventsController {
     });
 
     for (const r of fresh) {
+      const statusRaw = (this.stringField(r.el, ['status', 'durum']) ?? '').toUpperCase();
+      // Strict tri-state: only an EXACT 'ONAY'/'RET' is ever published as a
+      // consent event. The element is already archived above regardless (for
+      // audit) — an unrecognized status just never reaches the consumer that
+      // applies ONAY/RET to a lead, instead of silently fail-opening to ONAY.
+      if (statusRaw !== 'ONAY' && statusRaw !== 'RET') {
+        this.logger.warn(`unrecognized İYS status: ${statusRaw || '(empty)'} — element ${r.externalId} archived, not published`);
+        continue;
+      }
+      const status = statusRaw;
       const recipient = this.stringField(r.el, ['recipient', 'msisdn', 'gsmnumber']) ?? '';
       const type = this.stringField(r.el, ['type']) ?? 'MESAJ';
-      const statusRaw = (this.stringField(r.el, ['status', 'durum']) ?? '').toUpperCase();
-      const status = statusRaw === 'RET' ? 'RET' : 'ONAY';
       const source = this.stringField(r.el, ['source', 'kaynak']) ?? '';
       const transactionId =
         this.stringField(r.el, ['transactionid']) ?? this.stringField(r.el, ['submitid']) ?? r.externalId;
