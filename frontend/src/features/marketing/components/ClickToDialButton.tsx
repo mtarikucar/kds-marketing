@@ -6,7 +6,7 @@ import marketingApi from '../api/marketingApi';
 import { PhoneInput } from '@/components/ui/PhoneInput';
 import type { SalesCall, StartCallResult } from '../types';
 import { CALL_OUTCOMES } from '../types';
-import { expectRingback } from '../webphone/WebphoneHost';
+import { expectRingback, setActiveCallId } from '../webphone/WebphoneHost';
 
 const errMsg = (err: any, fallback: string) => err?.response?.data?.message || fallback;
 
@@ -48,7 +48,11 @@ export default function ClickToDialButton({
         // without this, the extension ring-back INVITE would surface the
         // accept/reject dialog instead of auto-answering silently. Reach the
         // app-wide webphone instance via WebphoneHost's module singleton.
-        expectRingback(phone.trim());
+        // Also hand it the SalesCall id (Phase 3 Task 5) so its in-call
+        // controls panel can show hangup/transfer immediately — including
+        // for bridge-mode calls, which never touch this tab's SIP session
+        // at all (no ring-back INVITE ever arrives for them).
+        expectRingback(phone.trim(), data.call.id);
       } else if (data.dialUri) {
         window.location.href = data.dialUri; // click-to-dial hands off to the device
       }
@@ -67,6 +71,7 @@ export default function ClickToDialButton({
     onSuccess: () => {
       toast.success('Call logged');
       setActiveCall(null);
+      setActiveCallId(null); // the in-call controls panel has nothing left to control
       queryClient.invalidateQueries({ queryKey: ['marketing', 'calls'] });
     },
     onError: (e: any) => toast.error(errMsg(e, 'Failed to log call')),

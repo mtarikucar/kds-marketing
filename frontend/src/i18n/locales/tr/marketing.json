@@ -1989,7 +1989,24 @@
       "accept": "Kabul et",
       "reject": "Reddet"
     },
-    "bridgeToast": "Gelen çağrı: {{caller}}"
+    "bridgeToast": "Gelen çağrı: {{caller}}",
+    "controls": {
+      "hold": "Beklet",
+      "unhold": "Devam et",
+      "mute": "Sessize al",
+      "unmute": "Sesi aç",
+      "keypad": "Tuş takımı",
+      "transfer": "Aktar",
+      "hangupServer": "Görüşmeyi bitir",
+      "hangupFailed": "Görüşme sonlandırılamadı",
+      "transferTitle": "Görüşmeyi aktar",
+      "transferHint": "Bu görüşmeyi devretmek için bir ekip arkadaşı seçin.",
+      "attended": "Danışmalı (önce görüş)",
+      "noTeammates": "Dahili numarası olan ekip arkadaşı yok",
+      "transferSuccess": "Görüşme aktarıldı",
+      "transferFailed": "Aktarma başarısız oldu",
+      "cancel": "Vazgeç"
+    }
   },
   "voiceAiSettings": {
     "title": "Sesli AI",

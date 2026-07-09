@@ -134,6 +134,21 @@ export class TelephonyConfigService {
     return { wssUrl: c.wssUrl, sipDomain: c.sipDomain, dahili: sipUsername, sipPassword, displayName: `${rep.firstName} ${rep.lastName}`.trim() };
   }
 
+  /**
+   * Teammates' extensions for the in-call transfer picker (Phase 3 Task 5) —
+   * any ACTIVE rep in the workspace with a dahili set, excluding the caller
+   * (can't transfer a live call to yourself). Open to any authenticated
+   * telephony user (not MANAGER-only, unlike MarketingUsersController.findAll)
+   * since a REP mid-call needs this to transfer, not just managers.
+   */
+  async listTeammateDahilis(workspaceId: string, excludeUserId: string) {
+    return this.prisma.marketingUser.findMany({
+      where: { workspaceId, status: 'ACTIVE', dahili: { not: null }, id: { not: excludeUserId } },
+      select: { id: true, firstName: true, lastName: true, dahili: true },
+      orderBy: { firstName: 'asc' },
+    });
+  }
+
   private mask(c: any) {
     let configuredSecrets: string[] = [];
     if (c.configSealed && isSecretBoxConfigured()) {

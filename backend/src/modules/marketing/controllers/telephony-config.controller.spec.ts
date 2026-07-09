@@ -1,4 +1,4 @@
-import { TelephonyConfigController } from './telephony-config.controller';
+import { TelephonyConfigController, WebphoneConfigController } from './telephony-config.controller';
 import { MarketingUserPayload } from '../types';
 
 const USER = { id: 'u1', workspaceId: 'ws-1', role: 'MANAGER' } as MarketingUserPayload;
@@ -51,5 +51,23 @@ describe('TelephonyConfigController.verify', () => {
     const r = await ctrl.verify(USER);
 
     expect(r.cdr).toEqual({ error: 'IP not allow-listed' });
+  });
+});
+
+/**
+ * GET /marketing/telephony/teammates (Phase 3 Task 5) — the webphone's
+ * transfer picker. Unlike TelephonyConfigController, WebphoneConfigController
+ * has no MANAGER role restriction — a REP mid-call needs this too.
+ */
+describe('WebphoneConfigController.teammates', () => {
+  it('delegates to TelephonyConfigService.listTeammateDahilis, excluding the caller', async () => {
+    const telephony = { listTeammateDahilis: jest.fn() };
+    const ctrl = new WebphoneConfigController(telephony as any);
+    telephony.listTeammateDahilis.mockResolvedValue([{ id: 'rep-2', firstName: 'B', lastName: 'C', dahili: '105' }]);
+
+    const r = await ctrl.teammates(USER);
+
+    expect(telephony.listTeammateDahilis).toHaveBeenCalledWith('ws-1', 'u1');
+    expect(r).toEqual([{ id: 'rep-2', firstName: 'B', lastName: 'C', dahili: '105' }]);
   });
 });

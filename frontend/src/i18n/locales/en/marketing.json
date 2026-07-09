@@ -1777,7 +1777,24 @@
       "accept": "Accept",
       "reject": "Reject"
     },
-    "bridgeToast": "Incoming call: {{caller}}"
+    "bridgeToast": "Incoming call: {{caller}}",
+    "controls": {
+      "hold": "Hold",
+      "unhold": "Resume",
+      "mute": "Mute",
+      "unmute": "Unmute",
+      "keypad": "Keypad",
+      "transfer": "Transfer",
+      "hangupServer": "End call",
+      "hangupFailed": "Could not end the call",
+      "transferTitle": "Transfer call",
+      "transferHint": "Pick a teammate to hand this call to.",
+      "attended": "Attended (consult first)",
+      "noTeammates": "No teammates with an extension yet",
+      "transferSuccess": "Call transferred",
+      "transferFailed": "Transfer failed",
+      "cancel": "Cancel"
+    }
   },
   "voiceAiSettings": {
     "title": "Voice AI",

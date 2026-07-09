@@ -29,6 +29,12 @@ export interface BridgeParams {
   record?: boolean;
 }
 
+/** Netsantral account credentials — the subset every control endpoint needs. */
+export interface NetsantralCreds {
+  username: string;
+  password: string;
+}
+
 /**
  * Thin client for NetGSM Netsantral call control ("dış arama" / tıkla-ara).
  *
@@ -104,9 +110,62 @@ export class NetsantralClient {
     return this.call('linkup', p.username, qs, p.password);
   }
 
+  /**
+   * Hang up the LIVE call (Phase 3 Task 5 — in-call controls). Needs the
+   * santral `unique_id`, which only arrives later via the event webhook and
+   * gets backfilled onto `SalesCall.externalCallId` (see
+   * TelephonyEventConsumer) — there is no way to hang up a call before that.
+   */
+  async hangup(creds: NetsantralCreds, uniqueId: string): Promise<NetsantralOriginateOutcome> {
+    if (!creds?.username || !creds?.password || !uniqueId) {
+      return { ok: false, message: 'Netsantral hangup called with missing parameters.' };
+    }
+    const qs = new URLSearchParams({ username: creds.username, password: creds.password, unique_id: uniqueId });
+    return this.call('hangup', creds.username, qs, creds.password);
+  }
+
+  /** Blind transfer (`xfer`) — hand the LIVE call off to another extension, this leg drops immediately. */
+  async blindTransfer(creds: NetsantralCreds, uniqueId: string, exten: string): Promise<NetsantralOriginateOutcome> {
+    if (!creds?.username || !creds?.password || !uniqueId || !exten) {
+      return { ok: false, message: 'Netsantral blindTransfer called with missing parameters.' };
+    }
+    const qs = new URLSearchParams({
+      username: creds.username, password: creds.password, unique_id: uniqueId, exten,
+    });
+    return this.call('xfer', creds.username, qs, creds.password);
+  }
+
+  /** Attended transfer (`atxfer`) — consult the target extension before the handoff completes. */
+  async attendedTransfer(creds: NetsantralCreds, uniqueId: string, exten: string): Promise<NetsantralOriginateOutcome> {
+    if (!creds?.username || !creds?.password || !uniqueId || !exten) {
+      return { ok: false, message: 'Netsantral attendedTransfer called with missing parameters.' };
+    }
+    const qs = new URLSearchParams({
+      username: creds.username, password: creds.password, unique_id: uniqueId, exten,
+    });
+    return this.call('atxfer', creds.username, qs, creds.password);
+  }
+
+  /**
+   * Mute/unmute (`muteaudio`) one side of the LIVE call. NOTE: the exact
+   * on/off toggle field is an open item (same status as originate/linkup's
+   * wire shape before it was confirmed live — see the class docstring) —
+   * `mute=1|0` is the best-effort guess; adjust here if NetGSM's real field
+   * differs once confirmed against a live account.
+   */
+  async mute(creds: NetsantralCreds, uniqueId: string, on: boolean): Promise<NetsantralOriginateOutcome> {
+    if (!creds?.username || !creds?.password || !uniqueId) {
+      return { ok: false, message: 'Netsantral mute called with missing parameters.' };
+    }
+    const qs = new URLSearchParams({
+      username: creds.username, password: creds.password, unique_id: uniqueId, mute: on ? '1' : '0',
+    });
+    return this.call('muteaudio', creds.username, qs, creds.password);
+  }
+
   /** Shared GET + status check + tolerant interpret + credential scrubbing. */
   private async call(
-    path: 'originate' | 'linkup',
+    path: 'originate' | 'linkup' | 'hangup' | 'xfer' | 'atxfer' | 'muteaudio',
     username: string,
     qs: URLSearchParams,
     password: string,

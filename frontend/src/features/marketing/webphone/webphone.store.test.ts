@@ -6,13 +6,18 @@ const call = vi.fn().mockResolvedValue(undefined);
 const hangup = vi.fn().mockResolvedValue(undefined);
 const answer = vi.fn().mockResolvedValue(undefined);
 const decline = vi.fn().mockResolvedValue(undefined);
+const hold = vi.fn().mockResolvedValue(undefined);
+const unhold = vi.fn().mockResolvedValue(undefined);
+const mute = vi.fn();
+const unmute = vi.fn();
+const sendDTMF = vi.fn().mockResolvedValue(undefined);
 let captured: any;
 let capturedInstance: any;
 vi.mock('sip.js/lib/platform/web', () => ({
   SimpleUser: vi.fn().mockImplementation((server: string, opts: any) => {
     captured = { server, opts };
     capturedInstance = {
-      connect, register, call, hangup, answer, decline,
+      connect, register, call, hangup, answer, decline, hold, unhold, mute, unmute, sendDTMF,
       unregister: vi.fn(), disconnect: vi.fn(), delegate: opts.delegate,
     };
     return capturedInstance;
@@ -35,9 +40,13 @@ describe('webphone store', () => {
   beforeEach(() => {
     connect.mockClear(); register.mockClear(); call.mockClear(); hangup.mockClear();
     answer.mockClear(); decline.mockClear();
+    hold.mockClear(); unhold.mockClear(); mute.mockClear(); unmute.mockClear(); sendDTMF.mockClear();
     connect.mockResolvedValue(undefined);
     answer.mockResolvedValue(undefined);
     decline.mockResolvedValue(undefined);
+    hold.mockResolvedValue(undefined);
+    unhold.mockResolvedValue(undefined);
+    sendDTMF.mockResolvedValue(undefined);
   });
   afterEach(() => { vi.useRealTimers(); });
 
@@ -236,5 +245,147 @@ describe('webphone store', () => {
     expect(answer).not.toHaveBeenCalled();
     expect(decline).not.toHaveBeenCalled();
     expect(wp.getState().status).toBe('registered');
+  });
+
+  // ── In-call controls: hold/mute/DTMF (Phase 3 Task 5) ─────────────────────
+
+  describe('hold/unhold', () => {
+    it('hold() sends the re-INVITE and flips held:true while in a call', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+
+      await wp.hold();
+
+      expect(hold).toHaveBeenCalledTimes(1);
+      expect(wp.getState().held).toBe(true);
+    });
+
+    it('unhold() clears held:false', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+      await wp.hold();
+
+      await wp.unhold();
+
+      expect(unhold).toHaveBeenCalledTimes(1);
+      expect(wp.getState().held).toBe(false);
+    });
+
+    it('hold()/unhold() are no-ops when not in a call', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+
+      await wp.hold();
+      await wp.unhold();
+
+      expect(hold).not.toHaveBeenCalled();
+      expect(unhold).not.toHaveBeenCalled();
+    });
+
+    it('sets an error and leaves held unset when hold() rejects', async () => {
+      hold.mockRejectedValueOnce(new Error('re-INVITE rejected'));
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+
+      await wp.hold();
+
+      expect(wp.getState().held).not.toBe(true);
+      expect(wp.getState().error).toBe('re-INVITE rejected');
+    });
+
+    it('a fresh call after hold resets held:false', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+      await wp.hold();
+      expect(wp.getState().held).toBe(true);
+
+      captured.opts.delegate.onCallHangup();
+      await wp.call('+90 555 999 88 77');
+
+      expect(wp.getState().held).toBe(false);
+    });
+  });
+
+  describe('mute/unmute', () => {
+    it('mute() disables the sender track and flips muted:true while in a call', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+
+      wp.mute();
+
+      expect(mute).toHaveBeenCalledTimes(1);
+      expect(wp.getState().muted).toBe(true);
+    });
+
+    it('unmute() clears muted:false', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+      wp.mute();
+
+      wp.unmute();
+
+      expect(unmute).toHaveBeenCalledTimes(1);
+      expect(wp.getState().muted).toBe(false);
+    });
+
+    it('mute()/unmute() are no-ops when not in a call', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+
+      wp.mute();
+      wp.unmute();
+
+      expect(mute).not.toHaveBeenCalled();
+      expect(unmute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('sendDtmf', () => {
+    it('sends a DTMF tone while in a call', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+
+      await wp.sendDtmf('5');
+
+      expect(sendDTMF).toHaveBeenCalledWith('5');
+    });
+
+    it('is a no-op when not in a call', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+
+      await wp.sendDtmf('5');
+
+      expect(sendDTMF).not.toHaveBeenCalled();
+    });
+
+    it('swallows a rejected sendDTMF (transient — nothing actionable to show)', async () => {
+      sendDTMF.mockRejectedValueOnce(new Error('no active session'));
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+
+      await expect(wp.sendDtmf('#')).resolves.toBeUndefined();
+    });
+  });
+
+  it('hangup() resets held/muted back to false', async () => {
+    const wp = createWebphone(document.createElement('audio'));
+    await wp.start(cfg);
+    await wp.call('+90 555 111 22 33');
+    await wp.hold();
+    wp.mute();
+
+    await wp.hangup();
+
+    expect(wp.getState().held).toBe(false);
+    expect(wp.getState().muted).toBe(false);
   });
 });

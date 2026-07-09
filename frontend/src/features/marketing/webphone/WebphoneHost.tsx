@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { createWebphone, type WebphoneState, type WebphoneConfig } from './webphone.store';
 import CopilotPanel from './CopilotPanel';
+import CallControlsPanel from './CallControlsPanel';
 
 /** The `screen_pop` event payload TelephonyEventConsumer pushes onto
  *  `GET /marketing/telephony/stream` (NetGSM Phase 3 Task 3). `lead` is
@@ -72,10 +73,32 @@ const numbersMayCorrelate = (a: string | null | undefined, b: string | null | un
  *  no-ops rather than throwing. */
 let activeWebphone: { expectRingback: (dialedNumber?: string) => void } | null = null;
 
+/**
+ * Module-level pointer to the mounted WebphoneHost's own `activeCallId`
+ * setter (Phase 3 Task 5 — in-call controls). Same idiom as `activeWebphone`
+ * above: a REST-originated call (ClickToDialButton, DialerPage) knows the
+ * SalesCall id the moment the server accepts the dial, well before — or, for
+ * a bridge-mode call, INSTEAD of — any SIP ring-back ever arriving in this
+ * tab. `setActiveCallId` lets those call sites hand that id to the one
+ * mounted host so CallControlsPanel can show hangup/transfer immediately,
+ * including for bridge calls that never touch this tab's SIP session at all.
+ */
+let activeCallIdSetter: ((id: string | null) => void) | null = null;
+
 /** Arm the ring-back-expectation window on the one app-wide webphone
- *  instance. No-op if no WebphoneHost is currently mounted. */
-export function expectRingback(dialedNumber?: string) {
+ *  instance, and (if known) record the SalesCall id as the active call for
+ *  the in-call controls panel. No-op if no WebphoneHost is currently mounted. */
+export function expectRingback(dialedNumber?: string, salesCallId?: string) {
   activeWebphone?.expectRingback(dialedNumber);
+  if (salesCallId) activeCallIdSetter?.(salesCallId);
+}
+
+/** Directly set/clear the ACTIVE call shown in the in-call controls panel —
+ *  for a call this rep is controlling that has no SIP leg in this tab
+ *  (bridge-mode) or whose id is known before any ring-back. No-op if no
+ *  WebphoneHost is currently mounted. */
+export function setActiveCallId(id: string | null) {
+  activeCallIdSetter?.(id);
 }
 
 /**
@@ -104,6 +127,12 @@ export default function WebphoneHost() {
   const [state, setState] = useState<WebphoneState>({ status: 'idle' });
   const [screenPop, setScreenPop] = useState<ScreenPopPayload | null>(null);
   const pendingScreenPopRef = useRef<{ payload: ScreenPopPayload; at: number } | null>(null);
+  // NetGSM Phase 3 Task 5 — the SalesCall this rep is currently handling, for
+  // CallControlsPanel (hangup/transfer/hold/mute/DTMF). Tracked independently
+  // of the SIP `state.status` because a bridge-mode call never reaches
+  // `incall` here at all (see `activeCallIdSetter`'s doc above).
+  const [activeCallId, setActiveCallIdState] = useState<string | null>(null);
+  const prevSipStatusRef = useRef<WebphoneState['status']>('idle');
   const navigate = useNavigate();
   const { t } = useTranslation('marketing');
   const { accessToken } = useMarketingAuthStore();
@@ -120,6 +149,16 @@ export default function WebphoneHost() {
     enabled: telephonyEntitled,
   });
 
+  // Registers the activeCallId setter UNCONDITIONALLY (not gated on `cfg`) —
+  // a bridge-mode rep (phone set, no dahili) never gets a webphone `cfg` at
+  // all (webphoneConfigFor requires dahili+dahiliSecret), but still needs
+  // ClickToDialButton/DialerPage's `setActiveCallId`/`expectRingback` calls
+  // to reach this host so CallControlsPanel can show hangup/transfer.
+  useEffect(() => {
+    activeCallIdSetter = setActiveCallIdState;
+    return () => { activeCallIdSetter = null; };
+  }, []);
+
   useEffect(() => {
     if (!cfg || !audioRef.current || wpRef.current) return;
     const wp = createWebphone(audioRef.current);
@@ -127,6 +166,15 @@ export default function WebphoneHost() {
     activeWebphone = wp;
     const unsub = wp.subscribe((s) => {
       setState(s);
+      // A SIP call that just ended (was 'incall', now isn't) clears the
+      // active-call pointer too — covers the dahili/inbound-accepted paths.
+      // A bridge-mode call's activeCallId was never tied to a SIP transition
+      // in the first place, so this never fires spuriously for it; it's
+      // cleared instead by ClickToDialButton/DialerPage logging the outcome.
+      if (prevSipStatusRef.current === 'incall' && s.status !== 'incall') {
+        setActiveCallIdState(null);
+      }
+      prevSipStatusRef.current = s.status;
       if (s.status === 'ringing') {
         // A screen-pop that arrived just before this SIP INVITE (order isn't
         // guaranteed across the two channels) — merge it in now instead of
@@ -261,7 +309,9 @@ export default function WebphoneHost() {
 
   const handleAccept = async () => {
     const leadId = screenPop?.lead?.id;
+    const salesCallId = screenPop?.salesCallId ?? null;
     await wpRef.current?.answerIncoming();
+    if (salesCallId) setActiveCallIdState(salesCallId);
     setScreenPop(null);
     if (leadId) navigate(`/leads/${leadId}`);
   };
@@ -299,10 +349,35 @@ export default function WebphoneHost() {
     </Dialog>
   );
 
+  // In-call controls (Phase 3 Task 5) — independent of `cfg` like the ringing
+  // dialog: a bridge-mode rep (phone set, no dahili) never gets a webphone
+  // `cfg` at all, but still needs hangup/transfer for the live netsantral call.
+  const callControlsPanel = (
+    <CallControlsPanel
+      callId={activeCallId}
+      sipActive={state.status === 'incall'}
+      held={!!state.held}
+      muted={!!state.muted}
+      onHold={() => void wpRef.current?.hold()}
+      onUnhold={() => void wpRef.current?.unhold()}
+      onMute={() => wpRef.current?.mute()}
+      onUnmute={() => wpRef.current?.unmute()}
+      onDtmf={(digit) => void wpRef.current?.sendDtmf(digit)}
+      onCallEnded={() => setActiveCallIdState(null)}
+    />
+  );
+
   // The status pill / audio element / copilot need an actual webphone config;
-  // the ringing dialog above is independent (its own effect gates on the
-  // `telephony` feature only) and renders regardless.
-  if (!cfg) return <>{ringingDialog}</>;
+  // the ringing dialog and in-call controls above are independent (their own
+  // effects/props don't require it) and render regardless.
+  if (!cfg) {
+    return (
+      <>
+        {ringingDialog}
+        {callControlsPanel}
+      </>
+    );
+  }
 
   const dot =
     state.status === 'registered' || state.status === 'incall'
@@ -328,6 +403,7 @@ export default function WebphoneHost() {
   return (
     <>
       {ringingDialog}
+      {callControlsPanel}
       {/* Live-call copilot — only while a call is connected. Self-contained:
           listens to the rep's mic (Web Speech API) and surfaces AI suggestions. */}
       {state.status === 'incall' && (

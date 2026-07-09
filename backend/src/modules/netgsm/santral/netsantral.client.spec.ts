@@ -76,4 +76,110 @@ describe('NetsantralClient', () => {
     expect(out.ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  // ── Phase 3 Task 5: in-call controls ──────────────────────────────────────
+
+  describe('hangup', () => {
+    it('GETs the /hangup URL with unique_id and returns ok', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().hangup(creds, 'u-live-1');
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/hangup');
+      expect(url).toContain('unique_id=u-live-1');
+      expect(url).toContain('username=8508407303');
+      expect(url).toContain('password=pw');
+    });
+
+    it('returns ok:false (no throw) when uniqueId is missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().hangup(creds, '');
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('scrubs username and password from a thrown error', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockRejectedValue(
+        new Error('boom username=8508407303 password=pw'),
+      );
+      const out = await new NetsantralClient().hangup(creds, 'u-1');
+      expect(out.ok).toBe(false);
+      expect(out.message).not.toContain('pw');
+      expect(out.message).toContain('***');
+    });
+  });
+
+  describe('blindTransfer', () => {
+    it('GETs the /xfer URL with unique_id + exten and returns ok', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().blindTransfer(creds, 'u-live-2', '105');
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/xfer');
+      expect(url).toContain('unique_id=u-live-2');
+      expect(url).toContain('exten=105');
+    });
+
+    it('returns ok:false (no throw) when exten is missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().blindTransfer(creds, 'u-1', '');
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('attendedTransfer', () => {
+    it('GETs the /atxfer URL with unique_id + exten and returns ok', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().attendedTransfer(creds, 'u-live-3', '106');
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/atxfer');
+      expect(url).toContain('unique_id=u-live-3');
+      expect(url).toContain('exten=106');
+    });
+
+    it('returns ok:false (no throw) when required params are missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().attendedTransfer({ ...creds, username: '' }, 'u-1', '106');
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mute', () => {
+    it('GETs the /muteaudio URL with mute=1 when muting on', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().mute(creds, 'u-live-4', true);
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/muteaudio');
+      expect(url).toContain('unique_id=u-live-4');
+      expect(url).toContain('mute=1');
+    });
+
+    it('GETs mute=0 when muting off', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      await new NetsantralClient().mute(creds, 'u-live-5', false);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('mute=0');
+    });
+
+    it('returns ok:false (no throw) when uniqueId is missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().mute(creds, '', true);
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

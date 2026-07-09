@@ -27,8 +27,10 @@ vi.mock('react-i18next', () => ({
 // ring-back window. Mocked so we can assert the arming call without a real
 // SIP.js webphone.
 const expectRingbackMock = vi.fn();
+const setActiveCallIdMock = vi.fn();
 vi.mock('../../features/marketing/webphone/WebphoneHost', () => ({
   expectRingback: (...a: unknown[]) => expectRingbackMock(...a),
+  setActiveCallId: (...a: unknown[]) => setActiveCallIdMock(...a),
 }));
 
 const session = {
@@ -39,7 +41,7 @@ const session = {
   done: 0,
   current: {
     itemId: 'item-1',
-    callId: null,
+    callId: 'call-77',
     lead: {
       id: 'lead-1',
       businessName: 'Acme A.Ş.',
@@ -90,7 +92,10 @@ describe('DialerPage — ring-back arming (Finding H1/M2)', () => {
     await userEvent.click(screen.getByRole('button', { name: /^dial$/i }));
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith(`/dialer/sessions/${session.id}/dial`));
-    await waitFor(() => expect(expectRingbackMock).toHaveBeenCalledWith('+905551112233'));
+    // Phase 3 Task 5: also hands the SalesCall id to WebphoneHost's in-call
+    // controls panel (works for bridge-mode calls too, which never touch the
+    // SIP ring-back path at all).
+    await waitFor(() => expect(expectRingbackMock).toHaveBeenCalledWith('+905551112233', 'call-77'));
     expect(window.location.href).toBe('');
   });
 

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { PhoneCall, SkipForward, Play, X, CheckCircle2 } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
-import { expectRingback } from '../../features/marketing/webphone/WebphoneHost';
+import { expectRingback, setActiveCallId } from '../../features/marketing/webphone/WebphoneHost';
 import {
   PageHeader, Card, CardContent, Button, Input, Field, Badge, Progress, EmptyState,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -40,7 +40,10 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
     onError: (e) => toast.error(apiErr(e, 'No callable leads match')),
   });
 
-  const refresh = (s: DialSession) => { setSession(s); setNotes(''); setDuration(''); };
+  // The in-call controls panel has nothing left to control once the session
+  // moves off this lead (logged/skipped) — the id it tracks belonged to the
+  // call that just ended.
+  const refresh = (s: DialSession) => { setSession(s); setNotes(''); setDuration(''); setActiveCallId(null); };
 
   const dial = useMutation({
     mutationFn: () => marketingApi.post(`/dialer/sessions/${session!.id}/dial`).then((r) => r.data as { dialUri: string; mode: string }),
@@ -55,7 +58,10 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
         // without this, the extension ring-back INVITE would surface the
         // accept/reject dialog instead of auto-answering silently. Reach the
         // app-wide webphone instance via WebphoneHost's module singleton.
-        expectRingback(session?.current?.lead.phone ?? undefined);
+        // Also hand it the SalesCall id (Phase 3 Task 5) so its in-call
+        // controls panel can show hangup/transfer immediately — including
+        // for bridge-mode calls, which never touch this tab's SIP session.
+        expectRingback(session?.current?.lead.phone ?? undefined, session?.current?.callId ?? undefined);
       } else if (res.dialUri) {
         window.location.href = res.dialUri;
       }
@@ -82,7 +88,7 @@ export default function DialerPage({ embedded }: { embedded?: boolean } = {}) {
 
   const cancel = useMutation({
     mutationFn: () => marketingApi.post(`/dialer/sessions/${session!.id}/cancel`).then((r) => r.data),
-    onSuccess: () => setSession(null),
+    onSuccess: () => { setSession(null); setActiveCallId(null); },
     onError: (e) => toast.error(apiErr(e, 'Could not end the session')),
   });
 

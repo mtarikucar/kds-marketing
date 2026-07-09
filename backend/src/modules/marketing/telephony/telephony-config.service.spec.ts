@@ -9,7 +9,7 @@ jest.mock('../../../common/crypto/secret-box.helper', () => ({
 function prismaMock() {
   return {
     telephonyConfig: { findUnique: jest.fn().mockResolvedValue(undefined), upsert: jest.fn(), update: jest.fn() },
-    marketingUser: { findFirst: jest.fn(), updateMany: jest.fn() },
+    marketingUser: { findFirst: jest.fn(), updateMany: jest.fn(), findMany: jest.fn() },
   } as any;
 }
 
@@ -118,6 +118,21 @@ describe('TelephonyConfigService', () => {
       const r = await new TelephonyConfigService(prisma, balance).verifyCreds('ws');
       expect(balance.fetchBalance).toHaveBeenCalledWith({ usercode: '850', password: 'pw' });
       expect(r).toEqual({ configured: true, balance: balanceResult });
+    });
+  });
+
+  describe('listTeammateDahilis (Phase 3 Task 5 transfer picker)', () => {
+    it('lists ACTIVE users with a dahili, excluding the caller', async () => {
+      const prisma = prismaMock();
+      const rows = [{ id: 'rep-2', firstName: 'B', lastName: 'C', dahili: '105' }];
+      prisma.marketingUser.findMany.mockResolvedValue(rows);
+      const r = await new TelephonyConfigService(prisma, balanceClientMock()).listTeammateDahilis('ws', 'rep-1');
+      expect(prisma.marketingUser.findMany).toHaveBeenCalledWith({
+        where: { workspaceId: 'ws', status: 'ACTIVE', dahili: { not: null }, id: { not: 'rep-1' } },
+        select: { id: true, firstName: true, lastName: true, dahili: true },
+        orderBy: { firstName: 'asc' },
+      });
+      expect(r).toEqual(rows);
     });
   });
 });

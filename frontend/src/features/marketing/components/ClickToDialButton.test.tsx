@@ -18,7 +18,11 @@ vi.mock('sonner', () => ({ toast: { success: (...a: unknown[]) => toastSuccess(.
 // assert it's called (api-dial mode) or not (click-to-dial mode) without
 // standing up a real SIP.js webphone.
 const expectRingbackMock = vi.fn();
-vi.mock('../webphone/WebphoneHost', () => ({ expectRingback: (...a: unknown[]) => expectRingbackMock(...a) }));
+const setActiveCallIdMock = vi.fn();
+vi.mock('../webphone/WebphoneHost', () => ({
+  expectRingback: (...a: unknown[]) => expectRingbackMock(...a),
+  setActiveCallId: (...a: unknown[]) => setActiveCallIdMock(...a),
+}));
 
 function renderButton(props: { leadId?: string; defaultPhone?: string } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -58,7 +62,10 @@ describe('ClickToDialButton — ring-back arming (Finding H1/M2)', () => {
     await userEvent.click(screen.getByRole('button', { name: /call/i }));
 
     await waitFor(() => expect(postMock).toHaveBeenCalled());
-    await waitFor(() => expect(expectRingbackMock).toHaveBeenCalledWith('+905551112233'));
+    // Phase 3 Task 5: also hands the SalesCall id to WebphoneHost's in-call
+    // controls panel (works for bridge-mode calls too, which never touch the
+    // SIP ring-back path at all).
+    await waitFor(() => expect(expectRingbackMock).toHaveBeenCalledWith('+905551112233', 'call-1'));
     expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/extension will ring/i));
     // api-dial mode never hands back a dialUri to navigate to.
     expect(window.location.href).toBe('');
@@ -73,5 +80,22 @@ describe('ClickToDialButton — ring-back arming (Finding H1/M2)', () => {
     await waitFor(() => expect(postMock).toHaveBeenCalled());
     await waitFor(() => expect(window.location.href).toBe('tel:+905551112233'));
     expect(expectRingbackMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ClickToDialButton — clears the in-call controls panel once logged (Phase 3 Task 5)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('calls setActiveCallId(null) after the call outcome is logged', async () => {
+    postMock.mockResolvedValueOnce({ data: { call: call(), dialUri: '', mode: 'api' } });
+    postMock.mockResolvedValueOnce({ data: {} }); // the /log response
+    renderButton({ defaultPhone: '+905551112233' });
+
+    await userEvent.click(screen.getByRole('button', { name: /call/i }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(screen.getByRole('button', { name: /save outcome/i }));
+
+    await waitFor(() => expect(setActiveCallIdMock).toHaveBeenCalledWith(null));
   });
 });

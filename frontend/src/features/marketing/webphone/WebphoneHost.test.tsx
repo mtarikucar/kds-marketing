@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import WebphoneHost, { expectRingback } from './WebphoneHost';
+import WebphoneHost, { expectRingback, setActiveCallId } from './WebphoneHost';
 import type { WebphoneState } from './webphone.store';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
@@ -11,7 +11,15 @@ const navigateMock = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigateMock }));
 
 const toastInfo = vi.fn();
-vi.mock('sonner', () => ({ toast: { info: (...a: unknown[]) => toastInfo(...a) } }));
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock('sonner', () => ({
+  toast: {
+    info: (...a: unknown[]) => toastInfo(...a),
+    success: (...a: unknown[]) => toastSuccess(...a),
+    error: (...a: unknown[]) => toastError(...a),
+  },
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -31,6 +39,7 @@ vi.mock('../../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: () => ({ accessToken: 'test-token' }),
 }));
 
+const apiPost = vi.fn().mockResolvedValue({ data: { ok: true } });
 vi.mock('../api/marketingApi', () => ({
   default: {
     get: vi.fn().mockResolvedValue({
@@ -41,6 +50,7 @@ vi.mock('../api/marketingApi', () => ({
         sipPassword: 'pw',
       },
     }),
+    post: (...a: unknown[]) => apiPost(...a),
   },
 }));
 
@@ -54,6 +64,11 @@ const hangup = vi.fn().mockResolvedValue(undefined);
 const start = vi.fn().mockResolvedValue(undefined);
 const stop = vi.fn().mockResolvedValue(undefined);
 const expectRingbackFn = vi.fn();
+const hold = vi.fn().mockResolvedValue(undefined);
+const unhold = vi.fn().mockResolvedValue(undefined);
+const muteFn = vi.fn();
+const unmuteFn = vi.fn();
+const sendDtmf = vi.fn().mockResolvedValue(undefined);
 let fakeState: WebphoneState = { status: 'registered' };
 
 vi.mock('./webphone.store', () => ({
@@ -70,6 +85,11 @@ vi.mock('./webphone.store', () => ({
     rejectIncoming,
     call: vi.fn(),
     expectRingback: expectRingbackFn,
+    hold,
+    unhold,
+    mute: muteFn,
+    unmute: unmuteFn,
+    sendDtmf,
   }),
 }));
 
@@ -303,5 +323,104 @@ describe('WebphoneHost — screen-pop SSE correlation', () => {
     // The already-consumed screen-pop must not reattach to this new, later call.
     expect(await screen.findByText(/incoming call/i)).toBeInTheDocument();
     expect(screen.queryByText('Acme A.Ş.')).not.toBeInTheDocument();
+  });
+});
+
+// ── In-call controls panel (Phase 3 Task 5) ────────────────────────────────
+
+describe('WebphoneHost — in-call controls panel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fakeState = { status: 'registered' };
+    subscriber = null;
+    apiPost.mockResolvedValue({ data: { ok: true } });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no sse')));
+  });
+
+  it('shows hold/mute/keypad once a SIP leg is incall, and reflects held/muted state', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => emit({ status: 'incall' }));
+
+    expect(screen.getByRole('button', { name: /^hold$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^mute$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /keypad/i })).toBeInTheDocument();
+    // No known active call id yet — the transfer/server-hangup affordances don't apply.
+    expect(screen.queryByRole('button', { name: /transfer/i })).not.toBeInTheDocument();
+
+    act(() => emit({ status: 'incall', held: true, muted: true }));
+    expect(screen.getByRole('button', { name: /resume/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^unmute$/i })).toBeInTheDocument();
+  });
+
+  it('clicking Hold/Mute delegates to the webphone store', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    act(() => emit({ status: 'incall' }));
+
+    await userEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    expect(hold).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole('button', { name: /^mute$/i }));
+    expect(muteFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('the DTMF keypad sends a tone through the store', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    act(() => emit({ status: 'incall' }));
+
+    await userEvent.click(screen.getByRole('button', { name: /keypad/i }));
+    await userEvent.click(screen.getByRole('button', { name: '5' }));
+
+    expect(sendDtmf).toHaveBeenCalledWith('5');
+  });
+
+  it('setActiveCallId shows transfer + server hangup even with no SIP leg (bridge-mode call)', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => setActiveCallId('call-99'));
+
+    expect(screen.getByRole('button', { name: /transfer/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /end call/i })).toBeInTheDocument();
+    // No SIP leg exists for a bridge call — hold/mute/keypad don't apply.
+    expect(screen.queryByRole('button', { name: /^hold$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^mute$/i })).not.toBeInTheDocument();
+  });
+
+  it('expectRingback(number, salesCallId) also arms the active-call panel', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => expectRingback('5551234567', 'call-42'));
+
+    expect(expectRingbackFn).toHaveBeenCalledWith('5551234567');
+    expect(screen.getByRole('button', { name: /transfer/i })).toBeInTheDocument();
+  });
+
+  it('clicking the bridge-mode "End call" button posts to the server hangup endpoint and clears the panel', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    act(() => setActiveCallId('call-5'));
+
+    await userEvent.click(screen.getByRole('button', { name: /end call/i }));
+
+    expect(apiPost).toHaveBeenCalledWith('/telephony/calls/call-5/hangup');
+    await waitFor(() => expect(screen.queryByRole('button', { name: /end call/i })).not.toBeInTheDocument());
+  });
+
+  it('a call armed alongside a SIP ring-back auto-clears once that SIP call hangs up', async () => {
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => expectRingback('5551234567', 'call-7')); // REST dial accepted — id known immediately
+    act(() => emit({ status: 'incall' })); // ring-back auto-answered
+    expect(screen.getByRole('button', { name: /transfer/i })).toBeInTheDocument();
+
+    act(() => emit({ status: 'registered' })); // hangup
+    expect(screen.queryByRole('button', { name: /transfer/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^hold$/i })).not.toBeInTheDocument();
   });
 });

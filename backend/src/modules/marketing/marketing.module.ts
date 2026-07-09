@@ -86,6 +86,10 @@ import { TelephonyEventConsumer } from './telephony/telephony-event.consumer';
 import { TelephonyStreamService } from './telephony/telephony-stream.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
 import { TelephonyStreamController } from './controllers/telephony-stream.controller';
+// NetGSM Phase 3 Task 5 — in-call control (hangup/transfer/mute) over the
+// LIVE netsantral call, keyed by SalesCall.externalCallId.
+import { TelephonyControlController } from './controllers/telephony-control.controller';
+import { TelephonyControlService } from './services/telephony-control.service';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
@@ -505,6 +509,7 @@ import { WalletService } from './wallet/wallet.service';
     TelephonyConfigController,
     WebphoneConfigController,
     TelephonyStreamController,
+    TelephonyControlController,
     NetgsmOnboardingController,
     InstallationController,
     SalesTargetController,
@@ -648,6 +653,8 @@ import { WalletService } from './wallet/wallet.service';
     NetgsmApiAdapter,
     TelephonyConfigService,
     CallCdrSyncService,
+    // NetGSM Phase 3 Task 5 — in-call control (hangup/transfer/mute).
+    TelephonyControlService,
     // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
     TelephonyEventConsumer,
     // NetGSM Phase 3 Task 3 — per-workspace SSE fan-out (screen-pop, live

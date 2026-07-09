@@ -80,4 +80,10 @@ export class WebphoneConfigController {
   webphone(@CurrentMarketingUser() a: MarketingUserPayload) {
     return this.telephony.webphoneConfigFor(a.workspaceId, a.id);
   }
+
+  /** Teammates' extensions for the webphone's in-call transfer picker (Phase 3 Task 5). */
+  @Get('teammates')
+  teammates(@CurrentMarketingUser() a: MarketingUserPayload) {
+    return this.telephony.listTeammateDahilis(a.workspaceId, a.id);
+  }
 }

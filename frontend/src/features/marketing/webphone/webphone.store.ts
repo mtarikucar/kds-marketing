@@ -14,6 +14,11 @@ export interface WebphoneState {
   error?: string;
   lastNumber?: string;
   incoming?: IncomingCall;
+  /** In-call controls (Phase 3 Task 5) — only meaningful while `status ===
+   *  'incall'`; reset to false on every fresh call (outbound, ring-back
+   *  auto-answer, or accepted inbound) and on hangup. */
+  held?: boolean;
+  muted?: boolean;
 }
 
 /** How long after this rep places an outbound `call()` an inbound INVITE is
@@ -157,7 +162,7 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
                   clearRingbackWindow();
                   try {
                     await user!.answer();
-                    set({ status: 'incall' });
+                    set({ status: 'incall', held: false, muted: false });
                   } catch (e: any) {
                     set({ status: 'registered', error: e?.message ?? 'answer failed' });
                   }
@@ -168,7 +173,7 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
             },
             onCallHangup: () => {
               clearRingbackWindow();
-              set({ status: 'registered', incoming: undefined });
+              set({ status: 'registered', incoming: undefined, held: false, muted: false });
             },
           },
         });
@@ -186,7 +191,7 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
       // API-mode originate can ring the extension back almost immediately.
       armRingbackWindow(number);
       await user.call(toTarget(number));
-      set({ status: 'incall', lastNumber: number });
+      set({ status: 'incall', lastNumber: number, held: false, muted: false });
     },
 
     /**
@@ -211,7 +216,7 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
       if (!user || state.status !== 'ringing') return;
       try {
         await user.answer();
-        set({ status: 'incall', incoming: undefined });
+        set({ status: 'incall', incoming: undefined, held: false, muted: false });
       } catch (e: any) {
         set({ status: 'registered', error: e?.message ?? 'answer failed', incoming: undefined });
       }
@@ -227,7 +232,60 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
     async hangup() {
       if (!user || state.status !== 'incall') return;
       try { await user.hangup(); } catch { /* already torn down */ }
-      set({ status: 'registered' });
+      set({ status: 'registered', held: false, muted: false });
+    },
+
+    // ── In-call controls (Phase 3 Task 5) ───────────────────────────────────
+    // Hold/mute/DTMF act on THIS browser's own SIP leg via SIP.js's SimpleUser
+    // (native hold()/unhold()/mute()/unmute()/sendDTMF() — no SDH plumbing
+    // needed). They are meaningless for a bridge-mode call (no SIP leg exists
+    // in this tab at all — see NetgsmApiAdapter's 'bridge' callMode), which is
+    // exactly why they're guarded on `status === 'incall'`: a bridge call
+    // never reaches that status here. Hangup/transfer for THAT case go
+    // through the server-side `/marketing/telephony/calls/:id/*` endpoints
+    // instead (see telephony-control.controller.ts), which act on the live
+    // netsantral call directly and work regardless of any SIP leg.
+
+    /** Put the call on hold (re-INVITE, RFC 6337). No-op if not in a call. */
+    async hold() {
+      if (!user || state.status !== 'incall') return;
+      try {
+        await user.hold();
+        set({ held: true });
+      } catch (e: any) {
+        set({ error: e?.message ?? 'hold failed' });
+      }
+    },
+
+    /** Take the call off hold. No-op if not in a call. */
+    async unhold() {
+      if (!user || state.status !== 'incall') return;
+      try {
+        await user.unhold();
+        set({ held: false });
+      } catch (e: any) {
+        set({ error: e?.message ?? 'unhold failed' });
+      }
+    },
+
+    /** Mute this rep's own mic (disables the local sender track). No-op if not in a call. */
+    mute() {
+      if (!user || state.status !== 'incall') return;
+      user.mute();
+      set({ muted: true });
+    },
+
+    /** Unmute this rep's own mic. No-op if not in a call. */
+    unmute() {
+      if (!user || state.status !== 'incall') return;
+      user.unmute();
+      set({ muted: false });
+    },
+
+    /** Send one DTMF tone (INFO application/dtmf-relay) on the live SIP session. */
+    async sendDtmf(digit: string) {
+      if (!user || state.status !== 'incall') return;
+      try { await user.sendDTMF(digit); } catch { /* transient — nothing actionable to show */ }
     },
 
     async stop() {
