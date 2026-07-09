@@ -877,10 +877,23 @@ model SalesCall {
   @@index([marketingUserId, startedAt(sort: Desc)])
   @@index([leadId])
   @@index([status])
-  // Phase 3 Task 2 — santral event correlation (crm_id/uniqueId → this row)
-  // upserts/reads by externalCallId on every inbound_call/answer/hangup/cdr
-  // event; without this the correlation query is a sequential scan.
-  @@index([externalCallId])
+  // Phase 3 Task 2 MEDIUM follow-up — santral event correlation (crm_id/
+  // uniqueId → this row) upserts/reads by (workspaceId, externalCallId) on
+  // every inbound_call/answer/hangup/cdr event. A plain index (the original
+  // Task 2 shape) only sped up the read — it did nothing to stop TWO
+  // DIFFERENT events for the same brand-new call (inbound_call + an
+  // out-of-order hangup/cdr) from both racing past
+  // handleInboundCall's/handleTerminal's findFirst-returns-null check and
+  // both inserting a row. This UNIQUE constraint (mirrors NetgsmWebhookEvent's
+  // (workspaceId, purpose, externalId) idiom) is the real, DB-atomic arbiter.
+  // Postgres excludes any row with a NULL in the tuple from a standard UNIQUE
+  // index (NULLS DISTINCT is the default here — deliberately not overridden),
+  // so OUTBOUND rows (externalCallId stays null until backfilled, and may
+  // never get one for click-to-dial) are unaffected; only two NON-NULL
+  // externalCallId rows in the same workspace collide, which is exactly the
+  // duplicate this guards against. See
+  // TelephonyEventConsumer.createOrGetInbound for the P2002 catch/re-fetch.
+  @@unique([workspaceId, externalCallId])
   @@map("sales_calls")
 }
 

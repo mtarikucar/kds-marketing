@@ -160,8 +160,8 @@ function CallsTab() {
     staleTime: 60_000,
   });
 
-  const repName = (id: string) => {
-    const r = reps.find((x) => x.id === id);
+  const repName = (id: string | null) => {
+    const r = id ? reps.find((x) => x.id === id) : undefined;
     return r ? `${r.firstName} ${r.lastName}` : '—';
   };
 

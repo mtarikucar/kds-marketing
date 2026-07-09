@@ -1,7 +1,13 @@
+import { Prisma } from '@prisma/client';
 import { TelephonyEventConsumer } from './telephony-event.consumer';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
 import { DomainEvent } from '../../outbox/domain-event-bus.service';
 import { MarketingEventTypes, MarketingCallEventPayload } from '../events/marketing-event-types';
+
+/** Real PrismaClientKnownRequestError instance — the production code checks
+ *  `instanceof`, so a plain `{ code: 'P2002' }` object would NOT be caught
+ *  (mirrors settlement-commission.consumer.spec.ts's identical idiom). */
+const p2002 = () => new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'test' } as any);
 
 function makeEvent(id: string, overrides: Partial<MarketingCallEventPayload> = {}): DomainEvent<MarketingCallEventPayload> {
   const payload: MarketingCallEventPayload = {
@@ -323,6 +329,128 @@ describe('TelephonyEventConsumer', () => {
       });
       // ...but status is never touched by this path.
       expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('concurrent-insert race (MEDIUM follow-up — DB-atomic guard)', () => {
+    it('inbound_call create losing the race to a P2002 re-fetches the winner row and skips lead-activity/missed-call side effects', async () => {
+      (prisma.salesCall.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null) // handleInboundCall's pre-check: no existing row yet
+        .mockResolvedValueOnce({
+          // createOrGetInbound's post-P2002 re-fetch: the winner's row
+          id: 'call-winner',
+          workspaceId: 'ws-1',
+          leadId: 'lead-1',
+          marketingUserId: 'rep-1',
+          direction: 'INBOUND',
+          status: 'RINGING',
+          externalCallId: 'uid-race',
+        });
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'rep-1' });
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'lead-1', assignedToId: 'rep-1' });
+      (prisma.salesCall.create as jest.Mock).mockRejectedValueOnce(p2002());
+
+      await handle(
+        makeEvent('evt-race-1', {
+          kind: 'inbound_call',
+          uniqueId: 'uid-race',
+          customerNum: '05551112233',
+          internalNum: '104',
+        }),
+      );
+
+      expect(prisma.salesCall.findFirst).toHaveBeenNthCalledWith(2, { where: { workspaceId: 'ws-1', externalCallId: 'uid-race' } });
+      // The loser never mirrors a lead activity or fires a missed-call
+      // follow-up/event — only the winning insert (elsewhere) does that.
+      expect(prisma.leadActivity.create).not.toHaveBeenCalled();
+      expect(prisma.marketingTask.create).not.toHaveBeenCalled();
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+
+    it('the out-of-order hangup/cdr upsert path losing the race to a P2002 also re-fetches and skips duplicate side effects', async () => {
+      (prisma.salesCall.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null) // correlate(): no row by uniqueId (no crmId given)
+        .mockResolvedValueOnce({
+          // createOrGetInbound's post-P2002 re-fetch: the winner's row (the
+          // concurrent inbound_call event's create already fired the missed
+          // call handling for it — this event must NOT fire it again)
+          id: 'call-winner-2',
+          workspaceId: 'ws-1',
+          leadId: null,
+          marketingUserId: null,
+          direction: 'INBOUND',
+          status: 'NO_ANSWER',
+          externalCallId: 'uid-race-2',
+        });
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce(null);
+      (prisma.salesCall.create as jest.Mock).mockRejectedValueOnce(p2002());
+
+      await handle(
+        makeEvent('evt-race-2', {
+          kind: 'hangup',
+          uniqueId: 'uid-race-2',
+          crmId: null,
+          customerNum: '05559998877',
+          direction: 'INBOUND',
+          durationSec: 0,
+          status: 'NOANSWER',
+        }),
+      );
+
+      expect(prisma.salesCall.findFirst).toHaveBeenNthCalledWith(2, { where: { workspaceId: 'ws-1', externalCallId: 'uid-race-2' } });
+      expect(prisma.marketingTask.create).not.toHaveBeenCalled();
+      expect(outbox.append).not.toHaveBeenCalled();
+    });
+
+    it('re-throws a non-P2002 create error rather than swallowing it', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null);
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce(null);
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce(null);
+      const boom = new Error('connection lost');
+      (prisma.salesCall.create as jest.Mock).mockRejectedValueOnce(boom);
+
+      await expect((svc as any).createInboundCall('ws-1', { uniqueId: 'uid-x', customerNum: null, internalNum: null }, 'RINGING')).rejects.toThrow(
+        'connection lost',
+      );
+    });
+
+    it('re-throws P2002 when the re-fetch itself somehow finds nothing (defensive — should not happen in practice)', async () => {
+      const err = p2002();
+      (prisma.salesCall.create as jest.Mock).mockRejectedValueOnce(err);
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null); // re-fetch finds nothing
+
+      await expect(
+        (svc as any).createOrGetInbound('ws-1', { uniqueId: 'uid-y', customerNum: null, internalNum: null }, 'RINGING', null, null),
+      ).rejects.toBe(err);
+    });
+
+    it('the normal single-create path is unchanged: created:true, no re-fetch, side effects fire once', async () => {
+      (prisma.salesCall.findFirst as jest.Mock).mockResolvedValueOnce(null); // handleInboundCall pre-check
+      (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'rep-1' });
+      (prisma.lead.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'lead-1', assignedToId: 'rep-1' });
+      (prisma.salesCall.create as jest.Mock).mockResolvedValueOnce({
+        id: 'call-normal',
+        workspaceId: 'ws-1',
+        leadId: 'lead-1',
+        marketingUserId: 'rep-1',
+        direction: 'INBOUND',
+        status: 'RINGING',
+      });
+
+      await handle(
+        makeEvent('evt-normal', {
+          kind: 'inbound_call',
+          uniqueId: 'uid-normal',
+          customerNum: '05551112233',
+          internalNum: '104',
+        }),
+      );
+
+      // Only ONE findFirst call (the pre-check) — no P2002 re-fetch.
+      expect(prisma.salesCall.findFirst).toHaveBeenCalledTimes(1);
+      expect(prisma.leadActivity.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ leadId: 'lead-1' }) }),
+      );
     });
   });
 

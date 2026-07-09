@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { SalesCall } from '@prisma/client';
+import { Prisma, SalesCall } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DomainEventBus, DomainEvent } from '../../outbox/domain-event-bus.service';
 import { OutboxService } from '../../outbox/outbox.service';
@@ -67,7 +67,7 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  * 'inbound_call'` OR `direction === 'INBOUND'`, never relying on `direction`
  * alone.
  *
- * IDEMPOTENCY, three layers:
+ * IDEMPOTENCY, four layers:
  *  - `DomainEvent.id` dedupe (bounded in-memory Set — same idiom as
  *    IysWebhookConsumer/NetgsmBlacklistSyncService) guards the outbox
  *    worker's orphan-reclaim sweep re-dispatching the same row.
@@ -79,6 +79,16 @@ const NON_TERMINAL_STATUSES = ['INITIATED', 'RINGING'];
  *  - Blank-fill only for redelivered/out-of-order `inbound_call` events
  *    against an already-created row (`fillInboundBlanks`) — never touches
  *    status.
+ *  - DB-atomic INBOUND create (MEDIUM follow-up): `handleInboundCall`'s and
+ *    `handleTerminal`'s findFirst-then-create on externalCallId is a TOCTOU
+ *    race — two DIFFERENT events for the same brand-new call (an
+ *    `inbound_call` and an out-of-order hangup/cdr) can both see no existing
+ *    row and both attempt to insert. The `(workspaceId, externalCallId)`
+ *    unique index (mirrors NetgsmWebhookEvent's identical idiom) is the real
+ *    arbiter: `createOrGetInbound` catches the loser's P2002 and re-fetches
+ *    the winner's row instead of creating a duplicate SalesCall — which
+ *    would otherwise spawn its own missed-call follow-up task + a second
+ *    `marketing.call.missed.v1` for what is really one physical call.
  */
 @Injectable()
 export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
@@ -298,32 +308,77 @@ export class TelephonyEventConsumer implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const marketingUserId = await this.resolveMarketingUserByDahili(workspaceId, p.internalNum);
     const lead = await this.findLeadByPhone(workspaceId, p.customerNum);
-    const now = new Date();
-    const terminal = this.isTerminal(initialStatus);
 
-    const call = await this.prisma.salesCall.create({
-      data: {
-        workspaceId,
-        marketingUserId,
-        leadId: lead?.id ?? null,
-        direction: 'INBOUND',
-        toPhone: p.customerNum ?? '',
-        providerId: 'netgsm-netsantral',
-        status: initialStatus,
-        externalCallId: p.uniqueId,
-        ringingAt: now,
-        durationSec: terminal ? (p.durationSec ?? null) : null,
-        recordingUrl: terminal ? (p.recording ?? null) : null,
-        endedAt: terminal ? now : null,
-      },
-    });
+    const { call, created } = await this.createOrGetInbound(workspaceId, p, initialStatus, marketingUserId, lead?.id ?? null);
+    if (!created) {
+      // Lost a concurrent-insert race for this (workspaceId, externalCallId) —
+      // the winning insert already ran (or is about to run) this same
+      // method's side effects below for the row it created. Re-running them
+      // here would double the lead-activity mirror and the missed-call
+      // follow-up/event, so this is a deliberate no-op.
+      this.logger.log(
+        `telephony inbound create: concurrent duplicate for externalCallId=${p.uniqueId} — using existing row ${call.id}`,
+      );
+      return;
+    }
 
     if (lead) {
       await this.mirrorLeadActivity(workspaceId, lead.id, marketingUserId, `Inbound call: ${initialStatus}`, initialStatus);
     }
 
-    if (terminal && initialStatus === 'NO_ANSWER') {
+    if (this.isTerminal(initialStatus) && initialStatus === 'NO_ANSWER') {
       await this.handleMissedCall(workspaceId, call, p);
+    }
+  }
+
+  /**
+   * DB-atomic create for the shared INBOUND row (MEDIUM follow-up — see the
+   * class docstring's IDEMPOTENCY section, 4th layer). `handleInboundCall`
+   * and `handleTerminal`'s out-of-order path both pre-check
+   * `findFirst({ externalCallId: p.uniqueId })` returns null before calling
+   * this — but that check-then-act is not atomic: two DIFFERENT events for
+   * the same brand-new call (e.g. `inbound_call` racing an out-of-order
+   * hangup/cdr) can both pass it and both reach this `create`. The
+   * `(workspaceId, externalCallId)` unique index (mirrors NetgsmWebhookEvent's
+   * `(workspaceId, purpose, externalId)` idiom) is the real arbiter: only ONE
+   * insert wins; the loser catches Prisma's P2002 unique-violation and
+   * re-fetches the winner's row rather than erroring or creating a duplicate
+   * SalesCall (`created: false` tells the caller to skip its side effects).
+   */
+  private async createOrGetInbound(
+    workspaceId: string,
+    p: MarketingCallEventPayload,
+    initialStatus: string,
+    marketingUserId: string | null,
+    leadId: string | null,
+  ): Promise<{ call: SalesCall; created: boolean }> {
+    const now = new Date();
+    const terminal = this.isTerminal(initialStatus);
+
+    try {
+      const call = await this.prisma.salesCall.create({
+        data: {
+          workspaceId,
+          marketingUserId,
+          leadId,
+          direction: 'INBOUND',
+          toPhone: p.customerNum ?? '',
+          providerId: 'netgsm-netsantral',
+          status: initialStatus,
+          externalCallId: p.uniqueId,
+          ringingAt: now,
+          durationSec: terminal ? (p.durationSec ?? null) : null,
+          recordingUrl: terminal ? (p.recording ?? null) : null,
+          endedAt: terminal ? now : null,
+        },
+      });
+      return { call, created: true };
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const existing = await this.prisma.salesCall.findFirst({ where: { workspaceId, externalCallId: p.uniqueId } });
+        if (existing) return { call: existing, created: false };
+      }
+      throw e;
     }
   }
 
