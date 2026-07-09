@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
+import { FeatureGuard, RequiresFeature } from '../guards/feature.guard';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
@@ -9,9 +10,15 @@ import { TwoFactorCodeDto } from '../dto/two-factor.dto';
 /**
  * Epic F — 2FA self-management for the signed-in marketing user. The login-time
  * challenge/verify lives on MarketingAuthController (/auth/2fa/verify).
+ *
+ * FeatureGuard is a no-op for every route without a method-level
+ * @RequiresFeature (see feature.guard.ts) — wired here only for the SMS-factor
+ * routes below (gated on the `smsOtp` add-on, same as the lead verify-phone
+ * routes on MarketingLeadsController). TOTP enroll/enable/disable/status carry
+ * no entitlement and stay reachable by every workspace.
  */
 @Controller('marketing/auth/2fa')
-@UseGuards(MarketingGuard)
+@UseGuards(MarketingGuard, FeatureGuard)
 export class TwoFactorController {
   constructor(private readonly svc: TwoFactorService) {}
 
@@ -37,12 +44,14 @@ export class TwoFactorController {
   // reauth step before `disable` when the active factor is already SMS),
   // `sms/enable` verifies it and arms the factor.
   @Post('sms/send')
+  @RequiresFeature('smsOtp')
   @Audit({ action: '2fa.sms.send', resourceType: 'user' })
   sendSmsCode(@CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.sendSmsCode(u.id);
   }
 
   @Post('sms/enable')
+  @RequiresFeature('smsOtp')
   @Audit({ action: '2fa.sms.enable', resourceType: 'user' })
   enableSms(@Body() dto: TwoFactorCodeDto, @CurrentMarketingUser() u: MarketingUserPayload) {
     return this.svc.enableSms(u.id, dto.code);

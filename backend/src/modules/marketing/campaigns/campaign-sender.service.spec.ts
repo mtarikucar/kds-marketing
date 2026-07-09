@@ -10,6 +10,7 @@ describe('CampaignSenderService.batch', () => {
   let prisma: any;
   let email: { sendPlainEmail: jest.Mock; sendCampaignEmail: jest.Mock };
   let scheduledJobs: { schedule: jest.Mock };
+  let conversationSpend: { settleCampaignSms: jest.Mock };
   let svc: CampaignSenderService;
 
   beforeEach(() => {
@@ -55,7 +56,7 @@ describe('CampaignSenderService.batch', () => {
     // path is only entered for campaign.channel === 'SMS' — see the dedicated
     // 'SMS v2 batching' describe below), but still required by the constructor.
     const smsV2 = { send: jest.fn() };
-    const conversationSpend = { settleCampaignSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
+    conversationSpend = { settleCampaignSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
     svc = new CampaignSenderService(
       prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any,
     );
@@ -97,6 +98,14 @@ describe('CampaignSenderService.batch', () => {
     expect(email.sendPlainEmail).toHaveBeenCalledWith('ok@lead.com', 'S', expect.any(String), undefined);
     const statuses = prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].data.status);
     expect(statuses).toContain('SKIPPED');
+  });
+
+  // Money-path fix scope check: the new legacy-SMS settlement call only fires
+  // for channel === 'SMS'. An EMAIL campaign send must never touch
+  // conversationSpend at all — email isn't priced/metered via SpendLedger.
+  it('never calls conversationSpend.settleCampaignSms for an EMAIL campaign send', async () => {
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+    expect(conversationSpend.settleCampaignSms).not.toHaveBeenCalled();
   });
 
   it('does nothing for a campaign that is not SENDING', async () => {
@@ -680,5 +689,52 @@ describe('CampaignSenderService.batch — SMS v2 batching', () => {
     const sent = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
     expect(sent).toHaveLength(3);
     expect(sent.every((c: any) => c[0].data.messageId === 'leg-1')).toBe(true);
+  });
+
+  // Money-path fix: useLegacySend bypasses sendSmsBatch() (the v2 batch path's
+  // settlement) entirely — a legacy-configured SMS channel sent real, billed
+  // NetGSM messages that never debited the SpendLedger. Each successful legacy
+  // send must now settle individually, keyed by the SAME ref (recipientId) the
+  // v2 path uses, so a future retry/replay still dedups via debitOnce.
+  it('settles the per-segment SMS cost for each SENT recipient on the legacy per-recipient path', async () => {
+    registry.resolveConfig.mockReturnValue({ ...resolvedConfig, public: { useLegacySend: true } });
+    const adapterSend = jest.fn().mockResolvedValue({ externalMessageId: 'leg-1', status: 'SENT' });
+    registry.get.mockReturnValue({ send: adapterSend });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(conversationSpend.settleCampaignSms).toHaveBeenCalledTimes(3);
+    const ids = conversationSpend.settleCampaignSms.mock.calls.map((c: any) => c[1].recipientId).sort();
+    expect(ids).toEqual(['r1', 'r2', 'r3']);
+    for (const [ws, opts] of conversationSpend.settleCampaignSms.mock.calls) {
+      expect(ws).toBe(WS);
+      expect(opts.text).toContain('Hi there');
+    }
+  });
+
+  it('does NOT settle a recipient the legacy adapter reports FAILED', async () => {
+    registry.resolveConfig.mockReturnValue({ ...resolvedConfig, public: { useLegacySend: true } });
+    const adapterSend = jest.fn().mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: 'carrier reject' });
+    registry.get.mockReturnValue({ send: adapterSend });
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(conversationSpend.settleCampaignSms).not.toHaveBeenCalled();
+  });
+
+  it('a legacy-path settlement failure for one recipient never blocks marking it SENT or settling the others', async () => {
+    registry.resolveConfig.mockReturnValue({ ...resolvedConfig, public: { useLegacySend: true } });
+    const adapterSend = jest.fn().mockResolvedValue({ externalMessageId: 'leg-1', status: 'SENT' });
+    registry.get.mockReturnValue({ send: adapterSend });
+    conversationSpend.settleCampaignSms.mockImplementation(async (_ws: string, opts: any) => {
+      if (opts.recipientId === 'r2') throw new Error('tariff lookup failed');
+      return { amount: 1, quantity: 1, unitCost: 1 };
+    });
+
+    await expect((svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } })).resolves.toBeUndefined();
+
+    expect(conversationSpend.settleCampaignSms).toHaveBeenCalledTimes(3);
+    const sent = prisma.campaignRecipient.update.mock.calls.filter((c: any) => c[0].data.status === 'SENT');
+    expect(sent).toHaveLength(3); // r2's settlement throw didn't stop it (or its siblings) from being marked SENT
   });
 });

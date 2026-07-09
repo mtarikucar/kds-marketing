@@ -268,6 +268,21 @@ export class CampaignSenderService implements OnModuleInit {
       const result = await this.send(workspaceId, campaign.channel, to, srcSubject, body, html);
       if (result.ok) {
         await this.mark(r.id, 'SENT', { messageId: result.messageId, sentAt: new Date() });
+        if (campaign.channel === 'SMS') {
+          // Legacy per-recipient path (channel opted back into useLegacySend, or
+          // v2 preconditions weren't met — see the smsV2Config resolution
+          // above): this bypasses sendSmsBatch()'s settlement entirely, so
+          // settle here instead. Same ref (recipientId) as the v2 batch path,
+          // so debitOnce dedups — best-effort: a pricing/ledger blip must not
+          // fail an already-sent, already-marked message.
+          await this.conversationSpend
+            .settleCampaignSms(workspaceId, { recipientId: r.id, text: body })
+            .catch((err) =>
+              this.logger.warn(
+                `legacy campaign SMS settlement failed for recipient ${r.id}: ${String((err as Error)?.message ?? err)}`,
+              ),
+            );
+        }
       } else {
         await this.mark(r.id, 'FAILED', { error: result.error?.slice(0, 300) });
       }
