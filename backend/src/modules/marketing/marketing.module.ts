@@ -128,6 +128,7 @@ import { MarketingChannelsController } from './controllers/marketing-channels.co
 import { WebchatPublicController } from './controllers/webchat-public.controller';
 import { MetaWebhookController } from './controllers/meta-webhook.controller';
 import { NetgsmPublicController } from './controllers/netgsm-public.controller';
+import { RecordingProxyController } from './controllers/recording-proxy.controller';
 import { SseTokenGuard } from './guards/sse-token.guard';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
@@ -530,6 +531,7 @@ import { WalletService } from './wallet/wallet.service';
     TiktokWebhookController,
     EmailWebhookController,
     NetgsmPublicController,
+    RecordingProxyController,
     MarketingWorkflowsController,
     MarketingCampaignsController,
     CampaignTrackingController,

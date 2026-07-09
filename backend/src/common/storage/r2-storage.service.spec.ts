@@ -5,6 +5,7 @@ jest.mock('@aws-sdk/client-s3', () => ({
   S3Client: jest.fn().mockImplementation(() => ({ send: sendMock })),
   PutObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
   DeleteObjectsCommand: jest.fn().mockImplementation((input) => ({ input })),
+  GetObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
 }));
 
 /**
@@ -134,6 +135,42 @@ describe('R2StorageService', () => {
       expect(svc.urlForKey('netgsm-recordings/ws-1/call-1.mp3')).toBe(
         'https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3',
       );
+    });
+  });
+
+  // HIGH fix round 1 (NetGSM Phase 4 Task 3) — RecordingProxyController streams
+  // through this instead of ever handing the browser R2's public URL.
+  describe('getObjectStream', () => {
+    it('throws when not configured (no GetObjectCommand sent)', async () => {
+      delete process.env.R2_ACCOUNT_ID;
+      const svc = new R2StorageService();
+      await expect(svc.getObjectStream('netgsm-recordings/ws-1/call-1.mp3')).rejects.toThrow(
+        'R2 storage is not configured',
+      );
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('returns the body stream + content-type/length for an existing object', async () => {
+      configure();
+      const fakeBody = { pipe: jest.fn() };
+      sendMock.mockResolvedValue({ Body: fakeBody, ContentType: 'audio/mpeg', ContentLength: 12345 });
+      const svc = new R2StorageService();
+      const key = 'netgsm-recordings/ws-1/call-1.mp3';
+
+      const res = await svc.getObjectStream(key);
+
+      expect(res.body).toBe(fakeBody);
+      expect(res.contentType).toBe('audio/mpeg');
+      expect(res.contentLength).toBe(12345);
+      const sentInput = sendMock.mock.calls[0][0].input;
+      expect(sentInput).toEqual({ Bucket: 'bucket', Key: key });
+    });
+
+    it('throws when the object has no body (treated as not-found by callers)', async () => {
+      configure();
+      sendMock.mockResolvedValue({});
+      const svc = new R2StorageService();
+      await expect(svc.getObjectStream('missing-key.mp3')).rejects.toThrow('has no body');
     });
   });
 

@@ -118,6 +118,31 @@ describe('RecordingIngestService', () => {
         expect(String(call.join(' '))).not.toContain('SUPERSECRET');
       }
     });
+
+    // LOW-2 fix — locks in the redaction itself: safeFetch's own URL-parse-error
+    // branch can echo a (truncated) URL back into e.message, which would carry
+    // the bearer token straight into the log line if not stripped. This rejects
+    // with an Error whose message CONTAINS a full tokenized URL (rather than a
+    // plain string like the test above) to actually exercise the
+    // `.replace(/https?:\/\/\S+/gi, '***')` redaction, not just assert its
+    // absence incidentally.
+    it('redacts an https URL embedded in the caught error message (safeFetch URL-parse-error echo path)', async () => {
+      const { prisma, svc } = makeSvc();
+      prisma.salesCall.findMany.mockResolvedValue([
+        { id: 'call-1', workspaceId: 'ws-1', recordingUrl: 'https://dosya.netgsm.com.tr/rec?token=SECRET123' },
+      ]);
+      mockSafeFetch.mockRejectedValue(
+        new Error('invalid URL: https://dosya.netgsm.com.tr/rec?token=SECRET123&tomp3'),
+      );
+      const warnSpy = jest.spyOn((svc as any).logger, 'warn');
+
+      await svc.ingest();
+
+      const logged = warnSpy.mock.calls.map((call) => String(call.join(' '))).join('\n');
+      expect(logged).not.toContain('SECRET123');
+      expect(logged).not.toContain('https://dosya.netgsm.com.tr');
+      expect(logged).toContain('***');
+    });
   });
 
   describe('never throws / idempotency', () => {

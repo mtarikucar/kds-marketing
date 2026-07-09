@@ -1,19 +1,27 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SalesCallService } from './sales-call.service';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
+import { verifyRecordingProxyToken } from '../telephony/recording-proxy-token.util';
 
 describe('SalesCallService', () => {
   let prisma: MockPrismaClient;
   let registry: { get: jest.Mock };
   let outbox: { append: jest.Mock };
   let telephonyConfig: { resolveForWorkspace: jest.Mock };
-  let r2: { urlForKey: jest.Mock };
   let provider: any;
   let liteProvider: any;
   let svc: SalesCallService;
 
   const WS = 'ws-1';
   const REP = 'rep-1';
+
+  beforeAll(() => {
+    // getRecordingUrl mints an HMAC proxy token (fix round 1) — needs a key.
+    process.env.MARKETING_SECRET_KEY = Buffer.from('k'.repeat(32)).toString('base64');
+  });
+  afterAll(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
 
   beforeEach(() => {
     prisma = mockPrismaClient();
@@ -31,8 +39,7 @@ describe('SalesCallService', () => {
     registry = { get: jest.fn().mockReturnValue(provider) };
     outbox = { append: jest.fn().mockResolvedValue('ob') };
     telephonyConfig = { resolveForWorkspace: jest.fn().mockResolvedValue(null) };
-    r2 = { urlForKey: jest.fn((key: string) => `https://cdn.example.com/${key}`) };
-    svc = new SalesCallService(prisma as any, registry as any, outbox as any, telephonyConfig as any, r2 as any);
+    svc = new SalesCallService(prisma as any, registry as any, outbox as any, telephonyConfig as any);
 
     // Support both $transaction(callback) and $transaction([...]) forms.
     (prisma.$transaction as any).mockImplementation(async (arg: any) =>
@@ -380,10 +387,14 @@ describe('SalesCallService', () => {
   });
 
   // NetGSM Phase 4 Task 3 — in-app recording player URL resolution.
+  // Fix round 1 (HIGH privacy finding): an R2-stored recording no longer
+  // resolves to R2's public, no-auth, no-TTL URL — it resolves to OUR OWN
+  // tokened proxy route instead, so the public bucket URL never reaches the
+  // browser.
   describe('getRecordingUrl', () => {
     const MANAGER = { id: 'mgr-1', role: 'MANAGER' } as any;
 
-    it('prefers the R2-stored copy over the provider url when both exist', async () => {
+    it('returns a tokened proxy-route url (never the public R2 url) when the recording is R2-stored', async () => {
       prisma.salesCall.findFirst.mockResolvedValue({
         id: 'call-1',
         workspaceId: WS,
@@ -394,8 +405,17 @@ describe('SalesCallService', () => {
 
       const res = await svc.getRecordingUrl(WS, 'call-1', MANAGER);
 
-      expect(r2.urlForKey).toHaveBeenCalledWith('netgsm-recordings/ws-1/call-1.mp3');
-      expect(res).toEqual({ url: 'https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3' });
+      // Shape: <base>/api/public/telephony/recording/<ws>/<callId>/<token>
+      // (base is empty here — PUBLIC_BASE_URL is unset in this test env —
+      // so the url is root-relative; that's fine, see recordingProxyUrl's
+      // own unit coverage for the base-URL-present case).
+      const match = res.url.match(/^\/api\/public\/telephony\/recording\/ws-1\/call-1\/(.+)$/);
+      expect(match).not.toBeNull();
+      const token = match![1];
+      expect(verifyRecordingProxyToken(WS, 'call-1', token)).toBe(true);
+      // Never the raw provider url, and never a public R2/cdn url.
+      expect(res.url).not.toContain('netgsm.example.com');
+      expect(res.url).not.toContain('cdn.example.com');
     });
 
     it('falls back to the provider url when no storage key has been ingested yet', async () => {
@@ -409,7 +429,6 @@ describe('SalesCallService', () => {
 
       const res = await svc.getRecordingUrl(WS, 'call-1', MANAGER);
 
-      expect(r2.urlForKey).not.toHaveBeenCalled();
       expect(res).toEqual({ url: 'https://netgsm.example.com/token/abc' });
     });
 
@@ -432,7 +451,6 @@ describe('SalesCallService', () => {
       await expect(svc.getRecordingUrl(WS, 'call-1', MANAGER)).rejects.toBeInstanceOf(
         NotFoundException,
       );
-      expect(r2.urlForKey).not.toHaveBeenCalled();
     });
 
     it("forbids a REP from reading a teammate's call recording", async () => {

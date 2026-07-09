@@ -17,7 +17,7 @@ import { LogCallDto, SalesCallOutcome } from '../dto/log-call.dto';
 import { SalesCallFilterDto } from '../dto/sales-call-filter.dto';
 import { MarketingUserPayload } from '../types';
 import { paginated } from '../../../common/pagination';
-import { R2StorageService } from '../../../common/storage/r2-storage.service';
+import { mintRecordingProxyToken, recordingProxyUrl } from '../telephony/recording-proxy-token.util';
 
 /**
  * Final-review HIGH-2 fix — statuses `logCall` may still attach a manual
@@ -47,7 +47,6 @@ export class SalesCallService {
     private readonly registry: TelephonyProviderRegistry,
     private readonly outbox: OutboxService,
     private readonly telephonyConfig: TelephonyConfigService,
-    private readonly r2: R2StorageService,
   ) {}
 
   /**
@@ -342,11 +341,21 @@ export class SalesCallService {
    * viewing a teammate's call), so this never leaks another workspace's or
    * another rep's recording regardless of how the caller reached it.
    *
-   * Prefers the R2-stored copy (`recordingStorageKey`, Task 2's ingest sweep)
-   * — stable, retention-managed, and immune to the NetGSM tokenized link
-   * eventually expiring — over the raw provider `recordingUrl`. Falls back to
-   * the provider url only when the recording hasn't been ingested (or ever
-   * will be — recording off/R2 unconfigured). 404s when neither exists yet.
+   * Fix round 1 (HIGH privacy finding) — this used to return
+   * `R2StorageService.urlForKey(key)` directly: R2's bucket is public-read
+   * (shared with social-planner's Meta/TikTok pull-from-URL media), so that
+   * was a fully public, no-auth, no-TTL URL handed straight to the browser as
+   * `<audio src>` — it survived past our auth boundary (history, devtools,
+   * error-tracker breadcrumbs) for as long as the object existed. Instead,
+   * when the recording HAS been ingested to R2 (`recordingStorageKey`, Task
+   * 2's sweep), this mints a short-lived (~5 min) HMAC token scoped to
+   * {workspaceId, id} and returns OUR OWN proxy route
+   * (`RecordingProxyController`, `recording-proxy-token.util`) — the browser
+   * never sees the public R2 URL at all. Falls back to the raw provider
+   * `recordingUrl` only when the recording hasn't been ingested yet (or ever
+   * will be — recording off/R2 unconfigured): that's already a NetGSM
+   * tokenized, short-lived link, not our public bucket, so it's returned
+   * as-is rather than also being proxied. 404s when neither exists yet.
    */
   async getRecordingUrl(
     workspaceId: string,
@@ -354,11 +363,12 @@ export class SalesCallService {
     user: MarketingUserPayload,
   ): Promise<{ url: string }> {
     const call = await this.get(workspaceId, id, user);
-    const url = call.recordingStorageKey
-      ? this.r2.urlForKey(call.recordingStorageKey)
-      : call.recordingUrl;
-    if (!url) throw new NotFoundException('No recording for this call');
-    return { url };
+    if (call.recordingStorageKey) {
+      const token = mintRecordingProxyToken(workspaceId, id);
+      return { url: recordingProxyUrl(process.env.PUBLIC_BASE_URL, workspaceId, id, token) };
+    }
+    if (call.recordingUrl) return { url: call.recordingUrl };
+    throw new NotFoundException('No recording for this call');
   }
 
   private outcomeFor(status: SalesCallOutcome): string {

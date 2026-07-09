@@ -3,8 +3,17 @@ import {
   S3Client,
   PutObjectCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
 } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
+import type { Readable } from 'stream';
+
+export interface ObjectStream {
+  /** Node readable stream of the object's bytes. */
+  body: Readable;
+  contentType?: string;
+  contentLength?: number;
+}
 
 export interface UploadedMedia {
   /** Public URL Meta will pull the asset from. */
@@ -137,6 +146,33 @@ export class R2StorageService {
       }),
     );
     return { url: this.urlForKey(key), key, mime: file.mimetype };
+  }
+
+  /**
+   * Fetch an object's bytes as a stream, for server-side proxying — NetGSM
+   * Phase 4 Task 3, fix round 1 (HIGH privacy finding): `RecordingProxyController`
+   * uses this so a call recording's bytes are piped through OUR route rather
+   * than ever handing the browser this bucket's public URL (see the class
+   * docstring — the bucket is public-read for Meta/TikTok pull-from-URL, so
+   * that URL carries no auth and no TTL once it leaves our server). Throws if
+   * unconfigured or the object has no body; callers should treat any throw as
+   * "not found" (a deleted/never-ingested object looks the same from here).
+   */
+  async getObjectStream(key: string): Promise<ObjectStream> {
+    if (!this.isConfigured()) {
+      throw new Error('R2 storage is not configured');
+    }
+    const res = await this.getClient().send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    if (!res.Body) {
+      throw new Error(`R2 object ${key} has no body`);
+    }
+    return {
+      body: res.Body as unknown as Readable,
+      contentType: res.ContentType,
+      contentLength: res.ContentLength,
+    };
   }
 
   /** Best-effort delete of uploaded objects (post-publish cleanup). */
