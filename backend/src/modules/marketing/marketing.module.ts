@@ -107,6 +107,10 @@ import { TelephonyQueueController } from './controllers/telephony-queue.controll
 import { TelephonyQueueService } from './services/telephony-queue.service';
 import { TelephonyReportsController } from './controllers/telephony-reports.controller';
 import { TelephonyReportsService } from './services/telephony-reports.service';
+// NetGSM Phase 5 Task 6 — "leave your number, we call you now" callback
+// (dynamic_redirect); İYS ARAMA consent + brandcode is mandatory, fail-closed.
+import { TelephonyCallbackController } from './controllers/telephony-callback.controller';
+import { TelephonyCallbackService } from './services/telephony-callback.service';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
@@ -536,6 +540,7 @@ import { WalletService } from './wallet/wallet.service';
     TelephonyStreamController,
     TelephonyControlController,
     TelephonyQueueController,
+    TelephonyCallbackController,
     TelephonyReportsController,
     NetgsmOnboardingController,
     InstallationController,
@@ -695,6 +700,8 @@ import { WalletService } from './wallet/wallet.service';
     TelephonyQueueService,
     // NetGSM Phase 4 Task 5 — inbound call statistics dashboard.
     TelephonyReportsService,
+    // NetGSM Phase 5 Task 6 — "call this number back now" (dynamic_redirect).
+    TelephonyCallbackService,
     // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
     TelephonyEventConsumer,
     // NetGSM Phase 3 Task 3 — per-workspace SSE fan-out (screen-pop, live

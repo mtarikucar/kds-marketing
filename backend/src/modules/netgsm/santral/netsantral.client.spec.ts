@@ -367,4 +367,63 @@ describe('NetsantralClient', () => {
       expect(out.message).toContain('***');
     });
   });
+
+  describe('dynamicRedirect', () => {
+    it('GETs the /dynamic_redirect URL with phone digits + redirect target + mandatory iysfilter', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success","unique_id":"cb-1"}',
+      } as any);
+      const out = await new NetsantralClient().dynamicRedirect(creds, {
+        phone: '+90 555 111 22 33', redirectMenu: '850-queue-vip', redirectType: 'queue', iysfilter: '11', brandcode: 'BRAND1',
+      });
+      expect(out).toEqual({ ok: true, callId: 'cb-1' });
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/dynamic_redirect');
+      expect(url).toContain('no=905551112233'); // digits only
+      expect(url).toContain('redirect_menu=850-queue-vip');
+      expect(url).toContain('redirect_type=queue');
+      expect(url).toContain('iysfilter=11');
+      expect(url).toContain('brandcode=BRAND1');
+    });
+
+    it('omits brandcode when not given (informational/no-consent-required call)', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success","unique_id":"cb-2"}',
+      } as any);
+      await new NetsantralClient().dynamicRedirect(creds, {
+        phone: '5551112233', redirectMenu: 'anons-1', redirectType: 'announcement', iysfilter: '0',
+      });
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).not.toContain('brandcode');
+      expect(url).toContain('redirect_type=announcement');
+    });
+
+    it('returns ok:false (no throw, no fetch) when iysfilter is missing — never sent without it', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().dynamicRedirect(creds, {
+        phone: '5551112233', redirectMenu: 'ivr-1', redirectType: 'ivr',
+      } as any);
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('returns ok:false (no throw, no fetch) when required params are missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().dynamicRedirect(creds, { phone: '', redirectMenu: '', redirectType: 'queue', iysfilter: '11' });
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('scrubs username and password from a thrown error (creds are in the query string)', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockRejectedValue(
+        new Error('boom username=8508407303 password=pw'),
+      );
+      const out = await new NetsantralClient().dynamicRedirect(creds, {
+        phone: '5551112233', redirectMenu: '850-queue-vip', redirectType: 'queue', iysfilter: '11',
+      });
+      expect(out.ok).toBe(false);
+      expect(out.message).not.toContain('pw');
+      expect(out.message).toContain('***');
+    });
+  });
 });

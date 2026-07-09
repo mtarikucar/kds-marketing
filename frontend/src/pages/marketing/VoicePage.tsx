@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Phone, Sparkles, User, ChevronLeft } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Phone, Sparkles, User, ChevronLeft, UserCheck } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
@@ -19,6 +20,9 @@ interface VoiceCall {
   status: string;
   turns: number;
   createdAt: string;
+  // NetGSM Phase 5 Task 6 — set when the caller matched a lead (canonical
+  // phone match) and the IVR personalized the greeting/handoff for them.
+  leadId?: string | null;
 }
 interface Turn {
   role: string;
@@ -98,8 +102,20 @@ export default function VoicePage() {
                         {c.status}
                       </Badge>
                     </div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {c.turns} {t('voice.turns', 'turns')} · {new Date(c.createdAt).toLocaleString()}
+                    <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>
+                        {c.turns} {t('voice.turns', 'turns')} · {new Date(c.createdAt).toLocaleString()}
+                      </span>
+                      {c.leadId && (
+                        <Link
+                          to={`/leads/${c.leadId}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-primary hover:underline shrink-0"
+                        >
+                          <UserCheck className="h-3 w-3" />
+                          {t('voice.leadMatched', 'Lead')}
+                        </Link>
+                      )}
                     </div>
                   </button>
                 ))}

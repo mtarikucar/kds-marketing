@@ -37,7 +37,7 @@ export class SiteRendererService {
     page: { title: string; blocks: unknown; seo?: any; theme?: any },
     forms: Map<string, FormDefLite>,
     publicBase: string,
-    branding?: { brandName?: string | null; accentColor?: string | null; logoUrl?: string | null },
+    branding?: { brandName?: string | null; accentColor?: string | null; logoUrl?: string | null; workspaceId?: string },
   ): string {
     const theme = (page.theme ?? {}) as Record<string, string>;
     // Accent precedence: page theme → workspace branding → default.
@@ -47,6 +47,7 @@ export class SiteRendererService {
         ? branding!.accentColor!
         : '#1e40af';
     const seo = (page.seo ?? {}) as Record<string, string>;
+    const lang = String(seo.lang || 'en').toLowerCase();
     const blocks = Array.isArray(page.blocks) ? page.blocks : [];
     const header =
       branding && (branding.logoUrl || branding.brandName)
@@ -55,7 +56,7 @@ export class SiteRendererService {
           (branding.brandName ? `<strong>${esc(branding.brandName)}</strong>` : '') +
           `</header>`
         : '';
-    const body = header + blocks.map((b: any, i: number) => this.block(b, forms, publicBase, accent!, i)).join('\n');
+    const body = header + blocks.map((b: any, i: number) => this.block(b, forms, publicBase, accent!, i, lang, branding?.workspaceId)).join('\n');
     return (
       `<!doctype html><html lang="${esc(seo.lang || 'en')}"><head><meta charset="utf-8">` +
       `<meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -77,7 +78,15 @@ export class SiteRendererService {
     );
   }
 
-  private block(b: any, forms: Map<string, FormDefLite>, base: string, accent: string, idx = 0): string {
+  private block(
+    b: any,
+    forms: Map<string, FormDefLite>,
+    base: string,
+    accent: string,
+    idx = 0,
+    lang = 'en',
+    workspaceId?: string,
+  ): string {
     switch (b?.type) {
       case 'popup': {
         // JS-free modal shown on load (checkbox checked); the × closes it.
@@ -115,9 +124,48 @@ export class SiteRendererService {
         return `<section class="s"><p>${esc(b.text)}</p></section>`;
       case 'form':
         return this.formBlock(b, forms.get(b.formId), base);
+      case 'callback':
+        return this.callbackBlock(b, base, lang, workspaceId);
       default:
         return '';
     }
+  }
+
+  /**
+   * "Leave your number, we call you now" (NetGSM Phase 5 Task 6) — a plain,
+   * JS-free POST form (same JS-free/CSP-safe contract as every other block
+   * here) to the public callback endpoint (`PublicSiteController`), which
+   * calls the identical `TelephonyCallbackService.requestCallback` the
+   * authenticated `POST /marketing/telephony/callback` uses — same
+   * İYS-mandatory, fail-closed compliance gate either way. `redirectMenu`/
+   * `redirectType` are the WORKSPACE OWNER's own routing config (which
+   * pre-existing Netsantral queue/IVR/announcement this funnel feeds), not
+   * visitor input — carried as hidden fields, same idiom as the 'form'
+   * block's `formId`. Renders nothing (matches `formBlock`'s `if (!form)`
+   * guard) when the block wasn't configured with a target to redirect into,
+   * or when this page isn't being rendered for a specific workspace (only
+   * happens if a caller reuses the renderer outside the public site/funnel
+   * flow, which always passes one).
+   */
+  private callbackBlock(b: any, base: string, lang: string, workspaceId?: string): string {
+    const redirectMenu = typeof b?.redirectMenu === 'string' ? b.redirectMenu.trim() : '';
+    if (!workspaceId || !redirectMenu) return '';
+    const redirectType = ['queue', 'ivr', 'announcement'].includes(b?.redirectType) ? b.redirectType : 'queue';
+    const tr = lang.startsWith('tr');
+    const heading = b?.heading || (tr ? 'Sizi hemen arayalım' : "We'll call you right now");
+    const phoneLabel = b?.phoneLabel || (tr ? 'Telefon numaranız' : 'Your phone number');
+    const submitText = b?.submitText || (tr ? 'Beni şimdi arayın' : 'Call me now');
+    return (
+      `<section class="s"><h2>${esc(heading)}</h2>` +
+      (b?.text ? `<p>${esc(b.text)}</p>` : '') +
+      `<form method="POST" action="${base}/api/public/callback/${esc(workspaceId)}">` +
+      `<input type="hidden" name="redirectMenu" value="${esc(redirectMenu)}">` +
+      `<input type="hidden" name="redirectType" value="${esc(redirectType)}">` +
+      `<label>${esc(phoneLabel)}</label>` +
+      `<input type="tel" name="phone" required>` +
+      `<button class="btn" type="submit" style="margin-top:12px">${esc(submitText)}</button>` +
+      `</form></section>`
+    );
   }
 
   private formBlock(b: any, form: FormDefLite | undefined, base: string): string {

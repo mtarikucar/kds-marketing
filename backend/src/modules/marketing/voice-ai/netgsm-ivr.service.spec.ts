@@ -4,6 +4,11 @@ function makeDeps() {
   const prisma = {
     channel: { findFirst: jest.fn() },
     agentProfile: { findFirst: jest.fn() },
+    // Default: no lead matches (unknown caller) — every pre-existing test in
+    // this file predates lead personalization and asserts the unpersonalized
+    // path, so this default keeps them green; personalization tests below
+    // override it per-case.
+    lead: { findFirst: jest.fn().mockResolvedValue(null) },
     voiceCall: { upsert: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
     voiceTranscript: { create: jest.fn().mockResolvedValue({}) },
   };
@@ -120,5 +125,156 @@ describe('NetgsmIvrService', () => {
     // findFirst called with an externalId set containing the normalized santral number
     const where = prisma.channel.findFirst.mock.calls[0][0].where;
     expect(JSON.stringify(where)).toContain('8508407303');
+  });
+
+  // ── Task 6: dynamic IVR personalization ─────────────────────────────────
+
+  const LEAD_NO_REP = { id: 'lead-1', contactPerson: 'Ahmet Yılmaz', assignedTo: null };
+  const LEAD_WITH_REP = {
+    id: 'lead-2',
+    contactPerson: 'Elif Demir',
+    assignedTo: { dahili: '104', phone: '5559998877' },
+  };
+
+  it('known caller (no DTMF): greets by name, stamps leadId on the VoiceCall row', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
+
+    const r = await svc.handle(INPUT);
+
+    expect(r.result).toBe('1');
+    expect(r.data).toContain('Merhaba Ahmet Yılmaz Bey/Hanım');
+    // known-caller greeting replaces the tenant's configured greeting text
+    expect(r.data).not.toContain('KDS Restorana hoş geldiniz.');
+    const up = prisma.voiceCall.upsert.mock.calls[0][0];
+    expect(up.create.leadId).toBe('lead-1');
+    // canonical phone match: searched against every localMsisdnVariants spelling
+    const leadWhere = prisma.lead.findFirst.mock.calls[0][0].where;
+    expect(leadWhere.workspaceId).toBe('ws-1');
+    expect(leadWhere.phoneNormalized.in).toEqual(expect.arrayContaining(['5331234567', '05331234567', '905331234567']));
+  });
+
+  it('unknown caller (no lead match): greeting + VoiceCall unaffected, leadId null', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    // default mock already resolves null; assert explicitly for clarity here.
+    prisma.lead.findFirst.mockResolvedValue(null);
+
+    const r = await svc.handle(INPUT);
+
+    expect(r.data).toContain('KDS Restorana hoş geldiniz.');
+    expect(r.data).not.toContain('Bey/Hanım');
+    const up = prisma.voiceCall.upsert.mock.calls[0][0];
+    expect(up.create.leadId).toBeNull();
+  });
+
+  it('agent digit "2", known caller with an assigned rep: dynamic redirect to the rep dahili (not the tenant handoffNumber)', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    prisma.lead.findFirst.mockResolvedValue(LEAD_WITH_REP);
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
+
+    expect(r.result).toBe('dynamic');
+    expect((r as any).redirect).toBe('104'); // rep's dahili, not '5331234567'
+  });
+
+  it('agent digit "2", known caller with an assigned rep but no dahili: falls back to the rep phone', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'lead-3', contactPerson: 'Zeynep Kaya', assignedTo: { dahili: null, phone: '5551112233' },
+    });
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
+    expect((r as any).redirect).toBe('5551112233');
+  });
+
+  it('agent digit "2", known caller with no assigned rep: falls back to configured priorityQueue', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue({
+      ...CHANNEL, configPublic: { ...CHANNEL.configPublic, priorityQueue: '850-queue-vip' },
+    });
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP); // assignedTo: null
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
+    expect((r as any).redirect).toBe('850-queue-vip');
+  });
+
+  it('agent digit "2", known caller with no rep/queue configured: falls back to the tenant handoffNumber (prior behavior)', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue(CHANNEL); // no priorityQueue configured
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
+    expect((r as any).redirect).toBe('5331234567');
+  });
+
+  it('configPublic.ivrMenu honored: a configured digit answers straight from config, bypassing Claude/agent-handoff', async () => {
+    const { prisma, anthropic, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue({
+      ...CHANNEL,
+      configPublic: {
+        ...CHANNEL.configPublic,
+        ivrMenu: { '3': { data: 'Şubemiz hafta içi 09:00-18:00 açıktır.', redirect: '850-queue-sales' } },
+      },
+    });
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '3' });
+
+    expect(r.result).toBe('dynamic');
+    expect(r.data).toBe('Şubemiz hafta içi 09:00-18:00 açıktır.');
+    expect((r as any).redirect).toBe('850-queue-sales');
+    expect(anthropic.complete).not.toHaveBeenCalled();
+  });
+
+  it('configPublic.ivrMenu entry without a redirect: result "1", no redirect field', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue({
+      ...CHANNEL,
+      configPublic: { ...CHANNEL.configPublic, ivrMenu: { '3': { data: 'Bilgilendirme mesajı.' } } },
+    });
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '3' });
+    expect(r.result).toBe('1');
+    expect(r.data).toBe('Bilgilendirme mesajı.');
+    expect((r as any).redirect).toBeUndefined();
+  });
+
+  it('configPublic.ivrMenu still honors an AGENT_DIGITS entry (e.g. "2") when explicitly configured', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue({
+      ...CHANNEL,
+      configPublic: { ...CHANNEL.configPublic, ivrMenu: { '2': { data: 'Özel karşılama.', redirect: '850-queue-custom' } } },
+    });
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
+    expect(r.data).toBe('Özel karşılama.');
+    expect((r as any).redirect).toBe('850-queue-custom');
+  });
+
+  it('malformed configPublic.ivrMenu entries are dropped, not thrown — falls through to the hardcoded menu', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findFirst.mockResolvedValue({
+      ...CHANNEL,
+      configPublic: { ...CHANNEL.configPublic, ivrMenu: { '2': { data: 123 }, '9': 'not-an-object' } },
+    });
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+
+    const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
+    // digit "2" had no usable `data` string — falls through to the hardcoded
+    // agent-handoff branch exactly as if ivrMenu were absent.
+    expect(r.result).toBe('dynamic');
+    expect(r.data).toBe('Aktarıyorum');
   });
 });

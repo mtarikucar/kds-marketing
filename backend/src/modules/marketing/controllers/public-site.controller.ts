@@ -6,8 +6,18 @@ import { SitesService } from '../sites/sites.service';
 import { FormsService } from '../sites/forms.service';
 import { BookingService } from '../sites/booking.service';
 import { BookSlotDto, SlotsQueryDto, RescheduleTokenDto } from '../dto/public-site.dto';
+import { TelephonyCallbackDto } from '../dto/telephony-callback.dto';
+import { TelephonyCallbackService } from '../services/telephony-callback.service';
 import { PUBLIC_WRITE_THROTTLE } from '../public-throttle.const';
 import { readCookie, AFF_REF_COOKIE } from './public-referral.controller';
+
+function callbackPage(title: string, heading: string, body: string): string {
+  return (
+    `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
+    `<div style="font-family:system-ui;max-width:480px;margin:80px auto;text-align:center">` +
+    `<h2>${heading}</h2><p style="color:#64748b">${body}</p></div>`
+  );
+}
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
@@ -25,6 +35,7 @@ export class PublicSiteController {
     private readonly forms: FormsService,
     private readonly booking: BookingService,
     private readonly config: ConfigService,
+    private readonly callback: TelephonyCallbackService,
   ) {}
 
   private base(): string {
@@ -72,6 +83,37 @@ export class PublicSiteController {
         `<h2>Thank you!</h2><p style="color:#64748b">We received your submission and will be in touch.</p></div>`,
       );
     }
+  }
+
+  /**
+   * "Leave your number, we call you now" (NetGSM Phase 5 Task 6) — the public
+   * funnel/webchat 'callback' block's JS-free form target. `:ws` is the
+   * workspace id, same convention as `p/:ws/:slug`/`funnel/:ws/:slug`. Calls
+   * the EXACT SAME `TelephonyCallbackService.requestCallback` the
+   * authenticated `POST /marketing/telephony/callback` uses, so a visitor-
+   * submitted number is held to the identical İYS-mandatory, fail-closed
+   * compliance gate as a rep-triggered callback — nothing here bypasses it.
+   * Never leaks the underlying reason (İYS block, no PBX configured, ...)
+   * to an anonymous visitor — a generic "try again later" either way.
+   */
+  @Post('callback/:ws')
+  @Throttle(PUBLIC_WRITE_THROTTLE)
+  async requestCallback(
+    @Param('ws') ws: string,
+    @Body() dto: TelephonyCallbackDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    try {
+      await this.callback.requestCallback(ws, dto);
+    } catch {
+      res.status(400).type('html').send(
+        callbackPage('Hata', 'Şu anda geri arama alamıyoruz', 'Lütfen daha sonra tekrar deneyin.'),
+      );
+      return;
+    }
+    res.type('html').send(
+      callbackPage('Teşekkürler', 'Teşekkürler!', 'Sizi kısa süre içinde arayacağız.'),
+    );
   }
 
   @Get('book/:ws/:cal/slots')

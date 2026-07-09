@@ -38,6 +38,23 @@ export interface NetsantralCreds {
 }
 
 /**
+ * `dynamic_redirect` params (NetGSM Phase 5 Task 6 — callback widget). Places
+ * an outbound call to `phone` and, once answered, connects it into a
+ * pre-existing Netsantral object named by `redirectMenu` — the object must
+ * already exist in the portal, this call cannot create one. `iysfilter` is
+ * NEVER optional here (same contract as `/voicesms/send`); `brandcode` is
+ * required by NetGSM only when `iysfilter` marks the call commercial ('11').
+ */
+export interface DynamicRedirectParams {
+  /** The customer/caller number to ring back. */
+  phone: string;
+  redirectMenu: string;
+  redirectType: 'queue' | 'ivr' | 'announcement';
+  iysfilter: '0' | '11' | '12';
+  brandcode?: string;
+}
+
+/**
  * Normalized per-agent queue state (NetGSM Phase 4 Task 4). The real
  * queuestats wire shape is an open item (same status as originate/linkup
  * before they were confirmed live) — `raw` keeps NetGSM's own string for
@@ -206,6 +223,33 @@ export class NetsantralClient {
     return this.call('muteaudio', creds.username, qs, creds.password);
   }
 
+  /**
+   * `dynamic_redirect` (GET, crmsntrl host) — the "leave your number, we call
+   * you now" callback: NetGSM rings `phone` and, once answered, drops the
+   * call straight into the named queue/IVR/announcement object. Refuses to
+   * build the request at all without an `iysfilter` — this places a REAL
+   * outbound call, so the caller (TelephonyCallbackService) must always
+   * resolve one, never omit it "to be safe".
+   */
+  async dynamicRedirect(creds: NetsantralCreds, p: DynamicRedirectParams): Promise<NetsantralOriginateOutcome> {
+    if (!creds?.username || !creds?.password || !p?.phone || !p?.redirectMenu || !p?.redirectType) {
+      return { ok: false, message: 'Netsantral dynamicRedirect called with missing parameters.' };
+    }
+    if (!p.iysfilter) {
+      return { ok: false, message: 'Netsantral dynamicRedirect called without a mandatory iysfilter.' };
+    }
+    const qs = new URLSearchParams({
+      username: creds.username,
+      password: creds.password,
+      no: p.phone.replace(/[^\d]/g, ''),
+      redirect_menu: p.redirectMenu,
+      redirect_type: p.redirectType,
+      iysfilter: p.iysfilter,
+    });
+    if (p.brandcode) qs.set('brandcode', p.brandcode);
+    return this.call('dynamic_redirect', creds.username, qs, creds.password);
+  }
+
   // ── Phase 4 Task 4: queue wallboard + agent presence ──────────────────────
 
   /**
@@ -353,7 +397,9 @@ export class NetsantralClient {
 
   /** Shared GET + status check + tolerant interpret + credential scrubbing. */
   private async call(
-    path: 'originate' | 'linkup' | 'hangup' | 'xfer' | 'atxfer' | 'muteaudio' | 'agentlogin' | 'agentlogoff' | 'agentpause',
+    path:
+      | 'originate' | 'linkup' | 'hangup' | 'xfer' | 'atxfer' | 'muteaudio'
+      | 'agentlogin' | 'agentlogoff' | 'agentpause' | 'dynamic_redirect',
     username: string,
     qs: URLSearchParams,
     password: string,

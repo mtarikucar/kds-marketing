@@ -1761,7 +1761,8 @@
     "turns": "turns",
     "empty": "No AI calls yet.",
     "selectPrompt": "Select a call to see the transcript.",
-    "noTranscript": "No transcript for this call."
+    "noTranscript": "No transcript for this call.",
+    "leadMatched": "Lead"
   },
   "callRecording": {
     "title": "Recording",

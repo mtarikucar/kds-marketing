@@ -134,7 +134,7 @@ export class PageFunnelsService {
       for (const d of defs) forms.set(d.id, d as any);
     }
     const brand = await this.branding.get(workspaceId);
-    const html = this.renderer.render(page, forms, publicBase, brand);
+    const html = this.renderer.render(page, forms, publicBase, { ...brand, workspaceId });
 
     // Append a "Continue" link to the next step (linear advance), JS-free.
     const hasNext = stepIndex + 1 < steps.length;

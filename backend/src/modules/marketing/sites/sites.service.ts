@@ -149,7 +149,7 @@ export class SitesService {
       for (const d of defs) forms.set(d.id, d as any);
     }
     const branding = await this.branding.get(workspaceId);
-    return this.renderer.render(page, forms, publicBase, branding);
+    return this.renderer.render(page, forms, publicBase, { ...branding, workspaceId });
   }
 
   async draft(workspaceId: string, prompt: string): Promise<{ title: string; blocks: unknown[] }> {
