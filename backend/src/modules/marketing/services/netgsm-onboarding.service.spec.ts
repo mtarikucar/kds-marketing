@@ -14,6 +14,9 @@ function prismaMock() {
   return {
     channel: { findFirst: jest.fn() },
     marketingUser: { count: jest.fn() },
+    // NetGSM Phase 2 Task 6 — iysFirstSync's live check. Default: no job
+    // found (mirrors a workspace with no consent changes yet).
+    iysSyncJob: { findFirst: jest.fn().mockResolvedValue(null) },
   } as any;
 }
 function telephonyMock() {
@@ -177,6 +180,66 @@ describe('NetgsmOnboardingService', () => {
     const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
     const { items } = await svc.checklist('ws-1');
     expect(items.find((i) => i.key === 'iysWebhook')?.state).toBe('ok');
+  });
+
+  it('iysBrandCode: missing when no ACTIVE SMS channel exists', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'iysBrandCode')).toEqual({ key: 'iysBrandCode', state: 'missing' });
+  });
+
+  it('iysBrandCode: missing when the ACTIVE SMS channel exists but configPublic.brandCode is blank/absent', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1', configPublic: { brandCode: '   ' } });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'iysBrandCode')?.state).toBe('missing');
+  });
+
+  it('iysBrandCode: ok once configPublic.brandCode is set on the ACTIVE SMS channel', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue({ id: 'chan-1', configPublic: { brandCode: 'BRAND1' } });
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'iysBrandCode')).toEqual({ key: 'iysBrandCode', state: 'ok' });
+  });
+
+  it('iysFirstSync: unknown when no CONFIRMED/SENT IysSyncJob exists for the workspace (not necessarily broken — may just be no consent changes yet)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(prisma.iysSyncJob.findFirst).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws-1', status: { in: ['CONFIRMED', 'SENT'] } },
+      select: { id: true },
+    });
+    expect(items.find((i) => i.key === 'iysFirstSync')).toEqual({ key: 'iysFirstSync', state: 'unknown' });
+  });
+
+  it('iysFirstSync: ok once at least one IysSyncJob has reached SENT or CONFIRMED', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    prisma.iysSyncJob.findFirst.mockResolvedValue({ id: 'job-1' });
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock());
+    const { items } = await svc.checklist('ws-1');
+    expect(items.find((i) => i.key === 'iysFirstSync')).toEqual({ key: 'iysFirstSync', state: 'ok' });
   });
 
   it('otpPackage: always unknown with the error-60 explainer detail (no live probe — sending a real OTP would be a wasted, user-facing send)', async () => {

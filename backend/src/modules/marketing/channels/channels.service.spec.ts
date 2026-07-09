@@ -2,8 +2,10 @@ import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnav
 import { ChannelsService } from './channels.service';
 import * as secretBox from '../../../common/crypto/secret-box.helper';
 
-/** Entitled to both — matches every real plan block (no regression). */
-function makeEntitlements(features: Record<string, boolean> = { conversationAi: true, sms: true }) {
+/** Entitled to all three — matches every real plan block that grants `sms`
+ *  alongside `campaigns` (no regression); the one plan block with `sms` but
+ *  not `campaigns` is exercised explicitly where it matters (registerIysWebhook). */
+function makeEntitlements(features: Record<string, boolean> = { conversationAi: true, sms: true, campaigns: true }) {
   return { getEffective: jest.fn().mockResolvedValue({ features }) } as any;
 }
 
@@ -351,7 +353,9 @@ describe('ChannelsService — create()/update() feature gate', () => {
  * Task 4) — mints the workspace's İYS webhook URL and asks NetGSM to
  * register it, using the SMS channel's own sealed usercode/password +
  * configPublic.brandCode. Stamps configPublic.iysWebhookRegistered only on
- * a genuine NetGSM success.
+ * a genuine NetGSM success. Gated on `campaigns` (Task 6 reconciliation —
+ * NOT the generic per-type `sms` gate every other channel action uses; see
+ * the service method's own doc comment for why).
  */
 describe('ChannelsService — registerIysWebhook()', () => {
   const PUBLIC_BASE_URL = 'https://app.example.com';
@@ -422,15 +426,26 @@ describe('ChannelsService — registerIysWebhook()', () => {
     expect(prisma.channel.update).not.toHaveBeenCalled();
   });
 
-  it('blocks when the workspace lacks the sms feature', async () => {
+  it('blocks when the workspace lacks the campaigns feature (İYS is bundled with campaigns, not sms)', async () => {
     const iysClient = { registerWebhook: jest.fn() };
     const { svc } = makeRegisterService(
       { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: {} },
       iysClient,
-      makeEntitlements({ conversationAi: true, sms: false }),
+      makeEntitlements({ conversationAi: true, sms: true, campaigns: false }),
     );
     await expect(svc.registerIysWebhook('ws-1', 'ch-1')).rejects.toBeInstanceOf(ForbiddenException);
     expect(iysClient.registerWebhook).not.toHaveBeenCalled();
+  });
+
+  it('allows registering the webhook on campaigns alone, even without sms (a plan-block edge case, not a real one — every real plan grants sms wherever it grants campaigns)', async () => {
+    const iysClient = { registerWebhook: jest.fn().mockResolvedValue({ ok: true, code: '00', message: null }) };
+    const { svc } = makeRegisterService(
+      { id: 'ch-1', workspaceId: 'ws-1', type: 'SMS', configPublic: { brandCode: 'BRAND1' } },
+      iysClient,
+      makeEntitlements({ conversationAi: false, sms: false, campaigns: true }),
+    );
+    const result = await svc.registerIysWebhook('ws-1', 'ch-1');
+    expect(result.ok).toBe(true);
   });
 
   it('throws BadRequestException when the channel has no NetGSM credentials configured yet', async () => {

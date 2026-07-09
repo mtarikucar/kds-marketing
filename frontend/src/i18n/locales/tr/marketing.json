@@ -223,6 +223,9 @@
       "eventsWebhookUrl": "Olay webhook URL'si",
       "otpPackage": "SMS OTP paketi",
       "senderHeaders": "Gönderici başlığı İYS onaylı",
+      "iysWebhook": "İYS geri bildirim webhook'u kayıtlı",
+      "iysBrandCode": "İYS marka kodu tanımlı",
+      "iysFirstSync": "İlk İYS onay senkronizasyonu tamamlandı",
       "repsCount": "{{count}} temsilcide dahili tanımlı",
       "detail": {
         "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
@@ -1662,7 +1665,21 @@
     "public": "herkese açık web sohbet",
     "noSecrets": "henüz bilgi yok",
     "embed": "Gömme kodu (</body> öncesine yapıştırın)",
-    "empty": "Henüz kanal yok — müşterilerin size yazabilmesi için bir tane bağlayın."
+    "empty": "Henüz kanal yok — müşterilerin size yazabilmesi için bir tane bağlayın.",
+    "iysTitle": "İYS (İleti Yönetim Sistemi)",
+    "iysBrandCode": "İYS Marka Kodu",
+    "iysBrandCodePlaceholder": "Marka kodu",
+    "iysDefault": "Varsayılan mesaj türü",
+    "iysBilgilendirme": "Bilgilendirme",
+    "iysTicari": "Ticari",
+    "iysSaved": "İYS ayarları kaydedildi",
+    "iysSaveFailed": "İYS ayarları kaydedilemedi",
+    "iysRegisterWebhook": "İYS webhook'unu kaydet",
+    "iysWebhookRegistered": "İYS webhook'u NetGSM'e kaydedildi",
+    "iysWebhookFailed": "İYS webhook'u kaydedilemedi",
+    "iysWebhookOk": "Webhook kayıtlı",
+    "iysWebhookNotRegistered": "Webhook kayıtlı değil",
+    "iysHelp": "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir."
   },
   "automations": {
     "title": "Otomasyonlar",

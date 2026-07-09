@@ -63,6 +63,9 @@ export function NetgsmOnboardingCard() {
       eventsWebhookUrl: 'Events webhook URL',
       otpPackage: 'SMS OTP package',
       senderHeaders: 'Sender header (msgheader) İYS-approved',
+      iysWebhook: 'İYS push-back webhook registered',
+      iysBrandCode: 'İYS marka kodu (brand code) configured',
+      iysFirstSync: 'First İYS consent sync confirmed',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

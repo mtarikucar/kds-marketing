@@ -71,6 +71,13 @@ export class ChannelsService {
    */
   private async assertChannelFeature(workspaceId: string, type: string): Promise<void> {
     const feature: FeatureKey = type === 'SMS' ? 'sms' : 'conversationAi';
+    await this.assertFeature(workspaceId, feature);
+  }
+
+  /** Shared single-key entitlement check — assertChannelFeature() picks the
+   *  per-type key then delegates here; registerIysWebhook() calls this
+   *  directly with a fixed key (`campaigns`, see its own doc comment). */
+  private async assertFeature(workspaceId: string, feature: FeatureKey): Promise<void> {
     const effective = await this.entitlements.getEffective(workspaceId);
     if (!effective.features[feature]) {
       throw new ForbiddenException({
@@ -313,18 +320,22 @@ export class ChannelsService {
    * rather than "we tried" — a failed registration must be retried, and a
    * stale `true` would hide that from the operator.
    *
-   * Gating note: this rides the SAME `assertChannelFeature` gate as every
-   * other SMS channel action here (feature `sms`) for now. Per the owner
-   * decision (Phase 2 plan, Task 6) İYS is bundled FREE with the
-   * `campaigns` feature — Task 6 lands the dedicated
-   * `@RequiresFeature('campaigns')` checklist/brandCode UI wiring; this
-   * action deliberately stays on the channel's existing gate until then
-   * rather than invent a parallel one that Task 6 would just replace.
+   * Gating note (NetGSM Phase 2 Task 6 — reconciling Task 4's placeholder):
+   * this does NOT ride the generic `assertChannelFeature` (`sms`) gate that
+   * every other SMS channel action here uses. Per the owner decision İYS is
+   * bundled FREE with `campaigns`, not `sms` — the two are sold separately
+   * (one plan block grants `sms` without `campaigns`: SMS channel/inbox
+   * management with no campaign sending), and a workspace that can't launch
+   * commercial campaigns (`MarketingCampaignsController` is entirely behind
+   * `@RequiresFeature('campaigns')`) has nothing for İYS consent tracking to
+   * protect. So this action checks `campaigns` explicitly instead — a
+   * dedicated single-key check via `assertFeature`, not the type-keyed
+   * `assertChannelFeature` used by create/update/verify.
    */
   async registerIysWebhook(workspaceId: string, id: string) {
     const c = await this.prisma.channel.findFirst({ where: { id, workspaceId, type: 'SMS' } });
     if (!c) throw new NotFoundException('SMS channel not found');
-    await this.assertChannelFeature(workspaceId, c.type);
+    await this.assertFeature(workspaceId, 'campaigns');
 
     const { secrets, public: pub } = this.registry.resolveConfig(c);
     const usercode = secrets?.usercode;

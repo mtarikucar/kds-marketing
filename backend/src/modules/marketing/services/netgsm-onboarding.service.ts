@@ -123,6 +123,28 @@ export class NetgsmOnboardingService {
       url: netgsmWebhookUrl(base, workspaceId, 'iys') ?? undefined,
     });
 
+    // NetGSM Phase 2 Task 6 — İYS is bundled free with the `campaigns`
+    // feature (owner decision, no separate feature key/tripwire). This row
+    // mirrors ChannelsService.registerIysWebhook's own brandCode requirement:
+    // without a brandCode on the ACTIVE SMS channel's configPublic, neither
+    // the auto-push queue (IysSyncService.resolveCreds) nor webhook
+    // registration can proceed, so it's the first thing an operator fixes.
+    const brandCodeRaw = (sms?.configPublic as Record<string, unknown> | null)?.brandCode;
+    const hasBrandCode = typeof brandCodeRaw === 'string' && brandCodeRaw.trim().length > 0;
+    items.push({ key: 'iysBrandCode', state: hasBrandCode ? 'ok' : 'missing' });
+
+    // NetGSM Phase 2 Task 3 — whether the auto-push queue has ever actually
+    // gotten a consent change confirmed by İYS. Unlike iysBrandCode/iysWebhook
+    // (both pure configuration), the ABSENCE of a CONFIRMED/SENT job doesn't
+    // prove anything is broken — it may just mean no consent change has
+    // happened yet for this workspace — so this degrades to 'unknown' rather
+    // than a false 'missing' (mirrors eventsWebhookUrl's always-'unknown').
+    const firstSync = await this.prisma.iysSyncJob.findFirst({
+      where: { workspaceId, status: { in: ['CONFIRMED', 'SENT'] } },
+      select: { id: true },
+    });
+    items.push({ key: 'iysFirstSync', state: firstSync ? 'ok' : 'unknown' });
+
     return { items };
   }
 

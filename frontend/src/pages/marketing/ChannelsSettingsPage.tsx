@@ -16,6 +16,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Card, CardContent } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Input } from '@/components/ui/Input';
+import { Field } from '@/components/ui/Field';
 import {
   Select,
   SelectContent,
@@ -315,6 +317,12 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
                   substitute — there is no LinkedIn DM API. It is polling-based and
                   stays DORMANT until LinkedIn Community Management access is granted
                   (capability flag in configPublic.linkedinEngagement). */}
+              {/* İYS (İleti Yönetim Sistemi) compliance — NetGSM Phase 2. Bundled
+                  free with the `campaigns` feature (no separate gate/badge here;
+                  a workspace without `campaigns` just gets a 403 toast from the
+                  save/register actions below, same as any other gated action). */}
+              {c.type === 'SMS' && <SmsIysSection channel={c} onSaved={invalidate} />}
+
               {c.type === 'LINKEDIN' && (
                 <div className="mt-3 pt-3 border-t border-border">
                   {(c.configPublic as any)?.linkedinEngagement === 'granted' ? (
@@ -357,6 +365,118 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * SMS channel card — İYS (İleti Yönetim Sistemi) compliance section (NetGSM
+ * Phase 2 Task 6): the brandCode + default message-type config, and the
+ * push-back webhook registration action.
+ *
+ * Saves via the EXISTING PATCH /channels/:id path (ChannelsService.update),
+ * merging client-side onto the channel's current configPublic — the backend
+ * replaces configPublic wholesale on update, it does not merge, so sending
+ * only { brandCode, iysDefault } here would silently drop unrelated keys the
+ * server has stamped (iysWebhookRegistered, lastMoPollRecovery, …).
+ *
+ * `registerIysWebhook` is bundled free with the `campaigns` feature, not the
+ * channel's own `sms` gate — see ChannelsService.registerIysWebhook's doc
+ * comment. A workspace without `campaigns` gets a 403 here, surfaced as any
+ * other save-failed toast; there is no separate feature check client-side
+ * (an inert action that always fails cleanly, same pattern as the rest of
+ * this app's gated-but-unhidden actions).
+ */
+function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () => void }) {
+  const { t } = useTranslation('marketing');
+  const savedPublic = (channel.configPublic as Record<string, unknown> | null) ?? {};
+  const savedBrandCode = typeof savedPublic.brandCode === 'string' ? savedPublic.brandCode : '';
+  const savedIysDefault = savedPublic.iysDefault === 'TICARI' ? 'TICARI' : 'BILGILENDIRME';
+  const registered = savedPublic.iysWebhookRegistered === true;
+
+  const [brandCode, setBrandCode] = useState(savedBrandCode);
+  const [iysDefault, setIysDefault] = useState<string>(savedIysDefault);
+
+  const save = useMutation({
+    mutationFn: () =>
+      marketingApi.patch(`/channels/${channel.id}`, {
+        configPublic: { ...savedPublic, brandCode: brandCode.trim(), iysDefault },
+      }),
+    onSuccess: () => {
+      onSaved();
+      toast.success(t('channels.iysSaved', 'İYS settings saved'));
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('channels.iysSaveFailed', 'Could not save İYS settings')),
+  });
+
+  const registerWebhook = useMutation({
+    mutationFn: () => marketingApi.post(`/channels/${channel.id}/iys/register-webhook`),
+    onSuccess: () => {
+      onSaved();
+      toast.success(t('channels.iysWebhookRegistered', 'İYS webhook registered with NetGSM'));
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('channels.iysWebhookFailed', 'Could not register the İYS webhook')),
+  });
+
+  const dirty = brandCode.trim() !== savedBrandCode || iysDefault !== savedIysDefault;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-caption text-muted-foreground">
+          {t('channels.iysTitle', 'İYS (İleti Yönetim Sistemi)')}
+        </span>
+        <Badge tone={registered ? 'success' : 'neutral'} size="sm">
+          {registered
+            ? t('channels.iysWebhookOk', 'Webhook registered')
+            : t('channels.iysWebhookNotRegistered', 'Webhook not registered')}
+        </Badge>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label={t('channels.iysBrandCode', 'İYS Marka Kodu')} className="w-48">
+          {({ id }) => (
+            <Input
+              id={id}
+              placeholder={t('channels.iysBrandCodePlaceholder', 'Marka kodu')}
+              value={brandCode}
+              onChange={(e) => setBrandCode(e.target.value)}
+            />
+          )}
+        </Field>
+        <Field label={t('channels.iysDefault', 'Varsayılan mesaj türü')} className="w-56">
+          {({ id }) => (
+            <Select value={iysDefault} onValueChange={setIysDefault}>
+              <SelectTrigger id={id}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="BILGILENDIRME">{t('channels.iysBilgilendirme', 'Bilgilendirme')}</SelectItem>
+                <SelectItem value="TICARI">{t('channels.iysTicari', 'Ticari')}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <Button size="sm" variant="outline" onClick={() => save.mutate()} loading={save.isPending} disabled={!dirty}>
+          {t('common.save', 'Save')}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => registerWebhook.mutate()}
+          loading={registerWebhook.isPending}
+          disabled={!brandCode.trim()}
+        >
+          {t('channels.iysRegisterWebhook', "İYS webhook'unu kaydet")}
+        </Button>
+      </div>
+      <p className="text-caption text-muted-foreground">
+        {t(
+          'channels.iysHelp',
+          "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir.",
+        )}
+      </p>
     </div>
   );
 }

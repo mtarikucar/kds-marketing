@@ -155,4 +155,73 @@ describe('ChannelsSettingsPage', () => {
       expect(toast.error).not.toHaveBeenCalled();
     });
   });
+
+  /**
+   * NetGSM Phase 2 Task 6 — the SMS channel card's İYS section: brandCode +
+   * default message-type fields (persisted via the existing PATCH
+   * /channels/:id path, merged client-side onto configPublic) and the
+   * register-webhook action (POST /channels/:id/iys/register-webhook,
+   * bundled free with `campaigns` — a 403 there just surfaces as a toast,
+   * same as any other save failure).
+   */
+  describe('SMS channel card — İYS section', () => {
+    async function renderSmsCard(configPublic: Record<string, unknown> = {}) {
+      const marketingApi = (await import('../../features/marketing/api/marketingApi')).default as any;
+      marketingApi.get.mockImplementation((url: string) =>
+        url === '/channels'
+          ? Promise.resolve({
+              data: [
+                { id: 'ch1', type: 'SMS', name: 'SMS line', status: 'ACTIVE', configuredSecrets: ['usercode'], configPublic, agentProfileId: null },
+              ],
+            })
+          : Promise.resolve({ data: [] }),
+      );
+      render(<ChannelsSettingsPage />, { wrapper });
+      await screen.findByText('SMS line');
+      return marketingApi;
+    }
+
+    it('shows "not registered" and disables the register button when brandCode is blank', async () => {
+      await renderSmsCard({});
+      expect(screen.getByText('Webhook not registered')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /kaydet/i })).toBeDisabled();
+    });
+
+    it('shows "registered" once configPublic.iysWebhookRegistered is stamped true', async () => {
+      await renderSmsCard({ brandCode: 'BRAND1', iysWebhookRegistered: true });
+      expect(screen.getByText('Webhook registered')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /kaydet/i })).not.toBeDisabled();
+    });
+
+    it('registers the webhook and shows a success toast', async () => {
+      const marketingApi = await renderSmsCard({ brandCode: 'BRAND1' });
+      marketingApi.post.mockResolvedValue({ data: { ok: true } });
+      await userEvent.click(screen.getByRole('button', { name: /kaydet/i }));
+      expect(marketingApi.post).toHaveBeenCalledWith('/channels/ch1/iys/register-webhook');
+      expect(toast.success).toHaveBeenCalledWith('İYS webhook registered with NetGSM');
+    });
+
+    it('surfaces a 403 (workspace lacks campaigns) as an error toast, not a crash', async () => {
+      const marketingApi = await renderSmsCard({ brandCode: 'BRAND1' });
+      marketingApi.post.mockRejectedValue({ response: { data: { message: 'This feature requires a higher package' } } });
+      await userEvent.click(screen.getByRole('button', { name: /kaydet/i }));
+      expect(toast.error).toHaveBeenCalledWith('This feature requires a higher package');
+    });
+
+    it('saves brandCode + iysDefault by merging onto the existing configPublic (never clobbering iysWebhookRegistered)', async () => {
+      const marketingApi = await renderSmsCard({ iysWebhookRegistered: true, lastMoPollRecovery: '2026-01-01T00:00:00.000Z' });
+      const input = screen.getByPlaceholderText('Marka kodu');
+      await userEvent.type(input, 'BRAND9');
+      const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+      await userEvent.click(saveButtons[0]);
+      expect(marketingApi.patch).toHaveBeenCalledWith('/channels/ch1', {
+        configPublic: {
+          iysWebhookRegistered: true,
+          lastMoPollRecovery: '2026-01-01T00:00:00.000Z',
+          brandCode: 'BRAND9',
+          iysDefault: 'BILGILENDIRME',
+        },
+      });
+    });
+  });
 });
