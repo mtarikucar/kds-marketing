@@ -54,7 +54,12 @@ export class NetgsmCdrClient {
     try {
       ({ body } = await this.fetchRaw(creds, startdate, stopdate));
     } catch (e: any) {
-      this.logger.warn(`netgsm CDR fetch failed: ${e?.message ?? e}`);
+      // A transport error's message can echo the POST body (usercode/password).
+      // Scrub both cred values before logging — mirrors NetsantralClient.
+      const scrubbed = String(e?.message ?? e)
+        .split(creds.password).join('***')
+        .split(creds.usercode).join('***');
+      this.logger.warn(`netgsm CDR fetch failed: ${scrubbed}`);
       return [];
     }
     if (!body) return [];

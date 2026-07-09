@@ -102,7 +102,13 @@ export class NetgsmStatisticsClient {
     try {
       ({ body } = await this.fetchRaw(creds, params));
     } catch (e: any) {
-      this.logger.warn(`netgsm statistics fetch failed: ${e?.message ?? e}`);
+      // A transport error's message can echo the POST body (usercode/password).
+      // Scrub both cred values before logging — mirrors NetsantralClient.
+      const raw = String(e?.message ?? e);
+      const scrubbed = raw
+        .split(creds.password).join('***')
+        .split(creds.usercode).join('***');
+      this.logger.warn(`netgsm statistics fetch failed: ${scrubbed}`);
       return empty(params.mode, 'Netsantral statistics request failed');
     }
     if (!body) return empty(params.mode, 'Netsantral returned an empty response');
