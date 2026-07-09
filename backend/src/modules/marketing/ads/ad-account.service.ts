@@ -16,6 +16,7 @@ import { pullTiktokInsights } from './tiktok-ads.client';
 import { pullLinkedinInsights } from './linkedin-ads.client';
 import { pullGoogleInsights } from './google-ads.client';
 import { isGoogleAuthError } from './google-ads.util';
+import { pullMetaBreakdowns, AdBreakdownRow } from './meta-ads-breakdown.client';
 import {
   isMetaAdsConfigured,
   isTiktokAdsConfigured,
@@ -292,7 +293,140 @@ export class AdAccountService {
       await this.markError(account.id, (e as Error).message?.slice(0, 1000) ?? 'metric write failed');
       return 0;
     }
+    // Granular ad-level breakdowns (Meta only) → the separate reporting table.
+    // Best-effort: a breakdown failure never fails the campaign-metric pull above.
+    if (account.provider === 'META') {
+      try {
+        await this.pullBreakdowns(account, token, from, to);
+      } catch (e) {
+        this.logger.warn(`breakdown pull failed for ${account.id}: ${(e as Error).message ?? e}`);
+      }
+    }
     return rows.length;
+  }
+
+  /** Pull Meta level=ad placement+demographic breakdowns → ad_metric_breakdowns. */
+  private async pullBreakdowns(
+    account: { id: string; workspaceId: string; externalAdId: string },
+    token: string,
+    from: string,
+    to: string,
+  ): Promise<void> {
+    const rows: AdBreakdownRow[] = await pullMetaBreakdowns(token, account.externalAdId, from, to);
+    for (const r of rows) {
+      const date = new Date(`${r.date}T00:00:00.000Z`);
+      if (Number.isNaN(date.getTime())) continue;
+      const data = {
+        adAccountId: account.id,
+        date,
+        level: r.level,
+        campaignId: r.campaignId ?? '',
+        adSetId: r.adSetId ?? '',
+        adSetName: r.adSetName ?? null,
+        adId: r.adId ?? '',
+        adName: r.adName ?? null,
+        placement: r.placement ?? '',
+        breakdownType: r.breakdownType ?? '',
+        breakdownValue: r.breakdownValue ?? '',
+        spend: new Prisma.Decimal(r.spend ?? 0),
+        impressions: r.impressions ?? 0,
+        clicks: r.clicks ?? 0,
+        leads: r.leads ?? 0,
+        conversionValue: new Prisma.Decimal(r.conversionValue ?? 0),
+        leads1dClick: r.leads1dClick ?? 0,
+        leads7dClick: r.leads7dClick ?? 0,
+        leads1dView: r.leads1dView ?? 0,
+        convValue1dClick: new Prisma.Decimal(r.convValue1dClick ?? 0),
+        convValue7dClick: new Prisma.Decimal(r.convValue7dClick ?? 0),
+        convValue1dView: new Prisma.Decimal(r.convValue1dView ?? 0),
+      };
+      await this.prisma.adMetricBreakdown.upsert({
+        where: {
+          adBreakdown_dim: {
+            adAccountId: account.id,
+            date,
+            campaignId: data.campaignId,
+            adSetId: data.adSetId,
+            adId: data.adId,
+            placement: data.placement,
+            breakdownType: data.breakdownType,
+            breakdownValue: data.breakdownValue,
+          },
+        },
+        // workspaceId inlined here (not on the hoisted `data`) so the arch-fitness
+        // scanner sees the scope literal.
+        create: { workspaceId: account.workspaceId, ...data },
+        update: { ...data, pulledAt: new Date() },
+      });
+    }
+  }
+
+  /**
+   * Aggregated ad-level breakdown for a workspace over a date range, grouped by a
+   * dimension (ad | adset | placement | age | gender | region | country) with an
+   * optional attribution-window view (default | 1d_click | 7d_click | 1d_view).
+   */
+  async getBreakdown(
+    workspaceId: string,
+    from: string,
+    to: string,
+    q: { provider?: string; dimension: string; window?: string; campaignId?: string; adSetId?: string },
+  ) {
+    const accounts = await this.prisma.adAccount.findMany({
+      where: { workspaceId, ...(q.provider ? { provider: q.provider } : {}) },
+      select: { id: true },
+    });
+    const ids = accounts.map((a) => a.id);
+    if (ids.length === 0) return { dimension: q.dimension, window: q.window ?? 'default', rows: [] };
+
+    // workspaceId is inlined in the findMany call below (not on this hoisted
+    // filter) so the multi-tenant arch-fitness scanner sees the scope literal.
+    const filter: Prisma.AdMetricBreakdownWhereInput = {
+      adAccountId: { in: ids },
+      date: { gte: new Date(from), lte: new Date(to) },
+      ...(q.campaignId ? { campaignId: q.campaignId } : {}),
+      ...(q.adSetId ? { adSetId: q.adSetId } : {}),
+    };
+    const demo = ['age', 'gender', 'region', 'country'];
+    if (q.dimension === 'placement') filter.placement = { not: '' };
+    else if (demo.includes(q.dimension)) filter.breakdownType = q.dimension;
+
+    const rows = await this.prisma.adMetricBreakdown.findMany({ where: { workspaceId, ...filter } });
+
+    // Group by the dimension key; accumulate money in cents (float-drift-safe).
+    const keyOf = (r: (typeof rows)[number]): { key: string; label: string } => {
+      switch (q.dimension) {
+        case 'placement': return { key: r.placement, label: r.placement };
+        case 'adset': return { key: r.adSetId, label: r.adSetName ?? r.adSetId };
+        case 'ad': return { key: r.adId, label: r.adName ?? r.adId };
+        default: return { key: r.breakdownValue, label: r.breakdownValue };
+      }
+    };
+    const win = q.window ?? 'default';
+    const groups = new Map<string, { label: string; spendCents: number; impressions: number; clicks: number; leads: number; revenueCents: number }>();
+    for (const r of rows) {
+      const { key, label } = keyOf(r);
+      const g = groups.get(key) ?? { label, spendCents: 0, impressions: 0, clicks: 0, leads: 0, revenueCents: 0 };
+      g.spendCents += Math.round(Number(r.spend) * 100);
+      g.impressions += r.impressions;
+      g.clicks += r.clicks;
+      g.leads += win === '1d_click' ? r.leads1dClick : win === '7d_click' ? r.leads7dClick : win === '1d_view' ? r.leads1dView : r.leads;
+      const cv = win === '1d_click' ? r.convValue1dClick : win === '7d_click' ? r.convValue7dClick : win === '1d_view' ? r.convValue1dView : r.conversionValue;
+      g.revenueCents += Math.round(Number(cv) * 100);
+      groups.set(key, g);
+    }
+    const out = [...groups.entries()].map(([key, g]) => ({
+      key,
+      label: g.label,
+      spend: g.spendCents / 100,
+      impressions: g.impressions,
+      clicks: g.clicks,
+      leads: g.leads,
+      revenue: g.revenueCents / 100,
+      roas: g.spendCents > 0 ? g.revenueCents / g.spendCents : 0,
+    }));
+    out.sort((a, b) => b.spend - a.spend);
+    return { dimension: q.dimension, window: win, rows: out };
   }
 
   /** True when the provider's app credentials are present (platform-enabled). */

@@ -42,3 +42,14 @@ export class AdMetricsQueryDto {
 export class PullAdAccountDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(90) days?: number;
 }
+
+/** Granular ad-report breakdown query: a dimension + optional attribution window. */
+export class AdBreakdownQueryDto {
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsString() @IsIn(['META', 'TIKTOK', 'LINKEDIN', 'GOOGLE']) provider?: string;
+  @IsString() @IsIn(['ad', 'adset', 'placement', 'age', 'gender', 'region', 'country']) dimension: string;
+  @IsOptional() @IsString() @IsIn(['default', '1d_click', '7d_click', '1d_view']) window?: string;
+  @IsOptional() @IsString() @MaxLength(64) campaignId?: string;
+  @IsOptional() @IsString() @MaxLength(64) adSetId?: string;
+}

@@ -17,6 +17,9 @@ import {
   getAdStatus,
   listAdAccounts,
   getAdMetrics,
+  getAdBreakdown,
+  type AdBreakdownDimension,
+  type AdBreakdownWindow,
   connectAdAccount,
   removeAdAccount,
   pullAdAccount,
@@ -349,18 +352,28 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
       </div>
 
       {view === 'overview' ? (
-        <OverviewView
-          isLoading={metricsLoading}
-          noAccounts={noAccounts}
-          totals={totals}
-          ctr={ctr}
-          cpl={cpl}
-          currency={currency}
-          byDay={metrics?.byDay ?? []}
-          byProvider={metrics?.byProvider ?? {}}
-          onGoToAccounts={() => setView('accounts')}
-          canConnect={canConnect}
-        />
+        <div className="space-y-5">
+          <OverviewView
+            isLoading={metricsLoading}
+            noAccounts={noAccounts}
+            totals={totals}
+            ctr={ctr}
+            cpl={cpl}
+            currency={currency}
+            byDay={metrics?.byDay ?? []}
+            byProvider={metrics?.byProvider ?? {}}
+            onGoToAccounts={() => setView('accounts')}
+            canConnect={canConnect}
+          />
+          {!noAccounts && (
+            <BreakdownCard
+              from={isoDaysAgo(Number(range))}
+              to={todayIso()}
+              provider={provider === 'ALL' ? undefined : provider}
+              currency={currency}
+            />
+          )}
+        </div>
       ) : view === 'accounts' ? (
         <AccountsView
           accounts={accounts}
@@ -418,6 +431,99 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
         loading={disconnectMutation.isPending}
       />
     </div>
+  );
+}
+
+// ── Breakdown (creative / adset / placement / demographic) ──────────────────────
+
+const BREAKDOWN_DIMS: AdBreakdownDimension[] = ['ad', 'adset', 'placement', 'age', 'gender', 'region', 'country'];
+const BREAKDOWN_WINDOWS: AdBreakdownWindow[] = ['default', '1d_click', '7d_click', '1d_view'];
+
+function BreakdownCard({
+  from,
+  to,
+  provider,
+  currency,
+}: {
+  from: string;
+  to: string;
+  provider?: AdProvider;
+  currency: ReturnType<typeof asWorkspaceCurrency>;
+}) {
+  const { t } = useTranslation('marketing');
+  const [dimension, setDimension] = useState<AdBreakdownDimension>('placement');
+  const [win, setWin] = useState<AdBreakdownWindow>('default');
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['marketing', 'ads', 'breakdown', from, to, provider, dimension, win],
+    queryFn: () => getAdBreakdown({ from, to, provider, dimension, window: win }),
+  });
+  const rows = data?.rows ?? [];
+
+  return (
+    <Card className="p-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <h3 className="text-sm font-medium text-foreground">
+          {t('ads.breakdown.title', { defaultValue: 'Breakdown' })}
+        </h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={dimension}
+            onChange={(e) => setDimension(e.target.value as AdBreakdownDimension)}
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs"
+            aria-label={t('ads.breakdown.dimension', { defaultValue: 'Dimension' })}
+          >
+            {BREAKDOWN_DIMS.map((d) => (
+              <option key={d} value={d}>{t(`ads.breakdown.dim.${d}`, { defaultValue: d })}</option>
+            ))}
+          </select>
+          <select
+            value={win}
+            onChange={(e) => setWin(e.target.value as AdBreakdownWindow)}
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs"
+            aria-label={t('ads.breakdown.window', { defaultValue: 'Attribution window' })}
+          >
+            {BREAKDOWN_WINDOWS.map((w) => (
+              <option key={w} value={w}>{t(`ads.breakdown.win.${w}`, { defaultValue: w })}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="p-4"><Skeleton className="h-24" /></div>
+      ) : rows.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+          {t('ads.breakdown.empty', { defaultValue: 'No breakdown rows in this range (Meta only, after the next metrics pull).' })}
+        </div>
+      ) : (
+        <Table>
+          <THead>
+            <TR>
+              <TH>{t('ads.breakdown.name', { defaultValue: 'Name' })}</TH>
+              <TH className="text-right">{t('ads.stat.spend', { defaultValue: 'Spend' })}</TH>
+              <TH className="text-right">{t('ads.stat.impressions', { defaultValue: 'Impressions' })}</TH>
+              <TH className="text-right">{t('ads.stat.clicks', { defaultValue: 'Clicks' })}</TH>
+              <TH className="text-right">{t('ads.stat.leads', { defaultValue: 'Leads' })}</TH>
+              <TH className="text-right">{t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}</TH>
+              <TH className="text-right">{t('ads.stat.roas', { defaultValue: 'ROAS' })}</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {rows.map((r) => (
+              <TR key={r.key || r.label}>
+                <TD className="max-w-[220px] truncate" title={r.label}>{r.label || '—'}</TD>
+                <TD className="text-right tabular-nums">{formatMoney(r.spend, currency)}</TD>
+                <TD className="text-right tabular-nums">{fmtInt(r.impressions)}</TD>
+                <TD className="text-right tabular-nums">{fmtInt(r.clicks)}</TD>
+                <TD className="text-right tabular-nums">{fmtInt(r.leads)}</TD>
+                <TD className="text-right tabular-nums">{r.revenue > 0 ? formatMoney(r.revenue, currency) : '—'}</TD>
+                <TD className="text-right tabular-nums">{fmtRoas(r.roas)}</TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      )}
+    </Card>
   );
 }
 

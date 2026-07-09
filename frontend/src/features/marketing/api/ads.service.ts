@@ -71,6 +71,37 @@ export const listAdAccounts = (): Promise<AdAccount[]> =>
 export const getAdMetrics = (q: AdMetricsQuery = {}): Promise<AdMetricsResponse> =>
   marketingApi.get('/ads/metrics', { params: q }).then((r) => r.data);
 
+/** One aggregated row of a granular ad breakdown (by placement / demographic / creative). */
+export interface AdBreakdownRow {
+  key: string;
+  label: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  revenue: number;
+  roas: number;
+}
+
+export type AdBreakdownDimension = 'ad' | 'adset' | 'placement' | 'age' | 'gender' | 'region' | 'country';
+export type AdBreakdownWindow = 'default' | '1d_click' | '7d_click' | '1d_view';
+
+export interface AdBreakdownResponse {
+  dimension: AdBreakdownDimension;
+  window: AdBreakdownWindow;
+  rows: AdBreakdownRow[];
+}
+
+export interface AdBreakdownQuery extends AdMetricsQuery {
+  dimension: AdBreakdownDimension;
+  window?: AdBreakdownWindow;
+  campaignId?: string;
+  adSetId?: string;
+}
+
+export const getAdBreakdown = (q: AdBreakdownQuery): Promise<AdBreakdownResponse> =>
+  marketingApi.get('/ads/metrics/breakdown', { params: q }).then((r) => r.data);
+
 export const connectAdAccount = (payload: ConnectAdAccountPayload): Promise<AdAccount> =>
   marketingApi.post('/ads/accounts', payload).then((r) => r.data);
 

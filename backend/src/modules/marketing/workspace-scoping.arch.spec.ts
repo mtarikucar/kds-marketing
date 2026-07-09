@@ -165,6 +165,8 @@ const OWNED_DELEGATES = [
   'adRuleLog',
   // CRM segment → Meta Custom Audience sync state (one row per segment+account).
   'segmentAudienceSync',
+  // Granular ad-level breakdown metrics (reporting-only, separate from AdMetric).
+  'adMetricBreakdown',
   // Custom Objects (GHL parity): workspace-defined record types, their records,
   // and record↔Contact links are all workspace-owned.
   'customObjectDef',

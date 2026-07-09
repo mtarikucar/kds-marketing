@@ -3797,6 +3797,46 @@ model AdMetric {
   @@map("ad_metrics")
 }
 
+/// Granular ad-level metrics (creative/adset × placement OR demographic) with
+/// per-attribution-window conversion figures. Kept in a SEPARATE table from
+/// AdMetric so the campaign-day rollup the budget autopilot reads stays
+/// untouched (no double-counting) — these rows are read only by the reporting
+/// breakdown view. Meta-only today (level='ad').
+model AdMetricBreakdown {
+  id               String   @id @default(uuid())
+  workspaceId      String
+  adAccountId      String
+  date             DateTime @db.Date // UTC day
+  level            String   @default("ad")
+  campaignId       String   @default("")
+  adSetId          String   @default("")
+  adSetName        String?
+  adId             String   @default("")
+  adName           String?
+  /// `${publisher_platform}:${platform_position}` for placement rows; '' otherwise.
+  placement        String   @default("")
+  /// '' on placement rows; 'age'|'gender'|'region'|'country' on demographic rows.
+  breakdownType    String   @default("")
+  breakdownValue   String   @default("")
+  spend            Decimal  @default(0) @db.Decimal(14, 2)
+  impressions      Int      @default(0)
+  clicks           Int      @default(0)
+  leads            Int      @default(0)
+  conversionValue  Decimal  @default(0) @db.Decimal(14, 2)
+  leads1dClick     Int      @default(0)
+  leads7dClick     Int      @default(0)
+  leads1dView      Int      @default(0)
+  convValue1dClick Decimal  @default(0) @db.Decimal(14, 2)
+  convValue7dClick Decimal  @default(0) @db.Decimal(14, 2)
+  convValue1dView  Decimal  @default(0) @db.Decimal(14, 2)
+  pulledAt         DateTime @default(now())
+
+  @@unique([adAccountId, date, campaignId, adSetId, adId, placement, breakdownType, breakdownValue], name: "adBreakdown_dim")
+  @@index([workspaceId, date])
+  @@index([adAccountId, campaignId, date])
+  @@map("ad_metric_breakdowns")
+}
+
 /// An automated ad-scaling rule (Meta only). The hourly evaluator computes
 /// `metric` over the trailing `windowDays` per campaign and, when the condition
 /// holds (respecting per-campaign `cooldownHours`), applies `action`:

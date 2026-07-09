@@ -5,6 +5,10 @@ import * as tiktokClient from './tiktok-ads.client';
 import * as linkedinClient from './linkedin-ads.client';
 import * as adsTypes from './ads.types';
 import * as secretBox from '../../../common/crypto/secret-box.helper';
+import { pullMetaBreakdowns } from './meta-ads-breakdown.client';
+
+jest.mock('./meta-ads-breakdown.client', () => ({ pullMetaBreakdowns: jest.fn().mockResolvedValue([]) }));
+const mockBreakdownPull = pullMetaBreakdowns as jest.Mock;
 
 const WS = 'ws-1';
 
@@ -21,6 +25,10 @@ function makePrisma() {
       findMany: jest.fn(),
       upsert: jest.fn(),
       updateMany: jest.fn(),
+    },
+    adMetricBreakdown: {
+      findMany: jest.fn().mockResolvedValue([]),
+      upsert: jest.fn().mockResolvedValue({}),
     },
   };
 }
@@ -43,6 +51,41 @@ describe('AdAccountService', () => {
     prisma.adAccount.delete.mockResolvedValue({});
     prisma.adMetric.upsert.mockResolvedValue({});
     prisma.adMetric.updateMany.mockResolvedValue({ count: 0 });
+    mockBreakdownPull.mockReset().mockResolvedValue([]);
+  });
+
+  describe('getBreakdown', () => {
+    it('groups by placement with a recomputed ROAS and window-aware leads', async () => {
+      prisma.adAccount.findMany.mockResolvedValue([{ id: 'a1' }]);
+      prisma.adMetricBreakdown.findMany.mockResolvedValue([
+        { placement: 'facebook:feed', adSetId: '', adSetName: null, adId: '', adName: null, breakdownValue: '', spend: '10.00', impressions: 100, clicks: 5, leads: 2, conversionValue: '40.00', leads1dClick: 1, leads7dClick: 2, leads1dView: 0, convValue1dClick: '20.00', convValue7dClick: '40.00', convValue1dView: '0' },
+        { placement: 'facebook:feed', adSetId: '', adSetName: null, adId: '', adName: null, breakdownValue: '', spend: '10.00', impressions: 50, clicks: 3, leads: 1, conversionValue: '20.00', leads1dClick: 1, leads7dClick: 1, leads1dView: 0, convValue1dClick: '10.00', convValue7dClick: '20.00', convValue1dView: '0' },
+      ]);
+      const res = await svc.getBreakdown(WS, '2026-06-01', '2026-06-30', { dimension: 'placement' });
+      expect(res.rows).toHaveLength(1);
+      expect(res.rows[0]).toMatchObject({ key: 'facebook:feed', spend: 20, leads: 3, revenue: 60, roas: 3 });
+      // The findMany filter is workspace-scoped and placement-only.
+      const where = prisma.adMetricBreakdown.findMany.mock.calls[0][0].where;
+      expect(where.workspaceId).toBe(WS);
+      expect(where.placement).toEqual({ not: '' });
+    });
+
+    it('uses the 7d_click window figures when requested', async () => {
+      prisma.adAccount.findMany.mockResolvedValue([{ id: 'a1' }]);
+      prisma.adMetricBreakdown.findMany.mockResolvedValue([
+        { placement: '', adSetId: '', adSetName: null, adId: '', adName: null, breakdownType: 'age', breakdownValue: '25-34', spend: '10.00', impressions: 100, clicks: 5, leads: 9, conversionValue: '90.00', leads1dClick: 3, leads7dClick: 7, leads1dView: 0, convValue1dClick: '30.00', convValue7dClick: '70.00', convValue1dView: '0' },
+      ]);
+      const res = await svc.getBreakdown(WS, '2026-06-01', '2026-06-30', { dimension: 'age', window: '7d_click' });
+      expect(res.rows[0]).toMatchObject({ key: '25-34', leads: 7, revenue: 70 });
+      expect(prisma.adMetricBreakdown.findMany.mock.calls[0][0].where.breakdownType).toBe('age');
+    });
+
+    it('returns empty when the workspace has no ad accounts', async () => {
+      prisma.adAccount.findMany.mockResolvedValue([]);
+      const res = await svc.getBreakdown(WS, '2026-06-01', '2026-06-30', { dimension: 'ad' });
+      expect(res.rows).toEqual([]);
+      expect(prisma.adMetricBreakdown.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('connect', () => {

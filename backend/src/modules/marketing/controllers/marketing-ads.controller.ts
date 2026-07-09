@@ -23,6 +23,7 @@ import { AdManagementService } from '../ads/ad-management.service';
 import {
   ConnectAdAccountDto,
   AdMetricsQueryDto,
+  AdBreakdownQueryDto,
   PullAdAccountDto,
 } from '../dto/ad-account.dto';
 
@@ -103,6 +104,20 @@ export class MarketingAdsController {
     const from =
       q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
     return this.adAccounts.getMetrics(a.workspaceId, from, to, q.provider);
+  }
+
+  @Get('metrics/breakdown')
+  @RequirePermission('reports.read')
+  breakdown(@CurrentMarketingUser() a: MarketingUserPayload, @Query() q: AdBreakdownQueryDto) {
+    const to = q.to ?? new Date().toISOString().slice(0, 10);
+    const from = q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    return this.adAccounts.getBreakdown(a.workspaceId, from, to, {
+      provider: q.provider,
+      dimension: q.dimension,
+      window: q.window,
+      campaignId: q.campaignId,
+      adSetId: q.adSetId,
+    });
   }
 
   @Post('accounts')
