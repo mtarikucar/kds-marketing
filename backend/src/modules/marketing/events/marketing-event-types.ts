@@ -92,6 +92,15 @@ export const MarketingEventTypes = {
   // recognize — and never re-enqueue — an İYS-ORIGINATED change (would
   // otherwise be a feedback loop back to İYS).
   IysConsentReceived: "marketing.iys.consent.v1",
+
+  // Santral live call event (NetGSM Phase 3 Task 1) — one event per NEW
+  // call-event element the unified public receiver (NetgsmEventsController's
+  // `events` route, hub-owned) normalizes from a santral scenario push
+  // (Inbound_call/Answer/Hangup/cdr). An element whose scenario doesn't
+  // normalize is archived for audit but never published, same fail-closed
+  // treatment as IysConsentReceived above. The telephony consumer (Phase 3
+  // Task 2) subscribes to write INBOUND/missed SalesCall rows + screen-pop.
+  CallEvent: "marketing.telephony.call_event.v1",
 } as const;
 
 export type MarketingEventType =
@@ -242,4 +251,30 @@ export interface MarketingIysConsentPayload {
   /** İYS source code as reported by the push (e.g. HS_WEB, HS_MESAJ). */
   source: string;
   transactionId: string;
+}
+
+export type SantralCallEventKind = 'inbound_call' | 'answer' | 'hangup' | 'cdr';
+
+/**
+ * Santral live call event (marketing.telephony.call_event.v1). Emitted once
+ * per NEW call-event element the unified NetGSM webhook receiver (the hub's
+ * `events` route) normalizes from a santral scenario push. Mirrors
+ * `SantralEvent` from
+ * `netgsm/webhooks/santral-event-normalizer.ts` — kept as an independent
+ * interface (not imported) so marketing's event registry never takes a
+ * compile-time dependency on the netgsm hub module, the same reasoning as
+ * MarketingIysConsentPayload above.
+ */
+export interface MarketingCallEventPayload {
+  workspaceId: string;
+  kind: SantralCallEventKind;
+  uniqueId: string | null;
+  crmId: string | null;
+  customerNum: string | null;
+  internalNum: string | null;
+  direction: 'INBOUND' | 'OUTBOUND' | null;
+  status: string | null;
+  recording: string | null;
+  durationSec: number | null;
+  raw: object;
 }

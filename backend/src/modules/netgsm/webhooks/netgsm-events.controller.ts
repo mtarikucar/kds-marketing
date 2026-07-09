@@ -2,6 +2,13 @@ import { Body, Controller, HttpCode, Logger, NotFoundException, Param, Post } fr
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { payloadDigest, verifyNetgsmWebhookToken } from './netgsm-webhook.util';
+import { normalizeSantralEvent } from './santral-event-normalizer';
+
+type WebhookPurpose = 'events' | 'iys';
+interface WebhookRow {
+  el: Record<string, unknown>;
+  externalId: string;
+}
 
 /**
  * Unified public receiver for NetGSM pushes (santral events, İYS, voice/
@@ -19,6 +26,23 @@ export class NetgsmEventsController {
     private readonly outbox: OutboxService,
   ) {}
 
+  /**
+   * Santral live call events (Phase 3 Task 1). NetGSM's Netsantral usually
+   * pushes ONE scenario object per call leg, but the body may also arrive as
+   * an array (a lone object is wrapped as a one-element array so both shapes
+   * reuse the exact same fan-out path as the `iys` route below).
+   *
+   * Archive-then-normalize, same layering as `iys`: every element is
+   * archived regardless (raw payload kept for audit + as the CDR
+   * reconciliation backstop), but only elements that are BOTH new (not
+   * already archived by a previous delivery) AND normalize to a recognized
+   * scenario (`normalizeSantralEvent` — Inbound_call/Answer/Hangup/cdr) are
+   * published as a typed `marketing.telephony.call_event.v1` outbox event.
+   * An unrecognized scenario is archived but never published — the hub
+   * still doesn't know what the future scenario means, so it must never
+   * synthesize a typed event for it (same fail-closed shape as İYS's
+   * unknown-status/type skip below).
+   */
   @Post(':workspaceId/:token/events')
   @HttpCode(202)
   async events(
@@ -27,19 +51,32 @@ export class NetgsmEventsController {
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
     if (!verifyNetgsmWebhookToken(workspaceId, 'events', token)) throw new NotFoundException();
-    const b = (body ?? {}) as Record<string, unknown>;
-    const externalId =
-      (typeof b.unique_id === 'string' && b.unique_id) ||
-      (typeof b.uniqueid === 'string' && b.uniqueid) ||
-      payloadDigest(body);
-    // Duplicate delivery — first archive row wins. skipDuplicates emits a
-    // native ON CONFLICT DO NOTHING, so a concurrent NetGSM retry is a clean
-    // no-op instead of a P2002 500 (Prisma EMULATES upsert for this compound
-    // key + empty-update shape, which loses the insert race).
-    await this.prisma.netgsmWebhookEvent.createMany({
-      data: [{ workspaceId, purpose: 'events', externalId, payload: (body ?? {}) as object }],
-      skipDuplicates: true,
+    const elements = Array.isArray(body) ? body : [body ?? {}];
+    if (elements.length === 0) return { ok: true };
+
+    const rows: WebhookRow[] = elements.map((raw) => {
+      const el = (raw ?? {}) as Record<string, unknown>;
+      const externalId = this.stringField(el, ['unique_id', 'uniqueid']) ?? payloadDigest(el);
+      return { el, externalId };
     });
+
+    const fresh = await this.archiveFresh(workspaceId, 'events', rows);
+    if (fresh.length === 0) return { ok: true };
+
+    for (const r of fresh) {
+      const normalized = normalizeSantralEvent(r.el);
+      if (!normalized) {
+        this.logger.warn(`unrecognized santral scenario — element ${r.externalId} archived, not published`);
+        continue;
+      }
+      await this.outbox.append({
+        type: 'marketing.telephony.call_event.v1',
+        tenantId: null,
+        payload: { workspaceId, ...normalized },
+        idempotencyKey: `${workspaceId}:santral:${normalized.uniqueId ?? r.externalId}:${normalized.kind}`,
+      });
+    }
+
     return { ok: true };
   }
 
@@ -94,28 +131,15 @@ export class NetgsmEventsController {
     const elements = Array.isArray(body) ? body : [];
     if (elements.length === 0) return { ok: true };
 
-    const rows = elements.map((raw) => {
+    const rows: WebhookRow[] = elements.map((raw) => {
       const el = (raw ?? {}) as Record<string, unknown>;
       const externalId =
         this.stringField(el, ['transactionid']) ?? this.stringField(el, ['submitid']) ?? payloadDigest(el);
       return { el, externalId };
     });
 
-    // Read what's already archived for this batch BEFORE inserting — the
-    // clean way to know which rows are genuinely new (createMany's return is
-    // just a count, not which rows landed).
-    const existing = await this.prisma.netgsmWebhookEvent.findMany({
-      where: { workspaceId, purpose: 'iys', externalId: { in: rows.map((r) => r.externalId) } },
-      select: { externalId: true },
-    });
-    const existingIds = new Set(existing.map((e) => e.externalId));
-    const fresh = rows.filter((r) => !existingIds.has(r.externalId));
+    const fresh = await this.archiveFresh(workspaceId, 'iys', rows);
     if (fresh.length === 0) return { ok: true };
-
-    await this.prisma.netgsmWebhookEvent.createMany({
-      data: fresh.map((r) => ({ workspaceId, purpose: 'iys', externalId: r.externalId, payload: r.el as object })),
-      skipDuplicates: true,
-    });
 
     for (const r of fresh) {
       const statusRaw = (this.stringField(r.el, ['status', 'durum']) ?? '').toUpperCase();
@@ -155,6 +179,39 @@ export class NetgsmEventsController {
     }
 
     return { ok: true };
+  }
+
+  /**
+   * Shared read-existing→insert-missing fan-out helper for both array-shaped
+   * (`iys`) and array-or-wrapped-object-shaped (`events`) batches. `createMany`
+   * alone can't report WHICH rows were new (it only returns a count), so
+   * existing externalIds for this batch are read FIRST — only the rows that
+   * come back missing are archived AND returned to the caller for
+   * publishing. `createMany({skipDuplicates: true})` remains the insert call
+   * (the race backstop for a concurrent redelivery of the same batch); each
+   * route's own publish step is further protected by `OutboxService.append`'s
+   * idempotencyKey dedup, so even a genuine concurrent double-publish
+   * attempt collapses to one outbox row.
+   */
+  private async archiveFresh(
+    workspaceId: string,
+    purpose: WebhookPurpose,
+    rows: WebhookRow[],
+  ): Promise<WebhookRow[]> {
+    const existing = await this.prisma.netgsmWebhookEvent.findMany({
+      where: { workspaceId, purpose, externalId: { in: rows.map((r) => r.externalId) } },
+      select: { externalId: true },
+    });
+    const existingIds = new Set(existing.map((e) => e.externalId));
+    const fresh = rows.filter((r) => !existingIds.has(r.externalId));
+    if (fresh.length === 0) return [];
+
+    await this.prisma.netgsmWebhookEvent.createMany({
+      data: fresh.map((r) => ({ workspaceId, purpose, externalId: r.externalId, payload: r.el as object })),
+      skipDuplicates: true,
+    });
+
+    return fresh;
   }
 
   private stringField(obj: Record<string, unknown>, keys: string[]): string | null {

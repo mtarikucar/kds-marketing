@@ -84,6 +84,144 @@ describe('NetgsmEventsController', () => {
     await expect(controller.events('ws-1', otherToken, {})).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.netgsmWebhookEvent.createMany).not.toHaveBeenCalled();
   });
+
+  it('rejects a bad token without touching prisma.findMany or the outbox either', async () => {
+    await expect(controller.events('ws-1', 'bad-token', { unique_id: 'evt-4' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Phase 3 Task 1 — santral event normalizer + typed domain events. Santral
+ * usually pushes a single scenario object per call leg, but the fan-out
+ * dedupe (read-existing → insert-missing → publish-missing) mirrors the İYS
+ * route exactly, via the shared `archiveFresh` helper, so a lone object is
+ * wrapped as a one-element array to reuse the same path.
+ */
+describe('NetgsmEventsController — events fan-out + normalization', () => {
+  const KEY = Buffer.alloc(32, 7).toString('base64');
+  let prisma: any;
+  let outbox: any;
+  let controller: NetgsmEventsController;
+
+  beforeEach(() => {
+    process.env.MARKETING_SECRET_KEY = KEY;
+    prisma = {
+      netgsmWebhookEvent: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    outbox = { append: jest.fn().mockResolvedValue('outbox-id') };
+    controller = new NetgsmEventsController(prisma, outbox);
+  });
+
+  afterEach(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  it('a single-object body (the usual santral shape) is archived AND published as one typed call_event', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const body = {
+      scenario: 'Inbound_call',
+      unique_id: 'call-1',
+      customer_num: '905551112233',
+      internal_num: '101',
+      yon: 'INBOUND',
+    };
+
+    const res = await controller.events('ws-1', token, body);
+
+    expect(res).toEqual({ ok: true });
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'call-1', payload: body }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledWith({
+      type: 'marketing.telephony.call_event.v1',
+      tenantId: null,
+      payload: {
+        workspaceId: 'ws-1',
+        kind: 'inbound_call',
+        uniqueId: 'call-1',
+        crmId: null,
+        customerNum: '905551112233',
+        internalNum: '101',
+        direction: 'INBOUND',
+        status: null,
+        recording: null,
+        durationSec: null,
+        raw: body,
+      },
+      idempotencyKey: 'ws-1:santral:call-1:inbound_call',
+    });
+  });
+
+  it('an array body fans out: archives every element, but publishes ONLY the NEW one (the other was already archived)', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const elA = { scenario: 'Hangup', unique_id: 'evt-a', bilsec: '30' };
+    const elB = { scenario: 'Answer', unique_id: 'evt-b' };
+    // evt-a was already archived by a previous delivery — only evt-b is new.
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'evt-a' }]);
+
+    const res = await controller.events('ws-1', token, [elA, elB]);
+
+    expect(res).toEqual({ ok: true });
+    expect(prisma.netgsmWebhookEvent.findMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws-1', purpose: 'events', externalId: { in: ['evt-a', 'evt-b'] } },
+      select: { externalId: true },
+    });
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-b', payload: elB }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: 'ws-1:santral:evt-b:answer',
+        payload: expect.objectContaining({ uniqueId: 'evt-b', kind: 'answer' }),
+      }),
+    );
+  });
+
+  it('an element that fails to normalize (unrecognized scenario) is archived but never published', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const body = { scenario: 'SomeFutureScenario', unique_id: 'evt-x' };
+
+    await expect(controller.events('ws-1', token, body)).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-x', payload: body }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('when every element in the batch was already archived, nothing new is inserted or published', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const body = { scenario: 'Hangup', unique_id: 'evt-seen' };
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'evt-seen' }]);
+
+    await expect(controller.events('ws-1', token, body)).resolves.toEqual({ ok: true });
+
+    expect(prisma.netgsmWebhookEvent.createMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bad token with NotFoundException and never touches prisma or the outbox', async () => {
+    await expect(controller.events('ws-1', 'bad-token', { scenario: 'Hangup' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
+    expect(prisma.netgsmWebhookEvent.createMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
 });
 
 /**
