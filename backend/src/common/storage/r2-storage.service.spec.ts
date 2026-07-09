@@ -95,6 +95,38 @@ describe('R2StorageService', () => {
     });
   });
 
+  describe('uploadToKey', () => {
+    it('throws when not configured (no PutObjectCommand sent)', async () => {
+      delete process.env.R2_ACCOUNT_ID;
+      const svc = new R2StorageService();
+      await expect(
+        svc.uploadToKey('netgsm-recordings/ws-1/call-1.mp3', { mimetype: 'audio/mpeg', buffer: Buffer.from('x'), size: 1 }),
+      ).rejects.toThrow('R2 storage is not configured');
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('uploads to the EXACT caller-supplied key (no derived scheme) and returns url+key+mime', async () => {
+      configure();
+      sendMock.mockResolvedValue({});
+      const svc = new R2StorageService();
+      const key = 'netgsm-recordings/ws-1/call-1.mp3';
+      const res = await svc.uploadToKey(key, { mimetype: 'audio/mpeg', buffer: Buffer.from('audio-bytes'), size: 11 });
+      expect(res.key).toBe(key);
+      expect(res.mime).toBe('audio/mpeg');
+      expect(res.url).toBe(`https://cdn.example.com/${key}`);
+      const sentInput = sendMock.mock.calls[0][0].input;
+      expect(sentInput).toMatchObject({ Bucket: 'bucket', Key: key, ContentType: 'audio/mpeg' });
+    });
+
+    it('does not affect upload()\'s random-key scheme (social-planner behavior untouched)', async () => {
+      configure();
+      sendMock.mockResolvedValue({});
+      const svc = new R2StorageService();
+      const res = await svc.upload('ws-1', { mimetype: 'image/png', buffer: Buffer.from('x'), size: 1 });
+      expect(res.key).toMatch(/^social\/ws-1\/[0-9a-f-]+\.png$/);
+    });
+  });
+
   describe('deleteKeys', () => {
     it('no-ops (never calls send) when the key list is empty', async () => {
       configure();

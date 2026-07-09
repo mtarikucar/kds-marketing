@@ -78,6 +78,12 @@ import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
 import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
+// NetGSM Phase 4 Task 2 — proxy-download call recordings into R2 (stable
+// storage, independent of the provider tokenized URL's longevity) + a daily
+// retention sweep that reclaims storage past the workspace's configured
+// recordingRetentionDays.
+import { RecordingIngestService } from './telephony/recording-ingest.service';
+import { RecordingRetentionService } from './telephony/recording-retention.service';
 // NetGSM Phase 3 Task 2 — telephony event consumer (subscribes
 // marketing.telephony.call_event.v1: INBOUND/missed SalesCalls + crm_id
 // correlation for OUTBOUND hangup/cdr).
@@ -653,6 +659,9 @@ import { WalletService } from './wallet/wallet.service';
     NetgsmApiAdapter,
     TelephonyConfigService,
     CallCdrSyncService,
+    // NetGSM Phase 4 Task 2 — recording ingest (→ R2) + retention sweeps.
+    RecordingIngestService,
+    RecordingRetentionService,
     // NetGSM Phase 3 Task 5 — in-call control (hangup/transfer/mute).
     TelephonyControlService,
     // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.

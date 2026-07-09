@@ -102,6 +102,30 @@ export class R2StorageService {
     return { url: `${this.publicBase}/${key}`, key, mime: file.mimetype };
   }
 
+  /**
+   * Upload one file to a CALLER-SUPPLIED key — bypasses the
+   * `social/<workspaceId>/<uuid>.<ext>` scheme `upload()` derives internally.
+   * Used by telephony recording ingest (NetGSM Phase 4 Task 2), which needs a
+   * stable, predictable key (`netgsm-recordings/<workspaceId>/<salesCallId>.mp3`)
+   * rather than a random one, so a later re-ingest attempt targets the same
+   * object. `upload()` itself is untouched — social-planner's random-key
+   * behavior is unaffected.
+   */
+  async uploadToKey(key: string, file: UploadInput): Promise<UploadedMedia> {
+    if (!this.isConfigured()) {
+      throw new Error('R2 storage is not configured');
+    }
+    await this.getClient().send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+      }),
+    );
+    return { url: `${this.publicBase}/${key}`, key, mime: file.mimetype };
+  }
+
   /** Best-effort delete of uploaded objects (post-publish cleanup). */
   async deleteKeys(keys: string[]): Promise<void> {
     const clean = keys.filter(Boolean);
