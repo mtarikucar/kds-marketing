@@ -1769,6 +1769,16 @@
     "getSuggestions": "Get suggestions",
     "pastePlaceholder": "Paste the call transcript here…"
   },
+  "webphone": {
+    "incoming": {
+      "title": "Incoming call",
+      "unknown": "Unknown caller",
+      "noNumber": "Number withheld",
+      "accept": "Accept",
+      "reject": "Reject"
+    },
+    "bridgeToast": "Incoming call: {{caller}}"
+  },
   "voiceAiSettings": {
     "title": "Voice AI",
     "subtitle": "Voice-AI capabilities activate automatically once you buy the NetGSM add-ons and set the keys. Each capability's status and wiring URLs are shown below.",

@@ -1981,6 +1981,16 @@
     "getSuggestions": "Öneri al",
     "pastePlaceholder": "Görüşme metnini buraya yapıştırın…"
   },
+  "webphone": {
+    "incoming": {
+      "title": "Gelen çağrı",
+      "unknown": "Bilinmeyen arayan",
+      "noNumber": "Numara gizli",
+      "accept": "Kabul et",
+      "reject": "Reddet"
+    },
+    "bridgeToast": "Gelen çağrı: {{caller}}"
+  },
   "voiceAiSettings": {
     "title": "Sesli AI",
     "subtitle": "Sesli AI yetenekleri NetGSM eklentilerini satın alıp anahtarları girdiğinizde otomatik olarak aktifleşir. Aşağıda her yeteneğin durumu ve bağlantı adresleri yer alır.",
