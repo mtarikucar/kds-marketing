@@ -14,6 +14,34 @@ import {
 } from './meta-ads-management.client';
 import { setTiktokCampaignBudget, setTiktokCampaignStatus } from './tiktok-ads.client';
 import { updateLinkedinCampaign } from './linkedin-ads.client';
+import {
+  createAdSet,
+  uploadAdImage,
+  uploadAdVideo,
+  waitVideoReady,
+  createAdCreative,
+  createAd,
+} from './meta-ads-management.client';
+import { MediaGenService } from '../ai/media/media-gen.service';
+import { safeFetch } from '../../../common/util/safe-fetch';
+
+/** Launch a full Meta ad from a generated creative asset. */
+export interface LaunchAdInput {
+  generatedAssetId: string;
+  campaignId?: string;
+  campaignName?: string;
+  objective?: string;
+  adsetName: string;
+  dailyBudget: number; // major units
+  optimizationGoal: string;
+  billingEvent: string;
+  targeting: Record<string, any>;
+  link: string;
+  primaryText: string;
+  callToAction: string;
+  instagram?: boolean;
+  status?: 'PAUSED' | 'ACTIVE';
+}
 
 export type AdStatus = 'ACTIVE' | 'PAUSED';
 
@@ -41,6 +69,7 @@ export class AdManagementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly capabilities: AdWriteCapabilityService,
+    private readonly mediaGen: MediaGenService,
   ) {}
 
   /** Load a workspace-owned META ad account and decrypt its token. */
@@ -173,6 +202,99 @@ export class AdManagementService {
     const r = await this.onResult(account.id, await createCampaign(token, account.externalAdId, input));
     if (!r.ok) throw new BadRequestException(r.error ?? 'Failed to create campaign');
     return r;
+  }
+
+  /**
+   * Launch a full Meta ad end-to-end from a generated creative asset:
+   * campaign (or reuse) → ad set (targeting) → upload the creative (image bytes
+   * or video pull-from-URL, so Meta COPIES the media and the R2 url isn't
+   * load-bearing) → ad creative (object_story_spec) → ad node. Everything
+   * defaults to PAUSED so a launch never immediately spends.
+   */
+  async launchAdFromCreative(workspaceId: string, id: string, dto: LaunchAdInput) {
+    if (!(dto.dailyBudget > 0)) throw new BadRequestException('dailyBudget must be > 0');
+    const { account, token } = await this.metaAccount(workspaceId, id);
+    const pageId = await this.facebookPageId(workspaceId);
+    const asset = await this.mediaGen.getAsset(workspaceId, dto.generatedAssetId);
+    if (asset.status !== 'READY' || !asset.url) {
+      throw new BadRequestException('The creative asset is not READY');
+    }
+    const status = dto.status ?? 'PAUSED';
+    const run = async (p: Promise<MetaWriteResult>): Promise<MetaWriteResult> =>
+      this.onResult(account.id, await p);
+
+    // 1) Campaign — reuse or create.
+    let campaignId = dto.campaignId;
+    if (!campaignId) {
+      const c = await run(createCampaign(token, account.externalAdId, { name: dto.campaignName ?? dto.adsetName, objective: dto.objective ?? 'OUTCOME_TRAFFIC' }));
+      if (!c.ok || !c.id) throw new BadRequestException(c.error ?? 'Failed to create campaign');
+      campaignId = c.id;
+    }
+
+    // 2) Ad set with targeting.
+    const as = await run(createAdSet(token, account.externalAdId, {
+      name: dto.adsetName,
+      campaignId,
+      optimizationGoal: dto.optimizationGoal,
+      billingEvent: dto.billingEvent,
+      dailyBudgetCents: Math.round(dto.dailyBudget * 100),
+      targeting: dto.targeting,
+      status,
+    }));
+    if (!as.ok || !as.id) throw new BadRequestException(as.error ?? 'Failed to create ad set');
+
+    // 3) Creative — image (bytes → hash) or video (pull-from-URL → wait ready).
+    const cta = { type: dto.callToAction, value: { link: dto.link } };
+    let linkData: Record<string, any> | undefined;
+    let videoData: Record<string, any> | undefined;
+    const isVideo = asset.type === 'VIDEO' || (asset.mime ?? '').startsWith('video/');
+    if (isVideo) {
+      const up = await run(uploadAdVideo(token, account.externalAdId, asset.url, dto.adsetName));
+      if (!up.ok || !up.id) throw new BadRequestException(up.error ?? 'Failed to upload video');
+      const ready = await run(waitVideoReady(token, up.id));
+      if (!ready.ok) throw new BadRequestException(ready.error ?? 'Video did not finish processing');
+      videoData = { video_id: up.id, message: dto.primaryText, call_to_action: cta };
+    } else {
+      const bytes = await this.downloadBase64(asset.url);
+      const img = await run(uploadAdImage(token, account.externalAdId, bytes));
+      if (!img.ok || !img.id) throw new BadRequestException(img.error ?? 'Failed to upload image');
+      linkData = { message: dto.primaryText, link: dto.link, image_hash: img.id, call_to_action: cta };
+    }
+
+    // 4) Ad creative + 5) ad node.
+    const cr = await run(createAdCreative(token, account.externalAdId, {
+      name: dto.adsetName,
+      pageId,
+      instagramActorId: dto.instagram ? await this.instagramActorId(workspaceId) : undefined,
+      linkData,
+      videoData,
+    }));
+    if (!cr.ok || !cr.id) throw new BadRequestException(cr.error ?? 'Failed to create ad creative');
+
+    const ad = await run(createAd(token, account.externalAdId, { name: dto.adsetName, adsetId: as.id, creativeId: cr.id, status }));
+    if (!ad.ok || !ad.id) throw new BadRequestException(ad.error ?? 'Failed to create ad');
+
+    return { campaignId, adsetId: as.id, creativeId: cr.id, adId: ad.id, status };
+  }
+
+  /** The connected Facebook Page id (object_story_spec.page_id). */
+  private async facebookPageId(workspaceId: string): Promise<string> {
+    const acc = await this.prisma.socialAccount.findFirst({ where: { workspaceId, network: 'FACEBOOK', enabled: true }, select: { externalId: true } });
+    if (!acc) throw new BadRequestException('Connect a Facebook Page before launching an ad');
+    return acc.externalId;
+  }
+
+  private async instagramActorId(workspaceId: string): Promise<string | undefined> {
+    const acc = await this.prisma.socialAccount.findFirst({ where: { workspaceId, network: 'INSTAGRAM', enabled: true }, select: { externalId: true } });
+    return acc?.externalId;
+  }
+
+  /** SSRF-safe download of a media URL → base64 (Meta copies the bytes). */
+  private async downloadBase64(url: string): Promise<string> {
+    const res = await safeFetch(url, { method: 'GET', timeoutMs: 20_000 } as any);
+    if (!res.ok) throw new BadRequestException('Failed to fetch the creative asset');
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.toString('base64');
   }
 }
 

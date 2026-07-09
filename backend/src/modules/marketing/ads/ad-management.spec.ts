@@ -9,6 +9,9 @@ jest.mock('./meta-ads-management.client');
 jest.mock('./tiktok-ads.client');
 jest.mock('./linkedin-ads.client');
 jest.mock('../../../common/crypto/secret-box.helper', () => ({ openSecret: () => 'TOKEN' }));
+jest.mock('../../../common/util/safe-fetch', () => ({
+  safeFetch: jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }),
+}));
 
 const mClient = client as jest.Mocked<typeof client>;
 const mTiktok = tiktok as jest.Mocked<typeof tiktok>;
@@ -16,6 +19,7 @@ const mLinkedin = linkedin as jest.Mocked<typeof linkedin>;
 
 describe('AdManagementService', () => {
   let prisma: any;
+  let mediaGen: { getAsset: jest.Mock };
   let svc: AdManagementService;
 
   beforeAll(() => {
@@ -30,8 +34,12 @@ describe('AdManagementService', () => {
     for (const k of ['META_APP_ID', 'META_APP_SECRET', 'TIKTOK_BUSINESS_APP_ID', 'TIKTOK_BUSINESS_APP_SECRET', 'LINKEDIN_ADS_CLIENT_ID', 'LINKEDIN_ADS_CLIENT_SECRET']) delete process.env[k];
   });
   beforeEach(() => {
-    prisma = { adAccount: { findFirst: jest.fn(), update: jest.fn().mockResolvedValue({}) } };
-    svc = new AdManagementService(prisma, new AdWriteCapabilityService());
+    prisma = {
+      adAccount: { findFirst: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+      socialAccount: { findFirst: jest.fn().mockResolvedValue({ externalId: 'page-1' }) },
+    };
+    mediaGen = { getAsset: jest.fn() };
+    svc = new AdManagementService(prisma, new AdWriteCapabilityService(), mediaGen as any);
     jest.clearAllMocks();
   });
 
@@ -99,5 +107,57 @@ describe('AdManagementService', () => {
   it('setDailyBudget on LinkedIn without a currency is rejected', async () => {
     prisma.adAccount.findFirst.mockResolvedValue({ id: 'li', workspaceId: 'ws', provider: 'LINKEDIN', externalAdId: '512', accessToken: 'x', currency: null });
     await expect(svc.setDailyBudget('ws', 'li', 'c1', 40)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  const launchDto = () => ({
+    generatedAssetId: 'asset-1', adsetName: 'Set A', dailyBudget: 50,
+    optimizationGoal: 'LINK_CLICKS', billingEvent: 'IMPRESSIONS',
+    targeting: { geo_locations: { countries: ['TR'] } }, link: 'https://x.com',
+    primaryText: 'Buy now', callToAction: 'SHOP_NOW',
+  });
+
+  it('launchAdFromCreative builds campaign→adset→image creative→ad from a READY asset', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue(metaAcc());
+    mediaGen.getAsset.mockResolvedValue({ id: 'asset-1', status: 'READY', url: 'https://r2/img.png', type: 'IMAGE', mime: 'image/png' });
+    mClient.createCampaign.mockResolvedValue({ ok: true, id: 'cmp-1' });
+    mClient.createAdSet.mockResolvedValue({ ok: true, id: 'as-1' });
+    mClient.uploadAdImage.mockResolvedValue({ ok: true, id: 'hash-1' });
+    mClient.createAdCreative.mockResolvedValue({ ok: true, id: 'cr-1' });
+    mClient.createAd.mockResolvedValue({ ok: true, id: 'ad-1' });
+
+    const out = await svc.launchAdFromCreative('ws', 'acc', launchDto() as any);
+    expect(out).toEqual({ campaignId: 'cmp-1', adsetId: 'as-1', creativeId: 'cr-1', adId: 'ad-1', status: 'PAUSED' });
+    expect(mClient.createAdSet).toHaveBeenCalledWith('TOKEN', 'act_1', expect.objectContaining({ dailyBudgetCents: 5000, campaignId: 'cmp-1' }));
+    expect(mClient.uploadAdImage).toHaveBeenCalledWith('TOKEN', 'act_1', expect.any(String));
+    expect(mClient.createAdCreative).toHaveBeenCalledWith('TOKEN', 'act_1', expect.objectContaining({ pageId: 'page-1', linkData: expect.objectContaining({ image_hash: 'hash-1' }) }));
+    expect(mClient.uploadAdVideo).not.toHaveBeenCalled();
+  });
+
+  it('launchAdFromCreative uses the video pull-from-URL path for a video asset', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue(metaAcc());
+    mediaGen.getAsset.mockResolvedValue({ id: 'asset-1', status: 'READY', url: 'https://r2/v.mp4', type: 'VIDEO', mime: 'video/mp4' });
+    mClient.createCampaign.mockResolvedValue({ ok: true, id: 'cmp-1' });
+    mClient.createAdSet.mockResolvedValue({ ok: true, id: 'as-1' });
+    mClient.uploadAdVideo.mockResolvedValue({ ok: true, id: 'vid-1' });
+    mClient.waitVideoReady.mockResolvedValue({ ok: true, id: 'vid-1' });
+    mClient.createAdCreative.mockResolvedValue({ ok: true, id: 'cr-1' });
+    mClient.createAd.mockResolvedValue({ ok: true, id: 'ad-1' });
+    await svc.launchAdFromCreative('ws', 'acc', launchDto() as any);
+    expect(mClient.uploadAdVideo).toHaveBeenCalledWith('TOKEN', 'act_1', 'https://r2/v.mp4', 'Set A');
+    expect(mClient.waitVideoReady).toHaveBeenCalledWith('TOKEN', 'vid-1');
+    expect(mClient.createAdCreative).toHaveBeenCalledWith('TOKEN', 'act_1', expect.objectContaining({ videoData: expect.objectContaining({ video_id: 'vid-1' }) }));
+    expect(mClient.uploadAdImage).not.toHaveBeenCalled();
+  });
+
+  it('launchAdFromCreative rejects when no Facebook Page is connected', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue(metaAcc());
+    prisma.socialAccount.findFirst.mockResolvedValue(null);
+    await expect(svc.launchAdFromCreative('ws', 'acc', launchDto() as any)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('launchAdFromCreative rejects an asset that is not READY', async () => {
+    prisma.adAccount.findFirst.mockResolvedValue(metaAcc());
+    mediaGen.getAsset.mockResolvedValue({ id: 'asset-1', status: 'PENDING', url: null });
+    await expect(svc.launchAdFromCreative('ws', 'acc', launchDto() as any)).rejects.toBeInstanceOf(BadRequestException);
   });
 });
