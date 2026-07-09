@@ -142,7 +142,6 @@ export class BookingService implements OnModuleInit {
     const effective = await this.entitlements.getEffective(workspaceId);
     const limit = effective.limits.maxCalendars;
     const data = {
-      workspaceId,
       name: dto.name,
       slug: this.slugify(dto.slug || dto.name),
       ownerUserId: dto.ownerUserId ?? null,
@@ -168,9 +167,11 @@ export class BookingService implements OnModuleInit {
       }
       throw e;
     };
-    // Unlimited plan — no cap to race against.
+    // Unlimited plan — no cap to race against. workspaceId is spread inline at
+    // every create call site so the scope is visible to the multi-tenant
+    // arch-fitness scanner (not hoisted where the regex can't see it).
     if (limit === -1) {
-      return this.prisma.bookingCalendar.create({ data }).catch(onError);
+      return this.prisma.bookingCalendar.create({ data: { workspaceId, ...data } }).catch(onError);
     }
     // Enforce the per-plan maxCalendars cap. Serialize the count-check + create
     // per workspace under an advisory xact-lock so two concurrent creates at
@@ -183,7 +184,7 @@ export class BookingService implements OnModuleInit {
         if (count >= limit) {
           throw new BadRequestException(`Calendar limit reached (${limit}) — upgrade your package`);
         }
-        return tx.bookingCalendar.create({ data });
+        return tx.bookingCalendar.create({ data: { workspaceId, ...data } });
       })
       .catch(onError);
   }
