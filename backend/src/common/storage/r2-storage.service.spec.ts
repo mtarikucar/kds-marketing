@@ -127,6 +127,16 @@ describe('R2StorageService', () => {
     });
   });
 
+  describe('urlForKey', () => {
+    it('joins the public base + key (trailing slash on base stripped)', () => {
+      configure();
+      const svc = new R2StorageService();
+      expect(svc.urlForKey('netgsm-recordings/ws-1/call-1.mp3')).toBe(
+        'https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3',
+      );
+    });
+  });
+
   describe('deleteKeys', () => {
     it('no-ops (never calls send) when the key list is empty', async () => {
       configure();

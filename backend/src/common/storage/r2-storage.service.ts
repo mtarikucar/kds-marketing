@@ -83,6 +83,19 @@ export class R2StorageService {
     return fromName && fromName.length <= 5 ? fromName.toLowerCase() : 'bin';
   }
 
+  /**
+   * Public URL for an already-uploaded object, given its key. The bucket is
+   * public-read (Meta/TikTok pull media from it directly — see the class
+   * docstring), so there is no presigned/private URL to mint; this just
+   * centralizes the `${publicBase}/${key}` join so callers (NetGSM Phase 4
+   * Task 3 — recording playback + STT source resolution) never hand-roll the
+   * bucket's public URL scheme. Access is still scoped via our own routes
+   * (workspace ownership checks), not by bucket ACLs.
+   */
+  urlForKey(key: string): string {
+    return `${this.publicBase}/${key}`;
+  }
+
   /** Upload one file and return its public URL + key + mime. */
   async upload(workspaceId: string, file: UploadInput): Promise<UploadedMedia> {
     if (!this.isConfigured()) {
@@ -99,7 +112,7 @@ export class R2StorageService {
         CacheControl: 'public, max-age=604800',
       }),
     );
-    return { url: `${this.publicBase}/${key}`, key, mime: file.mimetype };
+    return { url: this.urlForKey(key), key, mime: file.mimetype };
   }
 
   /**
@@ -123,7 +136,7 @@ export class R2StorageService {
         ContentType: file.mimetype,
       }),
     );
-    return { url: `${this.publicBase}/${key}`, key, mime: file.mimetype };
+    return { url: this.urlForKey(key), key, mime: file.mimetype };
   }
 
   /** Best-effort delete of uploaded objects (post-publish cleanup). */

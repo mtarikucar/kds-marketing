@@ -1964,6 +1964,11 @@
     "selectPrompt": "Transkripti görmek için bir çağrı seçin.",
     "noTranscript": "Bu çağrı için transkript yok."
   },
+  "callRecording": {
+    "title": "Kayıt",
+    "loading": "Kayıt yükleniyor…",
+    "unavailable": "Bu görüşme için kayıt mevcut değil."
+  },
   "callAnalysis": {
     "title": "Görüşme analizi",
     "summary": "Özet",

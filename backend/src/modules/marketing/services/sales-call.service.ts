@@ -17,6 +17,7 @@ import { LogCallDto, SalesCallOutcome } from '../dto/log-call.dto';
 import { SalesCallFilterDto } from '../dto/sales-call-filter.dto';
 import { MarketingUserPayload } from '../types';
 import { paginated } from '../../../common/pagination';
+import { R2StorageService } from '../../../common/storage/r2-storage.service';
 
 /**
  * Final-review HIGH-2 fix — statuses `logCall` may still attach a manual
@@ -46,6 +47,7 @@ export class SalesCallService {
     private readonly registry: TelephonyProviderRegistry,
     private readonly outbox: OutboxService,
     private readonly telephonyConfig: TelephonyConfigService,
+    private readonly r2: R2StorageService,
   ) {}
 
   /**
@@ -331,6 +333,32 @@ export class SalesCallService {
       throw new ForbiddenException('You can only view your own calls');
     }
     return call;
+  }
+
+  /**
+   * NetGSM Phase 4 Task 3 — a playable URL for this call's recording, for the
+   * in-app `<audio>` player. Reuses the same scoped `get` every other
+   * call-detail read goes through (404 cross-workspace, Forbidden for a REP
+   * viewing a teammate's call), so this never leaks another workspace's or
+   * another rep's recording regardless of how the caller reached it.
+   *
+   * Prefers the R2-stored copy (`recordingStorageKey`, Task 2's ingest sweep)
+   * — stable, retention-managed, and immune to the NetGSM tokenized link
+   * eventually expiring — over the raw provider `recordingUrl`. Falls back to
+   * the provider url only when the recording hasn't been ingested (or ever
+   * will be — recording off/R2 unconfigured). 404s when neither exists yet.
+   */
+  async getRecordingUrl(
+    workspaceId: string,
+    id: string,
+    user: MarketingUserPayload,
+  ): Promise<{ url: string }> {
+    const call = await this.get(workspaceId, id, user);
+    const url = call.recordingStorageKey
+      ? this.r2.urlForKey(call.recordingStorageKey)
+      : call.recordingUrl;
+    if (!url) throw new NotFoundException('No recording for this call');
+    return { url };
   }
 
   private outcomeFor(status: SalesCallOutcome): string {

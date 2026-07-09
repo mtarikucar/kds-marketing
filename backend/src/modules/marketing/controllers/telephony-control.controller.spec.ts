@@ -5,8 +5,9 @@ const USER = { id: 'rep-1', workspaceId: 'ws-1', role: 'REP' } as MarketingUserP
 
 function makeController() {
   const control = { hangup: jest.fn(), transfer: jest.fn(), mute: jest.fn() };
-  const ctrl = new TelephonyControlController(control as any);
-  return { control, ctrl };
+  const calls = { getRecordingUrl: jest.fn() };
+  const ctrl = new TelephonyControlController(control as any, calls as any);
+  return { control, calls, ctrl };
 }
 
 describe('TelephonyControlController', () => {
@@ -40,5 +41,15 @@ describe('TelephonyControlController', () => {
 
     expect(control.mute).toHaveBeenCalledWith('ws-1', 'call-1', USER, dto);
     expect(res).toEqual({ ok: true });
+  });
+
+  it('GET :id/recording delegates to SalesCallService with workspace + user', async () => {
+    const { calls, ctrl } = makeController();
+    calls.getRecordingUrl.mockResolvedValue({ url: 'https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3' });
+
+    const res = await ctrl.recording('call-1', USER);
+
+    expect(calls.getRecordingUrl).toHaveBeenCalledWith('ws-1', 'call-1', USER);
+    expect(res).toEqual({ url: 'https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3' });
   });
 });

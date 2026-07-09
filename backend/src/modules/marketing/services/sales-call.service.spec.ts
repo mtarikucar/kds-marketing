@@ -7,6 +7,7 @@ describe('SalesCallService', () => {
   let registry: { get: jest.Mock };
   let outbox: { append: jest.Mock };
   let telephonyConfig: { resolveForWorkspace: jest.Mock };
+  let r2: { urlForKey: jest.Mock };
   let provider: any;
   let liteProvider: any;
   let svc: SalesCallService;
@@ -30,7 +31,8 @@ describe('SalesCallService', () => {
     registry = { get: jest.fn().mockReturnValue(provider) };
     outbox = { append: jest.fn().mockResolvedValue('ob') };
     telephonyConfig = { resolveForWorkspace: jest.fn().mockResolvedValue(null) };
-    svc = new SalesCallService(prisma as any, registry as any, outbox as any, telephonyConfig as any);
+    r2 = { urlForKey: jest.fn((key: string) => `https://cdn.example.com/${key}`) };
+    svc = new SalesCallService(prisma as any, registry as any, outbox as any, telephonyConfig as any, r2 as any);
 
     // Support both $transaction(callback) and $transaction([...]) forms.
     (prisma.$transaction as any).mockImplementation(async (arg: any) =>
@@ -374,6 +376,77 @@ describe('SalesCallService', () => {
       expect(prisma.salesCall.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { workspaceId: WS, marketingUserId: REP } }),
       );
+    });
+  });
+
+  // NetGSM Phase 4 Task 3 — in-app recording player URL resolution.
+  describe('getRecordingUrl', () => {
+    const MANAGER = { id: 'mgr-1', role: 'MANAGER' } as any;
+
+    it('prefers the R2-stored copy over the provider url when both exist', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue({
+        id: 'call-1',
+        workspaceId: WS,
+        marketingUserId: REP,
+        recordingStorageKey: 'netgsm-recordings/ws-1/call-1.mp3',
+        recordingUrl: 'https://netgsm.example.com/token/abc',
+      });
+
+      const res = await svc.getRecordingUrl(WS, 'call-1', MANAGER);
+
+      expect(r2.urlForKey).toHaveBeenCalledWith('netgsm-recordings/ws-1/call-1.mp3');
+      expect(res).toEqual({ url: 'https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3' });
+    });
+
+    it('falls back to the provider url when no storage key has been ingested yet', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue({
+        id: 'call-1',
+        workspaceId: WS,
+        marketingUserId: REP,
+        recordingStorageKey: null,
+        recordingUrl: 'https://netgsm.example.com/token/abc',
+      });
+
+      const res = await svc.getRecordingUrl(WS, 'call-1', MANAGER);
+
+      expect(r2.urlForKey).not.toHaveBeenCalled();
+      expect(res).toEqual({ url: 'https://netgsm.example.com/token/abc' });
+    });
+
+    it('404s a call from another workspace (scoped lookup misses)', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue(null);
+      await expect(svc.getRecordingUrl(WS, 'call-1', MANAGER)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('404s when neither a storage key nor a provider url exists', async () => {
+      prisma.salesCall.findFirst.mockResolvedValue({
+        id: 'call-1',
+        workspaceId: WS,
+        marketingUserId: REP,
+        recordingStorageKey: null,
+        recordingUrl: null,
+      });
+
+      await expect(svc.getRecordingUrl(WS, 'call-1', MANAGER)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(r2.urlForKey).not.toHaveBeenCalled();
+    });
+
+    it("forbids a REP from reading a teammate's call recording", async () => {
+      prisma.salesCall.findFirst.mockResolvedValue({
+        id: 'call-1',
+        workspaceId: WS,
+        marketingUserId: 'someone-else',
+        recordingStorageKey: 'netgsm-recordings/ws-1/call-1.mp3',
+        recordingUrl: null,
+      });
+
+      await expect(
+        svc.getRecordingUrl(WS, 'call-1', { id: REP, role: 'REP' } as any),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });

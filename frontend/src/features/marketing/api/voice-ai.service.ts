@@ -48,6 +48,22 @@ export interface RunAnalysisResult {
 export const getCallAnalysis = (callId: string): Promise<CallAnalysisResult> =>
   marketingApi.get(`/calls/${callId}/analysis`).then((r) => r.data as CallAnalysisResult);
 
+export interface CallRecordingResult {
+  url: string;
+}
+
+/**
+ * GET /marketing/telephony/calls/:id/recording (NetGSM Phase 4 Task 3)
+ * Resolves a playable URL for the call's recording — the R2-stored copy when
+ * ingested, else the provider's (possibly short-lived) url. Throws (404) when
+ * no recording exists yet; callers should treat that as "no player to show"
+ * rather than surface it as an error.
+ */
+export const getCallRecording = (callId: string): Promise<CallRecordingResult> =>
+  marketingApi
+    .get(`/telephony/calls/${callId}/recording`)
+    .then((r) => r.data as CallRecordingResult);
+
 /**
  * POST /marketing/calls/:id/analysis/run
  * Triggers analysis on demand (recording → STT → Claude). Returns the outcome;

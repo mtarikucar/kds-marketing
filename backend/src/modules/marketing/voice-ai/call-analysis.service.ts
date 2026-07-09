@@ -4,6 +4,7 @@ import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
 import { creditCost } from '../ai/ai-credit-costs';
 import { SttService } from './stt.service';
+import { R2StorageService } from '../../../common/storage/r2-storage.service';
 
 export type CallAnalysisStatus = 'OK' | 'SKIPPED' | 'FAILED';
 export interface CallAnalysisResult {
@@ -17,6 +18,14 @@ export interface CallAnalysisResult {
  * (summary/sentiment/score/actionItems/topics) and persists one CallAnalysis
  * row per call. Credit-metered: reserve before the LLM call, refund if Claude
  * (or parse) throws so an errored analysis isn't billed.
+ *
+ * NetGSM Phase 4 Task 3 — STT reads the R2-STORED copy of the recording
+ * (`recordingStorageKey`, stamped by Task 2's ingest sweep) when one exists,
+ * rather than the raw provider `recordingUrl` — a NetGSM tokenized bearer
+ * link that can expire well before the cron sweep (or a manual "Analyse"
+ * click) gets to it. Falls back to `recordingUrl` only when the recording
+ * hasn't been ingested yet (or never will be — recording off / R2
+ * unconfigured), matching `SalesCallService.getRecordingUrl`'s preference.
  */
 @Injectable()
 export class CallAnalysisService {
@@ -27,18 +36,22 @@ export class CallAnalysisService {
     private readonly stt: SttService,
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
+    private readonly r2: R2StorageService,
   ) {}
 
   async analyzeSalesCall(salesCallId: string): Promise<CallAnalysisResult> {
     const call = await this.prisma.salesCall.findUnique({ where: { id: salesCallId } });
-    if (!call || !call.recordingUrl || !call.workspaceId) {
+    if (!call || !call.workspaceId || (!call.recordingStorageKey && !call.recordingUrl)) {
       return { status: 'FAILED', reason: 'no recording' };
     }
 
     const existing = await this.prisma.callAnalysis.findUnique({ where: { salesCallId } });
     if (existing) return { status: 'SKIPPED', reason: 'already analyzed' };
 
-    const stt = await this.stt.transcribeUrl(call.recordingUrl);
+    const audioUrl = call.recordingStorageKey
+      ? this.r2.urlForKey(call.recordingStorageKey)
+      : (call.recordingUrl as string);
+    const stt = await this.stt.transcribeUrl(audioUrl);
     if (!stt || !stt.text) return { status: 'FAILED', reason: 'no transcript' };
 
     const cost = creditCost('voice.analysis');

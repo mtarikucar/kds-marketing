@@ -1743,6 +1743,11 @@
     "selectPrompt": "Select a call to see the transcript.",
     "noTranscript": "No transcript for this call."
   },
+  "callRecording": {
+    "title": "Recording",
+    "loading": "Loading recording…",
+    "unavailable": "Recording is not available for this call."
+  },
   "callAnalysis": {
     "title": "Call analysis",
     "summary": "Summary",
