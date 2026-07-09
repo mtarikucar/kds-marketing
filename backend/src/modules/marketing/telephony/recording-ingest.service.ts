@@ -99,8 +99,11 @@ export class RecordingIngestService {
         ok = await this.ingestOne(call);
       } catch (e: any) {
         // Never let one call's failure abort the tick; never interpolate the
-        // tokenized recordingUrl into the log line.
-        this.logger.warn(`recording ingest failed for call ${call.id}: ${e?.message ?? 'unknown error'}`);
+        // tokenized recordingUrl into the log line. safeFetch's URL-parse-error
+        // branch can echo a truncated URL into e.message, so redact any
+        // http(s) URL (which carries the bearer token) before logging.
+        const safeMsg = String(e?.message ?? 'unknown error').replace(/https?:\/\/\S+/gi, '***');
+        this.logger.warn(`recording ingest failed for call ${call.id}: ${safeMsg}`);
       }
       // ALWAYS stamp the watermark (success, no-recording-yet, or error) so
       // this call leaves the front of the queue and the sweep keeps progressing.
