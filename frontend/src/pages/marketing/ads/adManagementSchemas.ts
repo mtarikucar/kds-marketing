@@ -35,6 +35,59 @@ export const createCampaignSchema = z.object({
 
 export type CreateCampaignFormValues = z.infer<typeof createCampaignSchema>;
 
+// ── Launch ad from creative (Meta) ───────────────────────────────────────────
+
+/** Meta call-to-action button values accepted by the ad creative. */
+export const CALL_TO_ACTIONS = [
+  'LEARN_MORE',
+  'SHOP_NOW',
+  'SIGN_UP',
+  'SUBSCRIBE',
+  'CONTACT_US',
+  'BOOK_TRAVEL',
+  'GET_OFFER',
+  'DOWNLOAD',
+] as const;
+
+export type CallToAction = (typeof CALL_TO_ACTIONS)[number];
+
+export const CTA_LABEL: Record<CallToAction, string> = {
+  LEARN_MORE: 'Learn more',
+  SHOP_NOW: 'Shop now',
+  SIGN_UP: 'Sign up',
+  SUBSCRIBE: 'Subscribe',
+  CONTACT_US: 'Contact us',
+  BOOK_TRAVEL: 'Book now',
+  GET_OFFER: 'Get offer',
+  DOWNLOAD: 'Download',
+};
+
+/**
+ * Minimal launch-from-creative form. `optimizationGoal`/`billingEvent` default
+ * server-side-friendly values (LINK_CLICKS / IMPRESSIONS); `targeting` is built
+ * from the 2-letter country in the dialog. Budget is coerced from the input.
+ */
+export const launchAdSchema = z.object({
+  generatedAssetId: z.string().trim().min(1, 'required').max(64, 'tooLong'),
+  adsetName: z.string().trim().min(1, 'required').max(200, 'tooLong'),
+  dailyBudget: z
+    .union([z.string(), z.number()])
+    .transform((v) => Number(v))
+    .refine((v) => Number.isFinite(v) && v > 0, 'invalidNumber'),
+  objective: z.enum(CAMPAIGN_OBJECTIVES),
+  link: z.string().trim().url('invalidUrl').max(2000, 'tooLong'),
+  primaryText: z.string().trim().min(1, 'required').max(2000, 'tooLong'),
+  callToAction: z.enum(CALL_TO_ACTIONS),
+  country: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z]{2}$/, 'invalidCountry')
+    .transform((v) => v.toUpperCase()),
+});
+
+export type LaunchAdFormValues = z.input<typeof launchAdSchema>;
+export type LaunchAdFormOutput = z.output<typeof launchAdSchema>;
+
 // ── Scaling-rule enums ───────────────────────────────────────────────────────
 
 export const RULE_METRICS: RuleMetric[] = ['SPEND', 'CPL', 'CTR', 'LEADS', 'CLICKS', 'IMPRESSIONS'];

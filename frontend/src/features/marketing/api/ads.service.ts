@@ -8,13 +8,14 @@
 
 import marketingApi from './marketingApi';
 
-export type AdProvider = 'META' | 'TIKTOK' | 'LINKEDIN';
+export type AdProvider = 'META' | 'TIKTOK' | 'LINKEDIN' | 'GOOGLE';
 export type AdAccountStatus = 'ACTIVE' | 'TOKEN_EXPIRED' | 'DISCONNECTED';
 
 export interface AdProviderStatus {
   META: boolean;
   TIKTOK: boolean;
   LINKEDIN: boolean;
+  GOOGLE: boolean;
   secretBoxConfigured: boolean;
 }
 
@@ -142,6 +143,39 @@ export const confirmLinkedinAdsPending = (
 ): Promise<LinkedinAdsConfirmResult> =>
   marketingApi.post(`/ads/oauth/linkedin/pending/${id}/confirm`, { selected }).then((r) => r.data);
 
+// ── Google Ads OAuth ────────────────────────────────────────────────────────
+// Mirrors the LinkedIn trio: start → (callback redirects to /ads?connect=<id>&
+// connect_provider=google) → pending → confirm. `externalAdId` is the customer id.
+
+export interface GoogleAdsPendingAccount {
+  externalAdId: string;
+  displayName: string;
+  currency: string | null;
+}
+
+export interface GoogleAdsPending {
+  accounts: GoogleAdsPendingAccount[];
+}
+
+export interface GoogleAdsConfirmResult {
+  connected: number;
+}
+
+/** POST /ads/oauth/google/start → { authorizeUrl } */
+export const startGoogleAdsOAuth = (): Promise<{ authorizeUrl: string }> =>
+  marketingApi.post('/ads/oauth/google/start').then((r) => r.data);
+
+/** GET /ads/oauth/google/pending/:id */
+export const getGoogleAdsPending = (id: string): Promise<GoogleAdsPending> =>
+  marketingApi.get(`/ads/oauth/google/pending/${id}`).then((r) => r.data);
+
+/** POST /ads/oauth/google/pending/:id/confirm */
+export const confirmGoogleAdsPending = (
+  id: string,
+  selected: string[],
+): Promise<GoogleAdsConfirmResult> =>
+  marketingApi.post(`/ads/oauth/google/pending/${id}/confirm`, { selected }).then((r) => r.data);
+
 // ── TikTok for Business OAuth ───────────────────────────────────────────────
 
 export interface TiktokAdsPendingAdvertiser {
@@ -237,6 +271,38 @@ export const createCampaign = (
   payload: { name: string; objective: string },
 ): Promise<unknown> =>
   marketingApi.post(`/ads/accounts/${accountId}/campaigns`, payload).then((r) => r.data);
+
+// ── Launch a full Meta ad from a generated creative asset ────────────────────
+// Everything defaults to PAUSED server-side so a launch never immediately spends.
+// `dailyBudget` is MAJOR currency units; `targeting` is a raw Meta targeting spec.
+
+export interface LaunchAdPayload {
+  generatedAssetId: string;
+  adsetName: string;
+  dailyBudget: number;
+  optimizationGoal: string;
+  billingEvent: string;
+  targeting: Record<string, unknown>;
+  link: string;
+  primaryText: string;
+  callToAction: string;
+  campaignId?: string;
+  campaignName?: string;
+  objective?: string;
+  instagram?: boolean;
+  status?: 'PAUSED' | 'ACTIVE';
+}
+
+export interface LaunchAdResult {
+  campaignId: string;
+  adsetId: string;
+  creativeId: string;
+  adId: string;
+  status: string;
+}
+
+export const launchAd = (accountId: string, payload: LaunchAdPayload): Promise<LaunchAdResult> =>
+  marketingApi.post(`/ads/accounts/${accountId}/launch`, payload).then((r) => r.data);
 
 // ── Scaling rules ────────────────────────────────────────────────────────────
 

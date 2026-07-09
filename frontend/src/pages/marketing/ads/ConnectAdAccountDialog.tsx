@@ -141,7 +141,11 @@ export function ConnectAdAccountDialog({
             hint={
               provider === 'META'
                 ? t('ads.connect.metaIdHint', { defaultValue: 'Your Meta ad account id (act_… or the number).' })
-                : t('ads.connect.tiktokIdHint', { defaultValue: 'Your TikTok advertiser_id.' })
+                : provider === 'GOOGLE'
+                  ? t('ads.connect.googleIdHint', { defaultValue: 'Your Google Ads customer id (10 digits, no dashes).' })
+                  : provider === 'LINKEDIN'
+                    ? t('ads.connect.linkedinIdHint', { defaultValue: 'Your LinkedIn sponsored ad account id.' })
+                    : t('ads.connect.tiktokIdHint', { defaultValue: 'Your TikTok advertiser_id.' })
             }
             error={fieldErr(errors.externalAdId?.message)}
             required

@@ -25,6 +25,7 @@ import {
   pullAdAccount,
   startLinkedinAdsOAuth,
   startTiktokAdsOAuth,
+  startGoogleAdsOAuth,
   type AdAccount,
   type AdProvider,
 } from '../../../features/marketing/api/ads.service';
@@ -32,6 +33,7 @@ import type { ConnectAdAccountFormValues } from './adsSchemas';
 import { AD_PROVIDER_LABEL } from './adsSchemas';
 import { ConnectAdAccountDialog } from './ConnectAdAccountDialog';
 import { LinkedinAdsSelectDialog } from './LinkedinAdsSelectDialog';
+import { GoogleAdsSelectDialog } from './GoogleAdsSelectDialog';
 import { TiktokAdsSelectDialog } from './TiktokAdsSelectDialog';
 import { AdManagementSection } from './AdManagementSection';
 import { AdRulesSection } from './AdRulesSection';
@@ -98,7 +100,9 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
   const [connectOpen, setConnectOpen] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<AdAccount | null>(null);
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
-  const [connectProvider, setConnectProvider] = useState<'linkedin' | 'tiktok' | null>(null);
+  const [connectProvider, setConnectProvider] = useState<'linkedin' | 'tiktok' | 'google' | null>(
+    null,
+  );
   const [manageAccountId, setManageAccountId] = useState<string | null>(null);
 
   // ── OAuth return handling ────────────────────────────────────────────────────
@@ -112,7 +116,15 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     if (connectId) {
       const cp = searchParams.get('connect_provider');
       setPendingConnectId(connectId);
-      setConnectProvider(cp === 'linkedin' ? 'linkedin' : cp === 'tiktok' ? 'tiktok' : null);
+      setConnectProvider(
+        cp === 'linkedin'
+          ? 'linkedin'
+          : cp === 'tiktok'
+            ? 'tiktok'
+            : cp === 'google'
+              ? 'google'
+              : null,
+      );
       setView('accounts');
       searchParams.delete('connect');
       searchParams.delete('connect_provider');
@@ -195,11 +207,24 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     }
   };
 
+  const startGoogleConnect = async () => {
+    try {
+      const { authorizeUrl } = await startGoogleAdsOAuth();
+      window.location.href = authorizeUrl;
+    } catch {
+      toast.error(
+        t('ads.oauth.startFailed', { defaultValue: 'Could not start the Google Ads connection' }),
+      );
+    }
+  };
+
   const handleReconnect = (account: AdAccount) => {
     if (account.provider === 'LINKEDIN') {
       void startLinkedinConnect();
     } else if (account.provider === 'TIKTOK') {
       void startTikTokConnect();
+    } else if (account.provider === 'GOOGLE') {
+      void startGoogleConnect();
     }
     // META reconnect not yet implemented — button is hidden for META accounts
   };
@@ -289,6 +314,20 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
           defaultValue: 'Connect TikTok for Business',
         })}
       </Button>
+      <Button
+        onClick={() => void startGoogleConnect()}
+        disabled={!status?.GOOGLE}
+        title={
+          status?.GOOGLE
+            ? undefined
+            : t('ads.oauth.googleNotConfigured', {
+                defaultValue: 'An admin must add Google Ads app credentials first',
+              })
+        }
+        variant="outline"
+      >
+        {t('ads.oauth.googleConnect', { defaultValue: 'Connect Google Ads' })}
+      </Button>
       <Button onClick={() => setConnectOpen(true)} disabled={!canConnect} variant="outline">
         <Link2 className="h-4 w-4" aria-hidden="true" />
         {t('ads.connectAccount', { defaultValue: 'Connect account' })}
@@ -335,6 +374,7 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
                 <SelectItem value="META">{AD_PROVIDER_LABEL.META}</SelectItem>
                 <SelectItem value="TIKTOK">{AD_PROVIDER_LABEL.TIKTOK}</SelectItem>
                 <SelectItem value="LINKEDIN">{AD_PROVIDER_LABEL.LINKEDIN}</SelectItem>
+                <SelectItem value="GOOGLE">{AD_PROVIDER_LABEL.GOOGLE}</SelectItem>
               </SelectContent>
             </Select>
             <SegmentedControl<RangeKey>
@@ -413,6 +453,12 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
 
       <LinkedinAdsSelectDialog
         pendingId={connectProvider === 'linkedin' ? pendingConnectId : null}
+        onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
+        onSuccess={invalidateAccounts}
+      />
+
+      <GoogleAdsSelectDialog
+        pendingId={connectProvider === 'google' ? pendingConnectId : null}
         onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
         onSuccess={invalidateAccounts}
       />
