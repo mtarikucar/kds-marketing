@@ -12,11 +12,12 @@ vi.mock('react-i18next', () => ({
 
 const get = vi.fn();
 const post = vi.fn();
+const put = vi.fn().mockResolvedValue({ data: {} });
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...a: unknown[]) => get(...a),
     post: (...a: unknown[]) => post(...a),
-    put: vi.fn().mockResolvedValue({ data: {} }),
+    put: (...a: unknown[]) => put(...a),
     patch: vi.fn().mockResolvedValue({ data: {} }),
   },
 }));
@@ -109,5 +110,75 @@ describe('TelephonyCard — CDR-prod-only note', () => {
     });
 
     expect(await screen.findByText(/production server IP/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * NetGSM Phase 4 Task 1 — call-recording toggle + retention field. The KVKK
+ * legal note must always be visible next to the toggle (recording is OFF by
+ * default; a caller announcement is a legal requirement, so admins must see
+ * the note before they ever turn it on, not only after).
+ */
+describe('TelephonyCard — call recording (NetGSM Phase 4 Task 1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    put.mockResolvedValue({ data: {} });
+    get.mockImplementation((url: string) => {
+      if (url === '/telephony/config') return Promise.resolve({ data: CFG });
+      if (url === '/users') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: null });
+    });
+  });
+
+  async function openDialog() {
+    renderCard();
+    await userEvent.click(await screen.findByRole('button', { name: /manage|set up/i }));
+  }
+
+  it('shows the KVKK announcement note regardless of the toggle state', async () => {
+    await openDialog();
+    expect(await screen.findByText(/anons yapılması yasal zorunluluktur|Recording requires a caller announcement/i)).toBeInTheDocument();
+  });
+
+  it('defaults the toggle off and an empty retention field when unset', async () => {
+    await openDialog();
+    const toggle = await screen.findByRole('switch', { name: /record calls/i });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('reflects a saved recordCalls:true + retention days from the config', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/telephony/config') return Promise.resolve({ data: { ...CFG, recordCalls: true, recordingRetentionDays: 30 } });
+      if (url === '/users') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: null });
+    });
+    await openDialog();
+    const toggle = await screen.findByRole('switch', { name: /record calls/i });
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByDisplayValue('30')).toBeInTheDocument();
+  });
+
+  it('saves recordCalls:true + the retention days typed in when the toggle is switched on', async () => {
+    await openDialog();
+    const toggle = await screen.findByRole('switch', { name: /record calls/i });
+    await userEvent.click(toggle);
+    const retentionInput = screen.getByPlaceholderText(/retention|saklama/i);
+    await userEvent.type(retentionInput, '45');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      '/telephony/config',
+      expect.objectContaining({ recordCalls: true, recordingRetentionDays: 45 }),
+    ));
+  });
+
+  it('saves recordingRetentionDays:null ("keep forever") when the retention field is left blank', async () => {
+    await openDialog();
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      '/telephony/config',
+      expect.objectContaining({ recordCalls: false, recordingRetentionDays: null }),
+    ));
   });
 });

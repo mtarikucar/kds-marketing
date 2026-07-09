@@ -196,7 +196,14 @@
       "sip": "SIP parolası",
       "phoneFor": "{{name}} için telefon",
       "dahiliFor": "{{name}} için dahili",
-      "sipFor": "{{name}} için SIP parolası"
+      "sipFor": "{{name}} için SIP parolası",
+      "recording": {
+        "title": "Görüşme kaydı",
+        "toggle": "Görüşmeleri kaydet",
+        "toggleHint": "Varsayılan olarak kapalı. Yalnızca bu ayar açıldıktan sonra başlatılan görüşmelere uygulanır.",
+        "kvkkNote": "Görüşme kaydı için karşı tarafa anons yapılması yasal zorunluluktur (KVKK).",
+        "retention": "Saklama süresi (gün) — süresiz saklamak için boş bırakın"
+      }
     },
     "voice": {
       "title": "AI Sesli",

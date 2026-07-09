@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsObject, IsIn, MaxLength, ValidateIf, Matches } from 'class-validator';
+import { IsOptional, IsString, IsObject, IsIn, IsBoolean, IsInt, Min, MaxLength, ValidateIf, Matches } from 'class-validator';
 
 export class UpsertTelephonyConfigDto {
   @IsOptional() @IsObject() secrets?: Record<string, string>;
@@ -7,6 +7,10 @@ export class UpsertTelephonyConfigDto {
   @IsOptional() @IsIn(['ACTIVE', 'DISABLED']) status?: string;
   @IsOptional() @IsString() @MaxLength(255) @Matches(/^wss:\/\//i, { message: 'wssUrl must be a wss:// URL' }) wssUrl?: string;
   @IsOptional() @IsString() @MaxLength(120) sipDomain?: string;
+  /** Call-recording toggle (KVKK requires a caller announcement — surfaced by the frontend, not enforced here). */
+  @IsOptional() @IsBoolean() recordCalls?: boolean;
+  /** Days to keep a recording before the retention sweep deletes it; null = keep forever. */
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsInt() @Min(1) recordingRetentionDays?: number | null;
 }
 
 export class SetDahiliDto {

@@ -12,6 +12,8 @@ export interface OriginateParams {
   crmId?: string;
   /** Ring duration (seconds) before giving up on the rep's extension. */
   ringTimeout?: number;
+  /** Record both legs (caller_record/called_record). Mirrors BridgeParams.record. */
+  record?: boolean;
 }
 
 export interface BridgeParams {
@@ -79,6 +81,10 @@ export class NetsantralClient {
       originate_order: 'if',
       trunk: p.trunk.replace(/[^\d]/g, ''),
     });
+    if (p.record) {
+      qs.set('caller_record', '1');
+      qs.set('called_record', '1');
+    }
     return this.call('originate', p.username, qs, p.password);
   }
 

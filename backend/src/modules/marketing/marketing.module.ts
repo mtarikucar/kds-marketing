@@ -292,7 +292,7 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
-import { R2StorageService } from './social-planner/r2-storage.service';
+import { R2StorageService } from '../../common/storage/r2-storage.service';
 import { MarketingMediaController } from './controllers/marketing-media.controller';
 import { MarketingMediaWebhookController } from './controllers/marketing-media-webhook.controller';
 import { MediaGenService } from './ai/media/media-gen.service';

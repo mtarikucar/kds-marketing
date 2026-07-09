@@ -43,6 +43,7 @@ export class NetgsmApiAdapter implements TelephonyProvider, OnModuleInit {
       outcome = await this.client.callBridge({
         username: c.username, password: c.password,
         caller: c.callerNum, called: req.toPhone, trunk: c.trunk, crmId: req.crmId,
+        record: c.recordCalls,
       });
     } else {
       if (!c.internalNum) {
@@ -51,6 +52,7 @@ export class NetgsmApiAdapter implements TelephonyProvider, OnModuleInit {
       outcome = await this.client.originate({
         username: c.username, password: c.password,
         customer_num: req.toPhone, internal_num: c.internalNum, trunk: c.trunk, pbxnum: c.pbxnum, crmId: req.crmId,
+        record: c.recordCalls,
       });
     }
     if (!outcome.ok) {

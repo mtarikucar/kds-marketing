@@ -858,6 +858,11 @@ model SalesCall {
   // the back of the queue (a CONNECTED call with no recording yet, or never), and
   // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
   recordingCheckedAt DateTime?
+  /// NetGSM Phase 4 Task 1 — R2 object key once the recording-ingest sweep
+  /// (Task 2) has downloaded the provider recording into stable storage.
+  /// Null until ingested (or forever, if recording is off/R2 unconfigured);
+  /// `recordingUrl` stays the provider fallback either way.
+  recordingStorageKey String?
   notes              String?   @db.Text
   /// Phase 3 Task 2 — the rep whose extension actually picked up (from the
   /// santral `answer`/hangup event's internal_num → MarketingUser.dahili).
@@ -1637,6 +1642,14 @@ model TelephonyConfig {
   wssUrl       String?
   /// SIP domain/realm for AOR + targets, e.g. sip5.netsantral.com.
   sipDomain    String?
+  /// NetGSM Phase 4 Task 1 — call-recording toggle (caller_record/
+  /// called_record on linkup/originate). OFF by default: KVKK requires a
+  /// caller announcement before recording, so this must be an explicit
+  /// opt-in, never silently on.
+  recordCalls  Boolean  @default(false)
+  /// How long a recording is kept in R2 before the retention sweep deletes
+  /// the object + nulls SalesCall.recordingStorageKey. Null = keep forever.
+  recordingRetentionDays Int?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

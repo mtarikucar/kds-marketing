@@ -9,7 +9,7 @@ import { ScheduledJobService } from '../../scheduling/scheduled-job.service';
 import {
   ScheduledJobRunnerService, JobRescheduleDirective,
 } from '../../scheduling/scheduled-job-runner.service';
-import { R2StorageService } from '../../social-planner/r2-storage.service';
+import { R2StorageService } from '../../../../common/storage/r2-storage.service';
 import { GrowthWalletService } from '../../wallet/growth-wallet.service';
 import { growthAutopilotAutonomyEnabled } from '../../budget/growth-autonomy.flag';
 import {

@@ -17,7 +17,7 @@ import {
 } from '../../../common/crypto/secret-box.helper';
 import { publishToNetwork, isNetworkConfigured, PostFormat } from './network-adapters';
 import { queryCreatorInfo } from './tiktok-creator-info.util';
-import { R2StorageService, UploadedMedia, UploadInput } from './r2-storage.service';
+import { R2StorageService, UploadedMedia, UploadInput } from '../../../common/storage/r2-storage.service';
 
 export const SOCIAL_PUBLISH_KIND = 'social.publish';
 /** Delete a published post's uploaded R2 media this long after success. */

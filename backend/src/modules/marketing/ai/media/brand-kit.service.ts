@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
-import { R2StorageService, UploadInput } from '../../social-planner/r2-storage.service';
+import { R2StorageService, UploadInput } from '../../../../common/storage/r2-storage.service';
 
 const MAX_REFERENCE_IMAGES = 5;
 

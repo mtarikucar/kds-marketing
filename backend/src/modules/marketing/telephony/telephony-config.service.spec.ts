@@ -42,6 +42,17 @@ describe('TelephonyConfigService', () => {
     expect(r).toEqual({ username: '850', password: 'pw', trunk: '850', pbxnum: undefined });
   });
 
+  it('resolveForWorkspace returns recordCalls from the config row (NetGSM Phase 4 Task 1)', async () => {
+    const prisma = prismaMock();
+    prisma.telephonyConfig.findUnique.mockResolvedValue({
+      workspaceId: 'ws', status: 'ACTIVE', trunk: '850', pbxnum: null, recordCalls: true,
+      configSealed: 'sealed:{"username":"850","password":"pw"}',
+    });
+    const svc = new TelephonyConfigService(prisma, balanceClientMock());
+    const r = await svc.resolveForWorkspace('ws');
+    expect(r).toEqual({ username: '850', password: 'pw', trunk: '850', pbxnum: undefined, recordCalls: true });
+  });
+
   it('resolveForWorkspace returns null when no config or DISABLED', async () => {
     const prisma = prismaMock();
     prisma.telephonyConfig.findUnique.mockResolvedValue(null);
@@ -63,6 +74,78 @@ describe('TelephonyConfigService', () => {
     const data = prisma.telephonyConfig.upsert.mock.calls[0][0].update;
     expect(data.wssUrl).toBe('wss://sip5.netsantral.com:8089/ws');
     expect(data.sipDomain).toBe('sip5.netsantral.com');
+  });
+
+  describe('call-recording config (NetGSM Phase 4 Task 1)', () => {
+    it('upsert persists recordCalls + recordingRetentionDays', async () => {
+      const prisma = prismaMock();
+      prisma.telephonyConfig.upsert.mockResolvedValue({
+        id: 'c1', workspaceId: 'ws', provider: 'netgsm-netsantral', status: 'ACTIVE',
+        configSealed: 'sealed:{"username":"850","password":"pw"}', trunk: '8508407303', pbxnum: null,
+        recordCalls: true, recordingRetentionDays: 30,
+      });
+      const svc = new TelephonyConfigService(prisma, balanceClientMock());
+      const out = await svc.upsert('ws', {
+        secrets: { username: '850', password: 'pw' }, trunk: '8508407303',
+        recordCalls: true, recordingRetentionDays: 30,
+      });
+      expect((out as any).recordCalls).toBe(true);
+      expect((out as any).recordingRetentionDays).toBe(30);
+      const data = prisma.telephonyConfig.upsert.mock.calls[0][0].update;
+      expect(data.recordCalls).toBe(true);
+      expect(data.recordingRetentionDays).toBe(30);
+    });
+
+    it('upsert defaults recordCalls to false and retention to null for a brand-new config', async () => {
+      const prisma = prismaMock();
+      prisma.telephonyConfig.upsert.mockResolvedValue({
+        id: 'c1', workspaceId: 'ws', provider: 'netgsm-netsantral', status: 'ACTIVE',
+        configSealed: 'sealed:{"username":"850","password":"pw"}', trunk: '8508407303', pbxnum: null,
+        recordCalls: false, recordingRetentionDays: null,
+      });
+      const svc = new TelephonyConfigService(prisma, balanceClientMock());
+      await svc.upsert('ws', { secrets: { username: '850', password: 'pw' }, trunk: '8508407303' });
+      const data = prisma.telephonyConfig.upsert.mock.calls[0][0].update;
+      expect(data.recordCalls).toBe(false);
+      expect(data.recordingRetentionDays).toBeNull();
+    });
+
+    it('upsert keeps the existing recordCalls/retention when the caller omits both fields', async () => {
+      const prisma = prismaMock();
+      prisma.telephonyConfig.findUnique.mockResolvedValue({
+        workspaceId: 'ws', status: 'ACTIVE', trunk: '8508407303', pbxnum: null,
+        configSealed: 'sealed:{"username":"850","password":"pw"}',
+        recordCalls: true, recordingRetentionDays: 14,
+      });
+      prisma.telephonyConfig.upsert.mockResolvedValue({
+        id: 'c1', workspaceId: 'ws', provider: 'netgsm-netsantral', status: 'ACTIVE',
+        configSealed: 'sealed:{"username":"850","password":"pw"}', trunk: '8508407303', pbxnum: null,
+        recordCalls: true, recordingRetentionDays: 14,
+      });
+      const svc = new TelephonyConfigService(prisma, balanceClientMock());
+      await svc.upsert('ws', { trunk: '8508407303' }); // no recordCalls/recordingRetentionDays sent
+      const data = prisma.telephonyConfig.upsert.mock.calls[0][0].update;
+      expect(data.recordCalls).toBe(true);
+      expect(data.recordingRetentionDays).toBe(14);
+    });
+
+    it('upsert explicitly clears recordingRetentionDays back to null ("keep forever") when the caller sends null', async () => {
+      const prisma = prismaMock();
+      prisma.telephonyConfig.findUnique.mockResolvedValue({
+        workspaceId: 'ws', status: 'ACTIVE', trunk: '8508407303', pbxnum: null,
+        configSealed: 'sealed:{"username":"850","password":"pw"}',
+        recordCalls: true, recordingRetentionDays: 14,
+      });
+      prisma.telephonyConfig.upsert.mockResolvedValue({
+        id: 'c1', workspaceId: 'ws', provider: 'netgsm-netsantral', status: 'ACTIVE',
+        configSealed: 'sealed:{"username":"850","password":"pw"}', trunk: '8508407303', pbxnum: null,
+        recordCalls: true, recordingRetentionDays: null,
+      });
+      const svc = new TelephonyConfigService(prisma, balanceClientMock());
+      await svc.upsert('ws', { trunk: '8508407303', recordingRetentionDays: null });
+      const data = prisma.telephonyConfig.upsert.mock.calls[0][0].update;
+      expect(data.recordingRetentionDays).toBeNull();
+    });
   });
 
   it('setDahili seals the SIP password', async () => {

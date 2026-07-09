@@ -23,6 +23,28 @@ describe('NetsantralClient', () => {
     expect(url).toContain('originate_order=if'); // rep rings first
   });
 
+  it('originate does NOT add caller_record/called_record by default (recording off)', async () => {
+    fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      status: 200, text: async () => '{"status":"success","unique_id":"u-2"}',
+    } as any);
+    await new NetsantralClient().originate({ ...creds, customer_num: '5551112233', internal_num: '104', trunk: '8508407303' });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).not.toContain('caller_record');
+    expect(url).not.toContain('called_record');
+  });
+
+  it('originate adds caller_record/called_record when record is requested (NetGSM Phase 4 Task 1)', async () => {
+    fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      status: 200, text: async () => '{"status":"success","unique_id":"u-3"}',
+    } as any);
+    await new NetsantralClient().originate({
+      ...creds, customer_num: '5551112233', internal_num: '104', trunk: '8508407303', record: true,
+    });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('caller_record=1');
+    expect(url).toContain('called_record=1');
+  });
+
   it('returns ok:false on a provider error code', async () => {
     fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ status: 200, text: async () => '30' } as any);
     const out = await new NetsantralClient().originate({ ...creds, customer_num: '5551112233', internal_num: '104', trunk: '8508407303' });

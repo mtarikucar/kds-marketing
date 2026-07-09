@@ -6,6 +6,7 @@ import { Phone, PhoneCall } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Switch } from '@/components/ui/Switch';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Callout, type CalloutTone } from '@/components/ui/Callout';
@@ -26,6 +27,8 @@ interface TelephonyConfigView {
   wssUrl?: string | null;
   sipDomain?: string | null;
   configuredSecrets: string[];
+  recordCalls?: boolean;
+  recordingRetentionDays?: number | null;
 }
 interface Rep {
   id: string;
@@ -229,6 +232,12 @@ function TelephonyDialog({
   const [trunk, setTrunk] = useState(cfg?.trunk ?? '');
   const [wssUrl, setWssUrl] = useState(cfg?.wssUrl ?? '');
   const [sipDomain, setSipDomain] = useState(cfg?.sipDomain ?? '');
+  const [recordCalls, setRecordCalls] = useState(cfg?.recordCalls ?? false);
+  // Empty string = "keep forever" (recordingRetentionDays: null); a positive
+  // integer = days to retain before the retention sweep deletes the object.
+  const [recordingRetentionDays, setRecordingRetentionDays] = useState(
+    cfg?.recordingRetentionDays != null ? String(cfg.recordingRetentionDays) : '',
+  );
 
   const { data: reps } = useQuery<Rep[]>({
     queryKey: ['marketing', 'users'],
@@ -239,6 +248,8 @@ function TelephonyDialog({
     setTrunk(cfg?.trunk ?? '');
     setWssUrl(cfg?.wssUrl ?? '');
     setSipDomain(cfg?.sipDomain ?? '');
+    setRecordCalls(cfg?.recordCalls ?? false);
+    setRecordingRetentionDays(cfg?.recordingRetentionDays != null ? String(cfg.recordingRetentionDays) : '');
   }, [cfg]);
 
   const save = useMutation({
@@ -251,6 +262,8 @@ function TelephonyDialog({
         trunk: trunk.trim() || undefined,
         wssUrl: wssUrl.trim() || undefined,
         sipDomain: sipDomain.trim() || undefined,
+        recordCalls,
+        recordingRetentionDays: recordingRetentionDays.trim() ? Number(recordingRetentionDays) : null,
       }),
     onSuccess: () => {
       onSaved();
@@ -308,6 +321,32 @@ function TelephonyDialog({
             <p className="text-sm font-medium text-foreground">{t('accounts.tel.webphone', 'In-browser webphone (optional)')}</p>
             <Input aria-label={t('accounts.tel.wssUrl', 'WebRTC WSS URL')} placeholder="wss://sip5.netsantral.com:8089/ws" value={wssUrl} onChange={(e) => setWssUrl(e.target.value)} />
             <Input aria-label={t('accounts.tel.sipDomain', 'SIP domain')} placeholder="sip5.netsantral.com" value={sipDomain} onChange={(e) => setSipDomain(e.target.value)} />
+          </section>
+
+          <section className="space-y-2 border-t border-border pt-3">
+            <p className="text-sm font-medium text-foreground">{t('accounts.tel.recording.title', 'Call recording')}</p>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border p-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">{t('accounts.tel.recording.toggle', 'Record calls')}</p>
+                <p className="text-caption text-muted-foreground">{t('accounts.tel.recording.toggleHint', 'Off by default. Applies to new calls placed after this is enabled.')}</p>
+              </div>
+              <Switch
+                aria-label={t('accounts.tel.recording.toggle', 'Record calls')}
+                checked={recordCalls}
+                onCheckedChange={setRecordCalls}
+              />
+            </div>
+            <Callout tone="warning">
+              <p>{t('accounts.tel.recording.kvkkNote', 'Recording requires a caller announcement by law (KVKK).')}</p>
+            </Callout>
+            <Input
+              type="number"
+              min={1}
+              aria-label={t('accounts.tel.recording.retention', 'Retention (days) — leave blank to keep forever')}
+              placeholder={t('accounts.tel.recording.retention', 'Retention (days) — leave blank to keep forever')}
+              value={recordingRetentionDays}
+              onChange={(e) => setRecordingRetentionDays(e.target.value)}
+            />
           </section>
 
           <div className="flex gap-2">

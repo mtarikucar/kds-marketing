@@ -86,6 +86,7 @@ export class SalesCallService {
         const base = {
           username: netsantral.username, password: netsantral.password,
           trunk: netsantral.trunk, pbxnum: netsantral.pbxnum,
+          recordCalls: netsantral.recordCalls,
         };
         resolvedConfig = rep.phone
           ? { ...base, callMode: 'bridge' as const, callerNum: rep.phone }

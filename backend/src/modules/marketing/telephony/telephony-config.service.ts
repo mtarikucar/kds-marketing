@@ -11,12 +11,18 @@ export interface UpsertTelephonyInput {
   status?: string;
   wssUrl?: string;
   sipDomain?: string;
+  /** NetGSM Phase 4 Task 1 — call-recording toggle (OFF by default; KVKK requires a caller announcement). */
+  recordCalls?: boolean;
+  /** Days to keep a recording before the retention sweep deletes it; null/omitted = keep forever. */
+  recordingRetentionDays?: number | null;
 }
 export interface ResolvedNetsantral {
   username: string;
   password: string;
   trunk: string;
   pbxnum?: string;
+  /** Threaded into NetgsmApiAdapter → NetsantralClient.callBridge/originate's `record` flag. */
+  recordCalls: boolean;
 }
 
 @Injectable()
@@ -47,6 +53,15 @@ export class TelephonyConfigService {
     if (!isSecretBoxConfigured()) {
       throw new ServiceUnavailableException('MARKETING_SECRET_KEY is not configured — cannot store telephony credentials');
     }
+    // recordingRetentionDays' null is a MEANINGFUL explicit state ("keep
+    // forever"), distinct from "omitted → leave unchanged" — `??` alone can't
+    // tell those apart (null is nullish, so `dto.x ?? existing.x` would
+    // silently fall through to the old value instead of clearing it). Only
+    // fall back to the existing value when the caller didn't send the field.
+    const retentionProvided = Object.prototype.hasOwnProperty.call(dto, 'recordingRetentionDays');
+    const recordingRetentionDays = retentionProvided
+      ? dto.recordingRetentionDays ?? null
+      : existing?.recordingRetentionDays ?? null;
     const data = {
       provider: 'netgsm-netsantral',
       status: dto.status ?? existing?.status ?? 'ACTIVE',
@@ -55,6 +70,8 @@ export class TelephonyConfigService {
       pbxnum: dto.pbxnum ?? existing?.pbxnum ?? null,
       wssUrl: dto.wssUrl ?? existing?.wssUrl ?? null,
       sipDomain: dto.sipDomain ?? existing?.sipDomain ?? null,
+      recordCalls: dto.recordCalls ?? existing?.recordCalls ?? false,
+      recordingRetentionDays,
     };
     const c = await this.prisma.telephonyConfig.upsert({
       where: { workspaceId },
@@ -77,7 +94,10 @@ export class TelephonyConfigService {
     let creds: Record<string, string>;
     try { creds = JSON.parse(openSecret(c.configSealed)); } catch { return null; }
     if (!creds.username || !creds.password) return null;
-    return { username: creds.username, password: creds.password, trunk: c.trunk, pbxnum: c.pbxnum ?? undefined };
+    return {
+      username: creds.username, password: creds.password, trunk: c.trunk, pbxnum: c.pbxnum ?? undefined,
+      recordCalls: c.recordCalls,
+    };
   }
 
   /** Live verify of the santral creds via /balance (works off-prod, unlike CDR). */
@@ -158,6 +178,7 @@ export class TelephonyConfigService {
       id: c.id, workspaceId: c.workspaceId, provider: c.provider, status: c.status,
       trunk: c.trunk, pbxnum: c.pbxnum, configuredSecrets,
       wssUrl: c.wssUrl, sipDomain: c.sipDomain,
+      recordCalls: c.recordCalls, recordingRetentionDays: c.recordingRetentionDays,
       createdAt: c.createdAt, updatedAt: c.updatedAt,
     };
   }
