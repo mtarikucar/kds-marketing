@@ -204,4 +204,167 @@ describe('NetsantralClient', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
+
+  // ── Phase 4 Task 4: queue wallboard + agent presence ──────────────────────
+
+  describe('queueStats', () => {
+    it('GETs the /queuestats URL and tolerantly parses waiting/holdtime + per-agent state', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            queues: [
+              {
+                queue: '8508407303-queue-sales',
+                waiting: '3',
+                holdtime: '01:30',
+                agents: [
+                  { dahili: '101', state: 'Available' },
+                  { exten: '102', status: 'Paused' },
+                  { internal_num: '103', durum: 'Görüşmede' },
+                ],
+              },
+            ],
+          }),
+      } as any);
+      const out = await new NetsantralClient().queueStats(creds);
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/queuestats');
+      expect(url).toContain('username=8508407303');
+      expect(url).toContain('password=pw');
+      expect(url).not.toContain('queue=');
+      expect(out.queues).toEqual([
+        {
+          queue: '8508407303-queue-sales',
+          waiting: 3,
+          holdtimeSec: 90,
+          agents: [
+            { dahili: '101', state: 'available', raw: 'Available' },
+            { dahili: '102', state: 'paused', raw: 'Paused' },
+            { dahili: '103', state: 'unknown', raw: 'Görüşmede' },
+          ],
+        },
+      ]);
+    });
+
+    it('filters to one queue via the `queue` param when queueName is given', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => JSON.stringify({ queues: [] }),
+      } as any);
+      await new NetsantralClient().queueStats(creds, '8508407303-queue-sales');
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('queue=8508407303-queue-sales');
+    });
+
+    it('returns ok:false (no throw) when creds are missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().queueStats({ username: '', password: '' });
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('tolerates an unrecognised/empty shape without throwing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ status: 200, text: async () => '' } as any);
+      const out = await new NetsantralClient().queueStats(creds);
+      expect(out.ok).toBe(false);
+    });
+
+    it('returns ok:false on a provider error code', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ status: 200, text: async () => '30' } as any);
+      const out = await new NetsantralClient().queueStats(creds);
+      expect(out.ok).toBe(false);
+      expect(out.code).toBe('30');
+    });
+
+    it('scrubs username and password from a thrown error', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockRejectedValue(
+        new Error('boom username=8508407303 password=pw'),
+      );
+      const out = await new NetsantralClient().queueStats(creds);
+      expect(out.ok).toBe(false);
+      expect(out.message).not.toContain('pw');
+      expect(out.message).toContain('***');
+    });
+  });
+
+  describe('agentLogin', () => {
+    it('GETs the /agentlogin URL with the extension and returns ok', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().agentLogin(creds, '104');
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/agentlogin');
+      expect(url).toContain('exten=104');
+    });
+
+    it('returns ok:false (no throw) when dahili is missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().agentLogin(creds, '');
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('agentLogoff', () => {
+    it('GETs the /agentlogoff URL with the extension and returns ok', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().agentLogoff(creds, '104');
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/agentlogoff');
+      expect(url).toContain('exten=104');
+    });
+
+    it('returns ok:false (no throw) when dahili is missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().agentLogoff(creds, '');
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('agentPause', () => {
+    it('GETs the /agentpause URL with the extension + reason when given', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      const out = await new NetsantralClient().agentPause(creds, '104', 'Lunch');
+      expect(out.ok).toBe(true);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('crmsntrl.netgsm.com.tr:9111/8508407303/agentpause');
+      expect(url).toContain('exten=104');
+      expect(url).toContain('reason=Lunch');
+    });
+
+    it('omits the reason param when none is given', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        status: 200, text: async () => '{"status":"success"}',
+      } as any);
+      await new NetsantralClient().agentPause(creds, '104');
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).not.toContain('reason=');
+    });
+
+    it('returns ok:false (no throw) when dahili is missing', async () => {
+      fetchMock = jest.spyOn(global, 'fetch');
+      const out = await new NetsantralClient().agentPause(creds, '');
+      expect(out.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('scrubs username and password from a thrown error', async () => {
+      fetchMock = jest.spyOn(global, 'fetch').mockRejectedValue(
+        new Error('boom username=8508407303 password=pw'),
+      );
+      const out = await new NetsantralClient().agentPause(creds, '104', 'Break');
+      expect(out.ok).toBe(false);
+      expect(out.message).not.toContain('pw');
+      expect(out.message).toContain('***');
+    });
+  });
 });

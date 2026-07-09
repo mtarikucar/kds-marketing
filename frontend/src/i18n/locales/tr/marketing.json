@@ -1986,6 +1986,40 @@
       "NEGATIVE": "Olumsuz"
     }
   },
+  "queueWallboard": {
+    "title": "Kuyruk panosu",
+    "waiting": "Bekleyen",
+    "avgHoldtime": "Ort. bekleme süresi",
+    "agents": "Temsilciler",
+    "noData": "Henüz aktif kuyruk yok — canlı istatistikleri görmek için NetGSM Netsantral kuyruklarını yapılandırın.",
+    "loadError": "Kuyruk istatistikleri yüklenemedi.",
+    "helpTitle": "Kuyruklar hakkında",
+    "helpBody": "Kuyruğa DİNAMİK üye olarak eklenen ekip arkadaşlarının canlı durumu burada görünür ve aşağıdaki düğmeyle yönetilebilir — NetGSM panelinden STATİK eklenen üyeler salt okunurdur. Kuyruk adları `{santral}-queue-{name}` biçimini izler.",
+    "state": {
+      "available": "Müsait",
+      "paused": "Molada",
+      "oncall": "Görüşmede",
+      "offline": "Çevrimdışı",
+      "unknown": "Bilinmiyor"
+    },
+    "presence": {
+      "available": "Müsait",
+      "break": "Mola",
+      "noExtension": "Durumu kullanmak için hesap ayarlarından dahili numaranızı ayarlayın.",
+      "reasonTitle": "Mola ver",
+      "reasonHint": "İsteğe bağlı bir sebep seçin — yöneticiniz panoda görür.",
+      "reasonLunch": "Öğle yemeği",
+      "reasonMeeting": "Toplantı",
+      "reasonTechnical": "Teknik sorun",
+      "reasonOther": "Diğer",
+      "reasonPlaceholder": "Sebep (opsiyonel)",
+      "confirm": "Molayı başlat",
+      "cancel": "Vazgeç",
+      "toggleSuccessAvailable": "Artık müsaitsiniz",
+      "toggleSuccessBreak": "Moladasınız",
+      "toggleFailed": "Durumunuz güncellenemedi"
+    }
+  },
   "copilot": {
     "title": "Canlı Asistan",
     "listen": "Dinle",

@@ -96,6 +96,10 @@ import { TelephonyStreamController } from './controllers/telephony-stream.contro
 // LIVE netsantral call, keyed by SalesCall.externalCallId.
 import { TelephonyControlController } from './controllers/telephony-control.controller';
 import { TelephonyControlService } from './services/telephony-control.service';
+// NetGSM Phase 4 Task 4 — queue wallboard (queuestats) + agent presence
+// (agentlogin/agentlogoff/agentpause), acting on the CALLING rep's own dahili.
+import { TelephonyQueueController } from './controllers/telephony-queue.controller';
+import { TelephonyQueueService } from './services/telephony-queue.service';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
@@ -517,6 +521,7 @@ import { WalletService } from './wallet/wallet.service';
     WebphoneConfigController,
     TelephonyStreamController,
     TelephonyControlController,
+    TelephonyQueueController,
     NetgsmOnboardingController,
     InstallationController,
     SalesTargetController,
@@ -666,6 +671,8 @@ import { WalletService } from './wallet/wallet.service';
     RecordingRetentionService,
     // NetGSM Phase 3 Task 5 — in-call control (hangup/transfer/mute).
     TelephonyControlService,
+    // NetGSM Phase 4 Task 4 — queue wallboard + agent presence.
+    TelephonyQueueService,
     // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
     TelephonyEventConsumer,
     // NetGSM Phase 3 Task 3 — per-workspace SSE fan-out (screen-pop, live

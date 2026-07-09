@@ -5,9 +5,11 @@ import { useTranslation } from 'react-i18next';
 import { Phone, PlayCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
+import { useEntitlements } from '../../features/marketing/hooks/useEntitlements';
 import { ClickToDialButton } from '../../features/marketing/components';
 import CallAnalysisPanel from './calls/CallAnalysisPanel';
 import CallRecordingPlayer from './calls/CallRecordingPlayer';
+import QueueWallboard from './calls/QueueWallboard';
 import { RouteFallback } from '../../components/RouteFallback';
 import { CallStatus, CALL_STATUS_LABELS } from '../../features/marketing/types';
 import type { SalesCall, PaginatedResponse, MarketingUserInfo } from '../../features/marketing/types';
@@ -132,6 +134,10 @@ function CallsTab() {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  // Wallboard hits telephony-only routes that 503 without an active Netsantral
+  // config — only render it for workspaces the package actually entitles.
+  const { has: hasFeature } = useEntitlements();
+  const showWallboard = hasFeature('telephony');
 
   const [status, setStatus] = useState('');
   const [repId, setRepId] = useState('');
@@ -182,6 +188,8 @@ function CallsTab() {
 
   return (
     <div className="space-y-6">
+      {showWallboard && <QueueWallboard />}
+
       {/* ── Filters ── */}
       <FilterBar>
         <Select

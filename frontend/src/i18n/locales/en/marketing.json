@@ -1765,6 +1765,40 @@
       "NEGATIVE": "Negative"
     }
   },
+  "queueWallboard": {
+    "title": "Queue wallboard",
+    "waiting": "Waiting",
+    "avgHoldtime": "Avg hold time",
+    "agents": "Agents",
+    "noData": "No active queue yet — configure NetGSM Netsantral queues to see live stats here.",
+    "loadError": "Could not load queue stats.",
+    "helpTitle": "About queues",
+    "helpBody": "Only teammates added to the queue as DYNAMIC members show live state here and can be managed with the toggle below — members added as STATIC in the NetGSM portal are read-only. Queue names follow the `{santral}-queue-{name}` pattern.",
+    "state": {
+      "available": "Available",
+      "paused": "On break",
+      "oncall": "On a call",
+      "offline": "Offline",
+      "unknown": "Unknown"
+    },
+    "presence": {
+      "available": "Available",
+      "break": "Break",
+      "noExtension": "Set your extension in account settings to use presence.",
+      "reasonTitle": "Take a break",
+      "reasonHint": "Optionally pick a reason — your manager sees it on the wallboard.",
+      "reasonLunch": "Lunch",
+      "reasonMeeting": "Meeting",
+      "reasonTechnical": "Technical issue",
+      "reasonOther": "Other",
+      "reasonPlaceholder": "Reason (optional)",
+      "confirm": "Start break",
+      "cancel": "Cancel",
+      "toggleSuccessAvailable": "You're available",
+      "toggleSuccessBreak": "You're on a break",
+      "toggleFailed": "Could not update your status"
+    }
+  },
   "copilot": {
     "title": "Live Assistant",
     "listen": "Listen",
