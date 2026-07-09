@@ -161,6 +161,7 @@ import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
 import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
 import { NetgsmMoPollService } from './channels/netgsm-mo-poll.service';
 import { NetgsmVoicemailPollService } from './channels/netgsm-voicemail-poll.service';
+import { NetgsmFaxPollService } from './channels/netgsm-fax-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
 import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
@@ -769,6 +770,11 @@ import { WalletService } from './wallet/wallet.service';
     // voicemail reaches the shared inbox through, best-effort proxy-storing
     // the recording into R2 and transcribing it for a text preview.
     NetgsmVoicemailPollService,
+    // NetGSM Phase 6 Task 2 — fax has no push webhook either, so this hourly
+    // poll of /fax/receive IS the (only) path an inbound fax reaches the
+    // shared inbox through, gated on the fax + conversationAi entitlements
+    // (an active SMS channel alone does not imply either).
+    NetgsmFaxPollService,
     // Blacklist sync (defense-in-depth): mirrors lead smsOptOut transitions
     // onto NetGSM's account-level blacklist — subscribes via DomainEventBus.
     NetgsmBlacklistSyncService,

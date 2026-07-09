@@ -1660,6 +1660,8 @@
     "close": "Kapat",
     "failed": "başarısız",
     "voicemail": "Sesli Mesaj",
+    "fax": "Faks",
+    "faxOpenDocument": "Belgeyi aç",
     "replyPlaceholder": "Yanıt yazın… (AI'ı duraklatır)",
     "smsCounter": "{{chars}} karakter · {{segments}} segment",
     "context": "Lead",

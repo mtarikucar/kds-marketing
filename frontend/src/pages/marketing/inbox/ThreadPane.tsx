@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   Users,
   Mic,
+  FileText,
 } from 'lucide-react';
 import { Button, IconButton, Card, ScrollArea, Badge } from '@/components/ui';
 import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
@@ -25,8 +26,19 @@ interface MessageRow {
    *  `meta.raw.kind === 'VOICEMAIL'` (Message has no separate channel/type
    *  column of its own). `audioUrl` is NetGSM's own provider-tokenized link
    *  (an accepted fallback — see RecordingProxyController's docstring for the
-   *  same precedent with call recordings — never our R2 bucket's public URL). */
-  meta?: { raw?: { kind?: string; audioUrl?: string | null; durationSec?: number | null } } | null;
+   *  same precedent with call recordings — never our R2 bucket's public URL).
+   *  NetGSM Phase 6 Task 2 — an inbound fax lands the same way, tagged
+   *  `meta.raw.kind === 'FAX'`; `documentUrl` is NetGSM's own provider-
+   *  tokenized link to the PDF (same precedent, never our R2 bucket's public
+   *  URL — see NetgsmFaxPollService's docstring). */
+  meta?: {
+    raw?: {
+      kind?: string;
+      audioUrl?: string | null;
+      durationSec?: number | null;
+      documentUrl?: string | null;
+    };
+  } | null;
 }
 
 interface ThreadPaneProps {
@@ -169,6 +181,7 @@ export function ThreadPane({
         <div className="space-y-3">
           {messages.map((m) => {
             const isVoicemail = m.meta?.raw?.kind === 'VOICEMAIL';
+            const isFax = m.meta?.raw?.kind === 'FAX';
             return (
               <div
                 key={m.id}
@@ -192,6 +205,12 @@ export function ThreadPane({
                       {t('inbox.voicemail', 'Voicemail')}
                     </Badge>
                   )}
+                  {isFax && (
+                    <Badge tone="neutral" size="sm" className="mb-1 gap-1">
+                      <FileText className="w-3 h-3" aria-hidden="true" />
+                      {t('inbox.fax', 'Fax')}
+                    </Badge>
+                  )}
                   <div className="whitespace-pre-wrap break-words">{m.body}</div>
                   {isVoicemail && m.meta?.raw?.audioUrl && (
                     <audio
@@ -200,6 +219,17 @@ export function ThreadPane({
                       src={m.meta.raw.audioUrl}
                       className="mt-1.5 h-8 max-w-full"
                     />
+                  )}
+                  {isFax && m.meta?.raw?.documentUrl && (
+                    <a
+                      href={m.meta.raw.documentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1.5 inline-flex items-center gap-1 text-xs underline underline-offset-2"
+                    >
+                      <FileText className="w-3 h-3" aria-hidden="true" />
+                      {t('inbox.faxOpenDocument', 'Open document')}
+                    </a>
                   )}
                   {m.status === 'FAILED' && (
                     <div className="text-[10px] text-danger/80 mt-0.5">

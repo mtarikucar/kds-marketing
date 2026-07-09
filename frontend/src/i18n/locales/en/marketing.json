@@ -1432,6 +1432,8 @@
     "close": "Close",
     "failed": "failed",
     "voicemail": "Voicemail",
+    "fax": "Fax",
+    "faxOpenDocument": "Open document",
     "replyPlaceholder": "Type a reply… (this pauses the AI)",
     "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
     "context": "Lead",
