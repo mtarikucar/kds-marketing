@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { TwoFactorService } from './two-factor.service';
 import { generateTotpSecret, generateTotpCode } from '../util/totp';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
@@ -10,7 +10,12 @@ import {
 function makeSvc() {
   const prisma = mockPrismaClient();
   const smsOtp = { issue: jest.fn(), verify: jest.fn() } as any;
-  return { prisma, smsOtp, svc: new TwoFactorService(prisma as any, smsOtp) };
+  // Default to entitled so every EXISTING test (written before the Task 13
+  // purpose-aware gate) keeps passing without having to know about
+  // entitlements; the dedicated "smsOtp entitlement gate" describe block
+  // below overrides this per-test to exercise the 403/bypass branches.
+  const entitlements = { getEffective: jest.fn().mockResolvedValue({ features: { smsOtp: true } }) } as any;
+  return { prisma, smsOtp, entitlements, svc: new TwoFactorService(prisma as any, smsOtp, entitlements) };
 }
 
 describe('TwoFactorService', () => {
@@ -248,6 +253,64 @@ describe('TwoFactorService', () => {
 
       prisma.marketingUser.findUnique.mockResolvedValue({ id: 'u1', twoFactorEnabled: false, twoFactorSecret: null } as any);
       expect(await svc.status('u1')).toEqual({ enabled: false, method: null });
+    });
+  });
+
+  describe('sendSmsCode — purpose-aware smsOtp entitlement gate (NetGSM SMS v2 Task 13)', () => {
+    // Lockout fix: `sms/send` no longer carries a blanket route-level
+    // @RequiresFeature — see two-factor.controller.ts. A NEW enrollment send
+    // (caller isn't SMS-armed yet) still requires the `smsOtp` add-on; a send
+    // that services an ALREADY-armed SMS factor (disable()'s reauth code)
+    // must stay available even without it, so a workspace that armed
+    // SMS-2FA and then lost the add-on (cancel/downgrade) is never stranded
+    // on a factor it can't remove.
+    it('(a) non-armed user WITHOUT smsOtp -> ForbiddenException, NetGSM never contacted', async () => {
+      const { prisma, smsOtp, entitlements, svc } = makeSvc();
+      entitlements.getEffective.mockResolvedValue({ features: { smsOtp: false } });
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'u1', workspaceId: 'ws1', phone: '05551234567', twoFactorEnabled: false, twoFactorSecret: null,
+      } as any);
+      await expect(svc.sendSmsCode('u1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(smsOtp.issue).not.toHaveBeenCalled();
+    });
+
+    it('(b) already-SMS-armed user WITHOUT smsOtp -> allowed, entitlements never even consulted', async () => {
+      const { prisma, smsOtp, entitlements, svc } = makeSvc();
+      entitlements.getEffective.mockResolvedValue({ features: { smsOtp: false } });
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'u1', workspaceId: 'ws1', phone: '05551234567', twoFactorEnabled: true, twoFactorSecret: null,
+      } as any);
+      smsOtp.issue.mockResolvedValue({ ok: true });
+      const out = await svc.sendSmsCode('u1');
+      expect(out).toEqual({ sent: true });
+      expect(entitlements.getEffective).not.toHaveBeenCalled();
+      expect(smsOtp.issue).toHaveBeenCalledWith(
+        'ws1',
+        { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: 'u1' },
+        '05551234567',
+      );
+    });
+
+    it('non-armed user WITH smsOtp -> allowed (new enrollment, entitled)', async () => {
+      const { prisma, smsOtp, entitlements, svc } = makeSvc();
+      entitlements.getEffective.mockResolvedValue({ features: { smsOtp: true } });
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'u1', workspaceId: 'ws1', phone: '05551234567', twoFactorEnabled: false, twoFactorSecret: null,
+      } as any);
+      smsOtp.issue.mockResolvedValue({ ok: true });
+      const out = await svc.sendSmsCode('u1');
+      expect(out).toEqual({ sent: true });
+      expect(smsOtp.issue).toHaveBeenCalled();
+    });
+
+    it('TOTP-armed user is refused before the entitlement check ever runs', async () => {
+      const { prisma, entitlements, svc } = makeSvc();
+      entitlements.getEffective.mockResolvedValue({ features: { smsOtp: false } });
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'u1', workspaceId: 'ws1', phone: '05551234567', twoFactorEnabled: true, twoFactorSecret: 'sealed',
+      } as any);
+      await expect(svc.sendSmsCode('u1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(entitlements.getEffective).not.toHaveBeenCalled();
     });
   });
 });

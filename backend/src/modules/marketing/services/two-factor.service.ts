@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
 import { SmsOtpService, SmsOtpTarget } from './sms-otp.service';
 import {
   generateBackupCodes,
@@ -41,6 +43,7 @@ export class TwoFactorService {
   constructor(
     private prisma: PrismaService,
     private smsOtp: SmsOtpService,
+    private entitlements: EntitlementsService,
   ) {}
 
   private async getUser(userId: string) {
@@ -103,6 +106,20 @@ export class TwoFactorService {
    * to obtain the fresh code `disable()` requires when the active factor is
    * already SMS — an authenticator app can mint a code offline at any
    * instant, but SMS has no equivalent, so the client calls this first.
+   *
+   * NetGSM SMS v2 Task 13 — purpose-aware `smsOtp` entitlement gate. The
+   * controller route carries NO @RequiresFeature (see two-factor.controller.ts)
+   * because this method services TWO distinct purposes that must NOT share
+   * one gate:
+   *   - a NEW enrollment send (caller isn't SMS-armed yet) is a real, billed
+   *     NetGSM send with no factor behind it yet — still requires `smsOtp`,
+   *     closing the free-send abuse the route-level gate was added for.
+   *   - a reauth send to service an ALREADY-armed SMS factor (disable()'s
+   *     code requirement) must stay available even withOUT `smsOtp` — a
+   *     workspace that armed SMS-2FA while entitled and later lost the
+   *     add-on (cancel/downgrade) must always be able to get a code to turn
+   *     its OWN 2FA off. Gating that path would soft-lock the account onto a
+   *     factor it can never remove.
    */
   async sendSmsCode(userId: string) {
     const u = await this.getUser(userId);
@@ -110,6 +127,17 @@ export class TwoFactorService {
       throw new BadRequestException(
         'Disable your authenticator-app 2FA before switching to SMS.',
       );
+    }
+    const alreadySmsArmed = u.twoFactorEnabled && u.twoFactorSecret === null;
+    if (!alreadySmsArmed) {
+      const effective = await this.entitlements.getEffective(u.workspaceId);
+      if (!effective.features.smsOtp) {
+        throw new ForbiddenException({
+          message: 'This feature requires a higher package',
+          feature: 'smsOtp',
+          code: 'FEATURE_NOT_IN_PACKAGE',
+        });
+      }
     }
     if (!u.phone) {
       throw new BadRequestException('Add a phone number to your profile first.');
