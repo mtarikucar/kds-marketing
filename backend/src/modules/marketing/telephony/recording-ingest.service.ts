@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { R2StorageService } from '../../../common/storage/r2-storage.service';
@@ -140,7 +141,20 @@ export class RecordingIngestService {
       return false;
     }
 
-    const key = `netgsm-recordings/${call.workspaceId}/${call.id}.mp3`;
+    // Final-review HIGH-2 fix: a RANDOM segment makes this key impossible to
+    // derive from workspaceId+callId alone. Pre-fix, the key was
+    // `netgsm-recordings/<ws>/<callId>.mp3` — fully deterministic — while the
+    // tokened proxy URL the browser sees (`recording-proxy-token.util`'s
+    // `recordingProxyUrl`) carries exactly `<ws>/<callId>` in its path. Since
+    // the R2 bucket is public-read (see `R2StorageService`'s docstring —
+    // shared with social-planner's Meta/TikTok pull-from-URL media), anyone
+    // who captured a proxy URL could compute `<R2_PUBLIC_BASE>/<key>` and get
+    // a permanent, no-TTL, no-auth link to the audio — bypassing both the
+    // 5-minute token AND the REP-own-calls check in `SalesCallService.get`.
+    // The random suffix closes that: the key is only ever known via
+    // `SalesCall.recordingStorageKey`, read from the DB by
+    // `RecordingProxyController` — never recomputed from ws+callId.
+    const key = `netgsm-recordings/${call.workspaceId}/${call.id}-${randomUUID()}.mp3`;
     await this.r2.uploadToKey(key, { mimetype: 'audio/mpeg', buffer, size: buffer.length });
 
     // Guarded updateMany (recordingStorageKey: null) — idempotent: a second

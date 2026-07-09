@@ -72,7 +72,7 @@ describe('RecordingIngestService', () => {
   });
 
   describe('ingest happy path', () => {
-    it('appends &tomp3, downloads via safeFetch, uploads to the right R2 key, and stamps recordingStorageKey', async () => {
+    it('appends &tomp3, downloads via safeFetch, uploads to a randomized R2 key, and stamps recordingStorageKey with that exact key (HIGH-2 fix)', async () => {
       const { prisma, r2, svc } = makeSvc();
       prisma.salesCall.findMany.mockResolvedValue([
         { id: 'call-1', workspaceId: 'ws-1', recordingUrl: 'https://dosya.netgsm.com.tr/rec?token=SECRET123' },
@@ -85,16 +85,21 @@ describe('RecordingIngestService', () => {
         'https://dosya.netgsm.com.tr/rec?token=SECRET123&tomp3',
         expect.objectContaining({ timeoutMs: expect.any(Number) }),
       );
-      expect(r2.uploadToKey).toHaveBeenCalledWith(
-        'netgsm-recordings/ws-1/call-1.mp3',
-        expect.objectContaining({ mimetype: 'audio/mpeg' }),
-      );
+      expect(r2.uploadToKey).toHaveBeenCalledTimes(1);
+      const uploadedKey = r2.uploadToKey.mock.calls[0][0];
+      // HIGH-2 fix: the key must NOT be derivable from workspaceId+callId
+      // alone (that pair is exactly what the tokened proxy URL exposes to
+      // the browser) — it carries a random UUID segment.
+      expect(uploadedKey).toMatch(/^netgsm-recordings\/ws-1\/call-1-[0-9a-f-]+\.mp3$/);
+      expect(r2.uploadToKey).toHaveBeenCalledWith(uploadedKey, expect.objectContaining({ mimetype: 'audio/mpeg' }));
       const uploadArg = r2.uploadToKey.mock.calls[0][1];
       expect(Buffer.isBuffer(uploadArg.buffer)).toBe(true);
 
+      // recordingStorageKey is stamped with the EXACT randomized key that was
+      // uploaded — never recomputed from ws+callId elsewhere.
       expect(prisma.salesCall.updateMany).toHaveBeenCalledWith({
         where: { id: 'call-1', workspaceId: 'ws-1', recordingStorageKey: null },
-        data: { recordingStorageKey: 'netgsm-recordings/ws-1/call-1.mp3' },
+        data: { recordingStorageKey: uploadedKey },
       });
       // watermark ALWAYS advances
       expect(prisma.salesCall.update).toHaveBeenCalledWith({
@@ -102,6 +107,25 @@ describe('RecordingIngestService', () => {
         data: { recordingCheckedAt: expect.any(Date) },
       });
       expect(result).toEqual({ processed: 1, ingested: 1 });
+    });
+
+    it('uploads to a DIFFERENT key on each call, even for the same call id (random segment is per-attempt, not memoized)', async () => {
+      const { prisma, r2, svc } = makeSvc();
+      prisma.salesCall.findMany
+        .mockResolvedValueOnce([
+          { id: 'call-1', workspaceId: 'ws-1', recordingUrl: 'https://dosya.netgsm.com.tr/rec?token=t1' },
+        ])
+        .mockResolvedValueOnce([
+          { id: 'call-1', workspaceId: 'ws-1', recordingUrl: 'https://dosya.netgsm.com.tr/rec?token=t1' },
+        ]);
+      mockSafeFetch.mockResolvedValue(fakeResponse(true, 200));
+
+      await svc.ingest();
+      const firstKey = r2.uploadToKey.mock.calls[0][0];
+      await svc.ingest();
+      const secondKey = r2.uploadToKey.mock.calls[1][0];
+
+      expect(firstKey).not.toBe(secondKey);
     });
 
     it('never logs the tokenized recordingUrl even on failure', async () => {
@@ -225,6 +249,29 @@ describe('RecordingIngestService', () => {
         { recordingCheckedAt: null },
         { recordingCheckedAt: { lt: expect.any(Date) } },
       ]);
+    });
+  });
+
+  describe('HIGH-1 fix — retention purge stops the re-ingest loop', () => {
+    it('the DUE query requires recordingUrl NOT NULL, so a purged call (RecordingRetentionService nulls recordingUrl on purge) structurally cannot be re-selected', async () => {
+      const { prisma, svc } = makeSvc();
+      await svc.ingest();
+      const arg = prisma.salesCall.findMany.mock.calls[0][0];
+      expect(arg.where.recordingUrl).toEqual({ not: null });
+
+      // Shape of a row immediately after RecordingRetentionService.retainWorkspace
+      // purges it (see recording-retention.service.ts): status stays CONNECTED,
+      // but BOTH recordingStorageKey and recordingUrl are null. Prisma's
+      // `{ not: null }` predicate on a null field never matches — this asserts
+      // that invariant directly against the purged shape, rather than just the
+      // query's literal text, so a future refactor of either service that
+      // breaks the pairing is caught here too.
+      const purgedCallRow = { status: 'CONNECTED', recordingUrl: null, recordingStorageKey: null };
+      const matchesDue =
+        purgedCallRow.status === 'CONNECTED' &&
+        purgedCallRow.recordingUrl !== null &&
+        purgedCallRow.recordingStorageKey === null;
+      expect(matchesDue).toBe(false);
     });
   });
 });

@@ -127,11 +127,16 @@ export class R2StorageService {
   /**
    * Upload one file to a CALLER-SUPPLIED key — bypasses the
    * `social/<workspaceId>/<uuid>.<ext>` scheme `upload()` derives internally.
-   * Used by telephony recording ingest (NetGSM Phase 4 Task 2), which needs a
-   * stable, predictable key (`netgsm-recordings/<workspaceId>/<salesCallId>.mp3`)
-   * rather than a random one, so a later re-ingest attempt targets the same
-   * object. `upload()` itself is untouched — social-planner's random-key
-   * behavior is unaffected.
+   * Used by telephony recording ingest (NetGSM Phase 4 Task 2), which needs
+   * the key's PREFIX (`netgsm-recordings/<workspaceId>/<salesCallId>-...`) to
+   * stay grep-able/attributable per workspace+call, while still including a
+   * random segment (final-review HIGH-2 fix) so the full key can never be
+   * derived from workspaceId+callId alone — this bucket is public-read (see
+   * class docstring), so a derivable key would be a permanent, no-auth URL to
+   * sensitive call/voicemail audio. Callers persist the exact returned `key`
+   * (`SalesCall.recordingStorageKey`) rather than ever recomputing it.
+   * `upload()` itself is untouched — social-planner's random-key behavior is
+   * unaffected.
    */
   async uploadToKey(key: string, file: UploadInput): Promise<UploadedMedia> {
     if (!this.isConfigured()) {

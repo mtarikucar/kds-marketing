@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { safeFetch } from '../../../common/util/safe-fetch';
@@ -38,9 +39,22 @@ const BUDGET_WINDOW_MS = 60_000;
  *  the hourly cadence with a 1h safety margin against a missed/delayed tick,
  *  without ever risking the 24h ceiling. */
 const WINDOW_HOURS = 2;
-/** R2 key prefix for a voicemail's proxy-downloaded copy — deterministic from
- *  (workspaceId, NetGSM's own record id), so it never needs to be persisted
- *  anywhere separately (a future playback route can recompute it). */
+/** R2 key prefix for a voicemail's proxy-downloaded copy.
+ *
+ * Final-review HIGH-2 fix: the full key is
+ * `<R2_KEY_PREFIX>/<workspaceId>/<sanitized-id>-<randomUUID()>.mp3` — NOT
+ * purely deterministic from (workspaceId, NetGSM's record id) anymore. A
+ * deterministic key here would have the SAME derivable-from-public-info
+ * problem `RecordingIngestService`'s call-recording key had (see that
+ * service's docstring): the R2 bucket is public-read, so a key computable
+ * from data already visible to a caller (workspaceId + this poller's own
+ * `netgsm-vm:<id>` convention) would be a permanent, no-auth link once
+ * ingested. The key is currently write-only (MEDIUM-1, deferred — no
+ * playback proxy reads it back yet), so this random segment is a
+ * future-safety measure: it also means a future playback route (when
+ * MEDIUM-1 ships) MUST persist and read back the actual stored key rather
+ * than recomputing it from workspaceId+id — recomputation is no longer
+ * possible by design. */
 const R2_KEY_PREFIX = 'netgsm-voicemail';
 
 /**
@@ -69,8 +83,8 @@ const R2_KEY_PREFIX = 'netgsm-voicemail';
  * the SMS poller's `netgsm-mo:<id>`) checked BEFORE the expensive download
  * step (so an already-ingested voicemail from a prior, overlapping tick is
  * never re-downloaded); then best-effort proxy-download the `sesdosya`
- * audio into R2 (`netgsm-voicemail/<workspaceId>/<id>.mp3`, mirroring
- * `RecordingIngestService`'s ingest shape) when R2 is configured, and
+ * audio into R2 (`netgsm-voicemail/<workspaceId>/<id>-<random>.mp3`, mirroring
+ * `RecordingIngestService`'s randomized-key ingest shape) when R2 is configured, and
  * best-effort STT (`SttService`, already inert until STT_PROVIDER/STT_API_KEY
  * are set) for a text preview; the Message body is the STT preview when one
  * came back, else the literal `'Sesli mesaj'`. Ingestion reuses
@@ -278,7 +292,7 @@ export class NetgsmVoicemailPollService {
         this.logger.warn(`netgsm-voicemail-poll: audio download empty for voicemail ${row.id}`);
         return null;
       }
-      const key = `${R2_KEY_PREFIX}/${workspaceId}/${sanitizeKeySegment(row.id!)}.mp3`;
+      const key = `${R2_KEY_PREFIX}/${workspaceId}/${sanitizeKeySegment(row.id!)}-${randomUUID()}.mp3`;
       await this.r2.uploadToKey(key, { mimetype: 'audio/mpeg', buffer, size: buffer.length });
       return key;
     } catch (e: any) {

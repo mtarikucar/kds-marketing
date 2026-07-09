@@ -187,7 +187,7 @@ describe('NetgsmVoicemailPollService.poll', () => {
       expect(out.polled).toBe(1);
     });
 
-    it('ingests a new voicemail as a VOICEMAIL message, namespaced netgsm-vm:<id>, and stores the recording in R2', async () => {
+    it('ingests a new voicemail as a VOICEMAIL message, namespaced netgsm-vm:<id>, and stores the recording in R2 under a randomized key (HIGH-2 fix)', async () => {
       voicesms.receiveVoicemails.mockResolvedValue({ ok: true, voicemails: [voicemailRow()] });
       r2.isConfigured.mockReturnValue(true);
       mockSafeFetch.mockResolvedValue({
@@ -199,10 +199,11 @@ describe('NetgsmVoicemailPollService.poll', () => {
       const out = await service.poll();
 
       expect(mockSafeFetch).toHaveBeenCalledWith('https://sesdosya.netgsm.com.tr/abc.wav', expect.objectContaining({ timeoutMs: 30_000 }));
-      expect(r2.uploadToKey).toHaveBeenCalledWith(
-        'netgsm-voicemail/w1/42.mp3',
-        expect.objectContaining({ mimetype: 'audio/mpeg' }),
-      );
+      expect(r2.uploadToKey).toHaveBeenCalledTimes(1);
+      const uploadedKey = r2.uploadToKey.mock.calls[0][0];
+      // HIGH-2 fix: not derivable from workspaceId+voicemailId alone.
+      expect(uploadedKey).toMatch(/^netgsm-voicemail\/w1\/42-[0-9a-f-]+\.mp3$/);
+      expect(r2.uploadToKey).toHaveBeenCalledWith(uploadedKey, expect.objectContaining({ mimetype: 'audio/mpeg' }));
       expect(ingress.ingest).toHaveBeenCalledWith(
         { id: 'ch-1', workspaceId: 'w1', type: 'SMS' },
         expect.objectContaining({

@@ -41,12 +41,12 @@ describe('RecordingRetentionService', () => {
     expect(arg.where.recordingRetentionDays).toEqual({ not: null });
   });
 
-  it('deletes R2 objects past retention, nulls recordingStorageKey, and keeps the row + recordingUrl', async () => {
+  it('deletes R2 objects past retention and nulls BOTH recordingStorageKey and recordingUrl in the SAME updateMany (HIGH-1 fix — stops recording-ingest from re-selecting a purged call)', async () => {
     const { prisma, r2, svc } = makeSvc();
     prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-1', recordingRetentionDays: 30 }]);
     prisma.salesCall.findMany.mockResolvedValue([
-      { id: 'call-1', recordingStorageKey: 'netgsm-recordings/ws-1/call-1.mp3' },
-      { id: 'call-2', recordingStorageKey: 'netgsm-recordings/ws-1/call-2.mp3' },
+      { id: 'call-1', recordingStorageKey: 'netgsm-recordings/ws-1/call-1-abc123.mp3' },
+      { id: 'call-2', recordingStorageKey: 'netgsm-recordings/ws-1/call-2-def456.mp3' },
     ]);
     prisma.salesCall.updateMany.mockResolvedValue({ count: 2 });
 
@@ -59,15 +59,18 @@ describe('RecordingRetentionService', () => {
     expect(callArg.where.endedAt.lt).toBeInstanceOf(Date);
 
     expect(r2.deleteKeys).toHaveBeenCalledWith([
-      'netgsm-recordings/ws-1/call-1.mp3',
-      'netgsm-recordings/ws-1/call-2.mp3',
+      'netgsm-recordings/ws-1/call-1-abc123.mp3',
+      'netgsm-recordings/ws-1/call-2-def456.mp3',
     ]);
+    // HIGH-1 fix: recordingUrl is nulled in the SAME updateMany as
+    // recordingStorageKey — recording-ingest's DUE query requires
+    // `recordingUrl: { not: null }`, so leaving it set would let a purged
+    // call re-enter the ingest queue and get silently re-downloaded within
+    // minutes, defeating retention entirely.
     expect(prisma.salesCall.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['call-1', 'call-2'] }, workspaceId: 'ws-1' },
-      data: { recordingStorageKey: null },
+      data: { recordingStorageKey: null, recordingUrl: null },
     });
-    // recordingUrl / the row itself are never touched by this sweep.
-    expect(prisma.salesCall.updateMany.mock.calls[0][0].data).not.toHaveProperty('recordingUrl');
     expect(result).toEqual({ deleted: 2 });
   });
 

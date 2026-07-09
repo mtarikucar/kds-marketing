@@ -9,12 +9,26 @@ import { R2StorageService } from '../../../common/storage/r2-storage.service';
  *
  * For each workspace with `TelephonyConfig.recordingRetentionDays` set,
  * deletes the R2 object (best-effort — `R2StorageService.deleteKeys` never
- * throws) and nulls `SalesCall.recordingStorageKey` for any call whose
- * `endedAt` is older than that many days. The `SalesCall` row itself and its
- * `recordingUrl` (the provider fallback, which is likely long-expired by
- * retention time anyway) are left untouched — only the stored copy is
- * reclaimed. Workspaces with `recordingRetentionDays: null` are skipped
- * entirely (explicit "keep forever").
+ * throws) and nulls BOTH `SalesCall.recordingStorageKey` AND `recordingUrl`
+ * for any call whose `endedAt` is older than that many days. The `SalesCall`
+ * row itself is otherwise left untouched — only the recording (stored copy +
+ * provider link) is reclaimed.
+ *
+ * Final-review HIGH-1 fix — `recordingUrl` MUST be nulled in the same
+ * `updateMany` as `recordingStorageKey`, not left in place: `RecordingIngestService`'s
+ * DUE query matches `status: CONNECTED, recordingUrl NOT NULL,
+ * recordingStorageKey NULL`, which is EXACTLY the row shape this sweep
+ * produces if `recordingUrl` survives the purge — the very next ingest tick
+ * re-downloads (from a link that's long-expired by retention time anyway,
+ * per the reasoning that used to justify keeping it) and re-uploads the
+ * "deleted" recording, silently defeating retention forever. Nulling
+ * `recordingUrl` here closes that loop (the ingest DUE query's own `NOT NULL`
+ * requirement then excludes the purged row) and correctly flips the
+ * CallsPage "has recording" affordance off for a call whose recording no
+ * longer exists anywhere.
+ *
+ * Workspaces with `recordingRetentionDays: null` are skipped entirely
+ * (explicit "keep forever").
  */
 @Injectable()
 export class RecordingRetentionService {
@@ -75,9 +89,13 @@ export class RecordingRetentionService {
     const keys = calls.map((c) => c.recordingStorageKey).filter(Boolean) as string[];
     await this.r2.deleteKeys(keys);
 
+    // HIGH-1 fix: null recordingUrl in the SAME updateMany as
+    // recordingStorageKey — see the class docstring for why leaving
+    // recordingUrl set would let recording-ingest's DUE query re-select and
+    // re-download this just-purged call within minutes.
     const res = await this.prisma.salesCall.updateMany({
       where: { id: { in: calls.map((c) => c.id) }, workspaceId },
-      data: { recordingStorageKey: null },
+      data: { recordingStorageKey: null, recordingUrl: null },
     });
     return res.count;
   }
