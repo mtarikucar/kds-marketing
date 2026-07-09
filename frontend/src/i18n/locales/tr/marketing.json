@@ -235,6 +235,8 @@
       "iysWebhook": "İYS geri bildirim webhook'u kayıtlı",
       "iysBrandCode": "İYS marka kodu tanımlı",
       "iysFirstSync": "İlk İYS onay senkronizasyonu tamamlandı",
+      "recordingStorage": "Çağrı kaydı depolama (R2) yapılandırıldı",
+      "recordingsReceiving": "Kayıtlar depolanıyor",
       "repsCount": "{{count}} temsilcide dahili tanımlı",
       "detail": {
         "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
@@ -242,7 +244,9 @@
         "eventsWebhookHint": "Netsantral panel > Ayarlar > Genel Ayarlar > API Talep Ayarları'na yapıştırın",
         "otpPackageHint": "Gerçek bir kod gönderilmeden kontrol edilemez — OTP gönderimleri NetGSM hata 60 ile başarısız oluyorsa, bu NetGSM hesabında OTP paketi henüz aktif değildir.",
         "headersUnavailable": "Henüz kontrol edilemedi — SMS kanalında kayıtlı bir gönderici başlığı yok ya da NetGSM'in onaylı başlık listesi şu an alınamıyor.",
-        "eventsWebhookReceivingHint": "URL'yi panele kaydedip test araması yapın"
+        "eventsWebhookReceivingHint": "URL'yi panele kaydedip test araması yapın",
+        "recordingStorageKvkkHint": "KVKK, aramanın kaydedildiğinin arayana bildirilmesini zorunlu kılar — kaydı açmadan önce bunu IVR/karşılama anonsunuza ekleyin.",
+        "recordingsReceivingHint": "Kayıtların depolandığını doğrulamak için kaydı açık bir arama yapıp tamamlayın"
       }
     },
     "tab": {

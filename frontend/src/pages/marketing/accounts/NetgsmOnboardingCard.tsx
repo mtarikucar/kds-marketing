@@ -37,6 +37,14 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   // NetGSM Phase 3 Task 7 — eventsWebhookReceiving's remedy hint, shown only
   // while the row is 'unknown' (no events-purpose webhook has landed yet).
   eventsWebhookReceivingHint: 'Register the URL in the panel and place a test call',
+  // NetGSM Phase 4 Task 7 — recordingStorage's persistent compliance
+  // reminder, shown regardless of ok/missing/unknown: KVKK requires telling
+  // the caller a call is being recorded before recording starts.
+  recordingStorageKvkkHint:
+    'KVKK requires announcing to the caller that the call is being recorded — add this to your IVR/greeting before turning recording on.',
+  // NetGSM Phase 4 Task 7 — recordingsReceiving's remedy hint, shown only
+  // while the row is 'unknown' (no recorded call has landed yet).
+  recordingsReceivingHint: 'Place and finish a recorded call to verify recordings are being stored',
 };
 
 /**
@@ -70,6 +78,8 @@ export function NetgsmOnboardingCard() {
       iysWebhook: 'İYS push-back webhook registered',
       iysBrandCode: 'İYS marka kodu (brand code) configured',
       iysFirstSync: 'First İYS consent sync confirmed',
+      recordingStorage: 'Call recording storage (R2) configured',
+      recordingsReceiving: 'Recordings being stored',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

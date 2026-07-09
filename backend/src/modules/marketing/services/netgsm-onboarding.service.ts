@@ -6,6 +6,7 @@ import { SmsV2Client } from '../../netgsm/sms/sms-v2.client';
 import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 import { netgsmMoCallbackUrl } from '../channels/netgsm-callback.util';
 import { ChannelAdapterRegistry, ChannelRowLike } from '../channels/channel-adapter.registry';
+import { R2StorageService } from '../../../common/storage/r2-storage.service';
 
 export interface OnboardingItem {
   key: string;
@@ -40,6 +41,7 @@ export class NetgsmOnboardingService {
     private readonly balance: BalanceClient,
     private readonly smsV2: SmsV2Client,
     private readonly registry: ChannelAdapterRegistry,
+    private readonly r2: R2StorageService,
   ) {}
 
   async checklist(workspaceId: string): Promise<{ items: OnboardingItem[] }> {
@@ -89,6 +91,41 @@ export class NetgsmOnboardingService {
 
     items.push({ key: 'telephonyConfig', state: cfg ? 'ok' : 'missing' });
     items.push({ key: 'santralCredsLive', state: smsCreds.state, detail: smsCreds.detail });
+
+    // NetGSM Phase 4 Task 1/2 — call-recording storage. `recordCalls` is a
+    // KVKK-relevant toggle (recording a call requires announcing it to the
+    // caller), so the detail hint always names that requirement regardless
+    // of state — an operator flipping the toggle on should see it right
+    // away, not only once something is actually broken. 'ok' only once BOTH
+    // the toggle is on AND R2StorageService has its env vars (the
+    // recording-ingest sweep has somewhere to put the downloaded file);
+    // 'missing' names the real gap (recording is on but nothing will be
+    // stored); 'unknown' while the toggle itself is off — nothing to check.
+    const recordCallsOn = cfg?.recordCalls === true;
+    items.push({
+      key: 'recordingStorage',
+      state: !recordCallsOn ? 'unknown' : this.r2.isConfigured() ? 'ok' : 'missing',
+      detail: 'recordingStorageKvkkHint',
+    });
+
+    // NetGSM Phase 4 Task 2/7 — like eventsWebhookReceiving, NetGSM/the
+    // recording-ingest sweep never confirms back that a recording actually
+    // landed, so the only live signal is: has ANY SalesCall in this
+    // workspace actually gotten a recordingStorageKey stamped in the last 7
+    // days. Degrades to 'unknown' (never 'missing') — silence could equally
+    // mean "recording just turned on, no calls yet" or "no calls this week".
+    const recentRecordingsCount = await this.prisma.salesCall.count({
+      where: {
+        workspaceId,
+        recordingStorageKey: { not: null },
+        endedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+      },
+    });
+    items.push({
+      key: 'recordingsReceiving',
+      state: recentRecordingsCount > 0 ? 'ok' : 'unknown',
+      detail: recentRecordingsCount > 0 ? undefined : 'recordingsReceivingHint',
+    });
 
     // NetGSM SMS v2 Task 13 — whether the ACTIVE SMS channel's configured
     // msgheader (sealed onto the channel row, NOT the shared Netsantral creds
