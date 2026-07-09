@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { NetgsmEventsController } from './netgsm-events.controller';
-import { netgsmWebhookToken } from './netgsm-webhook.util';
+import { netgsmWebhookToken, payloadDigest } from './netgsm-webhook.util';
 
 /**
  * Unified public receiver for NetGSM santral events. Phase 0 is archive-only:
@@ -34,13 +34,18 @@ describe('NetgsmEventsController', () => {
 
   it('archives a valid event and acks 202', async () => {
     const token = netgsmWebhookToken('ws-1', 'events');
+    const body = { unique_id: 'evt-1', foo: 'bar' };
 
-    const res = await controller.events('ws-1', token, { unique_id: 'evt-1', foo: 'bar' });
+    const res = await controller.events('ws-1', token, body);
 
     expect(res).toEqual({ ok: true });
+    // No scenario/durum/event field on this body, so the scenario token falls
+    // all the way back to a payload digest (see the CRITICAL note on
+    // `events()`) — the externalId is `unique_id:scenarioToken`, never bare
+    // `unique_id`, so a later scenario for the same call gets its own row.
     expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
       data: [
-        { workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-1', payload: { unique_id: 'evt-1', foo: 'bar' } },
+        { workspaceId: 'ws-1', purpose: 'events', externalId: `evt-1:${payloadDigest(body)}`, payload: body },
       ],
       skipDuplicates: true,
     });
@@ -49,12 +54,18 @@ describe('NetgsmEventsController', () => {
   it('falls back to uniqueid, then a payload digest, when unique_id is absent', async () => {
     const token = netgsmWebhookToken('ws-1', 'events');
 
-    await controller.events('ws-1', token, { uniqueid: 'evt-2' });
-    expect(prisma.netgsmWebhookEvent.createMany.mock.calls[0][0].data[0].externalId).toBe('evt-2');
+    const bodyA = { uniqueid: 'evt-2' };
+    await controller.events('ws-1', token, bodyA);
+    expect(prisma.netgsmWebhookEvent.createMany.mock.calls[0][0].data[0].externalId).toBe(
+      `evt-2:${payloadDigest(bodyA)}`,
+    );
 
-    await controller.events('ws-1', token, { foo: 'no-id-here' });
+    const bodyB = { foo: 'no-id-here' };
+    await controller.events('ws-1', token, bodyB);
     const secondCall = prisma.netgsmWebhookEvent.createMany.mock.calls[1][0];
-    expect(secondCall.data[0].externalId).toMatch(/^[0-9a-f]{64}$/);
+    // Both the id part and the scenario-token part fall back to the same
+    // whole-element digest here (no unique_id/uniqueid AND no scenario field).
+    expect(secondCall.data[0].externalId).toBe(`${payloadDigest(bodyB)}:${payloadDigest(bodyB)}`);
   });
 
   it('a duplicate delivery (skipDuplicates hits, count 0) still acks ok', async () => {
@@ -137,8 +148,10 @@ describe('NetgsmEventsController — events fan-out + normalization', () => {
     const res = await controller.events('ws-1', token, body);
 
     expect(res).toEqual({ ok: true });
+    // externalId is `unique_id:scenarioToken` (scenario field lowercased/
+    // trimmed), never bare unique_id — see the CRITICAL note on `events()`.
     expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
-      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'call-1', payload: body }],
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'call-1:inbound_call', payload: body }],
       skipDuplicates: true,
     });
     expect(outbox.append).toHaveBeenCalledTimes(1);
@@ -166,18 +179,19 @@ describe('NetgsmEventsController — events fan-out + normalization', () => {
     const token = netgsmWebhookToken('ws-1', 'events');
     const elA = { scenario: 'Hangup', unique_id: 'evt-a', bilsec: '30' };
     const elB = { scenario: 'Answer', unique_id: 'evt-b' };
-    // evt-a was already archived by a previous delivery — only evt-b is new.
-    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'evt-a' }]);
+    // evt-a's Hangup scenario was already archived by a previous delivery —
+    // only evt-b's Answer is new.
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'evt-a:hangup' }]);
 
     const res = await controller.events('ws-1', token, [elA, elB]);
 
     expect(res).toEqual({ ok: true });
     expect(prisma.netgsmWebhookEvent.findMany).toHaveBeenCalledWith({
-      where: { workspaceId: 'ws-1', purpose: 'events', externalId: { in: ['evt-a', 'evt-b'] } },
+      where: { workspaceId: 'ws-1', purpose: 'events', externalId: { in: ['evt-a:hangup', 'evt-b:answer'] } },
       select: { externalId: true },
     });
     expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
-      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-b', payload: elB }],
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-b:answer', payload: elB }],
       skipDuplicates: true,
     });
     expect(outbox.append).toHaveBeenCalledTimes(1);
@@ -196,7 +210,7 @@ describe('NetgsmEventsController — events fan-out + normalization', () => {
     await expect(controller.events('ws-1', token, body)).resolves.toEqual({ ok: true });
 
     expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
-      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-x', payload: body }],
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: 'evt-x:somefuturescenario', payload: body }],
       skipDuplicates: true,
     });
     expect(outbox.append).not.toHaveBeenCalled();
@@ -205,7 +219,7 @@ describe('NetgsmEventsController — events fan-out + normalization', () => {
   it('when every element in the batch was already archived, nothing new is inserted or published', async () => {
     const token = netgsmWebhookToken('ws-1', 'events');
     const body = { scenario: 'Hangup', unique_id: 'evt-seen' };
-    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'evt-seen' }]);
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValue([{ externalId: 'evt-seen:hangup' }]);
 
     await expect(controller.events('ws-1', token, body)).resolves.toEqual({ ok: true });
 
@@ -221,6 +235,136 @@ describe('NetgsmEventsController — events fan-out + normalization', () => {
     expect(prisma.netgsmWebhookEvent.findMany).not.toHaveBeenCalled();
     expect(prisma.netgsmWebhookEvent.createMany).not.toHaveBeenCalled();
     expect(outbox.append).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * CRITICAL fix — a single call leg fans out to MULTIPLE scenario pushes
+ * (Inbound_call → Answer → Hangup → cdr) that all share the SAME unique_id.
+ * Keying the archive purely on unique_id let the FIRST scenario delivered
+ * claim the row under `@@unique([workspaceId,purpose,externalId])` and
+ * silently swallow every later scenario for that call. The archive
+ * `externalId` is now `unique_id:scenarioToken`, so distinct scenarios for
+ * the same call each archive + publish, while a genuine redelivery of the
+ * SAME scenario still dedupes to one row.
+ */
+describe('NetgsmEventsController — events archive key scoped by scenario (CRITICAL fix)', () => {
+  const KEY = Buffer.alloc(32, 7).toString('base64');
+  let prisma: any;
+  let outbox: any;
+  let controller: NetgsmEventsController;
+
+  beforeEach(() => {
+    process.env.MARKETING_SECRET_KEY = KEY;
+    prisma = {
+      netgsmWebhookEvent: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    outbox = { append: jest.fn().mockResolvedValue('outbox-id') };
+    controller = new NetgsmEventsController(prisma, outbox);
+  });
+
+  afterEach(() => {
+    delete process.env.MARKETING_SECRET_KEY;
+  });
+
+  it('Inbound_call → Answer → Hangup for ONE unique_id, delivered as 3 separate calls, all 3 archive AND all 3 publish', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const uniqueId = 'call-multi-1';
+
+    await controller.events('ws-1', token, { scenario: 'Inbound_call', unique_id: uniqueId });
+    await controller.events('ws-1', token, { scenario: 'Answer', unique_id: uniqueId });
+    await controller.events('ws-1', token, { scenario: 'Hangup', unique_id: uniqueId, bilsec: '42' });
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(3);
+    const archivedIds = prisma.netgsmWebhookEvent.createMany.mock.calls.map(
+      (c: any) => c[0].data[0].externalId,
+    );
+    expect(archivedIds).toEqual([
+      `${uniqueId}:inbound_call`,
+      `${uniqueId}:answer`,
+      `${uniqueId}:hangup`,
+    ]);
+    // Every archived externalId is distinct — none collapsed onto another.
+    expect(new Set(archivedIds).size).toBe(3);
+
+    expect(outbox.append).toHaveBeenCalledTimes(3);
+    expect(outbox.append).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ idempotencyKey: `ws-1:santral:${uniqueId}:inbound_call` }),
+    );
+    expect(outbox.append).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: `ws-1:santral:${uniqueId}:answer` }),
+    );
+    expect(outbox.append).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ idempotencyKey: `ws-1:santral:${uniqueId}:hangup` }),
+    );
+  });
+
+  it('the SAME Hangup for the SAME unique_id delivered twice (genuine redelivery) still dedupes to ONE archived row + ONE typed event', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const body = { scenario: 'Hangup', unique_id: 'call-redeliver-1', bilsec: '10' };
+    const externalId = 'call-redeliver-1:hangup';
+
+    // 1st delivery: genuinely new.
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([]);
+    // 2nd delivery: the same scenario+unique_id already archived by the 1st.
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([{ externalId }]);
+
+    await controller.events('ws-1', token, body);
+    await controller.events('ws-1', token, body);
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId, payload: body }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unrecognized scenario for unique_id X, followed by a recognized Hangup for the SAME X, still archives + publishes the Hangup', async () => {
+    const token = netgsmWebhookToken('ws-1', 'events');
+    const uniqueId = 'call-mixed-1';
+    const unknownBody = { scenario: 'SomeFutureScenario', unique_id: uniqueId };
+    const hangupBody = { scenario: 'Hangup', unique_id: uniqueId };
+
+    // 1st delivery: unrecognized scenario — archived, not published.
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([]);
+    await controller.events('ws-1', token, unknownBody);
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          workspaceId: 'ws-1',
+          purpose: 'events',
+          externalId: `${uniqueId}:somefuturescenario`,
+          payload: unknownBody,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).not.toHaveBeenCalled();
+
+    // 2nd delivery: the prior unrecognized-scenario row is "already archived"
+    // for this unique_id, but the Hangup's OWN externalId is different, so it
+    // must not be blocked by it.
+    prisma.netgsmWebhookEvent.findMany.mockResolvedValueOnce([
+      { externalId: `${uniqueId}:somefuturescenario` },
+    ]);
+    await controller.events('ws-1', token, hangupBody);
+
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenCalledTimes(2);
+    expect(prisma.netgsmWebhookEvent.createMany).toHaveBeenLastCalledWith({
+      data: [{ workspaceId: 'ws-1', purpose: 'events', externalId: `${uniqueId}:hangup`, payload: hangupBody }],
+      skipDuplicates: true,
+    });
+    expect(outbox.append).toHaveBeenCalledTimes(1);
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: `ws-1:santral:${uniqueId}:hangup` }),
+    );
   });
 });
 

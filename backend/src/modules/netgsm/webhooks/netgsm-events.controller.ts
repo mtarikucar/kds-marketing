@@ -8,6 +8,14 @@ type WebhookPurpose = 'events' | 'iys';
 interface WebhookRow {
   el: Record<string, unknown>;
   externalId: string;
+  /**
+   * `events`-route only: the bare unique_id/uniqueid (or digest fallback)
+   * part of the composite `externalId` below, kept alongside it so the
+   * per-element publish step can fall back to it (never to the composite
+   * `externalId`, which already has the scenario token baked in — reusing it
+   * would double-suffix the idempotencyKey). Unused by `iys`.
+   */
+  idPart?: string;
 }
 
 /**
@@ -42,6 +50,23 @@ export class NetgsmEventsController {
    * still doesn't know what the future scenario means, so it must never
    * synthesize a typed event for it (same fail-closed shape as İYS's
    * unknown-status/type skip below).
+   *
+   * CRITICAL — one call leg fans out to MULTIPLE scenario pushes
+   * (Inbound_call → Answer → Hangup → cdr) that all share the SAME
+   * unique_id. Unlike `iys`'s transactionid (genuinely one-shot), keying the
+   * archive purely on unique_id would let the FIRST scenario delivered claim
+   * that externalId under `@@unique([workspaceId,purpose,externalId])` and
+   * silently swallow every later scenario for the same call (never archived,
+   * never published) — defeating Task 2, which needs all of them. So the
+   * events-route archive `externalId` is `${idPart}:${scenarioToken}`:
+   * `idPart` is unique_id/uniqueid (or a payload digest when absent, exactly
+   * as before), and `scenarioToken` is the raw scenario/durum/event field
+   * value, lowercased/trimmed (falling back to the normalized `kind`, or
+   * finally a digest of the element, so two different unrecognized-scenario
+   * elements sharing a unique_id still don't collide). Same unique_id + same
+   * scenario token still dedupes to ONE archived row (a genuine redelivery);
+   * same unique_id + a DIFFERENT scenario token gets its own row and its own
+   * publish.
    */
   @Post(':workspaceId/:token/events')
   @HttpCode(202)
@@ -56,8 +81,9 @@ export class NetgsmEventsController {
 
     const rows: WebhookRow[] = elements.map((raw) => {
       const el = (raw ?? {}) as Record<string, unknown>;
-      const externalId = this.stringField(el, ['unique_id', 'uniqueid']) ?? payloadDigest(el);
-      return { el, externalId };
+      const idPart = this.stringField(el, ['unique_id', 'uniqueid']) ?? payloadDigest(el);
+      const scenarioToken = this.scenarioToken(el);
+      return { el, externalId: `${idPart}:${scenarioToken}`, idPart };
     });
 
     const fresh = await this.archiveFresh(workspaceId, 'events', rows);
@@ -73,7 +99,7 @@ export class NetgsmEventsController {
         type: 'marketing.telephony.call_event.v1',
         tenantId: null,
         payload: { workspaceId, ...normalized },
-        idempotencyKey: `${workspaceId}:santral:${normalized.uniqueId ?? r.externalId}:${normalized.kind}`,
+        idempotencyKey: `${workspaceId}:santral:${normalized.uniqueId ?? r.idPart}:${normalized.kind}`,
       });
     }
 
@@ -212,6 +238,24 @@ export class NetgsmEventsController {
     });
 
     return fresh;
+  }
+
+  /**
+   * `events`-route only — see the CRITICAL note on `events()` above. Prefers
+   * the raw scenario/durum/event field value (lowercased/trimmed) so
+   * Inbound_call/Answer/Hangup/cdr — and any future/unrecognized scenario
+   * string — each get their own token; falls back to the normalized `kind`
+   * (currently unreachable in practice, since `normalizeSantralEvent` reads
+   * the same three keys, but kept as a defensive second tier in case the
+   * normalizer's field detection ever widens); finally falls back to a
+   * digest of the whole element so two elements with no scenario field at
+   * all, sharing the same unique_id, still don't collide into one archive
+   * row.
+   */
+  private scenarioToken(el: Record<string, unknown>): string {
+    const raw = this.stringField(el, ['scenario', 'durum', 'event']);
+    if (raw) return raw.trim().toLowerCase();
+    return normalizeSantralEvent(el)?.kind ?? payloadDigest(el);
   }
 
   private stringField(obj: Record<string, unknown>, keys: string[]): string | null {
