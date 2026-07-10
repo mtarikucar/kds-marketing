@@ -8,7 +8,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsIn, IsNumber, IsString, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -23,6 +23,7 @@ import { AdManagementService } from '../ads/ad-management.service';
 import {
   ConnectAdAccountDto,
   AdMetricsQueryDto,
+  AdBreakdownQueryDto,
   PullAdAccountDto,
 } from '../dto/ad-account.dto';
 
@@ -43,6 +44,24 @@ class CreateAdCampaignDto {
   /** Meta outcome objective, e.g. OUTCOME_LEADS / OUTCOME_TRAFFIC / OUTCOME_SALES. */
   @IsString() @MaxLength(60)
   objective: string;
+}
+
+/** Launch a full Meta ad end-to-end from a generated creative asset. */
+class LaunchAdDto {
+  @IsString() @MaxLength(64) generatedAssetId: string;
+  @IsOptional() @IsString() @MaxLength(64) campaignId?: string;
+  @IsOptional() @IsString() @MaxLength(200) campaignName?: string;
+  @IsOptional() @IsString() @MaxLength(60) objective?: string;
+  @IsString() @MaxLength(200) adsetName: string;
+  @IsNumber() @Min(0.01) dailyBudget: number; // major units
+  @IsString() @MaxLength(60) optimizationGoal: string;
+  @IsString() @MaxLength(60) billingEvent: string;
+  @IsObject() targeting: Record<string, any>;
+  @IsString() @MaxLength(2000) link: string;
+  @IsString() @MaxLength(2000) primaryText: string;
+  @IsString() @MaxLength(60) callToAction: string;
+  @IsOptional() @IsBoolean() instagram?: boolean;
+  @IsOptional() @IsIn(['PAUSED', 'ACTIVE']) status?: 'PAUSED' | 'ACTIVE';
 }
 
 /**
@@ -85,6 +104,20 @@ export class MarketingAdsController {
     const from =
       q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
     return this.adAccounts.getMetrics(a.workspaceId, from, to, q.provider);
+  }
+
+  @Get('metrics/breakdown')
+  @RequirePermission('reports.read')
+  breakdown(@CurrentMarketingUser() a: MarketingUserPayload, @Query() q: AdBreakdownQueryDto) {
+    const to = q.to ?? new Date().toISOString().slice(0, 10);
+    const from = q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    return this.adAccounts.getBreakdown(a.workspaceId, from, to, {
+      provider: q.provider,
+      dimension: q.dimension,
+      window: q.window,
+      campaignId: q.campaignId,
+      adSetId: q.adSetId,
+    });
   }
 
   @Post('accounts')
@@ -187,5 +220,17 @@ export class MarketingAdsController {
     @Body() dto: CreateAdCampaignDto,
   ) {
     return this.adMgmt.create(a.workspaceId, id, dto);
+  }
+
+  @Post('accounts/:id/launch')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'ad.launch', resourceType: 'ad_entity', captureBody: ['generatedAssetId', 'objective'] })
+  launch(
+    @CurrentMarketingUser() a: MarketingUserPayload,
+    @Param('id') id: string,
+    @Body() dto: LaunchAdDto,
+  ) {
+    return this.adMgmt.launchAdFromCreative(a.workspaceId, id, dto);
   }
 }

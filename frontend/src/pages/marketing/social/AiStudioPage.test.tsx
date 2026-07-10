@@ -32,6 +32,13 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+// The page gates its whole surface behind the `mediaGen` entitlement (plan-audit
+// #126). Render it in the entitled state — matching GrowthStudioPage.test.tsx —
+// so these tests exercise the generate panel + library, not the UpgradeCallout.
+vi.mock('../../../features/marketing/hooks/useEntitlements', () => ({
+  useEntitlements: () => ({ has: () => true, isLoading: false, isError: false, features: {}, entitledModules: [] }),
+}));
+
 const READY = {
   id: 'a-ready', type: 'IMAGE', status: 'READY', provider: 'fal', model: 'fal-ai/qwen-image',
   prompt: 'a cat', params: {}, url: 'https://r2/img.png', r2Key: 'social/ws/img.png',

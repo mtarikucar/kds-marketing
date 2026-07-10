@@ -17,11 +17,15 @@ import {
   getAdStatus,
   listAdAccounts,
   getAdMetrics,
+  getAdBreakdown,
+  type AdBreakdownDimension,
+  type AdBreakdownWindow,
   connectAdAccount,
   removeAdAccount,
   pullAdAccount,
   startLinkedinAdsOAuth,
   startTiktokAdsOAuth,
+  startGoogleAdsOAuth,
   type AdAccount,
   type AdProvider,
 } from '../../../features/marketing/api/ads.service';
@@ -29,6 +33,7 @@ import type { ConnectAdAccountFormValues } from './adsSchemas';
 import { AD_PROVIDER_LABEL } from './adsSchemas';
 import { ConnectAdAccountDialog } from './ConnectAdAccountDialog';
 import { LinkedinAdsSelectDialog } from './LinkedinAdsSelectDialog';
+import { GoogleAdsSelectDialog } from './GoogleAdsSelectDialog';
 import { TiktokAdsSelectDialog } from './TiktokAdsSelectDialog';
 import { AdManagementSection } from './AdManagementSection';
 import { AdRulesSection } from './AdRulesSection';
@@ -76,6 +81,11 @@ function fmtInt(n: number): string {
 function pct(n: number): string {
   return `${n.toFixed(2)}%`;
 }
+/** ROAS as `2.40×`; a dash when there is no revenue signal (0) so providers that
+ *  simply don't report purchase value don't read as a real 0× return. */
+function fmtRoas(n: number): string {
+  return n > 0 ? `${n.toFixed(2)}×` : '—';
+}
 
 export default function AdReportingPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
@@ -90,7 +100,9 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
   const [connectOpen, setConnectOpen] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<AdAccount | null>(null);
   const [pendingConnectId, setPendingConnectId] = useState<string | null>(null);
-  const [connectProvider, setConnectProvider] = useState<'linkedin' | 'tiktok' | null>(null);
+  const [connectProvider, setConnectProvider] = useState<'linkedin' | 'tiktok' | 'google' | null>(
+    null,
+  );
   const [manageAccountId, setManageAccountId] = useState<string | null>(null);
 
   // ── OAuth return handling ────────────────────────────────────────────────────
@@ -104,7 +116,15 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     if (connectId) {
       const cp = searchParams.get('connect_provider');
       setPendingConnectId(connectId);
-      setConnectProvider(cp === 'linkedin' ? 'linkedin' : cp === 'tiktok' ? 'tiktok' : null);
+      setConnectProvider(
+        cp === 'linkedin'
+          ? 'linkedin'
+          : cp === 'tiktok'
+            ? 'tiktok'
+            : cp === 'google'
+              ? 'google'
+              : null,
+      );
       setView('accounts');
       searchParams.delete('connect');
       searchParams.delete('connect_provider');
@@ -187,11 +207,24 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     }
   };
 
+  const startGoogleConnect = async () => {
+    try {
+      const { authorizeUrl } = await startGoogleAdsOAuth();
+      window.location.href = authorizeUrl;
+    } catch {
+      toast.error(
+        t('ads.oauth.startFailed', { defaultValue: 'Could not start the Google Ads connection' }),
+      );
+    }
+  };
+
   const handleReconnect = (account: AdAccount) => {
     if (account.provider === 'LINKEDIN') {
       void startLinkedinConnect();
     } else if (account.provider === 'TIKTOK') {
       void startTikTokConnect();
+    } else if (account.provider === 'GOOGLE') {
+      void startGoogleConnect();
     }
     // META reconnect not yet implemented — button is hidden for META accounts
   };
@@ -238,7 +271,7 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const totals = metrics?.totals ?? { spend: 0, impressions: 0, clicks: 0, leads: 0 };
+  const totals = metrics?.totals ?? { spend: 0, impressions: 0, clicks: 0, leads: 0, revenue: 0, roas: 0 };
   const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
   const cpl = totals.leads > 0 ? totals.spend / totals.leads : 0;
   const noAccounts = !accountsLoading && accounts.length === 0;
@@ -280,6 +313,20 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
         {t('ads.oauth.tiktokConnect', {
           defaultValue: 'Connect TikTok for Business',
         })}
+      </Button>
+      <Button
+        onClick={() => void startGoogleConnect()}
+        disabled={!status?.GOOGLE}
+        title={
+          status?.GOOGLE
+            ? undefined
+            : t('ads.oauth.googleNotConfigured', {
+                defaultValue: 'An admin must add Google Ads app credentials first',
+              })
+        }
+        variant="outline"
+      >
+        {t('ads.oauth.googleConnect', { defaultValue: 'Connect Google Ads' })}
       </Button>
       <Button onClick={() => setConnectOpen(true)} disabled={!canConnect} variant="outline">
         <Link2 className="h-4 w-4" aria-hidden="true" />
@@ -327,6 +374,7 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
                 <SelectItem value="META">{AD_PROVIDER_LABEL.META}</SelectItem>
                 <SelectItem value="TIKTOK">{AD_PROVIDER_LABEL.TIKTOK}</SelectItem>
                 <SelectItem value="LINKEDIN">{AD_PROVIDER_LABEL.LINKEDIN}</SelectItem>
+                <SelectItem value="GOOGLE">{AD_PROVIDER_LABEL.GOOGLE}</SelectItem>
               </SelectContent>
             </Select>
             <SegmentedControl<RangeKey>
@@ -344,18 +392,28 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
       </div>
 
       {view === 'overview' ? (
-        <OverviewView
-          isLoading={metricsLoading}
-          noAccounts={noAccounts}
-          totals={totals}
-          ctr={ctr}
-          cpl={cpl}
-          currency={currency}
-          byDay={metrics?.byDay ?? []}
-          byProvider={metrics?.byProvider ?? {}}
-          onGoToAccounts={() => setView('accounts')}
-          canConnect={canConnect}
-        />
+        <div className="space-y-5">
+          <OverviewView
+            isLoading={metricsLoading}
+            noAccounts={noAccounts}
+            totals={totals}
+            ctr={ctr}
+            cpl={cpl}
+            currency={currency}
+            byDay={metrics?.byDay ?? []}
+            byProvider={metrics?.byProvider ?? {}}
+            onGoToAccounts={() => setView('accounts')}
+            canConnect={canConnect}
+          />
+          {!noAccounts && (
+            <BreakdownCard
+              from={isoDaysAgo(Number(range))}
+              to={todayIso()}
+              provider={provider === 'ALL' ? undefined : provider}
+              currency={currency}
+            />
+          )}
+        </div>
       ) : view === 'accounts' ? (
         <AccountsView
           accounts={accounts}
@@ -399,6 +457,12 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
         onSuccess={invalidateAccounts}
       />
 
+      <GoogleAdsSelectDialog
+        pendingId={connectProvider === 'google' ? pendingConnectId : null}
+        onOpenChange={(open) => { if (!open) { setPendingConnectId(null); setConnectProvider(null); } }}
+        onSuccess={invalidateAccounts}
+      />
+
       <ConfirmDialog
         open={!!disconnectTarget}
         onOpenChange={(open) => { if (!open) setDisconnectTarget(null); }}
@@ -416,6 +480,99 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
   );
 }
 
+// ── Breakdown (creative / adset / placement / demographic) ──────────────────────
+
+const BREAKDOWN_DIMS: AdBreakdownDimension[] = ['ad', 'adset', 'placement', 'age', 'gender', 'region', 'country'];
+const BREAKDOWN_WINDOWS: AdBreakdownWindow[] = ['default', '1d_click', '7d_click', '1d_view'];
+
+function BreakdownCard({
+  from,
+  to,
+  provider,
+  currency,
+}: {
+  from: string;
+  to: string;
+  provider?: AdProvider;
+  currency: ReturnType<typeof asWorkspaceCurrency>;
+}) {
+  const { t } = useTranslation('marketing');
+  const [dimension, setDimension] = useState<AdBreakdownDimension>('placement');
+  const [win, setWin] = useState<AdBreakdownWindow>('default');
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['marketing', 'ads', 'breakdown', from, to, provider, dimension, win],
+    queryFn: () => getAdBreakdown({ from, to, provider, dimension, window: win }),
+  });
+  const rows = data?.rows ?? [];
+
+  return (
+    <Card className="p-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <h3 className="text-sm font-medium text-foreground">
+          {t('ads.breakdown.title', { defaultValue: 'Breakdown' })}
+        </h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={dimension}
+            onChange={(e) => setDimension(e.target.value as AdBreakdownDimension)}
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs"
+            aria-label={t('ads.breakdown.dimension', { defaultValue: 'Dimension' })}
+          >
+            {BREAKDOWN_DIMS.map((d) => (
+              <option key={d} value={d}>{t(`ads.breakdown.dim.${d}`, { defaultValue: d })}</option>
+            ))}
+          </select>
+          <select
+            value={win}
+            onChange={(e) => setWin(e.target.value as AdBreakdownWindow)}
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs"
+            aria-label={t('ads.breakdown.window', { defaultValue: 'Attribution window' })}
+          >
+            {BREAKDOWN_WINDOWS.map((w) => (
+              <option key={w} value={w}>{t(`ads.breakdown.win.${w}`, { defaultValue: w })}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="p-4"><Skeleton className="h-24" /></div>
+      ) : rows.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+          {t('ads.breakdown.empty', { defaultValue: 'No breakdown rows in this range (Meta only, after the next metrics pull).' })}
+        </div>
+      ) : (
+        <Table>
+          <THead>
+            <TR>
+              <TH>{t('ads.breakdown.name', { defaultValue: 'Name' })}</TH>
+              <TH className="text-right">{t('ads.stat.spend', { defaultValue: 'Spend' })}</TH>
+              <TH className="text-right">{t('ads.stat.impressions', { defaultValue: 'Impressions' })}</TH>
+              <TH className="text-right">{t('ads.stat.clicks', { defaultValue: 'Clicks' })}</TH>
+              <TH className="text-right">{t('ads.stat.leads', { defaultValue: 'Leads' })}</TH>
+              <TH className="text-right">{t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}</TH>
+              <TH className="text-right">{t('ads.stat.roas', { defaultValue: 'ROAS' })}</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {rows.map((r) => (
+              <TR key={r.key || r.label}>
+                <TD className="max-w-[220px] truncate" title={r.label}>{r.label || '—'}</TD>
+                <TD className="text-right tabular-nums">{formatMoney(r.spend, currency)}</TD>
+                <TD className="text-right tabular-nums">{fmtInt(r.impressions)}</TD>
+                <TD className="text-right tabular-nums">{fmtInt(r.clicks)}</TD>
+                <TD className="text-right tabular-nums">{fmtInt(r.leads)}</TD>
+                <TD className="text-right tabular-nums">{r.revenue > 0 ? formatMoney(r.revenue, currency) : '—'}</TD>
+                <TD className="text-right tabular-nums">{fmtRoas(r.roas)}</TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      )}
+    </Card>
+  );
+}
+
 // ── Overview ───────────────────────────────────────────────────────────────────
 
 interface Bucket {
@@ -423,6 +580,8 @@ interface Bucket {
   impressions: number;
   clicks: number;
   leads: number;
+  revenue: number;
+  roas: number;
 }
 
 interface OverviewViewProps {
@@ -512,6 +671,17 @@ function OverviewView({
           label={t('ads.stat.cpl', { defaultValue: 'Cost / lead' })}
           value={totals.leads > 0 ? formatMoney(cpl, currency) : '—'}
         />
+        <StatCard
+          label={t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}
+          value={totals.revenue > 0 ? formatMoney(totals.revenue, currency) : '—'}
+          icon={<DollarSign className="h-5 w-5" />}
+          tone="success"
+        />
+        <StatCard
+          label={t('ads.stat.roas', { defaultValue: 'ROAS' })}
+          value={fmtRoas(totals.roas)}
+          tone={totals.roas >= 1 ? 'success' : undefined}
+        />
       </div>
 
       {providerEntries.length > 0 && (
@@ -529,6 +699,8 @@ function OverviewView({
                 <TH className="text-right">{t('ads.stat.impressions', { defaultValue: 'Impressions' })}</TH>
                 <TH className="text-right">{t('ads.stat.clicks', { defaultValue: 'Clicks' })}</TH>
                 <TH className="text-right">{t('ads.stat.leads', { defaultValue: 'Leads' })}</TH>
+                <TH className="text-right">{t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}</TH>
+                <TH className="text-right">{t('ads.stat.roas', { defaultValue: 'ROAS' })}</TH>
               </TR>
             </THead>
             <TBody>
@@ -541,6 +713,8 @@ function OverviewView({
                   <TD className="text-right tabular-nums">{fmtInt(m.impressions)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(m.clicks)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(m.leads)}</TD>
+                  <TD className="text-right tabular-nums">{m.revenue > 0 ? formatMoney(m.revenue, currency) : '—'}</TD>
+                  <TD className="text-right tabular-nums">{fmtRoas(m.roas)}</TD>
                 </TR>
               ))}
             </TBody>
@@ -567,6 +741,8 @@ function OverviewView({
                 <TH className="text-right">{t('ads.stat.impressions', { defaultValue: 'Impressions' })}</TH>
                 <TH className="text-right">{t('ads.stat.clicks', { defaultValue: 'Clicks' })}</TH>
                 <TH className="text-right">{t('ads.stat.leads', { defaultValue: 'Leads' })}</TH>
+                <TH className="text-right">{t('ads.stat.revenue', { defaultValue: 'Revenue (CRM)' })}</TH>
+                <TH className="text-right">{t('ads.stat.roas', { defaultValue: 'ROAS' })}</TH>
               </TR>
             </THead>
             <TBody>
@@ -577,6 +753,8 @@ function OverviewView({
                   <TD className="text-right tabular-nums">{fmtInt(d.impressions)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(d.clicks)}</TD>
                   <TD className="text-right tabular-nums">{fmtInt(d.leads)}</TD>
+                  <TD className="text-right tabular-nums">{d.revenue > 0 ? formatMoney(d.revenue, currency) : '—'}</TD>
+                  <TD className="text-right tabular-nums">{fmtRoas(d.roas)}</TD>
                 </TR>
               ))}
             </TBody>

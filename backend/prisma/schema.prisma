@@ -499,6 +499,31 @@ model Segment {
   @@map("segments")
 }
 
+/// CRM segment → ad-platform Custom Audience sync state. One row per
+/// (segment, adAccount): holds the created Meta custom-audience id so a re-sync
+/// APPENDS to the same audience instead of creating duplicates, plus an optional
+/// seeded lookalike id. Config data, not a secret (the source token stays sealed
+/// on AdAccount).
+model SegmentAudienceSync {
+  id                  String    @id @default(uuid())
+  workspaceId         String
+  segmentId           String
+  adAccountId         String
+  provider            String // META
+  externalAudienceId  String? // Meta custom audience id
+  lookalikeAudienceId String?
+  status              String    @default("PENDING") // PENDING | SYNCED | ERROR
+  lastCount           Int?
+  lastError           String?   @db.Text
+  lastSyncedAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([segmentId, adAccountId])
+  @@index([workspaceId])
+  @@map("segment_audience_syncs")
+}
+
 /// Epic A5 — a CSV lead import. Rows are parsed + stored on upload (status
 /// MAPPING); on commit the mapping + dedupe policy are set and processing runs
 /// in batches via the ScheduledJob queue (kind 'import.batch').
@@ -3720,6 +3745,17 @@ model AdAccount {
   tokenExpiresAt DateTime?
   status         String    @default("ACTIVE") // ACTIVE | TOKEN_EXPIRED | DISCONNECTED
   currency       String?
+  // Meta Conversions API (CAPI) destination. pixelId is the dataset id we POST
+  // server-side conversion events to (/<pixelId>/events) — non-secret. capiToken
+  // is an OPTIONAL dedicated System-User token (SEALED); when unset the sealed
+  // accessToken is reused. Feeding real CRM outcomes (won/paid) back to Meta.
+  pixelId        String?
+  capiToken      String?   @db.Text // SEALED
+  // Per-provider server-side conversion destinations (non-secret). TikTok Events
+  // API needs the pixel code; Google Ads offline upload needs the conversion
+  // action resource id. Null → that provider's conversion feedback stays inert.
+  tiktokPixelCode          String?
+  googleConversionActionId String?
   lastPulledAt   DateTime?
   lastError      String?   @db.Text
   createdAt      DateTime  @default(now())
@@ -3759,6 +3795,46 @@ model AdMetric {
   @@unique([adAccountId, date, campaignId])
   @@index([workspaceId, date])
   @@map("ad_metrics")
+}
+
+/// Granular ad-level metrics (creative/adset × placement OR demographic) with
+/// per-attribution-window conversion figures. Kept in a SEPARATE table from
+/// AdMetric so the campaign-day rollup the budget autopilot reads stays
+/// untouched (no double-counting) — these rows are read only by the reporting
+/// breakdown view. Meta-only today (level='ad').
+model AdMetricBreakdown {
+  id               String   @id @default(uuid())
+  workspaceId      String
+  adAccountId      String
+  date             DateTime @db.Date // UTC day
+  level            String   @default("ad")
+  campaignId       String   @default("")
+  adSetId          String   @default("")
+  adSetName        String?
+  adId             String   @default("")
+  adName           String?
+  /// `${publisher_platform}:${platform_position}` for placement rows; '' otherwise.
+  placement        String   @default("")
+  /// '' on placement rows; 'age'|'gender'|'region'|'country' on demographic rows.
+  breakdownType    String   @default("")
+  breakdownValue   String   @default("")
+  spend            Decimal  @default(0) @db.Decimal(14, 2)
+  impressions      Int      @default(0)
+  clicks           Int      @default(0)
+  leads            Int      @default(0)
+  conversionValue  Decimal  @default(0) @db.Decimal(14, 2)
+  leads1dClick     Int      @default(0)
+  leads7dClick     Int      @default(0)
+  leads1dView      Int      @default(0)
+  convValue1dClick Decimal  @default(0) @db.Decimal(14, 2)
+  convValue7dClick Decimal  @default(0) @db.Decimal(14, 2)
+  convValue1dView  Decimal  @default(0) @db.Decimal(14, 2)
+  pulledAt         DateTime @default(now())
+
+  @@unique([adAccountId, date, campaignId, adSetId, adId, placement, breakdownType, breakdownValue], name: "adBreakdown_dim")
+  @@index([workspaceId, date])
+  @@index([adAccountId, campaignId, date])
+  @@map("ad_metric_breakdowns")
 }
 
 /// An automated ad-scaling rule (Meta only). The hourly evaluator computes

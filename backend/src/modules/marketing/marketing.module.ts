@@ -65,6 +65,7 @@ import { FeatureGuard } from './guards/feature.guard';
 
 // Event consumers (Step C decoupling: settlement → commission crediting).
 import { SettlementCommissionConsumer } from './events/settlement-commission.consumer';
+import { MetaCapiConsumer } from './events/meta-capi.consumer';
 import { HardwareQuoteConsumer } from './events/hardware-quote.consumer';
 
 // Phase 2 telephony — single-line Netgsm sales calls (click-to-dial + manual log).
@@ -118,6 +119,7 @@ import { MessageQuotaService } from './channels/message-quota.service';
 import { ChannelsService } from './channels/channels.service';
 import { ConversationsService } from './channels/conversations.service';
 import { ConversationIngressService } from './channels/conversation-ingress.service';
+import { MetaLeadgenIngestService } from './channels/meta-leadgen-ingest.service';
 import { ConversationStreamService } from './channels/conversation-stream.service';
 import { MessageSenderService } from './channels/message-sender.service';
 import { MessageReceiptService } from './channels/message-receipt.service';
@@ -378,10 +380,13 @@ import { AdAccountService } from './ads/ad-account.service';
 import { AdsPullService } from './ads/ads-pull.service';
 import { LinkedinAdsOAuthController } from './ads/linkedin-ads-oauth.controller';
 import { LinkedinAdsOAuthService } from './ads/linkedin-ads-oauth.service';
+import { GoogleAdsOAuthController } from './ads/google-ads-oauth.controller';
+import { GoogleAdsOAuthService } from './ads/google-ads-oauth.service';
 // TikTok-for-Business OAuth (ads module — NOT social-planner)
 import { TiktokBusinessOAuthController } from './ads/tiktok-business-oauth.controller';
 import { TiktokBusinessOAuthService } from './ads/tiktok-business-oauth.service';
 import { AdManagementService } from './ads/ad-management.service';
+import { AudienceSyncService } from './ads/audience-sync.service';
 import { AdRulesService } from './ads/ad-rules.service';
 
 // Custom Objects (GoHighLevel parity) — workspace-defined record types.
@@ -582,6 +587,7 @@ import { WalletService } from './wallet/wallet.service';
     MarketingMediaWebhookController,
     SocialCampaignsController,
     LinkedinAdsOAuthController,
+    GoogleAdsOAuthController,
   ],
   providers: [
     // Services
@@ -616,6 +622,7 @@ import { WalletService } from './wallet/wallet.service';
     // Event consumer: credits SIGNUP/RENEWAL/UPSELL commissions off
     // payment.succeeded.v1 (subscribes via DomainEventBus on init).
     SettlementCommissionConsumer,
+    MetaCapiConsumer,
     // Event consumer: creates + auto-assigns a HARDWARE_QUOTE lead off
     // marketing.lead.hardware_quote.v1 (emitted by the core catalog) — keeps
     // the lead write out of the core module for the Phase-5 split.
@@ -670,6 +677,7 @@ import { WalletService } from './wallet/wallet.service';
     MessageSenderService,
     MessageReceiptService,
     ConversationIngressService,
+    MetaLeadgenIngestService,
     ConversationsService,
     ConversationAiEngineService,
     PublicChannelResolverService,
@@ -745,6 +753,7 @@ import { WalletService } from './wallet/wallet.service';
     AdsPullService,
     TiktokBusinessOAuthService,
     AdManagementService,
+    AudienceSyncService,
     AdRulesService,
     SnippetsService,
     LeadBulkService,
@@ -835,6 +844,7 @@ import { WalletService } from './wallet/wallet.service';
     SocialTokenRefreshService,
     // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
     LinkedinAdsOAuthService,
+    GoogleAdsOAuthService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

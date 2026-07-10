@@ -13,7 +13,10 @@ export const LINKEDIN_ADS_AUTHORIZE_URL = 'https://www.linkedin.com/oauth/v2/aut
 export const LINKEDIN_ADS_TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
 /** Reporting + read scopes for the Marketing (ads) API. Space-delimited. */
-export const LINKEDIN_ADS_SCOPES = 'r_ads_reporting r_ads';
+// rw_ads + rw_dmp_segments enable the campaign-write + DMP-audience-sync clients;
+// they require partner approval on the LinkedIn app, so accounts (re)connected
+// after that approval carry write scope (read-only ones keep working meanwhile).
+export const LINKEDIN_ADS_SCOPES = 'r_ads_reporting r_ads rw_ads rw_dmp_segments';
 
 export function linkedinAdsRedirectUri(): string {
   const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');

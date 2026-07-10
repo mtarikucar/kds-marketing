@@ -151,3 +151,50 @@ export function previewSegment(definition: SegmentNode): Promise<SegmentPreviewR
     .post('/segments/preview', { definition })
     .then((r) => r.data as SegmentPreviewResult);
 }
+
+// ── Audience sync (segment → ad-platform Custom Audience) ─────────────────────
+
+/** Options for pushing a segment to a connected ad account (SyncSegmentAudienceDto). */
+export interface SyncSegmentAudienceOptions {
+  includePhone?: boolean;
+  createLookalike?: boolean;
+  /** ISO-3166 alpha-2 seed country for the lookalike (e.g. 'US', 'TR'). */
+  country?: string;
+  /** Lookalike ratio, 0.01–0.2. */
+  ratio?: number;
+}
+
+export interface SyncSegmentAudienceResult {
+  audienceId: string;
+  uploaded: number;
+  received?: number;
+  invalid?: number;
+  lookalikeId?: string | null;
+  status?: string;
+}
+
+/** POST /segments/:id/sync/:accountId — push the segment to a connected ad account. */
+export function syncSegmentAudience(
+  segmentId: string,
+  accountId: string,
+  opts: SyncSegmentAudienceOptions = {},
+): Promise<SyncSegmentAudienceResult> {
+  return marketingApi
+    .post(`/segments/${segmentId}/sync/${accountId}`, opts)
+    .then((r) => r.data as SyncSegmentAudienceResult);
+}
+
+/** Mutation hook wrapping {@link syncSegmentAudience}. */
+export function useSyncSegmentAudience() {
+  return useMutation({
+    mutationFn: ({
+      segmentId,
+      accountId,
+      opts,
+    }: {
+      segmentId: string;
+      accountId: string;
+      opts?: SyncSegmentAudienceOptions;
+    }) => syncSegmentAudience(segmentId, accountId, opts),
+  });
+}

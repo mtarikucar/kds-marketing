@@ -1,17 +1,18 @@
 import { z } from 'zod';
 import type { AdProvider } from '../../../features/marketing/api/ads.service';
 
-export const AD_PROVIDERS: AdProvider[] = ['META', 'TIKTOK', 'LINKEDIN'];
+export const AD_PROVIDERS: AdProvider[] = ['META', 'TIKTOK', 'LINKEDIN', 'GOOGLE'];
 
 export const AD_PROVIDER_LABEL: Record<AdProvider, string> = {
   META: 'Meta (Facebook / Instagram)',
   TIKTOK: 'TikTok',
   LINKEDIN: 'LinkedIn',
+  GOOGLE: 'Google Ads',
 };
 
 /** Connect-account form. `accessToken` is sealed server-side and never echoed. */
 export const connectAdAccountSchema = z.object({
-  provider: z.enum(['META', 'TIKTOK', 'LINKEDIN']),
+  provider: z.enum(['META', 'TIKTOK', 'LINKEDIN', 'GOOGLE']),
   externalAdId: z.string().trim().min(1, 'required').max(120, 'tooLong'),
   displayName: z.string().trim().max(160, 'tooLong').optional().or(z.literal('')),
   accessToken: z.string().trim().min(1, 'required').max(4000, 'tooLong'),

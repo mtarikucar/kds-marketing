@@ -349,6 +349,28 @@ export class MarketingLeadsService {
         _count: {
           select: { activities: true, offers: true, tasks: true },
         },
+        // First-touch ad/UTM attribution (captured at lead birth). Scalar select
+        // only — the forensic `raw` JSON snapshot stays server-side. Nullable:
+        // leads with no click/UTM signal (or created before capture) have none.
+        attribution: {
+          select: {
+            utmSource: true,
+            utmMedium: true,
+            utmCampaign: true,
+            utmContent: true,
+            utmTerm: true,
+            clickId: true,
+            clickIdType: true,
+            ctwaClid: true,
+            landingUrl: true,
+            referrerUrl: true,
+            sourceSocialPostId: true,
+            sourceSocialCampaignId: true,
+            sourceAdCampaignId: true,
+            sourceAdCreativeId: true,
+            createdAt: true,
+          },
+        },
       },
     });
 

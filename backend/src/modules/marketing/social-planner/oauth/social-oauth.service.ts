@@ -298,7 +298,10 @@ export class SocialOAuthService {
       const sub = await metaGraphFetch(`/${pageId}/subscribed_apps`, {
         accessToken: token,
         method: 'POST',
-        query: { subscribed_fields: 'messages,messaging_postbacks,message_reactions' },
+        // `leadgen` delivers Meta Lead Ads (Instant Form) submissions on this
+        // same page webhook (MetaWebhookController routes them to the leadgen
+        // ingest). Inert until the app holds leads_retrieval/pages_manage_ads.
+        query: { subscribed_fields: 'messages,messaging_postbacks,message_reactions,leadgen' },
       });
       if (!sub.ok) {
         this.logger.warn(

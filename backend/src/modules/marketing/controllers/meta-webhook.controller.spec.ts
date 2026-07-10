@@ -13,7 +13,13 @@ describe('MetaWebhookController — signature + challenge', () => {
   beforeEach(() => {
     process.env.META_APP_SECRET = SECRET;
     process.env.META_WEBHOOK_VERIFY_TOKEN = 'verify-me';
-    controller = new MetaWebhookController({} as any, { has: () => false } as any, {} as any, {} as any);
+    controller = new MetaWebhookController(
+      {} as any,
+      { has: () => false } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
   });
 
   function sign(raw: Buffer): string {
@@ -84,6 +90,7 @@ describe('MetaWebhookController — signature + challenge', () => {
       registry as any,
       { ingest: jest.fn() } as any,
       { apply } as any,
+      { ingest: jest.fn() } as any,
     );
     const body = {
       object: 'whatsapp_business_account',
@@ -93,5 +100,36 @@ describe('MetaWebhookController — signature + challenge', () => {
     };
     await (ctrl as any).process(body);
     expect(apply).toHaveBeenCalledWith('w1', [{ externalMessageId: 'wamid.1', status: 'DELIVERED' }]);
+  });
+
+  it('routes a page leadgen change to the leadgen ingest with the resolved channel + config', async () => {
+    const ingestLeadgen = jest.fn().mockResolvedValue(undefined);
+    const adapter = { parseInbound: () => [], parseStatusUpdates: () => [] };
+    const config = { secrets: { pageAccessToken: 'PT' } };
+    const registry = { has: () => true, get: () => adapter, resolveConfig: () => config };
+    const resolver = {
+      byExternalId: jest.fn().mockResolvedValue({
+        id: 'c1',
+        workspaceId: 'w1',
+        type: 'MESSENGER',
+        externalId: 'page-7',
+      }),
+    };
+    const ctrl = new MetaWebhookController(
+      resolver as any,
+      registry as any,
+      { ingest: jest.fn() } as any,
+      { apply: jest.fn() } as any,
+      { ingest: ingestLeadgen } as any,
+    );
+    const body = {
+      object: 'page',
+      entry: [{ id: 'page-7', changes: [{ field: 'leadgen', value: { leadgen_id: 'lg-1', form_id: 'f1' } }] }],
+    };
+    await (ctrl as any).process(body);
+    expect(ingestLeadgen).toHaveBeenCalledTimes(1);
+    expect(ingestLeadgen.mock.calls[0][0]).toEqual({ id: 'c1', workspaceId: 'w1', externalId: 'page-7' });
+    expect(ingestLeadgen.mock.calls[0][1]).toBe(config);
+    expect(ingestLeadgen.mock.calls[0][2]).toEqual({ leadgen_id: 'lg-1', form_id: 'f1' });
   });
 });

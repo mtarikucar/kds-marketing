@@ -2,17 +2,20 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Play, Pause, Copy, Plus, Check, X, Pencil, AlertTriangle, Megaphone } from 'lucide-react';
+import { Play, Pause, Copy, Plus, Check, X, Pencil, AlertTriangle, Megaphone, Rocket } from 'lucide-react';
 import {
   listCampaigns,
   setEntityStatus,
   setEntityBudget,
   duplicateCampaign,
   createCampaign,
+  launchAd,
   type AdAccount,
   type AdCampaign,
+  type LaunchAdPayload,
 } from '../../../features/marketing/api/ads.service';
 import { CampaignDialog } from './CampaignDialog';
+import { LaunchAdDialog } from './LaunchAdDialog';
 import type { CreateCampaignFormValues } from './adManagementSchemas';
 import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
 import { Card } from '@/components/ui/Card';
@@ -43,6 +46,7 @@ export function AdManagementSection({ account }: AdManagementSectionProps) {
   const tokenExpired = account.status === 'TOKEN_EXPIRED';
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null);
   const [budgetDraft, setBudgetDraft] = useState('');
 
@@ -98,6 +102,20 @@ export function AdManagementSection({ account }: AdManagementSectionProps) {
     onError: () => toast.error(t('ads.manage.toast.createFailed', { defaultValue: 'Failed to create campaign' })),
   });
 
+  const launchMutation = useMutation({
+    mutationFn: (payload: LaunchAdPayload) => launchAd(account.id, payload),
+    onSuccess: () => {
+      invalidate();
+      setLaunchOpen(false);
+      toast.success(t('ads.manage.toast.launched', { defaultValue: 'Ad launched (paused)' }));
+    },
+    onError: (e) =>
+      toast.error(
+        (e as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+          t('ads.manage.toast.launchFailed', { defaultValue: 'Failed to launch ad' }),
+      ),
+  });
+
   const beginEditBudget = (c: AdCampaign) => {
     setEditingBudgetId(c.id);
     setBudgetDraft(c.dailyBudget != null ? String(c.dailyBudget) : '');
@@ -133,10 +151,16 @@ export function AdManagementSection({ account }: AdManagementSectionProps) {
       <SectionHeader
         title={t('ads.manage.title', { defaultValue: 'Campaigns' })}
         action={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t('ads.manage.newCampaign', { defaultValue: 'New campaign' })}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setLaunchOpen(true)}>
+              <Rocket className="h-4 w-4" aria-hidden="true" />
+              {t('ads.manage.launchAd', { defaultValue: 'Launch ad' })}
+            </Button>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t('ads.manage.newCampaign', { defaultValue: 'New campaign' })}
+            </Button>
+          </div>
         }
       />
 
@@ -296,6 +320,13 @@ export function AdManagementSection({ account }: AdManagementSectionProps) {
         onOpenChange={setCreateOpen}
         onSubmit={(values) => createMutation.mutate(values)}
         isPending={createMutation.isPending}
+      />
+
+      <LaunchAdDialog
+        open={launchOpen}
+        onOpenChange={setLaunchOpen}
+        onSubmit={(payload) => launchMutation.mutate(payload)}
+        isPending={launchMutation.isPending}
       />
     </Card>
   );

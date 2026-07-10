@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, RefreshCw, Filter } from 'lucide-react';
+import { Plus, Pencil, Trash2, RefreshCw, Filter, Megaphone } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
   PageHeader,
@@ -20,6 +20,7 @@ import { fmtDate } from '../../../../features/marketing/utils/format';
 import { useSegments, useSegmentMutations, useCustomFields } from '../hooks';
 import type { Segment, SegmentNode } from '../types';
 import { SegmentDialog } from './SegmentDialog';
+import { SegmentSyncDialog } from './SegmentSyncDialog';
 
 function apiError(e: unknown, fallback: string): string {
   const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data
@@ -37,6 +38,7 @@ export default function SegmentsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Segment | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Segment | null>(null);
+  const [syncTarget, setSyncTarget] = useState<Segment | null>(null);
 
   const segments: Segment[] = data ?? [];
 
@@ -144,6 +146,10 @@ export default function SegmentsPage() {
                 <Pencil className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('common.edit', { defaultValue: 'Edit' })}
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSyncTarget(s)}>
+                <Megaphone className="mr-2 h-4 w-4" aria-hidden="true" />
+                {t('crm.seg.syncAction', { defaultValue: 'Sync to ad platform' })}
+              </DropdownMenuItem>
               <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setDeleteTarget(s)}>
                 <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('common.delete', { defaultValue: 'Delete' })}
@@ -200,6 +206,13 @@ export default function SegmentsPage() {
         segment={editing}
         onSubmit={handleSubmit}
         isPending={create.isPending || update.isPending}
+      />
+
+      <SegmentSyncDialog
+        segment={syncTarget}
+        onOpenChange={(o) => {
+          if (!o) setSyncTarget(null);
+        }}
       />
 
       <ConfirmDialog

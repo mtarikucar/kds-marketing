@@ -5,7 +5,7 @@ import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { isMetaAdsConfigured } from './ads.types';
 import { AdManagementService, AdEntityView } from './ad-management.service';
 
-const METRICS = ['SPEND', 'CPL', 'CTR', 'LEADS', 'CLICKS', 'IMPRESSIONS'] as const;
+const METRICS = ['SPEND', 'CPL', 'CTR', 'LEADS', 'CLICKS', 'IMPRESSIONS', 'ROAS', 'REVENUE', 'CPA'] as const;
 const OPERATORS = ['GT', 'LT', 'GTE', 'LTE'] as const;
 const ACTIONS = ['INCREASE_BUDGET', 'DECREASE_BUDGET', 'PAUSE', 'RESUME'] as const;
 type Metric = (typeof METRICS)[number];
@@ -199,15 +199,19 @@ export class AdRulesService {
         date: { gte: since },
         campaignId: { not: '' },
       },
-      select: { campaignId: true, spend: true, impressions: true, clicks: true, leads: true },
+      select: { campaignId: true, spend: true, impressions: true, clicks: true, leads: true, revenue: true },
     });
-    const agg = new Map<string, { spend: number; impressions: number; clicks: number; leads: number }>();
+    const agg = new Map<
+      string,
+      { spend: number; impressions: number; clicks: number; leads: number; revenue: number }
+    >();
     for (const r of rows) {
-      const a = agg.get(r.campaignId) ?? { spend: 0, impressions: 0, clicks: 0, leads: 0 };
+      const a = agg.get(r.campaignId) ?? { spend: 0, impressions: 0, clicks: 0, leads: 0, revenue: 0 };
       a.spend += Number(r.spend);
       a.impressions += r.impressions;
       a.clicks += r.clicks;
       a.leads += r.leads;
+      a.revenue += Number(r.revenue);
       agg.set(r.campaignId, a);
     }
 
@@ -305,7 +309,7 @@ export class AdRulesService {
 /** Derive the rule metric from aggregated window totals (null = not evaluable). */
 function metricValue(
   metric: string,
-  m: { spend: number; impressions: number; clicks: number; leads: number },
+  m: { spend: number; impressions: number; clicks: number; leads: number; revenue: number },
 ): number | null {
   switch (metric) {
     case 'SPEND':
@@ -316,11 +320,19 @@ function metricValue(
       return m.impressions;
     case 'LEADS':
       return m.leads;
+    case 'REVENUE':
+      return m.revenue;
     case 'CTR':
       return m.impressions > 0 ? (m.clicks / m.impressions) * 100 : null;
     case 'CPL':
       // Spent with zero leads → infinite CPL (a "pause me" signal); no spend → skip.
       return m.leads > 0 ? m.spend / m.leads : m.spend > 0 ? Number.POSITIVE_INFINITY : null;
+    case 'CPA':
+      // Cost per acquisition (spend/leads). Div-by-zero (0 leads) → skip, like CPL's no-denominator guard.
+      return m.leads > 0 ? m.spend / m.leads : null;
+    case 'ROAS':
+      // Return on ad spend (revenue/spend). Div-by-zero (0 spend) → skip.
+      return m.spend > 0 ? m.revenue / m.spend : null;
     default:
       return null;
   }

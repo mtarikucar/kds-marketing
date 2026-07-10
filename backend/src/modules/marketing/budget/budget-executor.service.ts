@@ -158,15 +158,64 @@ export class BudgetExecutorService {
    * The shared per-channel commit + credential-gated live-write loop — the
    * money-safety core both lanes (APPROVED and AUTO) run through unchanged.
    */
+  /** Minutes an ad-rule budget change on a campaign blocks an autopilot push. */
+  private static readonly WRITER_COORD_MIN = 60;
+
+  /** True when a tactical ad-rule wrote a budget change to this campaign recently. */
+  private async recentRuleBudgetWrite(workspaceId: string, campaignRef: string): Promise<boolean> {
+    if (!campaignRef) return false;
+    const since = new Date(Date.now() - BudgetExecutorService.WRITER_COORD_MIN * 60_000);
+    const recent = await this.prisma.adRuleLog.findFirst({
+      where: {
+        workspaceId,
+        entityId: campaignRef,
+        action: { in: ['INCREASE_BUDGET', 'DECREASE_BUDGET'] },
+        ok: true,
+        createdAt: { gte: since },
+      },
+      select: { id: true },
+    });
+    return !!recent;
+  }
+
+  /** The pacer's recommended daily spend cap for this budget (0 when unset). */
+  private async paceCap(workspaceId: string, budgetId: string): Promise<number> {
+    const row = await this.prisma.pacingState.findUnique({
+      where: { budgetId_channel: { budgetId, channel: '' } },
+      select: { recommendedDailyCap: true, workspaceId: true },
+    });
+    // Scope guard: the pacing row is workspace-owned; ignore a mismatch.
+    if (!row || row.workspaceId !== workspaceId) return 0;
+    const cap = row.recommendedDailyCap ? Number(row.recommendedDailyCap) : 0;
+    return Number.isFinite(cap) && cap > 0 ? cap : 0;
+  }
+
   private async commitAndPush(
     workspaceId: string,
     budgetId: string,
     after: AfterAllocation[],
   ): Promise<{ results: ChannelResult[]; applied: number; skipped: number }> {
-    // Resolve a Meta ad account once (only when Meta is cred-write-capable).
-    const metaAccount = this.capability.canWriteBudget('META')
-      ? await this.prisma.adAccount.findFirst({ where: { workspaceId, provider: 'META' }, select: { id: true } })
-      : null;
+    // Lazily resolve the connected ad account per channel (only for channels the
+    // matrix says we can write to now). Cached so N allocations on one channel
+    // hit the DB once.
+    const accountByChannel = new Map<string, { id: string } | null>();
+    const accountFor = async (channel: string): Promise<{ id: string } | null> => {
+      if (accountByChannel.has(channel)) return accountByChannel.get(channel)!;
+      const acc = this.capability.canWriteBudget(channel)
+        ? await this.prisma.adAccount.findFirst({ where: { workspaceId, provider: channel }, select: { id: true } })
+        : null;
+      accountByChannel.set(channel, acc);
+      return acc;
+    };
+
+    // PID pace coupling: the pacer's recommendedDailyCap is the daily spend the
+    // ideal-curve controller allows today. If the sum of the allocations' daily
+    // budgets would exceed it, throttle the LIVE pushes proportionally so the
+    // pace actually caps spend (the internal plan still commits the full target,
+    // so the pacer keeps steering). NEVER scales up — factor is clamped to (0,1].
+    const cap = await this.paceCap(workspaceId, budgetId);
+    const totalIntended = after.reduce((s, a) => s + (a.budget > 0 ? a.budget : 0), 0);
+    const paceFactor = cap > 0 && totalIntended > cap ? cap / totalIntended : 1;
 
     const results: ChannelResult[] = [];
     for (const a of after) {
@@ -179,30 +228,41 @@ export class BudgetExecutorService {
         data: { plannedAmount: new Prisma.Decimal(Number.isFinite(a.budget) ? a.budget : 0) },
       });
 
-      // (2) Live ad-platform push — strictly gated.
+      // (2) Live ad-platform push — strictly gated. Any channel the write-capability
+      // matrix marks live (META/TIKTOK/LINKEDIN when configured) flows through here;
+      // a channel that is capability-off, has no connected account, or lacks a
+      // campaign ref degrades to a committed-plan-only NO_LIVE_WRITE.
       if (!this.capability.canWriteBudget(a.channel)) {
         results.push({ ...base, applied: false, note: `plan committed; no live write capability for ${a.channel}` });
-        continue;
-      }
-      if (a.channel !== 'META') {
-        results.push({ ...base, applied: false, note: `plan committed; ${a.channel} write client not available yet` });
         continue;
       }
       if (!ref) {
         results.push({ ...base, applied: false, note: 'plan committed; channel-level rollup has no ad entity to write' });
         continue;
       }
-      if (!metaAccount) {
-        results.push({ ...base, applied: false, note: 'plan committed; no Meta ad account connected' });
+      const account = await accountFor(a.channel);
+      if (!account) {
+        results.push({ ...base, applied: false, note: `plan committed; no ${a.channel} ad account connected` });
         continue;
       }
       if (!(a.budget > 0)) {
         results.push({ ...base, applied: false, note: 'plan committed; skipped live write for a non-positive budget' });
         continue;
       }
+      // Writer coordination: if a tactical ad-rule pushed a budget change to this
+      // same campaign within the coordination window, DEFER — don't let the
+      // autopilot clobber the rule's fresh decision (prevents the two writers
+      // thrashing the same Meta campaign). The plan still commits.
+      if (await this.recentRuleBudgetWrite(workspaceId, ref)) {
+        results.push({ ...base, applied: false, note: `plan committed; deferred to a recent ad-rule budget change on ${ref}` });
+        continue;
+      }
+      // Throttle the live push to the pace cap (never below a rounded 0.01).
+      const liveBudget = paceFactor < 1 ? Math.max(0.01, Math.round(a.budget * paceFactor * 100) / 100) : a.budget;
       try {
-        await this.ads.setDailyBudget(workspaceId, metaAccount.id, ref, a.budget);
-        results.push({ ...base, applied: true, note: 'daily budget pushed to Meta' });
+        await this.ads.setDailyBudget(workspaceId, account.id, ref, liveBudget);
+        const throttled = paceFactor < 1 ? ` (throttled to pace cap: ${liveBudget})` : '';
+        results.push({ ...base, applied: true, note: `daily budget pushed to ${a.channel}${throttled}` });
       } catch (e) {
         results.push({ ...base, applied: false, note: `live write failed: ${e instanceof Error ? e.message : 'error'}` });
       }

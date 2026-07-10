@@ -24,3 +24,17 @@ export function isTiktokAdsConfigured(): boolean {
 export function isLinkedinAdsConfigured(): boolean {
   return !!(process.env.LINKEDIN_ADS_CLIENT_ID && process.env.LINKEDIN_ADS_CLIENT_SECRET);
 }
+/**
+ * Google Ads uses the REST API: a platform developer token + an OAuth client
+ * (id/secret) + a manager refresh token for the login-customer-id header. All
+ * four must be present for any live Google Ads call (read, write, or offline
+ * conversion upload).
+ */
+export function isGoogleAdsConfigured(): boolean {
+  return !!(
+    process.env.GOOGLE_ADS_DEVELOPER_TOKEN &&
+    process.env.GOOGLE_ADS_CLIENT_ID &&
+    process.env.GOOGLE_ADS_CLIENT_SECRET &&
+    process.env.GOOGLE_ADS_REFRESH_TOKEN
+  );
+}

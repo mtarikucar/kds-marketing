@@ -131,6 +131,47 @@ export default function ContactInfo({ lead, fmtDate }: ContactInfoProps) {
         </CardContent>
       </Card>
 
+      {/* Ad / UTM attribution — where this lead actually came from. Only the
+          captured, non-empty signals are shown; absent for leads with no
+          click/UTM origin. */}
+      {lead.attribution && (() => {
+        const a = lead.attribution;
+        const rows: Array<[string, string | null]> = [
+          ['Campaign', a.utmCampaign],
+          ['Source', a.utmSource],
+          ['Medium', a.utmMedium],
+          ['Content', a.utmContent],
+          ['Term', a.utmTerm],
+          ['Click ID', a.clickId ? `${a.clickIdType ?? 'CLICK'}: ${a.clickId}` : null],
+          ['WhatsApp Ad', a.ctwaClid],
+          ['Ad Campaign', a.sourceAdCampaignId],
+          ['Ad Creative', a.sourceAdCreativeId],
+          ['Landing Page', a.landingUrl],
+          ['Referrer', a.referrerUrl],
+        ];
+        const shown = rows.filter(([, v]) => v != null && v !== '');
+        if (shown.length === 0) return null;
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Attribution</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="space-y-2 text-sm">
+                {shown.map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-3">
+                    <dt className="shrink-0 text-muted-foreground">{label}</dt>
+                    <dd className="truncate text-right text-foreground" title={value ?? undefined}>
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {lead.notes && (
         <Card>
           <CardHeader>

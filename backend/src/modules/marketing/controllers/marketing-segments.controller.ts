@@ -18,9 +18,12 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { SegmentsService } from '../services/segments.service';
+import { AudienceSyncService } from '../ads/audience-sync.service';
+import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import {
   CreateSegmentDto,
   PreviewSegmentDto,
+  SyncSegmentAudienceDto,
   UpdateSegmentDto,
 } from '../dto/segment.dto';
 
@@ -28,7 +31,10 @@ import {
 @Controller('marketing/segments')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingSegmentsController {
-  constructor(private readonly svc: SegmentsService) {}
+  constructor(
+    private readonly svc: SegmentsService,
+    private readonly audiences: AudienceSyncService,
+  ) {}
 
   @Get()
   list(@CurrentMarketingUser() user: MarketingUserPayload) {
@@ -80,6 +86,22 @@ export class MarketingSegmentsController {
     @CurrentMarketingUser() user: MarketingUserPayload,
   ) {
     return this.svc.count(user.workspaceId, id);
+  }
+
+  // Push this segment to a connected Meta ad account as a Custom Audience (+
+  // optional Lookalike). Sends hashed customer PII to an external platform, so
+  // it's gated tighter than the segment reads — MANAGER + settings.manage.
+  @Post(':id/sync/:accountId')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'segment.audience.sync', resourceType: 'segment', resourceIdParam: 'id' })
+  syncAudience(
+    @Param('id') id: string,
+    @Param('accountId') accountId: string,
+    @Body() dto: SyncSegmentAudienceDto,
+    @CurrentMarketingUser() user: MarketingUserPayload,
+  ) {
+    return this.audiences.syncSegment(user.workspaceId, id, accountId, dto);
   }
 
   @Patch(':id')
