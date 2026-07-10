@@ -29,6 +29,9 @@ interface TelephonyConfigView {
   configuredSecrets: string[];
   recordCalls?: boolean;
   recordingRetentionDays?: number | null;
+  /** NetGSM Phase 6 Task 4 — true once the workspace has saved a Netasistan
+   *  app-key + user-key pair (never the values themselves). */
+  netasistanConfigured?: boolean;
 }
 interface Rep {
   id: string;
@@ -37,6 +40,9 @@ interface Rep {
   email: string;
   phone?: string | null;
   dahili?: string | null;
+  /** NetGSM Phase 6 Task 4 — this rep's opt-in to also sync their
+   *  available/break presence toggle to Netasistan. */
+  netasistanOptIn?: boolean;
 }
 
 interface BalanceResult {
@@ -238,6 +244,10 @@ function TelephonyDialog({
   const [recordingRetentionDays, setRecordingRetentionDays] = useState(
     cfg?.recordingRetentionDays != null ? String(cfg.recordingRetentionDays) : '',
   );
+  // NetGSM Phase 6 Task 4 — Netasistan workspace app-key/user-key (sealed;
+  // same "leave blank to keep" convention as the santral username/password above).
+  const [netasistanAppKey, setNetasistanAppKey] = useState('');
+  const [netasistanUserKey, setNetasistanUserKey] = useState('');
 
   const { data: reps } = useQuery<Rep[]>({
     queryKey: ['marketing', 'users'],
@@ -264,11 +274,19 @@ function TelephonyDialog({
         sipDomain: sipDomain.trim() || undefined,
         recordCalls,
         recordingRetentionDays: recordingRetentionDays.trim() ? Number(recordingRetentionDays) : null,
+        ...((netasistanAppKey.trim() || netasistanUserKey.trim()) && {
+          netasistan: {
+            ...(netasistanAppKey.trim() ? { appKey: netasistanAppKey.trim() } : {}),
+            ...(netasistanUserKey.trim() ? { userKey: netasistanUserKey.trim() } : {}),
+          },
+        }),
       }),
     onSuccess: () => {
       onSaved();
       setUsername('');
       setPassword('');
+      setNetasistanAppKey('');
+      setNetasistanUserKey('');
       toast.success(t('accounts.tel.saved', 'Telephony saved'));
     },
     onError: (e: any) => toast.error(e?.response?.data?.message || t('accounts.tel.saveFailed', 'Could not save')),
@@ -349,6 +367,37 @@ function TelephonyDialog({
             />
           </section>
 
+          <section className="space-y-2 border-t border-border pt-3">
+            <p className="text-sm font-medium text-foreground">{t('accounts.tel.netasistan.title', 'Netasistan (agent self-service)')}</p>
+            <p className="text-caption text-muted-foreground">
+              {t(
+                'accounts.tel.netasistan.hint',
+                'Only for workspaces that also run Netasistan alongside Netsantral. Lets each rep who opts in sync their own available/break toggle to Netasistan too.',
+              )}
+            </p>
+            <Input
+              aria-label={t('accounts.tel.netasistan.appKey', 'Netasistan app-key')}
+              placeholder={
+                cfg?.netasistanConfigured
+                  ? t('accounts.tel.netasistan.appKeySet', 'Netasistan app-key (saved — leave blank to keep)')
+                  : t('accounts.tel.netasistan.appKey', 'Netasistan app-key')
+              }
+              value={netasistanAppKey}
+              onChange={(e) => setNetasistanAppKey(e.target.value)}
+            />
+            <Input
+              type="password"
+              aria-label={t('accounts.tel.netasistan.userKey', 'Netasistan user-key')}
+              placeholder={
+                cfg?.netasistanConfigured
+                  ? t('accounts.tel.netasistan.userKeySet', 'Netasistan user-key (saved — leave blank to keep)')
+                  : t('accounts.tel.netasistan.userKey', 'Netasistan user-key')
+              }
+              value={netasistanUserKey}
+              onChange={(e) => setNetasistanUserKey(e.target.value)}
+            />
+          </section>
+
           <div className="flex gap-2">
             <Button onClick={() => save.mutate()} loading={save.isPending}>{t('common.save', 'Save')}</Button>
             <Button variant="outline" onClick={() => verify.mutate()} loading={verify.isPending}>{t('accounts.tel.test', 'Verify credentials')}</Button>
@@ -375,7 +424,7 @@ function TelephonyDialog({
             </p>
             <div className="space-y-1.5">
               {(reps ?? []).map((r) => (
-                <RepRow key={r.id} rep={r} onSaved={onSaved} />
+                <RepRow key={r.id} rep={r} onSaved={onSaved} netasistanAvailable={!!cfg?.netasistanConfigured} />
               ))}
             </div>
           </section>
@@ -389,11 +438,22 @@ function TelephonyDialog({
   );
 }
 
-function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
+function RepRow({
+  rep,
+  onSaved,
+  netasistanAvailable,
+}: {
+  rep: Rep;
+  onSaved: () => void;
+  /** NetGSM Phase 6 Task 4 — true once the workspace has saved Netasistan
+   *  app-key/user-key; the per-rep opt-in only makes sense once that's true. */
+  netasistanAvailable: boolean;
+}) {
   const { t } = useTranslation('marketing');
   const [phone, setPhone] = useState(rep.phone ?? '');
   const [dahili, setDahili] = useState(rep.dahili ?? '');
   const [sipPassword, setSipPassword] = useState('');
+  const [netasistanOptIn, setNetasistanOptIn] = useState(rep.netasistanOptIn ?? false);
 
   const save = useMutation({
     mutationFn: () =>
@@ -401,6 +461,7 @@ function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
         phone: phone.trim() || null,
         dahili: dahili.trim() || null,
         ...(sipPassword ? { sipPassword } : {}),
+        netasistanOptIn,
       }),
     onSuccess: () => {
       onSaved();
@@ -426,6 +487,21 @@ function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
         <Input className="w-20 shrink-0" aria-label={t('accounts.tel.dahiliFor', { defaultValue: 'Dahili for {{name}}', name })} placeholder={t('accounts.tel.dahili', 'Dahili')} value={dahili} onChange={(e) => setDahili(e.target.value)} />
         <Input className="min-w-0 flex-1 basis-28" type="password" aria-label={t('accounts.tel.sipFor', { defaultValue: 'SIP password for {{name}}', name })} placeholder={t('accounts.tel.sip', 'SIP pass')} value={sipPassword} onChange={(e) => setSipPassword(e.target.value)} />
       </div>
+      {netasistanAvailable && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border p-2">
+          <div className="min-w-0">
+            <p className="text-sm text-foreground">{t('accounts.tel.netasistan.optIn', 'Sync my presence to Netasistan')}</p>
+            <p className="text-caption text-muted-foreground">
+              {t('accounts.tel.netasistan.optInHint', 'Also toggles this rep on Netasistan when they go available/on break here.')}
+            </p>
+          </div>
+          <Switch
+            aria-label={`${t('accounts.tel.netasistan.optIn', 'Sync my presence to Netasistan')} — ${name}`}
+            checked={netasistanOptIn}
+            onCheckedChange={setNetasistanOptIn}
+          />
+        </div>
+      )}
     </div>
   );
 }

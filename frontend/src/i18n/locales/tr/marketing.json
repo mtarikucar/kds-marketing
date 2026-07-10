@@ -204,6 +204,16 @@
         "toggleHint": "Varsayılan olarak kapalı. Yalnızca bu ayar açıldıktan sonra başlatılan görüşmelere uygulanır.",
         "kvkkNote": "Görüşme kaydı için karşı tarafa anons yapılması yasal zorunluluktur (KVKK).",
         "retention": "Saklama süresi (gün) — süresiz saklamak için boş bırakın"
+      },
+      "netasistan": {
+        "title": "Netasistan (temsilci self-servis)",
+        "hint": "Yalnızca Netsantral'in yanında Netasistan da kullanan çalışma alanları için. Katılım sağlayan her temsilcinin kendi müsait/mola durumunu Netasistan'a da eşitler.",
+        "appKey": "Netasistan app-key",
+        "appKeySet": "Netasistan app-key (kaydedildi — korumak için boş bırakın)",
+        "userKey": "Netasistan user-key",
+        "userKeySet": "Netasistan user-key (kaydedildi — korumak için boş bırakın)",
+        "optIn": "Durumumu Netasistan'a eşitle",
+        "optInHint": "Bu temsilci burada müsait/mola durumunu değiştirdiğinde Netasistan'da da eşitler."
       }
     },
     "voice": {

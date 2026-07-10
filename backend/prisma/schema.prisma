@@ -115,6 +115,12 @@ model MarketingUser {
   /// AES-256-GCM sealed SIP password for this rep's dahili (in-app webphone).
   /// Served only to the owning rep over HTTPS; never returned raw.
   dahiliSecret String?
+  /// NetGSM Phase 6 Task 4 — this rep opted their own available/break
+  /// presence toggle (TelephonyQueueService.setPresence) into ALSO syncing to
+  /// Netasistan (self-service break/queue via a separate app-key/user-key
+  /// auth realm), on top of the existing crmsntrl agentlogin/agentpause.
+  /// Default false: an explicit per-rep opt-in, never silently on.
+  netasistanOptIn Boolean @default(false)
   avatar       String?
   role         String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
   status       String    @default("ACTIVE") // ACTIVE, INACTIVE
@@ -1705,6 +1711,13 @@ model TelephonyConfig {
   /// How long a recording is kept in R2 before the retention sweep deletes
   /// the object + nulls SalesCall.recordingStorageKey. Null = keep forever.
   recordingRetentionDays Int?
+  /// NetGSM Phase 6 Task 4 — sealed JSON of { appKey, userKey } for the
+  /// Netasistan self-service realm (a SEPARATE auth realm from the santral
+  /// creds above: app-key+user-key -> a 1h bearer, used for the agent's own
+  /// break/queue self-service). Independent of configSealed so either can be
+  /// rotated/cleared without touching the other. Null = Netasistan not
+  /// configured for this workspace.
+  netasistanConfigSealed String? @db.Text
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

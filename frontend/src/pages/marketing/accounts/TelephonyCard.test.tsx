@@ -13,12 +13,13 @@ vi.mock('react-i18next', () => ({
 const get = vi.fn();
 const post = vi.fn();
 const put = vi.fn().mockResolvedValue({ data: {} });
+const patch = vi.fn().mockResolvedValue({ data: {} });
 vi.mock('../../../features/marketing/api/marketingApi', () => ({
   default: {
     get: (...a: unknown[]) => get(...a),
     post: (...a: unknown[]) => post(...a),
     put: (...a: unknown[]) => put(...a),
-    patch: vi.fn().mockResolvedValue({ data: {} }),
+    patch: (...a: unknown[]) => patch(...a),
   },
 }));
 
@@ -179,6 +180,84 @@ describe('TelephonyCard — call recording (NetGSM Phase 4 Task 1)', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith(
       '/telephony/config',
       expect.objectContaining({ recordCalls: false, recordingRetentionDays: null }),
+    ));
+  });
+});
+
+/**
+ * NetGSM Phase 6 Task 4 — Netasistan agent self-service (break/queue)
+ * presence sync: a workspace app-key/user-key input (sealed, "leave blank to
+ * keep" like the santral creds) + a per-rep opt-in toggle that only appears
+ * once the workspace has Netasistan configured.
+ */
+describe('TelephonyCard — Netasistan (NetGSM Phase 6 Task 4)', () => {
+  const REP = { id: 'rep-1', firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', dahili: '104', netasistanOptIn: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    put.mockResolvedValue({ data: {} });
+  });
+
+  async function openDialog(cfgOverrides: Partial<typeof CFG & { netasistanConfigured: boolean }> = {}, reps: unknown[] = []) {
+    get.mockImplementation((url: string) => {
+      if (url === '/telephony/config') return Promise.resolve({ data: { ...CFG, ...cfgOverrides } });
+      if (url === '/users') return Promise.resolve({ data: reps });
+      return Promise.resolve({ data: null });
+    });
+    renderCard();
+    await userEvent.click(await screen.findByRole('button', { name: /manage|set up/i }));
+  }
+
+  it('sends the appKey/userKey under a `netasistan` field when either is filled in', async () => {
+    await openDialog();
+    await userEvent.type(screen.getByPlaceholderText(/netasistan app-key/i), 'my-app-key');
+    await userEvent.type(screen.getByPlaceholderText(/netasistan user-key/i), 'my-user-key');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      '/telephony/config',
+      expect.objectContaining({ netasistan: { appKey: 'my-app-key', userKey: 'my-user-key' } }),
+    ));
+  });
+
+  it('omits the `netasistan` field entirely when both key inputs are left blank', async () => {
+    await openDialog();
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    const body = put.mock.calls[0][1];
+    expect(body.netasistan).toBeUndefined();
+  });
+
+  it('shows a "saved — leave blank to keep" placeholder once the workspace has Netasistan configured', async () => {
+    await openDialog({ netasistanConfigured: true });
+    expect(screen.getByPlaceholderText(/netasistan app-key \(saved/i)).toBeInTheDocument();
+  });
+
+  it('hides the per-rep opt-in toggle when the workspace has no Netasistan keys configured', async () => {
+    await openDialog({ netasistanConfigured: false }, [REP]);
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /sync my presence to netasistan/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the per-rep opt-in toggle once the workspace has Netasistan configured, defaulting to the saved value', async () => {
+    await openDialog({ netasistanConfigured: true }, [REP]);
+    const toggle = await screen.findByRole('switch', { name: /sync my presence to netasistan/i });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it("saves the rep's netasistanOptIn:true through the existing dahili PATCH endpoint", async () => {
+    await openDialog({ netasistanConfigured: true }, [REP]);
+    const toggle = await screen.findByRole('switch', { name: /sync my presence to netasistan/i });
+    await userEvent.click(toggle);
+
+    const repSaveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    // The last "Save" button belongs to the rep row (the dialog's own Save is first).
+    await userEvent.click(repSaveButtons[repSaveButtons.length - 1]);
+
+    await waitFor(() => expect(patch).toHaveBeenCalledWith(
+      '/telephony/users/rep-1/dahili',
+      expect.objectContaining({ netasistanOptIn: true }),
     ));
   });
 });

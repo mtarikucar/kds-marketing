@@ -121,6 +121,9 @@ export class MarketingUsersService {
         // Telephony extension (for the Account Center per-rep table). NOT
         // dahiliSecret — the sealed SIP password stays write-only.
         dahili: true,
+        // NetGSM Phase 6 Task 4 — this rep's Netasistan presence-sync opt-in
+        // (for the same per-rep table).
+        netasistanOptIn: true,
         role: true,
         status: true,
         lastLogin: true,

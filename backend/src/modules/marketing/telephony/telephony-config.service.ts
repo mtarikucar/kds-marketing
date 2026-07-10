@@ -15,6 +15,15 @@ export interface UpsertTelephonyInput {
   recordCalls?: boolean;
   /** Days to keep a recording before the retention sweep deletes it; null/omitted = keep forever. */
   recordingRetentionDays?: number | null;
+  /**
+   * NetGSM Phase 6 Task 4 — Netasistan workspace credentials (a SEPARATE
+   * auth realm from the santral creds above: app-key + user-key -> a 1h
+   * bearer). Sealed into their own column (`netasistanConfigSealed`),
+   * independent of `configSealed`, so a workspace can rotate/clear one
+   * without touching the other. Only present fields are merged in — same
+   * merge-on-partial-update semantics as `secrets`.
+   */
+  netasistan?: { appKey?: string; userKey?: string };
 }
 export interface ResolvedNetsantral {
   username: string;
@@ -62,6 +71,18 @@ export class TelephonyConfigService {
     const recordingRetentionDays = retentionProvided
       ? dto.recordingRetentionDays ?? null
       : existing?.recordingRetentionDays ?? null;
+    // Netasistan creds live in their OWN sealed column, merged the same
+    // partial-update way `secrets` is above — but independently, so saving a
+    // santral-only change never touches (or requires) the Netasistan keys.
+    let netasistanMerged: Record<string, string> = {};
+    if (existing?.netasistanConfigSealed && isSecretBoxConfigured()) {
+      try { netasistanMerged = JSON.parse(openSecret(existing.netasistanConfigSealed)); } catch { /* replace */ }
+    }
+    if (dto.netasistan?.appKey) netasistanMerged.appKey = dto.netasistan.appKey;
+    if (dto.netasistan?.userKey) netasistanMerged.userKey = dto.netasistan.userKey;
+    const netasistanConfigSealed = Object.keys(netasistanMerged).length
+      ? sealSecret(JSON.stringify(netasistanMerged))
+      : (existing?.netasistanConfigSealed ?? null);
     const data = {
       provider: 'netgsm-netsantral',
       status: dto.status ?? existing?.status ?? 'ACTIVE',
@@ -72,6 +93,7 @@ export class TelephonyConfigService {
       sipDomain: dto.sipDomain ?? existing?.sipDomain ?? null,
       recordCalls: dto.recordCalls ?? existing?.recordCalls ?? false,
       recordingRetentionDays,
+      netasistanConfigSealed,
     };
     const c = await this.prisma.telephonyConfig.upsert({
       where: { workspaceId },
@@ -100,6 +122,24 @@ export class TelephonyConfigService {
     };
   }
 
+  /**
+   * Decrypted Netasistan creds for a workspace, or null when not configured /
+   * secret-box missing. Deliberately does NOT require the santral config's
+   * own `status` to be ACTIVE — Netasistan is an independent self-service
+   * add-on some Netasistan-running tenants layer on top (facts: "only for
+   * tenants that run Netasistan alongside the santral"), gated purely on
+   * whether app-key/user-key are saved. Used by `TelephonyQueueService`'s
+   * presence sync.
+   */
+  async resolveNetasistanForWorkspace(workspaceId: string): Promise<{ appKey: string; userKey: string } | null> {
+    const c = await this.prisma.telephonyConfig.findUnique({ where: { workspaceId } });
+    if (!c?.netasistanConfigSealed || !isSecretBoxConfigured()) return null;
+    let creds: Record<string, string>;
+    try { creds = JSON.parse(openSecret(c.netasistanConfigSealed)); } catch { return null; }
+    if (!creds.appKey || !creds.userKey) return null;
+    return { appKey: creds.appKey, userKey: creds.userKey };
+  }
+
   /** Live verify of the santral creds via /balance (works off-prod, unlike CDR). */
   async verifyCreds(workspaceId: string) {
     const cfg = await this.resolveForWorkspace(workspaceId);
@@ -115,8 +155,17 @@ export class TelephonyConfigService {
     dahili: string | null | undefined,
     sipPassword?: string,
     phone?: string | null,
+    /** NetGSM Phase 6 Task 4 — this rep's explicit opt-in to also sync their
+     *  presence toggle to Netasistan. `undefined` = leave as-is (mirrors
+     *  every other optional field here). */
+    netasistanOptIn?: boolean,
   ) {
-    const data: { dahili?: string | null; dahiliSecret?: string | null; phone?: string | null } = {};
+    const data: {
+      dahili?: string | null;
+      dahiliSecret?: string | null;
+      phone?: string | null;
+      netasistanOptIn?: boolean;
+    } = {};
     // Only touch dahili when explicitly provided (undefined = leave as-is) — so a
     // caller editing just the phone/SIP password can't null out a saved extension.
     if (dahili !== undefined) data.dahili = dahili?.trim() || null;
@@ -128,6 +177,7 @@ export class TelephonyConfigService {
     }
     // Only touch phone when explicitly provided (undefined = leave as-is).
     if (phone !== undefined) data.phone = phone?.trim() || null;
+    if (netasistanOptIn !== undefined) data.netasistanOptIn = netasistanOptIn;
     const res = await this.prisma.marketingUser.updateMany({ where: { id: marketingUserId, workspaceId }, data });
     if (res.count === 0) throw new NotFoundException('User not found');
     return { ok: true };
@@ -174,11 +224,21 @@ export class TelephonyConfigService {
     if (c.configSealed && isSecretBoxConfigured()) {
       try { configuredSecrets = Object.keys(JSON.parse(openSecret(c.configSealed))); } catch { configuredSecrets = ['(unreadable)']; }
     }
+    // Netasistan: report ONLY whether both keys are saved — never leak the
+    // sealed values themselves (mirrors configuredSecrets' key-names-only shape).
+    let netasistanConfigured = false;
+    if (c.netasistanConfigSealed && isSecretBoxConfigured()) {
+      try {
+        const keys = JSON.parse(openSecret(c.netasistanConfigSealed));
+        netasistanConfigured = !!keys.appKey && !!keys.userKey;
+      } catch { netasistanConfigured = false; }
+    }
     return {
       id: c.id, workspaceId: c.workspaceId, provider: c.provider, status: c.status,
       trunk: c.trunk, pbxnum: c.pbxnum, configuredSecrets,
       wssUrl: c.wssUrl, sipDomain: c.sipDomain,
       recordCalls: c.recordCalls, recordingRetentionDays: c.recordingRetentionDays,
+      netasistanConfigured,
       createdAt: c.createdAt, updatedAt: c.updatedAt,
     };
   }

@@ -11,6 +11,11 @@ export class UpsertTelephonyConfigDto {
   @IsOptional() @IsBoolean() recordCalls?: boolean;
   /** Days to keep a recording before the retention sweep deletes it; null = keep forever. */
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsInt() @Min(1) recordingRetentionDays?: number | null;
+  /** NetGSM Phase 6 Task 4 — Netasistan workspace app-key/user-key (sealed
+   *  into their own column, independent of `secrets` above). Loosely typed
+   *  like `secrets`, not a nested DTO — mirrors this file's existing
+   *  convention for small free-form credential bags. */
+  @IsOptional() @IsObject() netasistan?: Record<string, string>;
 }
 
 export class SetDahiliDto {
@@ -19,4 +24,7 @@ export class SetDahiliDto {
   @IsOptional() @IsString() @MaxLength(120) sipPassword?: string;
   /** The rep's own phone (cell) — first leg for bridge calling (no Netsipp needed). */
   @IsOptional() @IsString() @ValidateIf((_, v) => v !== null) @MaxLength(20) phone?: string | null;
+  /** NetGSM Phase 6 Task 4 — this rep's opt-in to also sync their
+   *  available/break presence toggle to Netasistan. */
+  @IsOptional() @IsBoolean() netasistanOptIn?: boolean;
 }
