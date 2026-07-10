@@ -580,6 +580,40 @@ describe('NetgsmOnboardingService', () => {
     });
   });
 
+  it('ivrWebhook: missing with the env-gap detail (no url) while NETGSM_IVR_TOKEN is unset — the public IVR route 404s until the platform operator sets it', async () => {
+    delete process.env.NETGSM_IVR_TOKEN;
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'ivrWebhook')).toEqual({
+      key: 'ivrWebhook', state: 'missing', url: undefined, detail: 'ivrTokenMissing',
+    });
+  });
+
+  it('ivrWebhook: unknown with the {token}-PLACEHOLDER url once NETGSM_IVR_TOKEN is set — the platform-wide token itself is never rendered per-workspace', async () => {
+    process.env.NETGSM_IVR_TOKEN = 'super-secret-platform-token';
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    const row = items.find((i) => i.key === 'ivrWebhook');
+    expect(row).toEqual({
+      key: 'ivrWebhook',
+      state: 'unknown',
+      url: 'https://app.example.com/api/public/telephony/netgsm-ivr/{token}',
+      detail: 'ivrWebhookHint',
+    });
+    // The secret must never appear anywhere in the payload.
+    expect(JSON.stringify(items)).not.toContain('super-secret-platform-token');
+  });
+
   it('netasistanKeys: unknown (configure hint) when TelephonyConfigService.get() reports no config row at all', async () => {
     const prisma = prismaMock();
     prisma.channel.findFirst.mockResolvedValue(null);

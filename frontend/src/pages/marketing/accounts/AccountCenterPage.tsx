@@ -127,6 +127,33 @@ export default function AccountCenterPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // NetGSM guided setup deep-link: ?tab=accounts&focus=telephony scrolls the
+  // TelephonyCard into view with a short highlight ring once the connections
+  // query has resolved (the card only exists after loading), then clears the
+  // param so refresh/back doesn't re-scroll.
+  const focus = searchParams.get('focus');
+  useEffect(() => {
+    if (tab !== 'accounts' || focus !== 'telephony' || isLoading) return;
+    const el = document.getElementById('telephony-card');
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('ring-2', 'ring-primary', 'rounded-xl');
+    // NO effect cleanup on purpose: deleting the param below re-runs the
+    // effect immediately, and a cleanup would cancel this timer before it
+    // ever removed the highlight (a permanently-stuck ring). Letting the
+    // timer fire late is harmless — removing classes from a (possibly
+    // detached) node is a no-op.
+    window.setTimeout(() => el.classList.remove('ring-2', 'ring-primary', 'rounded-xl'), 2400);
+    setSearchParams(
+      (p) => {
+        p.delete('focus');
+        return p;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, focus, isLoading]);
+
   const onConnected = () => {
     qc.invalidateQueries({ queryKey: connectionsKey });
     qc.invalidateQueries({ queryKey: ['marketing', 'channels'] });
@@ -389,7 +416,10 @@ export default function AccountCenterPage() {
           >
             <div className="grid gap-3 md:grid-cols-2">
               {(data?.providers ?? []).map(renderProvider)}
-              <TelephonyCard />
+              {/* id anchors the guided-setup deep-link (?focus=telephony). */}
+              <div id="telephony-card">
+                <TelephonyCard />
+              </div>
               <VoiceAiCard />
             </div>
           </QueryStateBoundary>

@@ -230,8 +230,48 @@
       "opsNote": "Bunlar devreye girmeden önce bir yöneticinin VOICE_AI_BRIDGE_SECRET değerini ayarlaması (ve aramalar için NetGSM SIP-trunk / AI eklentisini sağlaması) gerekir."
     },
     "netgsm": {
-      "title": "NetGSM Kurulum Kontrol Listesi",
+      "title": "NetGSM Kurulumu",
       "subtitle": "NetGSM'in kendi panelinde yapman gereken manuel adımlar — mümkün olan yerde canlı bir kontrolle.",
+      "progress": "{{done}}/{{total}} doğrulanabilir adım tamam",
+      "missingCount": "{{count}} eksik",
+      "iysBlocked": "Ticari (TİCARİ) SMS ve sesli aramalar, İYS marka kodu tanımlanana kadar engellenir — bilgilendirme (BİLGİLENDİRME) gönderimleri çalışmaya devam eder.",
+      "fixChannels": "Kanal ayarlarını aç",
+      "fixTelephony": "Telefon kartına git",
+      "badge": {
+        "optional": "Opsiyonel",
+        "paid": "Ücretli NetGSM paketi"
+      },
+      "group": {
+        "sms": {
+          "title": "SMS temeli",
+          "desc": "Temel NetGSM hesabı — santral, faks, sesli arama ve OTP hepsi bunu kullanır."
+        },
+        "iys": {
+          "title": "İYS uyumluluğu",
+          "desc": "Herhangi bir ticari (TİCARİ) SMS veya sesli gönderimden önce zorunlu."
+        },
+        "santral": {
+          "title": "Telefon (Netsantral)",
+          "desc": "Canlı çağrı olayları, gelen arama ekranı ve çağrı içi kontrol."
+        },
+        "recording": {
+          "title": "Çağrı kaydı ve kuyruklar",
+          "desc": "Kayıtları depola (R2), saklama süresiyle birlikte."
+        },
+        "voice": {
+          "title": "Sesli kampanyalar ve IVR",
+          "desc": "Sesli SMS, otomatik arama ve dinamik IVR robotu."
+        },
+        "addons": {
+          "title": "Eklentiler",
+          "desc": "Faks, WhatsApp OTP ve Netasistan durum senkronu."
+        },
+        "other": {
+          "title": "Diğer",
+          "desc": "Henüz gruplanmamış yeni kontroller."
+        }
+      },
+      "ivrWebhook": "Dinamik IVR webhook URL'si",
       "smsChannel": "SMS kanalı bağlı",
       "smsCredsLive": "SMS kimlik bilgileri canlı doğrulandı",
       "moUrl": "Gelen (MO) callback URL'si",
@@ -268,7 +308,9 @@
         "autocallQueueHint": "Otomatik Arama'nın, yanıtlanan çağrıları aktarabilmesi için oturum açmış temsilcileri olan bir Netsantral kuyruğuna ihtiyacı vardır — bunu Netsantral panelinden kurun.",
         "faxNumberHint": "Faks gönderip almak için NetGSM panelinden faks özellikli bir numara tanımlanmalıdır — bu olmadan faks gönderme/alma çalışmaz.",
         "whatsappOtpPackageHint": "WhatsApp OTP için NetGSM hesabınızda ücretli bir OTP-WhatsApp paketi ve Meta şablon onayı gerekir — paket aktif olana kadar OTP kodları otomatik olarak SMS ile gönderilir.",
-        "netasistanKeysHint": "Temsilci mola/kuyruk durumunu senkronize etmek için Netasistan app-key ve user-key bilgilerinizi tanımlayın."
+        "netasistanKeysHint": "Temsilci mola/kuyruk durumunu senkronize etmek için Netasistan app-key ve user-key bilgilerinizi tanımlayın.",
+        "ivrTokenMissing": "Dinamik IVR bu platformda henüz etkin değil (NETGSM_IVR_TOKEN tanımsız) — yapılandırması için platform operatörünüzle görüşün.",
+        "ivrWebhookHint": "NetGSM \"Özel API (Custom)\" alanına yapıştırın — {token} kısmını platform IVR anahtarıyla değiştirin (platform operatörünüzden isteyin)."
       }
     },
     "tab": {
