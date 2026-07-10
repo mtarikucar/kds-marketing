@@ -6,6 +6,7 @@ import {
   clientId,
   clientSecret,
   redirectUri,
+  scopesFor,
 } from './social-oauth.config';
 
 /** A page/profile/account the user can choose to connect after OAuth. */
@@ -62,7 +63,7 @@ export function buildAuthorizeUrl(
   if (metaConfigId) {
     p.set('config_id', metaConfigId);
   } else {
-    p.set('scope', def.scopes.join(def.scopeSep));
+    p.set('scope', scopesFor(network).join(def.scopeSep));
   }
   if (network === 'TIKTOK') {
     p.set('client_key', clientId(network) ?? '');

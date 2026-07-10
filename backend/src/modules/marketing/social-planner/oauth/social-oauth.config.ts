@@ -160,6 +160,23 @@ export function usesPkce(n: Network): boolean {
   return NETWORK_OAUTH[n].pkce === true;
 }
 
+const LINKEDIN_ORG_SCOPES = ['w_organization_social', 'r_organization_social'];
+
+/**
+ * Effective scopes for a network at request time. LinkedIn's org scopes belong
+ * to the Community Management API, which LinkedIn only grants to a separate
+ * single-product app after partner review — requesting them from the self-serve
+ * app makes LinkedIn reject the ENTIRE authorize request. They stay off until
+ * LINKEDIN_ORG_SCOPES is set (i.e. the configured app has CMA access).
+ */
+export function scopesFor(n: Network): string[] {
+  const scopes = NETWORK_OAUTH[n].scopes;
+  if (n === 'LINKEDIN' && !process.env.LINKEDIN_ORG_SCOPES) {
+    return scopes.filter((s) => !LINKEDIN_ORG_SCOPES.includes(s));
+  }
+  return scopes;
+}
+
 /**
  * The provider redirect URI — must be registered verbatim in each provider's
  * app. Built from the PUBLIC backend origin (`PUBLIC_BASE_URL`, e.g.

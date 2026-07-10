@@ -49,14 +49,27 @@ describe('buildAuthorizeUrl', () => {
     expect(decodeURIComponent(url)).toContain('video.publish');
   });
 
-  it('LinkedIn: space-delimited scopes incl. org share', () => {
+  it('LinkedIn: default requests only self-serve member scopes (org scopes need CMA approval)', () => {
     process.env.LINKEDIN_CLIENT_ID = 'LIID';
     process.env.API_URL = 'https://api.x/api';
+    delete process.env.LINKEDIN_ORG_SCOPES;
     const url = buildAuthorizeUrl('LINKEDIN', 'S');
     expect(url).toContain('client_id=LIID');
     const decoded = decodeURIComponent(url);
-    expect(decoded).toContain('w_organization_social');
     expect(decoded).toContain('w_member_social');
+    expect(decoded).not.toContain('w_organization_social');
+    expect(decoded).not.toContain('r_organization_social');
+  });
+
+  it('LinkedIn: LINKEDIN_ORG_SCOPES=1 adds the org scopes back (CMA-granted app)', () => {
+    process.env.LINKEDIN_CLIENT_ID = 'LIID';
+    process.env.API_URL = 'https://api.x/api';
+    process.env.LINKEDIN_ORG_SCOPES = '1';
+    const url = buildAuthorizeUrl('LINKEDIN', 'S');
+    const decoded = decodeURIComponent(url);
+    expect(decoded).toContain('w_member_social');
+    expect(decoded).toContain('w_organization_social');
+    expect(decoded).toContain('r_organization_social');
   });
 
   it('X/Twitter: adds the PKCE S256 challenge when one is supplied', () => {
