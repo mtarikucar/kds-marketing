@@ -1472,7 +1472,11 @@
     "public": "public web chat",
     "noSecrets": "no credentials yet",
     "embed": "Embed snippet (paste before </body>)",
-    "empty": "No channels yet — connect one so customers can message you."
+    "empty": "No channels yet — connect one so customers can message you.",
+    "otpTransport": "OTP delivery channel",
+    "otpTransportSms": "SMS (default)",
+    "otpTransportWhatsapp": "WhatsApp",
+    "otpTransportHelp": "Which channel verification codes (2FA, phone verification) are sent over. WhatsApp requires a paid \"OTP WhatsApp\" package and an approved netgsm_verify_code template on your NetGSM account — if the package is missing or the send fails, the code automatically falls back to SMS."
   },
   "automations": {
     "title": "Automations",

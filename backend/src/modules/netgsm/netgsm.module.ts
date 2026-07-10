@@ -6,6 +6,7 @@ import { VoicesmsClient } from './voice/voicesms.client';
 import { VoicesmsSendClient } from './voice/voicesms-send.client';
 import { AutocallClient } from './voice/autocall.client';
 import { FaxClient } from './fax/fax.client';
+import { WhatsAppOtpClient } from './whatsapp/whatsapp-otp.client';
 import { NetgsmRestClient } from './core/netgsm-rest.client';
 import { AccountRateBudgeter } from './core/account-rate-budgeter';
 import { BalanceClient } from './balance/balance.client';
@@ -24,7 +25,7 @@ import { NetgsmEventsController } from './webhooks/netgsm-events.controller';
  */
 @Module({
   controllers: [NetgsmEventsController],
-  providers: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, VoicesmsSendClient, AutocallClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient, FaxClient],
-  exports: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, VoicesmsSendClient, AutocallClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient, FaxClient],
+  providers: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, VoicesmsSendClient, AutocallClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient, FaxClient, WhatsAppOtpClient],
+  exports: [NetsantralClient, NetgsmCdrClient, NetgsmStatisticsClient, VoicesmsClient, VoicesmsSendClient, AutocallClient, NetgsmRestClient, AccountRateBudgeter, BalanceClient, SmsV2Client, BlacklistClient, IysClient, FaxClient, WhatsAppOtpClient],
 })
 export class NetgsmModule {}

@@ -220,7 +220,22 @@ describe('ChannelsSettingsPage', () => {
           lastMoPollRecovery: '2026-01-01T00:00:00.000Z',
           brandCode: 'BRAND9',
           iysDefault: 'BILGILENDIRME',
+          // NetGSM Phase 6 Task 3 — the OTP delivery transport preference
+          // rides the same save action; 'SMS' is the default when the
+          // channel's configPublic carries no otpTransport of its own.
+          otpTransport: 'SMS',
         },
+      });
+    });
+
+    it('saves otpTransport: WHATSAPP when the OTP delivery channel select is switched to WhatsApp', async () => {
+      const marketingApi = await renderSmsCard({ brandCode: 'BRAND1' });
+      await userEvent.click(screen.getByRole('combobox', { name: /otp delivery channel/i }));
+      await userEvent.click(await screen.findByRole('option', { name: 'WhatsApp' }));
+      const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+      await userEvent.click(saveButtons[0]);
+      expect(marketingApi.patch).toHaveBeenCalledWith('/channels/ch1', {
+        configPublic: { brandCode: 'BRAND1', iysDefault: 'BILGILENDIRME', otpTransport: 'WHATSAPP' },
       });
     });
   });

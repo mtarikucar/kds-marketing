@@ -21,6 +21,12 @@ function makeSvc() {
   const prisma = mockPrismaClient();
   const channelRegistry = { resolveConfig: jest.fn() } as any;
   const smsV2 = { otp: jest.fn() } as any;
+  // NetGSM Phase 6 Task 3 — WhatsApp OTP alternate transport. Every existing
+  // test below never opts a channel into `configPublic.otpTransport ===
+  // 'WHATSAPP'` (RESOLVED_CONFIG.public stays `{}`), so `sendVerifyCode` is
+  // never called by those cases — this mock exists purely so the DI wiring
+  // is complete; it does not change any Phase-1 behavior or assertion.
+  const whatsappOtp = { sendVerifyCode: jest.fn() } as any;
   // Interactive-transaction shim (same convention as
   // marketing-auth.workspace.spec.ts): the callback just runs against the
   // same mocked prisma object, so every existing prisma.smsOtpCode.* mock
@@ -28,8 +34,8 @@ function makeSvc() {
   // $transaction.
   (prisma.$transaction as unknown as jest.Mock).mockImplementation((fn: any) => fn(prisma));
   (prisma.smsOtpCode.count as jest.Mock).mockResolvedValue(0);
-  const svc = new SmsOtpService(prisma as any, channelRegistry, smsV2);
-  return { prisma, channelRegistry, smsV2, svc };
+  const svc = new SmsOtpService(prisma as any, channelRegistry, smsV2, whatsappOtp);
+  return { prisma, channelRegistry, smsV2, whatsappOtp, svc };
 }
 
 const TARGET = { purpose: 'LEAD_PHONE_VERIFY' as const, targetType: 'LEAD' as const, targetId: 'lead-1' };
@@ -208,6 +214,117 @@ describe('SmsOtpService', () => {
           expect.any(Function),
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
+      });
+    });
+
+    // NetGSM Phase 6 Task 3 — WhatsApp OTP as an alternate delivery
+    // transport. The code generation/hash/persist path above is completely
+    // untouched by any of these cases; only which client sends the already-
+    // minted code differs.
+    describe('WhatsApp transport (Phase 6 Task 3)', () => {
+      const RESOLVED_CONFIG_WHATSAPP = {
+        secrets: { usercode: '850u', password: 'pw', msgheader: 'JEETA' },
+        public: { otpTransport: 'WHATSAPP' },
+      };
+
+      it('sends via WhatsAppOtpClient (not SMS) when the workspace prefers WhatsApp and the send succeeds', async () => {
+        const { prisma, channelRegistry, smsV2, whatsappOtp, svc } = makeSvc();
+        channelRegistry.resolveConfig.mockReturnValue(RESOLVED_CONFIG_WHATSAPP);
+        mockPrismaForIssue(prisma);
+        whatsappOtp.sendVerifyCode.mockResolvedValue({ ok: true, code: '00', message: null, retriable: false, transport: false });
+
+        const out = await svc.issue('ws-1', TARGET, PHONE);
+
+        expect(out.ok).toBe(true);
+        expect(whatsappOtp.sendVerifyCode).toHaveBeenCalledWith(
+          { usercode: '850u', password: 'pw' },
+          { to: PHONE, code: expect.stringMatching(/^\d{6}$/) },
+        );
+        // The preferred transport delivered — SMS is never touched.
+        expect(smsV2.otp).not.toHaveBeenCalled();
+        // The code was still persisted (hashed) BEFORE either transport was tried.
+        expect(prisma.smsOtpCode.create).toHaveBeenCalled();
+        expect(prisma.smsOtpCode.delete).not.toHaveBeenCalled();
+      });
+
+      it('falls back to SMS when the WhatsApp send errors (e.g. code 60 — no OTP-WhatsApp package), and the code still reaches the target', async () => {
+        const { prisma, channelRegistry, smsV2, whatsappOtp, svc } = makeSvc();
+        channelRegistry.resolveConfig.mockReturnValue(RESOLVED_CONFIG_WHATSAPP);
+        mockPrismaForIssue(prisma);
+        whatsappOtp.sendVerifyCode.mockResolvedValue({
+          ok: false, code: '60', message: 'no whatsapp otp package', retriable: false, transport: false,
+        });
+        smsV2.otp.mockResolvedValue({ ok: true, code: '00', jobid: 'j', message: null, retriable: false, transport: false });
+
+        const out = await svc.issue('ws-1', TARGET, PHONE);
+
+        expect(out.ok).toBe(true);
+        expect(whatsappOtp.sendVerifyCode).toHaveBeenCalled();
+        expect(smsV2.otp).toHaveBeenCalled();
+        // Never rolled back — SMS delivered it even though WhatsApp failed.
+        expect(prisma.smsOtpCode.delete).not.toHaveBeenCalled();
+      });
+
+      it('falls back to SMS when the WhatsApp client transport itself fails (network/timeout), and the code still reaches the target', async () => {
+        const { prisma, channelRegistry, smsV2, whatsappOtp, svc } = makeSvc();
+        channelRegistry.resolveConfig.mockReturnValue(RESOLVED_CONFIG_WHATSAPP);
+        mockPrismaForIssue(prisma);
+        whatsappOtp.sendVerifyCode.mockResolvedValue({
+          ok: false, code: '', message: 'NetGSM WhatsApp OTP isteğine ulaşılamadı.', retriable: false, transport: true,
+        });
+        smsV2.otp.mockResolvedValue({ ok: true, code: '00', jobid: 'j', message: null, retriable: false, transport: false });
+
+        const out = await svc.issue('ws-1', TARGET, PHONE);
+
+        expect(out.ok).toBe(true);
+        expect(smsV2.otp).toHaveBeenCalled();
+      });
+
+      it('rolls back the persisted row when BOTH WhatsApp and the SMS fallback fail — no transport ever leaves an undelivered code on file', async () => {
+        const { prisma, channelRegistry, smsV2, whatsappOtp, svc } = makeSvc();
+        channelRegistry.resolveConfig.mockReturnValue(RESOLVED_CONFIG_WHATSAPP);
+        mockPrismaForIssue(prisma);
+        whatsappOtp.sendVerifyCode.mockResolvedValue({
+          ok: false, code: '60', message: 'no whatsapp otp package', retriable: false, transport: false,
+        });
+        smsV2.otp.mockResolvedValue({
+          ok: false, code: '60', jobid: null, message: 'no sms otp package either', retriable: false, transport: false,
+        });
+
+        const out = await svc.issue('ws-1', TARGET, PHONE);
+
+        expect(out.ok).toBe(false);
+        expect(out.code).toBe('60');
+        expect(prisma.smsOtpCode.delete).toHaveBeenCalledWith({ where: { id: 'code-1' } });
+      });
+
+      it('never calls WhatsApp when the channel has no transport preference (default SMS, Phase-1 behavior unchanged)', async () => {
+        const { channelRegistry, smsV2, whatsappOtp, prisma, svc } = makeSvc();
+        // RESOLVED_CONFIG (top of file) has public: {} — no otpTransport set.
+        channelRegistry.resolveConfig.mockReturnValue(RESOLVED_CONFIG);
+        mockPrismaForIssue(prisma);
+        smsV2.otp.mockResolvedValue({ ok: true, code: '00', jobid: 'j', message: null, retriable: false, transport: false });
+
+        const out = await svc.issue('ws-1', TARGET, PHONE);
+
+        expect(out.ok).toBe(true);
+        expect(whatsappOtp.sendVerifyCode).not.toHaveBeenCalled();
+        expect(smsV2.otp).toHaveBeenCalled();
+      });
+
+      it('never calls WhatsApp when otpTransport is set to any value other than WHATSAPP', async () => {
+        const { channelRegistry, smsV2, whatsappOtp, prisma, svc } = makeSvc();
+        channelRegistry.resolveConfig.mockReturnValue({
+          secrets: { usercode: '850u', password: 'pw', msgheader: 'JEETA' },
+          public: { otpTransport: 'SMS' },
+        });
+        mockPrismaForIssue(prisma);
+        smsV2.otp.mockResolvedValue({ ok: true, code: '00', jobid: 'j', message: null, retriable: false, transport: false });
+
+        const out = await svc.issue('ws-1', TARGET, PHONE);
+
+        expect(out.ok).toBe(true);
+        expect(whatsappOtp.sendVerifyCode).not.toHaveBeenCalled();
       });
     });
   });

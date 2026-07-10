@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
 import { SmsV2Client } from '../../netgsm/sms/sms-v2.client';
+import { WhatsAppOtpClient } from '../../netgsm/whatsapp/whatsapp-otp.client';
 import { hmacHex, isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
 import { normalizePhone } from '../utils/lead-normalize';
 
@@ -92,6 +93,19 @@ class SmsOtpRateLimitedError extends Error {}
  * campaigns use) through the hub's SmsV2Client.otp — a paid,
  * single-recipient, single-segment, domestic-mobile-only NetGSM surface
  * (error 60 without the OTP package).
+ *
+ * NetGSM Phase 6 Task 3 — WhatsApp OTP is an ALTERNATE DELIVERY TRANSPORT,
+ * nothing more: the code generation/hash/verify/attempt-cap/phone-bind
+ * security from Phase 1 (above) is completely unchanged, and verify() is
+ * untouched — the code is the code, regardless of which channel carried it.
+ * A workspace opts in by setting configPublic.otpTransport: 'WHATSAPP' on its
+ * SMS channel (default/anything else = plain SMS, unchanged behavior). When
+ * opted in, issue() tries WhatsAppOtpClient.sendVerifyCode FIRST (same NetGSM
+ * account creds as the SMS channel — one shared usercode across
+ * SMS/İYS/voice/fax/balance/OTP, per the hub design) and falls back to the
+ * existing SmsV2Client.otp SMS path on ANY WhatsApp failure — a real send
+ * error, the paid OTP-WhatsApp package being absent/unapproved, or a
+ * transport fault — so a code is never silently undelivered.
  */
 @Injectable()
 export class SmsOtpService {
@@ -101,14 +115,18 @@ export class SmsOtpService {
     private readonly prisma: PrismaService,
     private readonly channelRegistry: ChannelAdapterRegistry,
     private readonly smsV2: SmsV2Client,
+    private readonly whatsappOtp: WhatsAppOtpClient,
   ) {}
 
   /** Resolves the workspace's ACTIVE NetGSM SMS channel into the creds +
    *  msgheader an OTP send needs — the exact same source regular SMS sends
-   *  read (NetgsmSmsAdapter), so an OTP fails only when SMS itself would. */
+   *  read (NetgsmSmsAdapter), so an OTP fails only when SMS itself would.
+   *  Also reads the same channel's configPublic.otpTransport preference
+   *  (Phase 6 Task 3) — WhatsApp OTP rides the SAME channel row/credentials,
+   *  never a separate config store. */
   private async resolveSendConfig(
     workspaceId: string,
-  ): Promise<{ usercode: string; password: string; msgheader: string } | null> {
+  ): Promise<{ usercode: string; password: string; msgheader: string; preferWhatsApp: boolean } | null> {
     const channel = await this.prisma.channel.findFirst({
       where: { workspaceId, type: 'SMS', status: 'ACTIVE' },
     });
@@ -116,7 +134,43 @@ export class SmsOtpService {
     const resolved = this.channelRegistry.resolveConfig(channel);
     const { usercode, password, msgheader } = resolved.secrets;
     if (!usercode || !password || !msgheader) return null;
-    return { usercode, password, msgheader };
+    const pub = resolved.public as Record<string, unknown> | undefined;
+    const preferWhatsApp = pub?.otpTransport === 'WHATSAPP';
+    return { usercode, password, msgheader, preferWhatsApp };
+  }
+
+  /**
+   * Deliver a freshly-minted code over the workspace's preferred transport.
+   * WhatsApp (when preferred) is tried FIRST; ANY non-ok result — a real
+   * NetGSM error, the paid OTP-WhatsApp package missing, or a transport
+   * fault — falls back to the existing SMS delivery. The default (preference
+   * absent or any value other than 'WHATSAPP') skips WhatsApp entirely and
+   * behaves EXACTLY like Phase 1: a single SmsV2Client.otp call. Never
+   * throws; the caller (issue()) decides what to do with a total failure
+   * (delete the just-persisted row).
+   */
+  private async deliverCode(
+    config: { usercode: string; password: string; msgheader: string; preferWhatsApp: boolean },
+    phone: string,
+    code: string,
+  ): Promise<{ ok: boolean; code?: string; message?: string; via: 'SMS' | 'WHATSAPP' }> {
+    if (config.preferWhatsApp) {
+      const waResult = await this.whatsappOtp.sendVerifyCode(
+        { usercode: config.usercode, password: config.password },
+        { to: phone, code },
+      );
+      if (waResult.ok) {
+        return { ok: true, via: 'WHATSAPP' };
+      }
+      this.logger.warn(
+        `sms-otp whatsapp transport failed — falling back to SMS (code=${waResult.code || '?'})`,
+      );
+    }
+    const smsResult = await this.smsV2.otp(
+      { usercode: config.usercode, password: config.password },
+      { msgheader: config.msgheader, msg: renderOtpMessage(code), no: phone },
+    );
+    return { ok: smsResult.ok, code: smsResult.code, message: smsResult.message ?? undefined, via: 'SMS' };
   }
 
   /**
@@ -230,23 +284,20 @@ export class SmsOtpService {
       throw e;
     }
 
-    const result = await this.smsV2.otp(
-      { usercode: config.usercode, password: config.password },
-      { msgheader: config.msgheader, msg: renderOtpMessage(code), no: phone },
-    );
+    const delivery = await this.deliverCode(config, phone, code);
 
-    if (!result.ok) {
-      // The send never went out (or NetGSM rejected it) — don't leave a code
-      // on file the target could never have received.
+    if (!delivery.ok) {
+      // Neither transport got the code out (or NetGSM rejected both) — don't
+      // leave a code on file the target could never have received.
       await this.prisma.smsOtpCode.delete({ where: { id: row.id } }).catch(() => undefined);
       this.logger.warn(
-        `sms-otp issue failed ws=${workspaceId} ${target.purpose}/${target.targetType}/${target.targetId} phone=${maskPhone(phone)} code=${result.code || '?'}`,
+        `sms-otp issue failed ws=${workspaceId} ${target.purpose}/${target.targetType}/${target.targetId} phone=${maskPhone(phone)} code=${delivery.code || '?'}`,
       );
-      return { ok: false, code: result.code || undefined, message: result.message ?? 'NetGSM could not send the code.' };
+      return { ok: false, code: delivery.code || undefined, message: delivery.message ?? 'NetGSM could not send the code.' };
     }
 
     this.logger.log(
-      `sms-otp issued ws=${workspaceId} ${target.purpose}/${target.targetType}/${target.targetId} phone=${maskPhone(phone)}`,
+      `sms-otp issued via ${delivery.via} ws=${workspaceId} ${target.purpose}/${target.targetType}/${target.targetId} phone=${maskPhone(phone)}`,
     );
     return { ok: true };
   }

@@ -1719,7 +1719,11 @@
     "iysWebhookFailed": "İYS webhook'u kaydedilemedi",
     "iysWebhookOk": "Webhook kayıtlı",
     "iysWebhookNotRegistered": "Webhook kayıtlı değil",
-    "iysHelp": "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir."
+    "iysHelp": "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir.",
+    "otpTransport": "OTP gönderim kanalı",
+    "otpTransportSms": "SMS (varsayılan)",
+    "otpTransportWhatsapp": "WhatsApp",
+    "otpTransportHelp": "Doğrulama kodları (2FA, telefon doğrulama) hangi kanaldan gönderilsin. WhatsApp seçeneği, NetGSM hesabınızda ücretli \"OTP WhatsApp\" paketi ve onaylı netgsm_verify_code şablonu gerektirir — paket yoksa veya gönderim başarısız olursa kod otomatik olarak SMS ile gönderilir."
   },
   "automations": {
     "title": "Otomasyonlar",

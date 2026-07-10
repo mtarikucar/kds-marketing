@@ -373,13 +373,18 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
 /**
  * SMS channel card — İYS (İleti Yönetim Sistemi) compliance section (NetGSM
  * Phase 2 Task 6): the brandCode + default message-type config, and the
- * push-back webhook registration action.
+ * push-back webhook registration action. Also carries the OTP delivery
+ * transport preference (NetGSM Phase 6 Task 3, `otpTransport`) — a different
+ * concern (verification-code delivery, read by `SmsOtpService`) but the SAME
+ * channel row/configPublic, so it shares this card and its Save action
+ * rather than opening a second settings surface for one field.
  *
  * Saves via the EXISTING PATCH /channels/:id path (ChannelsService.update),
  * merging client-side onto the channel's current configPublic — the backend
  * replaces configPublic wholesale on update, it does not merge, so sending
- * only { brandCode, iysDefault } here would silently drop unrelated keys the
- * server has stamped (iysWebhookRegistered, lastMoPollRecovery, …).
+ * only { brandCode, iysDefault, otpTransport } here would silently drop
+ * unrelated keys the server has stamped (iysWebhookRegistered,
+ * lastMoPollRecovery, …).
  *
  * `registerIysWebhook` is bundled free with the `campaigns` feature, not the
  * channel's own `sms` gate — see ChannelsService.registerIysWebhook's doc
@@ -395,9 +400,14 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
   const savedBrandCode = typeof savedPublic.brandCode === 'string' ? savedPublic.brandCode : '';
   const savedIysDefault = savedPublic.iysDefault === 'TICARI' ? 'TICARI' : 'BILGILENDIRME';
   const registered = savedPublic.iysWebhookRegistered === true;
+  // NetGSM Phase 6 Task 3 — OTP delivery transport preference. Anything
+  // other than the literal 'WHATSAPP' is SMS (the SmsOtpService default),
+  // mirroring the backend's own `pub?.otpTransport === 'WHATSAPP'` read.
+  const savedOtpTransport = savedPublic.otpTransport === 'WHATSAPP' ? 'WHATSAPP' : 'SMS';
 
   const [brandCode, setBrandCode] = useState(savedBrandCode);
   const [iysDefault, setIysDefault] = useState<string>(savedIysDefault);
+  const [otpTransport, setOtpTransport] = useState<string>(savedOtpTransport);
 
   // İYS auto-push DLQ (NetGSM Phase 2 Task 3/6) — workspace-scoped, not
   // per-channel, but read from here since this is the one place an operator
@@ -428,7 +438,7 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
   const save = useMutation({
     mutationFn: () =>
       marketingApi.patch(`/channels/${channel.id}`, {
-        configPublic: { ...savedPublic, brandCode: brandCode.trim(), iysDefault },
+        configPublic: { ...savedPublic, brandCode: brandCode.trim(), iysDefault, otpTransport },
       }),
     onSuccess: () => {
       onSaved();
@@ -448,7 +458,8 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
       toast.error(e?.response?.data?.message ?? t('channels.iysWebhookFailed', 'Could not register the İYS webhook')),
   });
 
-  const dirty = brandCode.trim() !== savedBrandCode || iysDefault !== savedIysDefault;
+  const dirty =
+    brandCode.trim() !== savedBrandCode || iysDefault !== savedIysDefault || otpTransport !== savedOtpTransport;
 
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2">
@@ -503,6 +514,35 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
         {t(
           'channels.iysHelp',
           "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir.",
+        )}
+      </p>
+      {/* NetGSM Phase 6 Task 3 — OTP delivery transport preference. Rides the
+          SAME channel row + Save button above (part of the same PATCH), a
+          separate field group only for visual grouping since it governs
+          verification-code delivery, not campaign compliance like the İYS
+          fields above it. Default SMS; WhatsApp needs the paid "OTP
+          WhatsApp" package + an approved netgsm_verify_code template — any
+          failure/absence falls back to SMS automatically (SmsOtpService),
+          so a code is never silently undelivered. */}
+      <div className="flex flex-wrap items-end gap-2 pt-1">
+        <Field label={t('channels.otpTransport', 'OTP delivery channel')} className="w-64">
+          {({ id }) => (
+            <Select value={otpTransport} onValueChange={setOtpTransport}>
+              <SelectTrigger id={id}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="SMS">{t('channels.otpTransportSms', 'SMS (default)')}</SelectItem>
+                <SelectItem value="WHATSAPP">{t('channels.otpTransportWhatsapp', 'WhatsApp')}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+      </div>
+      <p className="text-caption text-muted-foreground">
+        {t(
+          'channels.otpTransportHelp',
+          'Which channel verification codes (2FA, phone verification) are sent over. WhatsApp requires a paid "OTP WhatsApp" package and an approved netgsm_verify_code template on your NetGSM account — if the package is missing or the send fails, the code automatically falls back to SMS.',
         )}
       </p>
       {/* İYS auto-push DLQ warning (NetGSM Phase 2 Task 6): a job escalates
