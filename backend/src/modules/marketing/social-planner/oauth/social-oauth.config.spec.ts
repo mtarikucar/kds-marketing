@@ -1,4 +1,10 @@
-import { NETWORK_OAUTH, isOAuthConfigured, redirectUri, isOAuthNetwork } from './social-oauth.config';
+import {
+  NETWORK_OAUTH,
+  isOAuthConfigured,
+  redirectUri,
+  isOAuthNetwork,
+  scopesFor,
+} from './social-oauth.config';
 
 describe('social oauth config', () => {
   const env = { ...process.env };
@@ -79,5 +85,32 @@ describe('LinkedIn OAuth scopes', () => {
     expect(NETWORK_OAUTH.LINKEDIN.scopes).toEqual(
       expect.arrayContaining(['openid', 'profile', 'w_member_social', 'w_organization_social']),
     );
+  });
+});
+
+describe('scopesFor — LinkedIn org-scope gating', () => {
+  const env = { ...process.env };
+  afterEach(() => {
+    process.env = { ...env };
+  });
+
+  // LinkedIn's Community Management API (org posting/reading) must live on a
+  // SEPARATE, CMA-approved app. Requesting org scopes from the self-serve app
+  // makes LinkedIn reject the whole authorize request, so they are gated off
+  // until LINKEDIN_ORG_SCOPES is set.
+  it('default: LinkedIn effective scopes exclude the org scopes', () => {
+    delete process.env.LINKEDIN_ORG_SCOPES;
+    expect(scopesFor('LINKEDIN')).toEqual(['openid', 'profile', 'w_member_social']);
+  });
+
+  it('LINKEDIN_ORG_SCOPES=1 restores the full static list', () => {
+    process.env.LINKEDIN_ORG_SCOPES = '1';
+    expect(scopesFor('LINKEDIN')).toEqual(NETWORK_OAUTH.LINKEDIN.scopes);
+  });
+
+  it('other networks pass through the static list unchanged', () => {
+    delete process.env.LINKEDIN_ORG_SCOPES;
+    expect(scopesFor('TIKTOK')).toEqual(NETWORK_OAUTH.TIKTOK.scopes);
+    expect(scopesFor('FACEBOOK')).toEqual(NETWORK_OAUTH.FACEBOOK.scopes);
   });
 });
