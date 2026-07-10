@@ -24,8 +24,13 @@ const queryClient = new QueryClient({
   // api interceptor already handles them (refresh / logout-redirect), and a
   // toast there would just be noise during the bounce to login.
   queryCache: new QueryCache({
-    onError: (error: any) => {
+    onError: (error: any, query) => {
       if (error?.response?.status === 401) return;
+      // A query that owns its own inline error UI opts out of the global toast
+      // via `meta: { silent: true }` — otherwise it would double-report (and,
+      // for a polling query, re-toast on every interval). Such a query is
+      // responsible for showing its own failure state.
+      if (query?.meta?.silent) return;
       toast.error(
         error?.response?.data?.message ?? error?.message ?? 'Something went wrong loading data',
       );

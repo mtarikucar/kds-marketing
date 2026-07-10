@@ -30,12 +30,31 @@ export class TelephonyQueueService {
     private readonly netasistan: NetasistanClient,
   ) {}
 
-  /** GET /marketing/telephony/queues/stats */
+  /**
+   * GET /marketing/telephony/queues/stats — a PASSIVE wallboard poll: it fires
+   * on page entry (the calls page) and refetches every ~10s. It must degrade
+   * gracefully and NEVER throw a user-facing error, because the global
+   * query-error toast would then spam on every poll. Two failure modes both
+   * resolve to an EMPTY wallboard (the widget renders its own "configure
+   * Netsantral queues" empty state):
+   *   1. the workspace hasn't configured Netsantral yet (no creds), and
+   *   2. NetGSM rejects the read-only queuestats call — e.g. it answers with
+   *      its own raw Turkish "Eksik yada yanlis parametre" when the account has
+   *      no queue configured; that raw provider string must never surface as a
+   *      toast on page entry.
+   * Genuine rejections are logged server-side so ops can still see them.
+   * (Contrast setPresence below — an explicit user action — which DOES surface
+   * a rejection as an error, since the user is waiting on that click.)
+   */
   async stats(workspaceId: string, queueName?: string) {
-    const creds = await this.resolveCreds(workspaceId);
+    const creds = await this.telephonyConfig.resolveForWorkspace(workspaceId);
+    if (!creds) return { queues: [] };
     const outcome = await this.client.queueStats(creds, queueName);
     if (!outcome.ok) {
-      throw new BadRequestException(outcome.message ?? 'Netsantral rejected the queue-stats request.');
+      this.logger.warn(
+        `queuestats rejected for workspace ${workspaceId}: ${outcome.code ?? '-'} ${outcome.message ?? ''}`.trim(),
+      );
+      return { queues: [] };
     }
     return { queues: outcome.queues ?? [] };
   }

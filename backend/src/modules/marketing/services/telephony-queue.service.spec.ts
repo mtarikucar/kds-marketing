@@ -55,14 +55,19 @@ describe('TelephonyQueueService', () => {
       expect(res).toEqual({ queues: [] });
     });
 
-    it('surfaces a netsantral rejection as BadRequestException', async () => {
-      client.queueStats.mockResolvedValue({ ok: false, message: 'auth failed' });
-      await expect(svc.stats(WS)).rejects.toThrow('auth failed');
+    it('degrades a netsantral rejection to an EMPTY wallboard (never throws the raw provider message on a passive poll)', async () => {
+      // NetGSM answers the read-only queuestats call with its own raw Turkish
+      // rejection when the account has no queue configured — this must NOT
+      // become a user-facing 400 that the global toast spams every 10s.
+      client.queueStats.mockResolvedValue({ ok: false, code: '70', message: 'Eksik yada yanlis parametre' });
+      const res = await svc.stats(WS);
+      expect(res).toEqual({ queues: [] });
     });
 
-    it('503s when the workspace has no active netsantral config', async () => {
+    it('degrades to an EMPTY wallboard (not a 503) when the workspace has no active netsantral config', async () => {
       telephonyConfig.resolveForWorkspace.mockResolvedValue(null);
-      await expect(svc.stats(WS)).rejects.toBeInstanceOf(ServiceUnavailableException);
+      const res = await svc.stats(WS);
+      expect(res).toEqual({ queues: [] });
       expect(client.queueStats).not.toHaveBeenCalled();
     });
   });

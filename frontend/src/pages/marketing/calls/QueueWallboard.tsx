@@ -81,6 +81,10 @@ export default function QueueWallboard() {
     queryFn: getQueueStats,
     refetchInterval: 10_000,
     retry: false,
+    // This widget renders its own inline error card (see `isError` below), so
+    // it opts out of the global error toast — otherwise a transport failure on
+    // this 10s poll would re-toast every interval. See main.tsx QueryCache.
+    meta: { silent: true },
   });
 
   const presenceMutation = useMutation({
