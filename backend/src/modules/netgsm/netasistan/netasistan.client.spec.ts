@@ -160,6 +160,22 @@ describe('NetasistanClient', () => {
       expect(mockSafeFetch).toHaveBeenCalledTimes(2);
     });
 
+    it('does NOT serve a cached bearer to a different userKey under the same appKey', async () => {
+      // The pair is jointly secret: a token minted for (appKey, user-a) must
+      // never be handed to a caller presenting (appKey, user-b) — the cache
+      // key covers both. Re-auths instead of returning the first token.
+      const { client } = makeClient();
+      mockSafeFetch.mockResolvedValueOnce(res(200, { token: 'token-a' }));
+      mockSafeFetch.mockResolvedValueOnce(res(200, { token: 'token-b' }));
+
+      const a = await client.getToken(APP_KEY, 'user-a');
+      const b = await client.getToken(APP_KEY, 'user-b');
+
+      expect(a.token).toBe('token-a');
+      expect(b.token).toBe('token-b');
+      expect(mockSafeFetch).toHaveBeenCalledTimes(2);
+    });
+
     it('does not cache a failed auth attempt', async () => {
       const { client } = makeClient();
       mockSafeFetch.mockResolvedValueOnce(res(401, null));

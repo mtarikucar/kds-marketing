@@ -220,7 +220,7 @@ export function ThreadPane({
                       className="mt-1.5 h-8 max-w-full"
                     />
                   )}
-                  {isFax && m.meta?.raw?.documentUrl && (
+                  {isFax && typeof m.meta?.raw?.documentUrl === 'string' && m.meta.raw.documentUrl.startsWith('https://') && (
                     <a
                       href={m.meta.raw.documentUrl}
                       target="_blank"
