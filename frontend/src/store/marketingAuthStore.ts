@@ -24,6 +24,10 @@ interface MarketingAuthState {
   // only stored the access half, the next refresh would present a stale
   // refresh token and bounce to login.
   setTokens: (accessToken: string, refreshToken: string) => void;
+  // Merges a partial patch into the current user (e.g. after PATCH
+  // /marketing/auth/profile) so the header greeting and anywhere else reading
+  // `user` reflect the edit immediately, without a full re-login.
+  updateUser: (patch: Partial<MarketingUser>) => void;
   logout: () => void;
 }
 
@@ -50,6 +54,10 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
 
       setTokens: (accessToken: string, refreshToken: string) => {
         set({ accessToken, refreshToken });
+      },
+
+      updateUser: (patch: Partial<MarketingUser>) => {
+        set((state) => (state.user ? { user: { ...state.user, ...patch } } : state));
       },
 
       logout: () => {

@@ -72,6 +72,73 @@ export const MarketingEventTypes = {
   // course-completion certificate is issued. Backs the `certificate.issued`
   // workflow trigger; filter on trigger.courseId.
   CertificateIssued: "marketing.certificate.issued.v1",
+
+  // NetGSM blacklist sync (Phase 1 Task 10) — emitted whenever a lead's SMS
+  // opt-out flag flips, so NetgsmBlacklistSyncService can mirror the
+  // transition onto NetGSM's account-level SMS blacklist (defense-in-depth;
+  // İYS + the app-side smsOptOut checks remain the primary enforcement).
+  // Producers: ComplianceService (MARKETING_SMS consent writes) and
+  // CampaignTrackingService (public campaign-unsubscribe route).
+  SmsOptedOut: "marketing.sms.optout.v1",
+  SmsOptedIn: "marketing.sms.optin.v1",
+
+  // İYS push-back webhook (NetGSM Phase 2 Task 4) — one event per NEW
+  // consent-change element the unified public receiver
+  // (NetgsmEventsController's `iys` route, hub-owned) archives from İYS's
+  // (unsigned, array-shaped) push. IysWebhookConsumer subscribes and applies
+  // the ONAY/RET to the matching lead's MARKETING_SMS consent via
+  // ComplianceService.recordConsent, tagging the source
+  // `IYS_<originalSource>` so ComplianceService/IysSyncService can
+  // recognize — and never re-enqueue — an İYS-ORIGINATED change (would
+  // otherwise be a feedback loop back to İYS).
+  IysConsentReceived: "marketing.iys.consent.v1",
+
+  // Santral live call event (NetGSM Phase 3 Task 1) — one event per NEW
+  // call-event element the unified public receiver (NetgsmEventsController's
+  // `events` route, hub-owned) normalizes from a santral scenario push
+  // (Inbound_call/Answer/Hangup/cdr). An element whose scenario doesn't
+  // normalize is archived for audit but never published, same fail-closed
+  // treatment as IysConsentReceived above. The telephony consumer (Phase 3
+  // Task 2) subscribes to write INBOUND/missed SalesCall rows + screen-pop.
+  CallEvent: "marketing.telephony.call_event.v1",
+
+  // A missed inbound call (NetGSM Phase 3 Task 2) — emitted by
+  // TelephonyEventConsumer the first time an INBOUND SalesCall resolves to
+  // NO_ANSWER. Forward-compatible trigger source for workflow automation (a
+  // 'missed call' trigger — not yet wired into WorkflowTriggerService's
+  // TRIGGER_EVENT_MAP, see that file); usable today by anything that
+  // subscribes directly via DomainEventBus.
+  CallMissed: "marketing.call.missed.v1",
+
+  // Voice-campaign report push (NetGSM Phase 5 Task 3) — one event per NEW
+  // (relationid, state) pair the unified public receiver
+  // (NetgsmEventsController's `voice-report` route) archives from NetGSM's
+  // voicesms report push. Voice PUSHES call outcomes (unlike SMS, which is
+  // DLR-polled); a single call can receive multiple distinct-state pushes,
+  // each archived + published independently (mirrors the `events` route's
+  // one-call/many-scenarios shape). Consumed by VoiceReportConsumer
+  // (marketing/campaigns), which correlates purely by `relationid` (=
+  // CampaignRecipient.id) — never netgsmJobId/referansId, the SMS DLR-poll
+  // reconciler's own unscoped signal.
+  VoiceReport: "marketing.voice.report.v1",
+
+  // Press-1 → workflow trigger (NetGSM Phase 5 Task 3) — emitted by
+  // VoiceReportConsumer when a voice-report's pushButton matches one of the
+  // campaign's configured voiceConfig.keys. Backs the `voice_keypress`
+  // workflow trigger (WorkflowTriggerService's EVENT_FOR_TRIGGER); filter on
+  // trigger.key to react to a specific digit (e.g. "pressed 1 -> create task").
+  VoiceKeypress: "marketing.voice.keypress.v1",
+
+  // Auto-dialer per-attempt report push (NetGSM Phase 5 Task 5) — one event
+  // per NEW (JobID, unique_id) element the unified public receiver
+  // (NetgsmEventsController's `autocall-report` route) archives from
+  // NetGSM's `/autocallservice` attempt webhook. A number can be retried
+  // several times; each attempt gets its own unique_id and its own event
+  // (unlike VoiceReport, no extra state-token scoping is needed). Consumed
+  // by AutocallReportConsumer (marketing/campaigns), which correlates by
+  // `jobId` == AutocallSession.netgsmListId, then matches `called` to the
+  // session's own AutocallSessionItem rows by phone.
+  AutocallReport: "marketing.autocall.report.v1",
 } as const;
 
 export type MarketingEventType =
@@ -186,4 +253,147 @@ export interface MarketingBookingLifecyclePayload {
   bookingId: string;
   calendarId?: string;
   occurredAt: string;
+}
+
+/**
+ * SMS opt-out/opt-in transition payload (marketing.sms.optout.v1 /
+ * marketing.sms.optin.v1). Self-contained: NetgsmBlacklistSyncService never
+ * reads the Lead row, so `phone` is carried directly. `phone` is the raw
+ * value stored on Lead.phone — the client normalizes it to NetGSM's local
+ * MSISDN format on the wire.
+ */
+export interface MarketingSmsOptStatusPayload {
+  workspaceId: string;
+  leadId: string;
+  phone: string;
+}
+
+/**
+ * İYS push-back consent change (marketing.iys.consent.v1). Emitted once per
+ * NEW array element the unified NetGSM webhook receiver archives. The
+ * producer (NetgsmEventsController, hub-owned so it stays business-logic
+ * free — it never resolves a lead itself) uses the literal event-type
+ * string rather than importing this file, so the hub never takes a
+ * compile-time dependency on the marketing bounded context; this interface
+ * is the canonical contract IysWebhookConsumer types its handler against.
+ */
+export interface MarketingIysConsentPayload {
+  workspaceId: string;
+  /** Raw recipient as reported by İYS (phone for MESAJ/ARAMA, email for EPOSTA). */
+  recipient: string;
+  /** İYS consent type: MESAJ (SMS) | ARAMA (call) | EPOSTA (email). Only
+   *  MESAJ is applied this phase — ARAMA lands with Phase 5 voice campaigns,
+   *  EPOSTA is out of scope for this program (see IysWebhookConsumer). */
+  type: string;
+  status: 'ONAY' | 'RET';
+  /** İYS source code as reported by the push (e.g. HS_WEB, HS_MESAJ). */
+  source: string;
+  transactionId: string;
+}
+
+export type SantralCallEventKind = 'inbound_call' | 'answer' | 'hangup' | 'cdr';
+
+/**
+ * Santral live call event (marketing.telephony.call_event.v1). Emitted once
+ * per NEW call-event element the unified NetGSM webhook receiver (the hub's
+ * `events` route) normalizes from a santral scenario push. Mirrors
+ * `SantralEvent` from
+ * `netgsm/webhooks/santral-event-normalizer.ts` — kept as an independent
+ * interface (not imported) so marketing's event registry never takes a
+ * compile-time dependency on the netgsm hub module, the same reasoning as
+ * MarketingIysConsentPayload above.
+ */
+export interface MarketingCallEventPayload {
+  workspaceId: string;
+  kind: SantralCallEventKind;
+  uniqueId: string | null;
+  crmId: string | null;
+  customerNum: string | null;
+  internalNum: string | null;
+  direction: 'INBOUND' | 'OUTBOUND' | null;
+  status: string | null;
+  recording: string | null;
+  durationSec: number | null;
+  raw: object;
+}
+
+/**
+ * A missed inbound call (marketing.call.missed.v1) — emitted by
+ * TelephonyEventConsumer the first time an INBOUND SalesCall resolves to
+ * NO_ANSWER (never re-emitted for the same call; the consumer's monotonic
+ * status guard only lets that transition happen once). `leadId`/`customerNum`
+ * let a future workflow trigger react without a re-read.
+ */
+export interface MarketingCallMissedPayload {
+  workspaceId: string;
+  salesCallId: string;
+  leadId: string | null;
+  customerNum: string | null;
+}
+
+/**
+ * Voice-campaign report push (marketing.voice.report.v1). Emitted once per
+ * NEW (relationid, state) element the unified NetGSM webhook receiver
+ * archives (NetgsmEventsController's `voice-report` route, hub-owned so it
+ * stays business-logic free). The producer uses the literal event-type
+ * string rather than importing this file, same reasoning as
+ * MarketingIysConsentPayload/MarketingCallEventPayload above; this interface
+ * is the canonical contract VoiceReportConsumer types its handler against.
+ */
+export interface MarketingVoiceReportPayload {
+  workspaceId: string;
+  /** = CampaignRecipient.id, stamped as `relationid` at send time (see
+   *  campaign-sender.service.ts's `sendVoice`). */
+  relationid: string;
+  /** Raw durum/state as reported by NetGSM. The exact vocabulary isn't
+   *  live-verified (see VoiceReportConsumer.mapVoiceState's own caveat). */
+  state: string | null;
+  /** Talk seconds (bilsec), when the call carries one. */
+  bilsec: number | null;
+  /** DTMF digit the callee pressed (push_button), when present. */
+  pushButton: string | null;
+  /** Call-recording URL (record_link), when present. CampaignRecipient has
+   *  no dedicated column for this yet — see VoiceReportConsumer. */
+  recordLink: string | null;
+}
+
+/**
+ * Press-1 → workflow trigger (marketing.voice.keypress.v1). Emitted by
+ * VoiceReportConsumer when a voice-report's pushButton matches one of the
+ * campaign's configured `voiceConfig.keys`. `leadId`/`campaignId`/
+ * `recipientId` let a workflow react (and a future action look up either
+ * row) without a re-read; filter on trigger.key for a specific digit.
+ */
+export interface MarketingVoiceKeypressPayload {
+  workspaceId: string;
+  leadId: string;
+  campaignId: string;
+  recipientId: string;
+  key: string;
+}
+
+/**
+ * Auto-dialer per-attempt report push (marketing.autocall.report.v1).
+ * Emitted once per NEW (JobID, unique_id) element the unified NetGSM webhook
+ * receiver archives (NetgsmEventsController's `autocall-report` route,
+ * hub-owned so it stays business-logic free). The producer uses the literal
+ * event-type string rather than importing this file, same reasoning as
+ * MarketingIysConsentPayload/MarketingCallEventPayload above; this interface
+ * is the canonical contract AutocallReportConsumer types its handler against.
+ */
+export interface MarketingAutocallReportPayload {
+  workspaceId: string;
+  /** = AutocallClient.addAutocall's returned jobId/listId (best-effort
+   *  assumed to be the SAME identifier echoed back here — see
+   *  AutocallClient's docstring for the "not live-verified" caveat). */
+  jobId: string;
+  /** The dialed number, as NetGSM echoes it — matched against
+   *  AutocallSessionItem.phone (normalized) to resolve the lead. */
+  called: string | null;
+  /** This ONE attempt's identifier — a retried number gets a new one per try. */
+  uniqueId: string | null;
+  /** Raw status as reported by NetGSM. Vocabulary NOT researched/pinned down
+   *  (unlike voice-report's durum 1/2/3/7) — kept verbatim; see
+   *  AutocallReportConsumer for how it's stored. */
+  status: string | null;
 }

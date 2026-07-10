@@ -8,8 +8,9 @@ function makeDeps() {
   const stt = { transcribeUrl: jest.fn() };
   const anthropic = { complete: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
   const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
-  const svc = new CallAnalysisService(prisma as any, stt as any, anthropic as any, credits as any);
-  return { prisma, stt, anthropic, credits, svc };
+  const r2 = { urlForKey: jest.fn((key: string) => `https://cdn.example.com/${key}`) };
+  const svc = new CallAnalysisService(prisma as any, stt as any, anthropic as any, credits as any, r2 as any);
+  return { prisma, stt, anthropic, credits, r2, svc };
 }
 
 const CALL = { id: 'call-1', workspaceId: 'ws-1', recordingUrl: 'https://rec/x.mp3' };
@@ -84,6 +85,57 @@ describe('CallAnalysisService', () => {
     prisma.salesCall.findUnique.mockResolvedValue(null);
     const r = await svc.analyzeSalesCall('missing');
     expect(r.status).toBe('FAILED');
+  });
+
+  it('FAILED when the call has neither a storage key nor a provider recordingUrl', async () => {
+    const { prisma, stt, svc } = makeDeps();
+    prisma.salesCall.findUnique.mockResolvedValue({
+      id: 'call-1',
+      workspaceId: 'ws-1',
+      recordingStorageKey: null,
+      recordingUrl: null,
+    });
+    const r = await svc.analyzeSalesCall('call-1');
+    expect(r.status).toBe('FAILED');
+    expect(stt.transcribeUrl).not.toHaveBeenCalled();
+  });
+
+  // NetGSM Phase 4 Task 3 — STT prefers the stored file over the ephemeral
+  // provider url when the recording has been ingested into R2.
+  it('STT reads the R2-stored copy (not the provider recordingUrl) when recordingStorageKey is set', async () => {
+    const { prisma, stt, anthropic, r2, svc } = makeDeps();
+    prisma.salesCall.findUnique.mockResolvedValue({
+      id: 'call-1',
+      workspaceId: 'ws-1',
+      recordingStorageKey: 'netgsm-recordings/ws-1/call-1.mp3',
+      recordingUrl: 'https://netgsm.example.com/token/expiring-soon',
+    });
+    stt.transcribeUrl.mockResolvedValue({ text: 'merhaba', provider: 'deepgram' });
+    anthropic.complete.mockResolvedValue({ text: JSON.stringify({ summary: 'ok' }) });
+
+    const r = await svc.analyzeSalesCall('call-1');
+
+    expect(r.status).toBe('OK');
+    expect(r2.urlForKey).toHaveBeenCalledWith('netgsm-recordings/ws-1/call-1.mp3');
+    expect(stt.transcribeUrl).toHaveBeenCalledWith('https://cdn.example.com/netgsm-recordings/ws-1/call-1.mp3');
+  });
+
+  it('STT falls back to the provider recordingUrl when no storage key exists yet', async () => {
+    const { prisma, stt, anthropic, r2, svc } = makeDeps();
+    prisma.salesCall.findUnique.mockResolvedValue({
+      id: 'call-1',
+      workspaceId: 'ws-1',
+      recordingStorageKey: null,
+      recordingUrl: 'https://netgsm.example.com/token/abc',
+    });
+    stt.transcribeUrl.mockResolvedValue({ text: 'merhaba', provider: 'deepgram' });
+    anthropic.complete.mockResolvedValue({ text: JSON.stringify({ summary: 'ok' }) });
+
+    const r = await svc.analyzeSalesCall('call-1');
+
+    expect(r.status).toBe('OK');
+    expect(r2.urlForKey).not.toHaveBeenCalled();
+    expect(stt.transcribeUrl).toHaveBeenCalledWith('https://netgsm.example.com/token/abc');
   });
 
   it('FAILED when STT yields no text (no credit reserved)', async () => {

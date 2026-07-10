@@ -3,7 +3,7 @@ import {
   TelephonyProvider, TelephonyCapability, PrepareCallRequest, PreparedCall,
 } from './telephony-provider.interface';
 import { TelephonyProviderRegistry } from './telephony-provider.registry';
-import { NetsantralClient } from './netsantral.client';
+import { NetsantralClient } from '../../netgsm/santral/netsantral.client';
 
 /**
  * NetGSM Netsantral (cloud PBX) provider: places the call server-side so it
@@ -43,6 +43,7 @@ export class NetgsmApiAdapter implements TelephonyProvider, OnModuleInit {
       outcome = await this.client.callBridge({
         username: c.username, password: c.password,
         caller: c.callerNum, called: req.toPhone, trunk: c.trunk, crmId: req.crmId,
+        record: c.recordCalls,
       });
     } else {
       if (!c.internalNum) {
@@ -51,6 +52,7 @@ export class NetgsmApiAdapter implements TelephonyProvider, OnModuleInit {
       outcome = await this.client.originate({
         username: c.username, password: c.password,
         customer_num: req.toPhone, internal_num: c.internalNum, trunk: c.trunk, pbxnum: c.pbxnum, crmId: req.crmId,
+        record: c.recordCalls,
       });
     }
     if (!outcome.ok) {

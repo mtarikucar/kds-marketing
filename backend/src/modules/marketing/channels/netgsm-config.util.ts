@@ -31,3 +31,25 @@ export function assertNetgsmSmsSecrets(secrets: Record<string, string> | undefin
     );
   }
 }
+
+/**
+ * Validate the optional `useLegacySend` flag on a NetGSM SMS channel's PUBLIC
+ * config (`Channel.configPublic`, decrypted straight through to
+ * `ResolvedChannelConfig.public` by the registry — see
+ * `channel-adapter.registry.ts#resolveConfig` — never the sealed secrets).
+ * `NetgsmSmsAdapter.send` reads `config.public?.useLegacySend === true` to keep
+ * using the legacy `/sms/send/get` GET API instead of the new REST v2 `send`
+ * endpoint; every other value (absent, `false`) defaults to v2. This is
+ * validation only — it never mutates or defaults the config, and never throws
+ * when the key is simply absent (the "default false" lives in the adapter's
+ * read, not here).
+ */
+export function assertNetgsmSmsPublicConfig(
+  configPublic: Record<string, unknown> | undefined | null,
+): void {
+  if (configPublic == null) return;
+  const flag = configPublic.useLegacySend;
+  if (flag !== undefined && typeof flag !== 'boolean') {
+    throw new BadRequestException('NetGSM SMS channel "useLegacySend" must be a boolean.');
+  }
+}

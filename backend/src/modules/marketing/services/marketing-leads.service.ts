@@ -14,6 +14,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from './lead-auto-assigner.service';
 import { CustomFieldsService } from './custom-fields.service';
 import { EmailHygieneService } from '../leads/email-hygiene.service';
+import { SmsOtpService } from './sms-otp.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { findCoreIntegratedWorkspaceId } from './core-workspace.helper';
 import { rangeEndInclusive } from './report-date-range.util';
@@ -65,6 +66,7 @@ export class MarketingLeadsService {
     private readonly outbox: OutboxService,
     private readonly customFields: CustomFieldsService,
     private readonly hygiene: EmailHygieneService,
+    private readonly smsOtp: SmsOtpService,
   ) {}
 
   /** Epic 6 — a contact's companyId must reference a Company in the same
@@ -430,12 +432,20 @@ export class MarketingLeadsService {
       ? { emailVerifiedStatus: await this.hygiene.verify(dto.email), emailBouncedAt: null }
       : {};
 
+    // NetGSM SMS v2 Task 12 — a verified stamp must not survive editing the
+    // very number it attests to. Compared NORMALIZED (like the email clash
+    // check above) so formatting-only edits (spacing/dashes) don't spuriously
+    // re-require verification.
+    const phoneChanged =
+      dto.phone !== undefined && normalizePhone(dto.phone) !== lead.phoneNormalized;
+
     // Build update explicitly — the DTO now omits assignedToId and
     // status, but being explicit keeps us safe from future DTO drift.
     const data: Prisma.LeadUpdateInput = {
       ...(dto.businessName !== undefined && { businessName: dto.businessName }),
       ...(dto.contactPerson !== undefined && { contactPerson: dto.contactPerson }),
       ...(dto.phone !== undefined && { phone: dto.phone }),
+      ...(phoneChanged && { phoneVerifiedAt: null }),
       ...(dto.whatsapp !== undefined && { whatsapp: dto.whatsapp }),
       ...(dto.email !== undefined && { email: dto.email }),
       ...(dto.address !== undefined && { address: dto.address }),
@@ -507,6 +517,52 @@ export class MarketingLeadsService {
       }
     }
     return updated;
+  }
+
+  /** NetGSM SMS v2 Task 12 — step 1: text a fresh OTP to the lead's phone.
+   *  Controller-level `@RequiresFeature('smsOtp')` gates access to the
+   *  whole flow; this method additionally scopes the lead to the caller's
+   *  workspace (same "scoped pre-check" idiom as update()/findOne()). */
+  async verifyPhoneStart(workspaceId: string, id: string) {
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
+    if (!lead) throw new NotFoundException('Lead not found');
+    if (!lead.phone) {
+      throw new BadRequestException('This lead has no phone number on file.');
+    }
+    const result = await this.smsOtp.issue(
+      workspaceId,
+      { purpose: 'LEAD_PHONE_VERIFY', targetType: 'LEAD', targetId: id },
+      lead.phone,
+    );
+    if (!result.ok) {
+      throw new BadRequestException(result.message ?? 'Could not send the verification code.');
+    }
+    return { sent: true };
+  }
+
+  /** NetGSM SMS v2 Task 12 — step 2: verify the code and stamp phoneVerifiedAt.
+   *  Review fix round 1 (Finding 2) — passes the lead's CURRENT phone (read
+   *  fresh, right here) into SmsOtpService.verify, which now requires it to
+   *  equal the phone the pending code was issued to. Without this, a code
+   *  texted to the lead's number at `start` time could still confirm a claim
+   *  after the lead's phone was edited to a different number before
+   *  `confirm` — the swap now makes verify() fail instead of silently
+   *  stamping phoneVerifiedAt on a number that was never actually proven. */
+  async verifyPhoneConfirm(workspaceId: string, id: string, code: string) {
+    const lead = await this.prisma.lead.findFirst({ where: { id, workspaceId } });
+    if (!lead) throw new NotFoundException('Lead not found');
+    const result = await this.smsOtp.verify(
+      workspaceId,
+      { purpose: 'LEAD_PHONE_VERIFY', targetType: 'LEAD', targetId: id },
+      code,
+      lead.phone,
+    );
+    if (!result.ok) {
+      throw new BadRequestException(result.message ?? 'Invalid verification code');
+    }
+    const phoneVerifiedAt = new Date();
+    await this.prisma.lead.update({ where: { id }, data: { phoneVerifiedAt } });
+    return { phoneVerifiedAt };
   }
 
   async updateStatus(

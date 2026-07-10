@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { FEATURE_KEYS, LIMIT_KEYS } from './entitlements.service';
+import { FEATURE_KEYS, LIMIT_KEYS, TOGGLEABLE_MODULE_KEYS } from './entitlements.service';
 
 /**
  * Drift tripwire — the FEATURE_COLUMNS belt, ported. Three places must
@@ -23,6 +23,7 @@ describe('entitlements — feature-key drift tripwire', () => {
       'campaigns',
       'commissions',
       'conversationAi',
+      'fax',
       'funnels',
       'installations',
       'invoicing',
@@ -30,9 +31,12 @@ describe('entitlements — feature-key drift tripwire', () => {
       'memberships',
       'research',
       'reviews',
+      'sms',
+      'smsOtp',
       'socialCampaigns',
       'telephony',
       'voiceAi',
+      'voiceCampaigns',
       'workflows',
     ]);
   });
@@ -101,5 +105,82 @@ describe('entitlements — feature-key drift tripwire', () => {
     }
     walk(root);
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * Backfill-note tripwire. `EntitlementsService.compute()` treats a non-null
+ * `Workspace.activatedModules` as an explicit allow-list: any
+ * TOGGLEABLE_MODULE_KEYS entry missing from it is forced to
+ * `features[k] = false`, no matter what Package.features grants. That means
+ * any FEATURE_KEYS member added AFTER the allow-list model shipped
+ * (20260702160000_workspace_activated_modules) needs a one-off data
+ * migration backfilling it into every pre-existing customized allow-list, or
+ * every tenant who had already customized their module list silently loses
+ * the new capability on deploy. Pin the keys that needed this treatment here
+ * — adding a new post-20260702 toggleable key means EITHER shipping a
+ * backfill migration for it and listing it below, OR proving it can't
+ * possibly appear in a pre-existing allow-list (e.g. it's read-only/never
+ * user-toggleable) and documenting why instead.
+ */
+describe('entitlements — activatedModules backfill-note tripwire', () => {
+  const KEYS_REQUIRING_BACKFILL = ['sms', 'voiceCampaigns', 'fax'] as const;
+
+  // NetGSM SMS v2 Task 12 — `smsOtp` is a FEATURE_KEYS member added AFTER
+  // 20260702160000_workspace_activated_modules, same as `sms` was, but it
+  // does NOT need a backfill migration: it's excluded from
+  // TOGGLEABLE_MODULE_KEYS (add-on-only, `false` in every plan, never a
+  // Settings > Modules toggle), so EntitlementsService.compute()'s
+  // allow-list intersection never iterates it — a customized
+  // activatedModules list has no way to mask it. Pin the exclusion here so a
+  // future refactor that folds smsOtp into TOGGLEABLE_MODULE_KEYS is forced
+  // to ALSO add it to KEYS_REQUIRING_BACKFILL + ship the migration.
+  it('smsOtp is excluded from TOGGLEABLE_MODULE_KEYS (add-on-only — no backfill needed)', () => {
+    expect(TOGGLEABLE_MODULE_KEYS).not.toContain('smsOtp');
+  });
+
+  // NetGSM Phase 5 Task 1 — `voiceCampaigns` is the OPPOSITE case from
+  // `smsOtp`: it's `true` on SCALE/OPERATOR (seed-packages.ts), so it IS a
+  // genuine Settings > Modules toggle (present in TOGGLEABLE_MODULE_KEYS,
+  // unlike smsOtp) — meaning a workspace that had already customized its
+  // activatedModules allow-list BEFORE this key existed needs the backfill
+  // migration below, or it would silently lose voice campaigns on deploy
+  // despite being entitled by its plan.
+  it('voiceCampaigns is NOT excluded from TOGGLEABLE_MODULE_KEYS (plan-entitled — backfill required)', () => {
+    expect(TOGGLEABLE_MODULE_KEYS).toContain('voiceCampaigns');
+  });
+
+  // NetGSM Phase 6 Task 1 — `fax` is the SAME shape as `voiceCampaigns`, just
+  // entitled on a narrower tier: `true` ONLY on OPERATOR (seed-packages.ts),
+  // so it's STILL a genuine Settings > Modules toggle for that workspace
+  // (present in TOGGLEABLE_MODULE_KEYS) — a workspace that had already
+  // customized its activatedModules allow-list BEFORE this key existed needs
+  // the backfill migration below, or an OPERATOR workspace would silently
+  // lose fax on deploy despite being entitled by its plan.
+  it('fax is NOT excluded from TOGGLEABLE_MODULE_KEYS (plan-entitled — backfill required)', () => {
+    expect(TOGGLEABLE_MODULE_KEYS).toContain('fax');
+  });
+
+  it('every key needing a backfill has a reversible migration on disk', () => {
+    const migrationsRoot = path.resolve(__dirname, '../../../prisma/migrations');
+    const dirs = fs
+      .readdirSync(migrationsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+
+    for (const key of KEYS_REQUIRING_BACKFILL) {
+      expect(FEATURE_KEYS as readonly string[]).toContain(key);
+
+      const match = dirs.find((d) => d.includes(`backfill_${key}_activated_modules`));
+      expect(match).toBeDefined();
+
+      const migrationPath = path.join(migrationsRoot, match!, 'migration.sql');
+      const downPath = path.join(migrationsRoot, match!, 'down.sql');
+      expect(fs.existsSync(downPath)).toBe(true); // reversible, per repo convention
+
+      const sql = fs.readFileSync(migrationPath, 'utf8').toLowerCase();
+      expect(sql).toContain('activatedmodules');
+      expect(sql).toContain(key.toLowerCase());
+    }
   });
 });

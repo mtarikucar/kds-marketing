@@ -2,10 +2,12 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { BarChart3, MapPin, TrendingUp, Users } from 'lucide-react';
+import { BarChart3, MapPin, TrendingUp, Users, Phone } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
+import { useEntitlements } from '../../features/marketing/hooks/useEntitlements';
 import { RouteFallback } from '../../components/RouteFallback';
+import InboundCallStatsPanel from './reports/InboundCallStatsPanel';
 import {
   PageHeader,
   Card,
@@ -34,7 +36,7 @@ const AnalyticsPage = lazy(() => import('./analytics/AnalyticsPage'));
 const TABS = ['overview', 'ads', 'performance', 'analytics'] as const;
 type ReportsTab = (typeof TABS)[number];
 
-const OVERVIEW_SUBS = ['sources', 'regional', 'conversion', 'performance'] as const;
+const OVERVIEW_SUBS = ['sources', 'regional', 'conversion', 'performance', 'calls'] as const;
 type OverviewSub = (typeof OVERVIEW_SUBS)[number];
 
 function Lazy({ children }: { children: ReactNode }) {
@@ -140,13 +142,22 @@ function OverviewTab() {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  // Inbound call statistics hit a telephony-only route (503s without an
+  // active Netsantral config) and show whole-workspace call volume, so gate
+  // it the same way the queue wallboard gates itself on CallsPage: manager
+  // role AND the workspace's telephony entitlement.
+  const { has: hasFeature } = useEntitlements();
+  const showCallStats = isManager && hasFeature('telephony');
 
   // URL-synced nested tab state (`?sub=`) — deep-linkable, back-button-safe.
-  // The rep-performance report is manager-only; others fall back to sources.
+  // The rep-performance report and inbound call stats are manager-only;
+  // others fall back to sources.
   const [params, setParams] = useSearchParams();
   const rawSub = params.get('sub');
   const isValidSub = (v: string | null): v is OverviewSub =>
-    (OVERVIEW_SUBS as readonly string[]).includes(v ?? '') && (v !== 'performance' || isManager);
+    (OVERVIEW_SUBS as readonly string[]).includes(v ?? '') &&
+    (v !== 'performance' || isManager) &&
+    (v !== 'calls' || showCallStats);
   const sub: OverviewSub = isValidSub(rawSub) ? rawSub : 'sources';
   const setSub = (v: string) =>
     setParams((p) => {
@@ -183,6 +194,7 @@ function OverviewTab() {
     { id: 'regional', labelKey: 'reports.tabs.regional', icon: MapPin },
     { id: 'conversion', labelKey: 'reports.tabs.conversion', icon: TrendingUp },
     ...(isManager ? [{ id: 'performance', labelKey: 'reports.tabs.performance', icon: Users }] : []),
+    ...(showCallStats ? [{ id: 'calls', labelKey: 'reports.tabs.calls', icon: Phone }] : []),
   ] as const;
 
   return (
@@ -394,6 +406,13 @@ function OverviewTab() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+      )}
+
+      {/* ── Inbound calls (Manager + telephony entitlement only) ── */}
+      {showCallStats && (
+        <TabsContent value="calls">
+          <InboundCallStatsPanel />
         </TabsContent>
       )}
     </Tabs>

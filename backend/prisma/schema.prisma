@@ -115,6 +115,12 @@ model MarketingUser {
   /// AES-256-GCM sealed SIP password for this rep's dahili (in-app webphone).
   /// Served only to the owning rep over HTTPS; never returned raw.
   dahiliSecret String?
+  /// NetGSM Phase 6 Task 4 — this rep opted their own available/break
+  /// presence toggle (TelephonyQueueService.setPresence) into ALSO syncing to
+  /// Netasistan (self-service break/queue via a separate app-key/user-key
+  /// auth realm), on top of the existing crmsntrl agentlogin/agentpause.
+  /// Default false: an explicit per-rep opt-in, never silently on.
+  netasistanOptIn Boolean @default(false)
   avatar       String?
   role         String // OWNER, MANAGER, REP, SYSTEM (workspace-scoped)
   status       String    @default("ACTIVE") // ACTIVE, INACTIVE
@@ -243,6 +249,11 @@ model Lead {
   emailBouncedAt      DateTime?
   smsOptOut           Boolean   @default(false)
   waOptOut            Boolean   @default(false)
+  /// NetGSM SMS v2 Task 12 — stamped when a rep confirms a live SMS OTP sent to
+  /// `phone` (SmsOtpService, gated by the `smsOtp` add-on). Null = unverified.
+  /// Cleared back to null whenever `phone` is edited to a different number, so
+  /// the badge never claims a number that was never actually verified.
+  phoneVerifiedAt     DateTime?
 
   // Epic A1 — workspace-defined custom fields. Shape is { "<defKey>": value };
   // values are validated/coerced against CustomFieldDef by CustomFieldsService
@@ -586,6 +597,33 @@ model ApiKey {
   @@map("api_keys")
 }
 
+/// NetGSM SMS v2 Task 12 — a single issued SMS OTP code (2FA-SMS enroll/login
+/// challenge OR lead phone verification). Mirrors ApiKey's "hash at rest,
+/// never store the raw secret" convention: `codeHash` is the SHA-256 of the
+/// 6-digit code, never the code itself. One row per issued code; `purpose` +
+/// `targetType` + `targetId` scope which flow/entity it belongs to so a stale
+/// code from one flow can never verify another. `attempts` caps brute force
+/// (SmsOtpService refuses once attempts >= maxAttempts); `consumedAt` makes a
+/// code single-use; `expiresAt` is the 3-minute TTL. The service also reads
+/// `createdAt` on the latest row per target to enforce a resend cooldown.
+model SmsOtpCode {
+  id          String    @id @default(uuid())
+  workspaceId String
+  purpose     String // TWO_FACTOR | LEAD_PHONE_VERIFY
+  targetType  String // USER | LEAD
+  targetId    String
+  phone       String
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  consumedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, purpose, targetType, targetId, createdAt], map: "sms_otp_codes_target_idx")
+  @@map("sms_otp_codes")
+}
+
 /// Epic B2 — an outbound webhook subscription. `events` is the JSON array of
 /// domain event types this endpoint wants. `secret` is the HMAC signing key
 /// (returned once on create); deliveries carry `X-Webhook-Signature`.
@@ -829,26 +867,50 @@ model MarketingDistributionConfig {
 /// avoids back-relations). externalCallId / durationSec / recordingUrl are the
 /// seams a future Netgsm API/webhook provider fills.
 model SalesCall {
-  id                 String    @id @default(uuid())
-  workspaceId        String
-  marketingUserId    String
-  leadId             String?
-  direction          String    @default("OUTBOUND") // OUTBOUND, INBOUND
-  toPhone            String
-  providerId         String // 'netgsm-lite', ...
-  status             String    @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
-  externalCallId     String?
-  durationSec        Int?
+  id              String  @id @default(uuid())
+  workspaceId     String
+  /// Nullable (Phase 3 Task 2) — an INBOUND call to an extension that doesn't
+  /// match any MarketingUser.dahili has no rep to attribute it to. OUTBOUND
+  /// calls (SalesCallService.startCall) always set this from the actor.
+  marketingUserId String?
+  leadId          String?
+  direction       String  @default("OUTBOUND") // OUTBOUND, INBOUND
+  toPhone         String
+  providerId      String // 'netgsm-lite', ...
+  status          String  @default("INITIATED") // INITIATED, CONNECTED, NO_ANSWER, BUSY, FAILED, CANCELLED
+  externalCallId  String?
+  durationSec     Int?
   /// Budget Autopilot: billable duration + real per-minute cost (ChannelTariff
   /// VOICE_MINUTE), debited to SpendLedger. Null = not yet settled.
-  billableSeconds    Int?
-  costAmount         Decimal?  @db.Decimal(14, 4)
-  recordingUrl       String?
+  billableSeconds Int?
+  costAmount      Decimal? @db.Decimal(14, 4)
+  recordingUrl    String?
   // Epic 13 call-recording: watermark so the hourly sweep pushes a tried call to
   // the back of the queue (a CONNECTED call with no recording yet, or never), and
   // never re-burns the same dead rows at the front (mirrors AdAccount.lastPulledAt).
   recordingCheckedAt DateTime?
+  /// NetGSM Phase 4 Task 1 — R2 object key once the recording-ingest sweep
+  /// (Task 2) has downloaded the provider recording into stable storage.
+  /// Null until ingested (or forever, if recording is off/R2 unconfigured);
+  /// `recordingUrl` stays the provider fallback either way.
+  recordingStorageKey String?
   notes              String?   @db.Text
+  /// Phase 3 Task 2 — the rep whose extension actually picked up (from the
+  /// santral `answer`/hangup event's internal_num → MarketingUser.dahili).
+  /// May differ from `marketingUserId` on an INBOUND call routed through a
+  /// hunt group; null until answered (or never, if unmatched/unanswered).
+  answeredByUserId String?
+  /// Phase 3 Task 2 — stamped when the INBOUND SalesCall row is created from
+  /// an `inbound_call` santral event (the extension started ringing). Null
+  /// for OUTBOUND calls (startedAt already captures their origination time).
+  ringingAt          DateTime?
+  /// Final-review HIGH-2 fix — stamped the FIRST time a rep manually logs an
+  /// outcome (SalesCallService.logCall), independent of `status` (which the
+  /// santral webhook/CDR poll may already have finalized before the rep gets
+  /// to it). The atomic claim `updateMany({where:{outcomeLoggedAt:null}})` is
+  /// what lets logCall MERGE notes onto an already webhook-finalized row
+  /// instead of 409ing, while still rejecting a genuine second manual log.
+  outcomeLoggedAt    DateTime?
   startedAt          DateTime  @default(now())
   endedAt            DateTime?
   createdAt          DateTime  @default(now())
@@ -858,6 +920,23 @@ model SalesCall {
   @@index([marketingUserId, startedAt(sort: Desc)])
   @@index([leadId])
   @@index([status])
+  // Phase 3 Task 2 MEDIUM follow-up — santral event correlation (crm_id/
+  // uniqueId → this row) upserts/reads by (workspaceId, externalCallId) on
+  // every inbound_call/answer/hangup/cdr event. A plain index (the original
+  // Task 2 shape) only sped up the read — it did nothing to stop TWO
+  // DIFFERENT events for the same brand-new call (inbound_call + an
+  // out-of-order hangup/cdr) from both racing past
+  // handleInboundCall's/handleTerminal's findFirst-returns-null check and
+  // both inserting a row. This UNIQUE constraint (mirrors NetgsmWebhookEvent's
+  // (workspaceId, purpose, externalId) idiom) is the real, DB-atomic arbiter.
+  // Postgres excludes any row with a NULL in the tuple from a standard UNIQUE
+  // index (NULLS DISTINCT is the default here — deliberately not overridden),
+  // so OUTBOUND rows (externalCallId stays null until backfilled, and may
+  // never get one for click-to-dial) are unaffected; only two NON-NULL
+  // externalCallId rows in the same workspace collide, which is exactly the
+  // duplicate this guards against. See
+  // TelephonyEventConsumer.createOrGetInbound for the P2002 catch/re-fetch.
+  @@unique([workspaceId, externalCallId])
   @@map("sales_calls")
 }
 
@@ -882,6 +961,50 @@ model CallAnalysis {
 
   @@index([workspaceId, createdAt])
   @@map("call_analyses")
+}
+
+/// NetGSM hub — raw inbound webhook archive + idempotency guard. One row per
+/// received provider event; duplicates (NetGSM retries) upsert onto the same
+/// row via the unique key instead of double-processing. `processedAt` is
+/// stamped by the domain consumers (Phase 3+); Phase 0 only archives.
+model NetgsmWebhookEvent {
+  id          String    @id @default(uuid())
+  workspaceId String
+  purpose     String // 'events' | 'iys' | 'voice-report' | 'autocall-report'
+  /// Provider-side unique id (unique_id/gorevid/transactionid); a sha256 of the
+  /// raw body when the payload carries no id.
+  externalId  String
+  payload     Json
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@unique([workspaceId, purpose, externalId])
+  @@index([workspaceId, receivedAt])
+  @@map("netgsm_webhook_events")
+}
+
+/// İYS push queue — one row per consent change to prove to İYS. Outbox-style:
+/// PENDING → SENT (refid stamped) → CONFIRMED, or FAILED → retried with
+/// backoff → DLQ after 8 attempts (surfaced on the SMS channel card).
+model IysSyncJob {
+  id          String   @id @default(uuid())
+  workspaceId String
+  leadId      String
+  recipient   String // E.164 phone (or email for EPOSTA)
+  type        String // MESAJ | ARAMA | EPOSTA
+  status      String   @default("PENDING") // PENDING | SENT | CONFIRMED | FAILED | DLQ
+  direction   String // ONAY | RET
+  consentAt   DateTime
+  source      String?
+  refid       String?
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([status, updatedAt])
+  @@map("iys_sync_jobs")
 }
 
 /// Epic 11b — a PREVIEW dialer session: an ordered queue of leads a rep dials
@@ -920,6 +1043,61 @@ model DialSessionItem {
   @@unique([dialSessionId, position])
   @@index([workspaceId])
   @@map("dial_session_items")
+}
+
+/// NetGSM Phase 5 Task 5 — a PARALLEL auto-dialer session: a NetGSM
+/// "Devamlı Dinamik" autocall list that dials a queue of agents in parallel
+/// (unlike DialSession's preview one-at-a-time click-to-dial). One ACTIVE
+/// session per workspace at a time. `netgsmListId` is the id `AutocallClient.
+/// addAutocall` returned — passed to every subsequent addNumber/deleteNumber/
+/// updateListStatus/reportAutocall call AND matched against the per-attempt
+/// webhook's `JobID` (best-effort assumed to be the same identifier — see
+/// AutocallClient's docstring).
+model AutocallSession {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  startedByUserId String
+  status          String    @default("ACTIVE") // ACTIVE | STOPPED
+  netgsmListId    String
+  queueName       String
+  iysfilter       String // '0' | '11' | '12' — the classification the list was created with
+  brandCode       String?
+  retryCount      Int?
+  total           Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  stoppedAt       DateTime?
+
+  items AutocallSessionItem[]
+
+  @@index([workspaceId, status])
+  @@map("autocall_sessions")
+}
+
+/// One lead streamed into an AutocallSession's NetGSM list. `status` tracks
+/// OUR OWN streaming state (has addNumber been called for it yet); `
+/// lastAttemptStatus`/`lastUniqueId`/`attemptedAt` are populated by the
+/// per-attempt webhook consumer (AutocallReportConsumer) — a retried number
+/// gets a new unique_id per try, so these three always reflect the MOST
+/// RECENT attempt only (no full attempt history is kept — see the Task 5
+/// report for why this was kept minimal).
+model AutocallSessionItem {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  autocallSessionId String
+  leadId            String
+  phone             String
+  status            String    @default("PENDING") // PENDING | ADDED | SKIPPED_DNC | SKIPPED_IYS | FAILED
+  lastAttemptStatus String?
+  lastUniqueId      String?
+  attemptedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  session AutocallSession @relation(fields: [autocallSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([autocallSessionId, leadId])
+  @@index([workspaceId])
+  @@map("autocall_session_items")
 }
 
 /// Phase-3 installation ops (inside the marketing context). A crew is an
@@ -1550,6 +1728,21 @@ model TelephonyConfig {
   wssUrl       String?
   /// SIP domain/realm for AOR + targets, e.g. sip5.netsantral.com.
   sipDomain    String?
+  /// NetGSM Phase 4 Task 1 — call-recording toggle (caller_record/
+  /// called_record on linkup/originate). OFF by default: KVKK requires a
+  /// caller announcement before recording, so this must be an explicit
+  /// opt-in, never silently on.
+  recordCalls  Boolean  @default(false)
+  /// How long a recording is kept in R2 before the retention sweep deletes
+  /// the object + nulls SalesCall.recordingStorageKey. Null = keep forever.
+  recordingRetentionDays Int?
+  /// NetGSM Phase 6 Task 4 — sealed JSON of { appKey, userKey } for the
+  /// Netasistan self-service realm (a SEPARATE auth realm from the santral
+  /// creds above: app-key+user-key -> a 1h bearer, used for the agent's own
+  /// break/queue self-service). Independent of configSealed so either can be
+  /// rotated/cleared without touching the other. Null = Netasistan not
+  /// configured for this workspace.
+  netasistanConfigSealed String? @db.Text
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1819,6 +2012,11 @@ model Campaign {
   workspaceId      String
   name             String
   channel          String // EMAIL | SMS | WHATSAPP
+  /// İYS (İleti Yönetim Sistemi) message classification for SMS sends — TICARI
+  /// (commercial, requires İYS consent) | BILGILENDIRME (informational, exempt).
+  /// Column lands in Phase 1 to avoid a second migration when Phase 2 (İYS
+  /// compliance layer) wires the consent check.
+  iysMessageType   String    @default("BILGILENDIRME") // TICARI | BILGILENDIRME
   status           String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | PAUSED | CANCELLED
   /// A/B split test (GHL parity): when true + variants exist, each recipient is
   /// assigned a weighted-random variantKey at launch and gets that variant's
@@ -1849,6 +2047,17 @@ model Campaign {
   completedAt      DateTime?
   /// { recipients, sent, failed, skipped, opened, clicked, unsubscribed }.
   stats            Json?
+  /// NetGSM SMS v2 batch jobids for this campaign (string[]) — input to the
+  /// DLR poll / stats reconciler that fans out per-jobid report queries.
+  netgsmJobIds     Json?
+  /// NetGSM Phase 5 (voice campaigns): TTS/audio blast config —
+  /// `{ msg?: string (built-in Turkish TTS text), audioid?: string (an
+  /// uploaded .wav id from voicesms/upload), keys?: string[] (DTMF digits
+  /// eligible for a press-N branch capture — Task 3 wires the keypress →
+  /// workflow trigger) }`. Exactly one of msg/audioid is required for a VOICE
+  /// campaign — validated in CampaignsService.create/update, not at the
+  /// schema level. Unused by every other channel.
+  voiceConfig      Json?
   /// Cross-linkage (AI Social Content Studio §6.3): the companion SocialCampaign
   /// provisioned from this blast. Nullable — manual/legacy campaigns have none.
   socialCampaignId String?
@@ -1918,12 +2127,53 @@ model CampaignRecipient {
   sentAt      DateTime?
   openedAt    DateTime?
   clickedAt   DateTime?
+  /// NetGSM SMS v2 delivery tracking (Phase 1). netgsmJobId = the v2 batch
+  /// jobid this recipient was sent under; referansId = per-recipient
+  /// correlation id echoed back on report rows (= this recipient's id);
+  /// deliveryStatus/deliveredAt/errorCode are populated from the DLR poll.
+  netgsmJobId    String?
+  referansId     String?
+  deliveryStatus String? // DELIVERED | FAILED | PENDING (from report status enum)
+  deliveredAt    DateTime?
+  errorCode      String? // provider status/errorCode for failures
+  /// NetGSM Phase 5 (voice campaigns): outcome fields populated by the
+  /// voice-report webhook (Task 3) — voice PUSHES call outcomes (unlike SMS's
+  /// poll-based DLR), correlated back to this row by `relationid` = this
+  /// recipient's own id (sent as `voicesms/send`'s `relationid` — see
+  /// campaign-sender.service.ts's `sendVoice`). voiceState mirrors NetGSM's
+  /// documented durum/state (answered/no-answer/busy/failed, exact vocabulary
+  /// pinned down in Task 3); pushButton is the DTMF digit the callee pressed
+  /// (press-1 style); talkSec is the billable talk duration. Deliberately
+  /// NOT netgsmJobId/referansId above — those two columns are the SMS v2
+  /// DLR-poll reconciler's own signal (netgsm-dlr-poll.service.ts's
+  /// pollV2Campaigns selects ANY recipient row with netgsmJobId set,
+  /// regardless of campaign.channel), so stamping a voice call's jobid there
+  /// would leak it into that poller's next /sms/rest/v2/report batch — the
+  /// call's own jobid rides the plain, unindexed `messageId` instead.
+  voiceState String?
+  pushButton String?
+  talkSec    Int?
 
   createdAt DateTime @default(now())
 
   @@unique([campaignId, leadId])
   @@index([campaignId, status])
+  @@index([campaignId, netgsmJobId])
   @@index([workspaceId])
+  /// Covers netgsm-dlr-poll.service.ts's every-minute pollV2Campaigns
+  /// reconciliation query (workspaceId + deliveryStatus IS NULL +
+  /// netgsmJobId NOT NULL + sentAt >= window). A partial index on
+  /// `(workspaceId, sentAt) WHERE deliveryStatus IS NULL AND netgsmJobId IS
+  /// NOT NULL` would be the tighter fit, but schema.prisma has no syntax for
+  /// a partial/filtered index — a raw-SQL-only partial index would exist in
+  /// the DB with nothing here to represent it, and CI's migrations↔schema
+  /// parity gate (`prisma migrate diff --from-migrations --to-schema-datamodel
+  /// --exit-code`) always flags a DB index absent from the datamodel as
+  /// drift, regardless of its WHERE clause. This plain composite index is
+  /// fully expressible here, so it round-trips clean through that gate; the
+  /// trade-off is a larger index (it also carries rows with a non-NULL
+  /// deliveryStatus), acceptable at this scale.
+  @@index([workspaceId, deliveryStatus, sentAt])
   @@map("campaign_recipients")
 }
 

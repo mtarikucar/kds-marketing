@@ -38,6 +38,10 @@ const PACKAGES = [
       advancedReports: false,
       apiAccess: false,
       conversationAi: true,
+      sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: false,
       funnels: true,
@@ -50,6 +54,12 @@ const PACKAGES = [
       research: true,
       mediaGen: false,
       socialCampaigns: false,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
+      // plan-tier feature; false everywhere else (purchasable as an add-on).
+      voiceCampaigns: false,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 100,
@@ -81,6 +91,10 @@ const PACKAGES = [
       advancedReports: true,
       apiAccess: false,
       conversationAi: true,
+      sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -93,6 +107,12 @@ const PACKAGES = [
       research: true,
       mediaGen: false,
       socialCampaigns: false,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
+      // plan-tier feature; false everywhere else (purchasable as an add-on).
+      voiceCampaigns: false,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 500,
@@ -127,6 +147,10 @@ const PACKAGES = [
       advancedReports: true,
       apiAccess: false,
       conversationAi: true,
+      sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -139,6 +163,12 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts). SCALE/OPERATOR
+      // plan-tier feature; false everywhere else (purchasable as an add-on).
+      voiceCampaigns: false,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 2000,
@@ -173,6 +203,10 @@ const PACKAGES = [
       advancedReports: true,
       apiAccess: true,
       conversationAi: true,
+      sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -185,6 +219,11 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts): SCALE grants it.
+      voiceCampaigns: true,
+      // NetGSM Phase 6 Task 1 — fax. OPERATOR-only in-plan feature; false on
+      // every customer tier (purchasable as an add-on).
+      fax: false,
     },
     limits: {
       aiCreditsMonthly: 6000,
@@ -218,6 +257,10 @@ const PACKAGES = [
       advancedReports: true,
       apiAccess: true,
       conversationAi: true,
+      sms: true,
+      // NetGSM SMS v2 Task 12 — paid add-on only (WorkspaceAddOn grants
+      // `feature.smsOtp`); false on every plan, no exceptions.
+      smsOtp: false,
       workflows: true,
       campaigns: true,
       funnels: true,
@@ -230,6 +273,10 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
+      // NetGSM Phase 5 — voice campaigns (TTS/audio blasts): OPERATOR grants it.
+      voiceCampaigns: true,
+      // NetGSM Phase 6 Task 1 — fax: OPERATOR grants it (no customer tier does).
+      fax: true,
     },
     limits: {
       aiCreditsMonthly: -1,

@@ -46,6 +46,14 @@ export interface PrepareCallRequest {
     internalNum?: string;
     /** The rep's own phone (cell); required for callMode 'bridge'. */
     callerNum?: string;
+    /**
+     * NetGSM Phase 4 Task 1 — the workspace's TelephonyConfig.recordCalls,
+     * resolved by SalesCallService. When true, NetgsmApiAdapter passes
+     * `record: true` into callBridge/originate so NetGSM sets
+     * caller_record/called_record=1 on the PBX call. OFF by default — KVKK
+     * requires a caller announcement before recording.
+     */
+    recordCalls?: boolean;
   };
 }
 

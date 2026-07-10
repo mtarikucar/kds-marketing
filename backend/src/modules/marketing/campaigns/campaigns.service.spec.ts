@@ -1,5 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
-import { CampaignsService } from './campaigns.service';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { CampaignsService, CAMPAIGN_BATCH_KIND, CAMPAIGN_LAUNCH_KIND } from './campaigns.service';
 
 /**
  * Audience resolution + launch. The audience where must always pin the
@@ -11,6 +12,7 @@ describe('CampaignsService', () => {
   const WS = 'ws-1';
   let prisma: any;
   let scheduledJobs: { schedule: jest.Mock; cancel: jest.Mock };
+  let entitlements: { getEffective: jest.Mock };
   let svc: CampaignsService;
 
   beforeEach(() => {
@@ -23,7 +25,9 @@ describe('CampaignsService', () => {
       campaignRecipient: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
     };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
-    svc = new CampaignsService(prisma as any, scheduledJobs as any);
+    // Default: entitled to sms (matches every plan block — no regression).
+    entitlements = { getEffective: jest.fn().mockResolvedValue({ features: { sms: true } }) };
+    svc = new CampaignsService(prisma as any, scheduledJobs as any, entitlements as any);
   });
 
   describe('buildAudienceWhere', () => {
@@ -113,6 +117,101 @@ describe('CampaignsService', () => {
       const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
       expect(rows.every((r: any) => r.variantKey === null)).toBe(true);
     });
+
+    // Task 8b: a future scheduledAt defers the actual send — freeze now, but
+    // flip to SCHEDULED (not SENDING) and queue the `campaign.launch` job for
+    // scheduledAt instead of kicking a batch right away.
+    describe('with a scheduledAt', () => {
+      it('a FUTURE scheduledAt freezes the audience but flips to SCHEDULED and queues campaign.launch (no batch kick)', async () => {
+        const scheduledAt = new Date(Date.now() + 60 * 60 * 1000); // 1h out
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt,
+        });
+
+        const res = await svc.launch(WS, 'c1');
+
+        // Audience still frozen exactly like the immediate path.
+        expect(prisma.campaignRecipient.createMany).toHaveBeenCalled();
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SCHEDULED');
+        expect(update.startedAt).toBeUndefined();
+        // The `campaign.launch` job is queued for scheduledAt — not a batch kick.
+        expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND, dedupKey: 'c1', runAt: scheduledAt }),
+        );
+        expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(
+          expect.objectContaining({ kind: CAMPAIGN_BATCH_KIND }),
+        );
+        expect(res).toEqual(expect.objectContaining({ message: 'Campaign scheduled', recipients: 2, scheduledAt }));
+      });
+
+      it('a scheduledAt within the 30s tolerance sends immediately (SENDING + batch kick), not SCHEDULED', async () => {
+        const almostNow = new Date(Date.now() + 5_000); // well under the 30s tolerance
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: almostNow,
+        });
+
+        await svc.launch(WS, 'c1');
+
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SENDING');
+        expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: CAMPAIGN_BATCH_KIND, dedupKey: 'c1' }),
+        );
+      });
+
+      it('a past scheduledAt (e.g. a stale SCHEDULED campaign re-launched) sends immediately', async () => {
+        const past = new Date(Date.now() - 60_000);
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: past,
+        });
+
+        await svc.launch(WS, 'c1');
+
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SENDING');
+      });
+
+      it('an absent scheduledAt keeps the existing immediate-send behavior', async () => {
+        prisma.campaign.findFirst.mockResolvedValue({
+          id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', audienceFilter: [], scheduledAt: null,
+        });
+
+        await svc.launch(WS, 'c1');
+
+        const update = prisma.campaign.update.mock.calls[0][0].data;
+        expect(update.status).toBe('SENDING');
+      });
+    });
+  });
+
+  describe('cancel', () => {
+    it('cancels both the queued campaign.launch job AND the batch job (by dedupKey=campaignId) and flips SCHEDULED → CANCELLED', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+      const res = await svc.cancel(WS, 'c1');
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_BATCH_KIND, 'c1');
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
+      expect(prisma.campaign.update).toHaveBeenCalledWith({ where: { id: 'c1' }, data: { status: 'CANCELLED' } });
+      expect(res).toEqual({ message: 'Campaign cancelled' });
+    });
+
+    it('refuses to cancel a SENDING campaign (409) — pause covers that', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SENDING' });
+      await expect(svc.cancel(WS, 'c1')).rejects.toBeInstanceOf(ConflictException);
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(prisma.campaign.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to re-cancel an already-CANCELLED campaign (409, not a silent no-op)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'CANCELLED' });
+      await expect(svc.cancel(WS, 'c1')).rejects.toBeInstanceOf(ConflictException);
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+    });
+
+    it('404s when the campaign does not exist in this workspace', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(null);
+      await expect(svc.cancel(WS, 'missing')).rejects.toThrow('Campaign not found');
+    });
   });
 
   describe('setVariants', () => {
@@ -170,6 +269,171 @@ describe('CampaignsService', () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
       await svc.update(WS, 'c1', { subject: 'Spring sale' });
       expect(prisma.campaign.update.mock.calls[0][0].data.subject).toBe('Spring sale');
+    });
+  });
+
+  // Task 8b: a SCHEDULED campaign already has its `campaign.launch` job queued
+  // (audience frozen at the original launch() call). Editing scheduledAt must
+  // move that job, not just the DB column.
+  describe('update — reschedule a SCHEDULED campaign', () => {
+    it('reschedules the queued campaign.launch job to the new scheduledAt via schedule()\'s dedup collapse (no explicit cancel needed)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+      const newScheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
+      await svc.update(WS, 'c1', { scheduledAt: newScheduledAt.toISOString() });
+
+      // schedule()'s dedupKey lookup updates the existing PENDING row's runAt in
+      // place, so a cancel-then-create isn't needed for the reschedule-to-future path.
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND, dedupKey: 'c1', runAt: newScheduledAt }),
+      );
+      // Only the DB column update, not a second status-revert update.
+      expect(prisma.campaign.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('clearing scheduledAt on a SCHEDULED campaign cancels the job and reverts status to DRAFT (no orphaned SCHEDULED-with-nothing-queued)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { scheduledAt: '' });
+
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith(CAMPAIGN_LAUNCH_KIND, 'c1');
+      expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(expect.objectContaining({ kind: CAMPAIGN_LAUNCH_KIND }));
+      // Two writes: the scheduledAt=null column update, then the status revert.
+      expect(prisma.campaign.update).toHaveBeenCalledTimes(2);
+      expect(prisma.campaign.update.mock.calls[1][0]).toEqual({ where: { id: 'c1' }, data: { status: 'DRAFT' } });
+    });
+
+    it('does NOT touch any job when a DRAFT campaign edits scheduledAt (nothing queued yet)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT' });
+
+      await svc.update(WS, 'c1', { scheduledAt: new Date(Date.now() + 60_000).toISOString() });
+
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('does NOT touch any job when a SCHEDULED campaign is edited without changing scheduledAt', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'SCHEDULED' });
+
+      await svc.update(WS, 'c1', { name: 'New name' });
+
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+  });
+
+  // Split off `conversationAi` for the NetGSM SMS v2 program: an SMS-channel
+  // campaign now requires its own `sms` feature; EMAIL/WHATSAPP are unaffected
+  // (they never check entitlements here — `campaigns` at the controller
+  // already gates the whole surface).
+  describe('create — SMS feature gate', () => {
+    beforeEach(() => {
+      prisma.campaign.create = jest.fn().mockResolvedValue({ id: 'c1' });
+    });
+
+    it('blocks an SMS campaign when the workspace lacks the sms feature', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { sms: false } });
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'SMS', body: 'Hi' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('allows an SMS campaign when the workspace has the sms feature', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { sms: true } });
+      await svc.create(WS, { name: 'N', channel: 'SMS', body: 'Hi' });
+      expect(prisma.campaign.create).toHaveBeenCalled();
+    });
+
+    it('never checks entitlements for an EMAIL or WHATSAPP campaign', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi' });
+      await svc.create(WS, { name: 'N', channel: 'WHATSAPP', body: 'Hi' });
+      expect(entitlements.getEffective).not.toHaveBeenCalled();
+    });
+  });
+
+  // NetGSM Phase 5 Task 2: VOICE campaigns require the `voiceCampaigns`
+  // feature (same shape of gate as SMS above) AND a voiceConfig carrying
+  // msg or audioid (voicesms/send accepts exactly one of them).
+  describe('create/update — VOICE campaigns', () => {
+    beforeEach(() => {
+      prisma.campaign.create = jest.fn().mockResolvedValue({ id: 'c1' });
+    });
+
+    it('blocks a VOICE campaign when the workspace lacks the voiceCampaigns feature', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: false } });
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { msg: 'Merhaba' } }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('requires voiceConfig with msg or audioid — rejects when neither is set', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: {} }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a VOICE campaign with only msg (TTS text)', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { msg: 'Merhaba' } });
+      expect(prisma.campaign.create).toHaveBeenCalled();
+      expect(prisma.campaign.create.mock.calls[0][0].data.voiceConfig).toEqual({ msg: 'Merhaba' });
+    });
+
+    it('accepts a VOICE campaign with only audioid (no msg)', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await svc.create(WS, { name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { audioid: 'aud-1' } });
+      expect(prisma.campaign.create).toHaveBeenCalled();
+      expect(prisma.campaign.create.mock.calls[0][0].data.voiceConfig).toEqual({ audioid: 'aud-1' });
+    });
+
+    it('applies iysMessageType TICARI for a VOICE campaign (same as SMS)', async () => {
+      entitlements.getEffective.mockResolvedValue({ features: { voiceCampaigns: true } });
+      await svc.create(WS, {
+        name: 'N', channel: 'VOICE', body: 'desc', voiceConfig: { msg: 'Merhaba' }, iysMessageType: 'TICARI',
+      });
+      expect(prisma.campaign.create.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
+    });
+
+    it('never sets voiceConfig on a non-VOICE campaign even if one is passed', async () => {
+      await svc.create(WS, { name: 'N', channel: 'EMAIL', body: 'Hi', voiceConfig: { msg: 'stray' } } as any);
+      expect(prisma.campaign.create.mock.calls[0][0].data.voiceConfig).toBe(Prisma.JsonNull);
+    });
+
+    it('update: re-validates voiceConfig on an existing VOICE campaign and rejects clearing both msg and audioid', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'VOICE' });
+      await expect(svc.update(WS, 'c1', { voiceConfig: {} })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('update: accepts a valid voiceConfig edit on a VOICE campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'VOICE' });
+      await svc.update(WS, 'c1', { voiceConfig: { audioid: 'aud-2' } });
+      expect(prisma.campaign.update.mock.calls[0][0].data.voiceConfig).toEqual({ audioid: 'aud-2' });
+    });
+
+    it('update: ignores a voiceConfig edit on a non-VOICE campaign (no cross-field validation, no write)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'SMS' });
+      await svc.update(WS, 'c1', { voiceConfig: {} });
+      expect(prisma.campaign.update.mock.calls[0][0].data.voiceConfig).toBeUndefined();
+    });
+
+    it('update: applies iysMessageType TICARI for an existing VOICE campaign', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'VOICE' });
+      await svc.update(WS, 'c1', { iysMessageType: 'TICARI' });
+      expect(prisma.campaign.update.mock.calls[0][0].data.iysMessageType).toBe('TICARI');
+    });
+
+    it('buildAudienceWhere VOICE requires a phone and reuses the smsOptOut proxy', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'VOICE', []);
+      expect(w.smsOptOut).toBe(false);
+      expect(w.phone).toEqual({ not: null });
     });
   });
 });

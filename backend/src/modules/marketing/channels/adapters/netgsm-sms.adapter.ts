@@ -2,6 +2,8 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ChannelAdapterRegistry } from '../channel-adapter.registry';
 import { withRetry } from '../../../../common/retry.util';
 import { interpretNetgsmSend } from '../netgsm-send.util';
+import { BalanceClient } from '../../../netgsm/balance/balance.client';
+import { SmsV2Client } from '../../../netgsm/sms/sms-v2.client';
 import {
   ChannelAdapter,
   ChannelCapability,
@@ -11,13 +13,19 @@ import {
   SendResult,
 } from '../channel-adapter.interface';
 
+type NetgsmCreds = { usercode: string; password: string };
+/** Shared shape for a single send attempt: the public SendResult plus whether
+ *  THIS particular failure is worth retrying (never surfaced to the caller). */
+type SendAttempt = SendResult & { retriable: boolean };
+
 /**
  * NetGSM SMS adapter. Secrets: { usercode, password, msgheader } (msgheader is
- * the İYS-approved sender title). Uses NetGSM's GET send API; it returns a
- * status code + job id as plain text — codes 00/01/02 mean accepted. Delivery
- * reports arrive separately on the public NetGSM DLR endpoint. Inbound MO
- * (mobile-originated replies) parse tolerantly since NetGSM's MO shape varies
- * by account.
+ * the İYS-approved sender title). Sends via NetGSM's REST v2 `send` endpoint
+ * (true n:n bulk, JSON, Basic Auth) by default; a channel can opt back into the
+ * legacy `/sms/send/get` GET API via `configPublic.useLegacySend === true`
+ * while its account bakes on v2. Delivery reports arrive separately (DLR poll,
+ * Task 6). Inbound MO (mobile-originated replies) parse tolerantly since
+ * NetGSM's MO shape varies by account.
  */
 @Injectable()
 export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
@@ -37,7 +45,11 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
    *  ingest transactions (a real MO POST carries a single reply). */
   private static readonly MAX_INBOUND_BATCH = 100;
 
-  constructor(private readonly registry: ChannelAdapterRegistry) {}
+  constructor(
+    private readonly registry: ChannelAdapterRegistry,
+    private readonly balance: BalanceClient,
+    private readonly smsV2: SmsV2Client,
+  ) {}
 
   onModuleInit(): void {
     this.registry.register(this);
@@ -53,38 +65,98 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
       };
     }
     const gsmno = to.replace(/[^\d]/g, '');
+    const creds: NetgsmCreds = { usercode, password };
 
-    // One send attempt. Transient failures (network/timeout/HTTP-5xx) throw so
-    // the retry wrapper backs off; a parsed provider error returns a structured
-    // outcome carrying whether it's worth retrying (only the rate-limit code 80).
-    type Attempt = SendResult & { retriable: boolean };
-    const attempt = async (): Promise<Attempt> => {
-      // Credentials go in the POST body (form-encoded), never the URL/query
-      // string, so they don't leak into proxy/access logs or error messages.
-      const form = new URLSearchParams({ usercode, password, gsmno, message: text, msgheader });
-      const res = await fetch(NetgsmSmsAdapter.SEND_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: form.toString(),
-        // Bound every call so a hung connection can't block a campaign batch
-        // (which is then reaped and double-sent) — the abort is a transient throw.
-        signal: AbortSignal.timeout(NetgsmSmsAdapter.TIMEOUT_MS),
-      });
-      if (typeof res.status === 'number' && res.status >= 500) {
-        throw new Error(`NetGSM HTTP ${res.status}`); // transient → retry
-      }
-      const outcome = interpretNetgsmSend((await res.text()) ?? '');
-      if (outcome.ok) {
-        return { externalMessageId: outcome.jobId, status: 'SENT', retriable: false };
-      }
-      return {
-        externalMessageId: null,
-        status: 'FAILED',
-        error: outcome.message ?? `NetGSM ${outcome.code}`,
-        retriable: outcome.retriable,
-      };
+    // Per-channel escape hatch back to the legacy GET API; every other value
+    // (absent, false) sends via REST v2 — see netgsm-config.util.ts.
+    if (config.public?.useLegacySend === true) {
+      return this.runWithRetry(() => this.attemptLegacy(creds, msgheader, gsmno, text));
+    }
+    return this.runWithRetry(() => this.attemptV2(creds, msgheader, gsmno, text));
+  }
+
+  /** One legacy `/sms/send/get` attempt. Transient failures (network/timeout/
+   *  HTTP-5xx) throw so the retry wrapper backs off; a parsed provider error
+   *  returns a structured outcome carrying whether it's worth retrying (only
+   *  the rate-limit code 80). */
+  private async attemptLegacy(
+    creds: NetgsmCreds,
+    msgheader: string,
+    gsmno: string,
+    text: string,
+  ): Promise<SendAttempt> {
+    // Credentials go in the POST body (form-encoded), never the URL/query
+    // string, so they don't leak into proxy/access logs or error messages.
+    const form = new URLSearchParams({
+      usercode: creds.usercode,
+      password: creds.password,
+      gsmno,
+      message: text,
+      msgheader,
+    });
+    const res = await fetch(NetgsmSmsAdapter.SEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+      // Bound every call so a hung connection can't block a campaign batch
+      // (which is then reaped and double-sent) — the abort is a transient throw.
+      signal: AbortSignal.timeout(NetgsmSmsAdapter.TIMEOUT_MS),
+    });
+    if (typeof res.status === 'number' && res.status >= 500) {
+      throw new Error(`NetGSM HTTP ${res.status}`); // transient → retry
+    }
+    const outcome = interpretNetgsmSend((await res.text()) ?? '');
+    if (outcome.ok) {
+      return { externalMessageId: outcome.jobId, status: 'SENT', retriable: false };
+    }
+    return {
+      externalMessageId: null,
+      status: 'FAILED',
+      error: outcome.message ?? `NetGSM ${outcome.code}`,
+      retriable: outcome.retriable,
     };
+  }
 
+  /** One REST v2 `send` attempt (single-recipient call — CampaignSenderService's
+   *  n:n batching is Task 5). `SmsV2Client.send` never throws: every failure
+   *  (transport, unexpected response, provider error code) resolves to an
+   *  `ok:false` result, so retriability is read off the result rather than a
+   *  caught exception. Retriable = code 80 (rate limit, same as legacy) OR
+   *  `result.transport` (a genuine transport/timeout failure — the request
+   *  never reached NetGSM, so nothing was sent and a retry is safe). Crucially
+   *  this does NOT retry merely on an empty `code`: an HTTP response that came
+   *  back but couldn't be parsed means NetGSM may already have accepted and
+   *  sent the message, and retrying that would risk billing/sending a
+   *  duplicate SMS — mirroring attemptLegacy's "network + HTTP-5xx + code 80
+   *  retries, everything else (including a received-but-unparseable
+   *  response) is final" rule one level up the stack. */
+  private async attemptV2(
+    creds: NetgsmCreds,
+    msgheader: string,
+    gsmno: string,
+    text: string,
+  ): Promise<SendAttempt> {
+    const result = await this.smsV2.send(creds, {
+      msgheader,
+      messages: [{ msg: text, no: gsmno }],
+    });
+    if (result.ok) {
+      return { externalMessageId: result.jobid, status: 'SENT', retriable: false };
+    }
+    return {
+      externalMessageId: null,
+      status: 'FAILED',
+      error: result.message ?? `NetGSM ${result.code || '?'}`,
+      retriable: result.retriable || result.transport,
+    };
+  }
+
+  /** Shared bounded-retry wrapper for both send paths — one place defines
+   *  "what counts as retriable" so legacy and v2 truly share retry semantics
+   *  instead of two independently-maintained copies. MUST NOT throw (the
+   *  ChannelAdapter contract): a stray exception collapses to a scrubbed
+   *  FAILED result instead of propagating. */
+  private async runWithRetry(attempt: () => Promise<SendAttempt>): Promise<SendResult> {
     try {
       const result = await withRetry(attempt, {
         attempts: NetgsmSmsAdapter.MAX_ATTEMPTS,
@@ -151,11 +223,51 @@ export class NetgsmSmsAdapter implements ChannelAdapter, OnModuleInit {
     return d ? `+${d}` : '';
   }
 
+  /** Live verify: presence check, then a real /balance auth probe (not
+   *  IP-gated), then — only once creds are confirmed live — a msgheader-list
+   *  check so "Verify" also catches a header that's live but NOT İYS-approved
+   *  (a distinct failure from bad credentials, surfaced as
+   *  `details.headerApproved`). The msgheader list is cached onto
+   *  `details.approvedHeaders` for the settings UI's header dropdown. */
   async healthCheck(
     config: ResolvedChannelConfig,
   ): Promise<{ ok: boolean; details?: Record<string, unknown> }> {
     const { usercode, password, msgheader } = config.secrets;
-    const ok = !!(usercode && password && msgheader);
-    return { ok, details: { hasUsercode: !!usercode, hasHeader: !!msgheader } };
+    if (!usercode || !password || !msgheader) {
+      return { ok: false, details: { hasUsercode: !!usercode, hasHeader: !!msgheader } };
+    }
+    const probe = await this.balance.fetchBalance({ usercode, password });
+    // Bad/unreachable creds short-circuit exactly as before — never spend a
+    // second live call confirming a header on an account we can't even reach.
+    if (probe.credsValid !== true) {
+      return {
+        ok: false,
+        details: {
+          credsValid: probe.credsValid,
+          credit: probe.credit,
+          code: probe.code,
+          message: probe.message,
+          hasHeader: true,
+        },
+      };
+    }
+    const details: Record<string, unknown> = {
+      credsValid: probe.credsValid,
+      credit: probe.credit,
+      code: probe.code,
+      message: probe.message,
+      hasHeader: true,
+    };
+    const headersResult = await this.smsV2.msgheaders({ usercode, password });
+    if (!headersResult.ok) {
+      // The msgheader-list endpoint hiccuped — creds are live, so don't fail
+      // verify over a second, unrelated endpoint being flaky; headerApproved
+      // simply stays unset (undefined) rather than a false negative.
+      return { ok: true, details };
+    }
+    details.approvedHeaders = headersResult.headers;
+    const headerApproved = headersResult.headers.includes(msgheader);
+    details.headerApproved = headerApproved;
+    return { ok: headerApproved, details };
   }
 }

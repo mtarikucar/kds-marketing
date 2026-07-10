@@ -17,6 +17,17 @@ import { LogCallDto, SalesCallOutcome } from '../dto/log-call.dto';
 import { SalesCallFilterDto } from '../dto/sales-call-filter.dto';
 import { MarketingUserPayload } from '../types';
 import { paginated } from '../../../common/pagination';
+import { mintRecordingProxyToken, recordingProxyUrl } from '../telephony/recording-proxy-token.util';
+
+/**
+ * Final-review HIGH-2 fix — statuses `logCall` may still attach a manual
+ * outcome onto: `INITIATED` (pre-webhook, the rep is the source of truth) or
+ * an already webhook-finalized terminal outcome (TelephonyEventConsumer/
+ * CallCdrSyncService got there first). `CANCELLED` is deliberately excluded —
+ * that status only ever comes from startCall's own stale-sweep/origination-
+ * failure paths, never a call a rep would still need to log an outcome for.
+ */
+const LOGGABLE_STATUSES = ['INITIATED', 'CONNECTED', 'NO_ANSWER', 'BUSY', 'FAILED'];
 
 /**
  * Marketing sales-call log over the single company Netgsm line. Phase 2 is
@@ -40,8 +51,13 @@ export class SalesCallService {
 
   /**
    * Reserve the sales line and return a dial URI. Enforces the provider's
-   * single-line concurrency: at most `maxConcurrentCalls` may be INITIATED at
-   * once. A stale INITIATED call is auto-cancelled so the line never deadlocks.
+   * concurrency: at most `maxConcurrentCalls` may be INITIATED at once —
+   * scoped to the whole WORKSPACE for the single-line lite provider
+   * (maxConcurrentCalls===1, one shared 0850 number), or scoped PER REP for a
+   * multi-line provider like netsantral (maxConcurrentCalls===50) so one
+   * busy rep never blocks a teammate's dial on a trunk with capacity to spare
+   * (NetGSM Phase 3 Task 6). A stale INITIATED call is auto-cancelled, same
+   * scope, so the line/rep never deadlocks on an abandoned row.
    *
    * The provider/registry mechanics stay workspace-agnostic (the telephony
    * line is infrastructure, not tenant data) — but every SalesCall row read
@@ -71,6 +87,7 @@ export class SalesCallService {
         const base = {
           username: netsantral.username, password: netsantral.password,
           trunk: netsantral.trunk, pbxnum: netsantral.pbxnum,
+          recordCalls: netsantral.recordCalls,
         };
         resolvedConfig = rep.phone
           ? { ...base, callMode: 'bridge' as const, callerNum: rep.phone }
@@ -79,8 +96,23 @@ export class SalesCallService {
     }
     const provider = this.registry.get(providerId);
 
+    // Concurrency scope: the single-line lite provider (maxConcurrentCalls===1
+    // — one shared company 0850 number) must stay scoped to the WHOLE
+    // WORKSPACE, exactly as before. A multi-line provider (netsantral, 50) has
+    // capacity PER REP, not per workspace — scoping that check to the whole
+    // workspace would let one busy rep's own INITIATED row block every OTHER
+    // rep's dial attempt on a trunk that has 49 other lines free (Phase-0
+    // finding; NetGSM Phase 3 Task 6). The stale-auto-cancel sweep below is
+    // scoped identically, so a rep's own abandoned INITIATED row is only ever
+    // cleared against (and only ever counts toward) THEIR OWN limit.
+    const perRep = provider.maxConcurrentCalls > 1;
+
     const active = await this.prisma.salesCall.findMany({
-      where: { workspaceId, status: 'INITIATED' },
+      // workspaceId kept inline (not spread from a variable) so the
+      // workspace-scoping arch fitness test can statically see the scope.
+      // perRep (multi-line netsantral) also scopes to THIS rep; the single
+      // shared-line lite provider stays workspace-wide.
+      where: { workspaceId, status: 'INITIATED', ...(perRep ? { marketingUserId } : {}) },
       orderBy: { startedAt: 'desc' },
       select: { id: true, startedAt: true },
     });
@@ -99,7 +131,9 @@ export class SalesCallService {
     const liveCount = active.length - stale.length;
     if (liveCount >= provider.maxConcurrentCalls) {
       throw new ConflictException(
-        'Sales line is busy — log or cancel the active call first',
+        perRep
+          ? 'You already have an active call — log or cancel it first'
+          : 'Sales line is busy — log or cancel the active call first',
       );
     }
 
@@ -159,8 +193,22 @@ export class SalesCallService {
   }
 
   /**
-   * Record the outcome of an INITIATED call. Frees the line, mirrors onto the
-   * lead timeline (if linked), and emits marketing.call.logged.v1.
+   * Record the outcome of a call. Frees the line, mirrors onto the lead
+   * timeline (if linked), and emits marketing.call.logged.v1.
+   *
+   * Final-review HIGH-2 fix: once TelephonyEventConsumer/CallCdrSyncService
+   * finalize a call in seconds, a still-INITIATED row is the exception, not
+   * the rule — most calls this rep dialed/answered are ALREADY
+   * CONNECTED/NO_ANSWER/BUSY/FAILED by the time they open the "log outcome"
+   * modal. The pre-fix code only ever allowed `status === 'INITIATED'`,
+   * 409ing every one of those and silently dropping the rep's notes
+   * (ClickToDialButton's modal surfaced the error; DialerPage swallowed it).
+   * `outcomeLoggedAt` — independent of `status` — is the real "has a HUMAN
+   * already recorded this?" signal now: this MERGES onto a webhook-finalized
+   * row (attach notes, keep the webhook's ground-truth status/duration)
+   * rather than reject it outright. CANCELLED (startCall's own stale-sweep/
+   * origination-failure paths) and a genuine second manual log both still
+   * 409 — see LOGGABLE_STATUSES / the atomic claim below.
    */
   async logCall(workspaceId: string, id: string, marketingUserId: string, dto: LogCallDto) {
     // Scoped pre-check; the update below is keyed by this resolved row. The
@@ -171,40 +219,59 @@ export class SalesCallService {
     if (call.marketingUserId !== marketingUserId) {
       throw new ForbiddenException('You can only log your own calls');
     }
-    if (call.status !== 'INITIATED') {
+    if (!LOGGABLE_STATUSES.includes(call.status)) {
       throw new ConflictException('Call already logged');
     }
 
     const now = new Date();
+    // Pre-webhook: no santral/CDR confirmation has arrived yet, so the rep IS
+    // the source of truth for status/duration — unchanged from the pre-fix
+    // behavior. Already webhook-finalized: that status/duration is ground
+    // truth; the rep's dto.status/dto.durationSec are informational-only at
+    // this point and are deliberately NOT applied — only notes + the
+    // manual-log stamp are new information.
+    const preWebhook = call.status === 'INITIATED';
     const updated = await this.prisma.$transaction(async (tx) => {
-      // Atomic claim INSIDE the tx: only the first logger flips INITIATED→<status>.
-      // The pre-check above is racy on its own, so two concurrent logCall calls
-      // could both reach here and BOTH mirror a CALL activity. The compound WHERE
-      // lets exactly one win; the loser sees count 0 and aborts (no double row).
+      // Atomic claim INSIDE the tx, scoped to outcomeLoggedAt (NOT status) —
+      // this is what lets it claim equally whether the row is still
+      // INITIATED or already webhook-finalized. Two concurrent logCall calls
+      // (or a genuine second manual log after the first already succeeded)
+      // race this same WHERE; the loser sees count 0 and 409s (no double
+      // mirror, no double-logged row).
       const claim = await tx.salesCall.updateMany({
-        where: { id, workspaceId, status: 'INITIATED' },
-        data: {
-          status: dto.status,
-          durationSec: dto.durationSec ?? null,
-          notes: dto.notes ?? null,
-          endedAt: now,
-        },
+        where: { id, workspaceId, outcomeLoggedAt: null },
+        data: preWebhook
+          ? {
+              status: dto.status,
+              durationSec: dto.durationSec ?? null,
+              notes: dto.notes ?? null,
+              endedAt: now,
+              outcomeLoggedAt: now,
+            }
+          : {
+              notes: dto.notes ?? null,
+              outcomeLoggedAt: now,
+            },
       });
       if (claim.count === 0) {
         throw new ConflictException('Call already logged');
       }
       const row = await tx.salesCall.findUniqueOrThrow({ where: { id } });
 
-      // Mirror onto the lead timeline so the rep's call history lives with the
-      // lead (duration in minutes, per LeadActivity's convention).
+      // Mirror onto the lead timeline so the rep's call history lives with
+      // the lead (duration in minutes, per LeadActivity's convention). Reads
+      // back from `row` — the REAL final status/duration, whether that's the
+      // rep's own (pre-webhook path) or the webhook's ground truth (merge
+      // path) — rather than trusting dto directly, so both paths share one
+      // mirror/outbox implementation.
       if (call.leadId) {
         await tx.leadActivity.create({
           data: {
             type: 'CALL',
-            title: `Sales call: ${dto.status}`,
+            title: `Sales call: ${row.status}`,
             description: dto.notes ?? undefined,
-            outcome: this.outcomeFor(dto.status),
-            duration: dto.durationSec ? Math.round(dto.durationSec / 60) : undefined,
+            outcome: this.outcomeFor(row.status as SalesCallOutcome),
+            duration: row.durationSec ? Math.round(row.durationSec / 60) : undefined,
             leadId: call.leadId,
             createdById: marketingUserId,
           },
@@ -219,8 +286,8 @@ export class SalesCallService {
             callId: id,
             marketingUserId,
             leadId: call.leadId,
-            status: dto.status,
-            durationSec: dto.durationSec ?? null,
+            status: row.status,
+            durationSec: row.durationSec ?? null,
             occurredAt: now.toISOString(),
           },
         },
@@ -265,6 +332,43 @@ export class SalesCallService {
       throw new ForbiddenException('You can only view your own calls');
     }
     return call;
+  }
+
+  /**
+   * NetGSM Phase 4 Task 3 — a playable URL for this call's recording, for the
+   * in-app `<audio>` player. Reuses the same scoped `get` every other
+   * call-detail read goes through (404 cross-workspace, Forbidden for a REP
+   * viewing a teammate's call), so this never leaks another workspace's or
+   * another rep's recording regardless of how the caller reached it.
+   *
+   * Fix round 1 (HIGH privacy finding) — this used to return
+   * `R2StorageService.urlForKey(key)` directly: R2's bucket is public-read
+   * (shared with social-planner's Meta/TikTok pull-from-URL media), so that
+   * was a fully public, no-auth, no-TTL URL handed straight to the browser as
+   * `<audio src>` — it survived past our auth boundary (history, devtools,
+   * error-tracker breadcrumbs) for as long as the object existed. Instead,
+   * when the recording HAS been ingested to R2 (`recordingStorageKey`, Task
+   * 2's sweep), this mints a short-lived (~5 min) HMAC token scoped to
+   * {workspaceId, id} and returns OUR OWN proxy route
+   * (`RecordingProxyController`, `recording-proxy-token.util`) — the browser
+   * never sees the public R2 URL at all. Falls back to the raw provider
+   * `recordingUrl` only when the recording hasn't been ingested yet (or ever
+   * will be — recording off/R2 unconfigured): that's already a NetGSM
+   * tokenized, short-lived link, not our public bucket, so it's returned
+   * as-is rather than also being proxied. 404s when neither exists yet.
+   */
+  async getRecordingUrl(
+    workspaceId: string,
+    id: string,
+    user: MarketingUserPayload,
+  ): Promise<{ url: string }> {
+    const call = await this.get(workspaceId, id, user);
+    if (call.recordingStorageKey) {
+      const token = mintRecordingProxyToken(workspaceId, id);
+      return { url: recordingProxyUrl(process.env.PUBLIC_BASE_URL, workspaceId, id, token) };
+    }
+    if (call.recordingUrl) return { url: call.recordingUrl };
+    throw new NotFoundException('No recording for this call');
   }
 
   private outcomeFor(status: SalesCallOutcome): string {

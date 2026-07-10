@@ -104,6 +104,9 @@ export interface Lead {
   companyId?: string | null;
   contactPerson: string;
   phone?: string;
+  /** NetGSM SMS v2 Task 12 — stamped when a rep confirms a live SMS OTP sent
+   *  to `phone`; null/undefined = unverified. Cleared when `phone` is edited. */
+  phoneVerifiedAt?: string | null;
   whatsapp?: string;
   email?: string;
   address?: string;
@@ -372,7 +375,10 @@ export enum CallStatus {
 
 export interface SalesCall {
   id: string;
-  marketingUserId: string;
+  // Phase 3 Task 2 — nullable: an INBOUND call to an extension that doesn't
+  // match any MarketingUser.dahili has no rep to attribute it to (OUTBOUND
+  // calls always set this from the acting rep).
+  marketingUserId: string | null;
   marketingUser?: MarketingUserInfo;
   leadId?: string | null;
   direction: string;

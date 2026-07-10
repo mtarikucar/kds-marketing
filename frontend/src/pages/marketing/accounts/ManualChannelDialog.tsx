@@ -13,12 +13,23 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Field } from '@/components/ui/Field';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/Select';
 import marketingApi from '../../../features/marketing/api/marketingApi';
 import {
   SECRET_FIELDS,
   NEEDS_EXTERNAL_ID,
   SECRET_LABELS,
   SECRET_MASKED,
+  PUBLIC_FIELDS,
+  PUBLIC_LABELS,
+  PUBLIC_HELP,
+  PUBLIC_SELECT_OPTIONS,
   type ChannelType,
 } from '../channels/channelFields';
 
@@ -48,22 +59,30 @@ export function ManualChannelDialog({
   const [name, setName] = useState('');
   const [externalId, setExternalId] = useState('');
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [configPublic, setConfigPublic] = useState<Record<string, string>>({});
 
   // Reset the form whenever a different provider's dialog opens.
   useEffect(() => {
     setName('');
     setExternalId('');
     setSecrets({});
+    setConfigPublic({});
   }, [type]);
 
   const create = useMutation({
-    mutationFn: () =>
-      marketingApi.post('/channels', {
+    mutationFn: () => {
+      // Only post non-blank configPublic values — brandCode/iysDefault are
+      // optional at connect time (can be filled in later from the channel
+      // card), so an empty string must never overwrite anything server-side.
+      const publicEntries = Object.entries(configPublic).filter(([, v]) => v.trim());
+      return marketingApi.post('/channels', {
         type,
         name: name.trim(),
         externalId: externalId.trim() || undefined,
         secrets: Object.keys(secrets).length ? secrets : undefined,
-      }),
+        configPublic: publicEntries.length ? Object.fromEntries(publicEntries) : undefined,
+      });
+    },
     onSuccess: () => {
       onCreated();
       onOpenChange(false);
@@ -132,6 +151,41 @@ export function ManualChannelDialog({
                     onChange={(e) => setSecrets((s) => ({ ...s, [k]: e.target.value }))}
                   />
                 )}
+              </Field>
+            );
+          })}
+          {(PUBLIC_FIELDS[type] ?? []).map((k) => {
+            const label = PUBLIC_LABELS[k] ?? k;
+            const help = PUBLIC_HELP[k];
+            const options = PUBLIC_SELECT_OPTIONS[k];
+            return (
+              <Field key={k} label={label} hint={help}>
+                {({ id }) =>
+                  options ? (
+                    <Select
+                      value={configPublic[k] ?? options[0]?.value ?? ''}
+                      onValueChange={(v) => setConfigPublic((s) => ({ ...s, [k]: v }))}
+                    >
+                      <SelectTrigger id={id}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      id={id}
+                      placeholder={label}
+                      value={configPublic[k] ?? ''}
+                      onChange={(e) => setConfigPublic((s) => ({ ...s, [k]: e.target.value }))}
+                    />
+                  )
+                }
               </Field>
             );
           })}

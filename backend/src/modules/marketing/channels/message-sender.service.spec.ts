@@ -14,6 +14,7 @@ describe('MessageSenderService.send', () => {
   let quota: any;
   let outbox: any;
   let stream: any;
+  let conversationSpend: any;
   let adapter: any;
   let tx: any;
   let service: MessageSenderService;
@@ -42,8 +43,13 @@ describe('MessageSenderService.send', () => {
     quota = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
     outbox = { append: jest.fn().mockResolvedValue('evt-1') };
     stream = { push: jest.fn() };
-    service = new MessageSenderService(prisma, registry, quota, outbox, stream);
+    conversationSpend = { settleSms: jest.fn().mockResolvedValue({ amount: 1, quantity: 1, unitCost: 1 }) };
+    service = new MessageSenderService(prisma, registry, quota, outbox, stream, conversationSpend);
   });
+
+  // Let any fire-and-forget settleSms promise (and its .catch handler) drain
+  // before assertions run — `send()` does not await it.
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
 
   it('reserves, sends, persists message + outbox event in one tx, and does not refund', async () => {
     const msg = await service.send(input);
@@ -100,5 +106,35 @@ describe('MessageSenderService.send', () => {
       expect.objectContaining({ to: '+905551112233', text: 'hi', template, media }),
     );
     expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  describe('SMS settlement', () => {
+    it('settles the SMS cost with the message id + text after a successful send', async () => {
+      const msg = await service.send(input);
+      expect(conversationSpend.settleSms).toHaveBeenCalledWith('w1', { messageId: 'm1', text: 'hi' });
+      expect(msg).toEqual({ id: 'm1', status: 'SENT' });
+    });
+
+    it('does not settle a FAILED send', async () => {
+      adapter.send.mockResolvedValue({ externalMessageId: null, status: 'FAILED', error: 'NetGSM 30' });
+      tx.message.create.mockResolvedValue({ id: 'm2', status: 'FAILED' });
+      await service.send(input);
+      expect(conversationSpend.settleSms).not.toHaveBeenCalled();
+    });
+
+    it('does not settle a non-SMS channel', async () => {
+      prisma.channel.findFirst.mockResolvedValue({ ...channel, type: 'WHATSAPP' });
+      await service.send(input);
+      expect(conversationSpend.settleSms).not.toHaveBeenCalled();
+    });
+
+    it('[P0] a settlement failure is logged but never fails (or blocks) the send', async () => {
+      conversationSpend.settleSms.mockRejectedValue(new Error('tariff lookup failed'));
+      const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      const msg = await service.send(input);
+      expect(msg).toEqual({ id: 'm1', status: 'SENT' });
+      await flush();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('SMS settlement failed'));
+    });
   });
 });

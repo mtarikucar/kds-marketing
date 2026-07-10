@@ -149,7 +149,7 @@ export class SitesService {
       for (const d of defs) forms.set(d.id, d as any);
     }
     const branding = await this.branding.get(workspaceId);
-    return this.renderer.render(page, forms, publicBase, branding);
+    return this.renderer.render(page, forms, publicBase, { ...branding, workspaceId });
   }
 
   async draft(workspaceId: string, prompt: string): Promise<{ title: string; blocks: unknown[] }> {
@@ -207,6 +207,81 @@ export class SitesService {
     const res = await this.prisma.formDef.deleteMany({ where: { id, workspaceId } });
     if (res.count === 0) throw new NotFoundException('Form not found');
     return { message: 'Form deleted' };
+  }
+
+  /**
+   * Resolves the ONE callback target a public visitor is allowed to dial for
+   * this workspace — Final-review fix M2. Does double duty:
+   *
+   *  (1) OPT-IN GATE: `PublicSiteController`'s `POST /api/public/callback/:ws`
+   *      only serves a callback when this returns non-null — i.e. the tenant
+   *      has actually PUBLISHED a 'callback' block somewhere (the public
+   *      callback endpoint isn't live-by-default for every workspace just
+   *      because it exists in the code).
+   *  (2) TARGET BINDING: the returned `redirectMenu`/`redirectType` are what
+   *      the tenant's OWN block was configured with, never visitor/request-
+   *      body input — closing the "visitor dials an arbitrary PBX object"
+   *      hole.
+   *
+   * Scans, in order: every published SitePage's blocks directly, then every
+   * published Funnel's step pages (the step's underlying SitePage need not
+   * be independently `published` — mirrors `PageFunnelsService.render`'s own
+   * lookup, which never filters on the step page's own `published` flag,
+   * since the FUNNEL is the publish unit for a step page, not the page
+   * itself). Returns the FIRST eligible 'callback' block found (deterministic
+   * by `createdAt` ascending in each group) — a workspace configuring more
+   * than one live callback target is an edge case this resolves
+   * deterministically rather than rejecting; the guard/default logic here
+   * mirrors `SiteRendererService`'s own `callbackBlock()` render guard
+   * exactly, so "the widget renders" and "the widget's target is the one
+   * dialed" never disagree.
+   */
+  async resolvePublicCallbackTarget(
+    workspaceId: string,
+  ): Promise<{ redirectMenu: string; redirectType: 'queue' | 'ivr' | 'announcement' } | null> {
+    const fromBlocks = (blocks: unknown): { redirectMenu: string; redirectType: 'queue' | 'ivr' | 'announcement' } | null => {
+      const list = Array.isArray(blocks) ? blocks : [];
+      for (const b of list as any[]) {
+        const redirectMenu = typeof b?.redirectMenu === 'string' ? b.redirectMenu.trim() : '';
+        if (b?.type === 'callback' && redirectMenu) {
+          const redirectType = ['queue', 'ivr', 'announcement'].includes(b.redirectType) ? b.redirectType : 'queue';
+          return { redirectMenu, redirectType };
+        }
+      }
+      return null;
+    };
+
+    const pages = await this.prisma.sitePage.findMany({
+      where: { workspaceId, published: true },
+      select: { blocks: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const p of pages) {
+      const hit = fromBlocks(p.blocks);
+      if (hit) return hit;
+    }
+
+    const funnels = await this.prisma.funnel.findMany({
+      where: { workspaceId, published: true },
+      select: { steps: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const stepPageIds = new Set<string>();
+    for (const f of funnels) {
+      for (const s of Array.isArray(f.steps) ? (f.steps as any[]) : []) {
+        if (typeof s?.sitePageId === 'string' && s.sitePageId) stepPageIds.add(s.sitePageId);
+      }
+    }
+    if (stepPageIds.size === 0) return null;
+    const stepPages = await this.prisma.sitePage.findMany({
+      where: { workspaceId, id: { in: [...stepPageIds] } },
+      select: { blocks: true },
+    });
+    for (const p of stepPages) {
+      const hit = fromBlocks(p.blocks);
+      if (hit) return hit;
+    }
+    return null;
   }
 
   private slugify(s: string): string {

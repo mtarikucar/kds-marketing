@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BillingModule } from '../billing/billing.module';
+import { NetgsmModule } from '../netgsm/netgsm.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
@@ -73,15 +74,46 @@ import { SalesCallController } from './controllers/sales-call.controller';
 import { SalesCallService } from './services/sales-call.service';
 import { DialerController } from './controllers/dialer.controller';
 import { DialerService } from './services/dialer.service';
+// NetGSM Phase 5 Task 5 — parallel power-dialer ("parallel mode"), the
+// autocallservice-backed counterpart to DialerService's preview queue.
+import { AutocallDialerController } from './controllers/autocall-dialer.controller';
+import { AutocallDialerService } from './services/autocall-dialer.service';
+import { AutocallReportConsumer } from './campaigns/autocall-report.consumer';
 import { TelephonyProviderRegistry } from './telephony/telephony-provider.registry';
 import { NetgsmLiteAdapter } from './telephony/netgsm-lite.adapter';
 import { NetgsmApiAdapter } from './telephony/netgsm-api.adapter';
-import { NetsantralClient } from './telephony/netsantral.client';
 import { TelephonyConfigService } from './telephony/telephony-config.service';
-import { RecordingSyncService } from './telephony/recording-sync.service';
-import { NetgsmCdrClient } from './telephony/netgsm-cdr.client';
 import { CallCdrSyncService } from './telephony/call-cdr-sync.service';
+// NetGSM Phase 4 Task 2 — proxy-download call recordings into R2 (stable
+// storage, independent of the provider tokenized URL's longevity) + a daily
+// retention sweep that reclaims storage past the workspace's configured
+// recordingRetentionDays.
+import { RecordingIngestService } from './telephony/recording-ingest.service';
+import { RecordingRetentionService } from './telephony/recording-retention.service';
+// NetGSM Phase 3 Task 2 — telephony event consumer (subscribes
+// marketing.telephony.call_event.v1: INBOUND/missed SalesCalls + crm_id
+// correlation for OUTBOUND hangup/cdr).
+import { TelephonyEventConsumer } from './telephony/telephony-event.consumer';
+// NetGSM Phase 3 Task 3 — per-workspace SSE fan-out for screen-pop/call-status.
+import { TelephonyStreamService } from './telephony/telephony-stream.service';
 import { TelephonyConfigController, WebphoneConfigController } from './controllers/telephony-config.controller';
+import { TelephonyStreamController } from './controllers/telephony-stream.controller';
+// NetGSM Phase 3 Task 5 — in-call control (hangup/transfer/mute) over the
+// LIVE netsantral call, keyed by SalesCall.externalCallId.
+import { TelephonyControlController } from './controllers/telephony-control.controller';
+import { TelephonyControlService } from './services/telephony-control.service';
+// NetGSM Phase 4 Task 4 — queue wallboard (queuestats) + agent presence
+// (agentlogin/agentlogoff/agentpause), acting on the CALLING rep's own dahili.
+import { TelephonyQueueController } from './controllers/telephony-queue.controller';
+import { TelephonyQueueService } from './services/telephony-queue.service';
+import { TelephonyReportsController } from './controllers/telephony-reports.controller';
+import { TelephonyReportsService } from './services/telephony-reports.service';
+// NetGSM Phase 5 Task 6 — "leave your number, we call you now" callback
+// (dynamic_redirect); İYS ARAMA consent + brandcode is mandatory, fail-closed.
+import { TelephonyCallbackController } from './controllers/telephony-callback.controller';
+import { TelephonyCallbackService } from './services/telephony-callback.service';
+import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
+import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -112,6 +144,7 @@ import { MarketingChannelsController } from './controllers/marketing-channels.co
 import { WebchatPublicController } from './controllers/webchat-public.controller';
 import { MetaWebhookController } from './controllers/meta-webhook.controller';
 import { NetgsmPublicController } from './controllers/netgsm-public.controller';
+import { RecordingProxyController } from './controllers/recording-proxy.controller';
 import { SseTokenGuard } from './guards/sse-token.guard';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { ChannelAdapterRegistry } from './channels/channel-adapter.registry';
@@ -127,6 +160,10 @@ import { ConversationAiEngineService } from './channels/conversation-ai-engine.s
 import { PublicChannelResolverService } from './channels/public-channel-resolver.service';
 import { NetgsmReportClient } from './channels/netgsm-report.client';
 import { NetgsmDlrPollService } from './channels/netgsm-dlr-poll.service';
+import { NetgsmBlacklistSyncService } from './channels/netgsm-blacklist-sync.service';
+import { NetgsmMoPollService } from './channels/netgsm-mo-poll.service';
+import { NetgsmVoicemailPollService } from './channels/netgsm-voicemail-poll.service';
+import { NetgsmFaxPollService } from './channels/netgsm-fax-poll.service';
 import { WebchatAdapter } from './channels/adapters/webchat.adapter';
 import { WhatsappCloudAdapter } from './channels/adapters/whatsapp-cloud.adapter';
 import { NetgsmSmsAdapter } from './channels/adapters/netgsm-sms.adapter';
@@ -151,6 +188,16 @@ import { CampaignTrackingController } from './controllers/campaign-tracking.cont
 import { CampaignsService } from './campaigns/campaigns.service';
 import { CampaignSenderService } from './campaigns/campaign-sender.service';
 import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
+import { CampaignSmsStatsService } from './campaigns/campaign-sms-stats.service';
+// NetGSM Phase 5 Task 3 — voice-campaign report webhook consumer: writes
+// CampaignRecipient voiceState/pushButton/talkSec + press-1 keypress trigger.
+import { VoiceReportConsumer } from './campaigns/voice-report.consumer';
+// NetGSM Phase 5 Task 4 — POST /campaigns/voice/audio (.wav → audioid).
+import { VoiceAudioUploadService } from './campaigns/voice-audio-upload.service';
+// NetGSM Phase 6 Task 1 — POST /fax/send (PDF → NetGSM fax job), the
+// send-fax action surfaced on the lead/conversation views.
+import { FaxController } from './controllers/fax.controller';
+import { FaxSendService } from './campaigns/fax-send.service';
 
 // Phase F P5 — funnels/sites + forms + booking.
 import { MarketingSitesController } from './controllers/marketing-sites.controller';
@@ -280,7 +327,7 @@ import { RebillingService } from './services/rebilling.service';
 // P11 (GoHighLevel parity): env-gated social media planner (schedule + multi-network publish).
 import { SocialPlannerController } from './social-planner/social-planner.controller';
 import { SocialPlannerService } from './social-planner/social-planner.service';
-import { R2StorageService } from './social-planner/r2-storage.service';
+import { R2StorageService } from '../../common/storage/r2-storage.service';
 import { MarketingMediaController } from './controllers/marketing-media.controller';
 import { MarketingMediaWebhookController } from './controllers/marketing-media-webhook.controller';
 import { MediaGenService } from './ai/media/media-gen.service';
@@ -311,10 +358,17 @@ import { AttributionService } from './analytics/attribution.service';
 // Epic F (compliance) — GDPR/KVKK consent log + data subject requests.
 import { ComplianceController } from './compliance/compliance.controller';
 import { ComplianceService } from './compliance/compliance.service';
+// NetGSM Phase 2 Task 3 — İYS auto-push (consent writes -> İYS proof queue).
+import { IysSyncService } from './compliance/iys-sync.service';
+// NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (applies
+// İYS-originated ONAY/RET onto the matching lead's MARKETING_SMS consent).
+import { IysWebhookConsumer } from './compliance/iys-webhook.consumer';
 // Epic E — funnel A/B experiments + surveys.
-// Epic F — 2FA/MFA (TOTP).
+// Epic F — 2FA/MFA (TOTP + NetGSM SMS v2 Task 12's SMS factor).
 import { TwoFactorController } from './controllers/two-factor.controller';
 import { TwoFactorService } from './services/two-factor.service';
+// NetGSM SMS v2 Task 12 — shared OTP issue/verify (2FA-SMS + lead phone verify).
+import { SmsOtpService } from './services/sms-otp.service';
 // Epic B4 — Slack incoming-webhook notifications.
 import { SlackController } from './integrations/slack.controller';
 import { SlackService } from './integrations/slack.service';
@@ -430,6 +484,7 @@ import { WalletService } from './wallet/wallet.service';
     // Entitlements (lead quota, seat/profile limits, feature gates) +
     // the billing services the workspace-facing controller mounts.
     BillingModule,
+    NetgsmModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -489,8 +544,15 @@ import { WalletService } from './wallet/wallet.service';
     MarketingDistributionController,
     SalesCallController,
     DialerController,
+    AutocallDialerController,
     TelephonyConfigController,
     WebphoneConfigController,
+    TelephonyStreamController,
+    TelephonyControlController,
+    TelephonyQueueController,
+    TelephonyCallbackController,
+    TelephonyReportsController,
+    NetgsmOnboardingController,
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
@@ -504,9 +566,11 @@ import { WalletService } from './wallet/wallet.service';
     TiktokWebhookController,
     EmailWebhookController,
     NetgsmPublicController,
+    RecordingProxyController,
     MarketingWorkflowsController,
     MarketingCampaignsController,
     CampaignTrackingController,
+    FaxController,
     MarketingSitesController,
     MarketingBookingController,
     PublicSiteController,
@@ -630,14 +694,34 @@ import { WalletService } from './wallet/wallet.service';
     // Phase 2 telephony: sales-call log + single-line Netgsm provider.
     SalesCallService,
     DialerService,
+    // NetGSM Phase 5 Task 5 — parallel power-dialer service (registers the
+    // autocall.stream ScheduledJob handler on init) + its attempt-webhook
+    // consumer (registers its bus subscription on init).
+    AutocallDialerService,
+    AutocallReportConsumer,
     TelephonyProviderRegistry,
     NetgsmLiteAdapter,
     NetgsmApiAdapter,
-    NetsantralClient,
     TelephonyConfigService,
-    RecordingSyncService,
-    NetgsmCdrClient,
     CallCdrSyncService,
+    // NetGSM Phase 4 Task 2 — recording ingest (→ R2) + retention sweeps.
+    RecordingIngestService,
+    RecordingRetentionService,
+    // NetGSM Phase 3 Task 5 — in-call control (hangup/transfer/mute).
+    TelephonyControlService,
+    // NetGSM Phase 4 Task 4 — queue wallboard + agent presence.
+    TelephonyQueueService,
+    // NetGSM Phase 4 Task 5 — inbound call statistics dashboard.
+    TelephonyReportsService,
+    // NetGSM Phase 5 Task 6 — "call this number back now" (dynamic_redirect).
+    TelephonyCallbackService,
+    // NetGSM Phase 3 Task 2 — subscribes via DomainEventBus on init.
+    TelephonyEventConsumer,
+    // NetGSM Phase 3 Task 3 — per-workspace SSE fan-out (screen-pop, live
+    // call status), pushed to by TelephonyEventConsumer, read by
+    // TelephonyStreamController's GET /marketing/telephony/stream.
+    TelephonyStreamService,
+    NetgsmOnboardingService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
@@ -685,6 +769,23 @@ import { WalletService } from './wallet/wallet.service';
     // locked sweeper that resolves still-pending outbound SMS via the report API.
     NetgsmReportClient,
     NetgsmDlrPollService,
+    // Backup for the MO (inbound SMS) push webhook: hourly re-poll of NetGSM's
+    // inbox() so panel misconfiguration (wrong/missing callback URL) doesn't
+    // silently drop customer replies with no error visible to us.
+    NetgsmMoPollService,
+    // NetGSM Phase 4 Task 6 — voicemail (telesekreter) has no push webhook at
+    // all, so this hourly poll of /voicesms/receive IS the (only) path a
+    // voicemail reaches the shared inbox through, best-effort proxy-storing
+    // the recording into R2 and transcribing it for a text preview.
+    NetgsmVoicemailPollService,
+    // NetGSM Phase 6 Task 2 — fax has no push webhook either, so this hourly
+    // poll of /fax/receive IS the (only) path an inbound fax reaches the
+    // shared inbox through, gated on the fax + conversationAi entitlements
+    // (an active SMS channel alone does not imply either).
+    NetgsmFaxPollService,
+    // Blacklist sync (defense-in-depth): mirrors lead smsOptOut transitions
+    // onto NetGSM's account-level blacklist — subscribes via DomainEventBus.
+    NetgsmBlacklistSyncService,
     LinkedinEngagementPollService,
     SseTokenGuard,
     // Phase F P3 — workflow automation: the trigger listener + executor (each
@@ -698,6 +799,16 @@ import { WalletService } from './wallet/wallet.service';
     CampaignsService,
     CampaignSenderService,
     CampaignTrackingService,
+    // Slow reconciler (15-min tick): NetGSM per-jobid stats() rollups
+    // (delivered/undelivered/blacklist/iysNotValid/…) into campaign.stats.sms.
+    CampaignSmsStatsService,
+    // NetGSM Phase 5 Task 3 — voice-report webhook consumer (registers its
+    // bus subscription on init, like TelephonyEventConsumer/IysWebhookConsumer).
+    VoiceReportConsumer,
+    // NetGSM Phase 5 Task 4 — voice-campaign audio upload (.wav → audioid).
+    VoiceAudioUploadService,
+    // NetGSM Phase 6 Task 1 — send-fax action (PDF → NetGSM fax job).
+    FaxSendService,
     // Phase F P5 — funnels: page/form CRUD + AI draft, the safe block renderer,
     // public form submit, and booking (registers the booking.reminder handler).
     SitesService,
@@ -803,9 +914,17 @@ import { WalletService } from './wallet/wallet.service';
     AttributionService,
     // Epic F (compliance).
     ComplianceService,
+    // NetGSM Phase 2 Task 3 — İYS auto-push worker + enqueue helper.
+    IysSyncService,
+    // NetGSM Phase 2 Task 4 — İYS push-back webhook consumer (subscribes via
+    // DomainEventBus on init).
+    IysWebhookConsumer,
     // Epic E — funnel A/B + surveys.
-    // Epic F — 2FA.
+    // Epic F — 2FA (TOTP + SMS).
     TwoFactorService,
+    // NetGSM SMS v2 Task 12 — shared by TwoFactorService, MarketingAuthService
+    // (login SMS challenge) and MarketingLeadsService (lead phone verify).
+    SmsOtpService,
     // Epic B4 — Slack notify.
     SlackService,
     // Epic G — env-gated enterprise SSO (OIDC).

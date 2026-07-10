@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { OutboxService } from '../../outbox/outbox.service';
+import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
+import { IysSyncService } from '../compliance/iys-sync.service';
 
 /**
  * Resolves the unguessable per-recipient token behind open/click/unsubscribe
@@ -10,7 +13,13 @@ import { PrismaService } from '../../../prisma/prisma.service';
  */
 @Injectable()
 export class CampaignTrackingService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(CampaignTrackingService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly outbox: OutboxService,
+    private readonly iysSync: IysSyncService,
+  ) {}
 
   async open(token: string): Promise<void> {
     const r = await this.prisma.campaignRecipient.findUnique({ where: { token } });
@@ -58,7 +67,13 @@ export class CampaignTrackingService {
       select: { channel: true },
     });
     const field = campaign?.channel === 'EMAIL' ? 'emailOptOut' : campaign?.channel === 'SMS' ? 'smsOptOut' : 'waOptOut';
-    await this.prisma.lead.updateMany({ where: { id: r.leadId, workspaceId: r.workspaceId }, data: { [field]: true } });
+    if (field === 'smsOptOut') {
+      // The flip + the follow-on blacklist-sync event both happen inside
+      // emitSmsOptOutEvent's own transaction (see its docstring).
+      await this.emitSmsOptOutEvent(r.workspaceId, r.leadId, r.id);
+    } else {
+      await this.prisma.lead.updateMany({ where: { id: r.leadId, workspaceId: r.workspaceId }, data: { [field]: true } });
+    }
     if (r.status !== 'UNSUBSCRIBED') {
       // Race-safe claim: only the first hit flips the status + counts (the opt-out
       // above is idempotent and always runs, so consent is honored regardless).
@@ -69,6 +84,79 @@ export class CampaignTrackingService {
       if (claim.count === 1) await this.bump(r.campaignId, 'unsubscribed');
     }
     return true;
+  }
+
+  /**
+   * Flips the lead's smsOptOut flag and mirrors the unsubscribe onto
+   * NetgsmBlacklistSyncService via the outbox (defense-in-depth NetGSM
+   * account-blacklist sync — see that service's docstring), both inside ONE
+   * $transaction — the standard outbox idiom used by every other producer in
+   * this codebase (state write + event insert atomic together when the
+   * append succeeds). Keyed on the recipient row id so a retried/duplicate
+   * POST of the SAME unsubscribe click collapses into one outbox row.
+   *
+   * The one difference from those producers: this event is best-effort — the
+   * opt-out flag itself is the durable compliance record; the blacklist sync
+   * is only defense-in-depth — so a failure reading the lead's phone OR
+   * appending the event must NEVER fail the request, undo the flip, or skip
+   * the UNSUBSCRIBED status bump that runs right after this call returns. A
+   * plain try/catch around those two steps is NOT enough to protect the
+   * flip: Postgres aborts the WHOLE transaction the instant any statement
+   * inside it errors, and Prisma silently turns the eventual COMMIT into a
+   * no-op ROLLBACK even when the JS error was caught (verified empirically
+   * against a real Postgres instance — a caught inner error still discarded
+   * every earlier write in the same interactive transaction). The SAVEPOINT
+   * below isolates the read+append: on failure, only that sub-scope rolls
+   * back and the flip commits normally.
+   *
+   * Phase 2 Task 3 (İYS auto-push) adds a SECOND, INDEPENDENT savepoint block
+   * right after this one that enqueues an IysSyncJob (direction RET — a
+   * public unsubscribe is always an opt-out) via IysSyncService — its own
+   * savepoint (not shared with the blacklist-mirror block above) so a
+   * failure in EITHER best-effort mirror can never take down the other, and
+   * neither can ever touch the smsOptOut flip or the UNSUBSCRIBED status
+   * bump that runs right after this call returns.
+   */
+  private async emitSmsOptOutEvent(workspaceId: string, leadId: string, recipientId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.lead.updateMany({ where: { id: leadId, workspaceId }, data: { smsOptOut: true } });
+      await tx.$executeRawUnsafe('SAVEPOINT sp_sms_optout_event');
+      try {
+        const lead = await tx.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+        if (lead?.phone) {
+          await this.outbox.append(
+            {
+              type: MarketingEventTypes.SmsOptedOut,
+              tenantId: null,
+              payload: { workspaceId, leadId, phone: lead.phone } satisfies MarketingSmsOptStatusPayload,
+              idempotencyKey: `${workspaceId}:${leadId}:${MarketingEventTypes.SmsOptedOut}:unsub:${recipientId}`,
+            },
+            tx,
+          );
+        }
+        await tx.$executeRawUnsafe('RELEASE SAVEPOINT sp_sms_optout_event');
+      } catch (e: any) {
+        await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_sms_optout_event');
+        this.logger.warn(`Failed to enqueue ${MarketingEventTypes.SmsOptedOut} for lead=${leadId}: ${e?.message ?? e}`);
+      }
+
+      await tx.$executeRawUnsafe('SAVEPOINT sp_iys_enqueue');
+      try {
+        const lead = await tx.lead.findUnique({ where: { id: leadId }, select: { phone: true } });
+        await this.iysSync.enqueueConsent(tx, {
+          workspaceId,
+          leadId,
+          recipient: lead?.phone,
+          direction: 'RET',
+          source: 'HS_MESAJ',
+          consentAt: new Date(),
+        });
+        await tx.$executeRawUnsafe('RELEASE SAVEPOINT sp_iys_enqueue');
+      } catch (e: any) {
+        await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sp_iys_enqueue');
+        this.logger.warn(`Failed to enqueue İYS sync job for lead=${leadId}: ${e?.message ?? e}`);
+      }
+    });
   }
 
   /**

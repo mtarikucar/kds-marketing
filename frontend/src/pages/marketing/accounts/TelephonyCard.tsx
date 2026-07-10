@@ -6,8 +6,10 @@ import { Phone, PhoneCall } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Switch } from '@/components/ui/Switch';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Callout, type CalloutTone } from '@/components/ui/Callout';
 import {
   Dialog,
   DialogContent,
@@ -25,6 +27,11 @@ interface TelephonyConfigView {
   wssUrl?: string | null;
   sipDomain?: string | null;
   configuredSecrets: string[];
+  recordCalls?: boolean;
+  recordingRetentionDays?: number | null;
+  /** NetGSM Phase 6 Task 4 — true once the workspace has saved a Netasistan
+   *  app-key + user-key pair (never the values themselves). */
+  netasistanConfigured?: boolean;
 }
 interface Rep {
   id: string;
@@ -33,6 +40,24 @@ interface Rep {
   email: string;
   phone?: string | null;
   dahili?: string | null;
+  /** NetGSM Phase 6 Task 4 — this rep's opt-in to also sync their
+   *  available/break presence toggle to Netasistan. */
+  netasistanOptIn?: boolean;
+}
+
+interface BalanceResult {
+  ok: boolean;
+  /** true = NetGSM authenticated the creds; false = rejected; null = couldn't reach NetGSM. */
+  credsValid: boolean | null;
+  code: string | null;
+  credit: string | null;
+  packages: Array<{ name: string; remaining: string | null }>;
+  message: string | null;
+}
+interface VerifyResult {
+  configured: boolean;
+  balance: BalanceResult | null;
+  cdr: { httpStatus: number; body: unknown } | { skipped: string } | { error: string };
 }
 
 const telephonyKey = ['marketing', 'telephony', 'config'] as const;
@@ -114,6 +139,90 @@ export function TelephonyCard() {
   );
 }
 
+/**
+ * True only when the CDR leg genuinely confirmed (an httpStatus 2xx AND no
+ * NetGSM error `code` in the body) — see the CDR-note fix note below for why
+ * `'httpStatus' in cdr` alone is not sufficient.
+ */
+function cdrConfirmedOk(cdr: VerifyResult['cdr']): boolean {
+  if (!cdr || !('httpStatus' in cdr)) return false; // {skipped}/{error} — transport-level failure
+  const { httpStatus, body } = cdr;
+  if (httpStatus < 200 || httpStatus >= 300) return false;
+  const errorCode = body && typeof body === 'object' ? (body as Record<string, unknown>).code : undefined;
+  return errorCode == null;
+}
+
+/**
+ * Disambiguate the /telephony/verify response into a tone + localized headline
+ * + optional secondary detail line:
+ * - The headline ALWAYS comes from an i18n key — `balance.message` is a raw
+ *   provider string (from the backend's netgsm-error map) that is always in
+ *   Turkish, regardless of the viewer's locale, so it must never displace the
+ *   localized copy as the primary message.
+ * - `balance.message`, when present, is still useful diagnostics, so it's
+ *   rendered underneath as a smaller secondary `detail` line instead.
+ * - `configured === false` (no Netsantral credentials saved yet) gets its own
+ *   distinct copy instead of folding into the generic "unreachable" bucket.
+ * - The /balance probe is the real credential check (works from any IP); the
+ *   CDR leg is only ever reachable from NetGSM's allow-listed prod IP, so its
+ *   absence is expected almost everywhere except production and gets its own
+ *   informational note rather than being folded into the main verdict.
+ *
+ * CDR-note fix (Phase-0 deferral, NetGSM Phase 3 Task 6): `cdr.testFetch`
+ * (backend `CallCdrSyncService.testFetch` -> `NetgsmCdrClient.fetchRaw`)
+ * ALWAYS returns `{httpStatus, body}` as long as NetGSM's server answered at
+ * all — including a pre-auth rejection off-prod, which NetGSM returns as
+ * HTTP 200 with an error envelope `{code: "30", error: "..."}` in the body
+ * (see `netgsm-cdr.client.ts`'s own comment on that envelope shape). So
+ * `'httpStatus' in cdr` alone is NOT proof the CDR leg actually authenticated
+ * — it only proves the transport didn't fail. The note must also show
+ * whenever the body carries a NetGSM error `code`, or the HTTP status itself
+ * isn't 2xx.
+ */
+function describeVerifyResult(
+  result: VerifyResult,
+  t: (key: string, fallback: string) => string,
+): { tone: CalloutTone; message: string; detail: string | null; showCdrNote: boolean } {
+  if (!result.configured) {
+    return {
+      tone: 'warning',
+      message: t('accounts.tel.verify.notConfigured', 'Save your Netsantral credentials first, then verify.'),
+      detail: null,
+      showCdrNote: false,
+    };
+  }
+
+  const credsValid = result.balance?.credsValid ?? null;
+  const showCdrNote = !cdrConfirmedOk(result.cdr);
+  const detail = result.balance?.message || null;
+
+  if (credsValid === true) {
+    const credit = result.balance?.credit;
+    return {
+      tone: 'success',
+      message:
+        t('accounts.tel.verify.ok', 'Credentials verified with NetGSM') +
+        (credit ? ` — ${credit} TL` : ''),
+      detail: null,
+      showCdrNote,
+    };
+  }
+  if (credsValid === false) {
+    return {
+      tone: 'danger',
+      message: t('accounts.tel.verify.badCreds', 'NetGSM rejected these credentials'),
+      detail,
+      showCdrNote,
+    };
+  }
+  return {
+    tone: 'warning',
+    message: t('accounts.tel.verify.unreachable', "Couldn't reach NetGSM — try again in a moment"),
+    detail,
+    showCdrNote,
+  };
+}
+
 function TelephonyDialog({
   cfg,
   onOpenChange,
@@ -129,6 +238,16 @@ function TelephonyDialog({
   const [trunk, setTrunk] = useState(cfg?.trunk ?? '');
   const [wssUrl, setWssUrl] = useState(cfg?.wssUrl ?? '');
   const [sipDomain, setSipDomain] = useState(cfg?.sipDomain ?? '');
+  const [recordCalls, setRecordCalls] = useState(cfg?.recordCalls ?? false);
+  // Empty string = "keep forever" (recordingRetentionDays: null); a positive
+  // integer = days to retain before the retention sweep deletes the object.
+  const [recordingRetentionDays, setRecordingRetentionDays] = useState(
+    cfg?.recordingRetentionDays != null ? String(cfg.recordingRetentionDays) : '',
+  );
+  // NetGSM Phase 6 Task 4 — Netasistan workspace app-key/user-key (sealed;
+  // same "leave blank to keep" convention as the santral username/password above).
+  const [netasistanAppKey, setNetasistanAppKey] = useState('');
+  const [netasistanUserKey, setNetasistanUserKey] = useState('');
 
   const { data: reps } = useQuery<Rep[]>({
     queryKey: ['marketing', 'users'],
@@ -139,6 +258,8 @@ function TelephonyDialog({
     setTrunk(cfg?.trunk ?? '');
     setWssUrl(cfg?.wssUrl ?? '');
     setSipDomain(cfg?.sipDomain ?? '');
+    setRecordCalls(cfg?.recordCalls ?? false);
+    setRecordingRetentionDays(cfg?.recordingRetentionDays != null ? String(cfg.recordingRetentionDays) : '');
   }, [cfg]);
 
   const save = useMutation({
@@ -151,21 +272,36 @@ function TelephonyDialog({
         trunk: trunk.trim() || undefined,
         wssUrl: wssUrl.trim() || undefined,
         sipDomain: sipDomain.trim() || undefined,
+        recordCalls,
+        recordingRetentionDays: recordingRetentionDays.trim() ? Number(recordingRetentionDays) : null,
+        ...((netasistanAppKey.trim() || netasistanUserKey.trim()) && {
+          netasistan: {
+            ...(netasistanAppKey.trim() ? { appKey: netasistanAppKey.trim() } : {}),
+            ...(netasistanUserKey.trim() ? { userKey: netasistanUserKey.trim() } : {}),
+          },
+        }),
       }),
     onSuccess: () => {
       onSaved();
       setUsername('');
       setPassword('');
+      setNetasistanAppKey('');
+      setNetasistanUserKey('');
       toast.success(t('accounts.tel.saved', 'Telephony saved'));
     },
     onError: (e: any) => toast.error(e?.response?.data?.message || t('accounts.tel.saveFailed', 'Could not save')),
   });
 
-  const test = useMutation({
-    mutationFn: () => marketingApi.post('/telephony/cdr/test', {}),
-    onSuccess: () => toast.success(t('accounts.tel.testOk', 'Credentials verified with NetGSM')),
-    onError: (e: any) => toast.error(e?.response?.data?.message || t('accounts.tel.testFailed', 'Verification failed — check the credentials')),
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+  const verify = useMutation({
+    mutationFn: () => marketingApi.post<VerifyResult>('/telephony/verify', {}),
+    onSuccess: (res) => setVerifyResult(res.data),
+    onError: (e: any) => {
+      setVerifyResult(null);
+      toast.error(e?.response?.data?.message || t('accounts.tel.testFailed', 'Verification failed — check the credentials'));
+    },
   });
+  const outcome = verifyResult ? describeVerifyResult(verifyResult, t) : null;
 
   const hasUser = cfg?.configuredSecrets?.includes('username');
   const hasPass = cfg?.configuredSecrets?.includes('password');
@@ -205,10 +341,81 @@ function TelephonyDialog({
             <Input aria-label={t('accounts.tel.sipDomain', 'SIP domain')} placeholder="sip5.netsantral.com" value={sipDomain} onChange={(e) => setSipDomain(e.target.value)} />
           </section>
 
+          <section className="space-y-2 border-t border-border pt-3">
+            <p className="text-sm font-medium text-foreground">{t('accounts.tel.recording.title', 'Call recording')}</p>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border p-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">{t('accounts.tel.recording.toggle', 'Record calls')}</p>
+                <p className="text-caption text-muted-foreground">{t('accounts.tel.recording.toggleHint', 'Off by default. Applies to new calls placed after this is enabled.')}</p>
+              </div>
+              <Switch
+                aria-label={t('accounts.tel.recording.toggle', 'Record calls')}
+                checked={recordCalls}
+                onCheckedChange={setRecordCalls}
+              />
+            </div>
+            <Callout tone="warning">
+              <p>{t('accounts.tel.recording.kvkkNote', 'Recording requires a caller announcement by law (KVKK).')}</p>
+            </Callout>
+            <Input
+              type="number"
+              min={1}
+              aria-label={t('accounts.tel.recording.retention', 'Retention (days) — leave blank to keep forever')}
+              placeholder={t('accounts.tel.recording.retention', 'Retention (days) — leave blank to keep forever')}
+              value={recordingRetentionDays}
+              onChange={(e) => setRecordingRetentionDays(e.target.value)}
+            />
+          </section>
+
+          <section className="space-y-2 border-t border-border pt-3">
+            <p className="text-sm font-medium text-foreground">{t('accounts.tel.netasistan.title', 'Netasistan (agent self-service)')}</p>
+            <p className="text-caption text-muted-foreground">
+              {t(
+                'accounts.tel.netasistan.hint',
+                'Only for workspaces that also run Netasistan alongside Netsantral. Lets each rep who opts in sync their own available/break toggle to Netasistan too.',
+              )}
+            </p>
+            <Input
+              aria-label={t('accounts.tel.netasistan.appKey', 'Netasistan app-key')}
+              placeholder={
+                cfg?.netasistanConfigured
+                  ? t('accounts.tel.netasistan.appKeySet', 'Netasistan app-key (saved — leave blank to keep)')
+                  : t('accounts.tel.netasistan.appKey', 'Netasistan app-key')
+              }
+              value={netasistanAppKey}
+              onChange={(e) => setNetasistanAppKey(e.target.value)}
+            />
+            <Input
+              type="password"
+              aria-label={t('accounts.tel.netasistan.userKey', 'Netasistan user-key')}
+              placeholder={
+                cfg?.netasistanConfigured
+                  ? t('accounts.tel.netasistan.userKeySet', 'Netasistan user-key (saved — leave blank to keep)')
+                  : t('accounts.tel.netasistan.userKey', 'Netasistan user-key')
+              }
+              value={netasistanUserKey}
+              onChange={(e) => setNetasistanUserKey(e.target.value)}
+            />
+          </section>
+
           <div className="flex gap-2">
             <Button onClick={() => save.mutate()} loading={save.isPending}>{t('common.save', 'Save')}</Button>
-            <Button variant="outline" onClick={() => test.mutate()} loading={test.isPending}>{t('accounts.tel.test', 'Verify credentials')}</Button>
+            <Button variant="outline" onClick={() => verify.mutate()} loading={verify.isPending}>{t('accounts.tel.test', 'Verify credentials')}</Button>
           </div>
+
+          {outcome && (
+            <Callout tone={outcome.tone}>
+              <p>{outcome.message}</p>
+              {outcome.detail && (
+                <p className="text-caption text-muted-foreground">{outcome.detail}</p>
+              )}
+              {outcome.showCdrNote && (
+                <p className="text-caption text-muted-foreground">
+                  {t('accounts.tel.verify.cdrProdOnly', 'Call log (CDR) can only be confirmed from the production server IP')}
+                </p>
+              )}
+            </Callout>
+          )}
 
           <section className="space-y-2 border-t border-border pt-3">
             <p className="text-sm font-medium text-foreground">{t('accounts.tel.reps', 'Who can call')}</p>
@@ -217,7 +424,7 @@ function TelephonyDialog({
             </p>
             <div className="space-y-1.5">
               {(reps ?? []).map((r) => (
-                <RepRow key={r.id} rep={r} onSaved={onSaved} />
+                <RepRow key={r.id} rep={r} onSaved={onSaved} netasistanAvailable={!!cfg?.netasistanConfigured} />
               ))}
             </div>
           </section>
@@ -231,11 +438,22 @@ function TelephonyDialog({
   );
 }
 
-function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
+function RepRow({
+  rep,
+  onSaved,
+  netasistanAvailable,
+}: {
+  rep: Rep;
+  onSaved: () => void;
+  /** NetGSM Phase 6 Task 4 — true once the workspace has saved Netasistan
+   *  app-key/user-key; the per-rep opt-in only makes sense once that's true. */
+  netasistanAvailable: boolean;
+}) {
   const { t } = useTranslation('marketing');
   const [phone, setPhone] = useState(rep.phone ?? '');
   const [dahili, setDahili] = useState(rep.dahili ?? '');
   const [sipPassword, setSipPassword] = useState('');
+  const [netasistanOptIn, setNetasistanOptIn] = useState(rep.netasistanOptIn ?? false);
 
   const save = useMutation({
     mutationFn: () =>
@@ -243,6 +461,7 @@ function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
         phone: phone.trim() || null,
         dahili: dahili.trim() || null,
         ...(sipPassword ? { sipPassword } : {}),
+        netasistanOptIn,
       }),
     onSuccess: () => {
       onSaved();
@@ -268,6 +487,21 @@ function RepRow({ rep, onSaved }: { rep: Rep; onSaved: () => void }) {
         <Input className="w-20 shrink-0" aria-label={t('accounts.tel.dahiliFor', { defaultValue: 'Dahili for {{name}}', name })} placeholder={t('accounts.tel.dahili', 'Dahili')} value={dahili} onChange={(e) => setDahili(e.target.value)} />
         <Input className="min-w-0 flex-1 basis-28" type="password" aria-label={t('accounts.tel.sipFor', { defaultValue: 'SIP password for {{name}}', name })} placeholder={t('accounts.tel.sip', 'SIP pass')} value={sipPassword} onChange={(e) => setSipPassword(e.target.value)} />
       </div>
+      {netasistanAvailable && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border p-2">
+          <div className="min-w-0">
+            <p className="text-sm text-foreground">{t('accounts.tel.netasistan.optIn', 'Sync my presence to Netasistan')}</p>
+            <p className="text-caption text-muted-foreground">
+              {t('accounts.tel.netasistan.optInHint', 'Also toggles this rep on Netasistan when they go available/on break here.')}
+            </p>
+          </div>
+          <Switch
+            aria-label={`${t('accounts.tel.netasistan.optIn', 'Sync my presence to Netasistan')} — ${name}`}
+            checked={netasistanOptIn}
+            onCheckedChange={setNetasistanOptIn}
+          />
+        </div>
+      )}
     </div>
   );
 }

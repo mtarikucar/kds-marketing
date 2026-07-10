@@ -1,5 +1,23 @@
-import { Phone, Mail, MapPin, MessageCircle } from 'lucide-react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
+import { Phone, Mail, MapPin, MessageCircle, ShieldCheck, ShieldQuestion } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import {
+  Button,
+  Field,
+  Input,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  Badge,
+} from '@/components/ui';
+import { useEntitlements } from '../../../features/marketing/hooks/useEntitlements';
+import { verifyLeadPhoneStart, verifyLeadPhoneConfirm } from '../../../features/marketing/api/leads.service';
 import {
   BUSINESS_TYPE_LABELS,
   LEAD_SOURCE_LABELS,
@@ -14,6 +32,132 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 interface ContactInfoProps {
   lead: DetailLead;
   fmtDate: (d: string | Date | null | undefined) => string;
+}
+
+function apiErrorMessage(e: unknown, fallback: string): string {
+  const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data
+    ?.message;
+  if (Array.isArray(msg)) return msg[0];
+  return msg ?? fallback;
+}
+
+/**
+ * NetGSM SMS v2 Task 12 — "Verify phone" for a lead's phone number, behind
+ * the `smsOtp` add-on. Texts a 6-digit code (SmsOtpService) on open; the
+ * dialog's confirm step stamps `lead.phoneVerifiedAt` on success. Hidden
+ * entirely when the workspace isn't entitled (no add-on purchased) or the
+ * lead has no phone on file; once verified, the button is replaced by a
+ * static "Verified" badge (re-editing the phone clears the stamp server-side).
+ */
+function VerifyPhoneControl({ lead }: { lead: DetailLead }) {
+  const { t } = useTranslation('marketing');
+  const { has } = useEntitlements();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState('');
+
+  const startMutation = useMutation({
+    mutationFn: () => verifyLeadPhoneStart(lead.id),
+    onSuccess: () => {
+      setCode('');
+      setOpen(true);
+    },
+    onError: (e) =>
+      toast.error(
+        apiErrorMessage(e, t('leadDetail.verifyPhone.sendError', { defaultValue: 'Could not send the code' })),
+      ),
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: () => verifyLeadPhoneConfirm(lead.id, code),
+    onSuccess: () => {
+      setOpen(false);
+      setCode('');
+      qc.invalidateQueries({ queryKey: ['marketing', 'lead', lead.id] });
+      toast.success(t('leadDetail.verifyPhone.verified', { defaultValue: 'Phone number verified' }));
+    },
+    onError: (e) =>
+      toast.error(
+        apiErrorMessage(e, t('leadDetail.verifyPhone.invalidCode', { defaultValue: 'Invalid code' })),
+      ),
+  });
+
+  if (!has('smsOtp') || !lead.phone) return null;
+
+  if (lead.phoneVerifiedAt) {
+    return (
+      <Badge tone="success" className="gap-1">
+        <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('leadDetail.verifyPhone.badge', { defaultValue: 'Verified' })}
+      </Badge>
+    );
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        loading={startMutation.isPending}
+        onClick={() => startMutation.mutate()}
+      >
+        <ShieldQuestion className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('leadDetail.verifyPhone.button', { defaultValue: 'Verify phone' })}
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('leadDetail.verifyPhone.dialogTitle', { defaultValue: 'Verify phone number' })}</DialogTitle>
+            <DialogDescription>
+              {t('leadDetail.verifyPhone.dialogDesc', {
+                defaultValue: 'We texted a 6-digit code to {{phone}}. Enter it below to confirm this number.',
+                phone: lead.phone,
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <Field
+            label={t('leadDetail.verifyPhone.codeLabel', { defaultValue: 'Verification code' })}
+            required
+          >
+            {({ id, describedBy, invalid }) => (
+              <Input
+                id={id}
+                aria-describedby={describedBy}
+                aria-invalid={invalid}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="123456"
+                className="max-w-[12rem]"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            )}
+          </Field>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={startMutation.isPending}
+              onClick={() => startMutation.mutate()}
+            >
+              {t('leadDetail.verifyPhone.resend', { defaultValue: 'Resend code' })}
+            </Button>
+            <Button
+              type="button"
+              loading={confirmMutation.isPending}
+              disabled={code.trim().length === 0}
+              onClick={() => confirmMutation.mutate()}
+            >
+              {t('leadDetail.verifyPhone.confirm', { defaultValue: 'Confirm' })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 /**
@@ -38,6 +182,7 @@ export default function ContactInfo({ lead, fmtDate }: ContactInfoProps) {
               <a href={`tel:${lead.phone}`} className="text-primary hover:underline">
                 {lead.phone}
               </a>
+              <VerifyPhoneControl lead={lead} />
             </div>
           )}
           {lead.whatsapp && (

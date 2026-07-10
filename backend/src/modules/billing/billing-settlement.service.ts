@@ -15,6 +15,19 @@ const ADDON_GRANTS: Record<string, Record<string, number>> = {
   // into the monthly meters (entitlements.service.ts), -1 packages absorb them.
   ai_credit_boost_500: { 'limit.aiCreditsMonthly': 500 },
   messages_boost_1000: { 'limit.messagesMonthly': 1000 },
+  // NetGSM SMS v2 Task 12 — `feature.*` grants OR onto the package's feature
+  // map (entitlements.service.ts) regardless of any workspace module
+  // customization (`smsOtp` is deliberately excluded from
+  // TOGGLEABLE_MODULE_KEYS — see entitlements.service.ts).
+  sms_otp_package: { 'feature.smsOtp': 1 },
+  // NetGSM Phase 5 Task 1 — unlike smsOtp, `voiceCampaigns` IS a toggleable
+  // module (TOGGLEABLE_MODULE_KEYS does NOT exclude it, since SCALE/OPERATOR
+  // grant it via the plan already) — this add-on just ALSO ORs it on for
+  // lower tiers, same `feature.*` mechanism.
+  voice_campaigns_package: { 'feature.voiceCampaigns': 1 },
+  // NetGSM Phase 6 Task 1 — same `feature.*` OR mechanism: unlocks `fax` for
+  // any workspace below OPERATOR (which already grants it via the plan).
+  fax_package: { 'feature.fax': 1 },
 };
 
 /**

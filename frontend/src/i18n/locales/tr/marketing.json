@@ -23,7 +23,8 @@
       "sources": "Lead Kaynakları",
       "regional": "Bölgesel",
       "conversion": "Dönüşüm",
-      "performance": "Performans"
+      "performance": "Performans",
+      "calls": "Aramalar"
     },
     "col": {
       "source": "Kaynak",
@@ -175,6 +176,13 @@
       "saveFailed": "Kaydedilemedi",
       "testOk": "Kimlik bilgileri NetGSM ile doğrulandı",
       "testFailed": "Doğrulama başarısız oldu — kimlik bilgilerini kontrol edin",
+      "verify": {
+        "ok": "Kimlik bilgileri NetGSM ile doğrulandı",
+        "badCreds": "NetGSM kimlik bilgilerini reddetti",
+        "unreachable": "NetGSM'e ulaşılamadı — bir süre sonra tekrar deneyin",
+        "notConfigured": "Önce Netsantral kimlik bilgilerinizi kaydedin, ardından doğrulayın.",
+        "cdrProdOnly": "Çağrı kayıtları (CDR) yalnızca üretim sunucusunun IP'sinden doğrulanabilir"
+      },
       "dialogDesc": "NetGSM Netsantral API kimlik bilgilerinizi ve 0850 trunk'ını girin. Tarayıcı içi webphone için WebRTC URL'lerini ekleyin ve aşağıda her temsilciye bir telefon veya dahili tanımlayın.",
       "username": "NetGSM kullanıcı adı (abone no)",
       "usernameSet": "NetGSM kullanıcı adı (kaydedildi — korumak için boş bırakın)",
@@ -189,7 +197,24 @@
       "sip": "SIP parolası",
       "phoneFor": "{{name}} için telefon",
       "dahiliFor": "{{name}} için dahili",
-      "sipFor": "{{name}} için SIP parolası"
+      "sipFor": "{{name}} için SIP parolası",
+      "recording": {
+        "title": "Görüşme kaydı",
+        "toggle": "Görüşmeleri kaydet",
+        "toggleHint": "Varsayılan olarak kapalı. Yalnızca bu ayar açıldıktan sonra başlatılan görüşmelere uygulanır.",
+        "kvkkNote": "Görüşme kaydı için karşı tarafa anons yapılması yasal zorunluluktur (KVKK).",
+        "retention": "Saklama süresi (gün) — süresiz saklamak için boş bırakın"
+      },
+      "netasistan": {
+        "title": "Netasistan (temsilci self-servis)",
+        "hint": "Yalnızca Netsantral'in yanında Netasistan da kullanan çalışma alanları için. Katılım sağlayan her temsilcinin kendi müsait/mola durumunu Netasistan'a da eşitler.",
+        "appKey": "Netasistan app-key",
+        "appKeySet": "Netasistan app-key (kaydedildi — korumak için boş bırakın)",
+        "userKey": "Netasistan user-key",
+        "userKeySet": "Netasistan user-key (kaydedildi — korumak için boş bırakın)",
+        "optIn": "Durumumu Netasistan'a eşitle",
+        "optInHint": "Bu temsilci burada müsait/mola durumunu değiştirdiğinde Netasistan'da da eşitler."
+      }
     },
     "voice": {
       "title": "AI Sesli",
@@ -203,6 +228,48 @@
       "bridgeUrl": "Custom-LLM köprü URL'si ({channelId} yerine Ses kanalınızın id'sini yazın)",
       "ivrUrl": "NetGSM IVR webhook URL'si",
       "opsNote": "Bunlar devreye girmeden önce bir yöneticinin VOICE_AI_BRIDGE_SECRET değerini ayarlaması (ve aramalar için NetGSM SIP-trunk / AI eklentisini sağlaması) gerekir."
+    },
+    "netgsm": {
+      "title": "NetGSM Kurulum Kontrol Listesi",
+      "subtitle": "NetGSM'in kendi panelinde yapman gereken manuel adımlar — mümkün olan yerde canlı bir kontrolle.",
+      "smsChannel": "SMS kanalı bağlı",
+      "smsCredsLive": "SMS kimlik bilgileri canlı doğrulandı",
+      "moUrl": "Gelen (MO) callback URL'si",
+      "telephonyConfig": "Netsantral telefon sistemi yapılandırıldı",
+      "santralCredsLive": "Netsantral kimlik bilgileri canlı doğrulandı",
+      "repsWithDahili": "Dahili tanımlı temsilciler",
+      "eventsWebhookUrl": "Olay webhook URL'si",
+      "eventsWebhookReceiving": "Santral olayları alınıyor",
+      "otpPackage": "SMS OTP paketi",
+      "senderHeaders": "Gönderici başlığı İYS onaylı",
+      "iysWebhook": "İYS geri bildirim webhook'u kayıtlı",
+      "iysBrandCode": "İYS marka kodu tanımlı",
+      "iysFirstSync": "İlk İYS onay senkronizasyonu tamamlandı",
+      "recordingStorage": "Çağrı kaydı depolama (R2) yapılandırıldı",
+      "recordingsReceiving": "Kayıtlar depolanıyor",
+      "voicePackage": "Sesli SMS / Otomatik Arama paketi",
+      "voiceReportWebhook": "Sesli kampanya sonuç bildirimi webhook URL'si",
+      "autocallQueue": "Oturum açmış temsilcili Netsantral kuyruğu",
+      "faxNumber": "Faks özellikli NetGSM numarası",
+      "whatsappOtpPackage": "WhatsApp OTP paketi",
+      "netasistanKeys": "Netasistan app-key / user-key tanımlı",
+      "repsCount": "{{count}} temsilcide dahili tanımlı",
+      "detail": {
+        "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
+        "noSantralConfig": "Henüz kontrol edilmedi — Netsantral kimlik bilgisi kayıtlı değil",
+        "eventsWebhookHint": "Netsantral panel > Ayarlar > Genel Ayarlar > API Talep Ayarları'na yapıştırın",
+        "otpPackageHint": "Gerçek bir kod gönderilmeden kontrol edilemez — OTP gönderimleri NetGSM hata 60 ile başarısız oluyorsa, bu NetGSM hesabında OTP paketi henüz aktif değildir.",
+        "headersUnavailable": "Henüz kontrol edilemedi — SMS kanalında kayıtlı bir gönderici başlığı yok ya da NetGSM'in onaylı başlık listesi şu an alınamıyor.",
+        "eventsWebhookReceivingHint": "URL'yi panele kaydedip test araması yapın",
+        "recordingStorageKvkkHint": "KVKK, aramanın kaydedildiğinin arayana bildirilmesini zorunlu kılar — kaydı açmadan önce bunu IVR/karşılama anonsunuza ekleyin.",
+        "recordingsReceivingHint": "Kayıtların depolandığını doğrulamak için kaydı açık bir arama yapıp tamamlayın",
+        "voiceReportWebhookHint": "Her VOICE kampanya çağrısında otomatik olarak ayarlanır — manuel yapıştırma gerekmez",
+        "voicePackageHint": "Gerçek bir sesli arama gönderilmeden kontrol edilemez — Sesli SMS ve Otomatik Arama, NetGSM hesabınızda ayrı ayrı satın alınması gereken ücretli paketlerdir; her biri aktif edilene kadar gönderimler NetGSM hata 60 ile başarısız olur.",
+        "autocallQueueHint": "Otomatik Arama'nın, yanıtlanan çağrıları aktarabilmesi için oturum açmış temsilcileri olan bir Netsantral kuyruğuna ihtiyacı vardır — bunu Netsantral panelinden kurun.",
+        "faxNumberHint": "Faks gönderip almak için NetGSM panelinden faks özellikli bir numara tanımlanmalıdır — bu olmadan faks gönderme/alma çalışmaz.",
+        "whatsappOtpPackageHint": "WhatsApp OTP için NetGSM hesabınızda ücretli bir OTP-WhatsApp paketi ve Meta şablon onayı gerekir — paket aktif olana kadar OTP kodları otomatik olarak SMS ile gönderilir.",
+        "netasistanKeysHint": "Temsilci mola/kuyruk durumunu senkronize etmek için Netasistan app-key ve user-key bilgilerinizi tanımlayın."
+      }
     },
     "tab": {
       "accounts": "Hesaplar",
@@ -236,6 +303,7 @@
     "emptyDesc": "Mevcut planında aç/kapat yapılabilir modül yok.",
     "keys": {
       "conversationAi": "Mesajlar & Gelen Kutusu",
+      "sms": "SMS",
       "campaigns": "Kampanyalar",
       "socialCampaigns": "Sosyal kampanyalar",
       "mediaGen": "AI medya stüdyosu",
@@ -248,6 +316,8 @@
       "research": "Araştırma",
       "telephony": "Telefon & aramalar",
       "voiceAi": "Sesli AI",
+      "voiceCampaigns": "Sesli kampanyalar",
+      "fax": "Faks",
       "invoicing": "Faturalama",
       "commissions": "Komisyonlar",
       "installations": "Kurulumlar",
@@ -562,6 +632,19 @@
     "failed": "Giriş yapılamadı. Lütfen tekrar deneyin.",
     "networkError": "Bağlantı hatası. Lütfen tekrar deneyin."
   },
+  "profile": {
+    "menuItem": "Profili düzenle",
+    "dialogTitle": "Profili düzenle",
+    "dialogDescription": "Ad, soyad ve telefon numaranızı güncelleyin.",
+    "firstNameLabel": "Ad",
+    "lastNameLabel": "Soyad",
+    "phoneLabel": "Telefon numarası",
+    "phoneHint": "SMS ile iki adımlı doğrulama etkinse kodlar bu numaraya gönderilir.",
+    "currentPasswordLabel": "Telefon numarasını değiştirmek için mevcut şifreniz",
+    "currentPasswordRequired": "Devam etmek için mevcut şifrenizi girin.",
+    "updateSuccess": "Profil güncellendi",
+    "updateError": "Profil güncellenemedi"
+  },
   "dashboard": {
     "title": "Gösterge Paneli",
     "subtitle": "Performansa bir bakış",
@@ -686,6 +769,18 @@
   },
   "leadDetail": {
     "back": "Lead'lere dön",
+    "verifyPhone": {
+      "button": "Telefonu doğrula",
+      "badge": "Doğrulandı",
+      "dialogTitle": "Telefon numarasını doğrula",
+      "dialogDesc": "{{phone}} numarasına 6 haneli bir kod gönderdik. Onaylamak için aşağıya girin.",
+      "codeLabel": "Doğrulama kodu",
+      "resend": "Kodu yeniden gönder",
+      "confirm": "Onayla",
+      "sendError": "Kod gönderilemedi",
+      "invalidCode": "Geçersiz kod",
+      "verified": "Telefon numarası doğrulandı"
+    },
     "tabs": {
       "activities": "Etkinlik",
       "offers": "Teklifler",
@@ -764,6 +859,20 @@
       "title": "Bu müşteri adayı silinsin mi?",
       "desc": "Müşteri adayı ve zaman çizelgesi çalışma alanınızdan kaldırılır. Bu işlem geri alınamaz."
     }
+  },
+  "fax": {
+    "action": "Faks gönder",
+    "dialogTitle": "Faks gönder",
+    "dialogDesc": "NetGSM üzerinden bir faks numarasına PDF belge gönder.",
+    "to": "Alıcı faks numarası",
+    "header": "Kapak başlığı (opsiyonel)",
+    "document": "PDF belge",
+    "choosePdf": "PDF seç",
+    "toRequired": "Alıcı faks numarası gerekli.",
+    "fileRequired": "Fakslanacak bir PDF seçin.",
+    "send": "Faks gönder",
+    "sent": "Faks gönderime alındı",
+    "sendFailed": "Faks gönderilemedi"
   },
   "createLead": {
     "titleNew": "Yeni lead",
@@ -1456,7 +1565,8 @@
     "agents": "AI ajanları",
     "knowledgeDocs": "Bilgi belgeleri",
     "aiCreditsWord": "AI kredisi",
-    "messagesWord": "mesaj"
+    "messagesWord": "mesaj",
+    "faxWord": "Faks"
   },
   "commission": {
     "detailTitle": "Komisyon detayı",
@@ -1565,7 +1675,11 @@
     "pauseAi": "AI'ı duraklat",
     "close": "Kapat",
     "failed": "başarısız",
+    "voicemail": "Sesli Mesaj",
+    "fax": "Faks",
+    "faxOpenDocument": "Belgeyi aç",
     "replyPlaceholder": "Yanıt yazın… (AI'ı duraklatır)",
+    "smsCounter": "{{chars}} karakter · {{segments}} segment",
     "context": "Lead",
     "openLead": "Lead'i aç →",
     "noLead": "Bir konuşma seçin.",
@@ -1598,12 +1712,34 @@
     "saveFailed": "Kaydedilemedi",
     "verifyOk": "Kanal doğrulandı ✓",
     "verifyFail": "Doğrulama başarısız — bilgileri kontrol edin",
+    "verifyFailCreds": "Doğrulama başarısız — bilgileri kontrol edin",
+    "verifyUnreachable": "NetGSM'e ulaşılamadı — tekrar deneyin",
+    "verifyHeaderNotApproved": "Gönderici başlık bu hesapta onaylı değil",
+    "moWebhookMissing": "MO webhook'u mesaj kaçırıyor — panel URL'sini kontrol edin",
     "verify": "Doğrula",
     "secretsSet": "ayarlı bilgiler",
     "public": "herkese açık web sohbet",
     "noSecrets": "henüz bilgi yok",
     "embed": "Gömme kodu (</body> öncesine yapıştırın)",
-    "empty": "Henüz kanal yok — müşterilerin size yazabilmesi için bir tane bağlayın."
+    "empty": "Henüz kanal yok — müşterilerin size yazabilmesi için bir tane bağlayın.",
+    "iysTitle": "İYS (İleti Yönetim Sistemi)",
+    "iysBrandCode": "İYS Marka Kodu",
+    "iysBrandCodePlaceholder": "Marka kodu",
+    "iysDefault": "Varsayılan mesaj türü",
+    "iysBilgilendirme": "Bilgilendirme",
+    "iysTicari": "Ticari",
+    "iysSaved": "İYS ayarları kaydedildi",
+    "iysSaveFailed": "İYS ayarları kaydedilemedi",
+    "iysRegisterWebhook": "İYS webhook'unu kaydet",
+    "iysWebhookRegistered": "İYS webhook'u NetGSM'e kaydedildi",
+    "iysWebhookFailed": "İYS webhook'u kaydedilemedi",
+    "iysWebhookOk": "Webhook kayıtlı",
+    "iysWebhookNotRegistered": "Webhook kayıtlı değil",
+    "iysHelp": "İYS panelinizden aldığınız marka kodunu girip webhook'u kaydedin — ticari SMS onay/red durumları otomatik senkronize edilir.",
+    "otpTransport": "OTP gönderim kanalı",
+    "otpTransportSms": "SMS (varsayılan)",
+    "otpTransportWhatsapp": "WhatsApp",
+    "otpTransportHelp": "Doğrulama kodları (2FA, telefon doğrulama) hangi kanaldan gönderilsin. WhatsApp seçeneği, NetGSM hesabınızda ücretli \"OTP WhatsApp\" paketi ve onaylı netgsm_verify_code şablonu gerektirir — paket yoksa veya gönderim başarısız olursa kod otomatik olarak SMS ile gönderilir."
   },
   "automations": {
     "title": "Otomasyonlar",
@@ -1670,6 +1806,7 @@
     },
     "subject": "Konu",
     "body": "Mesaj",
+    "smsCounter": "{{chars}} karakter · {{segments}} segment",
     "prompt": "İstem",
     "message": "Mesaj",
     "tag": "Etiket",
@@ -1706,6 +1843,12 @@
     "recLead": "Lead",
     "recStatus": "Durum",
     "recError": "Hata",
+    "smsDelivery": "Teslimat (NetGSM)",
+    "smsDelivered": "teslim edildi",
+    "smsUndelivered": "teslim edilemedi",
+    "smsBlacklist": "kara liste",
+    "smsIysNotValid": "İYS onayı yok",
+    "smsOther": "diğer",
     "createSocial": "Sosyal içerik oluştur",
     "socialCreated": "Sosyal içerik kampanyası oluşturuldu",
     "socialCreateFailed": "Sosyal içerik oluşturulamadı",
@@ -1722,6 +1865,7 @@
     "write": "Yaz",
     "subject": "Konu",
     "body": "Mesaj",
+    "smsCounter": "{{chars}} karakter · {{segments}} segment",
     "saved": "Kampanya kaydedildi",
     "saveFailed": "Kaydedilemedi",
     "composed": "Taslak hazır",
@@ -1729,12 +1873,51 @@
     "launched": "Gönderildi",
     "launchFailed": "Başlatılamadı",
     "actionFailed": "İşlem başarısız",
+    "cancelScheduled": "Zamanlanmış gönderiyi iptal et",
+    "cancelScheduledTitle": "Zamanlanmış gönderi iptal edilsin mi?",
+    "cancelScheduledDesc": "Kampanya, planlanan saatte gönderilmeyecek. Daha sonra manuel olarak başlatabilirsiniz.",
+    "cancelScheduledConfirm": "Gönderiyi iptal et",
+    "cancelScheduledSuccess": "Zamanlanmış gönderi iptal edildi",
+    "cancelScheduledFailed": "Zamanlanmış gönderi iptal edilemedi",
+    "scheduledAt": "Gönderim zamanı (opsiyonel)",
+    "scheduledAtHint": "Hemen göndermek için boş bırakın.",
+    "scheduleInPast": "Bu zaman geçmişte — kampanya hemen gönderilir",
+    "scheduledFor": "{{when}} için zamanlandı",
+    "scheduleTitle": "Bu kampanya zamanlansın mı?",
+    "scheduleDesc": "{{when}} tarihinde otomatik olarak gönderilecek.",
+    "scheduleConfirm": "Zamanla",
+    "scheduled": "{{when}} için zamanlandı",
     "sent": "gönderildi",
     "opened": "açıldı",
     "clicked": "tıklandı",
     "unsub": "abonelikten çıktı",
     "launch": "Başlat",
-    "empty": "Henüz kampanya yok — bir tane oluşturun, metni AI yazsın."
+    "empty": "Henüz kampanya yok — bir tane oluşturun, metni AI yazsın.",
+    "iysMessageType": "İYS mesaj türü",
+    "iysMessageTypeTicariHint": "Ticari (reklam/promosyon) — İYS onayı gerektirir. Onayı olmayan alıcılar gönderim öncesi otomatik olarak atlanır.",
+    "iysMessageTypeBilgiHint": "Bilgilendirme (sipariş/randevu/hesap bildirimleri) — İYS onayından muaftır.",
+    "iysBilgilendirme": "Bilgilendirme",
+    "iysTicari": "Ticari",
+    "iysBlockedLabel": "İYS engelli",
+    "iysUnavailableLabel": "İYS erişilemedi",
+    "voiceMode": "Sesli mesaj türü",
+    "voiceModeHint": "Hazır metinden sese (TTS) bir mesaj çalın veya önceden kaydedilmiş bir .wav dosyası yükleyin.",
+    "voiceModeTts": "Metinden sese (TTS)",
+    "voiceModeAudio": "Ses dosyası yükle",
+    "voiceMsg": "Seslendirilecek metin (TTS)",
+    "voiceMsgPlaceholder": "Merhaba {{lead.contactPerson}}, bu aramanın nedeni…",
+    "voiceAudio": "Ses dosyası (.wav, en fazla 4MB)",
+    "voiceAudioUpload": ".wav yükle",
+    "voiceAudioReady": "Ses dosyası hazır",
+    "voiceAudioUploaded": "Ses dosyası yüklendi",
+    "voiceAudioUploadFailed": "Yükleme başarısız",
+    "voiceKeys": "Tuşlama eylemleri (tuşa basma)",
+    "voiceKeysHint": "Eşlenen bir tuşa basan kişi voice_keypress tetikleyicisini ateşler; bunu Otomasyonlar'da işleyebilirsiniz. Buradaki notlar yalnızca sizin referansınız içindir.",
+    "voiceKeyLabel": "Not (opsiyonel) — örn. ilgileniyor, satışa bağla",
+    "removeKeyMapping": "Eşlemeyi kaldır",
+    "addKeyMapping": "Tuş eşlemesi ekle",
+    "bodyVoiceLabel": "Dahili etiket",
+    "bodyVoiceHint": "Yalnızca sizin referansınız içindir — sesli okunmaz. Seslendirilecek metin yukarıda ayarlanır."
   },
   "sites": {
     "title": "Funnel & Sayfalar",
@@ -1848,7 +2031,13 @@
     "turns": "tur",
     "empty": "Henüz AI çağrısı yok.",
     "selectPrompt": "Transkripti görmek için bir çağrı seçin.",
-    "noTranscript": "Bu çağrı için transkript yok."
+    "noTranscript": "Bu çağrı için transkript yok.",
+    "leadMatched": "Lead"
+  },
+  "callRecording": {
+    "title": "Kayıt",
+    "loading": "Kayıt yükleniyor…",
+    "unavailable": "Bu görüşme için kayıt mevcut değil."
   },
   "callAnalysis": {
     "title": "Görüşme analizi",
@@ -1867,6 +2056,48 @@
       "NEGATIVE": "Olumsuz"
     }
   },
+  "queueWallboard": {
+    "title": "Kuyruk panosu",
+    "waiting": "Bekleyen",
+    "avgHoldtime": "Ort. bekleme süresi",
+    "agents": "Temsilciler",
+    "noData": "Henüz aktif kuyruk yok — canlı istatistikleri görmek için NetGSM Netsantral kuyruklarını yapılandırın.",
+    "loadError": "Kuyruk istatistikleri yüklenemedi.",
+    "helpTitle": "Kuyruklar hakkında",
+    "helpBody": "Kuyruğa DİNAMİK üye olarak eklenen ekip arkadaşlarının canlı durumu burada görünür ve aşağıdaki düğmeyle yönetilebilir — NetGSM panelinden STATİK eklenen üyeler salt okunurdur. Kuyruk adları `{santral}-queue-{name}` biçimini izler.",
+    "state": {
+      "available": "Müsait",
+      "paused": "Molada",
+      "oncall": "Görüşmede",
+      "offline": "Çevrimdışı",
+      "unknown": "Bilinmiyor"
+    },
+    "presence": {
+      "available": "Müsait",
+      "break": "Mola",
+      "noExtension": "Durumu kullanmak için hesap ayarlarından dahili numaranızı ayarlayın.",
+      "reasonTitle": "Mola ver",
+      "reasonHint": "İsteğe bağlı bir sebep seçin — yöneticiniz panoda görür.",
+      "reasonLunch": "Öğle yemeği",
+      "reasonMeeting": "Toplantı",
+      "reasonTechnical": "Teknik sorun",
+      "reasonOther": "Diğer",
+      "reasonPlaceholder": "Sebep (opsiyonel)",
+      "confirm": "Molayı başlat",
+      "cancel": "Vazgeç",
+      "toggleSuccessAvailable": "Artık müsaitsiniz",
+      "toggleSuccessBreak": "Moladasınız",
+      "toggleFailed": "Durumunuz güncellenemedi"
+    }
+  },
+  "inboundStats": {
+    "title": "Gelen aramalar (son 7 gün)",
+    "answered": "Cevaplanan",
+    "abandoned": "Cevapsız",
+    "avgWait": "Ort. bekleme",
+    "loadError": "Arama istatistikleri yüklenemedi.",
+    "offProdNote": "Arama istatistikleri yalnızca üretim sunucu IP'sinden doğrulanabilir (NetGSM izin listesi)."
+  },
   "copilot": {
     "title": "Canlı Asistan",
     "listen": "Dinle",
@@ -1875,6 +2106,43 @@
     "summary": "Özet",
     "getSuggestions": "Öneri al",
     "pastePlaceholder": "Görüşme metnini buraya yapıştırın…"
+  },
+  "webphone": {
+    "incoming": {
+      "title": "Gelen çağrı",
+      "unknown": "Bilinmeyen arayan",
+      "noNumber": "Numara gizli",
+      "accept": "Kabul et",
+      "reject": "Reddet"
+    },
+    "bridgeToast": "Gelen çağrı: {{caller}}",
+    "controls": {
+      "hold": "Beklet",
+      "unhold": "Devam et",
+      "mute": "Sessize al",
+      "unmute": "Sesi aç",
+      "keypad": "Tuş takımı",
+      "transfer": "Aktar",
+      "hangupServer": "Görüşmeyi bitir",
+      "hangupFailed": "Görüşme sonlandırılamadı",
+      "transferTitle": "Görüşmeyi aktar",
+      "transferHint": "Bu görüşmeyi devretmek için bir ekip arkadaşı seçin.",
+      "attended": "Danışmalı (önce görüş)",
+      "noTeammates": "Dahili numarası olan ekip arkadaşı yok",
+      "transferSuccess": "Görüşme aktarıldı",
+      "transferFailed": "Aktarma başarısız oldu",
+      "cancel": "Vazgeç"
+    },
+    "liveStatus": {
+      "initiated": "Aranıyor…",
+      "ringing": "Çalıyor…",
+      "connected": "Görüşmede",
+      "noAnswer": "Cevap yok",
+      "busy": "Meşgul",
+      "failed": "Görüşme başarısız",
+      "cancelled": "İptal edildi",
+      "ended": "Görüşme sona erdi"
+    }
   },
   "voiceAiSettings": {
     "title": "Sesli AI",
@@ -3267,5 +3535,24 @@
     "campaignName": "Haftalık plan — {{date}}",
     "provisioned": "Haftan planlanıyor — her taslağı burada inceleyip onayla.",
     "error": "Plan oluşturulamadı"
+  },
+  "dialer": {
+    "parallel": {
+      "title": "Paralel mod",
+      "subtitle": "Birçok kişiyi aynı anda canlı bir temsilci kuyruğuna arayın.",
+      "toggleLabel": "Paralel mod",
+      "prereqNote": "NetGSM'in ücretli \"Otomatik Arama\" eklentisini ve temsilcilerin oturum açtığı bir Netsantral kuyruğunu gerektirir — önce ikisini de NetGSM panelinden kurun.",
+      "queueLabel": "Kuyruk",
+      "progress": "{{added}} eklendi / {{pending}} bekliyor",
+      "added": "{{n}} eklendi",
+      "pending": "{{n}} bekliyor",
+      "skipped": "{{n}} atlandı",
+      "failed": "{{n}} başarısız",
+      "queueName": "Netsantral kuyruk adı",
+      "queueNamePlaceholder": "örn. sales-queue",
+      "iysType": "Mesaj türü",
+      "ticari": "Ticari (TİCARİ)",
+      "bilgilendirme": "Bilgilendirme (BİLGİLENDİRME)"
+    }
   }
 }

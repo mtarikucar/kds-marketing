@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   ConflictException,
   ServiceUnavailableException,
@@ -14,6 +15,7 @@ import {
   isSecretBoxConfigured,
 } from '../../../common/crypto/secret-box.helper';
 import { metaGraphFetch, graphApiVersion } from '../../../common/util/meta-graph.util';
+import { EntitlementsService, FeatureKey } from '../../billing/entitlements.service';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { PublicChannelResolverService } from './public-channel-resolver.service';
 import { assertNetgsmSmsSecrets } from './netgsm-config.util';
@@ -23,6 +25,8 @@ import { assertMetaSecrets, isMetaChannelType } from './meta-config.util';
 import { metaWebhookCallbackUrl } from './meta-callback.util';
 import { assertLinkedinEngagementSecrets } from './linkedin-config.util';
 import { tiktokWebhookCallbackUrl } from './tiktok-callback.util';
+import { IysClient } from '../../netgsm/iys/iys.client';
+import { netgsmWebhookUrl } from '../../netgsm/webhooks/netgsm-webhook.util';
 
 export interface CreateChannelInput {
   type: string;
@@ -55,7 +59,34 @@ export class ChannelsService {
     private readonly prisma: PrismaService,
     private readonly registry: ChannelAdapterRegistry,
     private readonly resolver: PublicChannelResolverService,
+    private readonly entitlements: EntitlementsService,
+    private readonly iysClient: IysClient,
   ) {}
+
+  /**
+   * Per-type feature gate for channel save/verify. Channel CRUD is one generic
+   * surface across every type, so the controller can't statically decide the
+   * key — SMS requires `sms` (split off `conversationAi` for the NetGSM SMS v2
+   * program); every other type keeps requiring `conversationAi`, unchanged.
+   */
+  private async assertChannelFeature(workspaceId: string, type: string): Promise<void> {
+    const feature: FeatureKey = type === 'SMS' ? 'sms' : 'conversationAi';
+    await this.assertFeature(workspaceId, feature);
+  }
+
+  /** Shared single-key entitlement check — assertChannelFeature() picks the
+   *  per-type key then delegates here; registerIysWebhook() calls this
+   *  directly with a fixed key (`campaigns`, see its own doc comment). */
+  private async assertFeature(workspaceId: string, feature: FeatureKey): Promise<void> {
+    const effective = await this.entitlements.getEffective(workspaceId);
+    if (!effective.features[feature]) {
+      throw new ForbiddenException({
+        message: 'This feature requires a higher package',
+        feature,
+        code: 'FEATURE_NOT_IN_PACKAGE',
+      });
+    }
+  }
 
   /** Canonical externalId for a type. EMAIL addresses are case-insensitive, so
    *  store them lower-cased+trimmed — the inbound webhook lower-cases the To
@@ -98,6 +129,7 @@ export class ChannelsService {
     if (!this.registry.has(dto.type)) {
       throw new NotFoundException(`Unsupported channel type: ${dto.type}`);
     }
+    await this.assertChannelFeature(workspaceId, dto.type);
     const externalId = this.normalizeExternalId(dto.type, dto.externalId);
     await this.assertExternalIdFree(dto.type, externalId);
     const data: any = {
@@ -222,6 +254,7 @@ export class ChannelsService {
   async update(workspaceId: string, id: string, dto: UpdateChannelInput) {
     const existing = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
     if (!existing) throw new NotFoundException('Channel not found');
+    await this.assertChannelFeature(workspaceId, existing.type);
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.status !== undefined) data.status = dto.status;
@@ -263,6 +296,7 @@ export class ChannelsService {
   async verify(workspaceId: string, id: string) {
     const c = await this.prisma.channel.findFirst({ where: { id, workspaceId } });
     if (!c) throw new NotFoundException('Channel not found');
+    await this.assertChannelFeature(workspaceId, c.type);
     const adapter = this.registry.get(c.type);
     const health = await adapter.healthCheck(this.registry.resolveConfig(c));
     if (health.ok) {
@@ -272,6 +306,69 @@ export class ChannelsService {
       });
     }
     return health;
+  }
+
+  /**
+   * İYS push-back registration (NetGSM Phase 2 Task 4) — SMS channel card
+   * action. Mints this workspace's İYS webhook URL
+   * (`netgsmWebhookUrl(base, workspaceId, 'iys')`) and asks NetGSM to
+   * register it as the push-back target for consent changes, using this
+   * SAME channel's sealed usercode/password + its `configPublic.brandCode`
+   * (the same İYS creds resolution `IysSyncService.resolveCreds` uses).
+   * Stamps `configPublic.iysWebhookRegistered` on SUCCESS only, so
+   * `NetgsmOnboardingService`'s `iysWebhook` checklist row reflects reality
+   * rather than "we tried" — a failed registration must be retried, and a
+   * stale `true` would hide that from the operator.
+   *
+   * Gating note (NetGSM Phase 2 Task 6 — reconciling Task 4's placeholder):
+   * this does NOT ride the generic `assertChannelFeature` (`sms`) gate that
+   * every other SMS channel action here uses. Per the owner decision İYS is
+   * bundled FREE with `campaigns`, not `sms` — the two are sold separately
+   * (one plan block grants `sms` without `campaigns`: SMS channel/inbox
+   * management with no campaign sending), and a workspace that can't launch
+   * commercial campaigns (`MarketingCampaignsController` is entirely behind
+   * `@RequiresFeature('campaigns')`) has nothing for İYS consent tracking to
+   * protect. So this action checks `campaigns` explicitly instead — a
+   * dedicated single-key check via `assertFeature`, not the type-keyed
+   * `assertChannelFeature` used by create/update/verify.
+   */
+  async registerIysWebhook(workspaceId: string, id: string) {
+    const c = await this.prisma.channel.findFirst({ where: { id, workspaceId, type: 'SMS' } });
+    if (!c) throw new NotFoundException('SMS channel not found');
+    await this.assertFeature(workspaceId, 'campaigns');
+
+    const { secrets, public: pub } = this.registry.resolveConfig(c);
+    const usercode = secrets?.usercode;
+    const password = secrets?.password;
+    const brandCode = typeof pub?.brandCode === 'string' ? pub.brandCode.trim() : '';
+    if (!usercode || !password) {
+      throw new BadRequestException('SMS channel has no NetGSM credentials configured yet');
+    }
+    if (!brandCode) {
+      throw new BadRequestException('İYS marka kodu (brandCode) is not configured on this channel yet');
+    }
+
+    const url = netgsmWebhookUrl(process.env.PUBLIC_BASE_URL, workspaceId, 'iys');
+    if (!url) {
+      throw new ServiceUnavailableException('PUBLIC_BASE_URL / MARKETING_SECRET_KEY is not configured');
+    }
+
+    const result = await this.iysClient.registerWebhook({ usercode, password, brandCode }, url);
+    if (!result.ok) {
+      throw new BadRequestException(result.message ?? 'İYS webhook kaydı başarısız');
+    }
+
+    await this.prisma.channel.update({
+      where: { id: c.id },
+      data: {
+        configPublic: {
+          ...((c.configPublic as Record<string, unknown> | null) ?? {}),
+          iysWebhookRegistered: true,
+        },
+      },
+    });
+
+    return { ok: true, url };
   }
 
   private seal(secrets: Record<string, string>): string {

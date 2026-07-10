@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import {
   LayoutTemplate, List, DollarSign, HelpCircle, MousePointerClick, Type, FileText,
-  Plus, Trash2, ArrowUp, ArrowDown,
+  Plus, Trash2, ArrowUp, ArrowDown, PhoneCall,
 } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
@@ -42,6 +42,7 @@ const PALETTE: { type: string; label: string; icon: typeof Type }[] = [
   { type: 'text', label: 'Text', icon: Type },
   { type: 'form', label: 'Form', icon: FileText },
   { type: 'popup', label: 'Popup', icon: MousePointerClick },
+  { type: 'callback', label: 'Callback', icon: PhoneCall },
 ];
 
 const NEW_BLOCK: Record<string, AnyBlock> = {
@@ -53,6 +54,10 @@ const NEW_BLOCK: Record<string, AnyBlock> = {
   text: { type: 'text', text: 'Some paragraph text.' },
   form: { type: 'form', formId: '', heading: '', submitText: 'Submit' },
   popup: { type: 'popup', heading: 'Wait — before you go!', text: 'Get 10% off your first order.', ctaText: 'Claim offer', ctaUrl: '/' },
+  // NetGSM Phase 5 Task 6 — "leave your number, we call you now". redirectMenu
+  // must name a queue/IVR/announcement object that ALREADY EXISTS in the
+  // Netsantral portal; this block only routes into it, never creates one.
+  callback: { type: 'callback', heading: '', text: '', phoneLabel: '', submitText: '', redirectMenu: '', redirectType: 'queue' },
 };
 
 function clone<T>(v: T): T {
@@ -238,6 +243,36 @@ function BlockEditor({ block, forms, onPatch }: { block: AnyBlock; forms: FormOp
             <L label={t('sites.submitText', 'Submit text')}><Input value={block.submitText ?? ''} onChange={(e) => onPatch({ submitText: e.target.value })} /></L>
           </div>
           {forms.length === 0 && <p className="text-[11px] text-amber-600">{t('sites.formBlockNeedsForm', 'Create a form first to use this block.')}</p>}
+        </div>
+      );
+    case 'callback':
+      return (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            {t('sites.callbackHint', 'Visitor leaves their number; NetGSM calls them and connects them straight into the queue/IVR/announcement below. The target must already exist in your Netsantral portal — this only routes into it.')}
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <L label={t('sites.heading', 'Heading')}><Input value={block.heading ?? ''} onChange={(e) => onPatch({ heading: e.target.value })} placeholder="We'll call you right now" /></L>
+            <L label={t('sites.submitText', 'Submit text')}><Input value={block.submitText ?? ''} onChange={(e) => onPatch({ submitText: e.target.value })} placeholder="Call me now" /></L>
+          </div>
+          <L label={t('sites.text', 'Text')}><Textarea className="min-h-16" value={block.text ?? ''} onChange={(e) => onPatch({ text: e.target.value })} /></L>
+          <L label={t('sites.callbackPhoneLabel', 'Phone field label')}><Input value={block.phoneLabel ?? ''} onChange={(e) => onPatch({ phoneLabel: e.target.value })} placeholder="Your phone number" /></L>
+          <div className="grid grid-cols-2 gap-2">
+            <L label={t('sites.callbackRedirectMenu', 'Netsantral target name')}>
+              <Input value={block.redirectMenu ?? ''} onChange={(e) => onPatch({ redirectMenu: e.target.value })} placeholder="850-queue-vip" />
+            </L>
+            <L label={t('sites.callbackRedirectType', 'Target type')}>
+              <Select value={block.redirectType || 'queue'} onValueChange={(v) => onPatch({ redirectType: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="queue">{t('sites.callbackTypeQueue', 'Queue')}</SelectItem>
+                  <SelectItem value="ivr">{t('sites.callbackTypeIvr', 'IVR')}</SelectItem>
+                  <SelectItem value="announcement">{t('sites.callbackTypeAnnouncement', 'Announcement')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </L>
+          </div>
+          {!block.redirectMenu && <p className="text-[11px] text-amber-600">{t('sites.callbackNeedsMenu', 'Set the Netsantral target name to activate this block.')}</p>}
         </div>
       );
     default:

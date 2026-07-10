@@ -5,8 +5,11 @@ import { useTranslation } from 'react-i18next';
 import { Phone, PlayCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
+import { useEntitlements } from '../../features/marketing/hooks/useEntitlements';
 import { ClickToDialButton } from '../../features/marketing/components';
 import CallAnalysisPanel from './calls/CallAnalysisPanel';
+import CallRecordingPlayer from './calls/CallRecordingPlayer';
+import QueueWallboard from './calls/QueueWallboard';
 import { RouteFallback } from '../../components/RouteFallback';
 import { CallStatus, CALL_STATUS_LABELS } from '../../features/marketing/types';
 import type { SalesCall, PaginatedResponse, MarketingUserInfo } from '../../features/marketing/types';
@@ -131,6 +134,10 @@ function CallsTab() {
   const { t } = useTranslation('marketing');
   const { user } = useMarketingAuthStore();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  // Wallboard hits telephony-only routes that 503 without an active Netsantral
+  // config — only render it for workspaces the package actually entitles.
+  const { has: hasFeature } = useEntitlements();
+  const showWallboard = hasFeature('telephony');
 
   const [status, setStatus] = useState('');
   const [repId, setRepId] = useState('');
@@ -160,8 +167,8 @@ function CallsTab() {
     staleTime: 60_000,
   });
 
-  const repName = (id: string) => {
-    const r = reps.find((x) => x.id === id);
+  const repName = (id: string | null) => {
+    const r = id ? reps.find((x) => x.id === id) : undefined;
     return r ? `${r.firstName} ${r.lastName}` : '—';
   };
 
@@ -181,6 +188,8 @@ function CallsTab() {
 
   return (
     <div className="space-y-6">
+      {showWallboard && <QueueWallboard />}
+
       {/* ── Filters ── */}
       <FilterBar>
         <Select
@@ -277,17 +286,16 @@ function CallsTab() {
                       <span className="inline-flex items-center gap-1.5">
                         {c.toPhone}
                         {c.recordingUrl && (
-                          <a
-                            href={c.recordingUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="Play recording"
-                            className="text-primary hover:text-primary/80"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <PlayCircle className="h-4 w-4" aria-hidden="true" />
-                            <span className="sr-only">Play recording</span>
-                          </a>
+                          // Static hint only (no cross-origin link) — the
+                          // actual in-app player lives in the expanded
+                          // detail panel below, fetched via the
+                          // workspace-scoped recording route.
+                          <span title={t('callRecording.title', 'Recording')}>
+                            <PlayCircle
+                              className="h-4 w-4 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                          </span>
                         )}
                       </span>
                     </TD>
@@ -315,6 +323,7 @@ function CallsTab() {
                     <TR>
                       <TD colSpan={colCount} className="bg-surface-muted/40">
                         <div className="px-2">
+                          {c.recordingUrl && <CallRecordingPlayer callId={c.id} />}
                           <p className="text-caption font-medium text-foreground">
                             {t('callAnalysis.title', 'Call analysis')}
                           </p>

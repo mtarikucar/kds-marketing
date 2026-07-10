@@ -34,6 +34,12 @@ export const TRIGGER_TYPES = [
   // Course-completion certificate issued (memberships, Epic 10b). Filter on
   // trigger.courseId.
   'certificate.issued',
+  // Press-1 on a VOICE campaign call (NetGSM Phase 5 Task 3) — backed by
+  // VoiceReportConsumer's marketing.voice.keypress.v1, emitted when the
+  // callee's DTMF press matches one of the campaign's configured
+  // voiceConfig.keys. Filter on trigger.key for a specific digit (e.g.
+  // "pressed 1 -> create task/transfer").
+  'voice_keypress',
 ] as const;
 export type WorkflowTriggerType = (typeof TRIGGER_TYPES)[number];
 

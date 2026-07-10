@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from '../ai/anthropic.service';
 import { AiCreditsService } from '../ai/ai-credits.service';
+import { creditCost } from '../ai/ai-credit-costs';
 import { KnowledgeService } from '../ai/knowledge.service';
 
 export interface CopilotSuggestion {
@@ -18,15 +19,10 @@ export interface CopilotSuggestion {
  *
  * Inert when Anthropic is disabled — returns an empty suggestion set rather than
  * throwing, so the panel stays harmless until AI is configured.
- *
- * Cost is the `voice.copilot` action — that key is not in the credit-cost map
- * yet (added in Phase 5.2), so the numeric literal 1 is used directly here.
  */
 @Injectable()
 export class CopilotService {
   private readonly logger = new Logger(CopilotService.name);
-  /** voice.copilot cost — literal until the cost-map entry lands in Phase 5.2. */
-  private static readonly COST = 1;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -62,7 +58,7 @@ export class CopilotService {
       for (const d of kb) parts.push(`- ${d.title}: ${d.snippet}`);
     }
 
-    const cost = CopilotService.COST;
+    const cost = creditCost('voice.copilot');
     await this.credits.reserve(workspaceId, cost);
 
     let res: { text: string };

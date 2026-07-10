@@ -18,6 +18,7 @@ export * from './marketing-notifications.controller';
 export * from './marketing-leads-ingest.controller';
 export * from './marketing-distribution.controller';
 export * from './sales-call.controller';
+export * from './telephony-control.controller';
 export * from './sales-target.controller';
 export * from './marketing-ai.controller';
 export * from './marketing-conversations.controller';

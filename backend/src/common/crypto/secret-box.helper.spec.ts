@@ -1,8 +1,10 @@
+import { createHash } from 'crypto';
 import {
   sealSecret,
   openSecret,
   maskSecret,
   isSecretBoxConfigured,
+  hmacHex,
 } from './secret-box.helper';
 
 describe('secret-box helper (AES-256-GCM)', () => {
@@ -59,5 +61,29 @@ describe('secret-box helper (AES-256-GCM)', () => {
     expect(maskSecret('sk_live_abcd1234')).toBe('••••1234');
     expect(maskSecret('ab')).toBe('••');
     expect(maskSecret(null)).toBe('');
+  });
+
+  describe('hmacHex — keyed pepper for low-entropy secrets', () => {
+    it('is deterministic for the same key + input', () => {
+      expect(hmacHex('sms-otp-code:123456')).toBe(hmacHex('sms-otp-code:123456'));
+    });
+
+    it('differs from a plain unkeyed SHA-256 of the same input (the whole point of peppering)', () => {
+      const plain = createHash('sha256').update('sms-otp-code:123456').digest('hex');
+      expect(hmacHex('sms-otp-code:123456')).not.toBe(plain);
+    });
+
+    it('changes when the master key changes (an attacker without the key can\'t reproduce it)', () => {
+      const first = hmacHex('sms-otp-code:123456');
+      process.env.MARKETING_SECRET_KEY = Buffer.alloc(32, 3).toString('base64');
+      const { hmacHex: hmacHexOtherKey } = require('./secret-box.helper');
+      expect(hmacHexOtherKey('sms-otp-code:123456')).not.toBe(first);
+    });
+
+    it('throws when unconfigured (fails closed, no silent unkeyed fallback)', () => {
+      delete process.env.MARKETING_SECRET_KEY;
+      const { hmacHex: hmacHexUnconfigured } = require('./secret-box.helper');
+      expect(() => hmacHexUnconfigured('x')).toThrow();
+    });
   });
 });

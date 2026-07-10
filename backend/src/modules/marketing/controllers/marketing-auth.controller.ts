@@ -14,7 +14,7 @@ import { MarketingPublic, MarketingRoute } from '../decorators/marketing-public.
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingAuthService } from '../services/marketing-auth.service';
 import { MarketingLoginDto } from '../dto/login.dto';
-import { Verify2faDto } from '../dto/two-factor.dto';
+import { Verify2faDto, ResendTwoFactorSmsDto } from '../dto/two-factor.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { RefreshTokenDto } from '../dto/refresh-token.dto';
@@ -52,6 +52,17 @@ export class MarketingAuthController {
   @Throttle(LOGIN_THROTTLE)
   verify2fa(@Body() dto: Verify2faDto) {
     return this.authService.verify2fa(dto.challengeToken, dto.code);
+  }
+
+  // NetGSM SMS v2 Task 12 — re-send the SMS challenge code for a pending 2FA
+  // login (public, same as 2fa/verify: the password step already passed).
+  // Same throttle envelope as login/verify — this is still an unauthenticated,
+  // brute-forceable surface.
+  @Post('2fa/resend')
+  @MarketingPublic()
+  @Throttle(LOGIN_THROTTLE)
+  resendTwoFactorSms(@Body() dto: ResendTwoFactorSmsDto) {
+    return this.authService.resendTwoFactorSms(dto.challengeToken);
   }
 
   @Post('register-workspace')

@@ -12,6 +12,9 @@ export const TRIGGER_TYPES = [
   'opportunity.stage_changed',
   'opportunity.won',
   'opportunity.lost',
+  // NetGSM Phase 5 — press-1 on a VOICE campaign call. Filter (JSON below)
+  // on trigger.key for a specific digit, e.g. [{"field":"trigger.key","op":"eq","value":"1"}].
+  'voice_keypress',
 ] as const;
 
 /** Step palette groups for the builder rail. Each `type` must be a key in

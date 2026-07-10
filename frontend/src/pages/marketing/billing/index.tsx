@@ -278,6 +278,30 @@ export default function BillingPage() {
                   priceTRY: '₺190',
                   priceUSD: '$6',
                 },
+                {
+                  // NetGSM SMS v2 Task 12 — unlocks the `smsOtp` feature
+                  // (2FA-SMS factor + lead phone verification).
+                  code: 'sms_otp_package',
+                  label: t('billing.smsOtpWord', 'SMS OTP verification'),
+                  priceTRY: '₺490',
+                  priceUSD: '$15',
+                },
+                {
+                  // NetGSM Phase 5 Task 1 — unlocks the `voiceCampaigns`
+                  // feature (TTS/audio voice blasts) for plans below SCALE.
+                  code: 'voice_campaigns_package',
+                  label: t('billing.voiceCampaignsWord', 'Voice campaigns'),
+                  priceTRY: '₺1.490',
+                  priceUSD: '$45',
+                },
+                {
+                  // NetGSM Phase 6 Task 1 — unlocks the `fax` feature
+                  // (send/receive) for every non-OPERATOR plan.
+                  code: 'fax_package',
+                  label: t('billing.faxWord', 'Fax'),
+                  priceTRY: '₺990',
+                  priceUSD: '$29',
+                },
               ].map((addon) => (
                 <div
                   key={addon.code}

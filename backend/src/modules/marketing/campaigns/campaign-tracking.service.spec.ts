@@ -8,6 +8,8 @@ import { CampaignTrackingService } from './campaign-tracking.service';
 describe('CampaignTrackingService', () => {
   const WS = 'ws-1';
   let prisma: any;
+  let outbox: { append: jest.Mock };
+  let iysSync: { enqueueConsent: jest.Mock };
   let svc: CampaignTrackingService;
 
   beforeEach(() => {
@@ -24,11 +26,21 @@ describe('CampaignTrackingService', () => {
         findUnique: jest.fn().mockResolvedValue({ stats: {} }),
         update: jest.fn().mockResolvedValue({}),
       },
-      lead: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      lead: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({ phone: '05551112233' }),
+      },
       // bump() now increments the counter via an atomic jsonb_set UPDATE.
       $executeRawUnsafe: jest.fn().mockResolvedValue(1),
     };
-    svc = new CampaignTrackingService(prisma as any);
+    // emitSmsOptOutEvent wraps the flip + phone read + outbox append + İYS
+    // enqueue in one $transaction; the mock just runs the callback against
+    // the same mock client (tx === prisma), matching the established test
+    // idiom elsewhere (e.g. review-sync.service.spec.ts).
+    prisma.$transaction = jest.fn((fn: any) => fn(prisma));
+    outbox = { append: jest.fn().mockResolvedValue('evt-1') };
+    iysSync = { enqueueConsent: jest.fn().mockResolvedValue(undefined) };
+    svc = new CampaignTrackingService(prisma as any, outbox as any, iysSync as any);
   });
 
   it('click returns the campaign-authored URL at the index', async () => {
@@ -91,6 +103,102 @@ describe('CampaignTrackingService', () => {
     expect(prisma.lead.updateMany).toHaveBeenCalledWith({
       where: { id: 'lead-1', workspaceId: WS },
       data: { waOptOut: true },
+    });
+    // Non-SMS channels never trigger the NetGSM blacklist-sync event.
+    expect(outbox.append).not.toHaveBeenCalled();
+    expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  it('SMS unsubscribe enqueues marketing.sms.optout.v1 keyed on the recipient id', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead-1', workspaceId: WS },
+      data: { smsOptOut: true },
+    });
+    expect(outbox.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'marketing.sms.optout.v1',
+        payload: { workspaceId: WS, leadId: 'lead-1', phone: '05551112233' },
+        idempotencyKey: 'ws-1:lead-1:marketing.sms.optout.v1:unsub:r1',
+      }),
+      expect.anything(), // the tx client the flip + append share
+    );
+  });
+
+  it('SMS unsubscribe does NOT enqueue a blacklist-sync event when the lead has no phone', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    prisma.lead.findUnique.mockResolvedValue({ phone: null });
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the unsubscribe when the outbox append throws', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    outbox.append.mockRejectedValue(new Error('outbox down'));
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+  });
+
+  it('does not fail the unsubscribe when the phone lookup (findUnique) rejects, and still bumps the UNSUBSCRIBED status', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    prisma.lead.findUnique.mockRejectedValue(new Error('db down'));
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    expect(outbox.append).not.toHaveBeenCalled();
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead-1', workspaceId: WS },
+      data: { smsOptOut: true },
+    });
+    // The read failure must not skip the UNSUBSCRIBED status bump either.
+    expect(prisma.campaignRecipient.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'r1', status: { not: 'UNSUBSCRIBED' } } }),
+    );
+  });
+
+  // Phase 2 Task 3 — İYS auto-push: a public SMS unsubscribe is always a
+  // revoke (RET), enqueued via IysSyncService inside the SAME transaction as
+  // the smsOptOut flip + blacklist-mirror event, in its own savepoint.
+  it('SMS unsubscribe enqueues an İYS RET job for the lead', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+
+    expect(iysSync.enqueueConsent).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({
+        workspaceId: WS,
+        leadId: 'lead-1',
+        recipient: '05551112233',
+        direction: 'RET',
+        source: 'HS_MESAJ',
+      }),
+    );
+  });
+
+  it('non-SMS unsubscribe never enqueues an İYS job', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'EMAIL' });
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+
+    expect(iysSync.enqueueConsent).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the unsubscribe when the İYS enqueue throws', async () => {
+    prisma.campaignRecipient.findUnique.mockResolvedValue({ id: 'r1', campaignId: 'c1', workspaceId: WS, leadId: 'lead-1', status: 'SENT' });
+    prisma.campaign.findFirst.mockResolvedValue({ channel: 'SMS' });
+    iysSync.enqueueConsent.mockRejectedValue(new Error('iys down'));
+
+    await expect(svc.unsubscribe('tok')).resolves.toBe(true);
+    // The outbox mirror and the status bump are unaffected by the İYS failure.
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead-1', workspaceId: WS },
+      data: { smsOptOut: true },
     });
   });
 });

@@ -8,7 +8,10 @@ import {
   Body,
   Param,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -19,6 +22,7 @@ import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingUserPayload } from '../types';
 import { CampaignsService } from '../campaigns/campaigns.service';
+import { VoiceAudioUploadService, UploadedWavFile } from '../campaigns/voice-audio-upload.service';
 import { CreateCampaignDto, UpdateCampaignDto, SetVariantsDto } from '../dto/campaign.dto';
 import { Audit } from '../../audit/audit.decorator';
 import { SocialCampaignLinkService } from '../social-campaigns/social-campaign-link.service';
@@ -37,11 +41,30 @@ export class MarketingCampaignsController {
   constructor(
     private readonly campaigns: CampaignsService,
     private readonly socialLink: SocialCampaignLinkService,
+    private readonly voiceAudio: VoiceAudioUploadService,
   ) {}
 
   @Get()
   list(@CurrentMarketingUser() a: MarketingUserPayload) {
     return this.campaigns.list(a.workspaceId);
+  }
+
+  /**
+   * Upload a .wav to use as a VOICE campaign's `voiceConfig.audioid` (the
+   * audio-blast alternative to the TTS `msg` text) — proxies to NetGSM's
+   * `/voicesms/upload` via `VoicesmsSendClient`. Gated on `voiceCampaigns`
+   * specifically (overriding the class's broader `campaigns` requirement —
+   * see `FeatureGuard`'s `getAllAndOverride`), NOT the general `campaigns`
+   * feature, since this is voice-specific. Non-wav / oversize (>4MB) files
+   * are rejected inside `VoiceAudioUploadService` with a clean 400 BEFORE
+   * NetGSM is ever called.
+   */
+  @Post('voice/audio')
+  @RequiresFeature('voiceCampaigns')
+  @RequirePermission('campaigns.send')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadVoiceAudio(@UploadedFile() file: UploadedWavFile, @CurrentMarketingUser() a: MarketingUserPayload) {
+    return this.voiceAudio.upload(a.workspaceId, file);
   }
 
   /** Cross-link (§6.3): provision a companion Social Campaign prefilled from this

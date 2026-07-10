@@ -1,18 +1,27 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
 
 export const CAMPAIGN_BATCH_KIND = 'campaign.batch';
 /** A/B WINNER mode: the job that picks the winner + releases the held remainder. */
 export const CAMPAIGN_AB_DECIDE_KIND = 'campaign.ab.decide';
+/** A DRAFT campaign launched with a future `scheduledAt`: the job that flips it
+ *  SCHEDULED → SENDING and kicks the first batch, at `scheduledAt`. */
+export const CAMPAIGN_LAUNCH_KIND = 'campaign.launch';
 /** How long the test cohort runs before the winner is auto-decided. */
 export const AB_TEST_WINDOW_MS = 4 * 60 * 60 * 1000; // 4h
+/** A `scheduledAt` within this window of "now" is treated as "send immediately"
+ *  rather than queuing a `campaign.launch` job for a few seconds out. */
+const SCHEDULE_TOLERANCE_MS = 30_000;
 
 // Audience filters may only target these scalar lead columns (no arbitrary
 // Prisma path injection).
@@ -29,14 +38,18 @@ interface AudienceFilter {
 /**
  * Campaign CRUD + launch. Launch freezes the audience (leads matching the
  * filter AND opted-in AND reachable on the channel) into CampaignRecipient
- * rows, extracts the body's links for safe click-tracking, flips the campaign
- * to SENDING and kicks the first throttled `campaign.batch` job.
+ * rows and extracts the body's links for safe click-tracking. With no future
+ * `scheduledAt` it flips the campaign to SENDING and kicks the first throttled
+ * `campaign.batch` job right away; with one, it flips to SCHEDULED instead and
+ * queues a `campaign.launch` job for scheduledAt (campaign-sender.service.ts's
+ * handler does the actual SENDING flip + batch kick when that job fires).
  */
 @Injectable()
 export class CampaignsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduledJobs: ScheduledJobService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   async list(workspaceId: string) {
@@ -114,9 +127,37 @@ export class CampaignsService {
     return this.getVariants(workspaceId, campaignId);
   }
 
-  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string }) {
-    if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(dto.channel)) {
+  async create(workspaceId: string, dto: { name: string; channel: string; subject?: string; body: string; bodyHtml?: string; emailTemplateId?: string; audienceFilter?: unknown; scheduledAt?: string; iysMessageType?: string; voiceConfig?: { msg?: string; audioid?: string; keys?: string[] } }) {
+    if (!['EMAIL', 'SMS', 'WHATSAPP', 'VOICE'].includes(dto.channel)) {
       throw new BadRequestException('Invalid channel');
+    }
+    // SMS is its own sellable feature (split off `conversationAi` for the
+    // NetGSM SMS v2 program) — an SMS-channel campaign requires it even
+    // though the broader `campaigns` feature already gates this controller.
+    if (dto.channel === 'SMS') {
+      const effective = await this.entitlements.getEffective(workspaceId);
+      if (!effective.features.sms) {
+        throw new ForbiddenException({
+          message: 'This feature requires a higher package',
+          feature: 'sms',
+          code: 'FEATURE_NOT_IN_PACKAGE',
+        });
+      }
+    }
+    // VOICE campaigns (NetGSM Phase 5, `voiceCampaigns`) — same shape of gate
+    // as SMS above, plus a msg-or-audioid shape check on voiceConfig (the
+    // DTO only validates field TYPES, not the cross-field "at least one of
+    // msg/audioid" business rule).
+    if (dto.channel === 'VOICE') {
+      const effective = await this.entitlements.getEffective(workspaceId);
+      if (!effective.features.voiceCampaigns) {
+        throw new ForbiddenException({
+          message: 'This feature requires a higher package',
+          feature: 'voiceCampaigns',
+          code: 'FEATURE_NOT_IN_PACKAGE',
+        });
+      }
+      this.assertVoiceConfig(dto.voiceConfig);
     }
     return this.prisma.campaign.create({
       data: {
@@ -129,9 +170,30 @@ export class CampaignsService {
         emailTemplateId: dto.emailTemplateId || null,
         audienceFilter: (dto.audienceFilter ?? []) as Prisma.InputJsonValue,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
+        // İYS classification only means anything for SMS/VOICE — force it to
+        // the exempt default on every other channel so a stray value never
+        // silently rides along on an EMAIL/WHATSAPP campaign (the sender's
+        // TİCARİ preflight only ever reads it on those two branches anyway,
+        // but this keeps the stored value honest for CampaignsPage.tsx's own display).
+        iysMessageType:
+          (dto.channel === 'SMS' || dto.channel === 'VOICE') && dto.iysMessageType === 'TICARI'
+            ? 'TICARI'
+            : 'BILGILENDIRME',
+        voiceConfig: dto.channel === 'VOICE' ? (dto.voiceConfig as Prisma.InputJsonValue) : Prisma.JsonNull,
         status: 'DRAFT',
       },
     });
+  }
+
+  /** Cross-field business rule the DTO's per-field decorators can't express:
+   *  a VOICE campaign's voiceConfig must be present and carry msg OR audioid
+   *  (NetGSM's voicesms/send accepts exactly one of them). */
+  private assertVoiceConfig(voiceConfig: { msg?: string; audioid?: string } | undefined): void {
+    const hasMsg = typeof voiceConfig?.msg === 'string' && voiceConfig.msg.trim().length > 0;
+    const hasAudio = typeof voiceConfig?.audioid === 'string' && voiceConfig.audioid.trim().length > 0;
+    if (!hasMsg && !hasAudio) {
+      throw new BadRequestException('voiceConfig must include either msg (TTS text) or audioid (uploaded audio)');
+    }
   }
 
   async update(workspaceId: string, id: string, dto: any) {
@@ -149,9 +211,60 @@ export class CampaignsService {
     if (data.subject === '') data.subject = null;
     if (data.bodyHtml === '') data.bodyHtml = null;
     if (data.emailTemplateId === '') data.emailTemplateId = null;
+    // Same SMS/VOICE-only normalization as create(): channel itself isn't
+    // editable (not in the field loop above), so `existing.channel` is this
+    // campaign's permanent channel — force the exempt default on anything else.
+    if (dto.iysMessageType !== undefined) {
+      data.iysMessageType =
+        (existing.channel === 'SMS' || existing.channel === 'VOICE') && dto.iysMessageType === 'TICARI'
+          ? 'TICARI'
+          : 'BILGILENDIRME';
+    }
+    // voiceConfig is only editable on a VOICE campaign (mirrors channel-scoped
+    // iysMessageType above) — re-validated the same way create() does, since
+    // an edit could otherwise clear both msg AND audioid on a draft.
+    if (dto.voiceConfig !== undefined && existing.channel === 'VOICE') {
+      this.assertVoiceConfig(dto.voiceConfig);
+      data.voiceConfig = dto.voiceConfig;
+    }
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
-    return this.prisma.campaign.update({ where: { id: existing.id }, data });
+    const updated = await this.prisma.campaign.update({ where: { id: existing.id }, data });
+
+    // A SCHEDULED campaign already has its `campaign.launch` job queued (audience
+    // frozen, recipients materialized). Editing scheduledAt here must move that
+    // job, not just the DB column — otherwise the stale job still fires at the
+    // OLD time regardless of what the operator just picked.
+    if (existing.status === 'SCHEDULED' && dto.scheduledAt !== undefined) {
+      // Read the new scheduledAt from `data` (what we just asked Prisma to
+      // persist) rather than `updated` — trusting the write we issued rather
+      // than however a given Prisma client/mock happens to shape its return.
+      const newScheduledAt: Date | null = data.scheduledAt;
+      if (newScheduledAt && newScheduledAt.getTime() > Date.now() + SCHEDULE_TOLERANCE_MS) {
+        // No explicit cancel first: schedule()'s dedupKey lookup collapses onto
+        // the existing PENDING campaign.launch row for this campaign (it
+        // UPDATEs runAt/payload in place rather than returning the stale row
+        // untouched — verified in scheduled-job.service.ts), so this alone
+        // moves the job to the new time.
+        await this.scheduledJobs.schedule({
+          workspaceId,
+          kind: CAMPAIGN_LAUNCH_KIND,
+          runAt: newScheduledAt,
+          dedupKey: existing.id,
+          payload: { workspaceId, campaignId: existing.id },
+        });
+      } else {
+        // Cleared, or moved to a non-future time: nothing is left to fire the
+        // launch — cancel the stale job and revert to DRAFT rather than
+        // stranding the campaign SCHEDULED with no queued job. The frozen
+        // recipients/links stay put; a later launch() re-freeze is idempotent
+        // (CampaignRecipient's @@unique([campaignId, leadId]) + skipDuplicates).
+        await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
+        await this.prisma.campaign.update({ where: { id: existing.id }, data: { status: 'DRAFT' } });
+        updated.status = 'DRAFT';
+      }
+    }
+    return updated;
   }
 
   async remove(workspaceId: string, id: string) {
@@ -171,10 +284,30 @@ export class CampaignsService {
     return { message: 'Campaign resumed' };
   }
 
+  /**
+   * Cancel a SCHEDULED (not yet sending) campaign's queued send — the "undo" for
+   * a scheduled blast. Only valid from SCHEDULED: a SENDING campaign must go
+   * through `pause` instead (cancelling mid-send would abandon recipients in an
+   * ambiguous sent/skipped limbo), and any other status (including an
+   * already-CANCELLED one) has nothing queued to cancel.
+   */
   async cancel(workspaceId: string, id: string) {
-    const c = await this.prisma.campaign.findFirst({ where: { id, workspaceId }, select: { id: true } });
+    const c = await this.prisma.campaign.findFirst({ where: { id, workspaceId }, select: { id: true, status: true } });
     if (!c) throw new NotFoundException('Campaign not found');
+    if (c.status !== 'SCHEDULED') {
+      throw new ConflictException('Only a scheduled (not yet sending) campaign can be cancelled');
+    }
+    // Cancel whichever job is actually queued for a SCHEDULED campaign — the
+    // `campaign.launch` job that would flip it to SENDING at scheduledAt. The
+    // `campaign.batch` cancel alongside it is a defensive no-op (SCHEDULED never
+    // has one queued; only SENDING does), kept so this stays correct even if a
+    // future edge case leaves one behind.
     await this.scheduledJobs.cancel(CAMPAIGN_BATCH_KIND, c.id);
+    await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, c.id);
+    // NetGSM-side scheduling (startdate passthrough) isn't wired up yet — app-side
+    // ScheduledJob cancellation above is the only queued work today. If a later
+    // task adds startdate passthrough, also best-effort SmsV2Client.cancel(jobid)
+    // here for each of the campaign's netgsmJobIds.
     await this.prisma.campaign.update({ where: { id: c.id }, data: { status: 'CANCELLED' } });
     return { message: 'Campaign cancelled' };
   }
@@ -188,7 +321,11 @@ export class CampaignsService {
     });
   }
 
-  /** Freeze the audience, extract links, flip to SENDING, kick the first batch. */
+  /**
+   * Freeze the audience, extract links, then either start sending now (flip to
+   * SENDING + kick the first batch) or — with a future `scheduledAt` — flip to
+   * SCHEDULED and queue a `campaign.launch` job to do that later.
+   */
   async launch(workspaceId: string, id: string) {
     const campaign = await this.prisma.campaign.findFirst({ where: { id, workspaceId } });
     if (!campaign) throw new NotFoundException('Campaign not found');
@@ -242,6 +379,47 @@ export class CampaignsService {
       ],
       skipDuplicates: true,
     });
+
+    const isScheduled = !!campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() + SCHEDULE_TOLERANCE_MS;
+
+    if (isScheduled) {
+      // Freeze now (recipients/links/stats materialized above), exactly like the
+      // immediate path — but don't start sending yet. Flip to SCHEDULED and let
+      // the `campaign.launch` job do the SENDING flip + first batch kick at
+      // scheduledAt. A/B WINNER's abDecideAt (the test-cohort window) is deferred
+      // to that same moment too — it must be measured from when the test cohort
+      // actually starts sending, not from this freeze time, or the decide job
+      // could fire while the campaign is still SCHEDULED (no-op, and the held
+      // remainder would never be released).
+      await this.prisma.campaign.update({
+        where: { id: campaign.id },
+        data: {
+          status: 'SCHEDULED',
+          links: links as Prisma.InputJsonValue,
+          stats: { recipients: leads.length, sent: 0, failed: 0, skipped: 0, opened: 0, clicked: 0, unsubscribed: 0 },
+        },
+      });
+      await this.scheduledJobs.schedule({
+        workspaceId,
+        kind: CAMPAIGN_LAUNCH_KIND,
+        runAt: campaign.scheduledAt as Date,
+        dedupKey: campaign.id,
+        payload: { workspaceId, campaignId: campaign.id },
+      });
+      return {
+        message: 'Campaign scheduled',
+        recipients: leads.length,
+        scheduledAt: campaign.scheduledAt,
+        testCohort: winnerMode ? testLeads.length : undefined,
+      };
+    }
+
+    // Immediate send (no future scheduledAt): start right now, exactly as before.
+    // Clear any stray queued `campaign.launch` job — e.g. an admin re-launching a
+    // still-SCHEDULED campaign ahead of its scheduled time forces it to send now
+    // — so the old job doesn't linger as an orphaned PENDING row (harmless: the
+    // handler's guarded updateMany would no-op it once status is SENDING).
+    await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, campaign.id);
     await this.prisma.campaign.update({
       where: { id: campaign.id },
       data: {
@@ -296,6 +474,12 @@ export class CampaignsService {
     }
     else if (channel === 'SMS') { where.smsOptOut = false; where.phone = { not: null }; }
     else if (channel === 'WHATSAPP') { where.waOptOut = false; where.OR = [{ whatsapp: { not: null } }, { phone: { not: null } }]; }
+    // VOICE (NetGSM Phase 5): same phone reachability as SMS. Lead has no
+    // dedicated call/voice opt-out flag yet — `smsOptOut` is reused as the
+    // nearest proxy (both ring the same lead phone number); a dedicated
+    // callOptOut/voiceOptOut column is a follow-up (see campaign-sender.
+    // service.ts's isOptedOut for the same reuse on the send-time recheck).
+    else if (channel === 'VOICE') { where.smsOptOut = false; where.phone = { not: null }; }
 
     const filters = Array.isArray(audienceFilter) ? (audienceFilter as AudienceFilter[]) : [];
     for (const f of filters) {

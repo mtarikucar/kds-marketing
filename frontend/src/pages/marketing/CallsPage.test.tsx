@@ -96,4 +96,26 @@ describe('CallsPage repro', () => {
     renderAt('/?tab=nope');
     expect(screen.getByRole('tab', { name: 'Calls' })).toHaveAttribute('data-state', 'active');
   });
+
+  // ── NetGSM Phase 4 Task 4: queue wallboard gating ──────────────────────────
+
+  it('hides the queue wallboard for a workspace not entitled to telephony (default /billing/summary mock)', async () => {
+    renderAt();
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByText('Queue wallboard')).not.toBeInTheDocument();
+  });
+
+  it('shows the queue wallboard for a telephony-entitled workspace', async () => {
+    getMock.mockImplementation((url: string) => {
+      if (url === '/calls')
+        return Promise.resolve({ data: { data: [], meta: { total: 0, page: 1, limit: 20, totalPages: 0 } } });
+      if (url === '/users') return Promise.resolve({ data: [] });
+      if (url === '/billing/summary')
+        return Promise.resolve({ data: { entitlements: { features: { telephony: true } } } });
+      if (url === '/telephony/queues/stats') return Promise.resolve({ data: { queues: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    renderAt();
+    expect(await screen.findByText('Queue wallboard')).toBeInTheDocument();
+  });
 });

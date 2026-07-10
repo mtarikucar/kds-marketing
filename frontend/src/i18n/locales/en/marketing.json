@@ -23,7 +23,8 @@
       "sources": "Lead Sources",
       "regional": "Regional",
       "conversion": "Conversion",
-      "performance": "Performance"
+      "performance": "Performance",
+      "calls": "Calls"
     },
     "col": {
       "source": "Source",
@@ -416,6 +417,19 @@
     "failed": "Could not sign in. Please try again.",
     "networkError": "Connection error. Please try again."
   },
+  "profile": {
+    "menuItem": "Edit profile",
+    "dialogTitle": "Edit profile",
+    "dialogDescription": "Update your name and phone number.",
+    "firstNameLabel": "First name",
+    "lastNameLabel": "Last name",
+    "phoneLabel": "Phone number",
+    "phoneHint": "Used for SMS two-factor codes if enabled.",
+    "currentPasswordLabel": "Current password to change your phone number",
+    "currentPasswordRequired": "Enter your current password to continue.",
+    "updateSuccess": "Profile updated",
+    "updateError": "Failed to update profile"
+  },
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Performance at a glance",
@@ -540,6 +554,18 @@
   },
   "leadDetail": {
     "back": "Back to leads",
+    "verifyPhone": {
+      "button": "Verify phone",
+      "badge": "Verified",
+      "dialogTitle": "Verify phone number",
+      "dialogDesc": "We texted a 6-digit code to {{phone}}. Enter it below to confirm this number.",
+      "codeLabel": "Verification code",
+      "resend": "Resend code",
+      "confirm": "Confirm",
+      "sendError": "Could not send the code",
+      "invalidCode": "Invalid code",
+      "verified": "Phone number verified"
+    },
     "tabs": {
       "activities": "Activity",
       "offers": "Offers",
@@ -1405,7 +1431,11 @@
     "pauseAi": "Pause AI",
     "close": "Close",
     "failed": "failed",
+    "voicemail": "Voicemail",
+    "fax": "Fax",
+    "faxOpenDocument": "Open document",
     "replyPlaceholder": "Type a reply… (this pauses the AI)",
+    "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
     "context": "Lead",
     "openLead": "Open lead →",
     "noLead": "Select a conversation.",
@@ -1442,7 +1472,11 @@
     "public": "public web chat",
     "noSecrets": "no credentials yet",
     "embed": "Embed snippet (paste before </body>)",
-    "empty": "No channels yet — connect one so customers can message you."
+    "empty": "No channels yet — connect one so customers can message you.",
+    "otpTransport": "OTP delivery channel",
+    "otpTransportSms": "SMS (default)",
+    "otpTransportWhatsapp": "WhatsApp",
+    "otpTransportHelp": "Which channel verification codes (2FA, phone verification) are sent over. WhatsApp requires a paid \"OTP WhatsApp\" package and an approved netgsm_verify_code template on your NetGSM account — if the package is missing or the send fails, the code automatically falls back to SMS."
   },
   "automations": {
     "title": "Automations",
@@ -1509,6 +1543,7 @@
     },
     "subject": "Subject",
     "body": "Message",
+    "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
     "prompt": "Prompt",
     "message": "Message",
     "tag": "Tag",
@@ -1545,6 +1580,12 @@
     "recLead": "Lead",
     "recStatus": "Status",
     "recError": "Error",
+    "smsDelivery": "Delivery (NetGSM)",
+    "smsDelivered": "delivered",
+    "smsUndelivered": "undelivered",
+    "smsBlacklist": "blacklist",
+    "smsIysNotValid": "no İYS consent",
+    "smsOther": "other",
     "createSocial": "Create social content",
     "socialCreated": "Social content campaign created",
     "socialCreateFailed": "Could not create social content",
@@ -1561,6 +1602,7 @@
     "write": "Write",
     "subject": "Subject",
     "body": "Message",
+    "smsCounter": "{{chars}} characters · {{segments}} segment{{plural}}",
     "saved": "Campaign saved",
     "saveFailed": "Save failed",
     "composed": "Draft ready",
@@ -1568,12 +1610,50 @@
     "launched": "Launched",
     "launchFailed": "Launch failed",
     "actionFailed": "Action failed",
+    "cancelScheduled": "Cancel scheduled send",
+    "cancelScheduledTitle": "Cancel scheduled send?",
+    "cancelScheduledDesc": "The campaign will not go out at its scheduled time. You can launch it manually later.",
+    "cancelScheduledConfirm": "Cancel send",
+    "cancelScheduledSuccess": "Scheduled send cancelled",
+    "cancelScheduledFailed": "Could not cancel the scheduled send",
+    "scheduledAt": "Send at (optional)",
+    "scheduledAtHint": "Leave blank to send immediately when you launch.",
+    "scheduledFor": "Scheduled for {{when}}",
+    "scheduleTitle": "Schedule this campaign?",
+    "scheduleDesc": "It will be sent automatically at {{when}}.",
+    "scheduleConfirm": "Schedule",
+    "scheduled": "Scheduled for {{when}}",
     "sent": "sent",
     "opened": "opened",
     "clicked": "clicked",
     "unsub": "unsub",
     "launch": "Launch",
-    "empty": "No campaigns yet — create one and let AI write the copy."
+    "empty": "No campaigns yet — create one and let AI write the copy.",
+    "iysMessageType": "İYS message type",
+    "iysMessageTypeTicariHint": "Commercial (ads/promotions) — requires İYS consent. Recipients without approval are skipped automatically before sending.",
+    "iysMessageTypeBilgiHint": "Informational (order/appointment/account updates) — exempt from İYS consent.",
+    "iysBilgilendirme": "Bilgilendirme (informational)",
+    "iysTicari": "Ticari (commercial)",
+    "iysBlockedLabel": "İYS blocked",
+    "iysUnavailableLabel": "İYS unreachable",
+    "voiceMode": "Voice message type",
+    "voiceModeHint": "Play a built-in text-to-speech message, or upload a pre-recorded .wav.",
+    "voiceModeTts": "Text-to-speech",
+    "voiceModeAudio": "Upload audio file",
+    "voiceMsg": "Spoken text (TTS)",
+    "voiceMsgPlaceholder": "Hello {{lead.contactPerson}}, this is…",
+    "voiceAudio": "Audio file (.wav, max 4MB)",
+    "voiceAudioUpload": "Upload .wav",
+    "voiceAudioReady": "Audio ready",
+    "voiceAudioUploaded": "Audio uploaded",
+    "voiceAudioUploadFailed": "Upload failed",
+    "voiceKeys": "Keypress actions (press-N)",
+    "voiceKeysHint": "Callers pressing a mapped digit fire a voice_keypress trigger you can react to in Automations. Notes here are just for your reference.",
+    "voiceKeyLabel": "Note (optional) — e.g. interested, connect to sales",
+    "removeKeyMapping": "Remove mapping",
+    "addKeyMapping": "Add keypress mapping",
+    "bodyVoiceLabel": "Internal label",
+    "bodyVoiceHint": "For your reference only — not read aloud. The spoken message is set above."
   },
   "sites": {
     "title": "Funnels & Pages",
@@ -1687,7 +1767,13 @@
     "turns": "turns",
     "empty": "No AI calls yet.",
     "selectPrompt": "Select a call to see the transcript.",
-    "noTranscript": "No transcript for this call."
+    "noTranscript": "No transcript for this call.",
+    "leadMatched": "Lead"
+  },
+  "callRecording": {
+    "title": "Recording",
+    "loading": "Loading recording…",
+    "unavailable": "Recording is not available for this call."
   },
   "callAnalysis": {
     "title": "Call analysis",
@@ -1706,6 +1792,48 @@
       "NEGATIVE": "Negative"
     }
   },
+  "queueWallboard": {
+    "title": "Queue wallboard",
+    "waiting": "Waiting",
+    "avgHoldtime": "Avg hold time",
+    "agents": "Agents",
+    "noData": "No active queue yet — configure NetGSM Netsantral queues to see live stats here.",
+    "loadError": "Could not load queue stats.",
+    "helpTitle": "About queues",
+    "helpBody": "Only teammates added to the queue as DYNAMIC members show live state here and can be managed with the toggle below — members added as STATIC in the NetGSM portal are read-only. Queue names follow the `{santral}-queue-{name}` pattern.",
+    "state": {
+      "available": "Available",
+      "paused": "On break",
+      "oncall": "On a call",
+      "offline": "Offline",
+      "unknown": "Unknown"
+    },
+    "presence": {
+      "available": "Available",
+      "break": "Break",
+      "noExtension": "Set your extension in account settings to use presence.",
+      "reasonTitle": "Take a break",
+      "reasonHint": "Optionally pick a reason — your manager sees it on the wallboard.",
+      "reasonLunch": "Lunch",
+      "reasonMeeting": "Meeting",
+      "reasonTechnical": "Technical issue",
+      "reasonOther": "Other",
+      "reasonPlaceholder": "Reason (optional)",
+      "confirm": "Start break",
+      "cancel": "Cancel",
+      "toggleSuccessAvailable": "You're available",
+      "toggleSuccessBreak": "You're on a break",
+      "toggleFailed": "Could not update your status"
+    }
+  },
+  "inboundStats": {
+    "title": "Inbound calls (last 7 days)",
+    "answered": "Answered",
+    "abandoned": "Abandoned",
+    "avgWait": "Avg wait",
+    "loadError": "Could not load call statistics.",
+    "offProdNote": "Call statistics can only be confirmed from the production server IP (NetGSM allow-list)."
+  },
   "copilot": {
     "title": "Live Assistant",
     "listen": "Listen",
@@ -1714,6 +1842,43 @@
     "summary": "Summary",
     "getSuggestions": "Get suggestions",
     "pastePlaceholder": "Paste the call transcript here…"
+  },
+  "webphone": {
+    "incoming": {
+      "title": "Incoming call",
+      "unknown": "Unknown caller",
+      "noNumber": "Number withheld",
+      "accept": "Accept",
+      "reject": "Reject"
+    },
+    "bridgeToast": "Incoming call: {{caller}}",
+    "controls": {
+      "hold": "Hold",
+      "unhold": "Resume",
+      "mute": "Mute",
+      "unmute": "Unmute",
+      "keypad": "Keypad",
+      "transfer": "Transfer",
+      "hangupServer": "End call",
+      "hangupFailed": "Could not end the call",
+      "transferTitle": "Transfer call",
+      "transferHint": "Pick a teammate to hand this call to.",
+      "attended": "Attended (consult first)",
+      "noTeammates": "No teammates with an extension yet",
+      "transferSuccess": "Call transferred",
+      "transferFailed": "Transfer failed",
+      "cancel": "Cancel"
+    },
+    "liveStatus": {
+      "initiated": "Calling…",
+      "ringing": "Ringing…",
+      "connected": "Connected",
+      "noAnswer": "No answer",
+      "busy": "Busy",
+      "failed": "Call failed",
+      "cancelled": "Cancelled",
+      "ended": "Call ended"
+    }
   },
   "voiceAiSettings": {
     "title": "Voice AI",
@@ -2558,5 +2723,24 @@
     "campaignName": "Weekly plan — {{date}}",
     "provisioned": "Your week is being planned — review and approve each draft here.",
     "error": "Could not generate a plan"
+  },
+  "dialer": {
+    "parallel": {
+      "title": "Parallel mode",
+      "subtitle": "Dial many leads at once into a live agent queue.",
+      "toggleLabel": "Parallel mode",
+      "prereqNote": "Requires the paid NetGSM \"Otomatik Arama\" add-on and a Netsantral queue with logged-in agents — set both up in the NetGSM panel first.",
+      "queueLabel": "Queue",
+      "progress": "{{added}} added / {{pending}} pending",
+      "added": "{{n}} added",
+      "pending": "{{n}} pending",
+      "skipped": "{{n}} skipped",
+      "failed": "{{n}} failed",
+      "queueName": "Netsantral queue name",
+      "queueNamePlaceholder": "e.g. sales-queue",
+      "iysType": "Message type",
+      "ticari": "Commercial (TİCARİ)",
+      "bilgilendirme": "Informational (BİLGİLENDİRME)"
+    }
   }
 }

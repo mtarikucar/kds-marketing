@@ -17,6 +17,10 @@ export const FEATURE_KEYS = [
   'apiAccess',
   // GoHighLevel-class capabilities (P1+). Each is a sellable feature gate.
   'conversationAi',
+  // Split off `conversationAi` (NetGSM SMS v2 program): SMS campaigns + SMS
+  // channel management gate on this key specifically; inbox/conversations
+  // stay on `conversationAi`. Granted on every plan block (no regression).
+  'sms',
   'workflows',
   'campaigns',
   'funnels',
@@ -33,6 +37,31 @@ export const FEATURE_KEYS = [
   // API gate) — a leaner first-run; power users switch them on in Modules.
   'memberships',
   'research',
+  // NetGSM SMS v2 Task 12 — SMS OTP (2FA-SMS factor + lead phone verify) is a
+  // PAID NetGSM add-on (error 60 without the OTP package), sold standalone —
+  // `false` in every plan block; only a WorkspaceAddOn grant
+  // (`feature.smsOtp`) turns it on. See TOGGLEABLE_MODULE_KEYS below for why
+  // it's excluded from the Settings > Modules toggle list.
+  'smsOtp',
+  // NetGSM Phase 5 — voice campaigns (TTS/audio blasts via `/voicesms/send`,
+  // press-1 workflow triggers). UNLIKE smsOtp, this one IS plan-entitled
+  // (SCALE + OPERATOR grant it `true`, see seed-packages.ts) as well as
+  // purchasable standalone as a WorkspaceAddOn (`feature.voiceCampaigns`,
+  // ADDON_GRANTS['voice_campaigns_package']) for lower tiers. Because it's
+  // granted in some plans, it IS a real Settings > Modules toggle — see
+  // TOGGLEABLE_MODULE_KEYS below (no exclusion) and the activatedModules
+  // backfill migration 20260709175000.
+  'voiceCampaigns',
+  // NetGSM Phase 6 Task 1 — fax (two-step `/fax/send` multipart + `/fax/receive`
+  // poll). OPPOSITE tiering from voiceCampaigns: `true` ONLY on OPERATOR (see
+  // seed-packages.ts — no paid customer tier grants it by default), `false`
+  // everywhere else, and ALSO purchasable standalone as a WorkspaceAddOn
+  // (`feature.fax`, ADDON_GRANTS['fax_package']) for every non-OPERATOR
+  // workspace. Because OPERATOR grants it `true` in-plan it's still a real
+  // Settings > Modules toggle for that workspace — see TOGGLEABLE_MODULE_KEYS
+  // below (no exclusion) and the activatedModules backfill migration
+  // 20260710120000.
+  'fax',
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -40,9 +69,29 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
  * Feature keys that map to a user-facing MODULE a workspace can toggle on/off for
  * progressive disclosure (via Workspace.activatedModules). `autoAssign` is
  * background behaviour, not a surfaced module, so it is never toggled off here.
+ * `smsOtp` is excluded too: it's an add-on purchase, not a plan-entitled
+ * capability a workspace switches on/off in Modules — since it's `false` in
+ * every plan, listing it here would gain nothing FOR entitled workspaces, but
+ * it WOULD mean any workspace with a customized `activatedModules` allow-list
+ * (predating this key) needs a backfill migration to add it (see the
+ * `entitlements — activatedModules backfill-note tripwire` in
+ * entitlements.tripwire.spec.ts) purely to avoid the allow-list silently
+ * masking a paid add-on it never had a chance to include. Excluding it here
+ * means the allow-list intersection in compute() below never touches it, so
+ * an add-on grant takes effect regardless of any workspace's module
+ * customization — correct, since a purchased add-on isn't a "module" at all.
+ * `voiceCampaigns` is deliberately NOT excluded here (unlike `smsOtp`): it IS
+ * `true` on some plans (SCALE/OPERATOR), so it's a genuine user-facing module
+ * a workspace can switch off — it just ALSO happens to be purchasable as a
+ * standalone add-on on lower tiers. Because it's toggleable, it needed the
+ * backfill migration (20260709175000) — see the backfill-note tripwire.
+ * `fax` is the SAME shape as `voiceCampaigns`, just entitled on a narrower
+ * tier (`true` on OPERATOR only, see seed-packages.ts) — still not excluded
+ * here, still a genuine Settings > Modules toggle for the workspace(s) it's
+ * entitled on, and it needed its own backfill migration (20260710120000).
  */
 export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter(
-  (k) => k !== 'autoAssign',
+  (k) => k !== 'autoAssign' && k !== 'smsOtp',
 );
 
 /**

@@ -306,12 +306,6 @@ const ALLOWED_GLOBAL: Record<string, string> = {
   // file IS workspace-scoped.
   'ads/ad-rules.service.ts:adRule.findMany':
     'hourly ad-rules eval sweep reads enabled rules across all workspaces (system cron)',
-  // Call-recording retrieval sweep (Epic 13, inert): the hourly cron reads ended
-  // api-dial calls missing a recording across ALL workspaces — a system job, same
-  // shape as the ads/subscription sweeps. The only write it triggers is an
-  // id-keyed salesCall.update of recordingUrl; idempotent (re-stamps the same URL).
-  'telephony/recording-sync.service.ts:salesCall.findMany':
-    'hourly call-recording sweep reads ended calls missing a recording across all workspaces (system cron)',
   // Post-call AI-analysis sweep (Voice AI, inert): the 30-min cron reads CONNECTED
   // calls that have a recording but no analysis across ALL workspaces — a system
   // job, same shape as the recording/ads sweeps. Every write it triggers

@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { ChannelAdapterRegistry } from '../channels/channel-adapter.registry';
-import { NetgsmCdrClient, CdrRecord } from './netgsm-cdr.client';
+import { NetgsmCdrClient, CdrRecord } from '../../netgsm/santral/netgsm-cdr.client';
 import { TelephonyConfigService } from './telephony-config.service';
 
 type Creds = { usercode: string; password: string };
@@ -37,10 +37,31 @@ export class CallCdrSyncService {
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'call-cdr-sync' })
   async syncDue(): Promise<void> {
     await withAdvisoryLock(this.prisma, 'telephony:cdr-sync', async () => {
-      const workspaces = await this.prisma.workspace.findMany({
-        where: { status: 'ACTIVE' },
-        select: { id: true },
-      });
+      // Only workspaces that can possibly have CDR creds — mirroring getCreds()'s
+      // two credential sources below: an ACTIVE SMS channel (sealed usercode/
+      // password), OR an ACTIVE TelephonyConfig row (sealed username/password,
+      // same status field/values TelephonyConfigService.resolveForWorkspace
+      // filters on). This supersedes the old `workspace.status === 'ACTIVE'`
+      // scan — that filter is dropped, not preserved, because a workspace can be
+      // ACTIVE with neither source configured (nothing to sync). Two cheap
+      // indexed queries, deduped in code, beat a linear scan over every
+      // workspace each 5-min tick.
+      const [channels, telephonyConfigs] = await Promise.all([
+        this.prisma.channel.findMany({
+          where: { type: 'SMS', status: 'ACTIVE' },
+          select: { workspaceId: true },
+          distinct: ['workspaceId'],
+        }),
+        this.prisma.telephonyConfig.findMany({
+          where: { status: 'ACTIVE' },
+          select: { workspaceId: true },
+        }),
+      ]);
+      const workspaceIds = new Set<string>([
+        ...channels.map((c) => c.workspaceId),
+        ...telephonyConfigs.map((t) => t.workspaceId),
+      ]);
+      const workspaces = [...workspaceIds].map((id) => ({ id }));
       let updated = 0;
       for (const ws of workspaces) {
         try {
@@ -83,8 +104,13 @@ export class CallCdrSyncService {
       if (!bucket || bucket.length === 0) continue;
       const rec = bucket.shift()!; // consume one match
       const connected = rec.duration > 0;
-      await this.prisma.salesCall.update({
-        where: { id: call.id },
+      // Guard on status:'INITIATED' (updateMany, not update) so the live event
+      // webhook — which may have finalized this row during the CDR-fetch window
+      // — is never clobbered/regressed by this reconciliation backstop. The
+      // consumer holds the same monotonic discipline; whichever finalizes first
+      // wins, the other is a no-op.
+      const res = await this.prisma.salesCall.updateMany({
+        where: { id: call.id, workspaceId, status: 'INITIATED' },
         data: {
           status: connected ? 'CONNECTED' : 'NO_ANSWER',
           durationSec: rec.duration,
@@ -92,7 +118,7 @@ export class CallCdrSyncService {
           endedAt: new Date(),
         },
       });
-      updated++;
+      if (res.count > 0) updated++;
     }
     return updated;
   }

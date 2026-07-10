@@ -112,6 +112,18 @@ export function deleteLead(id: string): Promise<void> {
   return marketingApi.delete(`/leads/${id}`).then(() => undefined);
 }
 
+/** POST /leads/:id/verify-phone/start — NetGSM SMS v2 Task 12 (behind the
+ *  `smsOtp` add-on). Texts a fresh code to the lead's phone on file. */
+export function verifyLeadPhoneStart(id: string): Promise<{ sent: boolean }> {
+  return marketingApi.post(`/leads/${id}/verify-phone/start`).then((r) => r.data);
+}
+
+/** POST /leads/:id/verify-phone/confirm — verifies the code and stamps
+ *  `lead.phoneVerifiedAt` on success. */
+export function verifyLeadPhoneConfirm(id: string, code: string): Promise<{ phoneVerifiedAt: string }> {
+  return marketingApi.post(`/leads/${id}/verify-phone/confirm`, { code }).then((r) => r.data);
+}
+
 /** POST /leads/:id/activities — log an activity against a lead. */
 export function createLeadActivity(
   leadId: string,

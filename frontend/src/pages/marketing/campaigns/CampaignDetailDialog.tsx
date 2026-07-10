@@ -18,13 +18,46 @@ import { Badge } from '@/components/ui/Badge';
 import { Spinner } from '@/components/ui/Spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 
+/** NetGSM per-jobid stats() rollup merged by campaign-sms-stats.service.ts —
+ *  a JSON count-by-status map plus a `jobs` sub-object it's derived from
+ *  (per-jobid latest snapshot; not itself a display value). */
+interface CampaignSmsStats {
+  jobs?: Record<string, Record<string, number>>;
+  [status: string]: number | Record<string, Record<string, number>> | undefined;
+}
+
 interface CampaignFull {
   id: string;
   name: string;
   channel: string;
   status: string;
-  stats?: Record<string, number> | null;
+  // iysBlocked (RET/YOK/invalid-phone tally) and iysUnavailable (a TİCARİ
+  // tick aborted closed — see campaign-sender.service.ts's iysPreflight/
+  // abortTicariTick) are rendered as their own dedicated badges below,
+  // never through the generic numeric-badge loop.
+  stats?: (Record<string, number> & { sms?: CampaignSmsStats; iysUnavailable?: boolean }) | null;
 }
+
+/** Known NetGSM delivery buckets get their own labeled cell; everything else
+ *  (repeated/refunded/waiting/…) rolls up into a single "other" count so no
+ *  status is ever silently dropped from the total. */
+const KNOWN_SMS_STATUSES = ['delivered', 'undelivered', 'blacklist', 'iysNotValid'] as const;
+
+function summarizeSmsStats(sms: CampaignSmsStats): { delivered: number; undelivered: number; blacklist: number; iysNotValid: number; other: number } {
+  let other = 0;
+  for (const [key, value] of Object.entries(sms)) {
+    if (key === 'jobs' || typeof value !== 'number') continue;
+    if (!(KNOWN_SMS_STATUSES as readonly string[]).includes(key)) other += value;
+  }
+  return {
+    delivered: typeof sms.delivered === 'number' ? sms.delivered : 0,
+    undelivered: typeof sms.undelivered === 'number' ? sms.undelivered : 0,
+    blacklist: typeof sms.blacklist === 'number' ? sms.blacklist : 0,
+    iysNotValid: typeof sms.iysNotValid === 'number' ? sms.iysNotValid : 0,
+    other,
+  };
+}
+
 interface RecipientRow {
   id: string;
   leadId: string;
@@ -88,10 +121,45 @@ export function CampaignDetailDialog({ campaignId, onClose }: CampaignDetailDial
         ) : (
           <div className="space-y-4 overflow-y-auto">
             <div className="flex flex-wrap gap-2 text-sm">
-              {Object.entries(c.stats ?? {}).map(([k, v]) => (
-                <Badge key={k} tone="neutral">{k}: {v}</Badge>
-              ))}
+              {Object.entries(c.stats ?? {}).map(([k, v]) =>
+                // `sms` is a nested rollup object rendered separately below —
+                // never a plain badge value (would crash: objects aren't valid JSX children).
+                // `iysBlocked`/`iysUnavailable` get their own translated badges
+                // below instead of the raw "iysBlocked: 3" key/value pair.
+                k === 'sms' || k === 'iysBlocked' || k === 'iysUnavailable' || typeof v !== 'number' ? null : (
+                  <Badge key={k} tone="neutral">{k}: {v}</Badge>
+                ),
+              )}
             </div>
+            {(!!c.stats?.iysBlocked || c.stats?.iysUnavailable) && (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                {!!c.stats?.iysBlocked && (
+                  <Badge tone="warning">
+                    {t('campaigns.iysBlockedLabel', 'İYS engelli')}: {c.stats.iysBlocked}
+                  </Badge>
+                )}
+                {c.stats?.iysUnavailable && (
+                  <Badge tone="danger">{t('campaigns.iysUnavailableLabel', 'İYS erişilemedi')}</Badge>
+                )}
+              </div>
+            )}
+            {c.stats?.sms && (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium">{t('campaigns.smsDelivery', 'Delivery (NetGSM)')}:</span>
+                {(() => {
+                  const s = summarizeSmsStats(c.stats.sms);
+                  return (
+                    <>
+                      <Badge tone="success">{t('campaigns.smsDelivered', 'delivered')}: {s.delivered}</Badge>
+                      <Badge tone="danger">{t('campaigns.smsUndelivered', 'undelivered')}: {s.undelivered}</Badge>
+                      <Badge tone="warning">{t('campaigns.smsBlacklist', 'blacklist')}: {s.blacklist}</Badge>
+                      <Badge tone="warning">{t('campaigns.smsIysNotValid', 'no İYS consent')}: {s.iysNotValid}</Badge>
+                      <Badge tone="neutral">{t('campaigns.smsOther', 'other')}: {s.other}</Badge>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             <Table>
               <THead>
                 <TR>

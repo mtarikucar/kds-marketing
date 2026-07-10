@@ -52,6 +52,38 @@ export class ConversationSpendService {
     return { amount: priced.amount, quantity: segments, unitCost: priced.unitCost };
   }
 
+  /**
+   * Price + record an outbound CAMPAIGN SMS by segment count — SpendLedger
+   * entry ONLY, deliberately narrower than `settleSms`: a CampaignRecipient
+   * has no `costAmount` column to stamp (unlike Message), and adding one is
+   * out of scope here, so this mirrors `settleVoice`'s shape (ledger debit +
+   * engine wallet drawdown, no per-row cost stamp) rather than
+   * `debitAndStampMessage`'s.
+   */
+  async settleCampaignSms(
+    workspaceId: string,
+    opts: { recipientId: string; text: string; country?: string | null; budgetId?: string | null },
+  ): Promise<SettlementResult | null> {
+    const segments = smsSegments(opts.text ?? '');
+    const priced = await this.tariffs.price(workspaceId, 'SMS', 'SMS_SEGMENT', segments, opts.country ?? 'TR');
+    if (!priced) return this.unpriced('SMS', workspaceId);
+    await this.safe(async () => {
+      // debitOnce: ref-deduped so a replayed settlement (future retry path,
+      // crash-recovery re-run) can never double-bill the same recipient.
+      await this.ledger.debitOnce(workspaceId, {
+        channel: 'SMS',
+        amount: priced.amount,
+        reason: 'SMS',
+        ref: opts.recipientId,
+        budgetId: opts.budgetId ?? null,
+        unitCost: priced.unitCost,
+        quantity: segments,
+      });
+      await this.engineWalletDrawdown(workspaceId, opts.budgetId ?? null, 'SMS', opts.recipientId, priced.amount);
+    });
+    return { amount: priced.amount, quantity: segments, unitCost: priced.unitCost };
+  }
+
   /** Price + record an outbound WhatsApp template by conversation category. */
   async settleWhatsApp(
     workspaceId: string,
@@ -105,7 +137,9 @@ export class ConversationSpendService {
     extraStamp: Prisma.MessageUpdateInput,
   ): Promise<void> {
     await this.safe(async () => {
-      await this.ledger.debit(workspaceId, {
+      // debitOnce: ref-deduped (messageId) — a replayed settlement no-ops
+      // instead of double-billing; same safety as the wallet drawdown below.
+      await this.ledger.debitOnce(workspaceId, {
         channel,
         amount,
         reason,

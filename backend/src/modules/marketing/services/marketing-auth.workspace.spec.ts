@@ -48,7 +48,8 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         return undefined;
       }),
     };
-    svc = new MarketingAuthService(prisma, jwt as any, config as any);
+    const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    svc = new MarketingAuthService(prisma, jwt as any, config as any, smsOtp as any);
   });
 
   describe('registerWorkspace', () => {

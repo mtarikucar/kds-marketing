@@ -6,7 +6,7 @@ import { isGoogleOAuthConfigured } from '../../../common/util/google-oauth-env';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 import { linkedinRest, linkedinUpload, isLinkedinAuthError } from '../../../common/util/linkedin-api.util';
 import { queryCreatorInfo, validatePrivacyLevel } from './tiktok-creator-info.util';
-import { R2StorageService } from './r2-storage.service';
+import { R2StorageService } from '../../../common/storage/r2-storage.service';
 
 export interface TikTokPostOptions {
   privacyLevel?: string;

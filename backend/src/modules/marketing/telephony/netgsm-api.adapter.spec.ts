@@ -45,6 +45,48 @@ describe('NetgsmApiAdapter', () => {
     await expect(a.prepareOutboundCall({ toPhone: '5', marketingUserId: 'u' })).rejects.toThrow();
   });
 
+  describe('call-recording flag (NetGSM Phase 4 Task 1)', () => {
+    it('bridge mode: passes record:true into callBridge when the resolved config has recordCalls on', async () => {
+      const client = { callBridge: jest.fn().mockResolvedValue({ ok: true, callId: 'u-10' }), originate: jest.fn() } as any;
+      const a = new NetgsmApiAdapter(registry, client);
+      await a.prepareOutboundCall({
+        toPhone: '5551112233', marketingUserId: 'u',
+        config: { username: '850', password: 'pw', trunk: '850', callMode: 'bridge', callerNum: '0532', recordCalls: true },
+      });
+      expect(client.callBridge).toHaveBeenCalledWith(expect.objectContaining({ record: true }));
+    });
+
+    it('bridge mode: passes record:false (no recording) when recordCalls is off/unset', async () => {
+      const client = { callBridge: jest.fn().mockResolvedValue({ ok: true, callId: 'u-11' }), originate: jest.fn() } as any;
+      const a = new NetgsmApiAdapter(registry, client);
+      await a.prepareOutboundCall({
+        toPhone: '5551112233', marketingUserId: 'u',
+        config: { username: '850', password: 'pw', trunk: '850', callMode: 'bridge', callerNum: '0532' },
+      });
+      expect(client.callBridge).toHaveBeenCalledWith(expect.objectContaining({ record: undefined }));
+    });
+
+    it('dahili mode: passes record:true into originate when the resolved config has recordCalls on', async () => {
+      const client = { originate: jest.fn().mockResolvedValue({ ok: true, callId: 'u-12' }), callBridge: jest.fn() } as any;
+      const a = new NetgsmApiAdapter(registry, client);
+      await a.prepareOutboundCall({
+        toPhone: '5551112233', marketingUserId: 'u',
+        config: { username: '850', password: 'pw', trunk: '850', callMode: 'dahili', internalNum: '104', recordCalls: true },
+      });
+      expect(client.originate).toHaveBeenCalledWith(expect.objectContaining({ record: true }));
+    });
+
+    it('dahili mode: omits recording when recordCalls is false', async () => {
+      const client = { originate: jest.fn().mockResolvedValue({ ok: true, callId: 'u-13' }), callBridge: jest.fn() } as any;
+      const a = new NetgsmApiAdapter(registry, client);
+      await a.prepareOutboundCall({
+        toPhone: '5551112233', marketingUserId: 'u',
+        config: { username: '850', password: 'pw', trunk: '850', callMode: 'dahili', internalNum: '104', recordCalls: false },
+      });
+      expect(client.originate).toHaveBeenCalledWith(expect.objectContaining({ record: false }));
+    });
+  });
+
   it('throws when the provider rejects the call', async () => {
     const client = { callBridge: jest.fn().mockResolvedValue({ ok: false, code: '30', message: 'auth' }) } as any;
     const a = new NetgsmApiAdapter(registry, client);

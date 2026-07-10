@@ -1,5 +1,11 @@
-import { normalizeRecords } from './netgsm-cdr.client';
+import { normalizeRecords } from '../../netgsm/santral/netgsm-cdr.client';
 import { CallCdrSyncService } from './call-cdr-sync.service';
+
+jest.mock('../../../common/scheduling/advisory-lock', () => ({
+  withAdvisoryLock: jest.fn(async (_p: any, _n: any, cb: () => Promise<void>) => {
+    await cb();
+  }),
+}));
 
 describe('normalizeRecords — defensive CDR parsing', () => {
   it('parses a flat array with string duration', () => {
@@ -34,7 +40,7 @@ describe('CallCdrSyncService.syncWorkspace', () => {
   beforeEach(() => {
     prisma = {
       channel: { findMany: jest.fn().mockResolvedValue([{ id: 'sms1', type: 'SMS', status: 'ACTIVE' }]) },
-      salesCall: { findMany: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+      salesCall: { findMany: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     registry = { resolveConfig: jest.fn().mockReturnValue({ secrets: { usercode: 'u', password: 'p' } }) };
     cdr = { fetchCdr: jest.fn() };
@@ -50,19 +56,28 @@ describe('CallCdrSyncService.syncWorkspace', () => {
 
     const n = await svc.syncWorkspace('ws');
     expect(n).toBe(1);
-    expect(prisma.salesCall.update).toHaveBeenCalledWith(
+    expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'c1' },
+        // status-guarded so the live event webhook is never regressed
+        where: { id: 'c1', workspaceId: 'ws', status: 'INITIATED' },
         data: expect.objectContaining({ status: 'CONNECTED', durationSec: 42, recordingUrl: 'http://rec/1' }),
       }),
     );
+  });
+
+  it('does NOT count a call the webhook already finalized (updateMany count 0)', async () => {
+    prisma.salesCall.findMany.mockResolvedValue([{ id: 'c1', toPhone: '5060687100', startedAt: new Date() }]);
+    cdr.fetchCdr.mockResolvedValue([{ destination: '5060687100', duration: 42 }]);
+    prisma.salesCall.updateMany.mockResolvedValueOnce({ count: 0 }); // webhook won the race
+    const n = await svc.syncWorkspace('ws');
+    expect(n).toBe(0);
   });
 
   it('marks a zero-duration match as NO_ANSWER', async () => {
     prisma.salesCall.findMany.mockResolvedValue([{ id: 'c1', toPhone: '5060687100', startedAt: new Date() }]);
     cdr.fetchCdr.mockResolvedValue([{ destination: '905060687100', duration: 0 }]);
     await svc.syncWorkspace('ws');
-    expect(prisma.salesCall.update).toHaveBeenCalledWith(
+    expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'NO_ANSWER', durationSec: 0 }) }),
     );
   });
@@ -79,7 +94,7 @@ describe('CallCdrSyncService.syncWorkspace', () => {
     cdr.fetchCdr.mockResolvedValue([{ destination: '5060687100', duration: 30 }]);
     const n = await svc.syncWorkspace('ws');
     expect(n).toBe(0);
-    expect(prisma.salesCall.update).not.toHaveBeenCalled();
+    expect(prisma.salesCall.updateMany).not.toHaveBeenCalled();
   });
 
   it('falls back to telephony-config creds when there is no SMS channel', async () => {
@@ -94,5 +109,83 @@ describe('CallCdrSyncService.syncWorkspace', () => {
       expect.any(String),
       expect.any(String),
     );
+  });
+});
+
+describe('CallCdrSyncService.syncDue (cron tick — workspace enumeration)', () => {
+  let prisma: any;
+  let registry: any;
+  let cdr: any;
+  let telephony: any;
+  let svc: CallCdrSyncService;
+
+  beforeEach(() => {
+    prisma = {
+      channel: { findMany: jest.fn().mockResolvedValue([]) },
+      telephonyConfig: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    registry = { resolveConfig: jest.fn() };
+    cdr = { fetchCdr: jest.fn() };
+    telephony = { resolveForWorkspace: jest.fn() };
+    svc = new CallCdrSyncService(prisma, registry, cdr, telephony);
+  });
+
+  it('syncs a workspace that has an ACTIVE SMS channel', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ workspaceId: 'ws-with-sms' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(prisma.channel.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { type: 'SMS', status: 'ACTIVE' } }),
+    );
+    expect(spy).toHaveBeenCalledWith('ws-with-sms');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('syncs a workspace that has only an ACTIVE TelephonyConfig (no SMS channel)', async () => {
+    prisma.channel.findMany.mockResolvedValue([]); // no SMS channel anywhere
+    prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-tel-only' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(prisma.telephonyConfig.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: 'ACTIVE' } }),
+    );
+    expect(spy).toHaveBeenCalledWith('ws-tel-only');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not sync a workspace without an ACTIVE SMS channel or TelephonyConfig', async () => {
+    prisma.channel.findMany.mockResolvedValue([]); // no ACTIVE SMS channel anywhere
+    prisma.telephonyConfig.findMany.mockResolvedValue([]); // no ACTIVE TelephonyConfig anywhere
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('syncs each distinct workspace exactly once', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ workspaceId: 'ws-a' }, { workspaceId: 'ws-b' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledWith('ws-a');
+    expect(spy).toHaveBeenCalledWith('ws-b');
+  });
+
+  it('dedupes a workspace present in both the SMS-channel and TelephonyConfig sources', async () => {
+    prisma.channel.findMany.mockResolvedValue([{ workspaceId: 'ws-both' }]);
+    prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-both' }]);
+    const spy = jest.spyOn(svc, 'syncWorkspace').mockResolvedValue(0);
+
+    await svc.syncDue();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('ws-both');
   });
 });

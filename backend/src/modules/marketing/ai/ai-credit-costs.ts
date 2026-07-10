@@ -16,6 +16,9 @@ export const AI_CREDIT_COSTS = {
   'funnel.draft': { credits: 3, tier: 'default' as AiModelTier },
   'review.reply_draft': { credits: 1, tier: 'default' as AiModelTier },
   'voice.turn': { credits: 2, tier: 'default' as AiModelTier },
+  // Voice-AI Phase 5.2 cost decisions (were numeric literals in the services):
+  'voice.analysis': { credits: 3, tier: 'default' as AiModelTier },
+  'voice.copilot': { credits: 1, tier: 'conversation' as AiModelTier },
   // AI Social Content Studio — per-model estimate (media-models.config) governs
   // the reserve; these are the registered floor + tripwire-pinned cost decision.
   'media.image.generate': { credits: 3, tier: 'default' as AiModelTier },

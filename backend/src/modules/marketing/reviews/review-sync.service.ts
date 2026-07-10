@@ -13,8 +13,8 @@ const LOW_RATING_THRESHOLD = 4;
 /**
  * Hourly review-sync sweep for connected Google Business / Facebook sources
  * (Epic 13, needs-external — INERT until a provider app env + a sealed page/
- * location token are present). Mirrors AdsPullService/RecordingSyncService: a
- * single-replica advisory lock guards the tick. The DUE-source read is the one
+ * location token are present). Mirrors AdsPullService: a single-replica
+ * advisory lock guards the tick. The DUE-source read is the one
  * cross-workspace system read (whitelisted in the scoping fitness test); the
  * upsert is idempotent on (sourceId, externalReviewId) so a re-sync never
  * duplicates, and a low-rating NEW review raises ReviewReceived (deduped by the

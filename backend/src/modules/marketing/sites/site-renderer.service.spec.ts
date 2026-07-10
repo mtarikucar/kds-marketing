@@ -100,4 +100,73 @@ describe('SiteRendererService', () => {
     const bad = svc.render({ title: 'T', blocks: [], theme: { accent: 'red;}body{x' } }, new Map(), '');
     expect(bad).not.toContain('red;}body{x');
   });
+
+  describe("'callback' block (NetGSM Phase 5 Task 6 — leave your number, we call you now)", () => {
+    // Final-review fix M2: redirectMenu/redirectType are NO LONGER carried as
+    // hidden fields (the public endpoint now resolves the dial target itself,
+    // server-side, from the tenant's published block config — see
+    // SitesService.resolvePublicCallbackTarget — rather than trusting
+    // whatever the request body says). This block's own redirectMenu still
+    // gates whether the widget renders at all.
+    it('renders a JS-free POST form to the public callback endpoint, WITHOUT redirectMenu/redirectType in the markup', () => {
+      const html = svc.render(
+        { title: 'T', blocks: [{ type: 'callback', heading: 'Call me', redirectMenu: '850-queue-vip', redirectType: 'queue' }] },
+        new Map(),
+        'https://m.example',
+        { workspaceId: 'ws-1' },
+      );
+      expect(html).toContain('action="https://m.example/api/public/callback/ws-1"');
+      expect(html).toContain('method="POST"');
+      expect(html).not.toContain('redirectMenu');
+      expect(html).not.toContain('redirectType');
+      expect(html).toContain('type="tel" name="phone" required');
+      expect(html).not.toContain('<script');
+    });
+
+    it('escapes customer-authored heading/text (no script injection)', () => {
+      const html = svc.render(
+        { title: 'T', blocks: [{ type: 'callback', heading: '<script>x</script>', redirectMenu: 'q1', redirectType: 'queue' }] },
+        new Map(),
+        'https://m.example',
+        { workspaceId: 'ws-1' },
+      );
+      expect(html).not.toContain('<script>x</script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+
+    it('renders TR default copy when the page is Turkish (seo.lang), EN otherwise', () => {
+      const tr = svc.render(
+        { title: 'T', blocks: [{ type: 'callback', redirectMenu: 'q1', redirectType: 'queue' }], seo: { lang: 'tr' } },
+        new Map(),
+        'https://m.example',
+        { workspaceId: 'ws-1' },
+      );
+      expect(tr).toContain('Sizi hemen arayalım');
+
+      const en = svc.render(
+        { title: 'T', blocks: [{ type: 'callback', redirectMenu: 'q1', redirectType: 'queue' }] },
+        new Map(),
+        'https://m.example',
+        { workspaceId: 'ws-1' },
+      );
+      expect(en).toContain('We&#39;ll call you right now'); // apostrophe HTML-escaped
+    });
+
+    it('renders nothing (no crash) without a workspaceId or without a configured redirectMenu', () => {
+      const noWs = svc.render(
+        { title: 'T', blocks: [{ type: 'callback', redirectMenu: 'q1', redirectType: 'queue' }] },
+        new Map(),
+        'https://m.example',
+      );
+      expect(noWs).not.toContain('api/public/callback');
+
+      const noMenu = svc.render(
+        { title: 'T', blocks: [{ type: 'callback', redirectType: 'queue' }] },
+        new Map(),
+        'https://m.example',
+        { workspaceId: 'ws-1' },
+      );
+      expect(noMenu).not.toContain('api/public/callback');
+    });
+  });
 });
