@@ -225,6 +225,27 @@ export class NetgsmOnboardingService {
       detail: 'voiceReportWebhookHint',
     });
 
+    // NetGSM guided setup — dynamic-IVR inbound webhook (Phase 5's missing
+    // checklist row). The route (netgsm-ivr.controller.ts) is gated on the
+    // PLATFORM-level NETGSM_IVR_TOKEN env and 404s until it's set, so this is
+    // a real, fixable 'missing' (the platform operator sets the env) rather
+    // than an 'unknown'. Once set, the URL is surfaced with a `{token}`
+    // PLACEHOLDER — the token is a platform-wide secret shared across every
+    // tenant's webhook, so it is never rendered per-workspace (mirrors
+    // VoiceAiStatusController's urls.netgsmIvr policy); the operator
+    // substitutes it when pasting into NetGSM's "Özel API (Custom)" panel.
+    const ivrTokenSet =
+      typeof process.env.NETGSM_IVR_TOKEN === 'string' && process.env.NETGSM_IVR_TOKEN.trim().length > 0;
+    items.push({
+      key: 'ivrWebhook',
+      state: ivrTokenSet ? 'unknown' : 'missing',
+      url:
+        ivrTokenSet && base
+          ? `${base.replace(/\/+$/, '')}/api/public/telephony/netgsm-ivr/{token}`
+          : undefined,
+      detail: ivrTokenSet ? 'ivrWebhookHint' : 'ivrTokenMissing',
+    });
+
     // NetGSM Phase 5 Task 7 — the autocall parallel dialer (autocall.client.ts)
     // REQUIRES a Netsantral queue with logged-in agents to have anywhere to
     // connect an answered call to (see autocall.client.ts's own doc comment);

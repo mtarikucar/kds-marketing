@@ -183,6 +183,17 @@ jobs:
           # NetGSM *SMS* credentials (usercode/password/msgheader) are NOT env vars —
           # they live per-channel, sealed in the DB (set via Channels settings UI).
           NETGSM_SALES_LINE: ${{ secrets.NETGSM_SALES_LINE }}
+          # NetGSM dynamic-IVR inbound webhook token (optional). Gates the public
+          # /api/public/telephony/netgsm-ivr/:token route — the route 404s (IVR
+          # stays inert) until this is set. Any long random string; the SAME value
+          # goes into the URL pasted into NetGSM's "Özel API (Custom)" panel.
+          NETGSM_IVR_TOKEN: ${{ secrets.NETGSM_IVR_TOKEN }}
+          # Post-call AI analysis STT (optional; unset = transcription disabled).
+          STT_PROVIDER: ${{ secrets.STT_PROVIDER }}
+          STT_API_KEY: ${{ secrets.STT_API_KEY }}
+          # External AI-voice partner bridge (VAPI/Retell/ElevenLabs custom-LLM)
+          # shared secret (optional; unset = bridge endpoints stay inert).
+          VOICE_AI_BRIDGE_SECRET: ${{ secrets.VOICE_AI_BRIDGE_SECRET }}
           # Growth Autopilot autonomy (owner-approved LIVE 2026-07). '1' arms the
           # AUTONOMOUS lane globally: a workspace that loads credit + flips the
           # switch gets real, approval-free budget reallocation on its connected
@@ -267,6 +278,12 @@ jobs:
           # NetGSM click-to-dial sales line (telephony only; empty = inert). SMS
           # creds are per-channel in the DB, not here.
           NETGSM_SALES_LINE=${NETGSM_SALES_LINE}
+          # NetGSM dynamic IVR + post-call STT + AI-voice bridge (all optional;
+          # empty = each surface stays inert, never fails the deploy).
+          NETGSM_IVR_TOKEN=${NETGSM_IVR_TOKEN}
+          STT_PROVIDER=${STT_PROVIDER}
+          STT_API_KEY=${STT_API_KEY}
+          VOICE_AI_BRIDGE_SECRET=${VOICE_AI_BRIDGE_SECRET}
           # Growth Autopilot autonomy (repo Variable GROWTH_AUTOPILOT_AUTONOMY).
           # '1' arms the AUTONOMOUS lane; empty/0 = ASSISTED fallback everywhere.
           GROWTH_AUTOPILOT_AUTONOMY=${GROWTH_AUTOPILOT_AUTONOMY}
