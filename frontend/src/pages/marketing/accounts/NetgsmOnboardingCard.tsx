@@ -58,6 +58,19 @@ const DETAIL_I18N_FALLBACK: Record<string, string> = {
   // (queue existence + agent login), nothing this app can read or set.
   autocallQueueHint:
     'The auto-dialer needs a Netsantral queue with logged-in agents to connect answered calls to — set this up in the Netsantral panel.',
+  // NetGSM Phase 6 Task 1 — faxNumber has no live probe (fax reuses the SMS
+  // channel's own creds, same as voicePackage/otpPackage above); this hint
+  // names the portal-only, paid prerequisite.
+  faxNumberHint:
+    'A fax-enabled NetGSM number is required (set up in the NetGSM portal) — fax send/receive will not work without it.',
+  // NetGSM Phase 6 Task 3 — whatsappOtpPackage has no live probe (sending a
+  // real WhatsApp OTP just to check would be an unwanted send, same
+  // reasoning as otpPackage); this hint explains the silent SMS fallback.
+  whatsappOtpPackageHint:
+    'WhatsApp OTP needs a paid OTP-WhatsApp package and Meta template approval on your NetGSM account — until then, OTP codes are sent over SMS automatically.',
+  // NetGSM Phase 6 Task 4 — shown only while netasistanKeys is 'unknown'
+  // (not yet configured); Netasistan is an opt-in add-on, not a required step.
+  netasistanKeysHint: 'Configure your Netasistan app-key and user-key to sync agent break/queue presence.',
 };
 
 /**
@@ -96,6 +109,9 @@ export function NetgsmOnboardingCard() {
       voicePackage: 'Voice SMS / Otomatik Arama package',
       voiceReportWebhook: 'Voice-campaign report webhook URL',
       autocallQueue: 'Netsantral queue with logged-in agents',
+      faxNumber: 'Fax-enabled NetGSM number',
+      whatsappOtpPackage: 'WhatsApp OTP package',
+      netasistanKeys: 'Netasistan app-key / user-key configured',
     };
     return t(`accounts.netgsm.${key}`, fallbacks[key] ?? key);
   };

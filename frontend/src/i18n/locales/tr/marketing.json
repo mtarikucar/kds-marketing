@@ -250,6 +250,9 @@
       "voicePackage": "Sesli SMS / Otomatik Arama paketi",
       "voiceReportWebhook": "Sesli kampanya sonuç bildirimi webhook URL'si",
       "autocallQueue": "Oturum açmış temsilcili Netsantral kuyruğu",
+      "faxNumber": "Faks özellikli NetGSM numarası",
+      "whatsappOtpPackage": "WhatsApp OTP paketi",
+      "netasistanKeys": "Netasistan app-key / user-key tanımlı",
       "repsCount": "{{count}} temsilcide dahili tanımlı",
       "detail": {
         "viaSantralCreds": "Paylaşılan Netsantral kimlik bilgileriniz üzerinden kontrol edildi",
@@ -262,7 +265,10 @@
         "recordingsReceivingHint": "Kayıtların depolandığını doğrulamak için kaydı açık bir arama yapıp tamamlayın",
         "voiceReportWebhookHint": "Her VOICE kampanya çağrısında otomatik olarak ayarlanır — manuel yapıştırma gerekmez",
         "voicePackageHint": "Gerçek bir sesli arama gönderilmeden kontrol edilemez — Sesli SMS ve Otomatik Arama, NetGSM hesabınızda ayrı ayrı satın alınması gereken ücretli paketlerdir; her biri aktif edilene kadar gönderimler NetGSM hata 60 ile başarısız olur.",
-        "autocallQueueHint": "Otomatik Arama'nın, yanıtlanan çağrıları aktarabilmesi için oturum açmış temsilcileri olan bir Netsantral kuyruğuna ihtiyacı vardır — bunu Netsantral panelinden kurun."
+        "autocallQueueHint": "Otomatik Arama'nın, yanıtlanan çağrıları aktarabilmesi için oturum açmış temsilcileri olan bir Netsantral kuyruğuna ihtiyacı vardır — bunu Netsantral panelinden kurun.",
+        "faxNumberHint": "Faks gönderip almak için NetGSM panelinden faks özellikli bir numara tanımlanmalıdır — bu olmadan faks gönderme/alma çalışmaz.",
+        "whatsappOtpPackageHint": "WhatsApp OTP için NetGSM hesabınızda ücretli bir OTP-WhatsApp paketi ve Meta şablon onayı gerekir — paket aktif olana kadar OTP kodları otomatik olarak SMS ile gönderilir.",
+        "netasistanKeysHint": "Temsilci mola/kuyruk durumunu senkronize etmek için Netasistan app-key ve user-key bilgilerinizi tanımlayın."
       }
     },
     "tab": {

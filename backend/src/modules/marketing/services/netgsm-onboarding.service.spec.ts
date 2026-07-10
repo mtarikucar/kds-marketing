@@ -26,8 +26,14 @@ function prismaMock() {
     salesCall: { count: jest.fn().mockResolvedValue(0) },
   } as any;
 }
+/** Default: no TelephonyConfig row at all (get() -> null), so
+ *  netasistanKeys defaults to 'unknown' unless a test overrides it —
+ *  mirrors resolveForWorkspace's own "nothing configured yet" default. */
 function telephonyMock() {
-  return { resolveForWorkspace: jest.fn() } as any;
+  return {
+    resolveForWorkspace: jest.fn(),
+    get: jest.fn().mockResolvedValue(null),
+  } as any;
 }
 function balanceMock() {
   return { fetchBalance: jest.fn() } as any;
@@ -545,6 +551,75 @@ describe('NetgsmOnboardingService', () => {
     const { items } = await svc.checklist('ws');
     expect(items.find((i) => i.key === 'autocallQueue')).toEqual({
       key: 'autocallQueue', state: 'unknown', detail: 'autocallQueueHint',
+    });
+  });
+
+  it('faxNumber: always unknown with the fax-enabled-number portal hint (fax reuses the SMS channel creds — no separate probe)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'faxNumber')).toEqual({
+      key: 'faxNumber', state: 'unknown', detail: 'faxNumberHint',
+    });
+  });
+
+  it('whatsappOtpPackage: always unknown with the paid-package + Meta-template hint (no live probe — OTP falls back to SMS without it)', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'whatsappOtpPackage')).toEqual({
+      key: 'whatsappOtpPackage', state: 'unknown', detail: 'whatsappOtpPackageHint',
+    });
+  });
+
+  it('netasistanKeys: unknown (configure hint) when TelephonyConfigService.get() reports no config row at all', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    telephony.get.mockResolvedValue(null);
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(telephony.get).toHaveBeenCalledWith('ws');
+    expect(items.find((i) => i.key === 'netasistanKeys')).toEqual({
+      key: 'netasistanKeys', state: 'unknown', detail: 'netasistanKeysHint',
+    });
+  });
+
+  it('netasistanKeys: unknown (configure hint) when the masked config exists but netasistanConfigured is false', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    telephony.get.mockResolvedValue({ netasistanConfigured: false });
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'netasistanKeys')).toEqual({
+      key: 'netasistanKeys', state: 'unknown', detail: 'netasistanKeysHint',
+    });
+  });
+
+  it('netasistanKeys: ok (no detail) once TelephonyConfigService.get() reports netasistanConfigured true — never unseals the keys itself', async () => {
+    const prisma = prismaMock();
+    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.marketingUser.count.mockResolvedValue(0);
+    const telephony = telephonyMock();
+    telephony.resolveForWorkspace.mockResolvedValue(null);
+    telephony.get.mockResolvedValue({ netasistanConfigured: true });
+    const svc = new NetgsmOnboardingService(prisma, telephony, balanceMock(), smsV2Mock(), registryMock(), r2Mock());
+    const { items } = await svc.checklist('ws');
+    expect(items.find((i) => i.key === 'netasistanKeys')).toEqual({
+      key: 'netasistanKeys', state: 'ok', detail: undefined,
     });
   });
 });

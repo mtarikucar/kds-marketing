@@ -233,6 +233,40 @@ export class NetgsmOnboardingService {
     // 'unknown' with a detail pointing at the portal-only setup step.
     items.push({ key: 'autocallQueue', state: 'unknown', detail: 'autocallQueueHint' });
 
+    // NetGSM Phase 6 Task 1 — fax (send/receive) reuses the workspace's
+    // ACTIVE SMS channel creds (FaxSendService.resolveCreds, mirrors
+    // voicePackage/otpPackage) — there's no separate "fax channel" row, and a
+    // fax-enabled NetGSM number is a portal-only, paid prerequisite NetGSM
+    // never reports back on. Always 'unknown' with a detail naming the
+    // portal step; degrades the same way voicePackage/otpPackage do.
+    items.push({ key: 'faxNumber', state: 'unknown', detail: 'faxNumberHint' });
+
+    // NetGSM Phase 6 Task 3 — WhatsApp OTP is an alternate delivery
+    // transport for the existing smsOtp flow (SmsOtpService.deliverCode),
+    // gated on a paid OTP-WhatsApp package + Meta template approval that
+    // NetGSM exposes no read-only probe for (same reasoning as otpPackage
+    // above — sending a real WhatsApp OTP just to populate this row would be
+    // an unwanted, user-facing send). Always 'unknown'; the detail explains
+    // that OTP silently falls back to SMS until the package is active.
+    items.push({ key: 'whatsappOtpPackage', state: 'unknown', detail: 'whatsappOtpPackageHint' });
+
+    // NetGSM Phase 6 Task 4 — Netasistan is a SEPARATE auth realm (app-key +
+    // user-key -> its own 1h bearer, sealed independently of the santral
+    // creds on TelephonyConfig.netasistanConfigSealed) that TelephonyQueueService's
+    // presence sync reads via resolveNetasistanForWorkspace. Unlike that
+    // resolver (which unseals the actual keys), this row only needs to know
+    // WHETHER both are saved — read via TelephonyConfigService.get()'s own
+    // masked `netasistanConfigured` boolean (never unseal here). 'ok' once
+    // both keys are configured; 'unknown' (never 'missing' — it's an
+    // opt-in add-on, not a required step) otherwise, with a hint that
+    // configuring it syncs agent break/queue presence.
+    const telephonyMasked = await this.telephony.get(workspaceId);
+    items.push({
+      key: 'netasistanKeys',
+      state: telephonyMasked?.netasistanConfigured ? 'ok' : 'unknown',
+      detail: telephonyMasked?.netasistanConfigured ? undefined : 'netasistanKeysHint',
+    });
+
     return { items };
   }
 
