@@ -131,13 +131,27 @@ export class IvrService {
       prompts.push(`<Say>For ${xml(o.label)}, press ${xml(o.digit)}.</Say>`);
     }
 
-    return (
-      `<?xml version="1.0" encoding="UTF-8"?><Response>` +
+    const gather =
       `<Gather numDigits="1" action="${xml(this.digitActionUrl(menuId))}" method="POST">` +
       prompts.join('') +
-      `</Gather>` +
-      // No input → reprompt once by replaying the menu, then give up.
-      `<Redirect method="POST">${xml(this.digitActionUrl(menuId))}</Redirect>` +
+      `</Gather>`;
+
+    // No-input handling is self-contained in ONE response (no webhook round
+    // trip): on the first <Gather> timeout Twilio falls through to a SECOND
+    // <Gather> (the single reprompt), and a second timeout falls through to
+    // <Hangup>. A digit pressed in EITHER <Gather> POSTs to the action
+    // (handleDigit) and the later verbs never run.
+    //
+    // This replaces a trailing <Redirect> back to the digit handler: on an
+    // empty (no-input) digit handleDigit re-rendered THIS SAME menu, whose
+    // Redirect pointed back at handleDigit again — an infinite reprompt loop on
+    // a silent caller (the call never hung up, burning telephony minutes),
+    // contradicting this method's own "reprompt once, then hang up" contract.
+    return (
+      `<?xml version="1.0" encoding="UTF-8"?><Response>` +
+      gather +
+      gather +
+      `<Say>We did not receive a selection. Goodbye.</Say><Hangup/>` +
       `</Response>`
     );
   }

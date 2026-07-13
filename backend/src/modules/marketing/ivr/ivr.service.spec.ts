@@ -56,6 +56,20 @@ describe('IvrService', () => {
       expect(twiml).not.toContain('<Play>');
     });
 
+    it('handles no-input in-response: reprompts ONCE then hangs up — never a looping <Redirect>', async () => {
+      prisma.ivrMenu.findFirst.mockResolvedValue({ id: 'm1', workspaceId: WS, greeting: 'Welcome!' });
+      prisma.ivrOption.findMany.mockResolvedValue([{ digit: '1', label: 'Sales' }]);
+
+      const twiml = await svc.renderMenuTwiml(WS, 'm1');
+
+      // Two <Gather>s (first prompt + one reprompt) then a terminal <Hangup>.
+      expect(twiml.match(/<Gather /g)).toHaveLength(2);
+      expect(twiml).toContain('<Hangup/>');
+      // The old looping fall-through must be gone — a <Redirect> back to the
+      // digit handler re-rendered this menu forever on a silent caller.
+      expect(twiml).not.toContain('<Redirect');
+    });
+
     it('plays an audio-URL greeting via <Play>', async () => {
       prisma.ivrMenu.findFirst.mockResolvedValue({ id: 'm1', workspaceId: WS, greeting: 'https://cdn.example/greet.mp3' });
       const twiml = await svc.renderMenuTwiml(WS, 'm1');
