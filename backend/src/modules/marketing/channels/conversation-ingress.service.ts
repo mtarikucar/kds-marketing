@@ -47,7 +47,7 @@ const SOURCE_BY_CHANNEL: Record<string, string> = {
 @Injectable()
 export class ConversationIngressService {
   private readonly logger = new Logger(ConversationIngressService.name);
-  private readonly sentinelCache = new Map<string, string | null>();
+  private readonly sentinelCache = new Map<string, string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -58,13 +58,19 @@ export class ConversationIngressService {
   ) {}
 
   private async resolveSentinel(workspaceId: string): Promise<string | null> {
-    if (this.sentinelCache.has(workspaceId)) return this.sentinelCache.get(workspaceId)!;
+    const cached = this.sentinelCache.get(workspaceId);
+    if (cached) return cached;
     const row = await this.prisma.marketingUser.findFirst({
       where: { workspaceId, role: 'SYSTEM' },
       select: { id: true },
     });
     const id = row?.id ?? null;
-    this.sentinelCache.set(workspaceId, id);
+    // Cache only a RESOLVED id — never a miss. Caching null would permanently
+    // (until process restart) disable the "new conversation" lead-activity note
+    // for any workspace whose SYSTEM user didn't exist yet at its first inbound
+    // message (a mid-provisioned/new workspace, or one backfilled later): every
+    // later lookup would short-circuit on the stale null instead of re-checking.
+    if (id) this.sentinelCache.set(workspaceId, id);
     return id;
   }
 

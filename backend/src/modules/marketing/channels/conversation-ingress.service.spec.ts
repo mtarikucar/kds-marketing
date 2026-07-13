@@ -84,6 +84,22 @@ describe('ConversationIngressService', () => {
     expect(stream.push).toHaveBeenCalled();
   });
 
+  it('does not cache a NULL sentinel — a SYSTEM user created after the first message is picked up', async () => {
+    // First inbound: the workspace has no SYSTEM user yet → no activity note,
+    // and the miss must NOT be cached.
+    prisma.marketingUser.findFirst.mockReset();
+    prisma.marketingUser.findFirst.mockResolvedValueOnce(null).mockResolvedValue({ id: 'sys-1' });
+
+    await svc.ingest(channel, { ...inbound, externalMessageId: 'wamid.s1' });
+    expect(prisma.leadActivity.create).not.toHaveBeenCalled();
+
+    // Second inbound: the SYSTEM user now exists. Because the null wasn't cached,
+    // resolveSentinel re-checks (2nd findFirst) and the note is written.
+    await svc.ingest(channel, { ...inbound, externalMessageId: 'wamid.s2' });
+    expect(prisma.marketingUser.findFirst).toHaveBeenCalledTimes(2);
+    expect(prisma.leadActivity.create).toHaveBeenCalledTimes(1);
+  });
+
   it('redelivered provider message dedupes (no tx, no new rows) — scoped to the workspace', async () => {
     prisma.message.findFirst.mockResolvedValue({ id: 'msg-9', conversationId: 'conv-9' });
     prisma.conversation.findFirst.mockResolvedValue({ leadId: 'lead-9' });
