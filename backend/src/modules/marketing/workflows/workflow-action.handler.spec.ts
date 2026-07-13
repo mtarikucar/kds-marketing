@@ -185,6 +185,62 @@ describe('WorkflowActionHandler assign_lead', () => {
   });
 });
 
+describe('WorkflowActionHandler ai_classify (category routing)', () => {
+  const mkHandler = (anthropic: any, credits: any) =>
+    new WorkflowActionHandler(
+      null as any, null as any, anthropic, credits,
+      null as any, null as any, null as any, null as any, null as any,
+    );
+  const ctx: WorkflowContext = { workspaceId: 'ws-1', lead: { id: 'lead-1' }, trigger: {}, context: {} };
+  const step = (over: any = {}) => ({
+    type: 'ai_classify',
+    prompt: 'Is this lead hot?',
+    categories: ['hot', 'not_hot'],
+    routes: { hot: 5, not_hot: 10 },
+    ...over,
+  });
+  const mkAi = (text: string) => ({ isEnabled: () => true, complete: jest.fn().mockResolvedValue({ text }) });
+  const mkCredits = () => ({ reserve: jest.fn(), refund: jest.fn() });
+
+  // Regression: a category that is a SUBSTRING of another ("hot" ⊂ "not_hot",
+  // "new" ⊂ "renew") must not steal the route. A naive `reply.includes(category)`
+  // + first-match scan routed the reply "not_hot" to hot (5) — the first-listed
+  // CONTAINING category — mis-routing e.g. a "not interested" lead into the
+  // "interested → aggressive follow-up" branch. Exact match must win.
+  it('routes an exact reply to its own category even when another category is a substring', async () => {
+    const handler = mkHandler(mkAi('not_hot'), mkCredits());
+    const res = await handler.execute(step() as any, ctx);
+    expect(res.output?.category).toBe('not_hot');
+    expect(res.goto).toBe(10);
+  });
+
+  it('routing is independent of category declaration order (substring listed first)', async () => {
+    const handler = mkHandler(mkAi('renew'), mkCredits());
+    const res = await handler.execute(
+      step({ categories: ['new', 'renew'], routes: { new: 1, renew: 2 } }) as any, ctx,
+    );
+    expect(res.output?.category).toBe('renew');
+    expect(res.goto).toBe(2);
+  });
+
+  // Lenient fallback: the model may not comply perfectly and wrap the category
+  // in prose ("the category is: not_hot."). The LONGEST matching category wins
+  // so specificity beats a shorter substring regardless of order.
+  it('falls back to the LONGEST substring match for a chatty reply', async () => {
+    const handler = mkHandler(mkAi('The category is: not_hot.'), mkCredits());
+    const res = await handler.execute(step() as any, ctx);
+    expect(res.output?.category).toBe('not_hot');
+    expect(res.goto).toBe(10);
+  });
+
+  it('no matching category → no goto, category null (falls through to next step)', async () => {
+    const handler = mkHandler(mkAi('cold'), mkCredits());
+    const res = await handler.execute(step() as any, ctx);
+    expect(res.output?.category).toBeNull();
+    expect(res.goto).toBeUndefined();
+  });
+});
+
 describe('WorkflowActionHandler tag actions', () => {
   const mkHandler = (tags: any) =>
     new WorkflowActionHandler(

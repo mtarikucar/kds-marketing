@@ -212,9 +212,23 @@ export class WorkflowActionHandler {
         maxTokens: 16,
         tier: tierFor('workflow.ai_classify'),
       });
-      const picked = (step.categories as string[]).find((c) =>
-        res.text.toLowerCase().includes(c.toLowerCase()),
-      );
+      const reply = res.text.trim().toLowerCase();
+      const catList = step.categories as string[];
+      // Exact match wins: the model is instructed to reply with ONLY the
+      // category word, so a trimmed equality is authoritative. This avoids the
+      // substring trap where a category CONTAINING another ("not_hot" ⊃ "hot",
+      // "renew" ⊃ "new") got mis-routed to the first-listed shorter one by a
+      // naive `reply.includes(category)` scan — e.g. sending a "not_hot" lead
+      // down the "hot" branch.
+      let picked = catList.find((c) => c.toLowerCase() === reply);
+      if (!picked) {
+        // Lenient fallback for a chatty reply ("the category is: not_hot."):
+        // among the categories present in the reply, take the LONGEST (most
+        // specific) so order no longer decides and "not_hot" beats "hot".
+        picked = catList
+          .filter((c) => reply.includes(c.toLowerCase()))
+          .sort((a, b) => b.length - a.length)[0];
+      }
       const goto = picked ? step.routes[picked] : undefined;
       return { goto, output: { category: picked ?? null } };
     } catch (e) {
