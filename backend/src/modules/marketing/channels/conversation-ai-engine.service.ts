@@ -267,6 +267,10 @@ export class ConversationAiEngineService implements OnModuleInit {
     agent: { id: string },
   ): Promise<{ text: string; handoff: boolean; handoffReason?: string }> {
     let finalText = '';
+    // Whether the loop is exiting while the model was STILL requesting tools
+    // (i.e. it ran out of iterations mid-tool-use). Only a clean break (a turn
+    // with no tool_uses) clears it — see the post-loop completion below.
+    let endedWithToolUse = false;
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       const res = await this.anthropic.complete({
         system,
@@ -277,7 +281,11 @@ export class ConversationAiEngineService implements OnModuleInit {
         cacheSystem: true,
       });
       if (res.text) finalText = res.text;
-      if (!res.toolUses.length) break;
+      if (!res.toolUses.length) {
+        endedWithToolUse = false;
+        break;
+      }
+      endedWithToolUse = true;
 
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
       let handoff: { reason: string } | null = null;
@@ -303,10 +311,14 @@ export class ConversationAiEngineService implements OnModuleInit {
       messages.push({ role: 'user', content: toolResults });
     }
 
-    // BUG 9 FIX: if the loop exhausted MAX_TOOL_ITERATIONS and the very last
-    // iteration was a tool_use (no text produced), finalText is still ''. Make
-    // one final no-tools completion so the model must produce a user-facing reply.
-    if (!finalText) {
+    // BUG 9 FIX: if the loop exhausted MAX_TOOL_ITERATIONS while the model was
+    // STILL requesting tools, it never produced its post-tool answer — any text
+    // we have is only a preamble ("Let me save that and check…"). Force one
+    // final no-tools completion so the customer gets the real reply, not the
+    // preamble. (The original guard was `if (!finalText)`, which fired only when
+    // the last tool turn had NO text — a last turn with a preamble + a tool_use
+    // left finalText non-empty and shipped the preamble as the answer.)
+    if (endedWithToolUse) {
       const final = await this.anthropic.complete({
         system,
         messages,
@@ -314,7 +326,7 @@ export class ConversationAiEngineService implements OnModuleInit {
         tier: tierFor('conversation.reply'),
         cacheSystem: true,
       });
-      finalText = final.text;
+      if (final.text) finalText = final.text;
     }
 
     return { text: finalText, handoff: false };

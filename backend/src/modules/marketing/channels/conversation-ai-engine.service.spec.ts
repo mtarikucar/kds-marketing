@@ -263,6 +263,47 @@ describe('ConversationAiEngineService.reply', () => {
     );
   });
 
+  it('BUG 9b: a tool_use WITH preamble text on the final iteration still forces a final completion (ships the answer, not the preamble)', async () => {
+    // The old guard was `if (!finalText)`, so a last tool turn that ALSO carried
+    // preamble text left finalText non-empty and skipped the final completion —
+    // shipping "Let me save that…" as the reply instead of the real answer.
+    const toolUseWithPreamble = {
+      text: 'Let me save that and check for you…', // preamble alongside the tool call
+      toolUses: [{ type: 'tool_use', id: 't1', name: 'capture_lead_fields', input: { name: 'Ali' } }],
+      stopReason: 'tool_use',
+      usage: { input: 1, output: 1 },
+    };
+    const finalTextResponse = {
+      text: 'Your table is booked for 8pm.',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: { input: 1, output: 1 },
+    };
+
+    let callCount = 0;
+    const h = build({ complete: undefined });
+    h.prisma.lead = {
+      findFirst: jest.fn().mockResolvedValue({ contactPerson: null, email: null, phone: null, city: null, notes: null }),
+      updateMany: jest.fn().mockResolvedValue({}),
+    };
+    h.anthropic.complete.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 3) return Promise.resolve(toolUseWithPreamble);
+      return Promise.resolve(finalTextResponse);
+    });
+
+    await run(h);
+
+    expect(h.anthropic.complete).toHaveBeenCalledTimes(4); // 3 tool turns + 1 final
+    expect(h.anthropic.complete.mock.calls[3][0].tools).toBeUndefined();
+    expect(h.sender.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Your table is booked for 8pm.' }),
+    );
+    expect(h.sender.send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Let me save that and check for you…' }),
+    );
+  });
+
   // Regression: a captured email/phone must also write the NORMALIZED keys —
   // every dedup path matches on emailNormalized/phoneNormalized, so a raw-only
   // capture leaves the lead invisible to dedup and spawns duplicates.
