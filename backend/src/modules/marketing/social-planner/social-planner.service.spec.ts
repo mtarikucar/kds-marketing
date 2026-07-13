@@ -233,6 +233,34 @@ describe('SocialPlannerService', () => {
     mockPublish.mockRestore();
   });
 
+  it('publishDuePost: a crash-retry with targets already PUBLISHED (post stuck PUBLISHING) marks it PUBLISHED, not FAILED', async () => {
+    const mockPublish = jest.spyOn(networkAdapters, 'publishToNetwork').mockResolvedValue({ ok: true, externalPostId: 'x' });
+    // The 15-min reaper re-ran the handler after a crash that published every
+    // target but died before the post status update: targets already PUBLISHED,
+    // post still PUBLISHING, nothing PENDING left. A this-run-only count would
+    // be 0 and wrongly re-mark this live post FAILED.
+    const postWithTargets = {
+      ...makePost({ status: 'PUBLISHING' }),
+      targets: [
+        makeTarget({ id: 't1', status: 'PUBLISHED' }),
+        makeTarget({ id: 't2', network: 'LINKEDIN', status: 'PUBLISHED', account: makeAccount({ id: 'acc-2', network: 'LINKEDIN' }) }),
+      ],
+    };
+    prisma.socialPost.findFirst.mockResolvedValue(postWithTargets);
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(mockPublish).not.toHaveBeenCalled(); // nothing PENDING to publish
+    expect(prisma.socialPost.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'PUBLISHED', publishedAt: expect.any(Date) }),
+      }),
+    );
+    mockPublish.mockRestore();
+  });
+
   it('publishDuePost marks a target FAILED with a clean error when network creds are unset', async () => {
     const mockPublish = jest
       .spyOn(networkAdapters, 'publishToNetwork')

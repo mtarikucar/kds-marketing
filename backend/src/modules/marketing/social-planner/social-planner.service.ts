@@ -431,20 +431,30 @@ export class SocialPlannerService implements OnModuleInit {
       }
     }
 
-    const finalStatus =
-      publishedCount > 0 ? 'PUBLISHED' : 'FAILED';
+    // Compute the final status from the OVERALL target outcomes (targets that
+    // published in a PRIOR run + those published this run) — NOT just this run's
+    // count. On a crash/retry after some targets published but before the post
+    // status was updated, the reaper re-runs this handler with `pendingTargets`
+    // empty; a this-run-only count would then be 0 and wrongly mark an already
+    // -live post FAILED (publishedAt null) — the user sees a failure for content
+    // that actually went out, and may re-publish it (duplicate social posts).
+    const alreadyPublished = post.targets.filter((t) => t.status === 'PUBLISHED').length;
+    const totalPublished = alreadyPublished + publishedCount;
+    const finalStatus = totalPublished > 0 ? 'PUBLISHED' : 'FAILED';
     await this.prisma.socialPost.update({
       where: { id: postId },
       data: {
         status: finalStatus,
-        publishedAt: publishedCount > 0 ? new Date() : null,
+        publishedAt: totalPublished > 0 ? new Date() : null,
       },
     });
 
     // Schedule deletion of the uploaded R2 media 7 days after a successful
     // publish (Meta has already pulled it; the objects are no longer needed).
+    // Keyed on `totalPublished` too, so the retry that FINALIZES a crashed
+    // publish still schedules cleanup (dedupKey makes a re-schedule a no-op).
     const hasUploads = (options.media ?? []).some((m) => m?.key);
-    if (publishedCount > 0 && hasUploads && !options.mediaDeletedAt) {
+    if (totalPublished > 0 && hasUploads && !options.mediaDeletedAt) {
       await this.scheduledJobs.schedule({
         workspaceId,
         kind: SOCIAL_MEDIA_CLEANUP_KIND,
