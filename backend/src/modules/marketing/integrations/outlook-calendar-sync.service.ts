@@ -72,6 +72,9 @@ interface GraphEvent {
   id?: string;
   subject?: string;
   isCancelled?: boolean;
+  // Microsoft free/busy status: 'free' | 'tentative' | 'busy' | 'oof' |
+  // 'workingElsewhere' | 'unknown'. Only 'free' means the time is NOT occupied.
+  showAs?: string;
   start?: { dateTime?: string; timeZone?: string };
   end?: { dateTime?: string; timeZone?: string };
   '@removed'?: { reason?: string };
@@ -730,6 +733,19 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
 
     // Removed (delta tombstone) or cancelled ⇒ remove our busy block.
     if (ev['@removed'] || ev.isCancelled === true) {
+      const res = await this.prisma.booking.deleteMany({
+        where: { workspaceId, outlookEventId: ev.id, status: EXTERNAL_BUSY },
+      });
+      return { upserted: 0, deleted: res.count };
+    }
+
+    // Marked FREE at Microsoft (showAs === 'free') ⇒ the time is NOT occupied,
+    // so it must never create/keep a busy block — importing it would falsely
+    // block the rep's availability (lost bookings) for a slot they left open.
+    // Treat it like a cancellation. Every other value (busy/tentative/oof/
+    // workingElsewhere/unknown/absent) stays busy, preserving prior behaviour.
+    // (Mirrors the Google sync's transparency:'transparent' guard.)
+    if (ev.showAs === 'free') {
       const res = await this.prisma.booking.deleteMany({
         where: { workspaceId, outlookEventId: ev.id, status: EXTERNAL_BUSY },
       });
