@@ -403,12 +403,20 @@ export class NetgsmDlrPollService {
       }
       if (!result.ok) continue;
 
+      // One recipient is attributed at most once per tick — so distinct report
+      // rows map to DISTINCT recipients. Without this, two rows that resolve to
+      // the same recipient (a duplicate/stale referansId, or — on the telno
+      // fallback — two recipients of this jobid that share a phone) both matched
+      // group.find()'s FIRST hit: one recipient was updated twice and the other
+      // was orphaned at deliveryStatus null (stuck, re-polled until it aged out).
+      const claimed = new Set<string>();
       for (const row of result.rows) {
         const group = byJobid.get(row.jobid);
         if (!group) continue; // report answered for a jobid outside this batch — ignore
 
-        const recipient = this.attributeCampaignRow(row, group, phoneByLeadId);
-        if (!recipient) continue; // no matching stamped recipient — TOLERATE, skip silently
+        const recipient = this.attributeCampaignRow(row, group, phoneByLeadId, claimed);
+        if (!recipient) continue; // no matching (unclaimed) recipient — TOLERATE, skip silently
+        claimed.add(recipient.id);
 
         const mapping = mapNetgsmV2Status(row.status, row.errorCode);
         if (!mapping.terminal) continue; // stays unresolved (deliveryStatus null) — re-polled next tick
@@ -440,15 +448,18 @@ export class NetgsmDlrPollService {
     row: SmsV2ReportRow,
     group: Array<{ id: string; workspaceId: string; campaignId: string; leadId: string }>,
     phoneByLeadId: Map<string, string | null>,
+    claimed: Set<string>,
   ): { id: string; workspaceId: string; campaignId: string } | undefined {
     if (row.referansId) {
-      const byId = group.find((r) => r.id === row.referansId);
+      const byId = group.find((r) => r.id === row.referansId && !claimed.has(r.id));
       if (byId) return byId;
     }
     if (row.telno) {
       const rowLast10 = last10Digits(row.telno);
       if (rowLast10) {
-        const byPhone = group.find((r) => last10Digits(phoneByLeadId.get(r.leadId)) === rowLast10);
+        const byPhone = group.find(
+          (r) => !claimed.has(r.id) && last10Digits(phoneByLeadId.get(r.leadId)) === rowLast10,
+        );
         if (byPhone) return byPhone;
       }
     }

@@ -316,6 +316,35 @@ describe('NetgsmDlrPollService.poll', () => {
       });
     });
 
+    it('attributes distinct rows to DISTINCT recipients when two share a phone (telno fallback) — no orphan', async () => {
+      // Two recipients of the same jobid whose leads share a phone; the report
+      // echoes no referansId so the telno fallback is used. The OLD code matched
+      // group.find()'s first hit for BOTH rows → r1 updated twice, r2 orphaned.
+      const r1 = { id: 'r1', workspaceId: 'wc', campaignId: 'camp1', leadId: 'l1', netgsmJobId: 'jobC', referansId: 'r1' };
+      const r2 = { id: 'r2', workspaceId: 'wc', campaignId: 'camp1', leadId: 'l2', netgsmJobId: 'jobC', referansId: 'r2' };
+      prisma.campaignRecipient.findMany.mockResolvedValue([r1, r2]);
+      prisma.lead.findMany.mockResolvedValue([
+        { id: 'l1', phone: '05551234567' },
+        { id: 'l2', phone: '05551234567' }, // SAME phone
+      ]);
+      prisma.campaign.findFirst.mockResolvedValue({ stats: {} });
+      prisma.campaignRecipient.count.mockResolvedValue(1);
+      smsV2.report.mockResolvedValue({
+        ok: true,
+        code: '00',
+        rows: [
+          { jobid: 'jobC', telno: '905551234567', status: 1, deliveredDate: '0807202612', errorCode: null, referansId: null },
+          { jobid: 'jobC', telno: '905551234567', status: 1, deliveredDate: '0807202612', errorCode: null, referansId: null },
+        ],
+      });
+
+      const out = await service.poll();
+
+      expect(out.updated).toBe(2);
+      const updatedIds = prisma.campaignRecipient.update.mock.calls.map((c: any) => c[0].where.id).sort();
+      expect(updatedIds).toEqual(['r1', 'r2']); // each once — r2 not orphaned, r1 not double-updated
+    });
+
     it('leaves deliveryStatus untouched (re-polled later) for a still-pending campaign report row', async () => {
       const r1 = { id: 'r1', workspaceId: 'wc', campaignId: 'camp1', leadId: 'l1', netgsmJobId: 'jobC', referansId: 'r1' };
       prisma.campaignRecipient.findMany.mockResolvedValue([r1]);
