@@ -72,6 +72,9 @@ const WEBHOOK_PATH = '/api/marketing/integrations/google-calendar/notifications'
 interface GoogleEvent {
   id?: string;
   status?: string; // 'confirmed' | 'tentative' | 'cancelled'
+  // Google free/busy flag: 'opaque' (default — the time is BUSY) or
+  // 'transparent' (the attendee marked it FREE; it must not block availability).
+  transparency?: string;
   summary?: string;
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
@@ -780,6 +783,18 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
 
     // Cancelled at Google ⇒ remove our busy block.
     if (ev.status === 'cancelled') {
+      const res = await this.prisma.booking.deleteMany({
+        where: { workspaceId, googleEventId: ev.id, status: EXTERNAL_BUSY },
+      });
+      return { upserted: 0, deleted: res.count };
+    }
+
+    // Marked FREE at Google ('transparency: transparent') ⇒ it does NOT block
+    // time, so it must never create/keep a busy block — importing it would make
+    // the rep falsely unavailable (lost bookings) for a slot they left open.
+    // Treat it like a cancellation: drop any block we already hold. Absent
+    // transparency defaults to 'opaque' (busy), preserving the prior behaviour.
+    if (ev.transparency === 'transparent') {
       const res = await this.prisma.booking.deleteMany({
         where: { workspaceId, googleEventId: ev.id, status: EXTERNAL_BUSY },
       });

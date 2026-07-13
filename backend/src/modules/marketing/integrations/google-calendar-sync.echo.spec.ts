@@ -62,4 +62,27 @@ describe('GoogleCalendarSyncService.applyExternalEvent — echo skip', () => {
     expect(res.upserted).toBe(1);
     expect(prisma.booking.create).toHaveBeenCalled();
   });
+
+  it('does NOT import a FREE-marked event (transparency: transparent) and drops any block it held', async () => {
+    // A rep who marks an event "free" in Google left that slot bookable — it
+    // must not create/keep a busy block (would falsely block availability).
+    const { svc, prisma } = makeSvc();
+    prisma.booking.deleteMany.mockResolvedValue({ count: 1 }); // it had a block from when it was busy
+    const ev = {
+      id: 'free-1',
+      status: 'confirmed',
+      transparency: 'transparent',
+      summary: 'Optional (free)',
+      start: { dateTime: '2026-07-01T10:00:00Z' },
+      end: { dateTime: '2026-07-01T10:30:00Z' },
+    };
+    const res = await (svc as any).applyExternalEvent(CONN, ev);
+    expect(res).toEqual({ upserted: 0, deleted: 1 });
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+    expect(prisma.booking.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ googleEventId: 'free-1', status: 'EXTERNAL_BUSY' }),
+      }),
+    );
+  });
 });
