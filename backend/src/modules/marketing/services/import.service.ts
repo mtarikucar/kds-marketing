@@ -16,10 +16,34 @@ import {
 } from '../scheduling/scheduled-job-runner.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
 import { parseCsv } from '../utils/csv-parse';
+import { LeadSource, LeadPriority, BUSINESS_TYPE_PATTERN } from '../dto/create-lead.dto';
 
 const MAX_ROWS = 50_000;
 const BATCH = 200;
 const ERROR_SAMPLE_CAP = 50;
+
+// `source` and `priority` are FIXED enums (@IsEnum) and `businessType` is an
+// UPPER_SNAKE taxonomy key (@Matches) on the create/update Lead DTOs. A CSV can
+// carry any free text in those columns; writing it verbatim used to mint leads
+// that later FAIL to save from the UI (the Update DTO's @IsEnum/@Matches rejects
+// the stored value → un-editable lead) and never match a source/priority/type
+// filter. Coerce imported values to the same domain the API enforces, so an
+// imported lead is a first-class, editable, filterable lead.
+const LEAD_SOURCE_VALUES = new Set<string>(Object.values(LeadSource));
+const LEAD_PRIORITY_VALUES = new Set<string>(Object.values(LeadPriority));
+
+/** Fold a free-text businessType into the UPPER_SNAKE taxonomy key the DTO
+ *  requires (e.g. "Cafe Restaurant" → "CAFE_RESTAURANT"); falls back to OTHER
+ *  when nothing valid survives. */
+function coerceBusinessType(v: string): string {
+  const key = v
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60);
+  return BUSINESS_TYPE_PATTERN.test(key) ? key : 'OTHER';
+}
 
 /** Native Lead columns an import may map a CSV column onto. */
 const NATIVE_FIELDS = [
@@ -205,6 +229,20 @@ export class ImportService implements OnModuleInit {
       } else if ((NATIVE_FIELDS as readonly string[]).includes(field)) {
         native[field] = val;
       }
+    }
+    // Coerce the validated-domain fields to what the Lead API enforces, so an
+    // imported lead validates on later edit and matches source/type/priority
+    // filters (a raw CSV value would otherwise mint an un-editable lead).
+    if (native.source !== undefined) {
+      const s = native.source.trim().toUpperCase();
+      native.source = LEAD_SOURCE_VALUES.has(s) ? s : 'OTHER';
+    }
+    if (native.priority !== undefined) {
+      const p = native.priority.trim().toUpperCase();
+      native.priority = LEAD_PRIORITY_VALUES.has(p) ? p : 'MEDIUM';
+    }
+    if (native.businessType !== undefined) {
+      native.businessType = coerceBusinessType(native.businessType);
     }
     return { native, cf, tags };
   }

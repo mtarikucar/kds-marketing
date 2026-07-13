@@ -105,6 +105,62 @@ describe('ImportService.processBatch', () => {
     expect(updates.some((d) => d.status === 'DONE')).toBe(true);
   });
 
+  it('coerces source/priority/businessType to the API-enforced domain so imported leads stay editable', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({
+      ...baseJob,
+      dedupePolicy: 'CREATE',
+      mapping: { business: 'businessName', src: 'source', prio: 'priority', type: 'businessType' },
+    } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      // src 'facebook' is not a LeadSource → OTHER; prio 'urgent' → URGENT (case);
+      // 'Cafe Restaurant' → the UPPER_SNAKE taxonomy key CAFE_RESTAURANT.
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', src: 'facebook', prio: 'urgent', type: 'Cafe Restaurant' } },
+    ] as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any);
+    (prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-1' });
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    expect(prisma.lead.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source: 'OTHER',
+          priority: 'URGENT',
+          businessType: 'CAFE_RESTAURANT',
+        }),
+      }),
+    );
+  });
+
+  it('keeps a valid (case-insensitive) source/priority as its canonical enum value', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({
+      ...baseJob,
+      dedupePolicy: 'CREATE',
+      mapping: { business: 'businessName', src: 'source', prio: 'priority' },
+    } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', src: 'instagram', prio: 'high' } },
+    ] as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any);
+    (prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-1' });
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    expect(prisma.lead.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ source: 'INSTAGRAM', priority: 'HIGH' }),
+      }),
+    );
+  });
+
   it('skips an existing lead under the SKIP policy (no create)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, dedupePolicy: 'SKIP' } as any);
