@@ -110,6 +110,8 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      // Atomic backup-code consume (jsonb) returns the affected-row count.
+      $executeRaw: jest.fn().mockResolvedValue(1),
       workspace: {
         findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
       },
@@ -244,9 +246,21 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
 
       expect(out.accessToken).toBe('challenge-tok');
       expect(smsOtp.verify).not.toHaveBeenCalled();
-      // The consumed backup code is removed so it can't be reused.
-      const data = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data;
-      expect(data.twoFactorBackupCodes).toEqual([]);
+      // The code is consumed ATOMICALLY (jsonb), not via a read-filter-write update.
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+    });
+
+    it('backup-code race: a concurrent second use (atomic consume matches 0 rows) is rejected', async () => {
+      const { prisma, smsOtp, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(
+        baseUser({ twoFactorBackupCodes: [hashBackupCode('deadbeef00')] }),
+      );
+      prisma.$executeRaw.mockResolvedValue(0); // the racing winner already removed it
+
+      await expect(svc.verify2fa('tok', 'deadbeef00')).rejects.toBeInstanceOf(UnauthorizedException);
+      // A losing backup-code claim must NOT fall through to burn an SMS attempt.
+      expect(smsOtp.verify).not.toHaveBeenCalled();
     });
 
     it('TOTP: accepts a fresh step and ATOMICALLY claims it (rejects a step not newer than the last)', async () => {

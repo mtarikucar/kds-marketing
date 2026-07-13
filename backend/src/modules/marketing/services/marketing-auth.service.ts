@@ -203,12 +203,21 @@ export class MarketingAuthService {
     // in-flight SMS challenge.
     const hashes = (user.twoFactorBackupCodes as string[]) ?? [];
     const h = hashBackupCode(code);
-    let ok = hashes.includes(h);
-    if (ok) {
-      await this.prisma.marketingUser.update({
-        where: { id: user.id },
-        data: { twoFactorBackupCodes: hashes.filter((x) => x !== h) },
-      });
+    let ok = false;
+    if (hashes.includes(h)) {
+      // ATOMICALLY consume the backup code so a concurrent second use of the
+      // SAME code can't also succeed (single-use). `jsonb - text` drops the
+      // element, and jsonb_exists() in the WHERE means only the request that
+      // still finds the code present wins — a racing duplicate matches 0 rows.
+      // (The read-then-filter-then-write it replaced let two concurrent logins
+      // both keep the code and both succeed.) jsonb_exists(), not the `?`
+      // operator, to sidestep Prisma's placeholder-vs-operator clash.
+      const claim = await this.prisma.$executeRaw`
+        UPDATE "marketing_users"
+           SET "twoFactorBackupCodes" = "twoFactorBackupCodes" - ${h}
+         WHERE "id" = ${user.id} AND "workspaceId" = ${user.workspaceId}
+           AND jsonb_exists("twoFactorBackupCodes", ${h})`;
+      ok = claim === 1;
     } else if (user.twoFactorSecret) {
       // TOTP + RFC 6238 §5.2 replay guard: verify the code, then ATOMICALLY
       // claim its 30s time-step — the conditional updateMany advances
