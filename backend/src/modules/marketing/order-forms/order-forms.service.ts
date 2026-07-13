@@ -327,7 +327,10 @@ export class OrderFormsService {
       where: {
         workspaceId,
         leadId,
-        notes: orderNote,
+        // Key the reuse window on the STABLE form id, not the editable
+        // "Order: <name>" note — two forms sharing a name would otherwise
+        // collide, reusing the wrong form's invoice for the same buyer.
+        orderFormId: form.id,
         status: { in: ['DRAFT', 'SENT'] },
         createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
         // When the buyer supplies a coupon, only reuse an ALREADY-discounted
@@ -359,6 +362,7 @@ export class OrderFormsService {
           currency,
           discount,
           notes: orderNote,
+          orderFormId: form.id,
         })) as { id: string }
       ).id;
     }

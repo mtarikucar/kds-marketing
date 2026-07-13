@@ -144,6 +144,9 @@ describe('OrderFormsService', () => {
           leadId: 'lead-1',
           currency: 'TRY',
           items: [{ description: 'Pro plan', qty: 1, unitPrice: 5000 }],
+          // The invoice carries a STABLE form reference so the reuse window
+          // can't collide across two same-named forms.
+          orderFormId: 'of1',
         }),
       );
       expect(res).toEqual({ redirectUrl: 'https://x/api/public/i/in_tok' });
@@ -188,6 +191,21 @@ describe('OrderFormsService', () => {
       expect(invoices.create).not.toHaveBeenCalled(); // reused, not re-minted
       expect(invoices.send).toHaveBeenCalledWith(WS, 'inv-prev');
       expect(res.redirectUrl).toBe('https://x/api/public/i/in_tok');
+    });
+
+    it('scopes the reuse window to the STABLE orderFormId, not the editable form name', async () => {
+      // Two forms sharing a name must never cross-reuse each other's invoice
+      // for the same buyer — the lookup keys on form.id, never `notes`.
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', status: 'NEW' } as any);
+      prisma.invoice.findFirst.mockResolvedValue(null); // no prior invoice → mint fresh
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {});
+
+      const where = prisma.invoice.findFirst.mock.calls[0][0].where;
+      expect(where.orderFormId).toBe('of1');
+      expect(where).not.toHaveProperty('notes'); // no longer keyed on the name
     });
 
     it('captures first-touch attribution for a NEW lead in the SAME tx (url + referrer)', async () => {

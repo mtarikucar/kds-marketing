@@ -2665,11 +2665,19 @@ model Invoice {
   subscriptionId        String?
   subscriptionPeriodKey String? // e.g. "2026-06" — the period this invoice settles
 
+  // Set when this invoice was minted from a public OrderForm submission (null
+  // for hand-made / subscription invoices). This is the STABLE reuse key for
+  // the submit() idempotency window — matching on the free-text note
+  // ("Order: <name>") collided across two forms that happened to share a name,
+  // silently reusing the wrong form's invoice for the same buyer.
+  orderFormId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([workspaceId, status])
   @@index([subscriptionId])
+  @@index([workspaceId, leadId, orderFormId])
   @@map("invoices")
 }
 

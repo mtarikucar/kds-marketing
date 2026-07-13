@@ -76,6 +76,10 @@ export class InvoicesService {
       // index then enforces one-invoice-per-period AT INSERT (no orphan window).
       subscriptionId?: string;
       subscriptionPeriodKey?: string;
+      // Set by OrderFormsService.submit so the invoice carries a STABLE form
+      // reference — the reuse/idempotency window then keys off this, not the
+      // editable "Order: <name>" note (which collided across same-named forms).
+      orderFormId?: string;
     },
   ) {
     // Re-snapshot each line's tax rate from the workspace's TaxRate rows, then
@@ -104,6 +108,7 @@ export class InvoicesService {
         publicToken: `in_${randomBytes(18).toString('hex')}`,
         subscriptionId: dto.subscriptionId ?? null,
         subscriptionPeriodKey: dto.subscriptionPeriodKey ?? null,
+        orderFormId: dto.orderFormId ?? null,
       },
     });
   }
