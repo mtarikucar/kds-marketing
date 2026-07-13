@@ -151,6 +151,14 @@ describe('InvoicesService', () => {
     expect(outbox.append).not.toHaveBeenCalled();
   });
 
+  it('send rejects a VOID invoice — a cancelled invoice cannot be resurrected to SENT/payable', async () => {
+    const { BadRequestException } = require('@nestjs/common');
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'inv1', status: 'VOID' });
+    await expect(svc.send(WS, 'inv1')).rejects.toBeInstanceOf(BadRequestException);
+    // never flips the status (would have made the void invoice payable again)
+    expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+
   it('seals the workspace Stripe secret (never stored in clear)', async () => {
     await svc.setPspConfig(WS, { provider: 'STRIPE', secrets: { secretKey: 'sk_live_secret' } });
     const data = prisma.workspacePspConfig.upsert.mock.calls[0][0];

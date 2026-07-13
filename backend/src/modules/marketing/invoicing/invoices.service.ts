@@ -139,6 +139,13 @@ export class InvoicesService {
     const inv = await this.prisma.invoice.findFirst({ where: { id, workspaceId }, select: { id: true, status: true } });
     if (!inv) throw new NotFoundException('Invoice not found');
     if (inv.status === 'PAID') throw new BadRequestException('Already paid');
+    // VOID is terminal. Without this guard the unconditional flip below RESURRECTS
+    // a cancelled invoice to SENT — making it payable again (a customer could pay a
+    // voided invoice). Reject it, matching markPaid/voidInvoice/payWithWallet (and
+    // the contract markPaid's own comment already claims send() upholds).
+    if (inv.status === 'VOID') {
+      throw new BadRequestException('A void invoice cannot be sent — reissue it instead');
+    }
     await this.prisma.invoice.update({ where: { id: inv.id }, data: { status: 'SENT' } });
     const updated = await this.prisma.invoice.findFirst({ where: { id, workspaceId }, select: { publicToken: true } });
     return { payUrl: `${this.base()}/api/public/i/${updated?.publicToken}` };
