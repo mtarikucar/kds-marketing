@@ -63,6 +63,31 @@ describe('GoogleCalendarSyncService.applyExternalEvent — echo skip', () => {
     expect(prisma.booking.create).toHaveBeenCalled();
   });
 
+  it('drops a stale block when a timed event was edited to ALL-DAY (date, no dateTime)', async () => {
+    // A timed meeting created an EXTERNAL_BUSY block; the rep later edits it to
+    // an all-day event. We can't represent all-day as a timed block (skipped),
+    // but the OLD timed block MUST be dropped — a timed→all-day edit is not a
+    // cancellation, so nothing else removes it, and a stale block would falsely
+    // hold the original slot busy (the same harm the free branch guards).
+    const { svc, prisma } = makeSvc();
+    prisma.booking.deleteMany.mockResolvedValue({ count: 1 }); // block from when it was timed
+    const ev = {
+      id: 'allday-1',
+      status: 'confirmed',
+      summary: 'Now all day',
+      start: { date: '2026-07-02' },
+      end: { date: '2026-07-03' },
+    };
+    const res = await (svc as any).applyExternalEvent(CONN, ev);
+    expect(res).toEqual({ upserted: 0, deleted: 1 });
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+    expect(prisma.booking.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ googleEventId: 'allday-1', status: 'EXTERNAL_BUSY' }),
+      }),
+    );
+  });
+
   it('does NOT import a FREE-marked event (transparency: transparent) and drops any block it held', async () => {
     // A rep who marks an event "free" in Google left that slot bookable — it
     // must not create/keep a busy block (would falsely block availability).

@@ -272,6 +272,40 @@ describe('OutlookCalendarSyncService (mocked Graph)', () => {
     );
   });
 
+  it('delta pull drops a stale block when an event becomes untimeable (invalid window), never leaving a phantom', async () => {
+    // A once-valid timed event created an EXTERNAL_BUSY block; a later edit
+    // leaves it untimeable (here end <= start). It can't be a timed block, but
+    // the OLD block MUST be dropped — this edit is not a cancellation, so
+    // nothing else removes it, and a stale block would falsely hold the slot.
+    const conn = freshConn({ deltaToken: 'https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=OLD' });
+    safeFetchSpy.mockResolvedValue(
+      jsonResponse({
+        value: [
+          {
+            id: 'ext-evt-1',
+            subject: 'Broken window',
+            start: { dateTime: '2027-06-14T12:00:00.0000000', timeZone: 'UTC' },
+            end: { dateTime: '2027-06-14T11:00:00.0000000', timeZone: 'UTC' }, // end <= start
+          },
+        ],
+        '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=tok4',
+      }),
+    );
+    prisma.booking.findFirst.mockResolvedValue(null as never); // not ours
+    (prisma.booking.deleteMany as jest.Mock).mockResolvedValue({ count: 1 } as never); // block from when it was valid
+
+    const result = await sync.pullEvents(conn as never);
+
+    expect(result.upserted).toBe(0);
+    expect(result.deleted).toBe(1);
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+    expect(prisma.booking.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { workspaceId: WS_A, outlookEventId: 'ext-evt-1', status: 'EXTERNAL_BUSY' },
+      }),
+    );
+  });
+
   it('delta pull does NOT import a FREE-marked event (showAs=free) and drops any block it held', async () => {
     const conn = freshConn({ deltaToken: 'https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=OLD' });
     safeFetchSpy.mockResolvedValue(

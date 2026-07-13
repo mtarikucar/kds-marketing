@@ -755,8 +755,15 @@ export class OutlookCalendarSyncService implements OnModuleInit, OnModuleDestroy
     const start = parseGraphTime(ev.start);
     const end = parseGraphTime(ev.end);
     if (!start || !end || end <= start) {
-      // All-day or malformed: skip (can't slice a slot window).
-      return { upserted: 0, deleted: 0 };
+      // Malformed / untimeable (missing or invalid dateTime): we can't represent
+      // it as a timed busy block. But if a PRIOR (valid) version of this event
+      // created a block, drop it — such an edit is not a cancellation, so no
+      // other path removes it, and a stale block would falsely hold the original
+      // slot busy (the same harm the showAs-free branch above guards against).
+      const res = await this.prisma.booking.deleteMany({
+        where: { workspaceId, outlookEventId: ev.id, status: EXTERNAL_BUSY },
+      });
+      return { upserted: 0, deleted: res.count };
     }
 
     const existing = await this.prisma.booking.findFirst({

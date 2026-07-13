@@ -804,8 +804,15 @@ export class GoogleCalendarSyncService implements OnModuleInit, OnModuleDestroy 
     const start = parseGoogleTime(ev.start);
     const end = parseGoogleTime(ev.end);
     if (!start || !end || end <= start) {
-      // All-day or malformed: skip (can't slice a slot window).
-      return { upserted: 0, deleted: 0 };
+      // All-day or malformed: we can't represent it as a timed busy block. But
+      // if a PRIOR (timed) version of this event created a block, drop it — a
+      // timed→all-day edit is NOT a cancellation, so no other path removes it,
+      // and leaving it would falsely hold the original slot busy (the same harm
+      // the transparency-free branch above guards against).
+      const res = await this.prisma.booking.deleteMany({
+        where: { workspaceId, googleEventId: ev.id, status: EXTERNAL_BUSY },
+      });
+      return { upserted: 0, deleted: res.count };
     }
 
     const existing = await this.prisma.booking.findFirst({
