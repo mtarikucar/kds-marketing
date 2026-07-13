@@ -31,6 +31,28 @@ describe('AdRulesService — scaling engine', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('update rejects a NEGATIVE actionValue on an existing budget rule (no action in the patch)', async () => {
+    // Regression: patching actionValue alone slipped past validate() (which
+    // only checked when `action` was in the patch), leaving a budget rule that
+    // INVERTS the change (a negative percent turns an increase into a cut).
+    prisma.adRule.findFirst.mockResolvedValue({ id: 'r1', action: 'INCREASE_BUDGET', actionValue: 20 });
+    await expect(svc.update('ws', 'r1', { actionValue: -50 })).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.adRule.update).not.toHaveBeenCalled();
+  });
+
+  it('update rejects flipping to a budget action when the stored actionValue is null', async () => {
+    prisma.adRule.findFirst.mockResolvedValue({ id: 'r1', action: 'PAUSE', actionValue: null });
+    await expect(svc.update('ws', 'r1', { action: 'INCREASE_BUDGET' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('update ALLOWS a non-value patch on a budget rule without re-supplying actionValue', async () => {
+    // The effective-value check must not over-reject: renaming a budget rule
+    // whose stored actionValue is valid stays valid.
+    prisma.adRule.findFirst.mockResolvedValue({ id: 'r1', action: 'INCREASE_BUDGET', actionValue: 20 });
+    await svc.update('ws', 'r1', { name: 'renamed' });
+    expect(prisma.adRule.update).toHaveBeenCalled();
+  });
+
   it('INCREASE_BUDGET raises the daily budget by the percent when the metric exceeds threshold', async () => {
     prisma.adRule.findFirst.mockResolvedValue(rule());
     mgmt.campaigns.mockResolvedValue([{ id: 'c1', name: 'C1', status: 'ACTIVE', dailyBudget: 50 }]);

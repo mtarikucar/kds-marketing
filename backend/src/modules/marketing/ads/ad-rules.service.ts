@@ -105,9 +105,26 @@ export class AdRulesService {
   }
 
   async update(workspaceId: string, id: string, patch: Partial<RuleInput>) {
-    const existing = await this.prisma.adRule.findFirst({ where: { id, workspaceId }, select: { id: true } });
+    const existing = await this.prisma.adRule.findFirst({
+      where: { id, workspaceId },
+      select: { id: true, action: true, actionValue: true },
+    });
     if (!existing) throw new NotFoundException('Rule not found');
-    this.validate(patch);
+    // Validate the EFFECTIVE (action, actionValue) that will PERSIST, not just
+    // the raw patch. `validate(patch)` only enforced "budget action ⇒
+    // actionValue > 0" when `action` was in the patch — so patching
+    // actionValue alone (or flipping to a budget action without re-supplying
+    // it) slipped a 0/negative/null percent past the guard, leaving a budget
+    // rule that is a silent no-op (0) or, worse, INVERTS the budget change
+    // (a negative percent turns INCREASE_BUDGET into a cut). Mirrors the
+    // affiliate FLAT→PERCENT effective-value validation.
+    const effActionValue =
+      patch.actionValue !== undefined
+        ? patch.actionValue
+        : existing.actionValue != null
+          ? Number(existing.actionValue)
+          : null;
+    this.validate({ ...patch, action: patch.action ?? existing.action, actionValue: effActionValue });
     return this.prisma.adRule.update({
       where: { id },
       data: {
