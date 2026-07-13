@@ -206,8 +206,19 @@ export class SsoService {
     if (!email || !email.includes('@')) {
       throw new UnauthorizedException('ID token has no usable email');
     }
-    // Honour the IdP's verification signal when present.
-    if (claims.email_verified === false) {
+    // Honour the IdP's verification signal when present. `email_verified` is a
+    // boolean per OIDC, but real IdPs also send it as a STRING ("false") — a
+    // strict `=== false` check would let the string form slip through and treat
+    // an explicitly-unverified email as verified, which (with matchOrProvision
+    // keying on email) is an account-takeover vector for an IdP that lets a user
+    // self-assert an email. Reject BOTH shapes; a MISSING signal stays lenient
+    // (enterprise directories often omit it and are authoritative for the email).
+    const emailVerified = claims.email_verified;
+    const explicitlyUnverified =
+      emailVerified === false ||
+      emailVerified === 0 ||
+      (typeof emailVerified === 'string' && ['false', '0', 'no'].includes(emailVerified.trim().toLowerCase()));
+    if (explicitlyUnverified) {
       throw new UnauthorizedException('Email is not verified at the IdP');
     }
     this.assertDomainAllowed(email, conn.allowedDomains);

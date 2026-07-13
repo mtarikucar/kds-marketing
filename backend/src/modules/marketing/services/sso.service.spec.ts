@@ -275,6 +275,34 @@ describe('SsoService', () => {
       );
     });
 
+    it('rejects a STRING "false" email_verified (not just the boolean) — closes the takeover bypass', async () => {
+      // Some IdPs send email_verified as a string. A strict `=== false` check
+      // let "false" slip through and treat an unverified email as verified,
+      // which (matchOrProvision keys on email) is an account-takeover vector.
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce, email_verified: 'false' })));
+
+      await expect(service.handleCallback(state, 'auth-code')).rejects.toBeInstanceOf(UnauthorizedException);
+      // Rejected BEFORE any user match/provision.
+      expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('stays lenient when email_verified is ABSENT (enterprise directories omit it)', async () => {
+      const { state, nonce } = await startFlow();
+      const claims = baseClaims({ nonce });
+      delete (claims as Record<string, unknown>).email_verified;
+      mockIdp(signIdToken(claims));
+
+      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.create.mockResolvedValue({
+        id: 'mu-x', workspaceId: 'ws-1', email: 'alice@acme.com', role: 'REP', tokenVersion: 0,
+      } as never);
+      authService.issueSession.mockReturnValue({ accessToken: 'A', refreshToken: 'R', user: {} });
+
+      await service.handleCallback(state, 'auth-code');
+      expect(prisma.marketingUser.create).toHaveBeenCalled();
+    });
+
     it('rejects an unknown/forged state', async () => {
       mockIdp(signIdToken(baseClaims()));
       await expect(
