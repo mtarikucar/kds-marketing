@@ -350,7 +350,15 @@ export class CampaignsService {
 
     // WINNER mode: only abTestPercent% of the audience is the test cohort (sent
     // now across variants); the remainder is HELD until the winner is decided.
-    const winnerMode = useAb && (campaign as any).abMode === 'WINNER';
+    // It needs a real held-back remainder to roll the winner out to — which
+    // requires MORE leads than variants (test ≥1 per variant AND keep ≥1 back).
+    // A smaller audience can't satisfy the documented "hold back at least 1"
+    // invariant: testCount below would be forced up to the whole audience,
+    // holding back NOBODY, yet a decide job would still be armed to release zero
+    // recipients. Fall back to SPLIT (everyone gets a variant now, no decide
+    // phase) in that case.
+    const winnerMode =
+      useAb && (campaign as any).abMode === 'WINNER' && leads.length > variants.length;
     let testLeads = leads;
     let holdLeads: typeof leads = [];
     let abDecideAt: Date | null = null;

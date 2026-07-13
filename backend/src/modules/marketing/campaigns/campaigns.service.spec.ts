@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { CampaignsService, CAMPAIGN_BATCH_KIND, CAMPAIGN_LAUNCH_KIND } from './campaigns.service';
+import { CampaignsService, CAMPAIGN_BATCH_KIND, CAMPAIGN_LAUNCH_KIND, CAMPAIGN_AB_DECIDE_KIND } from './campaigns.service';
 
 /**
  * Audience resolution + launch. The audience where must always pin the
@@ -109,6 +109,31 @@ describe('CampaignsService', () => {
       const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
       expect(rows).toHaveLength(2);
       for (const row of rows) expect(['A', 'B']).toContain(row.variantKey);
+    });
+
+    it('WINNER mode with an audience too small to hold back (leads <= variants) falls back to SPLIT — no decide job, no HOLD', async () => {
+      // 2 default leads, 3 variants → can't test ≥1/variant AND hold back ≥1.
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'DRAFT', channel: 'EMAIL', body: 'Hi', bodyHtml: null,
+        abEnabled: true, abMode: 'WINNER', abTestPercent: 20, audienceFilter: [],
+      });
+      prisma.campaignVariant = {
+        findMany: jest.fn().mockResolvedValue([
+          { key: 'A', weight: 1, body: 'a', bodyHtml: null },
+          { key: 'B', weight: 1, body: 'b', bodyHtml: null },
+          { key: 'C', weight: 1, body: 'c', bodyHtml: null },
+        ]),
+      };
+
+      await svc.launch(WS, 'c1');
+
+      // No pointless winner phase: no ab-decide job, and every recipient is a
+      // PENDING variant send (none HELD).
+      expect(scheduledJobs.schedule).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: CAMPAIGN_AB_DECIDE_KIND }),
+      );
+      const rows = prisma.campaignRecipient.createMany.mock.calls[0][0].data;
+      expect(rows.every((r: any) => r.status !== 'HOLD' && ['A', 'B', 'C'].includes(r.variantKey))).toBe(true);
     });
 
     it('leaves variantKey null when A/B is off', async () => {
