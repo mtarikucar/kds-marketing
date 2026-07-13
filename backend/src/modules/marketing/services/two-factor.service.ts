@@ -201,7 +201,15 @@ export class TwoFactorService {
     if (!okFactor && !okBackup) throw new BadRequestException('Invalid verification code');
     await this.prisma.marketingUser.update({
       where: { id: userId },
-      data: { twoFactorEnabled: false, twoFactorSecret: null, twoFactorBackupCodes: Prisma.DbNull },
+      // Clear ALL 2FA state, including the TOTP replay-guard step — a stale
+      // twoFactorLastStep could otherwise falsely reject a freshly re-enrolled
+      // TOTP login in the same 30s window (steps are time-based, not per-secret).
+      data: {
+        twoFactorEnabled: false,
+        twoFactorSecret: null,
+        twoFactorBackupCodes: Prisma.DbNull,
+        twoFactorLastStep: null,
+      },
     });
     return { enabled: false };
   }

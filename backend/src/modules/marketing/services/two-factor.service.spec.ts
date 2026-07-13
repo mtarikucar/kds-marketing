@@ -74,7 +74,11 @@ describe('TwoFactorService', () => {
     (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
     const out: any = await svc.disable('u1', generateTotpCode(secret));
     expect(out.enabled).toBe(false);
-    expect((prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data.twoFactorEnabled).toBe(false);
+    const data = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data;
+    expect(data.twoFactorEnabled).toBe(false);
+    // ALL 2FA state is cleared — secret, backup codes AND the replay-guard step.
+    expect(data.twoFactorSecret).toBeNull();
+    expect(data.twoFactorLastStep).toBeNull();
   });
 
   it('status reports the flag (+ method — see the dedicated SMS-factor describe block below)', async () => {
