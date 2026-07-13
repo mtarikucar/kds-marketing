@@ -2,7 +2,16 @@ import { BadRequestException, ConflictException, UnauthorizedException } from '@
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { MarketingAuthService } from './marketing-auth.service';
-import { hashBackupCode } from '../util/totp';
+import { hashBackupCode, verifyTotpStep } from '../util/totp';
+
+// Keep hashBackupCode real (the backup-code tests hash for real); control the
+// TOTP step + unseal so the replay-guard tests don't need a real secret box.
+jest.mock('../util/totp', () => ({
+  ...jest.requireActual('../util/totp'),
+  verifyTotpStep: jest.fn(),
+  openTotpSecret: jest.fn((s: string) => s),
+}));
+const mockVerifyTotpStep = verifyTotpStep as jest.Mock;
 
 /**
  * registerWorkspace pre-checks the owner email, then provisions the workspace
@@ -99,6 +108,7 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
       marketingUser: {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       workspace: {
         findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
@@ -237,6 +247,33 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
       // The consumed backup code is removed so it can't be reused.
       const data = (prisma.marketingUser.update as jest.Mock).mock.calls[0][0].data;
       expect(data.twoFactorBackupCodes).toEqual([]);
+    });
+
+    it('TOTP: accepts a fresh step and ATOMICALLY claims it (rejects a step not newer than the last)', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(
+        baseUser({ twoFactorSecret: 'sealed', twoFactorBackupCodes: [], twoFactorLastStep: 99 }),
+      );
+      mockVerifyTotpStep.mockReturnValue(100); // a valid, newer step
+
+      const out: any = await svc.verify2fa('tok', '123456');
+
+      expect(out.accessToken).toBe('challenge-tok');
+      // The claim advances the step only if strictly newer (replay-safe under races).
+      const call = (prisma.marketingUser.updateMany as jest.Mock).mock.calls[0][0];
+      expect(call.data).toEqual({ twoFactorLastStep: 100 });
+      expect(call.where.OR).toEqual([{ twoFactorLastStep: null }, { twoFactorLastStep: { lt: 100 } }]);
+    });
+
+    it('TOTP replay: a code whose step is already consumed (claim matches 0 rows) is rejected', async () => {
+      const { prisma, svc } = make();
+      prisma.marketingUser.findUnique.mockResolvedValue(
+        baseUser({ twoFactorSecret: 'sealed', twoFactorBackupCodes: [], twoFactorLastStep: 100 }),
+      );
+      mockVerifyTotpStep.mockReturnValue(100); // same step as last consumed
+      prisma.marketingUser.updateMany.mockResolvedValue({ count: 0 }); // conditional claim finds nothing
+
+      await expect(svc.verify2fa('tok', '123456')).rejects.toBeInstanceOf(UnauthorizedException);
     });
   });
 

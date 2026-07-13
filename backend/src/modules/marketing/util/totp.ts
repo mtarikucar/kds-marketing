@@ -99,18 +99,34 @@ export function generateTotpCode(secret: string, atMs: number = Date.now()): str
   return hotp(secret, Math.floor(atMs / 1000 / 30));
 }
 
+/**
+ * Verify a TOTP token and return the matched 30-second time-step (counter), or
+ * -1 if it matches no step in the ±window. The step is the RFC 6238 §5.2 replay
+ * key: a verifier that grants a session should record it and reject any code
+ * whose step is not strictly newer, so a captured code can't be replayed within
+ * its (up to ~90s) validity window.
+ */
+export function verifyTotpStep(
+  secret: string,
+  token: string,
+  atMs: number = Date.now(),
+  window = 1,
+): number {
+  if (!/^\d{6}$/.test(token || '')) return -1;
+  const counter = Math.floor(atMs / 1000 / 30);
+  for (let w = -window; w <= window; w++) {
+    if (hotp(secret, counter + w) === token) return counter + w;
+  }
+  return -1;
+}
+
 export function verifyTotp(
   secret: string,
   token: string,
   atMs: number = Date.now(),
   window = 1,
 ): boolean {
-  if (!/^\d{6}$/.test(token || '')) return false;
-  const counter = Math.floor(atMs / 1000 / 30);
-  for (let w = -window; w <= window; w++) {
-    if (hotp(secret, counter + w) === token) return true;
-  }
-  return false;
+  return verifyTotpStep(secret, token, atMs, window) >= 0;
 }
 
 export function generateBackupCodes(n = 10): string[] {

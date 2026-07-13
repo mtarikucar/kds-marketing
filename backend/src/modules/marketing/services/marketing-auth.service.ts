@@ -14,7 +14,7 @@ import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
-import { hashBackupCode, openTotpSecret, verifyTotp } from '../util/totp';
+import { hashBackupCode, openTotpSecret, verifyTotpStep } from '../util/totp';
 import { SmsOtpService } from './sms-otp.service';
 
 const MAX_FAILED_LOGINS = 5;
@@ -209,17 +209,34 @@ export class MarketingAuthService {
         where: { id: user.id },
         data: { twoFactorBackupCodes: hashes.filter((x) => x !== h) },
       });
+    } else if (user.twoFactorSecret) {
+      // TOTP + RFC 6238 §5.2 replay guard: verify the code, then ATOMICALLY
+      // claim its 30s time-step — the conditional updateMany advances
+      // twoFactorLastStep only if this step is strictly newer than the one last
+      // consumed at login. A replay of the SAME code (even two concurrent
+      // requests) matches 0 rows the second time, so a captured code can't be
+      // reused within its ~90s validity window.
+      const step = verifyTotpStep(openTotpSecret(user.twoFactorSecret), code);
+      if (step >= 0) {
+        const claim = await this.prisma.marketingUser.updateMany({
+          where: {
+            id: user.id,
+            workspaceId: user.workspaceId,
+            OR: [{ twoFactorLastStep: null }, { twoFactorLastStep: { lt: step } }],
+          },
+          data: { twoFactorLastStep: step },
+        });
+        ok = claim.count === 1;
+      }
     } else {
-      ok = user.twoFactorSecret
-        ? verifyTotp(openTotpSecret(user.twoFactorSecret), code)
-        : (
-            await this.smsOtp.verify(
-              user.workspaceId,
-              { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
-              code,
-              user.phone,
-            )
-          ).ok;
+      ok = (
+        await this.smsOtp.verify(
+          user.workspaceId,
+          { purpose: 'TWO_FACTOR', targetType: 'USER', targetId: user.id },
+          code,
+          user.phone,
+        )
+      ).ok;
     }
     if (!ok) throw new UnauthorizedException('Invalid 2FA code');
     return this.generateTokens(user);

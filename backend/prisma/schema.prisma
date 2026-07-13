@@ -147,6 +147,11 @@ model MarketingUser {
   twoFactorEnabled     Boolean @default(false)
   twoFactorSecret      String?
   twoFactorBackupCodes Json?
+  // RFC 6238 §5.2 replay guard: the last TOTP time-step consumed at LOGIN. A
+  // login 2FA verify rejects any code whose step is not strictly newer, so a
+  // captured code can't be replayed within its ~90s validity window. Null until
+  // the first TOTP login.
+  twoFactorLastStep    Int?
 
   // Epic F — optional custom role (granular permissions). When set, its
   // permission set overrides the legacy `role` string; otherwise the legacy
