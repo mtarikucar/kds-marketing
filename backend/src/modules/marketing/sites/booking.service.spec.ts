@@ -75,6 +75,18 @@ describe('BookingService', () => {
     expect(slots[0]).toBe('2027-06-14T09:00:00.000Z');
   });
 
+  it('honours a narrow [from, to) sub-window — no slots before `from` or at/after `to`', async () => {
+    // Calendar window is 09:00–10:00 UTC (slots 09:00, 09:30). A caller-supplied
+    // narrow window must NOT spill the whole day's slots (the public endpoint
+    // passes from/to through verbatim).
+    const only930 = await svc.availability(WS, 'c1', '2027-06-14T09:15:00.000Z', '2027-06-14T09:45:00.000Z');
+    expect(only930).toEqual(['2027-06-14T09:30:00.000Z']); // 09:00 < from, nothing >= to
+
+    prisma.bookingCalendar.findFirst.mockResolvedValue(calendar());
+    const only900 = await svc.availability(WS, 'c1', dayISO, '2027-06-14T09:30:00.000Z');
+    expect(only900).toEqual(['2027-06-14T09:00:00.000Z']); // 09:30 is at `to` → excluded
+  });
+
   it('interprets availability windows in the calendar timezone (Istanbul = UTC+3)', async () => {
     prisma.bookingCalendar.findFirst.mockResolvedValue(calendar({ timezone: 'Europe/Istanbul' }));
     const slots = await svc.availability(WS, 'c1', dayISO, '2027-06-14T23:59:59.000Z');

@@ -398,6 +398,12 @@ export class BookingService implements OnModuleInit {
     if (!cal) throw new NotFoundException('Calendar not found');
     const from = new Date(fromISO);
     let to = new Date(toISO);
+    // The caller's requested end instant, kept BEFORE the maxAdvance clamp: it
+    // is the strict slot-level upper bound. `to` below is clamped to the
+    // maxAdvance horizon and drives the (day-granular) day loop, which
+    // deliberately INCLUDES the cap day — so the slot bound must use the
+    // un-clamped requested end, or the cap day's slots would be dropped.
+    const toRequestedMs = to.getTime();
     const maxDays = (cal as any).maxAdvanceDays ?? MAX_RANGE_DAYS;
     const cap = new Date(from.getTime() + maxDays * 86400_000);
     if (to > cap) to = cap;
@@ -496,6 +502,14 @@ export class BookingService implements OnModuleInit {
         const we = zonedWallTimeToUtcMs(y, mo, d, he[0], he[1], tz);
         for (let s = ws; s + slotMs <= we; s += stepMs) {
           const e = s + slotMs;
+          // Honour the requested [from, to) window at the SLOT level. The day
+          // loop only bounds whole tz-local days, so a window on the first/last
+          // day would otherwise spill slots BEFORE `from`'s time-of-day or
+          // AFTER `to` — and the public availability endpoint passes
+          // caller-supplied from/to through verbatim, so a narrow query would
+          // wrongly return the whole day's slots.
+          if (s < from.getTime()) continue; // before the requested window start
+          if (s >= toRequestedMs) break; // at/after the requested end (s ascends here)
           if (s < earliest) continue; // before now + minimum notice
           if (extIv.some(([bs, be]) => s < be && e > bs)) continue; // hard block
           if (overlapsBlackout(blackouts, s, e, ownerId)) continue; // blackout / time-off
