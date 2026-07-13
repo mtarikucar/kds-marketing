@@ -550,10 +550,15 @@ export class SocialCampaignsService implements OnModuleInit {
       const assets = await this.prisma.generatedAsset.findMany({
         where: { id: { in: assetIds }, workspaceId }, select: { status: true },
       });
-      const anyReady = assets.some((a) => a.status === 'READY');
+      // Wait while ANY attached asset is still generating — not only when NONE
+      // are ready. A multi-media post (e.g. IMAGE + VIDEO) whose image is READY
+      // but whose video is still GENERATING must NOT publish image-only and
+      // orphan the video that finishes moments later (attachAssetsToPost only
+      // attaches READY assets). Bounded by waitedMs so a permanently-stuck asset
+      // still eventually publishes with whatever IS ready.
       const anyPending = assets.some((a) => a.status === 'QUEUED' || a.status === 'GENERATING');
       const waitedMs = Date.now() - new Date(item.scheduledFor).getTime();
-      if (!anyReady && anyPending && waitedMs < MEDIA_READY_MAX_WAIT_MS) {
+      if (anyPending && waitedMs < MEDIA_READY_MAX_WAIT_MS) {
         return { reschedule: { runAt: new Date(Date.now() + MEDIA_READY_RETRY_MS), payload: { itemId, workspaceId } } };
       }
     }

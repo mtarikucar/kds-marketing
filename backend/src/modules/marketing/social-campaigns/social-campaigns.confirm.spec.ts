@@ -74,6 +74,19 @@ describe('confirmItem — gate, cap rollover, brand-safety', () => {
     expect(prisma.socialCampaignItem.updateMany).not.toHaveBeenCalled();
   });
 
+  it('multi-media: waits when ANY asset is still generating even if another is READY (no orphaned media)', async () => {
+    const { svc, prisma, planner } = build();
+    prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
+      makeItem({ scheduledFor: new Date(), generatedAssetIds: ['img-1', 'vid-1'] }),
+    );
+    // image ready, video still generating → must WAIT, not publish image-only.
+    prisma.generatedAsset.findMany.mockResolvedValueOnce([{ status: 'READY' }, { status: 'GENERATING' }]);
+    const res = await confirm(svc);
+    expect(res).toEqual({ reschedule: expect.objectContaining({ payload: { itemId: 'i-1', workspaceId: WS } }) });
+    expect(planner.schedulePost).not.toHaveBeenCalled();
+    expect(prisma.socialCampaignItem.updateMany).not.toHaveBeenCalled(); // not yet claimed/published
+  });
+
   it('SEMI_AUTO auto-publishes a NEEDS_APPROVAL item the user did not reject', async () => {
     const { svc, prisma, planner } = build();
     prisma.socialCampaignItem.findFirst.mockResolvedValueOnce(
