@@ -91,10 +91,10 @@ describe('IvrService', () => {
 
     it('SUBMENU → renders the nested menu gather', async () => {
       prisma.ivrOption.findFirst.mockResolvedValue({ action: 'SUBMENU', targetMenuId: 'm2' });
-      // the nested render re-reads the target menu
       prisma.ivrMenu.findFirst
         .mockResolvedValueOnce({ id: 'm1', workspaceId: WS, greeting: 'Hi' }) // option's menu
-        .mockResolvedValueOnce({ id: 'm2', workspaceId: WS, greeting: 'Submenu' }); // target
+        .mockResolvedValueOnce({ id: 'm2', enabled: true }) // target enabled check
+        .mockResolvedValueOnce({ id: 'm2', workspaceId: WS, greeting: 'Submenu' }); // nested render
       prisma.ivrOption.findMany.mockResolvedValue([{ digit: '1', label: 'Billing' }]);
 
       const out = await svc.handleDigit(WS, 'm1', '3');
@@ -103,6 +103,21 @@ describe('IvrService', () => {
       expect(out.twiml).toContain('<Gather numDigits="1"');
       expect(out.twiml).toContain('action="https://m.example/api/public/channels/twilio/ivr/m2"');
       expect(out.twiml).toContain('Submenu');
+    });
+
+    it('SUBMENU whose target is DISABLED → re-prompts the current menu, not the disabled submenu', async () => {
+      prisma.ivrOption.findFirst.mockResolvedValue({ action: 'SUBMENU', targetMenuId: 'm2' });
+      prisma.ivrMenu.findFirst
+        .mockResolvedValueOnce({ id: 'm1', workspaceId: WS, greeting: 'Hi' }) // option's menu
+        .mockResolvedValueOnce({ id: 'm2', enabled: false }) // target enabled check → disabled
+        .mockResolvedValueOnce({ id: 'm1', workspaceId: WS, greeting: 'Hi' }); // re-prompt current menu
+      prisma.ivrOption.findMany.mockResolvedValue([{ digit: '1', label: 'Billing' }]);
+
+      const out = await svc.handleDigit(WS, 'm1', '3');
+
+      // Routed back to the CURRENT menu (m1) — never into the disabled target (m2).
+      expect(out.twiml).toContain('action="https://m.example/api/public/channels/twilio/ivr/m1"');
+      expect(out.twiml).not.toContain('/ivr/m2"');
     });
 
     it('DIAL → <Dial> the E.164 number', async () => {
