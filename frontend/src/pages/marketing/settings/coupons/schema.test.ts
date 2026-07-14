@@ -19,7 +19,15 @@ describe('coupons form schema — PERCENT value bound', () => {
     expect(schema.safeParse({ ...base, kind: 'PERCENT', value: 50 }).success).toBe(true);
   });
 
-  it('accepts a FIXED value above 100 (currency amount, unbounded)', () => {
-    expect(schema.safeParse({ ...base, kind: 'FIXED', value: 500 }).success).toBe(true);
+  it('accepts a FIXED value above 100 with a currency (currency amount, unbounded)', () => {
+    expect(schema.safeParse({ ...base, kind: 'FIXED', value: 500, currency: 'TRY' }).success).toBe(true);
+  });
+
+  it('rejects a FIXED coupon with no currency (the backend requires one)', () => {
+    const r = schema.safeParse({ ...base, kind: 'FIXED', value: 500 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path[0] === 'currency')).toBe(true);
+    }
   });
 });
