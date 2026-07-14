@@ -1,9 +1,11 @@
 /**
  * Epic A4 — normalized lead match keys for duplicate detection.
  *
- * Phone: digits only (drops spaces, dashes, parens, leading +/00) so the same
- * number written different ways collides. Email: trimmed + lowercased.
- * Both return null for empty/blank input so absent contact info never matches.
+ * Phone: digits only (drops spaces, dashes, parens, and the leading `+`) so the
+ * same number written different ways collides. A leading `00` international-access
+ * prefix is left INTACT here (it's digits) and reconciled by
+ * `localMsisdnVariants`/`toIysMsisdn`. Email: trimmed + lowercased. Both return
+ * null for empty/blank input so absent contact info never matches.
  */
 export function normalizePhone(phone?: string | null): string | null {
   if (!phone) return null;
@@ -43,6 +45,12 @@ export function normalizeEmail(email?: string | null): string | null {
  */
 export function localMsisdnVariants(phoneNormalized: string): string[] {
   let d = phoneNormalized;
+  // A leading `00` is the international-access prefix (00 + country code). Drop it
+  // so `00·90·<local>` reduces exactly like `+90` / `0` / bare do — otherwise an
+  // externally-sourced 00-form (import from a foreign CRM, some webhooks) would
+  // fall through to the bare exact-match below and silently miss the same lead
+  // stored via any other path. (normalizePhone keeps the 00; it only strips `+`.)
+  if (d.length >= 12 && d.startsWith('00')) d = d.slice(2);
   if (d.length === 12 && d.startsWith('90')) d = d.slice(2);
   else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
   if (d.length !== 10) return [phoneNormalized];
@@ -65,6 +73,12 @@ export function localMsisdnVariants(phoneNormalized: string): string[] {
  */
 export function toIysMsisdn(raw: string | null | undefined): string | null {
   let d = (raw ?? '').replace(/\D/g, '');
+  // Drop a leading `00` international-access prefix first (see localMsisdnVariants)
+  // so a valid `00·90·<local>` mobile is recognised instead of failing closed —
+  // an İYS-consented customer whose number arrives in 00-form must not be blocked
+  // from commercial SMS. A non-TR number still fails the 10-digit/starts-with-5
+  // guard below and returns null.
+  if (d.length >= 12 && d.startsWith('00')) d = d.slice(2);
   if (d.length === 12 && d.startsWith('90')) d = d.slice(2);
   else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
   if (d.length !== 10 || !d.startsWith('5')) return null;
