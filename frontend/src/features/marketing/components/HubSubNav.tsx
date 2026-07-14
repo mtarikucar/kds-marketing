@@ -20,7 +20,7 @@ export default function HubSubNav() {
   const location = useLocation();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
-  const hubs = visibleNav(NAV_HUBS, { isManager, has, isAgency });
+  const hubs = visibleNav(NAV_HUBS, { isManager, isOwner: user?.role === 'OWNER', has, isAgency });
   const active = findActiveHub(hubs, location.pathname);
   if (!active || active.area === 'settings' || !active.children || active.children.length < 2) {
     return null;

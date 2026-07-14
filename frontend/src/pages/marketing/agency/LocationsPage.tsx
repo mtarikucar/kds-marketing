@@ -58,6 +58,19 @@ function LocationsPageInner() {
     }));
   }, [locations, dashboard]);
 
+  // Switch INTO a sub-account. Shared by the row's primary "Open" button.
+  // access.isPending is global, so we scope the loading spinner to the row
+  // currently being opened via access.variables.
+  const openLocation = (loc: Row) =>
+    access.mutate(
+      { id: loc.id, name: loc.name },
+      {
+        onSuccess: () => navigate('/'),
+        onError: (e) =>
+          toast.error(apiError(e, t('agency.locations.enterError', { defaultValue: 'Could not open the sub-account' }))),
+      },
+    );
+
   const handleCreate = (values: CreateLocationFormValues) => {
     create.mutate(values, {
       onSuccess: () => {
@@ -109,52 +122,48 @@ function LocationsPageInner() {
     },
     {
       id: 'actions',
-      header: '',
-      size: 48,
+      header: t('agency.locations.actions', { defaultValue: 'Actions' }),
+      size: 200,
       cell: ({ row }) => {
         const loc = row.original;
         const isActive = loc.status === 'ACTIVE';
+        // access.isPending is global to the mutation; scope the spinner to the row.
+        const opening = access.isPending && access.variables?.id === loc.id;
         return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <IconButton aria-label={t('common.actions', { defaultValue: 'Actions' })} size="sm" variant="ghost">
-                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-              </IconButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {isActive && (
-                <DropdownMenuItem
-                  disabled={access.isPending}
-                  onClick={() =>
-                    access.mutate(
-                      { id: loc.id, name: loc.name },
-                      {
-                        onSuccess: () => navigate('/'),
-                        onError: (e) =>
-                          toast.error(
-                            apiError(e, t('agency.locations.enterError', { defaultValue: 'Could not open the sub-account' })),
-                          ),
-                      },
-                    )
-                  }
-                >
-                  <LogIn className="mr-2 h-4 w-4" aria-hidden="true" />
-                  {t('agency.locations.enter', { defaultValue: 'Open sub-account' })}
-                </DropdownMenuItem>
-              )}
-              {isActive ? (
-                <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setSuspendTarget(loc)}>
-                  <PauseCircle className="mr-2 h-4 w-4" aria-hidden="true" />
-                  {t('agency.locations.suspend', { defaultValue: 'Suspend' })}
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onClick={() => setSuspendTarget(loc)}>
-                  <PlayCircle className="mr-2 h-4 w-4" aria-hidden="true" />
-                  {t('agency.locations.reactivate', { defaultValue: 'Reactivate' })}
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-1.5">
+            {isActive && (
+              <Button
+                size="sm"
+                variant="primary"
+                loading={opening}
+                disabled={access.isPending}
+                onClick={() => openLocation(loc)}
+              >
+                {!opening && <LogIn className="h-4 w-4" aria-hidden="true" />}
+                {t('agency.locations.enter', { defaultValue: 'Open' })}
+              </Button>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton aria-label={t('agency.locations.moreActions', { defaultValue: 'More actions' })} size="sm" variant="ghost">
+                  <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                </IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {isActive ? (
+                  <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setSuspendTarget(loc)}>
+                    <PauseCircle className="mr-2 h-4 w-4" aria-hidden="true" />
+                    {t('agency.locations.suspend', { defaultValue: 'Suspend' })}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={() => setSuspendTarget(loc)}>
+                    <PlayCircle className="mr-2 h-4 w-4" aria-hidden="true" />
+                    {t('agency.locations.reactivate', { defaultValue: 'Reactivate' })}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         );
       },
     },
@@ -208,7 +217,8 @@ function LocationsPageInner() {
             icon={<Building2 className="h-10 w-10" />}
             title={t('agency.locations.empty', { defaultValue: 'No sub-accounts yet' })}
             description={t('agency.locations.emptyHint', {
-              defaultValue: 'Create your first child location to start managing it from here.',
+              defaultValue:
+                'Sub-accounts are the individual client workspaces your agency runs — each with its own leads, users and settings. Create one, then use Open to step into it and work as that client.',
             })}
             action={
               <Button onClick={() => setCreateOpen(true)} variant="outline">

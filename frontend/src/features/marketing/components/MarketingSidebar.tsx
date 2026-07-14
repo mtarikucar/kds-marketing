@@ -57,7 +57,7 @@ export default function MarketingSidebar({
       return next;
     });
 
-  const hubs = visibleNav(NAV_HUBS, { isManager, has, isAgency });
+  const hubs = visibleNav(NAV_HUBS, { isManager, isOwner: user?.role === 'OWNER', has, isAgency });
   const settingsHub = hubs.find((h) => h.area === 'settings');
   const activeHub = findActiveHub(hubs, location.pathname);
 

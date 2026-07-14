@@ -23,8 +23,8 @@ vi.mock('../../../features/marketing/api/marketingApi', () => ({
 
 // Authenticated store so useWorkspaceProfile runs its query.
 vi.mock('../../../store/marketingAuthStore', () => ({
-  useMarketingAuthStore: (sel?: (s: { isAuthenticated: boolean }) => unknown) => {
-    const state = { isAuthenticated: true };
+  useMarketingAuthStore: (sel?: (s: { isAuthenticated: boolean; user: { role: string } }) => unknown) => {
+    const state = { isAuthenticated: true, user: { role: 'OWNER' } };
     return sel ? sel(state) : state;
   },
 }));

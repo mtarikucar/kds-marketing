@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { LogOut } from 'lucide-react';
+import { LogOut, Eye } from 'lucide-react';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 /**
@@ -21,13 +21,27 @@ export function AgencyImpersonationBanner() {
   if (!agencyReturn) return null;
 
   return (
-    <div className="flex items-center justify-between gap-3 bg-amber-500 px-4 py-2 text-sm font-medium text-amber-950 lg:px-6">
-      <span className="min-w-0 truncate">
-        {t('agency.impersonation.banner', {
-          defaultValue: 'You are inside the sub-account “{{name}}”.',
-          name: agencyReturn.locationName,
-        })}
-      </span>
+    <div
+      role="status"
+      className="flex items-center justify-between gap-3 bg-amber-500 px-4 py-2 text-sm text-amber-950 lg:px-6"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <Eye className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 truncate">
+          <span className="font-semibold uppercase tracking-wide">
+            {t('agency.impersonation.label', { defaultValue: 'Sub-account' })}
+          </span>
+          <span aria-hidden="true" className="mx-2 opacity-40">
+            •
+          </span>
+          <span className="font-medium">
+            {t('agency.impersonation.banner', {
+              defaultValue: 'You are working inside “{{name}}”. Everything you do here affects this sub-account.',
+              name: agencyReturn.locationName,
+            })}
+          </span>
+        </span>
+      </div>
       <button
         type="button"
         onClick={() => {
@@ -35,7 +49,7 @@ export function AgencyImpersonationBanner() {
           qc.clear();
           navigate('/agency/locations');
         }}
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-amber-950/10 px-2.5 py-1 font-semibold hover:bg-amber-950/20"
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-amber-950/15 px-3 py-1.5 font-semibold transition-colors hover:bg-amber-950/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-950/60"
       >
         <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
         {t('agency.impersonation.return', { defaultValue: 'Return to agency' })}

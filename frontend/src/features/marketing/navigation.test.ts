@@ -87,13 +87,20 @@ describe('visibleNav — hub model, role + entitlement gating', () => {
     expect(hubs.find((h) => h.id === 'agency')).toBeUndefined();
   });
 
-  it('shows the Agency hub only for an AGENCY workspace manager', () => {
-    const hubs = visibleNav(NAV_HUBS, { isManager: true, has: entitle(), isAgency: true });
+  it('shows the Agency hub only for an AGENCY workspace OWNER', () => {
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, isOwner: true, has: entitle(), isAgency: true });
     expect(childPaths(hubs, 'agency').sort()).toEqual([
       '/agency/locations',
       '/agency/rebilling',
       '/agency/snapshots',
     ]);
+  });
+
+  it('hides the Agency hub from a non-OWNER (MANAGER) of an agency workspace', () => {
+    // Every /agency/* backend route is @MarketingRoles('OWNER'); a manager who saw
+    // the console would only hit 403s, so the hub is ownerOnly.
+    const hubs = visibleNav(NAV_HUBS, { isManager: true, isOwner: false, has: entitle(), isAgency: true });
+    expect(hubs.find((h) => h.id === 'agency')).toBeUndefined();
   });
 });
 

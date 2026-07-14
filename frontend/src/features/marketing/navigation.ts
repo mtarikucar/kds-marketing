@@ -129,6 +129,8 @@ export interface NavChild {
   feature?: FeatureKey;
   /** When true, only OWNER/MANAGER see it. */
   managerOnly?: boolean;
+  /** When true, ONLY an OWNER sees it (stricter than managerOnly). */
+  ownerOnly?: boolean;
 }
 
 export interface NavHub {
@@ -143,6 +145,8 @@ export interface NavHub {
   /** Hub-level gating (single-page hubs); children carry their own gating. */
   feature?: FeatureKey;
   managerOnly?: boolean;
+  /** When true, ONLY an OWNER sees the hub (stricter than managerOnly). */
+  ownerOnly?: boolean;
   /** Whole hub only renders for an AGENCY workspace (Epic D). */
   agencyOnly?: boolean;
   /** 'settings' hubs render in the separate Settings area (gear), not the primary rail. */
@@ -251,7 +255,7 @@ export const NAV_HUBS: NavHub[] = [
     ],
   },
   {
-    id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true, tier: 'advanced',
+    id: 'agency', labelKey: 'nav.group.agency', label: 'Agency', icon: Building2, agencyOnly: true, ownerOnly: true, tier: 'advanced',
     children: [
       { path: '/agency/locations', labelKey: 'nav.agencyLocations', label: 'Sub-accounts', icon: Building2, managerOnly: true },
       { path: '/agency/snapshots', labelKey: 'nav.agencySnapshots', label: 'Snapshots', icon: Camera, managerOnly: true },
@@ -291,10 +295,17 @@ export interface NavVisibilityOpts {
   has: (feature?: FeatureKey) => boolean;
   /** True only for an AGENCY workspace — gates the `agencyOnly` hub (Epic D). */
   isAgency?: boolean;
+  /** True only for an OWNER — gates `ownerOnly` items (the whole Agency console,
+   *  whose every backend route is @MarketingRoles('OWNER')). */
+  isOwner?: boolean;
 }
 
 function childVisible(c: NavChild, opts: NavVisibilityOpts): boolean {
-  return (c.managerOnly ? opts.isManager : true) && opts.has(c.feature);
+  return (
+    (c.managerOnly ? opts.isManager : true) &&
+    (c.ownerOnly ? !!opts.isOwner : true) &&
+    opts.has(c.feature)
+  );
 }
 
 /**
@@ -312,7 +323,8 @@ export function visibleNav(hubs: NavHub[], opts: NavVisibilityOpts): NavHub[] {
       return { ...h, children: h.children.filter((c) => childVisible(c, opts)) };
     })
     .filter((h) => (h.children ? h.children.length > 0 : !!h.path) &&
-      (h.managerOnly ? opts.isManager : true) && opts.has(h.feature));
+      (h.managerOnly ? opts.isManager : true) &&
+      (h.ownerOnly ? !!opts.isOwner : true) && opts.has(h.feature));
 }
 
 /**

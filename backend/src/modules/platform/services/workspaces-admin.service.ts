@@ -59,7 +59,7 @@ export class WorkspacesAdminService {
     const workspace = await this.prisma.workspace.findUnique({ where: { id } });
     if (!workspace) throw new NotFoundException('Workspace not found');
 
-    const [users, leads, openLeads, wonLeads] = await Promise.all([
+    const [users, leads, openLeads, wonLeads, locationCount] = await Promise.all([
       this.prisma.marketingUser.count({
         where: { workspaceId: id, role: { not: 'SYSTEM' } },
       }),
@@ -68,6 +68,9 @@ export class WorkspacesAdminService {
         where: { workspaceId: id, status: { notIn: ['WON', 'LOST'] } },
       }),
       this.prisma.lead.count({ where: { workspaceId: id, status: 'WON' } }),
+      // Child sub-accounts — lets the admin UI show "N sub-accounts" and pre-empt
+      // the demote orphan-guard (an AGENCY with children can't revert to STANDALONE).
+      this.prisma.workspace.count({ where: { parentWorkspaceId: id, kind: 'LOCATION' } }),
     ]);
 
     const owner = await this.prisma.marketingUser.findFirst({
@@ -75,7 +78,7 @@ export class WorkspacesAdminService {
       select: { id: true, email: true, firstName: true, lastName: true, lastLogin: true },
     });
 
-    return { ...workspace, owner, counts: { users, leads, openLeads, wonLeads } };
+    return { ...workspace, owner, counts: { users, leads, openLeads, wonLeads }, locationCount };
   }
 
   async updateStatus(id: string, status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED') {

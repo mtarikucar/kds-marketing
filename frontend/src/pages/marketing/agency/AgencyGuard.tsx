@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Building2 } from 'lucide-react';
 import { EmptyState, Skeleton } from '@/components/ui';
 import { useWorkspaceProfile } from '../../../features/marketing/hooks/useWorkspaceProfile';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 /**
  * Page-level gate for the Agency console. The backend already 403s every
@@ -15,6 +16,10 @@ import { useWorkspaceProfile } from '../../../features/marketing/hooks/useWorksp
 export function AgencyGuard({ children }: { children: ReactNode }) {
   const { t } = useTranslation('marketing');
   const { isAgency, isLoading } = useWorkspaceProfile();
+  // Every /agency/* backend route is @MarketingRoles('OWNER'); mirror that here so
+  // a non-OWNER (e.g. a MANAGER) in an agency workspace gets a clean explanation
+  // instead of a console whose every action 403s.
+  const isOwner = useMarketingAuthStore((s) => s.user?.role === 'OWNER');
 
   if (isLoading) {
     return (
@@ -32,6 +37,18 @@ export function AgencyGuard({ children }: { children: ReactNode }) {
         title={t('agency.notAgency.title', { defaultValue: 'Agency console unavailable' })}
         description={t('agency.notAgency.desc', {
           defaultValue: 'This workspace is not an agency. Sub-accounts, snapshots and rebilling are only available to agency workspaces.',
+        })}
+      />
+    );
+  }
+
+  if (!isOwner) {
+    return (
+      <EmptyState
+        icon={<Building2 className="h-10 w-10" />}
+        title={t('agency.ownerOnly.title', { defaultValue: 'Owner access required' })}
+        description={t('agency.ownerOnly.desc', {
+          defaultValue: 'Managing sub-accounts, snapshots and rebilling is restricted to the agency owner.',
         })}
       />
     );
