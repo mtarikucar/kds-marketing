@@ -88,10 +88,22 @@ export function ThreadPane({
 }: ThreadPaneProps) {
   const { t } = useTranslation('marketing');
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const prevConvoId = useRef<string | undefined>(undefined);
+  const convoId = convo?.id;
+  const lastDirection = messages.length ? messages[messages.length - 1].direction : undefined;
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+    const threadChanged = prevConvoId.current !== convoId;
+    prevConvoId.current = convoId;
+    // Auto-scroll to the newest message ONLY when the thread just changed (jump
+    // to the bottom of the freshly opened conversation) or the newest message is
+    // our own OUTBOUND reply. A new INBOUND message (this is an AI-agent inbox
+    // where messages stream in continuously) must NOT yank an agent who has
+    // scrolled up to read earlier history down to the bottom.
+    if (threadChanged || lastDirection === 'OUTBOUND') {
+      threadEndRef.current?.scrollIntoView({ behavior: threadChanged ? 'auto' : 'smooth' });
+    }
+  }, [messages.length, convoId, lastDirection]);
 
   if (!convo) {
     return (
