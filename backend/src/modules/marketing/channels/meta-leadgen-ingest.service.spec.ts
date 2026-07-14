@@ -129,6 +129,24 @@ describe('MetaLeadgenIngestService', () => {
     expect(data.phone).toBe('5559998877');
   });
 
+  it('de-dupes by phone across ALL number spellings (variant-aware), not just the exact one', async () => {
+    // A Meta lead-ad delivers E.164 (→ 90-prefixed) while the same person's web
+    // form stored a 0-prefixed number; an exact phoneNormalized match would miss
+    // it and duplicate the (paid) lead.
+    mockGraph.mockResolvedValueOnce({
+      ok: true,
+      error: null,
+      data: { field_data: [{ name: 'phone_number', values: ['0555 999 88 77'] }] },
+    });
+    prisma.lead.findFirst.mockResolvedValue(null); // both checks miss → reach create
+    await svc.ingest(CHANNEL, CONFIG, { leadgen_id: 'lg-400' });
+    const where = prisma.lead.findFirst.mock.calls[1][0].where; // 2nd call = in-tx dedup
+    const phoneClause = where.OR.find((c: any) => c.phoneNormalized);
+    expect(phoneClause.phoneNormalized).toEqual({
+      in: expect.arrayContaining(['5559998877', '05559998877', '905559998877']),
+    });
+  });
+
   it('de-dupes onto an existing lead by email without creating a duplicate', async () => {
     // externalRef pre-check misses, then the in-tx normalized-email dedup hits.
     prisma.lead.findFirst

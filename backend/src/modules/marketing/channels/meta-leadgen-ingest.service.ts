@@ -4,7 +4,7 @@ import { OutboxService } from '../../outbox/outbox.service';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
 import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
-import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { normalizeEmail, normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
 import { ResolvedChannelConfig } from './channel-adapter.interface';
 
@@ -113,7 +113,11 @@ export class MetaLeadgenIngestService {
               deletedAt: null,
               OR: [
                 ...(emailNormalized ? [{ emailNormalized }] : []),
-                ...(phoneNormalized ? [{ phoneNormalized }] : []),
+                // Match across every stored spelling (0- / bare / 90- / +90 / 00-)
+                // like İYS/telephony/import do — Meta delivers E.164 (→ 90-prefixed)
+                // while the same person's web form stored a 0-prefixed number, so an
+                // exact match would miss it and duplicate the paid lead.
+                ...(phoneNormalized ? [{ phoneNormalized: { in: localMsisdnVariants(phoneNormalized) } }] : []),
               ],
             },
             select: { id: true, status: true },
