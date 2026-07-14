@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SitesService } from './sites.service';
 
@@ -86,6 +86,61 @@ describe('SitesService.create — quota-race safety', () => {
     await svc.create(WS, { title: 'Home' });
     expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
     expect(prisma.sitePage.create).toHaveBeenCalled();
+  });
+});
+
+// Reference guards: deleting a page that a funnel step renders (or a form a
+// page block references) silently broke LIVE surfaces mid-flow — the funnel
+// 404ed at that step / the renderer dropped the form block with no warning.
+describe('SitesService — delete reference guards', () => {
+  const WS = 'ws-1';
+  const mkSvc = (prisma: any) =>
+    new SitesService(prisma as never, null as never, null as never, null as never, null as never, null as never);
+
+  it('remove() refuses to delete a page referenced by a funnel step (409 with names)', async () => {
+    const prisma: any = {
+      funnel: {
+        findMany: jest.fn().mockResolvedValue([
+          { name: 'Demo funnel', steps: [{ sitePageId: 'p1' }] },
+          { name: 'Other', steps: [{ sitePageId: 'p9' }] },
+        ]),
+      },
+      sitePage: { deleteMany: jest.fn() },
+    };
+    await expect(mkSvc(prisma).remove(WS, 'p1')).rejects.toBeInstanceOf(ConflictException);
+    await expect(mkSvc(prisma).remove(WS, 'p1')).rejects.toThrow(/Demo funnel/);
+    expect(prisma.sitePage.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('remove() deletes an unreferenced page (404 when missing)', async () => {
+    const prisma: any = {
+      funnel: { findMany: jest.fn().mockResolvedValue([]) },
+      sitePage: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    await expect(mkSvc(prisma).remove(WS, 'ghost')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('removeForm() refuses to delete a form still wired into a page block (409 with titles)', async () => {
+    const prisma: any = {
+      sitePage: {
+        findMany: jest.fn().mockResolvedValue([
+          { title: 'Landing', blocks: [{ type: 'form', formId: 'f1' }] },
+          { title: 'About', blocks: [{ type: 'hero' }] },
+        ]),
+      },
+      formDef: { deleteMany: jest.fn() },
+    };
+    await expect(mkSvc(prisma).removeForm(WS, 'f1')).rejects.toBeInstanceOf(ConflictException);
+    await expect(mkSvc(prisma).removeForm(WS, 'f1')).rejects.toThrow(/Landing/);
+    expect(prisma.formDef.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('removeForm() deletes an unreferenced form', async () => {
+    const prisma: any = {
+      sitePage: { findMany: jest.fn().mockResolvedValue([{ title: 'Landing', blocks: [{ type: 'hero' }] }]) },
+      formDef: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    await expect(mkSvc(prisma).removeForm(WS, 'f1')).resolves.toEqual({ message: 'Form deleted' });
   });
 });
 

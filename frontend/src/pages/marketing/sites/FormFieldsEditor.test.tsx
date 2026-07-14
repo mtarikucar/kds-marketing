@@ -65,3 +65,29 @@ describe('FormFieldsEditor name/label coupling', () => {
     expect(onChange.mock.calls[0][0][0].name).toBe('company_name');
   });
 });
+
+describe('FormFieldsEditor name typing', () => {
+  it('keeps a trailing underscore while TYPING so multi-word keys like utm_source are typeable', () => {
+    const onChange = vi.fn();
+    render(<FormFieldsEditor fields={[field('utm', 'U')]} onChange={onChange} />);
+
+    // The strict slugify stripped the trailing '_' on every keystroke, so
+    // "utm_source" collapsed to "utmsource" — the '_' vanished as you typed.
+    fireEvent.change(screen.getByPlaceholderText(/name \(POST key\)/i), { target: { value: 'utm_' } });
+    expect(onChange.mock.calls[0][0][0].name).toBe('utm_');
+  });
+
+  it('allows clearing the input mid-edit (no snap to the literal "field") and commits strictly on blur', () => {
+    const onChange = vi.fn();
+    render(<FormFieldsEditor fields={[field('utm', 'U')]} onChange={onChange} />);
+    const input = screen.getByPlaceholderText(/name \(POST key\)/i);
+
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onChange.mock.calls[0][0][0].name).toBe(''); // empty allowed mid-edit
+
+    // Blur commits the strict slugify: current rendered value 'utm' stays 'utm'.
+    fireEvent.blur(input);
+    const afterBlur = onChange.mock.calls[1][0][0].name;
+    expect(afterBlur).toBe('utm'); // strict form of the still-rendered prop value
+  });
+});

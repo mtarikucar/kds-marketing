@@ -48,6 +48,27 @@ describe('PageFunnelsService', () => {
     await expect(svc.create(WS, { name: 'X' })).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('refuses publishing a funnel with ZERO steps (its public URL is a guaranteed 404)', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.funnel.findFirst.mockResolvedValue({ id: 'fn1', workspaceId: WS, published: false, steps: [] });
+    await expect(svc.update(WS, 'fn1', { published: true })).rejects.toThrow(/at least one step/);
+    expect(prisma.funnel.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses emptying the steps of an already-published funnel (effective post-update state)', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.funnel.findFirst.mockResolvedValue({ id: 'fn1', workspaceId: WS, published: true, steps: [{ sitePageId: 'p1' }] });
+    await expect(svc.update(WS, 'fn1', { steps: [] })).rejects.toThrow(/at least one step/);
+  });
+
+  it('allows publishing WITH steps, and unpublishing an empty funnel', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.funnel.findFirst.mockResolvedValue({ id: 'fn1', workspaceId: WS, published: false, steps: [{ sitePageId: 'p1' }] });
+    await expect(svc.update(WS, 'fn1', { published: true })).resolves.toBeDefined();
+    prisma.funnel.findFirst.mockResolvedValue({ id: 'fn2', workspaceId: WS, published: true, steps: [] });
+    await expect(svc.update(WS, 'fn2', { published: false, steps: [] })).resolves.toBeDefined();
+  });
+
   it('render returns null for an unknown/unpublished funnel', async () => {
     const { svc, prisma } = makeSvc();
     prisma.funnel.findFirst.mockResolvedValue(null);

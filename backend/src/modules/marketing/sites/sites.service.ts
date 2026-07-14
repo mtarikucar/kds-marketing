@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -131,6 +132,23 @@ export class SitesService {
   }
 
   async remove(workspaceId: string, id: string) {
+    // A funnel step renders this page by id — deleting it would make a
+    // published funnel silently 404 MID-FLOW at that step. Refuse with the
+    // referencing funnel names so the user detaches the step first.
+    const funnels = await this.prisma.funnel.findMany({
+      where: { workspaceId },
+      select: { name: true, steps: true },
+    });
+    const referencing = funnels.filter((f) =>
+      (Array.isArray(f.steps) ? (f.steps as Array<{ sitePageId?: string }>) : []).some(
+        (s) => s?.sitePageId === id,
+      ),
+    );
+    if (referencing.length > 0) {
+      throw new ConflictException(
+        `This page is a step in: ${referencing.map((f) => f.name).join(', ')} — remove it from the funnel(s) first`,
+      );
+    }
     const res = await this.prisma.sitePage.deleteMany({ where: { id, workspaceId } });
     if (res.count === 0) throw new NotFoundException('Page not found');
     return { message: 'Page deleted' };
@@ -204,6 +222,24 @@ export class SitesService {
     return this.prisma.formDef.update({ where: { id: existing.id }, data });
   }
   async removeForm(workspaceId: string, id: string) {
+    // Form blocks reference this def by id and the public renderer silently
+    // drops a missing form — deleting a still-referenced def would strip the
+    // lead capture off a LIVE landing page with no warning. Refuse with the
+    // referencing page titles so the user unwires the block first.
+    const pages = await this.prisma.sitePage.findMany({
+      where: { workspaceId },
+      select: { title: true, blocks: true },
+    });
+    const referencing = pages.filter((p) =>
+      (Array.isArray(p.blocks) ? (p.blocks as Array<{ type?: string; formId?: string }>) : []).some(
+        (b) => b?.type === 'form' && b.formId === id,
+      ),
+    );
+    if (referencing.length > 0) {
+      throw new ConflictException(
+        `This form is used on: ${referencing.map((p) => p.title).join(', ')} — remove the form block(s) first`,
+      );
+    }
     const res = await this.prisma.formDef.deleteMany({ where: { id, workspaceId } });
     if (res.count === 0) throw new NotFoundException('Form not found');
     return { message: 'Form deleted' };

@@ -142,13 +142,20 @@ export function FunnelsCard({ pages, wsId }: { pages: PageOpt[]; wsId?: string }
                 <Switch checked={draft.published} onCheckedChange={(v) => setDraft({ ...draft, published: v })} />
                 {t('funnels.published', 'Published')}
               </label>
+              {draft.published && draft.steps.length === 0 && (
+                <p className="text-[11px] text-amber-600">
+                  {t('funnels.publishNeedsStep', 'A published funnel needs at least one step — its public URL would 404.')}
+                </p>
+              )}
 
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDraft(null)}>{t('common.cancel', 'Cancel')}</Button>
                 <Button
                   onClick={() => save.mutate(draft)}
                   loading={save.isPending}
-                  disabled={!draft.name.trim() || draft.steps.some((s) => !s.sitePageId) || save.isPending}
+                  // Published-with-zero-steps mirrors the backend guard: the
+                  // copied public URL would be a guaranteed 404.
+                  disabled={!draft.name.trim() || draft.steps.some((s) => !s.sitePageId) || (draft.published && draft.steps.length === 0) || save.isPending}
                 >
                   {t('common.save', 'Save')}
                 </Button>

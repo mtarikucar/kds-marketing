@@ -31,6 +31,15 @@ function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'field';
 }
 
+/** Lenient per-keystroke normalization for the NAME input: keeps a trailing
+ *  underscore (so "utm_source" is typeable at all — the strict slugify strips
+ *  it as you type, yielding "utmsource") and allows an empty value mid-edit
+ *  (the strict fallback snapped a cleared input straight to "field"). The
+ *  strict slugify runs on blur to commit the final key. */
+function normalizeNameTyping(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+/, '').slice(0, 40);
+}
+
 export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; onChange: (next: FormField[]) => void }) {
   const { t } = useTranslation('marketing');
 
@@ -96,7 +105,10 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
               value={f.name}
               aria-invalid={dupName || undefined}
               // A manual name edit stops the label from auto-tracking it.
-              onChange={(e) => patch(i, { name: slugify(e.target.value), _autoName: false })}
+              // Lenient while typing (multi-word keys stay typeable); the
+              // strict slugify commits on blur.
+              onChange={(e) => patch(i, { name: normalizeNameTyping(e.target.value), _autoName: false })}
+              onBlur={() => patch(i, { name: slugify(f.name) })}
             />
             {HAS_OPTIONS.has(f.type ?? '') && (
               <TokenListInput
