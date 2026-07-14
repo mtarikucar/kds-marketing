@@ -57,6 +57,7 @@ import {
   type ImportDedupePolicy,
   type UploadResult,
 } from './importsApi';
+import { buildSampleRows } from './csv-preview';
 
 // ── Native fields the backend accepts + special values ───────────────────────
 
@@ -153,13 +154,10 @@ function UploadStep({ onDone }: UploadStepProps) {
           { filename: file.name, content },
           {
             onSuccess: (result) => {
-              // Parse sample rows client-side for preview in the mapping step.
-              const lines = content.split('\n').filter(Boolean);
-              const headers = lines[0]?.split(',').map((h) => h.trim().replace(/^"|"$/g, '')) ?? [];
-              const sampleRows = lines.slice(1, 4).map((line) => {
-                const cells = line.split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
-                return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? '']));
-              });
+              // Quote-aware preview parse keyed by the backend's own headers, so
+              // the "Sample values" shown line up with what the backend actually
+              // reads (a naive split(',') shifts columns after a quoted comma).
+              const sampleRows = buildSampleRows(content, result.headers);
               onDone(result, sampleRows);
             },
             onError: (err: unknown) => {
