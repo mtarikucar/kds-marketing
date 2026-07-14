@@ -14,7 +14,7 @@ import {
   ScheduledJobRunnerService,
   ClaimedJob,
 } from '../scheduling/scheduled-job-runner.service';
-import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { normalizeEmail, normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 import { parseCsv } from '../utils/csv-parse';
 import { LeadSource, LeadPriority, BUSINESS_TYPE_PATTERN } from '../dto/create-lead.dto';
 
@@ -254,7 +254,11 @@ export class ImportService implements OnModuleInit {
   ) {
     const or: Prisma.LeadWhereInput[] = [];
     if (emailNormalized) or.push({ emailNormalized });
-    if (phoneNormalized) or.push({ phoneNormalized });
+    // Match a phone across ALL its stored spellings (bare / 0- / 90- / +90 / 00-),
+    // exactly like İYS/telephony/voice/IVR resolution does — an exact-match on one
+    // spelling silently misses (and thus DUPLICATES) a lead the same real number
+    // was first stored under via a different ingest path.
+    if (phoneNormalized) or.push({ phoneNormalized: { in: localMsisdnVariants(phoneNormalized) } });
     if (!or.length) return Promise.resolve(null);
     return this.prisma.lead.findFirst({
       // Skip tombstoned (merged) AND soft-deleted (bulk-deleted) leads: an
@@ -340,7 +344,15 @@ export class ImportService implements OnModuleInit {
             // clobbering it corrupts contact identity. Preserve the existing key in
             // that case (fills-blanks + both-match updates still apply normally).
             const matchedEmail = !!emailNormalized && existing.emailNormalized === emailNormalized;
-            const matchedPhone = !!phoneNormalized && existing.phoneNormalized === phoneNormalized;
+            // Variant-aware to stay consistent with findExisting's variant lookup:
+            // a row that matched via a DIFFERENT spelling of the same number is a
+            // phone match, so the preservation flags below must recognise it (else
+            // a variant match would look like "no phone match" and clobber the
+            // existing, differing email).
+            const matchedPhone =
+              !!phoneNormalized &&
+              !!existing.phoneNormalized &&
+              localMsisdnVariants(phoneNormalized).includes(existing.phoneNormalized);
             const keepEmail = matchedPhone && !matchedEmail && !!existing.emailNormalized && existing.emailNormalized !== emailNormalized;
             const keepPhone = matchedEmail && !matchedPhone && !!existing.phoneNormalized && existing.phoneNormalized !== phoneNormalized;
             const scalars = this.nativeScalars(native);

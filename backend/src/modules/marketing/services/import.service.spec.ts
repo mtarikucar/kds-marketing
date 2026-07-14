@@ -239,6 +239,61 @@ describe('ImportService.processBatch', () => {
     expect(sel.phoneNormalized).toBe(true);
   });
 
+  it('dedup lookup matches a phone across ALL its spellings (variant-aware), not just the exact one', async () => {
+    // A lead first stored via SMS ingress as "905001112233" must be found by an
+    // import row that spells the same number "0500 111 22 33" — an exact-match
+    // lookup silently misses it and creates a DUPLICATE. Mirrors the variant
+    // resolution İYS/telephony/voice already use.
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({
+      ...baseJob, dedupePolicy: 'CREATE', mapping: { business: 'businessName', phone: 'phone' },
+    } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', phone: '0500 111 22 33' } },
+    ] as any);
+    prisma.lead.findFirst.mockResolvedValue(null as any);
+    (prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-1' });
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    const where = (prisma.lead.findFirst as jest.Mock).mock.calls[0][0].where;
+    const phoneClause = where.OR.find((c: any) => c.phoneNormalized);
+    expect(phoneClause.phoneNormalized).toEqual({
+      in: expect.arrayContaining(['5001112233', '05001112233', '905001112233']),
+    });
+  });
+
+  it('a phone-VARIANT match does not clobber a differing existing email (matchedPhone is variant-aware)', async () => {
+    // The row spells the phone as the 0-prefixed variant of the existing lead's
+    // 90-prefixed one, and carries a DIFFERENT email. This is a phone-only match,
+    // so the existing email must be preserved — the same protection an exact
+    // phone match already gets.
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({
+      ...baseJob, dedupePolicy: 'UPDATE', mapping: { business: 'businessName', phone: 'phone', email: 'email' },
+    } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', phone: '05001112233', email: 'new@x.com' } },
+    ] as any);
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1', customFields: {}, status: 'NEW', convertedTenantId: null,
+      emailNormalized: 'old@x.com', phoneNormalized: '905001112233',
+    } as any);
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    const upd = (prisma.lead.update as jest.Mock).mock.calls[0][0].data;
+    expect(upd.emailNormalized).toBeUndefined(); // existing (different) email preserved
+    expect(upd.email).toBeUndefined(); // scalar email dropped too
+  });
+
   it('excludes merged AND soft-deleted leads from the dedup lookup', async () => {
     // An import row must never match a hidden lead — matching a soft-deleted
     // (bulk-deleted) lead would update or skip the row against an invisible
