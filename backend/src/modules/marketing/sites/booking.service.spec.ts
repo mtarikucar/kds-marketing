@@ -50,7 +50,7 @@ describe('BookingService', () => {
       sendPlainEmailWithIcs: jest.fn().mockResolvedValue(true),
     };
     const autoAssigner = { pickAssignee: jest.fn().mockResolvedValue(null) };
-    scheduledJobs = { schedule: jest.fn().mockResolvedValue('j') };
+    scheduledJobs = { schedule: jest.fn().mockResolvedValue('j'), cancel: jest.fn().mockResolvedValue(true) };
     const runner = { registerHandler: jest.fn() };
     // Google / Outlook calendar sync are inert in this suite (push/cancel are
     // best-effort no-ops here); the dedicated calendar specs exercise them for real.
@@ -566,6 +566,26 @@ describe('BookingService', () => {
         expect.objectContaining({ type: 'marketing.booking.rescheduled.v1' }),
         expect.anything(),
       );
+    });
+
+    it('re-aligns reminders to the new start when a CONFIRMED booking is rescheduled', async () => {
+      // The reminder was queued at confirm for the OLD start; moving the booking
+      // must update each pending reminder (via the per-(booking,offset) dedupKey)
+      // so a T-1h reminder still fires 1h before the NEW time, not the old one.
+      prisma.booking.findFirst
+        .mockResolvedValueOnce({ id: 'b1', workspaceId: WS, calendarId: 'c1', status: 'CONFIRMED', assigneeUserId: null })
+        .mockResolvedValue(null);
+      prisma.bookingCalendar.findFirst.mockResolvedValue(
+        calendar({ reminderConfig: [{ offsetMinutes: 60, channels: ['EMAIL'], audience: 'CUSTOMER' }] }),
+      );
+      prisma.booking.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+
+      await svc.reschedule(WS, 'b1', '2027-06-14T09:30:00.000Z');
+
+      const reminderCall = scheduledJobs.schedule.mock.calls.find((c: any) => c[0].dedupKey === 'b1:60');
+      expect(reminderCall).toBeDefined();
+      // 60 min before the NEW start (09:30 → 08:30), not the old one.
+      expect(reminderCall[0].runAt).toEqual(new Date('2027-06-14T08:30:00.000Z'));
     });
 
     it('refuses to reschedule into a full CLASS slot (capacity enforced like book())', async () => {

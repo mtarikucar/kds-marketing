@@ -905,15 +905,36 @@ export class BookingService implements OnModuleInit {
     }
     // One reminder job per configured lead time (default: a single T-1h customer
     // email). dedupKey is per (booking, offset) so re-running approval is safe.
-    const reminders = parseReminderConfig((cal as any).reminderConfig);
+    await this.syncReminders(workspaceId, booking, (cal as any).reminderConfig);
+  }
+
+  /**
+   * (Re)schedule this booking's reminder jobs from the calendar's reminderConfig.
+   * The dedupKey is per (booking, offset), so calling this AGAIN after a reschedule
+   * updates each pending reminder's runAt in place (schedule()'s dedup collapses
+   * onto the existing PENDING row) instead of duplicating it — keeping every
+   * "T-N before start" reminder aligned to the CURRENT start. A rule whose new
+   * lead time is already in the past is CANCELLED, so a booking moved earlier
+   * can't strand a reminder queued to fire at the stale old time.
+   */
+  private async syncReminders(
+    workspaceId: string,
+    booking: { id: string; startAt: Date },
+    reminderConfig: unknown,
+  ): Promise<void> {
+    const reminders = parseReminderConfig(reminderConfig);
     for (const r of reminders) {
+      const dedupKey = `${booking.id}:${r.offsetMinutes}`;
       const runAt = new Date(booking.startAt.getTime() - r.offsetMinutes * 60_000);
-      if (runAt.getTime() <= Date.now()) continue;
+      if (runAt.getTime() <= Date.now()) {
+        await this.scheduledJobs.cancel(BOOKING_REMINDER_KIND, dedupKey);
+        continue;
+      }
       await this.scheduledJobs.schedule({
         workspaceId,
         kind: BOOKING_REMINDER_KIND,
         runAt,
-        dedupKey: `${booking.id}:${r.offsetMinutes}`,
+        dedupKey,
         payload: {
           workspaceId,
           bookingId: booking.id,
@@ -1012,6 +1033,10 @@ export class BookingService implements OnModuleInit {
     if (booking.status === 'CONFIRMED') {
       this.googleSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
       this.outlookSync.pushBooking(workspaceId, booking.id).catch(() => undefined);
+      // Realign reminders to the new start (a PENDING booking has none yet — it
+      // gets them at approval in afterConfirmed). Without this the reminder keeps
+      // firing relative to the OLD start after a move.
+      await this.syncReminders(workspaceId, { id: booking.id, startAt: start }, (cal as any).reminderConfig);
     }
     return { id: booking.id, startAt: start.toISOString() };
   }
