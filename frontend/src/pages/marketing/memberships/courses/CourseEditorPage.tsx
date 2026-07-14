@@ -96,7 +96,9 @@ export default function CourseEditorPage() {
           // A cleared price reverts the course to Free (priceCents null); a real
           // amount → cents. Omitting it left a paid course stuck at its old price.
           priceCents: coursePriceCents(values.price),
-          ...(values.currency ? { currency: values.currency } : {}),
+          // Send explicitly (like coverImageUrl below) so a cleared currency
+          // persists on this update PATCH instead of silently keeping the old one.
+          currency: values.currency ?? '',
           coverImageUrl: values.coverImageUrl ?? '',
           ...(values.dripMode ? { dripMode: values.dripMode } : {}),
           certificateEnabled: values.certificateEnabled ?? false,

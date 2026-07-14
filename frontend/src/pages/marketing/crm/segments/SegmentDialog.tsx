@@ -111,7 +111,10 @@ export function SegmentDialog({ open, onOpenChange, defs, segment, onSubmit, isP
     if (!def) return;
     onSubmit({
       name: values.name,
-      ...(values.description ? { description: values.description } : {}),
+      // Send description explicitly (empty when blanked) so an EDIT can actually
+      // clear it — omitting it left the old value on the partial-update PATCH.
+      // Harmless on create (nullable column).
+      description: values.description ?? '',
       definition: def,
     });
   };
