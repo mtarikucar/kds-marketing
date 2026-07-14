@@ -262,7 +262,7 @@ export default function ChannelsSettingsPage({ embedded }: { embedded?: boolean 
                     variant="outline"
                     size="sm"
                     onClick={() => verify.mutate(c.id)}
-                    loading={verify.isPending}
+                    loading={verify.isPending && verify.variables === c.id}
                   >
                     {t('channels.verify', 'Verify')}
                   </Button>
@@ -505,7 +505,10 @@ function SmsIysSection({ channel, onSaved }: { channel: ChannelRow; onSaved: () 
           variant="outline"
           onClick={() => registerWebhook.mutate()}
           loading={registerWebhook.isPending}
-          disabled={!brandCode.trim()}
+          // The backend registers the PERSISTED brandCode, not the typed one, so
+          // block registration while there are unsaved changes — otherwise it
+          // would silently register the old saved code. Save first.
+          disabled={!brandCode.trim() || dirty}
         >
           {t('channels.iysRegisterWebhook', "İYS webhook'unu kaydet")}
         </Button>
