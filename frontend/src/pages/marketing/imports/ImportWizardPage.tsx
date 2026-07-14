@@ -58,6 +58,7 @@ import {
   type UploadResult,
 } from './importsApi';
 import { buildSampleRows } from './csv-preview';
+import { useCustomFields } from '../crm/hooks';
 
 // ── Native fields the backend accepts + special values ───────────────────────
 
@@ -247,6 +248,21 @@ interface MapStepProps {
 function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext }: MapStepProps) {
   const { t } = useTranslation('marketing');
 
+  // The backend applies `cf:<key>` mappings (buildLeadData) and — in create
+  // mode — REJECTS rows missing a required custom field. Without offering the
+  // workspace's custom fields here, a workspace with any required LEAD custom
+  // field got a 100% failed import with no in-wizard remedy.
+  const { data: customFieldDefs } = useCustomFields();
+  const fieldOptions = useMemo(
+    () => [
+      ...FIELD_OPTIONS,
+      ...(customFieldDefs ?? [])
+        .filter((d) => d.entity === 'LEAD' && !d.archived)
+        .map((d) => ({ value: `cf:${d.key}`, label: `${d.label}${d.required ? ' *' : ''} (custom)` })),
+    ],
+    [customFieldDefs],
+  );
+
   // businessName is the one hard-required native field — the backend rejects
   // EVERY row without it. The auto-mapping synonyms are English-only, so a
   // Turkish header (e.g. "Firma Adı") arrives unmapped; without this guard the
@@ -266,7 +282,7 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
     return [...counts.entries()].filter(([, n]) => n > 1).map(([field]) => field);
   }, [mapping]);
   const duplicateLabels = duplicateFields
-    .map((f) => FIELD_OPTIONS.find((o) => o.value === f)?.label ?? f)
+    .map((f) => fieldOptions.find((o) => o.value === f)?.label ?? f)
     .join(', ');
 
   const setField = (header: string, field: string) => {
@@ -319,7 +335,7 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {FIELD_OPTIONS.map((opt) => (
+                      {fieldOptions.map((opt) => (
                         <SelectItem key={opt.value} value={opt.value} className="text-xs">
                           {opt.label}
                         </SelectItem>

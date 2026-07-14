@@ -9,6 +9,13 @@ describe('parseCsvRows — quote-aware CSV parsing (mapping-step preview)', () =
     ]);
   });
 
+  it('sniffs a semicolon delimiter (Turkish Excel default) like the backend parser', () => {
+    expect(parseCsvRows('name;email\nAda;ada@x.com')).toEqual([
+      ['name', 'email'],
+      ['Ada', 'ada@x.com'],
+    ]);
+  });
+
   it('keeps a comma that is inside a quoted field (the naive-split bug)', () => {
     // Name,Address,Email  /  Acme,"123 Main St, Suite 5",acme@x.com
     expect(parseCsvRows('Name,Address,Email\nAcme,"123 Main St, Suite 5",acme@x.com')).toEqual([

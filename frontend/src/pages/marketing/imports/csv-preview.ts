@@ -5,9 +5,33 @@
  * actually read. A naive split(',')/split('\n') shifts every column after a
  * quoted field that contains a comma or newline, so the preview would show the
  * wrong sample under each header. This mirrors the backend's quote handling:
- * double-quoted fields, embedded commas/newlines, and "" as an escaped quote.
+ * double-quoted fields, embedded commas/newlines, and "" as an escaped quote —
+ * and its delimiter SNIFFING (comma/semicolon/tab from the header line;
+ * Turkish-locale Excel exports "CSV" with ';').
  */
+export function sniffDelimiter(content: string): ',' | ';' | '\t' {
+  const counts: Record<',' | ';' | '\t', number> = { ',': 0, ';': 0, '\t': 0 };
+  let inQuotes = false;
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (content[i + 1] === '"') i++;
+        else inQuotes = false;
+      }
+      continue;
+    }
+    if (ch === '"') { inQuotes = true; continue; }
+    if (ch === '\n') break;
+    if (ch === ',' || ch === ';' || ch === '\t') counts[ch]++;
+  }
+  if (counts[';'] > counts[','] && counts[';'] >= counts['\t']) return ';';
+  if (counts['\t'] > counts[','] && counts['\t'] > counts[';']) return '\t';
+  return ',';
+}
+
 export function parseCsvRows(content: string): string[][] {
+  const delimiter = sniffDelimiter(content);
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
@@ -30,7 +54,7 @@ export function parseCsvRows(content: string): string[][] {
     }
     if (ch === '"') {
       inQuotes = true;
-    } else if (ch === ',') {
+    } else if (ch === delimiter) {
       row.push(field);
       field = '';
     } else if (ch === '\n') {

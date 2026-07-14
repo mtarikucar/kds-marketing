@@ -25,6 +25,10 @@ export interface JobRescheduleDirective {
 }
 export type JobHandlerResult = void | JobRescheduleDirective;
 export type JobHandler = (job: ClaimedJob) => Promise<JobHandlerResult>;
+/** Invoked once when a job of this kind exhausts maxAttempts and is DLQ'd —
+ *  lets the owning feature flip ITS domain record terminal (e.g. an ImportJob
+ *  stuck RUNNING would otherwise poll "running…" forever). Best-effort. */
+export type JobExhaustedHook = (job: ClaimedJob, error: string) => Promise<void>;
 
 const BATCH = 100;
 const STUCK_AFTER_MS = 15 * 60 * 1000;
@@ -45,14 +49,16 @@ const STUCK_AFTER_MS = 15 * 60 * 1000;
 export class ScheduledJobRunnerService {
   private readonly logger = new Logger(ScheduledJobRunnerService.name);
   private readonly handlers = new Map<string, JobHandler>();
+  private readonly exhaustedHooks = new Map<string, JobExhaustedHook>();
 
   constructor(private readonly prisma: PrismaService) {}
 
-  registerHandler(kind: string, fn: JobHandler): void {
+  registerHandler(kind: string, fn: JobHandler, onExhausted?: JobExhaustedHook): void {
     if (this.handlers.has(kind)) {
       throw new Error(`ScheduledJob handler for kind "${kind}" already registered`);
     }
     this.handlers.set(kind, fn);
+    if (onExhausted) this.exhaustedHooks.set(kind, onExhausted);
   }
 
   /** Exposed for the tripwire spec: which kinds have a handler. */
@@ -220,6 +226,16 @@ export class ScheduledJobRunnerService {
           data: { status: 'FAILED', attempts, lastError: msg, completedAt: new Date() },
         });
         this.logger.error(`scheduled-job DLQ: ${job.id} kind=${job.kind} attempts=${attempts}: ${msg}`);
+        // Let the owning feature mark ITS domain record terminal too —
+        // best-effort: a hook failure must never disturb the DLQ bookkeeping.
+        const onExhausted = this.exhaustedHooks.get(job.kind);
+        if (onExhausted) {
+          await onExhausted(job, msg).catch((hookErr) =>
+            this.logger.error(
+              `scheduled-job DLQ hook failed for ${job.id} kind=${job.kind}: ${(hookErr as Error)?.message}`,
+            ),
+          );
+        }
       } else {
         const backoffMs = Math.min(30_000 * 2 ** attempts, 60 * 60 * 1000);
         await this.prisma.scheduledJob.update({
