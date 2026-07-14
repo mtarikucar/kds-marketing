@@ -103,6 +103,44 @@ export class InstallationJobService {
     }
   }
 
+  /**
+   * Converted customers ELIGIBLE for a manual job: leads with a tenant whose
+   * tenant does NOT already carry an active (non-CANCELLED) installation job.
+   * Backs the "New Job" dialog — the jobs list is paginated (limit 20), so the
+   * frontend cannot reliably derive this by cross-referencing, and offering an
+   * already-jobbed customer just walks the user into create()'s 409.
+   */
+  async eligibleCustomers(workspaceId: string) {
+    const activeJobs = await this.prisma.installationJob.findMany({
+      where: { workspaceId, status: { not: 'CANCELLED' } },
+      select: { tenantId: true },
+    });
+    const busyTenantIds = [...new Set(activeJobs.map((j) => j.tenantId))];
+    return this.prisma.lead.findMany({
+      where: {
+        workspaceId,
+        deletedAt: null,
+        mergedIntoId: null,
+        convertedTenantId: {
+          not: null,
+          // Guarded spread: an empty notIn list excludes nothing (correct here),
+          // but keep the shape explicit rather than lean on that subtlety.
+          ...(busyTenantIds.length ? { notIn: busyTenantIds } : {}),
+        },
+      },
+      orderBy: { businessName: 'asc' },
+      select: {
+        id: true,
+        businessName: true,
+        contactPerson: true,
+        phone: true,
+        city: true,
+        convertedTenantId: true,
+      },
+      take: 200,
+    });
+  }
+
   async create(workspaceId: string, dto: CreateJobDto) {
     // leadId is a soft cross-reference — make sure it can't point into
     // another workspace's lead before the job is born carrying it.
