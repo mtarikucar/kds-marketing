@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ComplianceService } from './compliance.service';
 import {
   mockPrismaClient,
@@ -415,5 +415,79 @@ describe('ComplianceService', () => {
     const { prisma, svc } = makeSvc();
     prisma.lead.findFirst.mockResolvedValue(null as any);
     await expect(svc.recordConsent(WS, 'ghost', 'MARKETING_EMAIL', true)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  describe('fulfillErasure', () => {
+    const armPendingErasure = (prisma: MockPrismaClient, over: any = {}) => {
+      (prisma.dataRequest.findFirst as jest.Mock).mockResolvedValue({
+        id: 'dr1', workspaceId: WS, leadId: 'lead-1', kind: 'ERASURE', status: 'PENDING', ...over,
+      });
+      (prisma.conversation.findMany as jest.Mock).mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
+    };
+
+    it('anonymises the lead, deletes communication PII, keeps financial rows, and completes the request', async () => {
+      const { prisma, svc } = makeSvc();
+      armPendingErasure(prisma);
+
+      const out: any = await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+      expect(out).toMatchObject({ id: 'dr1', status: 'COMPLETED', leadId: 'lead-1' });
+
+      // Messages deleted by the lead's conversation ids, then the conversations.
+      expect(prisma.message.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, conversationId: { in: ['c1', 'c2'] } } }),
+      );
+      expect(prisma.conversation.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: WS, leadId: 'lead-1' } }),
+      );
+      // Communication / behavioural / identity PII deleted.
+      for (const t of ['voiceCall', 'salesCall', 'contactIdentity', 'leadAttribution', 'triggerLinkClick', 'surveyResponse']) {
+        expect((prisma as any)[t].deleteMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { workspaceId: WS, leadId: 'lead-1' } }),
+        );
+      }
+      // LeadActivity has no workspaceId column — scoped by the (workspace-bound) leadId.
+      expect(prisma.leadActivity.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { leadId: 'lead-1' } }),
+      );
+      // Booking PII scrubbed (row retained).
+      expect(prisma.booking.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { workspaceId: WS, leadId: 'lead-1' },
+          data: expect.objectContaining({ email: null, phone: null, notes: null }),
+        }),
+      );
+      // Lead anonymised: PII scrubbed, contact suppressed, hidden.
+      const leadUpd = (prisma.lead.updateMany as jest.Mock).mock.calls[0][0].data;
+      expect(leadUpd).toMatchObject({
+        contactPerson: '[Silinmiş]', email: null, phone: null, whatsapp: null,
+        emailNormalized: null, phoneNormalized: null,
+        emailOptOut: true, smsOptOut: true, waOptOut: true,
+      });
+      expect(leadUpd.deletedAt).toBeInstanceOf(Date);
+      // Financial / membership rows are NEVER deleted (legal retention).
+      expect(prisma.invoice.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.commission.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.customerWallet.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.lead.delete).not.toHaveBeenCalled();
+      // Request closed (the audit trail).
+      expect(prisma.dataRequest.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'dr1' }, data: expect.objectContaining({ status: 'COMPLETED' }) }),
+      );
+    });
+
+    it('404s when the erasure request does not exist (or is an EXPORT, filtered by kind)', async () => {
+      const { prisma, svc } = makeSvc();
+      (prisma.dataRequest.findFirst as jest.Mock).mockResolvedValue(null);
+      await expect(svc.fulfillErasure(WS, 'nope', 'mgr-1')).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.lead.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects (and does not re-run) a request that is already COMPLETED', async () => {
+      const { prisma, svc } = makeSvc();
+      armPendingErasure(prisma, { status: 'COMPLETED' });
+      await expect(svc.fulfillErasure(WS, 'dr1', 'mgr-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.lead.updateMany).not.toHaveBeenCalled();
+      expect(prisma.conversation.deleteMany).not.toHaveBeenCalled();
+    });
   });
 });

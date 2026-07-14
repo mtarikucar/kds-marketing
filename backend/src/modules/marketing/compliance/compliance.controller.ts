@@ -73,6 +73,16 @@ export class ComplianceController {
     return this.svc.requestErasure(u.workspaceId, leadId, u.id);
   }
 
+  /** Approve + execute a PENDING erasure request (KVKK/GDPR right to erasure):
+   *  anonymises the lead's PII, deletes its communication/behavioural data, and
+   *  keeps legally-retained financial records against the anonymised contact. */
+  @Post('requests/:id/fulfill')
+  @Audit({ action: 'compliance.erasure.fulfill', resourceType: 'dataRequest', resourceIdParam: 'id' })
+  @RequirePermission('settings.manage')
+  fulfillErasure(@Param('id') id: string, @CurrentMarketingUser() u: MarketingUserPayload) {
+    return this.svc.fulfillErasure(u.workspaceId, id, u.id);
+  }
+
   /** Phase 2 Task 3 (İYS auto-push) — manager retry: flips this workspace's
    *  DLQ IysSyncJob rows back to PENDING (attempts=0) so the next worker
    *  tick retries them. */

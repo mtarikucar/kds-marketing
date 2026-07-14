@@ -258,6 +258,8 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'activity rows inherit scope from a lead resolved via a scoped read',
   'parent-scoped:leadActivity.createMany':
     'bulk activity rows inherit scope from leads resolved via a scoped findMany (bulkAssign)',
+  'parent-scoped:leadActivity.deleteMany':
+    "erasure (KVKK/GDPR) deletes a lead's activity rows by a leadId resolved via a workspace-scoped dataRequest read; LeadActivity has no workspaceId column",
   'parent-scoped:installationTask.create':
     'checklist rows inherit scope from a job resolved via a scoped read',
   'parent-scoped:installationTask.createMany':

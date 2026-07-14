@@ -1,9 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
 import { MarketingEventTypes, MarketingSmsOptStatusPayload } from '../events/marketing-event-types';
 import { IysSyncService } from './iys-sync.service';
+
+/** Placeholder written over a name once its owner has exercised erasure. */
+const ERASED_MARKER = '[Silinmiş]';
 
 const OPT_OUT_FIELD: Record<string, 'emailOptOut' | 'smsOptOut' | 'waOptOut'> = {
   MARKETING_EMAIL: 'emailOptOut',
@@ -324,6 +327,106 @@ export class ComplianceService {
     return this.prisma.dataRequest.create({
       data: { workspaceId, leadId, kind: 'ERASURE', status: 'PENDING', requestedById: requestedById ?? null },
     });
+  }
+
+  /**
+   * Fulfil a PENDING ERASURE request (KVKK / GDPR Art. 17, right to erasure).
+   * Manager-gated at the controller. The approach is ANONYMISE-in-place, NOT a
+   * hard delete: Turkish tax law mandates ~10-year retention of invoices, so
+   * financial + membership records are KEPT (they simply come to reference an
+   * anonymised, PII-scrubbed lead), while the subject's pure communication /
+   * behavioural / identity data is DELETED and the lead's own PII is scrubbed.
+   * The COMPLETED DataRequest row (kind ERASURE + leadId + completedAt) is the
+   * audit trail proving the erasure ran. Idempotent by precondition: a request
+   * that isn't a live PENDING ERASURE is rejected, so a double-fulfil can't
+   * re-run (or re-scrub an already-anonymised lead).
+   *
+   * Tiers (each explicitly workspace+lead scoped):
+   *  - DELETE (no retention value): conversations + their messages, lead
+   *    activities, voice/sales calls, contact identities, first-touch
+   *    attribution, tracked link clicks, survey responses.
+   *  - SCRUB in place (retained rows that embed PII): bookings (attendee
+   *    name/contact/notes).
+   *  - RETAIN untouched (legal retention + memberships — now pointing at the
+   *    anonymised lead): invoices, estimates, commissions, wallet + ledger,
+   *    subscriptions, coupon redemptions, points, opportunities, enrolments,
+   *    certificates, tags, badges, community records, custom-object links,
+   *    campaign recipients, consent records.
+   */
+  async fulfillErasure(workspaceId: string, requestId: string, actorId?: string) {
+    const req = await this.prisma.dataRequest.findFirst({
+      where: { id: requestId, workspaceId, kind: 'ERASURE' },
+    });
+    if (!req) throw new NotFoundException('Erasure request not found');
+    if (req.status !== 'PENDING') {
+      throw new BadRequestException('Erasure request is already completed');
+    }
+    const leadId = req.leadId;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Messages carry no leadId of their own — they belong to the subject's
+      // conversations, so delete them by those conversation ids before the
+      // conversations themselves.
+      const convos = await tx.conversation.findMany({
+        where: { workspaceId, leadId },
+        select: { id: true },
+      });
+      const convoIds = convos.map((c) => c.id);
+      if (convoIds.length) {
+        await tx.message.deleteMany({ where: { workspaceId, conversationId: { in: convoIds } } });
+      }
+      await tx.conversation.deleteMany({ where: { workspaceId, leadId } });
+
+      // The remaining pure communication / behavioural / identity PII.
+      // (LeadActivity has no workspaceId column — leadId, resolved from the
+      // workspace-scoped request above, already binds it to this tenant.)
+      await tx.leadActivity.deleteMany({ where: { leadId } });
+      await tx.voiceCall.deleteMany({ where: { workspaceId, leadId } });
+      await tx.salesCall.deleteMany({ where: { workspaceId, leadId } });
+      await tx.contactIdentity.deleteMany({ where: { workspaceId, leadId } });
+      await tx.leadAttribution.deleteMany({ where: { workspaceId, leadId } });
+      await tx.triggerLinkClick.deleteMany({ where: { workspaceId, leadId } });
+      await tx.surveyResponse.deleteMany({ where: { workspaceId, leadId } });
+
+      // Scrub PII off retained bookings (kept for the operator's calendar history).
+      await tx.booking.updateMany({
+        where: { workspaceId, leadId },
+        data: { name: ERASED_MARKER, email: null, phone: null, notes: null },
+      });
+
+      // Anonymise the lead itself: scrub every PII field, suppress all future
+      // contact, and hide it (deletedAt). Retained financial/membership rows keep
+      // referencing this now-anonymised row, so referential integrity holds.
+      await tx.lead.updateMany({
+        where: { id: leadId, workspaceId },
+        data: {
+          businessName: ERASED_MARKER,
+          contactPerson: ERASED_MARKER,
+          phone: null,
+          whatsapp: null,
+          email: null,
+          address: null,
+          city: null,
+          region: null,
+          notes: null,
+          customFields: {} as Prisma.InputJsonValue,
+          phoneNormalized: null,
+          emailNormalized: null,
+          emailOptOut: true,
+          smsOptOut: true,
+          waOptOut: true,
+          deletedAt: new Date(),
+        },
+      });
+
+      await tx.dataRequest.update({
+        where: { id: req.id },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+    });
+
+    this.logger.log(`erasure fulfilled for lead=${leadId} (request ${req.id}, by ${actorId ?? 'system'})`);
+    return { id: req.id, status: 'COMPLETED', leadId };
   }
 
   listRequests(workspaceId: string) {
