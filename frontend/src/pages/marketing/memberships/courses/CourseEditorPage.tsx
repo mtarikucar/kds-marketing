@@ -299,9 +299,14 @@ function ModulesEditor({ course, mutations }: { course: CourseWithModules; mutat
     const payload = {
       title: values.title,
       type: values.type,
-      ...(values.content ? { content: values.content } : {}),
-      ...(values.videoUrl ? { videoUrl: values.videoUrl } : {}),
-      ...(values.durationSec !== undefined ? { durationSec: Number(values.durationSec) } : {}),
+      // Send the type-relevant body fields EXPLICITLY (empty when blanked) so a
+      // cleared value — or a lesson-type switch that hides a field — actually
+      // clears the old one. Omitting it left the PATCH a no-op for that field, so
+      // e.g. a wrong videoUrl could never be removed. content is for TEXT/QUIZ,
+      // videoUrl for VIDEO; the other is cleared so a stale value can't linger.
+      content: values.type === 'TEXT' || values.type === 'QUIZ' ? (values.content ?? '') : '',
+      videoUrl: values.type === 'VIDEO' ? (values.videoUrl ?? '') : '',
+      durationSec: values.durationSec !== undefined ? Number(values.durationSec) : null,
       isPreview: values.isPreview ?? false,
       gating,
       // dripDays only matters for DRIP; clear it otherwise so a mode switch can't
