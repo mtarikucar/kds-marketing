@@ -387,6 +387,18 @@ export default function SubscriptionsPage() {
               <Labeled label={t('subscriptions.dueDays', 'Due (days)')} className="w-24">
                 <Input type="number" min={0} max={365} value={form.dueDays} onChange={(e) => setForm((f) => ({ ...f, dueDays: e.target.value }))} />
               </Labeled>
+              {/* Currency was fixed at TRY (no control) — a USD/EUR plan built by
+                  manual entry was persisted + previewed as ₺. Let the operator set it. */}
+              <Labeled label={t('subscriptions.currency', 'Currency')} className="w-24">
+                <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['TRY', 'USD', 'EUR'].map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Labeled>
             </div>
 
             {products.length > 0 && (
