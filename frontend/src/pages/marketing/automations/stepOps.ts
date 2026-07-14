@@ -16,7 +16,10 @@ export const NEW_STEP: Record<string, AnyStep> = {
   assign_lead: { type: 'assign_lead', strategy: 'auto' },
   update_lead: { type: 'update_lead', set: { status: 'CONTACTED' } },
   notify_user: { type: 'notify_user', message: 'New lead {{lead.businessName}}' },
-  http_webhook_out: { type: 'http_webhook_out', url: 'https://', method: 'POST', body: '{}' },
+  // Backend DSL is { type, url, payload? } — `method`/`body` are stripped by the
+  // schema and ignored at runtime, so seeding them let an edited body/method
+  // silently vanish on save. Seed the real field instead.
+  http_webhook_out: { type: 'http_webhook_out', url: 'https://', payload: {} },
   add_tag: { type: 'add_tag', tag: 'customer' },
   remove_tag: { type: 'remove_tag', tag: 'prospect' },
   send_review_request: { type: 'send_review_request' },
