@@ -94,4 +94,32 @@ describe('DashboardHero', () => {
     await user.click(screen.getByRole('button', { name: /Review your tasks/i }));
     expect(screen.getByTestId('loc')).toHaveTextContent('/tasks');
   });
+
+  it('counts an overdue task ONCE, not twice (overdue is a subset of pending)', () => {
+    // The single overdue task is also part of pendingTasks (no due-date filter),
+    // so the attention total must be 1, not overdue(1) + pending(1) = 2.
+    renderHero({
+      stats: { totalLeads: 5, unassignedLeads: 0, pendingTasks: 1, activeOffers: 0 },
+      today: { overdueTasks: 1 },
+      isManager: false,
+    });
+    expect(screen.getByText(/1 items need your attention today/i)).toBeInTheDocument();
+    expect(screen.queryByText(/2 items need your attention today/i)).not.toBeInTheDocument();
+    // Overdue is still prioritized for the CTA.
+    expect(screen.getByRole('button', { name: /Review overdue tasks/i })).toBeInTheDocument();
+  });
+
+  it('routes "Review open offers" to the unfiltered offers list (no empty SENT dead-end)', async () => {
+    const user = userEvent.setup();
+    renderHero({
+      stats: { totalLeads: 5, unassignedLeads: 0, pendingTasks: 0, activeOffers: 2 },
+      today: { overdueTasks: 0 },
+      isManager: false,
+    });
+    await user.click(screen.getByRole('button', { name: /Review open offers/i }));
+    const loc = screen.getByTestId('loc');
+    expect(loc).toHaveTextContent('/documents?tab=offers');
+    // No hardcoded status=SENT that would hide the counted DRAFT offers.
+    expect(loc).not.toHaveTextContent('status=SENT');
+  });
 });

@@ -62,10 +62,14 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
   const unassigned = isManager ? stats.unassignedLeads ?? 0 : 0;
   const pending = stats.pendingTasks ?? 0;
   const offers = stats.activeOffers ?? 0;
-  const waiting = overdue + unassigned + pending + offers;
+  // `pending` (pendingTasks) has no due-date filter, so it ALREADY includes the
+  // overdue tasks — adding `overdue` again double-counted every overdue task in
+  // the "N items need your attention" total. Count it once (via pending); the CTA
+  // below still prioritizes the overdue view when there are overdue tasks.
+  const waiting = unassigned + pending + offers;
 
-  // Every branch of the waiting count (overdue → unassigned → pending → offers)
-  // has a matching CTA, so the subtitle count and the button never disagree.
+  // Each CTA branch maps to a real destination; overdue is prioritized first even
+  // though it's folded into `pending` for the count.
   const primary =
     overdue > 0
       ? { to: '/tasks?tab=overdue', label: t('dashboard.hero.reviewOverdue', 'Review overdue tasks') }
@@ -74,7 +78,9 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
         : pending > 0
           ? { to: '/tasks', label: t('dashboard.hero.reviewTasks', 'Review your tasks') }
           : offers > 0
-            ? { to: '/documents?tab=offers&status=SENT', label: t('dashboard.hero.reviewOffers', 'Review open offers') }
+            ? // Count is DRAFT+SENT (active offers); don't hardcode status=SENT or
+              // a draft-only "waiting" set dead-ends on an empty SENT list.
+              { to: '/documents?tab=offers', label: t('dashboard.hero.reviewOffers', 'Review open offers') }
             : { to: '/leads', label: t('dashboard.hero.goToLeads', 'Go to your leads') };
 
   const greeting = firstName
