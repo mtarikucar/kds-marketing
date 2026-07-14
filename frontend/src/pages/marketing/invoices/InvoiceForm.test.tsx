@@ -22,6 +22,17 @@ describe('normalizeInvoiceItems', () => {
     const rows = normalizeInvoiceItems([{ description: 'X', qty: 0, price: '10' }]);
     expect(rows[0].qty).toBe(1);
   });
+
+  it('coerces a fractional qty to an integer and clamps qty/price to the backend @Max(1_000_000)', () => {
+    const rows = normalizeInvoiceItems([
+      { description: 'A', qty: 2.5, price: '50' }, // fractional → integer (backend @IsInt)
+      { description: 'B', qty: 9_999_999, price: '50' }, // qty over max → clamped
+      { description: 'C', qty: 1, price: '20000' }, // 20000*100 = 2,000,000 kuruş → clamped
+    ]);
+    expect(rows[0].qty).toBe(3);
+    expect(rows[1].qty).toBe(1_000_000);
+    expect(rows[2].unitPrice).toBe(1_000_000);
+  });
 });
 
 describe('computeInvoiceTotals', () => {

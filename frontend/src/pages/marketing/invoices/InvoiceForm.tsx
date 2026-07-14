@@ -50,9 +50,12 @@ export function normalizeInvoiceItems(
     .filter((i) => i.description)
     .map((i) => ({
       description: i.description,
-      qty: Number(i.qty) || 1,
-      // Financial conversion — preserved verbatim from the original payload.
-      unitPrice: Math.round((Number(i.price) || 0) * 100),
+      // Backend InvoiceItemDto is @IsInt @Min(0) @Max(1_000_000) on qty AND
+      // unitPrice (kuruş) — coerce to an integer in range so the previewed total
+      // always matches a payload the server accepts (a fractional/over-max line
+      // otherwise quoted a figure the POST then rejected with a cryptic 400).
+      qty: Math.min(1_000_000, Math.max(0, Math.round(Number(i.qty) || 1))),
+      unitPrice: Math.min(1_000_000, Math.max(0, Math.round((Number(i.price) || 0) * 100))),
       ...(i.taxRateId ? { taxRateId: i.taxRateId } : {}),
     }));
 }
@@ -123,6 +126,8 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
                 className="w-20"
                 value={it.qty}
                 min={1}
+                max={1000000}
+                step={1}
                 onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })}
                 placeholder="Qty"
               />
@@ -130,6 +135,9 @@ export function InvoiceForm({ isPending, onSubmit, onCancel }: Props) {
                 type="number"
                 className="w-28"
                 value={it.price}
+                min={0}
+                max={10000}
+                step="0.01"
                 onChange={(e) => updateItem(idx, { price: e.target.value })}
                 placeholder={t('invoices.unitPrice', 'Unit price')}
               />

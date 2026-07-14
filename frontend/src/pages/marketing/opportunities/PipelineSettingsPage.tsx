@@ -345,7 +345,14 @@ function StageRow({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => onSave({ name: name.trim(), probability: Number(prob) || 0 })}
+          // Coerce to the backend's @IsInt @Min(0) @Max(100) so a typed 150 / 12.5
+          // (the input's min/max don't gate this onClick save) can't 400.
+          onClick={() =>
+            onSave({
+              name: name.trim(),
+              probability: Math.min(100, Math.max(0, Math.round(Number(prob) || 0))),
+            })
+          }
         >
           <Check className="w-4 h-4" aria-hidden="true" />
         </Button>
