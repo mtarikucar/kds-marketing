@@ -98,6 +98,31 @@ describe('AgencyService — createLocation', () => {
     expect(ownerCreate?.[0]?.data?.workspaceId).toBe(LOCATION_A1);
   });
 
+  it('starts the new location on the TRIAL package so it is usable (not zero-entitlement) out of the box', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve(args?.where?.id === AGENCY_A ? agencyRow() : null),
+    );
+    prisma.marketingUser.findUnique.mockResolvedValue(null as never);
+    (prisma.workspace.create as jest.Mock).mockResolvedValue(locationRow());
+    prisma.marketingUser.create.mockResolvedValue({ id: 'owner-1' } as never);
+    prisma.marketingDistributionConfig.create.mockResolvedValue({ id: 'dist-1' } as never);
+    (prisma.package.findUnique as jest.Mock).mockResolvedValue({ id: 'pkg-trial', trialDays: 14 });
+    prisma.workspaceSubscription.create.mockResolvedValue({ id: 'sub-1' } as never);
+
+    await svc.createLocation(AGENCY_A, {
+      name: 'Location A1', productName: 'Prod', ownerEmail: 'owner@a1.com',
+      ownerPassword: 'password123', ownerFirstName: 'Owen', ownerLastName: 'Owner',
+    });
+
+    // Without this the location resolves to zeroEntitlements (every feature off,
+    // every limit 0) — dead on arrival — since getEffective reads only the
+    // location's own subscription and there's no parent-agency fallback.
+    const subCreate = (prisma.workspaceSubscription.create as jest.Mock).mock.calls[0]?.[0]?.data;
+    expect(subCreate).toMatchObject({ workspaceId: LOCATION_A1, packageId: 'pkg-trial', status: 'TRIALING' });
+    expect(subCreate.trialEndsAt).toBeInstanceOf(Date);
+  });
+
   it('rejects when the caller workspace is not an AGENCY (STANDALONE → 403)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.workspace.findUnique.mockResolvedValue(

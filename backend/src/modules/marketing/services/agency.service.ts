@@ -253,6 +253,36 @@ export class AgencyService {
         data: { workspaceId: child.id, strategy: 'DISABLED' },
       });
 
+      // Start the location on the TRIAL package — the SAME bootstrap
+      // registerWorkspace runs for a self-signup. Without it the child has NO
+      // subscription, so EntitlementsService.getEffective (which reads only the
+      // workspace's own subscription — there is no parent-agency fallback) returns
+      // zeroEntitlements: every feature off, every limit 0. The location would be
+      // dead on arrival, and there is no agency "assign a plan" flow to recover it.
+      // A catalog not yet seeded (no TRIAL row) must not block provisioning.
+      const trialPackage = await tx.package.findUnique({
+        where: { code: 'TRIAL' },
+        select: { id: true, trialDays: true },
+      });
+      if (trialPackage) {
+        const now = new Date();
+        const trialEnd = new Date(
+          now.getTime() + Math.max(1, trialPackage.trialDays) * 24 * 60 * 60 * 1000,
+        );
+        await tx.workspaceSubscription.create({
+          data: {
+            workspaceId: child.id,
+            packageId: trialPackage.id,
+            status: 'TRIALING',
+            billingCycle: 'MONTHLY',
+            currency: input.currency ?? 'TRY',
+            currentPeriodStart: now,
+            currentPeriodEnd: trialEnd,
+            trialEndsAt: trialEnd,
+          },
+        });
+      }
+
       return child;
     });
   }
