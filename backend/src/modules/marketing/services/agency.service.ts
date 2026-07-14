@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   ForbiddenException,
   NotFoundException,
   ConflictException,
@@ -11,6 +12,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
+import { MarketingAuthService } from './marketing-auth.service';
 
 /**
  * Epic D1 — agency / sub-account hierarchy (GoHighLevel parity).
@@ -85,9 +87,12 @@ function slugify(name: string): string {
 
 @Injectable()
 export class AgencyService {
+  private readonly logger = new Logger(AgencyService.name);
+
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
+    private readonly authService: MarketingAuthService,
   ) {}
 
   private bcryptCost(): number {
@@ -333,6 +338,55 @@ export class AgencyService {
     });
 
     return this.assertAgencyOwns(agencyWorkspaceId, locationId);
+  }
+
+  /**
+   * Mint a session INTO a child LOCATION (GoHighLevel "switch account"): the
+   * agency operator gets an access/refresh pair scoped to the location so the app
+   * can work inside the sub-account, then return to the agency by restoring its
+   * own token client-side.
+   *
+   * SECURITY: this is a controlled, audited impersonation — the ONLY caller path
+   * is the agency console (@RequirePermission('users.manage') = OWNER-tier), and
+   * assertIsAgency + assertAgencyOwns guarantee the caller is an agency acting on
+   * a location IT owns (a foreign/missing id 404s before any token is minted). The
+   * session is issued for the location's own ACTIVE OWNER user, so
+   * MarketingGuard's `payload.wsp === user.workspaceId` invariant holds unchanged
+   * (no cross-workspace token, no guard weakening). The access EVENT is audited at
+   * the controller with the agency operator's identity.
+   */
+  async accessLocation(agencyWorkspaceId: string, locationId: string, actorUserId: string) {
+    await this.assertIsAgency(agencyWorkspaceId);
+    const location = await this.assertAgencyOwns(agencyWorkspaceId, locationId);
+    if ((location as { status?: string }).status === 'SUSPENDED') {
+      throw new BadRequestException('Reactivate the location before accessing it');
+    }
+    // The location's primary owner. OWNER is provisioned at createLocation and
+    // never deactivatable, but scope to ACTIVE + oldest to be robust against
+    // later owner changes; a location with no active owner can't be entered.
+    const owner = await this.prisma.marketingUser.findFirst({
+      where: { workspaceId: locationId, role: 'OWNER', status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        workspaceId: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        avatar: true,
+        role: true,
+        tokenVersion: true,
+      },
+    });
+    if (!owner) {
+      throw new BadRequestException('Location has no active owner to sign in as');
+    }
+    this.logger.log(
+      `agency access: user ${actorUserId} (agency ${agencyWorkspaceId}) entered location ${locationId} as owner ${owner.id}`,
+    );
+    const session = this.authService.issueSession(owner);
+    return { ...session, location };
   }
 
   /**

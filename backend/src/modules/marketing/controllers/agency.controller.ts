@@ -166,6 +166,24 @@ export class AgencyController {
     return this.agencyService.getLocation(user.workspaceId, locationId);
   }
 
+  /** Switch INTO a child location: mint a session scoped to the sub-account
+   *  (GoHighLevel "switch account"). OWNER-tier + owned-location-only + audited. */
+  @Post('locations/:locationId/access')
+  @MarketingRoles('OWNER')
+  @Audit({
+    action: 'agency.location.access',
+    resourceType: 'workspace',
+    resourceIdParam: 'locationId',
+  })
+  @RequirePermission('users.manage')
+  async accessLocation(
+    @Param('locationId') locationId: string,
+    @CurrentMarketingUser() user: MarketingUserPayload,
+  ) {
+    await this.assertAgencyKind(user.workspaceId);
+    return this.agencyService.accessLocation(user.workspaceId, locationId, user.id);
+  }
+
   @Patch('locations/:locationId/suspend')
   @MarketingRoles('OWNER')
   @Audit({

@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { mockDeep } from 'jest-mock-extended';
 import { ConfigService } from '@nestjs/config';
@@ -28,8 +28,11 @@ function makeSvc() {
     (fn: (tx: any) => Promise<any>) => fn(prisma),
   );
   const config = { get: jest.fn().mockReturnValue('10') } as unknown as ConfigService;
-  const svc = new AgencyService(prisma as any, config);
-  return { prisma, svc };
+  const authService = {
+    issueSession: jest.fn().mockReturnValue({ accessToken: 'at', refreshToken: 'rt', user: { id: 'owner-x' } }),
+  };
+  const svc = new AgencyService(prisma as any, config, authService as any);
+  return { prisma, svc, authService };
 }
 
 const agencyRow = (over: Record<string, unknown> = {}) => ({
@@ -301,5 +304,54 @@ describe('AgencyService — dashboard rollup', () => {
         }),
       }),
     );
+  });
+});
+
+describe('AgencyService — accessLocation (switch into a sub-account)', () => {
+  const OWNER = {
+    id: 'owner-1', workspaceId: LOCATION_A1, role: 'OWNER', email: 'o@l.com',
+    firstName: 'O', lastName: 'L', phone: null, avatar: null, tokenVersion: 0,
+  };
+  const arm = (prisma: any, over: { location?: any; owner?: any } = {}) => {
+    (prisma.workspace.findUnique as jest.Mock).mockResolvedValue(agencyRow()); // assertIsAgency
+    (prisma.workspace.findFirst as jest.Mock).mockResolvedValue(over.location ?? locationRow()); // assertAgencyOwns
+    (prisma.marketingUser.findFirst as jest.Mock).mockResolvedValue('owner' in over ? over.owner : OWNER);
+  };
+
+  it('mints a session for the location ACTIVE owner and returns it with the location', async () => {
+    const { prisma, svc, authService } = makeSvc();
+    arm(prisma);
+    const out: any = await svc.accessLocation(AGENCY_A, LOCATION_A1, 'agency-owner-1');
+    expect((prisma.marketingUser.findFirst as jest.Mock).mock.calls[0][0].where).toMatchObject({
+      workspaceId: LOCATION_A1, role: 'OWNER', status: 'ACTIVE',
+    });
+    // Issued FOR the owner → MarketingGuard's wsp===user.workspaceId invariant holds.
+    expect(authService.issueSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner-1', workspaceId: LOCATION_A1 }),
+    );
+    expect(out).toMatchObject({ accessToken: 'at', refreshToken: 'rt' });
+    expect(out.location.id).toBe(LOCATION_A1);
+  });
+
+  it('404s and mints NO session for a location the agency does not own', async () => {
+    const { prisma, svc, authService } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockResolvedValue(agencyRow());
+    (prisma.workspace.findFirst as jest.Mock).mockResolvedValue(null); // assertAgencyOwns → 404
+    await expect(svc.accessLocation(AGENCY_A, 'foreign', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+    expect(authService.issueSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses to enter a SUSPENDED location', async () => {
+    const { prisma, svc, authService } = makeSvc();
+    arm(prisma, { location: locationRow({ status: 'SUSPENDED' }) });
+    await expect(svc.accessLocation(AGENCY_A, LOCATION_A1, 'u1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(authService.issueSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the location has no active owner to sign in as', async () => {
+    const { prisma, svc, authService } = makeSvc();
+    arm(prisma, { owner: null });
+    await expect(svc.accessLocation(AGENCY_A, LOCATION_A1, 'u1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(authService.issueSession).not.toHaveBeenCalled();
   });
 });
