@@ -41,6 +41,13 @@ export class UpdateWorkspaceAdminDto {
   @IsOptional() @IsIn(['TRY', 'USD', 'EUR'])
   defaultCurrency?: string;
 
+  // Operator-designated workspace tier: promote a STANDALONE to AGENCY (unlocks
+  // the agency console — sub-accounts, snapshots, rebilling, switch-into) or
+  // demote back. LOCATION is NOT settable here — a sub-account is created via the
+  // agency's own createLocation (which stamps parentWorkspaceId).
+  @IsOptional() @IsIn(['STANDALONE', 'AGENCY'])
+  kind?: 'STANDALONE' | 'AGENCY';
+
   /** Free-shape per-workspace settings (businessTypes, branding…). */
   @IsOptional() @IsObject()
   settings?: Record<string, unknown>;

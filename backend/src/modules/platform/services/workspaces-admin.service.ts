@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { UpdateWorkspaceAdminDto } from '../dto/platform.dto';
@@ -98,6 +98,19 @@ export class WorkspacesAdminService {
       select: { id: true },
     });
     if (!existing) throw new NotFoundException('Workspace not found');
+
+    // Demoting an AGENCY back to STANDALONE would strand its child LOCATIONs — the
+    // agency console that manages them (and the switch-into-sub-account flow) would
+    // vanish, leaving the sub-accounts orphaned and unreachable. Refuse while any
+    // remain. (Promoting STANDALONE→AGENCY is always safe.)
+    if (dto.kind === 'STANDALONE') {
+      const children = await this.prisma.workspace.count({
+        where: { parentWorkspaceId: id, kind: 'LOCATION' },
+      });
+      if (children > 0) {
+        throw new BadRequestException('Move or remove the sub-accounts before demoting this agency');
+      }
+    }
 
     const { coreIntegration, settings, ...scalar } = dto;
     return this.prisma.workspace.update({
