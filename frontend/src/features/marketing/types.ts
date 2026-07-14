@@ -447,7 +447,9 @@ export interface TeamPerformanceRow {
 
 export const TARGET_METRIC_LABELS: Record<TargetMetric, string> = {
   WON_LEADS: 'Won Leads',
-  COMMISSION_AMOUNT: 'Commission ($)',
+  // No hardcoded currency symbol — the value is rendered via formatMoney in the
+  // workspace/plan currency (often ₺), so a '($)' label contradicted it.
+  COMMISSION_AMOUNT: 'Commission',
   CONNECTED_CALLS: 'Connected Calls',
 };
 
