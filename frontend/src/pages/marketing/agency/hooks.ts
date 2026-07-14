@@ -12,6 +12,15 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 import marketingApi from '../../../features/marketing/api/marketingApi';
+import { useMarketingAuthStore, type MarketingUser } from '../../../store/marketingAuthStore';
+
+/** Response of POST /agency/locations/:id/access — a session scoped to the location. */
+export interface AgencyAccessSession {
+  accessToken: string;
+  refreshToken: string;
+  user: MarketingUser;
+  location: Location;
+}
 import type {
   AgencyDashboard,
   ApplyResult,
@@ -70,7 +79,22 @@ export function useLocationMutations() {
     onSuccess: invalidate,
   });
 
-  return { create, setStatus };
+  // Switch INTO a sub-account: the backend mints a session for the location's
+  // owner; we stash the agency session (for "return to agency") and swap tokens,
+  // then drop all agency-scoped cache so the app refetches as the location.
+  const enterLocation = useMarketingAuthStore((s) => s.enterLocation);
+  const access = useMutation({
+    mutationFn: (loc: { id: string; name: string }) =>
+      marketingApi
+        .post(`/agency/locations/${loc.id}/access`, {})
+        .then((r) => ({ session: r.data as AgencyAccessSession, name: loc.name })),
+    onSuccess: ({ session, name }) => {
+      enterLocation(session.user, session.accessToken, session.refreshToken, name);
+      qc.clear();
+    },
+  });
+
+  return { create, setStatus, access };
 }
 
 // ── Snapshots ─────────────────────────────────────────────────────────────────

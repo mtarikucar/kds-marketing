@@ -7,6 +7,7 @@ import SettingsLayout from './SettingsLayout';
 import AskAiPanel from './AskAiPanel';
 import CommandPalette from './CommandPalette';
 import ProductTour from './ProductTour';
+import { AgencyImpersonationBanner } from './AgencyImpersonationBanner';
 import WebphoneHost from '../webphone/WebphoneHost';
 import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
@@ -54,6 +55,7 @@ export default function MarketingLayout() {
 
       {/* Main content */}
       <div className="flex min-w-0 min-h-0 flex-1 flex-col">
+        <AgencyImpersonationBanner />
         <MarketingHeader onMenuClick={() => setSidebarOpen(true)} />
         {/* Hub sub-nav (sibling pages of the active hub) — not in the Settings area. */}
         {!isSettings && <HubSubNav />}

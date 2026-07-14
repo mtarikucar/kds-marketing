@@ -12,13 +12,35 @@ export interface MarketingUser {
   avatar?: string;
 }
 
+/** The agency session stashed while an OWNER is switched INTO a sub-account, so
+ *  "return to agency" can restore it. Only the (rotating) refresh half + display
+ *  user are kept — the access token is minted on demand by the api client. */
+export interface AgencyReturn {
+  user: MarketingUser;
+  refreshToken: string;
+  locationName: string;
+}
+
 interface MarketingAuthState {
   user: MarketingUser | null;
   accessToken: string | null;
   refreshToken: string | null;
   isAuthenticated: boolean;
+  /** Set only while impersonating a sub-account; drives the "return to agency" banner. */
+  agencyReturn: AgencyReturn | null;
 
   login: (user: MarketingUser, accessToken: string, refreshToken: string) => void;
+  /** Enter a child LOCATION: stash the current agency session, then swap to the
+   *  location's tokens. No-op re-nesting (already impersonating keeps the ORIGINAL
+   *  agency return, so switching between two locations still returns to the agency). */
+  enterLocation: (
+    user: MarketingUser,
+    accessToken: string,
+    refreshToken: string,
+    locationName: string,
+  ) => void;
+  /** Restore the stashed agency session (access token null → refreshed on demand). */
+  returnToAgency: () => void;
   setAccessToken: (accessToken: string) => void;
   // Backend rotates both halves of the pair on every /auth/refresh — if we
   // only stored the access half, the next refresh would present a stale
@@ -38,14 +60,47 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
       accessToken: null,
       refreshToken: null,
       isAuthenticated: false,
+      agencyReturn: null,
 
       login: (user: MarketingUser, accessToken: string, refreshToken: string) => {
+        // A fresh login clears any stale impersonation stash.
         set({
           user,
           accessToken,
           refreshToken,
           isAuthenticated: true,
+          agencyReturn: null,
         });
+      },
+
+      enterLocation: (user, accessToken, refreshToken, locationName) => {
+        set((state) => ({
+          // Keep the ORIGINAL agency return if already impersonating (location→location
+          // hop still returns to the agency, not the previous location).
+          agencyReturn:
+            state.agencyReturn ??
+            (state.user && state.refreshToken
+              ? { user: state.user, refreshToken: state.refreshToken, locationName }
+              : null),
+          user,
+          accessToken,
+          refreshToken,
+          isAuthenticated: true,
+        }));
+      },
+
+      returnToAgency: () => {
+        set((state) =>
+          state.agencyReturn
+            ? {
+                user: state.agencyReturn.user,
+                refreshToken: state.agencyReturn.refreshToken,
+                accessToken: null, // api client's single-flight refresh mints a fresh one
+                isAuthenticated: true,
+                agencyReturn: null,
+              }
+            : state,
+        );
       },
 
       setAccessToken: (accessToken: string) => {
@@ -66,6 +121,7 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
           accessToken: null,
           refreshToken: null,
           isAuthenticated: false,
+          agencyReturn: null,
         });
       },
     }),
@@ -89,6 +145,9 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
         user: state.user,
         isAuthenticated: state.isAuthenticated,
         refreshToken: state.refreshToken,
+        // Persist the impersonation stash so an F5 inside a sub-account still
+        // offers "return to agency" (and doesn't strand the operator).
+        agencyReturn: state.agencyReturn,
       }),
     }
   )

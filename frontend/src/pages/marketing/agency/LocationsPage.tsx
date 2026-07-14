@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Plus, Building2, Users, UserCheck, PauseCircle, PlayCircle, MoreHorizontal } from 'lucide-react';
+import { Plus, Building2, Users, UserCheck, PauseCircle, PlayCircle, MoreHorizontal, LogIn } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
   PageHeader,
@@ -40,7 +41,8 @@ function LocationsPageInner() {
   const { t } = useTranslation('marketing');
   const { data: locations, isLoading } = useLocations();
   const { data: dashboard } = useAgencyDashboard();
-  const { create, setStatus } = useLocationMutations();
+  const { create, setStatus, access } = useLocationMutations();
+  const navigate = useNavigate();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [suspendTarget, setSuspendTarget] = useState<Row | null>(null);
@@ -120,6 +122,26 @@ function LocationsPageInner() {
               </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {isActive && (
+                <DropdownMenuItem
+                  disabled={access.isPending}
+                  onClick={() =>
+                    access.mutate(
+                      { id: loc.id, name: loc.name },
+                      {
+                        onSuccess: () => navigate('/'),
+                        onError: (e) =>
+                          toast.error(
+                            apiError(e, t('agency.locations.enterError', { defaultValue: 'Could not open the sub-account' })),
+                          ),
+                      },
+                    )
+                  }
+                >
+                  <LogIn className="mr-2 h-4 w-4" aria-hidden="true" />
+                  {t('agency.locations.enter', { defaultValue: 'Open sub-account' })}
+                </DropdownMenuItem>
+              )}
               {isActive ? (
                 <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setSuspendTarget(loc)}>
                   <PauseCircle className="mr-2 h-4 w-4" aria-hidden="true" />
