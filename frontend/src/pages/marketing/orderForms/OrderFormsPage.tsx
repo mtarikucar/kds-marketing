@@ -153,21 +153,17 @@ export default function OrderFormsPage() {
   const openEdit = async (f: OrderForm) => {
     // The list row omits collectPhone/phoneRequired, so fetch the full record
     // and seed the form from it — otherwise the toggles open at their defaults
-    // and saving would overwrite the form's real phone settings.
+    // and saving would overwrite the form's real phone settings. On a failed
+    // fetch, do NOT open the dialog seeded with hardcoded defaults (that
+    // reintroduced the exact reset-on-rename bug on the error path) — surface
+    // the failure and let the user retry.
     try {
       const full = await getOrderForm(f.id);
       setForm(formFromOrderForm(full));
-    } catch {
-      setForm({
-        id: f.id,
-        name: f.name,
-        productId: f.productId ?? '',
-        collectPhone: true,
-        phoneRequired: false,
-        active: f.active,
-      });
+      setDialogOpen(true);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? t('orderForms.loadFailed', 'Could not load the order form — try again'));
     }
-    setDialogOpen(true);
   };
 
   const rows = forms ?? [];
@@ -281,7 +277,10 @@ export default function OrderFormsPage() {
             </Labeled>
             <div className="flex items-center justify-between">
               <span className="text-sm text-foreground">{t('orderForms.collectPhone', 'Collect phone')}</span>
-              <Switch checked={form.collectPhone} onCheckedChange={(v) => setForm((f) => ({ ...f, collectPhone: v }))} />
+              {/* Turning collection OFF also clears "required": a form that
+                  renders no phone input must never require one (the stale pair
+                  used to brick the public checkout for every buyer). */}
+              <Switch checked={form.collectPhone} onCheckedChange={(v) => setForm((f) => ({ ...f, collectPhone: v, ...(v ? {} : { phoneRequired: false }) }))} />
             </div>
             {form.collectPhone && (
               <div className="flex items-center justify-between">

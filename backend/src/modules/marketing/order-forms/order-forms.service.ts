@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -25,6 +26,9 @@ interface OrderItem {
   description: string;
   qty: number;
   unitPrice: number;
+  /** Workspace TaxRate reference — the invoice tax seam trusts ONLY this id
+   *  (resolveItemTaxes re-snapshots the pct from the workspace catalogue). */
+  taxRateId?: string | null;
 }
 
 /**
@@ -147,6 +151,10 @@ export class OrderFormsService {
     if (dto.currency !== undefined) data.currency = dto.currency.toUpperCase();
     if (dto.collectPhone !== undefined) data.collectPhone = dto.collectPhone;
     if (dto.phoneRequired !== undefined) data.phoneRequired = dto.phoneRequired;
+    // Keep the pair coherent at the source: a form that does not collect a
+    // phone can never require one (the submit guard also tolerates the stale
+    // combination, but stored state should not lie).
+    if (data.collectPhone === false) data.phoneRequired = false;
     if (dto.notes !== undefined) data.notes = dto.notes;
     if (dto.active !== undefined) data.active = dto.active;
     return this.prisma.orderForm.update({ where: { id }, data });
@@ -177,8 +185,15 @@ export class OrderFormsService {
         0,
         new Prisma.Decimal(product.price).mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toNumber(),
       );
+      // Carry the product's configured VAT into the invoice: the tax seam
+      // (resolveItemTaxes) trusts only a workspace TaxRate id, so resolve the
+      // catalogue row matching the product's percent — creating it if the
+      // catalogue lacks one. Dropping this (the old behavior) issued EVERY
+      // product-mode order-form invoice with taxTotal 0: silent KDV
+      // under-collection on real money.
+      const taxRateId = await this.taxRateIdForProduct(form.workspaceId, product.taxRate);
       return {
-        items: [{ description: product.name, qty: 1, unitPrice }],
+        items: [{ description: product.name, qty: 1, unitPrice, ...(taxRateId ? { taxRateId } : {}) }],
         currency: product.currency,
       };
     }
@@ -191,17 +206,59 @@ export class OrderFormsService {
     return { items, currency: form.currency };
   }
 
+  /** Per-line tax total for resolved items, mirroring computeMoneyTotals'
+   *  rounding exactly (round((line*pct)/100) per line) so the public page's
+   *  total always equals the invoice the buyer is redirected to. */
+  private async itemsTaxTotal(workspaceId: string, items: OrderItem[]): Promise<number> {
+    const ids = [...new Set(items.map((i) => i.taxRateId).filter((x): x is string => !!x))];
+    if (ids.length === 0) return 0;
+    const rates = await this.prisma.taxRate.findMany({
+      where: { workspaceId, id: { in: ids }, archived: false },
+      select: { id: true, rate: true },
+    });
+    const byId = new Map(rates.map((r) => [r.id, Number(r.rate)]));
+    let taxTotal = 0;
+    for (const it of items) {
+      const pct = it.taxRateId ? (byId.get(it.taxRateId) ?? 0) : 0;
+      const line = it.qty * it.unitPrice;
+      if (pct > 0 && line > 0) taxTotal += Math.round((line * pct) / 100);
+    }
+    return taxTotal;
+  }
+
+  /** Resolve (or lazily create) the workspace TaxRate row matching the
+   *  product's VAT percent. Null when the product has no/zero tax. */
+  private async taxRateIdForProduct(
+    workspaceId: string,
+    taxRate: Prisma.Decimal | number | null | undefined,
+  ): Promise<string | null> {
+    const pct = taxRate == null ? 0 : Number(taxRate);
+    if (!Number.isFinite(pct) || pct <= 0) return null;
+    const existing = await this.prisma.taxRate.findFirst({
+      where: { workspaceId, archived: false, rate: new Prisma.Decimal(pct) },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+    const created = await this.prisma.taxRate.create({
+      data: { workspaceId, name: `KDV %${pct}`, rate: new Prisma.Decimal(pct) },
+      select: { id: true },
+    });
+    return created.id;
+  }
+
   async publicView(token: string) {
     const form = await this.prisma.orderForm.findUnique({ where: { publicToken: token } });
     if (!form || !form.active) throw new NotFoundException('Order form not found');
     const { items, currency } = await this.resolveLineItems(form);
-    const total = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
+    const subtotal = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
+    // Show the buyer the amount they will actually be invoiced (incl. VAT).
+    const taxTotal = await this.itemsTaxTotal(form.workspaceId, items);
     return {
       name: form.name,
       notes: form.notes,
       currency,
       items,
-      total,
+      total: subtotal + taxTotal,
       collectPhone: form.collectPhone,
       phoneRequired: form.phoneRequired,
     };
@@ -234,17 +291,24 @@ export class OrderFormsService {
 
     // Validate any coupon UP FRONT (side-effect-free) so an invalid code fails
     // cleanly before a lead/invoice is created. It is actually CONSUMED only on
-    // the new-invoice path below (never on the idempotent reuse path).
+    // the new-invoice path below (never on the idempotent reuse path). The
+    // expected discount also keys the reuse window below.
     const subtotal = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
     const couponCode = (body.couponCode || '').trim();
+    let expectedDiscount = 0;
     if (couponCode) {
-      await this.coupons.validate(workspaceId, couponCode, subtotal, currency);
+      const app = await this.coupons.validate(workspaceId, couponCode, subtotal, currency);
+      expectedDiscount = app.amountOff;
     }
 
     const name = (body.fullName || '').trim();
     const email = (body.email || '').trim() || null;
     const phone = (body.phone || '').trim() || null;
-    if (form.phoneRequired && !phone) throw new BadRequestException('Phone is required');
+    // phoneRequired only binds when the form actually COLLECTS a phone: with
+    // collectPhone=false the public page renders no phone input, so requiring
+    // one bricked the checkout — every buyer rejected for a field they were
+    // never shown.
+    if (form.collectPhone && form.phoneRequired && !phone) throw new BadRequestException('Phone is required');
     const emailNormalized = normalizeEmail(email);
     const phoneNormalized = normalizePhone(phone);
     const businessName = name || 'Order form lead';
@@ -336,11 +400,13 @@ export class OrderFormsService {
         orderFormId: form.id,
         status: { in: ['DRAFT', 'SENT'] },
         createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
-        // When the buyer supplies a coupon, only reuse an ALREADY-discounted
-        // invoice — otherwise a coupon-on-retry would silently reuse the earlier
-        // full-price invoice and drop the discount. A fresh discounted invoice is
-        // minted instead (and the coupon is consumed once, on that mint).
-        ...(couponCode ? { discount: { gt: 0 } } : {}),
+        // When the buyer supplies a coupon, only reuse an invoice whose
+        // discount EQUALS the one this coupon yields — `discount > 0` alone
+        // reused ANY discounted invoice, so a retry with a DIFFERENT (better)
+        // coupon silently kept the old coupon's smaller discount. On a
+        // mismatch a fresh, correctly-discounted invoice is minted instead
+        // (and the coupon is consumed once, on that mint).
+        ...(couponCode ? { discount: expectedDiscount } : {}),
       },
       orderBy: { createdAt: 'desc' },
       select: { id: true },
@@ -352,22 +418,50 @@ export class OrderFormsService {
       // Consume the coupon (atomic) only when actually minting an invoice. A
       // raced exhaustion between validate and redeem degrades to no discount.
       let discount = 0;
+      let siblingInvoiceId: string | null = null;
       if (couponCode) {
-        const app = await this.coupons
-          .redeem(workspaceId, couponCode, subtotal, currency, { leadId, orderFormId: form.id })
-          .catch(() => null);
-        if (app) discount = app.amountOff;
+        try {
+          const app = await this.coupons.redeem(workspaceId, couponCode, subtotal, currency, {
+            leadId,
+            orderFormId: form.id,
+          });
+          discount = app.amountOff;
+        } catch (e) {
+          if (e instanceof ConflictException) {
+            // TRUE-concurrent double submit: the sibling request already
+            // redeemed this coupon and is minting (or has minted) the
+            // discounted invoice. Blanket-swallowing this used to mint a
+            // second FULL-PRICE invoice for a buyer whose coupon was valid —
+            // reuse the sibling's invoice instead.
+            const sibling = await this.prisma.invoice.findFirst({
+              where: {
+                workspaceId,
+                leadId,
+                orderFormId: form.id,
+                status: { in: ['DRAFT', 'SENT'] },
+                createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
+                discount: { gt: 0 },
+              },
+              orderBy: { createdAt: 'desc' },
+              select: { id: true },
+            });
+            siblingInvoiceId = sibling?.id ?? null;
+          }
+          // Anything else (raced exhaustion) degrades to no discount, as before.
+        }
       }
-      invoiceId = (
-        (await this.invoices.create(workspaceId, {
-          leadId,
-          items,
-          currency,
-          discount,
-          notes: orderNote,
-          orderFormId: form.id,
-        })) as { id: string }
-      ).id;
+      invoiceId =
+        siblingInvoiceId ??
+        (
+          (await this.invoices.create(workspaceId, {
+            leadId,
+            items,
+            currency,
+            discount,
+            notes: orderNote,
+            orderFormId: form.id,
+          })) as { id: string }
+        ).id;
     }
     const { payUrl } = await this.invoices.send(workspaceId, invoiceId);
 

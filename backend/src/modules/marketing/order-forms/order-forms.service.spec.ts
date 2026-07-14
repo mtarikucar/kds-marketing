@@ -255,12 +255,96 @@ describe('OrderFormsService', () => {
       expect(leadAttribution.capture).not.toHaveBeenCalled();
     });
 
-    it('enforces a required phone', async () => {
-      prisma.orderForm.findUnique.mockResolvedValue({ ...FORM, phoneRequired: true } as any);
+    it('enforces a required phone (only when the form collects one)', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue({ ...FORM, collectPhone: true, phoneRequired: true } as any);
       products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
       await expect(
         svc.submit('of_tok', { fullName: 'Jane' } as any, {}),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('a stale collectPhone=false + phoneRequired=true pair must NOT brick the checkout', async () => {
+      // The public page renders no phone input when collectPhone=false — the
+      // old guard still demanded one, rejecting EVERY buyer of such a form.
+      prisma.orderForm.findUnique.mockResolvedValue({ ...FORM, collectPhone: false, phoneRequired: true } as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', status: 'NEW' } as any);
+      prisma.invoice.findFirst.mockResolvedValue(null);
+
+      const res = await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {});
+      expect(res.redirectUrl).toBe('https://x/api/public/i/in_tok');
+    });
+
+    it('carries the product VAT into the invoice line via the workspace TaxRate id (no more taxTotal 0)', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '100.00', currency: 'TRY', active: true, taxRate: '20' });
+      (prisma.taxRate.findFirst as jest.Mock).mockResolvedValue({ id: 'tr-20' });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', status: 'NEW' } as any);
+      prisma.invoice.findFirst.mockResolvedValue(null);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {});
+
+      expect(invoices.create).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({
+          items: [{ description: 'Pro', qty: 1, unitPrice: 10000, taxRateId: 'tr-20' }],
+        }),
+      );
+    });
+
+    it('lazily creates the TaxRate catalogue row when none matches the product percent', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '100.00', currency: 'TRY', active: true, taxRate: '10' });
+      (prisma.taxRate.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.taxRate.create as jest.Mock).mockResolvedValue({ id: 'tr-new' });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', status: 'NEW' } as any);
+      prisma.invoice.findFirst.mockResolvedValue(null);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com' } as any, {});
+
+      expect((prisma.taxRate.create as jest.Mock).mock.calls[0][0].data).toMatchObject({
+        workspaceId: WS,
+        name: 'KDV %10',
+      });
+      expect(invoices.create).toHaveBeenCalledWith(
+        WS,
+        expect.objectContaining({ items: [expect.objectContaining({ taxRateId: 'tr-new' })] }),
+      );
+    });
+
+    it('keys the coupon reuse window on the EXACT expected discount (a better coupon mints fresh)', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '100.00', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', status: 'NEW' } as any);
+      (svc as any).coupons.validate.mockResolvedValue({ couponId: 'c2', code: 'BETTER', amountOff: 3000 });
+      prisma.invoice.findFirst.mockResolvedValue(null);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com', couponCode: 'BETTER' } as any, {});
+
+      // `discount > 0` reused ANY discounted invoice — a retry with a different
+      // (better) coupon silently kept the old, smaller discount.
+      const where = prisma.invoice.findFirst.mock.calls[0][0].where;
+      expect(where.discount).toBe(3000);
+    });
+
+    it('a TRUE-concurrent coupon race (ConflictException) reuses the sibling invoice instead of minting full price', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '100.00', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', status: 'NEW' } as any);
+      (svc as any).coupons.validate.mockResolvedValue({ couponId: 'c1', code: 'X', amountOff: 2000 });
+      const { ConflictException } = require('@nestjs/common');
+      (svc as any).coupons.redeem.mockRejectedValue(new ConflictException('Coupon already applied to this order'));
+      // Reuse-window lookup misses (sibling not committed yet), the post-conflict
+      // sibling lookup finds the discounted invoice the racer minted.
+      (prisma.invoice.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'inv-sibling' });
+
+      const res = await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com', couponCode: 'X' } as any, {});
+
+      expect(invoices.create).not.toHaveBeenCalled(); // never a full-price duplicate
+      expect(invoices.send).toHaveBeenCalledWith(WS, 'inv-sibling');
+      expect(res.redirectUrl).toBe('https://x/api/public/i/in_tok');
     });
 
     it('refuses a form whose resolved amount is zero', async () => {
@@ -268,6 +352,21 @@ describe('OrderFormsService', () => {
       await expect(
         svc.submit('of_tok', { fullName: 'Jane' } as any, {}),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('phone-pair coherence on write', () => {
+    it('turning collectPhone OFF forces phoneRequired OFF in the same update', async () => {
+      prisma.orderForm.findFirst.mockResolvedValue({ id: 'f1', workspaceId: WS, productId: 'p1', items: null, currency: 'TRY' } as any);
+      products.get.mockResolvedValue({ id: 'p1', active: true });
+      prisma.orderForm.update.mockResolvedValue({ id: 'f1' } as any);
+
+      await svc.update(WS, 'f1', { collectPhone: false } as any);
+
+      expect((prisma.orderForm.update as jest.Mock).mock.calls[0][0].data).toMatchObject({
+        collectPhone: false,
+        phoneRequired: false,
+      });
     });
   });
 });
