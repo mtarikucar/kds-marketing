@@ -10,7 +10,8 @@
  * Past imports list at the bottom via GET /imports.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
@@ -51,6 +52,7 @@ import {
   useImportJob,
   useUploadImport,
   useCommitImport,
+  importListKey,
   type ImportJob,
   type ImportDedupePolicy,
   type UploadResult,
@@ -253,6 +255,22 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
   // user could run a silently 100%-failed import. Block Next until it's mapped.
   const hasBusinessName = Object.values(mapping).includes('businessName');
 
+  // Two columns mapped to the SAME native field silently drop one on import: the
+  // backend's buildLeadData assigns per field, so the LAST header mapped wins for
+  // every row and the other column's data vanishes. Block Next until resolved.
+  // '__skip' may repeat freely; 'tags' legitimately merges multiple columns.
+  const duplicateFields = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const field of Object.values(mapping)) {
+      if (field === '__skip' || field === 'tags') continue;
+      counts.set(field, (counts.get(field) ?? 0) + 1);
+    }
+    return [...counts.entries()].filter(([, n]) => n > 1).map(([field]) => field);
+  }, [mapping]);
+  const duplicateLabels = duplicateFields
+    .map((f) => FIELD_OPTIONS.find((o) => o.value === f)?.label ?? f)
+    .join(', ');
+
   const setField = (header: string, field: string) => {
     onMappingChange({ ...mapping, [header]: field });
   };
@@ -326,12 +344,22 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
         </Callout>
       )}
 
+      {duplicateFields.length > 0 && (
+        <Callout tone="warning" icon={<AlertCircle className="h-4 w-4" />}>
+          {t('import.duplicateFields', {
+            defaultValue:
+              'More than one column is mapped to the same field ({{fields}}). Only one would be imported — map each field once.',
+            fields: duplicateLabels,
+          })}
+        </Callout>
+      )}
+
       <div className="flex gap-3 pt-2">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           {t('common.back', { defaultValue: 'Back' })}
         </Button>
-        <Button onClick={onNext} disabled={!hasBusinessName}>
+        <Button onClick={onNext} disabled={!hasBusinessName || duplicateFields.length > 0}>
           {t('common.next', { defaultValue: 'Next' })}
           <ArrowRight className="h-4 w-4" aria-hidden="true" />
         </Button>
@@ -442,7 +470,19 @@ interface ProgressStepProps {
 
 function ProgressStep({ jobId, onStartNew }: ProgressStepProps) {
   const { t } = useTranslation('marketing');
+  const qc = useQueryClient();
   const { data: job } = useImportJob(jobId, true);
+
+  // The polled job surfaces completion, but the "Import history" list below was
+  // fetched at commit time (job RUNNING, processed 0) and nothing else refreshes
+  // it — invalidate it once the job reaches a terminal status so the history row
+  // shows the final counts/status instead of the frozen RUNNING snapshot.
+  const jobStatus = job?.status;
+  useEffect(() => {
+    if (jobStatus === 'DONE' || jobStatus === 'FAILED') {
+      qc.invalidateQueries({ queryKey: importListKey() });
+    }
+  }, [jobStatus, qc]);
 
   if (!job) {
     return (
