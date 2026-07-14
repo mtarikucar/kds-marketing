@@ -61,6 +61,8 @@ interface BreakdownRow {
 
 interface RepRow {
   repId: string;
+  /** Backend-resolved display name (firstName lastName, or 'Unassigned'). */
+  name: string;
   total: number;
   won: number;
   lost: number;
@@ -473,11 +475,11 @@ export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {})
                     <TBody>
                       {reps!.map((rep) => (
                         <TR key={rep.repId}>
-                          <TD className="font-medium text-foreground font-mono text-xs text-muted-foreground truncate max-w-[180px]">
+                          <TD className="font-medium text-foreground truncate max-w-[180px]">
                             {rep.repId === 'unassigned' ? (
-                              <span className="italic">Unassigned</span>
+                              <span className="italic">{rep.name}</span>
                             ) : (
-                              rep.repId
+                              rep.name
                             )}
                           </TD>
                           <TD numeric>{rep.total}</TD>
