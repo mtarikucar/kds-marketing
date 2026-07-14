@@ -112,6 +112,13 @@ export default function BillingPage() {
       provider: string;
     }) =>
       marketingApi.post('/billing/checkout', { ...input, billingCycle: cycle }),
+    // Clear any panel from a PREVIOUS checkout before a new one — otherwise a
+    // stale bank-transfer (or iframe) panel for a different package keeps showing
+    // its old amount/reference alongside the new one (wrong-amount / double-pay).
+    onMutate: () => {
+      setBank(null);
+      setIframeUrl(null);
+    },
     onSuccess: ({ data }) => {
       const handle = data.handle;
       if (handle.kind === 'redirect') {
@@ -235,6 +242,7 @@ export default function BillingPage() {
       <PackageMatrix
         packages={packages}
         currentPackageCode={sub?.packageCode}
+        currentBillingCycle={sub?.billingCycle}
         currency={currency}
         providers={providers}
         cycle={cycle}
