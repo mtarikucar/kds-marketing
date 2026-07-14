@@ -246,7 +246,9 @@ export default function AiStudioPage({ embedded }: { embedded?: boolean } = {}) 
                     max={MAX_VIDEO_SEC}
                     value={durationSec}
                     onChange={(e) =>
-                      setDurationSec(Math.max(1, Math.min(MAX_VIDEO_SEC, Number(e.target.value))))
+                      // Round to mirror the backend GenerateDto.durationSec @IsInt —
+                      // a fractional 7.5 otherwise 400s.
+                      setDurationSec(Math.round(Math.max(1, Math.min(MAX_VIDEO_SEC, Number(e.target.value)))))
                     }
                   />
                 )}

@@ -256,6 +256,8 @@ export function RuleDialog({
                 id={id}
                 type="number"
                 min={1}
+                max={90}
+                step={1}
                 inputMode="numeric"
                 aria-describedby={describedBy}
                 aria-invalid={invalid}
