@@ -93,7 +93,9 @@ export function toUpdateBody(values: RoutineFormValues): UpdateRoutineBody {
     onEvent: values.onEvent,
     cron: values.cron.trim() || null,
     triggerUrl: values.triggerUrl.trim() || null,
-    eventCooldownSec: Number(values.eventCooldownSec) || 300,
+    // Send the (zod-coerced, >= 0) value directly — `|| 300` silently rewrote a
+    // deliberate 0 (fire on every event, no debounce) to 300.
+    eventCooldownSec: Number.isFinite(values.eventCooldownSec) ? values.eventCooldownSec : 300,
   };
   if (values.triggerToken.trim()) {
     body.triggerToken = values.triggerToken.trim();
