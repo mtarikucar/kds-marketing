@@ -165,6 +165,10 @@ export default function OpportunitiesPage() {
     mutationFn: (id: string) => winOpportunity(id),
     onSuccess: () => {
       invalidateBoard();
+      // Close the dialog like save/delete do — the deal is now WON and leaves the
+      // OPEN-only board, so leaving the dialog open strands it on a hidden deal.
+      setDialogOpen(false);
+      setForm(EMPTY_FORM);
       toast.success(t('opportunities.markedWon', 'Marked as won'));
     },
     onError: () => toast.error(t('opportunities.winError', 'Could not mark the deal as won')),
@@ -173,6 +177,8 @@ export default function OpportunitiesPage() {
     mutationFn: (id: string) => loseOpportunity(id),
     onSuccess: () => {
       invalidateBoard();
+      setDialogOpen(false);
+      setForm(EMPTY_FORM);
       toast.success(t('opportunities.markedLost', 'Marked as lost'));
     },
     onError: () => toast.error(t('opportunities.loseError', 'Could not mark the deal as lost')),
@@ -425,14 +431,21 @@ export default function OpportunitiesPage() {
                 ))}
               </div>
 
-              <button
-                type="button"
-                onClick={() => openNew(stage.id)}
-                className="mt-2 w-full flex items-center justify-center gap-1 rounded-md py-1.5 text-xs text-muted-foreground hover:text-primary hover:bg-surface"
-              >
-                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                {t('opportunities.add', 'Add')}
-              </button>
+              {/* Never offer "+ Add" on a terminal (Won/Lost) column: creating
+                  a deal directly in a terminal stage resolves it WON/LOST on the
+                  backend, so it vanishes from this OPEN-only board while silently
+                  entering won/lost reporting. Deals reach terminal stages only via
+                  drag or the explicit Win/Lost buttons. */}
+              {!stage.isWon && !stage.isLost && (
+                <button
+                  type="button"
+                  onClick={() => openNew(stage.id)}
+                  className="mt-2 w-full flex items-center justify-center gap-1 rounded-md py-1.5 text-xs text-muted-foreground hover:text-primary hover:bg-surface"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  {t('opportunities.add', 'Add')}
+                </button>
+              )}
             </div>
           ))}
         </div>
