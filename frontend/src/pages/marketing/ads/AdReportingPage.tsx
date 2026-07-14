@@ -39,7 +39,7 @@ import { AdManagementSection } from './AdManagementSection';
 import { AdRulesSection } from './AdRulesSection';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
-import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
+import { formatMoney } from '../../../lib/money';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -184,7 +184,10 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
   // server-side regardless.)
   const currency = useMemo(() => {
     const scoped = provider === 'ALL' ? accounts : accounts.filter((a) => a.provider === provider);
-    return asWorkspaceCurrency(scoped.find((a) => a.currency)?.currency);
+    // The ad account's REAL provider currency (any ISO code) — not
+    // asWorkspaceCurrency, which coerced anything outside TRY/USD/EUR/GBP to ₺,
+    // rendering e.g. a CAD account's spend as Turkish Lira.
+    return scoped.find((a) => a.currency)?.currency || 'USD';
   }, [accounts, provider]);
 
   // Only Meta accounts support campaign / rule management.
@@ -504,7 +507,7 @@ function BreakdownCard({
   from: string;
   to: string;
   provider?: AdProvider;
-  currency: ReturnType<typeof asWorkspaceCurrency>;
+  currency: string;
 }) {
   const { t } = useTranslation('marketing');
   const [dimension, setDimension] = useState<AdBreakdownDimension>('placement');
@@ -600,7 +603,7 @@ interface OverviewViewProps {
   totals: Bucket;
   ctr: number;
   cpl: number;
-  currency: ReturnType<typeof asWorkspaceCurrency>;
+  currency: string;
   byDay: Array<Bucket & { date: string }>;
   byProvider: Partial<Record<AdProvider, Bucket>>;
   onGoToAccounts: () => void;
