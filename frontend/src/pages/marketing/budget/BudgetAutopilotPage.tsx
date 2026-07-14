@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -59,6 +59,10 @@ export default function BudgetAutopilotPage({ embedded }: { embedded?: boolean }
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['growth-budgets'] });
     qc.invalidateQueries({ queryKey: ['growth-wallet'] });
+    // Also refresh the per-budget detail query (['growth-budget', id]); BudgetDetail
+    // prefers detailQ.data over the list summary, so without this a dialog/wizard
+    // save leaves the detail view (monthly budget, scope, ROAS, allocations) stale.
+    qc.invalidateQueries({ queryKey: ['growth-budget'] });
   };
 
   return (
@@ -116,6 +120,7 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
   const qc = useQueryClient();
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
   const [flagBlocked, setFlagBlocked] = useState(false);
+  const [activeTab, setActiveTab] = useState('allocation');
 
   const detailQ = useQuery({ queryKey: ['growth-budget', summary.id], queryFn: () => getGrowthBudget(summary.id) });
   const budget = detailQ.data ?? summary;
@@ -138,6 +143,13 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
   );
   const walletBalance = num(walletQ.data?.balance);
   const armed = budget.autonomyLevel === 'AUTONOMOUS';
+
+  // Arming removes the Approvals tab. If it was the active tab, Radix (which
+  // holds the selected value internally) would be left pointing at a tab that no
+  // longer exists → a blank body with no active underline. Fall back to Allocation.
+  useEffect(() => {
+    if (armed && activeTab === 'approvals') setActiveTab('allocation');
+  }, [armed, activeTab]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['growth-budget', budget.id] });
@@ -336,7 +348,7 @@ function BudgetDetail({ budget: summary }: { budget: GrowthBudget }) {
             </div>
           </div>
 
-          <Tabs defaultValue="allocation">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList>
               <TabsTrigger value="allocation">{t('budget.tab.allocation', 'Allocation')}</TabsTrigger>
               <TabsTrigger value="activity">{t('autopilot.tab.activity', 'Activity')}</TabsTrigger>
@@ -493,7 +505,17 @@ function ApprovalsTab() {
   const q = useQuery({ queryKey: ['pending-approvals'], queryFn: listPendingApprovals });
   const [confirmItem, setConfirmItem] = useState<{ id: string; kind: string } | null>(null);
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['pending-approvals'] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['pending-approvals'] });
+    // Approving a BUDGET_REALLOCATION rewrites each allocation's plannedAmount and
+    // logs a run — so the detail view, budget list, activity and run history all
+    // go stale unless refreshed too. Prefix keys cover the mounted budget's id
+    // (this tab doesn't receive the budget id).
+    qc.invalidateQueries({ queryKey: ['growth-budget'] });
+    qc.invalidateQueries({ queryKey: ['growth-budgets'] });
+    qc.invalidateQueries({ queryKey: ['budget-activity'] });
+    qc.invalidateQueries({ queryKey: ['autopilot-runs'] });
+  };
   // Approving a budget reallocation immediately applies it: the approval IS the
   // authorization. apply() commits the plan and pushes live ONLY where an ad
   // platform is credential-write-capable — otherwise it stays a plan-only change.
