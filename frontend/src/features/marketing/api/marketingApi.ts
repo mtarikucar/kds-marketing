@@ -13,28 +13,45 @@ const marketingApi = axios.create({
 // revokes the previous token) and forced random logouts.
 const REFRESH_TIMEOUT_MS = 10_000;
 let refreshInFlight: Promise<string> | null = null;
+// The refresh token the in-flight refresh is rotating. A session swap — login,
+// logout+login, enterLocation (impersonate a sub-account) or returnToAgency —
+// changes the store's refreshToken, so a refresh STARTED under the old session
+// must not be reused by, or written back into, the NEW one. Without this key an
+// in-flight LOCATION refresh could hand a LOCATION access token to the first
+// agency request after "Return to agency" (403s / stranded impersonation), or a
+// refresh resolving after logout() could re-persist a live refresh token
+// (zombie session in sessionStorage).
+let refreshForToken: string | null = null;
 
-function refreshMarketingToken(): Promise<string> {
-  if (refreshInFlight) return refreshInFlight;
-  const store = useMarketingAuthStore.getState();
-  if (!store.refreshToken) {
+export function refreshMarketingToken(): Promise<string> {
+  const startingRefresh = useMarketingAuthStore.getState().refreshToken;
+  if (!startingRefresh) {
     return Promise.reject(new Error('no refresh token'));
   }
+  // Reuse the in-flight refresh ONLY when it belongs to the CURRENT session's
+  // refresh token — same-session concurrent 401s still share one refresh
+  // (single-flight), but a post-swap caller starts its own.
+  if (refreshInFlight && refreshForToken === startingRefresh) return refreshInFlight;
+
+  refreshForToken = startingRefresh;
   const refresh = axios
     .post(
       `${API_URL}/marketing/auth/refresh`,
-      { refreshToken: store.refreshToken },
+      { refreshToken: startingRefresh },
       { timeout: REFRESH_TIMEOUT_MS },
     )
     .then((response) => {
       const { accessToken, refreshToken } = response.data;
-      // Backend rotates the refresh token on every call. Persist both
-      // halves so the next refresh round uses the fresh one — otherwise
-      // we'd present a stale (revoked) refresh and immediately log out.
-      useMarketingAuthStore.getState().setTokens(
-        accessToken,
-        refreshToken ?? store.refreshToken,
-      );
+      // Backend rotates the refresh token on every call. Persist both halves so
+      // the next round uses the fresh one — BUT only if the session hasn't
+      // swapped out from under us while the refresh was in flight, else we'd
+      // clobber the new session's tokens (or revive a logged-out session).
+      if (useMarketingAuthStore.getState().refreshToken === startingRefresh) {
+        useMarketingAuthStore.getState().setTokens(
+          accessToken,
+          refreshToken ?? startingRefresh,
+        );
+      }
       return accessToken as string;
     });
   const timeout = new Promise<string>((_, reject) =>
@@ -43,10 +60,16 @@ function refreshMarketingToken(): Promise<string> {
       REFRESH_TIMEOUT_MS,
     ),
   );
-  refreshInFlight = Promise.race([refresh, timeout]).finally(() => {
-    refreshInFlight = null;
+  const inFlight = Promise.race([refresh, timeout]).finally(() => {
+    // Clear only if this is STILL the current in-flight — a session swap may
+    // have already replaced it with a newer refresh for a different session.
+    if (refreshInFlight === inFlight) {
+      refreshInFlight = null;
+      refreshForToken = null;
+    }
   });
-  return refreshInFlight;
+  refreshInFlight = inFlight;
+  return inFlight;
 }
 
 marketingApi.interceptors.request.use(async (config) => {
