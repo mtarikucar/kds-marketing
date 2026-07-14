@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { NAV_HUBS, visibleNav, findActiveHub, splitByTier, type FeatureKey } from './navigation';
+import {
+  NAV_HUBS,
+  visibleNav,
+  findActiveHub,
+  splitByTier,
+  shouldAutoOpenAdvanced,
+  type FeatureKey,
+} from './navigation';
 
 /** Entitle only the given feature keys; core (undefined) is always allowed. */
 const entitle =
@@ -170,6 +177,26 @@ describe('findActiveHub — path → owning hub', () => {
 
   it('returns undefined for an unknown path', () => {
     expect(findActiveHub(NAV_HUBS, '/nope')).toBeUndefined();
+  });
+});
+
+describe('shouldAutoOpenAdvanced — persisted "More" collapse survives reload', () => {
+  it('does NOT auto-open on the initial resolution (prev undefined → cold mount / reload)', () => {
+    // On reload the active hub id resolves from undefined once entitlements load;
+    // that must not count as a navigation, or a persisted collapse snaps open.
+    expect(shouldAutoOpenAdvanced(undefined, 'automation', true)).toBe(false);
+  });
+
+  it('auto-opens on a genuine in-session navigation INTO an advanced hub', () => {
+    expect(shouldAutoOpenAdvanced('dashboard', 'automation', true)).toBe(true);
+  });
+
+  it('does not auto-open when navigating into a NON-advanced hub', () => {
+    expect(shouldAutoOpenAdvanced('automation', 'dashboard', false)).toBe(false);
+  });
+
+  it('does not auto-open when the hub did not change (re-render on the same advanced page)', () => {
+    expect(shouldAutoOpenAdvanced('automation', 'automation', true)).toBe(false);
   });
 });
 

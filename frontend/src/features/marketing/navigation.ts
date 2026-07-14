@@ -365,3 +365,20 @@ export function findActiveHub(hubs: NavHub[], pathname: string): NavHub | undefi
   }
   return best?.hub;
 }
+
+/**
+ * Whether moving from `prevHubId` to `nextHubId` should auto-open the sidebar's
+ * "More" (advanced) section. TRUE only for a genuine in-session navigation INTO
+ * an advanced hub — never for the initial resolution (`prevHubId === undefined`,
+ * i.e. a cold mount / reload where the active hub id resolves from undefined
+ * once entitlements load). Without the undefined guard, sitting on an advanced
+ * page and pressing F5 would snap a manually-collapsed "More" back open,
+ * defeating the persisted collapse preference (sidebarPrefsStore).
+ */
+export function shouldAutoOpenAdvanced(
+  prevHubId: string | undefined,
+  nextHubId: string | undefined,
+  nextIsAdvanced: boolean,
+): boolean {
+  return prevHubId !== undefined && nextHubId !== prevHubId && nextIsAdvanced;
+}
