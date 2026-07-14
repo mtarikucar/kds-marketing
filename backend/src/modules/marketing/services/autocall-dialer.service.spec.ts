@@ -7,6 +7,10 @@ const USER = 'rep-1';
 
 function makeSvc() {
   const prisma = mockPrismaClient();
+  // start() claims the one-ACTIVE-session slot inside an advisory-locked
+  // transaction; run the callback against the same mock client.
+  (prisma.$transaction as jest.Mock).mockImplementation(async (fn: any) => fn(prisma));
+  (prisma.$queryRawUnsafe as jest.Mock).mockResolvedValue([{ locked: 'x' }]);
   const config = { get: jest.fn().mockReturnValue('https://hub.example.com') };
   const registry = { resolveConfig: jest.fn() };
   const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
@@ -96,7 +100,12 @@ describe('AutocallDialerService', () => {
       autocall.addAutocall.mockResolvedValue({ ok: true, code: '00', jobId: 'job-1', listId: 'job-1', message: null, retriable: false });
       autocall.updateListStatus.mockResolvedValue({ ok: true, code: '00', message: null, retriable: false });
       (prisma.autocallSession.create as jest.Mock).mockResolvedValue({ id: 'sess-1' });
-      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValueOnce(null).mockResolvedValue({ id: 'sess-1', status: 'ACTIVE', queueName: 'q1', netgsmListId: 'job-1', total: 2 });
+      // Once for the fast-fail check, once for the in-transaction re-check,
+      // then the default backs getSession's re-read.
+      (prisma.autocallSession.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({ id: 'sess-1', status: 'ACTIVE', queueName: 'q1', netgsmListId: 'job-1', total: 2 });
       (prisma.autocallSessionItem.count as jest.Mock).mockResolvedValue(0);
 
       const out = await svc.start(WS, USER, 'MANAGER', { queueName: 'q1', iysMessageType: 'BILGILENDIRME' } as any);
@@ -127,50 +136,73 @@ describe('AutocallDialerService', () => {
       expect(out).toMatchObject({ id: 'sess-1', status: 'ACTIVE' });
     });
 
-    it('TİCARİ: hard-blocks İYS RET/YOK leads (SKIPPED_IYS), only streams ONAY', async () => {
+    it('TİCARİ: defers İYS verification to the stream — every non-DNC candidate is PENDING at start, no İYS search spent', async () => {
       const { prisma, registry, autocall, iysClient, svc } = makeSvc();
-      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValueOnce(null);
       (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
       registry.resolveConfig.mockReturnValue(resolvedConfig('BR1'));
       (prisma.lead.findMany as jest.Mock).mockResolvedValue([
-        { id: 'l1', phone: '905551110001', smsOptOut: false }, // ONAY
-        { id: 'l2', phone: '905551110002', smsOptOut: false }, // RET
+        { id: 'l1', phone: '905551110001', smsOptOut: false },
+        { id: 'l2', phone: '905551110002', smsOptOut: false },
       ]);
-      iysClient.search.mockImplementation(async (_creds: any, phone: string) =>
-        phone === '905551110001' ? { ok: true, status: 'ONAY', message: null } : { ok: true, status: 'RET', message: null },
-      );
       autocall.addAutocall.mockResolvedValue({ ok: true, code: '00', jobId: 'job-2', listId: 'job-2', message: null, retriable: false });
       autocall.updateListStatus.mockResolvedValue({ ok: true, code: '00', message: null, retriable: false });
       (prisma.autocallSession.create as jest.Mock).mockResolvedValue({ id: 'sess-2' });
-      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValue({ id: 'sess-2', status: 'ACTIVE', queueName: 'q1', netgsmListId: 'job-2', total: 2 });
+      (prisma.autocallSession.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({ id: 'sess-2', status: 'ACTIVE', queueName: 'q1', netgsmListId: 'job-2', total: 2 });
       (prisma.autocallSessionItem.count as jest.Mock).mockResolvedValue(0);
 
       await svc.start(WS, USER, 'MANAGER', { queueName: 'q1', iysMessageType: 'TICARI' } as any);
 
+      // A one-shot preflight could only afford ~10 İYS searches and would
+      // mis-mark budget-denied candidates as terminal SKIPPED_IYS — so start()
+      // spends NO İYS budget; consent resolves per streaming tick instead.
+      expect(iysClient.search).not.toHaveBeenCalled();
       const createArgs = (prisma.autocallSession.create as jest.Mock).mock.calls[0][0];
       const items = createArgs.data.items.create;
       expect(items).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ leadId: 'l1', status: 'PENDING' }),
-          expect.objectContaining({ leadId: 'l2', status: 'SKIPPED_IYS' }),
+          expect.objectContaining({ leadId: 'l2', status: 'PENDING' }),
         ]),
       );
       const addArgs = autocall.addAutocall.mock.calls[0][1];
       expect(addArgs).toMatchObject({ iysfilter: '11', brandcode: 'BR1' });
     });
 
-    it('rejects when EVERY candidate is filtered out (all DNC/İYS-blocked) — never creates a NetGSM list', async () => {
-      const { prisma, registry, autocall, iysClient, svc } = makeSvc();
+    it('rejects when EVERY candidate is DNC-excluded — never creates a NetGSM list', async () => {
+      const { prisma, registry, autocall, svc } = makeSvc();
       (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValue(null);
       (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
       registry.resolveConfig.mockReturnValue(resolvedConfig('BR1'));
-      (prisma.lead.findMany as jest.Mock).mockResolvedValue([{ id: 'l1', phone: '905551110001', smsOptOut: false }]);
-      iysClient.search.mockResolvedValue({ ok: true, status: 'RET', message: null });
+      (prisma.lead.findMany as jest.Mock).mockResolvedValue([{ id: 'l1', phone: '905551110001', smsOptOut: true }]);
 
       await expect(
         svc.start(WS, USER, 'MANAGER', { queueName: 'q1', iysMessageType: 'TICARI' } as any),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(autocall.addAutocall).not.toHaveBeenCalled();
+    });
+
+    it('a concurrent start that loses the in-transaction claim 409s AND tears down its orphaned NetGSM list', async () => {
+      const { prisma, registry, autocall, svc } = makeSvc();
+      (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
+      registry.resolveConfig.mockReturnValue(resolvedConfig());
+      (prisma.lead.findMany as jest.Mock).mockResolvedValue([{ id: 'l1', phone: '905551110001', smsOptOut: false }]);
+      autocall.addAutocall.mockResolvedValue({ ok: true, code: '00', jobId: 'job-9', listId: 'job-9', message: null, retriable: false });
+      autocall.updateListStatus.mockResolvedValue({ ok: true, code: '00', message: null, retriable: false });
+      // Fast-fail check passes (null), but the in-transaction re-check finds a
+      // racer's freshly-created ACTIVE session.
+      (prisma.autocallSession.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'sess-racer' });
+
+      await expect(
+        svc.start(WS, USER, 'MANAGER', { queueName: 'q1', iysMessageType: 'BILGILENDIRME' } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.autocallSession.create).not.toHaveBeenCalled();
+      // The already-created NetGSM list is best-effort stopped, not orphaned live.
+      expect(autocall.updateListStatus).toHaveBeenCalledWith(expect.anything(), 'job-9', 'stop');
     });
 
     it('surfaces NetGSM addAutocall failure as a BadRequestException (e.g. add-on not enabled)', async () => {
@@ -189,7 +221,9 @@ describe('AutocallDialerService', () => {
 
     it('a REP is clamped to their own assigned leads', async () => {
       const { prisma, registry, autocall, svc } = makeSvc();
-      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValueOnce(null); // the "existing ACTIVE?" check
+      (prisma.autocallSession.findFirst as jest.Mock)
+        .mockResolvedValueOnce(null) // the fast-fail "existing ACTIVE?" check
+        .mockResolvedValueOnce(null); // the in-transaction re-check
       (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
       registry.resolveConfig.mockReturnValue(resolvedConfig());
       (prisma.lead.findMany as jest.Mock).mockResolvedValue([{ id: 'l1', phone: '905551110001', smsOptOut: false }]);
@@ -335,6 +369,83 @@ describe('AutocallDialerService', () => {
 
       expect(autocall.addNumber).not.toHaveBeenCalled();
       expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ dedupKey: 'sess-1' }));
+    });
+
+    it('TİCARİ: verifies İYS per item — ONAY streams, RET is SKIPPED_IYS (never added)', async () => {
+      const { prisma, registry, autocall, iysClient, svc } = makeSvc();
+      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValue({
+        id: 'sess-1', status: 'ACTIVE', netgsmListId: 'job-1', iysfilter: '11', brandCode: 'BR1',
+      });
+      (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
+      registry.resolveConfig.mockReturnValue(resolvedConfig('BR1'));
+      (prisma.autocallSessionItem.findMany as jest.Mock).mockResolvedValue([
+        { id: 'it-1', phone: '905551110001' }, // ONAY
+        { id: 'it-2', phone: '905551110002' }, // RET
+      ]);
+      iysClient.search.mockImplementation(async (_creds: any, phone: string) =>
+        phone === '905551110001' ? { ok: true, status: 'ONAY', message: null } : { ok: true, status: 'RET', message: null },
+      );
+      autocall.addNumber.mockResolvedValue({ ok: true, code: '00', message: null, retriable: false });
+      (prisma.autocallSessionItem.count as jest.Mock).mockResolvedValue(0);
+
+      await (svc as any).streamTick({ payload: { workspaceId: WS, sessionId: 'sess-1' } });
+
+      // Consent searched with the session's brand, for ARAMA.
+      expect(iysClient.search).toHaveBeenCalledWith(
+        expect.objectContaining({ brandCode: 'BR1' }), '905551110001', 'ARAMA',
+      );
+      // Only the ONAY number reaches the live list; RET is a terminal İYS skip.
+      expect(autocall.addNumber).toHaveBeenCalledTimes(1);
+      expect(autocall.addNumber).toHaveBeenCalledWith(expect.anything(), 'job-1', '905551110001');
+      const updateCalls = (prisma.autocallSessionItem.update as jest.Mock).mock.calls;
+      expect(updateCalls).toEqual(
+        expect.arrayContaining([
+          [{ where: { id: 'it-1' }, data: { status: 'ADDED' } }],
+          [{ where: { id: 'it-2' }, data: { status: 'SKIPPED_IYS' } }],
+        ]),
+      );
+    });
+
+    it('TİCARİ: an İYS budget denial is RETRIABLE — breaks the tick, items stay PENDING, session reschedules', async () => {
+      const { prisma, registry, autocall, iysClient, budgeter, scheduledJobs, svc } = makeSvc();
+      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValue({
+        id: 'sess-1', status: 'ACTIVE', netgsmListId: 'job-1', iysfilter: '11', brandCode: 'BR1',
+      });
+      (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
+      registry.resolveConfig.mockReturnValue(resolvedConfig('BR1'));
+      (prisma.autocallSessionItem.findMany as jest.Mock).mockResolvedValue([
+        { id: 'it-1', phone: '905551110001' },
+        { id: 'it-2', phone: '905551110002' },
+      ]);
+      budgeter.tryTake.mockReturnValue(false); // shared 'iys' bucket exhausted
+      (prisma.autocallSessionItem.count as jest.Mock).mockResolvedValue(2);
+
+      await (svc as any).streamTick({ payload: { workspaceId: WS, sessionId: 'sess-1' } });
+
+      // The OLD one-shot preflight marked budget-denied candidates terminal
+      // SKIPPED_IYS (consented prospects silently never called). Now: nothing
+      // searched, nothing added, nothing skipped — resumed next tick.
+      expect(iysClient.search).not.toHaveBeenCalled();
+      expect(autocall.addNumber).not.toHaveBeenCalled();
+      expect(prisma.autocallSessionItem.update).not.toHaveBeenCalled();
+      expect(scheduledJobs.schedule).toHaveBeenCalledWith(expect.objectContaining({ dedupKey: 'sess-1' }));
+    });
+
+    it('BİLGİLENDİRME (iysfilter 0): streams without any İYS search', async () => {
+      const { prisma, registry, autocall, iysClient, svc } = makeSvc();
+      (prisma.autocallSession.findFirst as jest.Mock).mockResolvedValue({
+        id: 'sess-1', status: 'ACTIVE', netgsmListId: 'job-1', iysfilter: '0', brandCode: null,
+      });
+      (prisma.channel.findFirst as jest.Mock).mockResolvedValue(ACTIVE_SMS_CHANNEL);
+      registry.resolveConfig.mockReturnValue(resolvedConfig());
+      (prisma.autocallSessionItem.findMany as jest.Mock).mockResolvedValue([{ id: 'it-1', phone: '905551110001' }]);
+      autocall.addNumber.mockResolvedValue({ ok: true, code: '00', message: null, retriable: false });
+      (prisma.autocallSessionItem.count as jest.Mock).mockResolvedValue(0);
+
+      await (svc as any).streamTick({ payload: { workspaceId: WS, sessionId: 'sess-1' } });
+
+      expect(iysClient.search).not.toHaveBeenCalled();
+      expect(autocall.addNumber).toHaveBeenCalledWith(expect.anything(), 'job-1', '905551110001');
     });
   });
 });

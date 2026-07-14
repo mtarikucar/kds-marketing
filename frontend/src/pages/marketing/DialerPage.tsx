@@ -54,6 +54,10 @@ function ParallelModeSection({ status, search }: { status: string; search: strin
     // Don't fire the request for an unentitled workspace — it would 403 silently.
     enabled: entitled,
     queryFn: () => marketingApi.get('/dialer/parallel/active').then((r) => r.data as AutocallSession | null),
+    // The backend streams ~10 numbers/min for up to ~10 minutes; without
+    // polling the added/pending progress stays frozen at its initial snapshot.
+    // Poll only while a session is actually running.
+    refetchInterval: (query) => (query.state.data ? 15_000 : false),
   });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['dialer-parallel-active'] });

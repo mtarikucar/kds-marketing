@@ -146,5 +146,54 @@ describe('DialerService', () => {
       await expect(svc.skip(WS, 'sess-1', USER)).rejects.toThrow(/not active/i);
       expect(prisma.dialSession.updateMany).not.toHaveBeenCalled();
     });
+
+    it('skipping an already-DIALED lead cancels the linked call (frees the single line)', async () => {
+      const { prisma, salesCalls, svc } = makeSvc();
+      prisma.dialSession.findFirst.mockResolvedValue({ id: 'sess-1', status: 'ACTIVE', currentIndex: 0, total: 2 } as any);
+      prisma.dialSessionItem.findFirst.mockResolvedValue({ id: 'it-0', callId: 'call-1', position: 0, leadId: 'l1' } as any);
+      prisma.lead.findFirst.mockResolvedValue({ id: 'l1', phone: '+90', businessName: 'A', contactPerson: null, status: 'NEW', city: null } as any);
+      (prisma.dialSessionItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.dialSession.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.dialSessionItem.count as jest.Mock).mockResolvedValue(1);
+      salesCalls.logCall.mockResolvedValue({});
+      await svc.skip(WS, 'sess-1', USER);
+      // Without this, the INITIATED call holds the workspace's single sales
+      // line until the 30-min stale sweep and every subsequent Dial 409s.
+      expect(salesCalls.logCall).toHaveBeenCalledWith(WS, 'call-1', USER, { status: 'CANCELLED' });
+    });
+
+    it('does NOT cancel the call when the item was already claimed (concurrent log owns it)', async () => {
+      const { prisma, salesCalls, svc } = makeSvc();
+      prisma.dialSession.findFirst.mockResolvedValue({ id: 'sess-1', status: 'ACTIVE', currentIndex: 0, total: 2 } as any);
+      prisma.dialSessionItem.findFirst.mockResolvedValue({ id: 'it-0', callId: 'call-1', position: 0, leadId: 'l1' } as any);
+      prisma.lead.findFirst.mockResolvedValue({ id: 'l1', phone: '+90', businessName: 'A', contactPerson: null, status: 'NEW', city: null } as any);
+      (prisma.dialSessionItem.updateMany as jest.Mock).mockResolvedValue({ count: 0 }); // lost the claim race
+      (prisma.dialSession.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dialSessionItem.count as jest.Mock).mockResolvedValue(1);
+      await svc.skip(WS, 'sess-1', USER);
+      expect(salesCalls.logCall).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cancel', () => {
+    it('cancelling a session mid-call cancels the linked INITIATED call (frees the single line)', async () => {
+      const { prisma, salesCalls, svc } = makeSvc();
+      prisma.dialSession.findFirst.mockResolvedValue({ id: 'sess-1', status: 'ACTIVE', currentIndex: 0, total: 2 } as any);
+      prisma.dialSessionItem.findFirst.mockResolvedValue({ id: 'it-0', callId: 'call-1', position: 0, leadId: 'l1' } as any);
+      prisma.lead.findFirst.mockResolvedValue({ id: 'l1', phone: '+90', businessName: 'A', contactPerson: null, status: 'NEW', city: null } as any);
+      (prisma.dialSession.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      salesCalls.logCall.mockResolvedValue({});
+      const out = await svc.cancel(WS, 'sess-1', USER);
+      expect(out).toEqual({ id: 'sess-1', status: 'CANCELLED' });
+      expect(salesCalls.logCall).toHaveBeenCalledWith(WS, 'call-1', USER, { status: 'CANCELLED' });
+    });
+
+    it('a second cancel (already-CANCELLED session) is a no-op — no call mutation', async () => {
+      const { prisma, salesCalls, svc } = makeSvc();
+      prisma.dialSession.findFirst.mockResolvedValue({ id: 'sess-1', status: 'CANCELLED', currentIndex: 0, total: 2 } as any);
+      (prisma.dialSession.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+      await svc.cancel(WS, 'sess-1', USER);
+      expect(salesCalls.logCall).not.toHaveBeenCalled();
+    });
   });
 });

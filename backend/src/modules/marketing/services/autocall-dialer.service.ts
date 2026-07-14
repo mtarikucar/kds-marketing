@@ -22,6 +22,11 @@ import { StartAutocallSessionDto } from '../dto/autocall-dialer.dto';
 
 export const AUTOCALL_STREAM_KIND = 'autocall.stream';
 
+/** Single-quote a lock key for the raw advisory-lock SELECT (mirrors marketing-users). */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 /** Mirrors DialerService.DIAL_QUEUE_CAP — a focused calling sprint, not a dump. */
 const MAX_QUEUE = 100;
 /** Numbers streamed per tick — sized to fit the account's 10/min autocall budget. */
@@ -43,15 +48,18 @@ interface AutocallCreds {
  * counterpart to DialerService's preview (one-at-a-time click-to-dial)
  * queue. `start()` builds an audience the same way DialerService does (an
  * ordered, ≤100-lead, phone-present queue; REP callers clamped to their own
- * assigned leads), excludes any lead with `smsOptOut` (the DNC/opt-out
+ * assigned leads) and excludes any lead with `smsOptOut` (the DNC/opt-out
  * proxy `campaign-sender.service.ts`'s `isOptedOut('VOICE', …)` already
  * reuses — call opt-out has no dedicated column yet, see that file's
- * docstring), and — for a TİCARİ session — hard-blocks any lead İYS doesn't
- * confirm ONAY for ARAMA consent (mirrors `sendVoice`'s `iysArmaPreflight`,
- * but resolved ONCE at session-build time rather than per streaming tick:
- * streaming ≤100 numbers at 10/min takes at most ~10 minutes, and re-checking
- * consent that often would just re-spend the same shared `'iys'` budget for
- * no practical benefit — see the Task 5 report for this scope call).
+ * docstring). For a TİCARİ session, İYS ARAMA consent (mirrors `sendVoice`'s
+ * `iysArmaPreflight`) is verified LAZILY inside each streaming tick, not
+ * one-shot at session-build time: the shared `'iys'` search budget is 10/min,
+ * so a one-shot preflight over a 100-lead queue could only verify the first
+ * ~10 candidates and would mis-mark the budget-denied rest as terminal
+ * SKIPPED_IYS (consented prospects silently never called). Per-tick
+ * verification aligns 1:1 with the 10-numbers-per-60s stream cadence, so a
+ * budget denial is simply retriable on the next tick — the same deferred
+ * treatment `campaign-sender` gives its own İYS budget denials.
  *
  * Only ONE session may be ACTIVE per workspace at a time (the underlying
  * NetGSM list + Netsantral queue are a shared team resource, not a per-rep
@@ -118,31 +126,23 @@ export class AutocallDialerService implements OnModuleInit {
     });
     if (rawLeads.length === 0) throw new BadRequestException('No callable leads match the filter');
 
-    type Categorized = { leadId: string; phone: string; status: 'PENDING' | 'SKIPPED_DNC' | 'SKIPPED_IYS' };
+    type Categorized = { leadId: string; phone: string; status: 'PENDING' | 'SKIPPED_DNC' };
     const categorized: Categorized[] = [];
-    const iysCandidates: Array<{ leadId: string; phone: string }> = [];
     for (const l of rawLeads) {
       if (!l.phone) continue; // buildWhere already requires phone; defensive only
       if (l.smsOptOut) {
         categorized.push({ leadId: l.id, phone: l.phone, status: 'SKIPPED_DNC' });
         continue;
       }
-      if (isTicari) {
-        iysCandidates.push({ leadId: l.id, phone: l.phone });
-        continue;
-      }
+      // TİCARİ İYS consent is verified lazily per streaming tick (see the class
+      // docstring): a one-shot preflight here can only afford ~10 searches/min
+      // and would mis-mark every budget-denied candidate as terminal SKIPPED_IYS.
       categorized.push({ leadId: l.id, phone: l.phone, status: 'PENDING' });
-    }
-    if (isTicari && iysCandidates.length > 0) {
-      const onay = await this.iysOnaySet(creds, iysCandidates);
-      for (const c of iysCandidates) {
-        categorized.push({ leadId: c.leadId, phone: c.phone, status: onay.has(c.leadId) ? 'PENDING' : 'SKIPPED_IYS' });
-      }
     }
     const eligible = categorized.filter((c) => c.status === 'PENDING');
     if (eligible.length === 0) {
       throw new BadRequestException(
-        'İYS / arama izni (DNC) filtreleri sonrası aranabilecek kayıt kalmadı — otomatik arama listesi oluşturulmadı.',
+        'Arama izni (DNC) filtreleri sonrası aranabilecek kayıt kalmadı — otomatik arama listesi oluşturulmadı.',
       );
     }
 
@@ -167,23 +167,51 @@ export class AutocallDialerService implements OnModuleInit {
       throw new BadRequestException(created.message ?? 'NetGSM otomatik arama listesi oluşturulamadı.');
     }
 
-    const session = await this.prisma.autocallSession.create({
-      data: {
-        workspaceId,
-        startedByUserId: marketingUserId,
-        status: 'ACTIVE',
-        netgsmListId: created.listId,
-        queueName: dto.queueName,
-        iysfilter,
-        brandCode: isTicari ? creds.brandCode : null,
-        retryCount: dto.retryCount ?? null,
-        total: categorized.length,
-        items: {
-          create: categorized.map((c) => ({ workspaceId, leadId: c.leadId, phone: c.phone, status: c.status })),
-        },
-      },
-      select: { id: true },
-    });
+    // Claim the one-ACTIVE-session-per-workspace slot atomically: the fast-fail
+    // findFirst at the top is unguarded, so two concurrent start() calls could
+    // both pass it and mint two live paid NetGSM lists. Serialize the re-check +
+    // create under the same advisory-xact-lock pattern the seat limit uses.
+    let session: { id: string };
+    try {
+      session = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('autocall:' + workspaceId)}))::text AS locked`,
+        );
+        const running = await tx.autocallSession.findFirst({
+          where: { workspaceId, status: 'ACTIVE' },
+          select: { id: true },
+        });
+        if (running) {
+          throw new ConflictException(
+            'A parallel autocall session is already running for this workspace — stop it first',
+          );
+        }
+        return tx.autocallSession.create({
+          data: {
+            workspaceId,
+            startedByUserId: marketingUserId,
+            status: 'ACTIVE',
+            netgsmListId: created.listId,
+            queueName: dto.queueName,
+            iysfilter,
+            brandCode: isTicari ? creds.brandCode : null,
+            retryCount: dto.retryCount ?? null,
+            total: categorized.length,
+            items: {
+              create: categorized.map((c) => ({ workspaceId, leadId: c.leadId, phone: c.phone, status: c.status })),
+            },
+          },
+          select: { id: true },
+        });
+      });
+    } catch (e) {
+      // The NetGSM list already exists — best-effort tear it down so the losing
+      // racer doesn't leave an orphaned live list only the NetGSM panel knows about.
+      await this.autocall
+        .updateListStatus({ usercode: creds.usercode, password: creds.password }, created.listId, 'stop')
+        .catch(() => undefined);
+      throw e;
+    }
 
     const startResult = await this.autocall.updateListStatus(
       { usercode: creds.usercode, password: creds.password },
@@ -303,7 +331,40 @@ export class AutocallDialerService implements OnModuleInit {
       take: STREAM_BATCH_SIZE,
     });
 
+    // TİCARİ sessions verify İYS ARAMA consent lazily here (not one-shot at
+    // start — see the class docstring): the 10/min shared 'iys' search budget
+    // aligns with this tick's ≤10-number batch, and a budget denial is
+    // RETRIABLE (break, resume next tick) instead of a terminal skip.
+    const isTicari = session.iysfilter === '11';
+    const iysCreds = {
+      usercode: creds.usercode,
+      password: creds.password,
+      brandCode: (session.brandCode as string | null) ?? creds.brandCode,
+    };
+    const iysCache = new Map<string, IysSearchResult>();
+
     for (const item of pending) {
+      if (isTicari) {
+        const wirePhone = toIysMsisdn(item.phone);
+        if (!wirePhone) {
+          // Unverifiable number — fail closed, never sent (same as sendVoice).
+          await this.prisma.autocallSessionItem.update({ where: { id: item.id }, data: { status: 'SKIPPED_IYS' } });
+          continue;
+        }
+        let res = iysCache.get(wirePhone);
+        if (!res) {
+          if (!this.budgeter.tryTake(creds.usercode, 'iys', IYS_SEARCH_BUDGET_LIMIT, IYS_SEARCH_BUDGET_WINDOW_MS)) {
+            break; // İYS budget exhausted this window — retriable, resume next tick
+          }
+          res = await this.iysClient.search(iysCreds, wirePhone, 'ARAMA');
+          iysCache.set(wirePhone, res);
+        }
+        if (!(res.ok && res.status === 'ONAY')) {
+          // Confirmed non-ONAY, or an İYS error — fail closed on a TİCARİ call.
+          await this.prisma.autocallSessionItem.update({ where: { id: item.id }, data: { status: 'SKIPPED_IYS' } });
+          continue;
+        }
+      }
       const result = await this.autocall.addNumber(
         { usercode: creds.usercode, password: creds.password },
         session.netgsmListId,
@@ -331,35 +392,6 @@ export class AutocallDialerService implements OnModuleInit {
       dedupKey: session.id,
       payload: { workspaceId: session.workspaceId, sessionId: session.id },
     });
-  }
-
-  /** İYS ARAMA search per candidate (cached per normalized phone within this
-   *  one call), budgeted via the SAME shared `'iys'` bucket every other İYS
-   *  caller uses. Unverifiable numbers and budget-denied lookups are simply
-   *  excluded (fail closed) — this builds a CANDIDATE set, so there's no
-   *  already-reserved spend to refund/abort the way campaign-sender's
-   *  per-tick preflight has to. */
-  private async iysOnaySet(
-    creds: AutocallCreds,
-    candidates: Array<{ leadId: string; phone: string }>,
-  ): Promise<Set<string>> {
-    const iysCreds = { usercode: creds.usercode, password: creds.password, brandCode: creds.brandCode };
-    const cache = new Map<string, IysSearchResult>();
-    const onay = new Set<string>();
-    for (const c of candidates) {
-      const wirePhone = toIysMsisdn(c.phone);
-      if (!wirePhone) continue; // can't verify → excluded, never sent anyway
-      let res = cache.get(wirePhone);
-      if (!res) {
-        if (!this.budgeter.tryTake(creds.usercode, 'iys', IYS_SEARCH_BUDGET_LIMIT, IYS_SEARCH_BUDGET_WINDOW_MS)) {
-          continue; // budget exhausted this run — excluded; a re-run picks up the rest
-        }
-        res = await this.iysClient.search(iysCreds, wirePhone, 'ARAMA');
-        cache.set(wirePhone, res);
-      }
-      if (res.ok && res.status === 'ONAY') onay.add(c.leadId);
-    }
-    return onay;
   }
 
   /** Same shape DialerService.buildWhere uses — an ordered, callable-only
