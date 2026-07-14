@@ -146,6 +146,10 @@ export default function WebphoneHost() {
   // same reason as `activeCallId` above: a bridge-mode call has no SIP leg in
   // this tab at all, so this is the ONLY signal that ever moves its pill.
   const [callStatus, setCallStatus] = useState<CallStatusPayload | null>(null);
+  // Mirror of activeCallId readable inside the long-lived SSE frame handler
+  // (which closes over a stale render). Lets a call_status frame tell whether it
+  // belongs to the call this rep is currently handling.
+  const activeCallIdRef = useRef<string | null>(null);
   const prevSipStatusRef = useRef<WebphoneState['status']>('idle');
   const navigate = useNavigate();
   const { t } = useTranslation('marketing');
@@ -179,6 +183,7 @@ export default function WebphoneHost() {
   // transition below and CallControlsPanel's onCallEnded, so this is the one
   // reset point that matters — no need to also diff "did the id change".)
   useEffect(() => {
+    activeCallIdRef.current = activeCallId;
     if (activeCallId === null) setCallStatus(null);
   }, [activeCallId]);
 
@@ -251,7 +256,17 @@ export default function WebphoneHost() {
       try {
         const data = JSON.parse(dataLines.join('\n'));
         if (data?.kind === 'call_status' && data.payload?.salesCallId && data.payload?.status) {
-          setCallStatus({ salesCallId: data.payload.salesCallId, status: data.payload.status });
+          const incoming = { salesCallId: data.payload.salesCallId, status: data.payload.status };
+          setCallStatus((prev) => {
+            // Don't let a frame for a DIFFERENT call overwrite (and downgrade)
+            // the pill while we're already holding the active call's own status —
+            // e.g. a new inbound's RINGING frame must not knock the active,
+            // CONNECTED call back to "Calling…". A frame for the active call (or
+            // arriving before any active call is set) is always accepted.
+            const holdingActive = prev !== null && prev.salesCallId === activeCallIdRef.current;
+            if (holdingActive && incoming.salesCallId !== activeCallIdRef.current) return prev;
+            return incoming;
+          });
           return;
         }
         if (data?.kind !== 'screen_pop' || !data.payload) return;
