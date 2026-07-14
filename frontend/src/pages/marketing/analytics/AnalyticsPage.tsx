@@ -80,6 +80,9 @@ interface ChannelAttribution {
 interface AttributionData {
   model: AttributionModel;
   totalRevenue: number;
+  /** ISO currency the revenue is in (each offer carries its plan's currency), or
+   *  null when offers span multiple currencies / there was no priced revenue. */
+  currency: string | null;
   conversions: number;
   channels: ChannelAttribution[];
 }
@@ -252,10 +255,7 @@ export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {})
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   const [tab, setTab] = useState<AnalyticsTab>('funnel');
-  // Attribution revenue is derived from offer prices in the WORKSPACE's currency —
-  // format it as such, not a hardcoded ₺ (a non-TRY workspace saw the wrong symbol).
   const { workspace } = useWorkspaceProfile();
-  const currency = asWorkspaceCurrency(workspace?.defaultCurrency);
 
   const defaultRange: DateRange = {
     from: subDays(new Date(), 30),
@@ -318,6 +318,17 @@ export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {})
         .then((r) => r.data),
     enabled: tab === 'attribution' && isManager,
   });
+
+  // Attribution money is in the currency the BACKEND aggregated (each offer
+  // carries its plan's currency, independent of the workspace default). A null
+  // currency with revenue means the offers span MULTIPLE currencies — show a
+  // plain number + a "mixed" marker instead of stamping one symbol on a mixed
+  // sum. (Null with zero revenue → the symbol is immaterial; fall back to the
+  // workspace default.)
+  const attrMixed = attribution?.currency == null && (attribution?.totalRevenue ?? 0) > 0;
+  const attrCurrency = asWorkspaceCurrency(attribution?.currency ?? workspace?.defaultCurrency);
+  const attrCurrencyLabel = attrMixed ? 'mixed' : attrCurrency;
+  const fmtAttr = (n: number) => (attrMixed ? n.toLocaleString() : formatMoney(n, attrCurrency));
 
   const tabs = [
     { id: 'funnel' as const, label: 'Funnel', icon: TrendingUp },
@@ -542,7 +553,7 @@ export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {})
                   <div className="grid grid-cols-2 gap-4">
                     <StatCard
                       label="Total Revenue"
-                      value={formatMoney(attribution.totalRevenue, currency)}
+                      value={fmtAttr(attribution.totalRevenue)}
                       icon={<DollarSign className="h-5 w-5" />}
                       tone="success"
                     />
@@ -563,7 +574,7 @@ export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {})
                             <TH>Channel</TH>
                             <TH numeric>Leads</TH>
                             <TH numeric>Conversions</TH>
-                            <TH numeric>Revenue ({currency})</TH>
+                            <TH numeric>Revenue ({attrCurrencyLabel})</TH>
                             <TH>Conv. Rate</TH>
                           </TR>
                         </THead>
@@ -577,7 +588,7 @@ export default function AnalyticsPage({ embedded }: { embedded?: boolean } = {})
                                   <Badge tone="success">{ch.conversions}</Badge>
                                 </TD>
                                 <TD numeric className="tabular-nums">
-                                  {formatMoney(ch.revenue, currency)}
+                                  {fmtAttr(ch.revenue)}
                                 </TD>
                                 <TD>
                                   <div className="flex items-center gap-2">

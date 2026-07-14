@@ -25,8 +25,14 @@ export interface ChannelAttribution {
 
 export interface AttributionResult {
   model: AttributionModel;
-  /** Sum of accepted-offer value over converted leads in range, TRY (2dp). */
+  /** Sum of accepted-offer value over converted leads in range (2dp). */
   totalRevenue: number;
+  /** The ISO currency the revenue figures are in (each offer carries its plan's
+   *  currency, which is independent of the workspace default). `null` when the
+   *  contributing offers span MORE THAN ONE currency — a single symbol over a
+   *  mixed sum would imply a false conversion — or when there was no priced
+   *  revenue. The client formats with this instead of the workspace default. */
+  currency: string | null;
   /** Number of converted leads with attributable value in range. */
   conversions: number;
   channels: ChannelAttribution[];
@@ -127,7 +133,7 @@ export class AttributionService {
         convertedTenantId: true,
         createdAt: true,
         convertedAt: true,
-        offers: { select: { status: true, customPrice: true, planMonthlyPrice: true } },
+        offers: { select: { status: true, customPrice: true, planMonthlyPrice: true, planCurrency: true } },
         activities: { select: { type: true, createdAt: true } },
       },
     });
@@ -140,6 +146,10 @@ export class AttributionService {
 
     let totalRevenue = ZERO;
     let convertedCount = 0;
+    // Distinct currencies of the ACCEPTED, priced offers that actually
+    // contributed revenue — so the result can be labelled with the real
+    // currency (single) or flagged as mixed (>1).
+    const currencies = new Set<string>();
 
     const addRevenue = (channel: string, amount: Prisma.Decimal) => {
       revenue.set(channel, (revenue.get(channel) ?? ZERO).plus(amount));
@@ -171,6 +181,13 @@ export class AttributionService {
       if (!isConverted) continue;
       totalRevenue = totalRevenue.plus(value);
       convertedCount += 1;
+      // Record the currency of each priced accepted offer that contributed (a
+      // zero-price/free offer's currency is irrelevant to the money figure).
+      for (const o of lead.offers) {
+        if (o.status !== 'ACCEPTED' || !o.planCurrency) continue;
+        const price = o.customPrice ?? o.planMonthlyPrice ?? 0;
+        if (!new Prisma.Decimal(price as Prisma.Decimal.Value).isZero()) currencies.add(o.planCurrency);
+      }
 
       if (q.model === 'first') {
         const ch = path[0];
@@ -208,6 +225,9 @@ export class AttributionService {
     return {
       model: q.model,
       totalRevenue: Number(totalRevenue.toFixed(2)),
+      // One currency → label with it; several → null (mixed, don't imply a
+      // conversion); none priced → null (zero revenue, symbol is immaterial).
+      currency: currencies.size === 1 ? [...currencies][0] : null,
       conversions: convertedCount,
       channels,
     };
