@@ -82,7 +82,14 @@ export function AdRulesSection({ accounts, selectedAccountId }: AdRulesSectionPr
       // adAccountId cannot be patched.
       const { adAccountId: _omit, ...patch } = values;
       void _omit;
-      return updateAdRule(id, patch);
+      // maxBudget/minBudget are "no cap" guardrails: an emptied field means CLEAR
+      // the cap, not "leave unchanged". optionalNumber makes a blank undefined,
+      // which the PATCH omits (keeps the old cap), so send explicit null to clear.
+      return updateAdRule(id, {
+        ...patch,
+        maxBudget: patch.maxBudget ?? null,
+        minBudget: patch.minBudget ?? null,
+      });
     },
     onSuccess: () => {
       invalidate();
@@ -114,13 +121,24 @@ export function AdRulesSection({ accounts, selectedAccountId }: AdRulesSectionPr
     onSuccess: (res) => {
       invalidate();
       const applied = res.actions.filter((a) => a.ok).length;
+      const failed = res.actions.length - applied;
       if (res.actions.length === 0) {
         toast.success(t('ads.rules.toast.runNoMatch', { defaultValue: 'Rule ran — no entities matched' }));
+      } else if (applied === 0) {
+        // Every attempted action failed — a green "0 applied" read like a benign
+        // no-op and hid real budget/status write failures.
+        toast.error(
+          t('ads.rules.toast.ranAllFailed', {
+            defaultValue: 'Rule ran — {{count}} action(s) failed',
+            count: failed,
+          }),
+        );
       } else {
         toast.success(
           t('ads.rules.toast.ran', {
-            defaultValue: '{{count}} action(s) applied',
+            defaultValue: failed > 0 ? '{{count}} applied, {{failed}} failed' : '{{count}} action(s) applied',
             count: applied,
+            failed,
           }),
         );
       }

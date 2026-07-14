@@ -6,7 +6,6 @@ import {
   launchAdSchema,
   type LaunchAdFormValues,
   type LaunchAdFormOutput,
-  CAMPAIGN_OBJECTIVES,
   OBJECTIVE_LABEL,
   CALL_TO_ACTIONS,
   CTA_LABEL,
@@ -50,6 +49,20 @@ const DEFAULTS: LaunchAdFormValues = {
   callToAction: 'LEARN_MORE',
   country: '',
 };
+
+/**
+ * A launched ad here is ONE link creative optimized for LINK_CLICKS/IMPRESSIONS
+ * (see buildLaunchPayload). Meta only accepts that optimization pair under these
+ * objectives — OUTCOME_AWARENESS needs REACH and OUTCOME_APP_PROMOTION needs an
+ * app + APP_INSTALLS, so offering them here would 400 at the ad-set step and
+ * orphan the just-created campaign. Only offer the compatible objectives.
+ */
+const LAUNCH_OBJECTIVES = [
+  'OUTCOME_TRAFFIC',
+  'OUTCOME_LEADS',
+  'OUTCOME_SALES',
+  'OUTCOME_ENGAGEMENT',
+] as const;
 
 /**
  * Build the full LaunchAdDto payload from the lean form: targeting is derived
@@ -205,7 +218,7 @@ export function LaunchAdDialog({ open, onOpenChange, onSubmit, isPending }: Laun
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {CAMPAIGN_OBJECTIVES.map((o) => (
+                        {LAUNCH_OBJECTIVES.map((o) => (
                           <SelectItem key={o} value={o}>
                             {t(`ads.objective.${o}`, { defaultValue: OBJECTIVE_LABEL[o] })}
                           </SelectItem>
