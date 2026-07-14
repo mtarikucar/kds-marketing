@@ -423,6 +423,7 @@ describe('ComplianceService', () => {
         id: 'dr1', workspaceId: WS, leadId: 'lead-1', kind: 'ERASURE', status: 'PENDING', ...over,
       });
       (prisma.conversation.findMany as jest.Mock).mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
+      (prisma.dataRequest.updateMany as jest.Mock).mockResolvedValue({ count: 1 }); // wins the atomic claim
     };
 
     it('anonymises the lead, deletes communication PII, keeps financial rows, and completes the request', async () => {
@@ -469,10 +470,25 @@ describe('ComplianceService', () => {
       expect(prisma.commission.deleteMany).not.toHaveBeenCalled();
       expect(prisma.customerWallet.deleteMany).not.toHaveBeenCalled();
       expect(prisma.lead.delete).not.toHaveBeenCalled();
-      // Request closed (the audit trail).
-      expect(prisma.dataRequest.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'dr1' }, data: expect.objectContaining({ status: 'COMPLETED' }) }),
+      // Request closed via the atomic PENDING→COMPLETED claim (the audit trail).
+      expect(prisma.dataRequest.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'dr1', workspaceId: WS, status: 'PENDING' },
+          data: expect.objectContaining({ status: 'COMPLETED' }),
+        }),
       );
+    });
+
+    it('is race-safe: a concurrent fulfil that loses the atomic claim (count 0) does no erasure', async () => {
+      const { prisma, svc } = makeSvc();
+      armPendingErasure(prisma);
+      (prisma.dataRequest.updateMany as jest.Mock).mockResolvedValue({ count: 0 }); // sibling already claimed
+      const out: any = await svc.fulfillErasure(WS, 'dr1', 'mgr-2');
+      expect(out).toMatchObject({ id: 'dr1', status: 'COMPLETED' });
+      // Lost the claim → must NOT re-run the destructive erasure.
+      expect(prisma.lead.updateMany).not.toHaveBeenCalled();
+      expect(prisma.conversation.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.message.deleteMany).not.toHaveBeenCalled();
     });
 
     it('404s when the erasure request does not exist (or is an EXPORT, filtered by kind)', async () => {

@@ -363,7 +363,19 @@ export class ComplianceService {
     }
     const leadId = req.leadId;
 
-    await this.prisma.$transaction(async (tx) => {
+    const ran = await this.prisma.$transaction(async (tx) => {
+      // Atomic claim: the FIRST fulfil flips PENDING→COMPLETED and proceeds; a
+      // racing double-click (two managers, or a double-submit) sees count 0 and
+      // skips — the erasure already ran in the sibling tx. Same claim-then-act
+      // idiom as coupon.redeem / invoice.settle. If the erasure below throws, the
+      // whole tx (claim included) rolls back, so the request stays PENDING and is
+      // retryable.
+      const claim = await tx.dataRequest.updateMany({
+        where: { id: req.id, workspaceId, status: 'PENDING' },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+      if (claim.count === 0) return false;
+
       // Messages carry no leadId of their own — they belong to the subject's
       // conversations, so delete them by those conversation ids before the
       // conversations themselves.
@@ -419,13 +431,14 @@ export class ComplianceService {
         },
       });
 
-      await tx.dataRequest.update({
-        where: { id: req.id },
-        data: { status: 'COMPLETED', completedAt: new Date() },
-      });
+      return true;
     });
 
-    this.logger.log(`erasure fulfilled for lead=${leadId} (request ${req.id}, by ${actorId ?? 'system'})`);
+    this.logger.log(
+      ran
+        ? `erasure fulfilled for lead=${leadId} (request ${req.id}, by ${actorId ?? 'system'})`
+        : `erasure already fulfilled for request ${req.id} — skipped (concurrent)`,
+    );
     return { id: req.id, status: 'COMPLETED', leadId };
   }
 
