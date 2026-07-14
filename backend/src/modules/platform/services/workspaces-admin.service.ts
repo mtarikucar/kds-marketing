@@ -88,19 +88,45 @@ export class WorkspacesAdminService {
     });
     if (!existing) throw new NotFoundException('Workspace not found');
 
-    return this.prisma.workspace.update({
+    const updated = await this.prisma.workspace.update({
       where: { id },
       data: { status },
       select: { id: true, slug: true, name: true, status: true },
     });
+
+    if (status !== 'ACTIVE') {
+      // Suspend/close must take effect NOW, not at token expiry: login and
+      // refresh check workspace status (assertWorkspaceActive), but an
+      // in-flight ACCESS token would otherwise keep full tenant access for up
+      // to 8h — contradicting the operator UI's "users will lose access".
+      // Bumping tokenVersion invalidates every outstanding access token on the
+      // next request (the guard's ver check), and refresh is already blocked
+      // by the workspace-status gate.
+      await this.prisma.marketingUser.updateMany({
+        where: { workspaceId: id },
+        data: { tokenVersion: { increment: 1 } },
+      });
+    }
+
+    return updated;
   }
 
   async update(id: string, dto: UpdateWorkspaceAdminDto) {
     const existing = await this.prisma.workspace.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, kind: true },
     });
     if (!existing) throw new NotFoundException('Workspace not found');
+
+    // A LOCATION sub-account's tier is managed by its parent agency's
+    // lifecycle, not this dial: flipping it to AGENCY/STANDALONE here would
+    // detach it from every kind='LOCATION'-scoped agency query while its
+    // parentWorkspaceId keeps dangling.
+    if (dto.kind !== undefined && existing.kind === 'LOCATION') {
+      throw new BadRequestException(
+        'Sub-accounts cannot change tier here — detach the location from its agency first',
+      );
+    }
 
     // Demoting an AGENCY back to STANDALONE would strand its child LOCATIONs — the
     // agency console that manages them (and the switch-into-sub-account flow) would

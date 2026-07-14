@@ -42,6 +42,14 @@ export class WorkspacesAdminController {
   }
 
   @Patch(':id')
+  // The highest-impact operator mutation (tier promote/demote, settings and
+  // coreIntegration rewiring) — audited like the adjacent status flip.
+  @Audit({
+    action: 'workspace.admin.update',
+    resourceType: 'workspace',
+    resourceIdParam: 'id',
+    captureBody: ['name', 'productName', 'kind', 'defaultLanguage', 'defaultCurrency'],
+  })
   update(@Param('id') id: string, @Body() dto: UpdateWorkspaceAdminDto) {
     return this.workspaces.update(id, dto);
   }

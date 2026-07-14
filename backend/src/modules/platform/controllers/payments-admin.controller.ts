@@ -6,6 +6,7 @@ import {
   Body,
   Query,
   UseGuards,
+  ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
@@ -64,6 +65,25 @@ export class PaymentsAdminController {
     }));
   }
 
+  /** Manual settlement is for bank transfers ONLY. A PENDING order is an
+   *  in-flight PSP card checkout that settles via its webhook: an operator
+   *  flip there would either provision an unpaid order (approve) or FAIL an
+   *  order the customer then completes at the PSP — charged but never
+   *  provisioned (reject). Both settle* calls accept PENDING, so the gate
+   *  lives here at the manual entrance. */
+  private async assertManuallySettleable(orderId: string): Promise<void> {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== 'AWAITING_TRANSFER') {
+      throw new ConflictException(
+        `Only bank-transfer (AWAITING_TRANSFER) orders can be settled manually — this order is ${order.status}`,
+      );
+    }
+  }
+
   @Post(':orderId/approve')
   @Audit({
     action: 'payment.manual.approve',
@@ -74,6 +94,7 @@ export class PaymentsAdminController {
     @CurrentOperator() operator: PlatformOperatorPayload,
     @Param('orderId') orderId: string,
   ) {
+    await this.assertManuallySettleable(orderId);
     const result = await this.settlement.settleSuccess(orderId, {
       approvedById: operator.id,
       raw: { manualApproval: { by: operator.email, at: new Date().toISOString() } },
@@ -96,6 +117,7 @@ export class PaymentsAdminController {
     @Param('orderId') orderId: string,
     @Body() dto: RejectPaymentDto,
   ) {
+    await this.assertManuallySettleable(orderId);
     return this.settlement.settleFailure(
       orderId,
       dto.reason ?? `rejected by ${operator.email}`,
