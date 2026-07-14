@@ -100,6 +100,31 @@ describe('PipelinesService', () => {
     });
   });
 
+  describe('updateStage — won/lost re-typing guard', () => {
+    it('refuses to flip isWon/isLost while the stage holds deals (would desync their status)', async () => {
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's1', isWon: false, isLost: false } as any);
+      prisma.opportunity.count.mockResolvedValue(5 as any);
+      await expect(svc.updateStage(WS, 'p1', 's1', { isWon: true } as any)).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.pipelineStage.update).not.toHaveBeenCalled();
+    });
+
+    it('allows flipping isWon when the stage is empty', async () => {
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's1', isWon: false, isLost: false } as any);
+      prisma.opportunity.count.mockResolvedValue(0 as any);
+      (prisma.pipelineStage.update as any).mockResolvedValue({ id: 's1' });
+      await svc.updateStage(WS, 'p1', 's1', { isWon: true } as any);
+      expect(prisma.pipelineStage.update).toHaveBeenCalled();
+    });
+
+    it('allows editing name/probability with deals present (no won/lost change → no guard)', async () => {
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's1', isWon: false, isLost: false } as any);
+      (prisma.pipelineStage.update as any).mockResolvedValue({ id: 's1' });
+      await svc.updateStage(WS, 'p1', 's1', { name: 'Renamed', probability: 40 } as any);
+      expect(prisma.opportunity.count).not.toHaveBeenCalled();
+      expect(prisma.pipelineStage.update).toHaveBeenCalled();
+    });
+  });
+
   describe('removeStage', () => {
     it('refuses while the stage still holds opportunities', async () => {
       prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's1' } as any);

@@ -199,6 +199,24 @@ export class PipelinesService {
       where: { id: stageId, workspaceId, pipelineId },
     });
     if (!stage) throw new NotFoundException('Stage not found');
+    // An opportunity's status (OPEN/WON/LOST) is derived from its stage's
+    // isWon/isLost flags and only re-synced when the deal MOVES (see
+    // OpportunitiesService.move). Flipping those flags on a stage that already
+    // holds deals would leave them stranded with a status that no longer matches
+    // the stage — e.g. OPEN cards sitting in a now-"won" stage: they'd still show
+    // on the board, inflate the forecast, and never count as won in reporting.
+    // Refuse while it holds deals (mirrors removeStage's "move them first");
+    // name/position/probability stay freely editable.
+    const wonChanged = dto.isWon !== undefined && dto.isWon !== stage.isWon;
+    const lostChanged = dto.isLost !== undefined && dto.isLost !== stage.isLost;
+    if (wonChanged || lostChanged) {
+      const used = await this.prisma.opportunity.count({ where: { workspaceId, stageId } });
+      if (used > 0) {
+        throw new ConflictException(
+          'Stage has opportunities — move them before changing its won/lost type',
+        );
+      }
+    }
     return this.prisma.pipelineStage.update({
       where: { id: stageId },
       data: {
