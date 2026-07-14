@@ -168,7 +168,7 @@ export class CustomFieldsService {
     return this.list(workspaceId, true, entity);
   }
 
-  private coerce(def: DefRow, raw: unknown): unknown {
+  private coerce(def: DefRow, raw: unknown, mode: 'create' | 'update'): unknown {
     const bad = (msg: string): never => {
       throw new BadRequestException(`"${def.key}": ${msg}`);
     };
@@ -190,14 +190,22 @@ export class CustomFieldsService {
       }
       case 'SELECT': {
         const opts = (def.options as { value: string }[] | null) ?? [];
-        if (!opts.some((o) => o.value === raw)) bad('value not in options');
+        // Strict on CREATE. On UPDATE, GRANDFATHER an out-of-options value: the
+        // edit form resubmits the FULL field map, so a value that was valid when
+        // saved but whose option was later removed must not fail coercion and
+        // brick the whole record save. The UI only offers current options, so in
+        // practice an out-of-options update value is a pre-existing stored one.
+        if (mode === 'create' && !opts.some((o) => o.value === raw)) bad('value not in options');
         return raw;
       }
       case 'MULTISELECT': {
         const opts = (def.options as { value: string }[] | null) ?? [];
         if (!Array.isArray(raw)) return bad('must be an array');
-        for (const v of raw as unknown[]) {
-          if (!opts.some((o) => o.value === v)) bad(`value "${String(v)}" not in options`);
+        // Same grandfathering as SELECT (a non-array is still malformed either way).
+        if (mode === 'create') {
+          for (const v of raw as unknown[]) {
+            if (!opts.some((o) => o.value === v)) bad(`value "${String(v)}" not in options`);
+          }
         }
         return raw;
       }
@@ -241,7 +249,7 @@ export class CustomFieldsService {
         if (opts.clearEmpty) out[k] = null;
         continue;
       }
-      out[k] = this.coerce(def as DefRow, v);
+      out[k] = this.coerce(def as DefRow, v, mode);
     }
     if (mode === 'create') {
       for (const d of defs) {

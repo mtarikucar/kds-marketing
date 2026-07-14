@@ -36,6 +36,29 @@ describe('CustomFieldsService.validateAndNormalize', () => {
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('grandfathers a stale SELECT value on UPDATE (removing an option must not brick editing affected records)', async () => {
+    // The edit form resubmits the FULL field map, so a value that WAS valid when
+    // saved but whose option was later removed would otherwise fail coercion and
+    // block the whole lead save. On update the stored value is kept; create stays strict.
+    expect(await svc.validateAndNormalize(WS, 'LEAD', { tier: 'platinum' }, 'update'))
+      .toEqual({ tier: 'platinum' });
+  });
+
+  it('grandfathers stale MULTISELECT values on UPDATE but still requires an array', async () => {
+    prisma.customFieldDef.findMany.mockResolvedValue([
+      { id: 'm1', workspaceId: WS, entity: 'LEAD', key: 'labels', type: 'MULTISELECT', options: [{ value: 'a' }], required: false, archived: false },
+    ] as any);
+    // 'b' (option since removed) is kept on update instead of bricking the save…
+    expect(await svc.validateAndNormalize(WS, 'LEAD', { labels: ['a', 'b'] }, 'update'))
+      .toEqual({ labels: ['a', 'b'] });
+    // …but a non-array is malformed regardless of mode.
+    await expect(svc.validateAndNormalize(WS, 'LEAD', { labels: 'nope' }, 'update'))
+      .rejects.toBeInstanceOf(BadRequestException);
+    // create still enforces the option membership.
+    await expect(svc.validateAndNormalize(WS, 'LEAD', { labels: ['b'] }, 'create'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('rejects a non-numeric NUMBER', async () => {
     await expect(svc.validateAndNormalize(WS, 'LEAD', { budget: 'abc', tier: 'gold' }, 'create'))
       .rejects.toBeInstanceOf(BadRequestException);
