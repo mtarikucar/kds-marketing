@@ -2680,6 +2680,9 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Numbers are short random hex — uniqueness must be enforced, not assumed;
+  // create() retries on P2002 with a fresh number.
+  @@unique([workspaceId, number], map: "invoices_workspaceId_number_key")
   @@index([workspaceId, status])
   @@index([subscriptionId])
   @@index([workspaceId, leadId, orderFormId])

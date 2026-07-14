@@ -291,5 +291,54 @@ describe('InvoicesService', () => {
       (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'FAILURE' }) });
       expect(await svc.iyzicoCallback('tok', 'iyz-token')).toBe(false);
     });
+
+    it('callback: an ECHOED conversationId must NOT bypass the basketId binding (production replay shape)', async () => {
+      // In production Iyzico ECHOES the retrieve REQUEST's conversationId — which
+      // we set to OUR invoice id — so it always matches. The real replay shape is
+      // conversationId=invA (echo) + basketId=invB (the actually-paid invoice).
+      // The old "conversationId mismatch AND basketId mismatch" guard was
+      // neutralized by the echo and settled invoice A with B's payment.
+      prisma.invoice.findUnique = jest.fn().mockResolvedValue({ id: 'invA', workspaceId: WS, leadId: null, total: 19900, currency: 'TRY', status: 'SENT' });
+      prisma.workspacePspConfig.findUnique.mockResolvedValue({ provider: 'IYZICO', configSealed: sealedIyzico() });
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'success', paymentStatus: 'SUCCESS', paidPrice: '199.00', currency: 'TRY', conversationId: 'invA', basketId: 'invB' }) });
+      const ok = await svc.iyzicoCallback('tok', 'iyz-token-of-invoice-B');
+      expect(ok).toBe(false);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('invoice number uniqueness', () => {
+    it('regenerates the number and retries when the (workspaceId, number) unique trips (P2002)', async () => {
+      const { Prisma } = require('@prisma/client');
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['workspaceId', 'number'] },
+      });
+      (prisma.invoice.create as jest.Mock)
+        .mockRejectedValueOnce(p2002)
+        .mockImplementationOnce((a: any) => Promise.resolve({ id: 'inv-2', ...a.data }));
+      const out: any = await svc.create(WS, { items: [{ description: 'X', qty: 1, unitPrice: 1000 }] } as any);
+      expect(prisma.invoice.create).toHaveBeenCalledTimes(2);
+      // A fresh number was minted for the retry (not the same colliding one).
+      const first = (prisma.invoice.create as jest.Mock).mock.calls[0][0].data.number;
+      const second = (prisma.invoice.create as jest.Mock).mock.calls[1][0].data.number;
+      expect(first).not.toBe(second);
+      expect(out.id).toBe('inv-2');
+    });
+
+    it('does NOT retry a P2002 on a different constraint (e.g. subscription period)', async () => {
+      const { Prisma } = require('@prisma/client');
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['subscriptionId', 'subscriptionPeriodKey'] },
+      });
+      (prisma.invoice.create as jest.Mock).mockRejectedValue(p2002);
+      await expect(
+        svc.create(WS, { items: [{ description: 'X', qty: 1, unitPrice: 1000 }] } as any),
+      ).rejects.toBe(p2002);
+      expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
+    });
   });
 });

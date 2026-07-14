@@ -26,15 +26,31 @@ export class PublicInvoiceController {
     const rows = (Array.isArray(inv.items) ? inv.items : [])
       .map((it: any) => `<tr><td>${esc(it.description)}</td><td style="text-align:right">${esc(it.qty)}</td><td style="text-align:right">${esc(money((it.unitPrice || 0), inv.currency))}</td></tr>`)
       .join('');
+    // Summary block: line prices are tax-EXCLUSIVE, so without the KDV and
+    // discount rows the visible rows don't sum to the amount the customer is
+    // asked to pay. Skip it entirely for legacy invoices with no breakdown.
+    const taxLines = (Array.isArray(inv.taxLines) ? inv.taxLines : [])
+      .filter((tl: any) => (tl?.tax ?? 0) > 0)
+      .map((tl: any) => `<div class="sumrow"><span>KDV %${esc(tl.ratePct)}</span><span>${esc(money(tl.tax, inv.currency))}</span></div>`)
+      .join('');
+    const summary =
+      (inv.taxTotal || 0) > 0 || (inv.discount || 0) > 0
+        ? `<div class="summary"><div class="sumrow"><span>Subtotal</span><span>${esc(money(inv.subtotal, inv.currency))}</span></div>` +
+          taxLines +
+          ((inv.discount || 0) > 0 ? `<div class="sumrow"><span>Discount</span><span>-${esc(money(inv.discount, inv.currency))}</span></div>` : '') +
+          `</div>`
+        : '';
     const paid = inv.status === 'PAID';
     res.type('html').send(
       `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
       `<title>Invoice ${esc(inv.number)}</title><style>body{font-family:system-ui;max-width:560px;margin:40px auto;padding:0 16px;color:#0f172a}` +
       `table{width:100%;border-collapse:collapse;margin:16px 0}td,th{padding:8px;border-bottom:1px solid #e2e8f0;text-align:left}` +
+      `.summary{margin:8px 0}.sumrow{display:flex;justify-content:space-between;padding:4px 8px;color:#475569}` +
       `.total{font-size:1.4rem;font-weight:700;text-align:right}button{background:#1e40af;color:#fff;border:none;padding:14px 28px;border-radius:10px;cursor:pointer;font-size:1rem}` +
       `.paid{background:#dcfce7;color:#166534;padding:10px;border-radius:8px;text-align:center}#manual{display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-top:12px;white-space:pre-wrap}</style></head>` +
       `<body><h2>Invoice ${esc(inv.number)}</h2>` +
       `<table><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th></tr>${rows}</table>` +
+      summary +
       `<div class="total">${esc(money(inv.total, inv.currency))}</div>` +
       (inv.notes ? `<p style="color:#64748b">${esc(inv.notes)}</p>` : '') +
       (paid ? `<div class="paid">✓ Paid</div>` : `<div style="text-align:center;margin-top:20px"><button id="pay">Pay ${esc(money(inv.total, inv.currency))}</button></div><div id="manual"></div>`) +
