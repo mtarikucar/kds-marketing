@@ -50,7 +50,7 @@ export class TrendRemixService {
       data: {
         workspaceId,
         sourcePlatform: input.sourcePlatform,
-        sourceUrl: input.sourceUrl,
+        sourceUrl: normalizeSourceUrl(input.sourceUrl),
         title: input.title,
         hookPattern: input.hookPattern,
         sceneStructure: (input.sceneStructure ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -132,4 +132,19 @@ function adaptPattern(pattern: string, subject: string): string {
 
 function clampInt(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, Math.floor(n)));
+}
+
+/**
+ * The saved link renders as a raw anchor href in the trends list — a
+ * scheme-less paste ("www.tiktok.com/@x/video/1", the most common form) would
+ * otherwise navigate INSIDE the app as a relative path, a permanently broken
+ * "source" link. Prefix https:// when no scheme is present; drop non-http(s)
+ * schemes outright (javascript:, data:, …) rather than store them for an href.
+ */
+export function normalizeSourceUrl(url?: string): string | undefined {
+  const trimmed = url?.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return undefined; // other scheme — refuse for an href
+  return `https://${trimmed}`;
 }

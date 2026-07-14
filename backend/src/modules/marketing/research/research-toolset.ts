@@ -79,8 +79,12 @@ export interface ResearchToolCtx {
 
 /**
  * Executes one source tool: calls the provider, meters the cost into the RESEARCH
- * budget, and records a ToolCallLog. Never throws — a tool failure is returned as
- * a string so the model can adapt (matching the AskAiService loop contract).
+ * budget ONLY when the provider call actually succeeded, and records a
+ * ToolCallLog. Never throws — a tool failure is returned as a string so the
+ * model can adapt (matching the AskAiService loop contract). Two failure legs
+ * deliberately skip the meter: a not-configured provider (pre-checked here —
+ * its inert []/null would otherwise be billed as a run) and a failed call (the
+ * configured providers THROW on HTTP/network failure, landing in the catch).
  */
 export async function dispatchResearchTool(
   deps: ResearchToolDeps,
@@ -90,6 +94,9 @@ export async function dispatchResearchTool(
 ): Promise<unknown> {
   const meter = (unit: 'FIRECRAWL_PAGE' | 'APIFY_RUN', qty = 1) =>
     deps.spend.settle(ctx.workspaceId, { unit, quantity: qty, ref: ctx.runId, budgetId: ctx.budgetId ?? null });
+  const notConfigured = (provider: string) => ({
+    error: `${provider} is not configured on this platform — use the other research tools instead`,
+  });
 
   let result: unknown;
   let ok = true;
@@ -97,23 +104,47 @@ export async function dispatchResearchTool(
   try {
     switch (name) {
       case 'search_places': {
+        if (!deps.sources.apify.isConfigured()) {
+          ok = false;
+          result = notConfigured('apify');
+          error = (result as { error: string }).error;
+          break;
+        }
         const limit = Math.min(Math.max(Number(args.limit) || 15, 1), 30);
         result = await deps.sources.apify.searchPlaces({ query: String(args.query ?? ''), geo: ctx.geo, limit });
         await meter('APIFY_RUN');
         break;
       }
       case 'scrape_page': {
+        if (!deps.sources.firecrawl.isConfigured()) {
+          ok = false;
+          result = notConfigured('firecrawl');
+          error = (result as { error: string }).error;
+          break;
+        }
         result = await deps.sources.firecrawl.scrape(String(args.url ?? ''));
         await meter('FIRECRAWL_PAGE');
         break;
       }
       case 'search_web': {
+        if (!deps.sources.firecrawl.isConfigured()) {
+          ok = false;
+          result = notConfigured('firecrawl');
+          error = (result as { error: string }).error;
+          break;
+        }
         const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 20);
         result = await deps.sources.firecrawl.searchWeb(String(args.query ?? ''), limit);
         await meter('FIRECRAWL_PAGE');
         break;
       }
       case 'lookup_instagram': {
+        if (!deps.sources.apify.isConfigured()) {
+          ok = false;
+          result = notConfigured('apify');
+          error = (result as { error: string }).error;
+          break;
+        }
         result = await deps.sources.apify.lookupInstagram(String(args.handle ?? ''));
         await meter('APIFY_RUN');
         break;

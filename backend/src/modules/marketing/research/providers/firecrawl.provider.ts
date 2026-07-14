@@ -24,27 +24,32 @@ export class FirecrawlProvider {
     return { Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`, 'Content-Type': 'application/json' };
   }
 
+  /** No-key stays inert (null), but a CONFIGURED provider whose call fails
+   *  THROWS instead of swallowing to null — the toolset meters the RESEARCH
+   *  budget after each call, so a swallowed failure was silently billed as a
+   *  successful page (and an outage turned into "no results" for the model). */
   private async post<T>(path: string, body: unknown): Promise<T | null> {
     if (!this.isConfigured()) return null;
+    let res: Response;
     try {
-      const res = await fetch(`${FIRECRAWL_BASE}${path}`, {
+      res = await fetch(`${FIRECRAWL_BASE}${path}`, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(FIRECRAWL_TIMEOUT_MS),
       });
-      if (!res.ok) {
-        this.logger.warn(`firecrawl ${path} failed (${res.status})`);
-        return null;
-      }
-      return (await res.json()) as T;
     } catch (e) {
       this.logger.warn(`firecrawl ${path} error: ${e instanceof Error ? e.message : e}`);
-      return null;
+      throw new Error(`firecrawl ${path} unreachable: ${e instanceof Error ? e.message : 'network error'}`);
     }
+    if (!res.ok) {
+      this.logger.warn(`firecrawl ${path} failed (${res.status})`);
+      throw new Error(`firecrawl ${path} failed (${res.status})`);
+    }
+    return (await res.json()) as T;
   }
 
-  /** Scrape one URL to markdown. Returns null when disabled or on failure. */
+  /** Scrape one URL to markdown. Null when disabled; throws on a failed call. */
   async scrape(url: string): Promise<ScrapeResult | null> {
     const body = (await this.post<{ data?: { markdown?: string; metadata?: Record<string, unknown> } }>(
       '/v1/scrape',

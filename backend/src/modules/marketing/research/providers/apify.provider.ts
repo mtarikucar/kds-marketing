@@ -30,31 +30,41 @@ export class ApifyProvider {
     return !!process.env.APIFY_TOKEN;
   }
 
+  /** No-keys stays inert ([]), but a CONFIGURED provider whose call fails
+   *  THROWS instead of swallowing to [] — the toolset meters the RESEARCH
+   *  budget after each call, so a swallowed failure was silently billed as a
+   *  successful run (and an outage turned into "no results" for the model). */
   private async runActor<T>(actor: string, input: unknown): Promise<T[]> {
     if (!this.isConfigured()) return [];
+    let res: Response;
     try {
       const url = `${APIFY_BASE}/v2/acts/${actor}/run-sync-get-dataset-items?token=${encodeURIComponent(process.env.APIFY_TOKEN as string)}`;
-      const res = await fetch(url, {
+      res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
         signal: AbortSignal.timeout(APIFY_TIMEOUT_MS),
       });
-      if (!res.ok) {
-        this.logger.warn(`apify actor ${actor} failed (${res.status})`);
-        return [];
-      }
-      const body = (await res.json()) as unknown;
-      return Array.isArray(body) ? (body as T[]) : [];
     } catch (e) {
       this.logger.warn(`apify actor ${actor} error: ${e instanceof Error ? e.message : e}`);
-      return [];
+      throw new Error(`apify ${actor} unreachable: ${e instanceof Error ? e.message : 'network error'}`);
     }
+    if (!res.ok) {
+      this.logger.warn(`apify actor ${actor} failed (${res.status})`);
+      throw new Error(`apify ${actor} failed (${res.status})`);
+    }
+    const body = (await res.json()) as unknown;
+    return Array.isArray(body) ? (body as T[]) : [];
   }
 
   /** Google Maps places search for an ICP query within a geo. */
   async searchPlaces(opts: { query: string; geo: Geo; limit: number }): Promise<PlaceHit[]> {
-    const loc = [opts.geo.cities?.join(', '), opts.geo.regions?.join(', '), opts.geo.country].filter(Boolean).join(', ');
+    // Defensive against malformed persisted geo (e.g. cities saved as a string
+    // by an old/raw API write): a non-array must not crash every run with
+    // ".join is not a function" — the DTO validates new writes, this guards old rows.
+    const cities = Array.isArray(opts.geo.cities) ? opts.geo.cities.join(', ') : undefined;
+    const regions = Array.isArray(opts.geo.regions) ? opts.geo.regions.join(', ') : undefined;
+    const loc = [cities, regions, opts.geo.country].filter(Boolean).join(', ');
     const search = loc ? `${opts.query} ${loc}` : opts.query;
     const rows = await this.runActor<RawPlace>(PLACES_ACTOR, {
       searchStringsArray: [search],

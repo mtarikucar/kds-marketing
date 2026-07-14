@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryStateBoundary } from '@/components/ui/QueryStateBoundary';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/Dialog';
 import { listTrends, saveTrend, remixTrend, type RemixBrief, type TrendPlatform } from '../../../features/marketing/api/trends.service';
+import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 
 const PLATFORM_LABEL: Record<string, string> = { TIKTOK: 'TikTok', INSTAGRAM: 'Instagram', YOUTUBE: 'YouTube' };
 
@@ -27,6 +28,11 @@ export default function TrendsPage({ embedded }: { embedded?: boolean } = {}) {
   const { t } = useTranslation('marketing');
   const [dialogOpen, setDialogOpen] = useState(false);
   const q = useQuery({ queryKey: ['trend-templates'], queryFn: listTrends });
+  // Save + remix are MANAGER-gated on the backend (settings.manage); a REP can
+  // read the list (reports.read) but every mutating affordance would just 400 —
+  // hide them instead of dangling buttons that fail with a generic toast.
+  const { user } = useMarketingAuthStore();
+  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
 
   return (
     <div className="space-y-6">
@@ -34,7 +40,7 @@ export default function TrendsPage({ embedded }: { embedded?: boolean } = {}) {
       <PageHeader
         title={t('trend.title', 'Trend Remix')}
         description={t('trend.subtitle', 'Capture a trend’s format — hook, pacing, structure — and remix it onto your brand. Never a copy.')}
-        actions={<Button onClick={() => setDialogOpen(true)}>{t('trend.save', 'Save a trend')}</Button>}
+        actions={isManager ? <Button onClick={() => setDialogOpen(true)}>{t('trend.save', 'Save a trend')}</Button> : undefined}
       />
       )}
 
@@ -44,7 +50,7 @@ export default function TrendsPage({ embedded }: { embedded?: boolean } = {}) {
             icon={<TrendingUp className="h-6 w-6" />}
             title={t('trend.empty.title', 'No trends captured yet')}
             description={t('trend.empty.desc', 'Paste a trending video link and describe its format (hook, pacing). Jeeta stores the abstract structure — never the video — so you can remix it onto your brand.')}
-            action={<Button onClick={() => setDialogOpen(true)}>{t('trend.save', 'Save a trend')}</Button>}
+            action={isManager ? <Button onClick={() => setDialogOpen(true)}>{t('trend.save', 'Save a trend')}</Button> : undefined}
           />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -74,7 +80,7 @@ export default function TrendsPage({ embedded }: { embedded?: boolean } = {}) {
         )}
       </QueryStateBoundary>
 
-      {!!q.data?.length && <RemixPanel templates={q.data} />}
+      {!!q.data?.length && isManager && <RemixPanel templates={q.data} />}
 
       <SaveTrendDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </div>
@@ -174,7 +180,9 @@ function SaveTrendDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   const [riskScore, setRiskScore] = useState('20');
 
   const save = useMutation({
-    mutationFn: () => saveTrend({ sourcePlatform: platform, sourceUrl: sourceUrl || undefined, title: title || undefined, hookPattern: hookPattern || undefined, riskScore: Number(riskScore) || 0 }),
+    // The backend DTO requires an INTEGER 0–100: clamp+round here so common
+    // inputs (150, 20.5) save instead of failing with a generic 400 toast.
+    mutationFn: () => saveTrend({ sourcePlatform: platform, sourceUrl: sourceUrl || undefined, title: title || undefined, hookPattern: hookPattern || undefined, riskScore: Math.min(100, Math.max(0, Math.round(Number(riskScore) || 0))) }),
     onSuccess: () => {
       toast.success(t('trend.saved', 'Trend saved'));
       qc.invalidateQueries({ queryKey: ['trend-templates'] });

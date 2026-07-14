@@ -44,4 +44,24 @@ describe('TrendRemixService.buildRemixBrief (pure format intelligence)', () => {
     await new TrendRemixService(prisma).saveTemplate('ws1', { sourcePlatform: 'TIKTOK', riskScore: 250 });
     expect(create.mock.calls[0][0].data.riskScore).toBe(100);
   });
+
+  it('normalizes a scheme-less sourceUrl on save (renders as an href, not an in-app relative path)', async () => {
+    const { prisma, create } = makePrisma();
+    await new TrendRemixService(prisma).saveTemplate('ws1', {
+      sourcePlatform: 'TIKTOK',
+      sourceUrl: 'www.tiktok.com/@x/video/1',
+    });
+    expect(create.mock.calls[0][0].data.sourceUrl).toBe('https://www.tiktok.com/@x/video/1');
+  });
+
+  it('keeps http(s) URLs as-is and refuses non-http schemes for the stored href', async () => {
+    const { prisma, create } = makePrisma();
+    const svc = new TrendRemixService(prisma);
+    await svc.saveTemplate('ws1', { sourcePlatform: 'TIKTOK', sourceUrl: 'https://ok.example/v' });
+    expect(create.mock.calls[0][0].data.sourceUrl).toBe('https://ok.example/v');
+    await svc.saveTemplate('ws1', { sourcePlatform: 'TIKTOK', sourceUrl: 'javascript:alert(1)' });
+    expect(create.mock.calls[1][0].data.sourceUrl).toBeUndefined();
+    await svc.saveTemplate('ws1', { sourcePlatform: 'TIKTOK', sourceUrl: '   ' });
+    expect(create.mock.calls[2][0].data.sourceUrl).toBeUndefined();
+  });
 });
