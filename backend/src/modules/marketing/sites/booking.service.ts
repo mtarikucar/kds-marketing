@@ -350,15 +350,26 @@ export class BookingService implements OnModuleInit {
     workspaceId: string,
     filters: { calendarId?: string; status?: string; from?: string; to?: string } = {},
   ) {
+    // Default the lower bound to the last ~24h when the caller gives no range, so
+    // the asc-ordered, 500-capped window covers CURRENT/upcoming appointments. An
+    // unbounded asc query returns the 500 OLDEST rows once lifetime bookings exceed
+    // the cap, truncating out every future appointment (staff can't see today's).
+    // The 24h buffer keeps recent past + handles workspace-timezone edges; an
+    // explicit `from`/`to` still queries any range (e.g. a history view).
+    const gte = filters.from
+      ? new Date(filters.from)
+      : filters.to
+        ? undefined
+        : new Date(Date.now() - 24 * 60 * 60 * 1000);
     return this.prisma.booking.findMany({
       where: {
         workspaceId,
         status: filters.status ? filters.status : { not: 'EXTERNAL_BUSY' },
         ...(filters.calendarId ? { calendarId: filters.calendarId } : {}),
-        ...(filters.from || filters.to
+        ...(gte || filters.to
           ? {
               startAt: {
-                ...(filters.from ? { gte: new Date(filters.from) } : {}),
+                ...(gte ? { gte } : {}),
                 ...(filters.to ? { lte: new Date(filters.to) } : {}),
               },
             }
