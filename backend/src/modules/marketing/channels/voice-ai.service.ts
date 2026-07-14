@@ -7,6 +7,7 @@ import { AiCreditsService } from '../ai/ai-credits.service';
 import { KnowledgeService } from '../ai/knowledge.service';
 import { creditCost, tierFor } from '../ai/ai-credit-costs';
 import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service';
+import { normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 
 function xml(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c] as string);
@@ -194,12 +195,38 @@ export class VoiceAiService {
 
   private async resolveLead(workspaceId: string, phone: string): Promise<string | null> {
     if (!phone) return null;
+    // Maintain the canonical `phoneNormalized` match key (like every other lead
+    // write) and dedup across ALL its spellings — an exact `phone` lookup misses a
+    // lead first stored via SMS/import/booking in a different format, minting a
+    // duplicate, and a lead created WITHOUT phoneNormalized is invisible to İYS,
+    // telephony and every other variant-keyed resolver.
+    const phoneNormalized = normalizePhone(phone);
     return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.lead.findFirst({ where: { workspaceId, phone }, select: { id: true } });
+      const existing = phoneNormalized
+        ? await tx.lead.findFirst({
+            where: {
+              workspaceId,
+              mergedIntoId: null,
+              deletedAt: null,
+              phoneNormalized: { in: localMsisdnVariants(phoneNormalized) },
+            },
+            select: { id: true },
+          })
+        : null;
       if (existing) return existing.id;
       const autoOwner = await this.autoAssigner.pickAssignee(workspaceId, tx);
       const lead = await tx.lead.create({
-        data: { workspaceId, businessName: `Caller ${phone}`, contactPerson: 'Caller', businessType: 'OTHER', source: 'PHONE', status: 'NEW', phone, ...(autoOwner ? { assignedToId: autoOwner } : {}) },
+        data: {
+          workspaceId,
+          businessName: `Caller ${phone}`,
+          contactPerson: 'Caller',
+          businessType: 'OTHER',
+          source: 'PHONE',
+          status: 'NEW',
+          phone,
+          ...(phoneNormalized ? { phoneNormalized } : {}),
+          ...(autoOwner ? { assignedToId: autoOwner } : {}),
+        },
       });
       return lead.id;
     });

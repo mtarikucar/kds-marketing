@@ -43,6 +43,20 @@ describe('VoiceAiService', () => {
     expect(prisma.voiceCall.upsert).toHaveBeenCalled();
   });
 
+  it('resolveLead persists phoneNormalized and dedups by number variants (not exact phone), skipping tombstones', async () => {
+    await (svc as any).resolveLead(WS, '0555 111 22 33');
+    // Dedup matches every stored spelling of the number, and never a hidden
+    // (merged-away / soft-deleted) lead.
+    const where = (prisma.lead.findFirst as jest.Mock).mock.calls[0][0].where;
+    expect(where).toMatchObject({ workspaceId: WS, mergedIntoId: null, deletedAt: null });
+    expect(where.phoneNormalized.in).toEqual(
+      expect.arrayContaining(['5551112233', '05551112233', '905551112233']),
+    );
+    // The created lead carries phoneNormalized so İYS/telephony/dedup can find it.
+    const created = (prisma.lead.create as jest.Mock).mock.calls[0][0].data;
+    expect(created.phoneNormalized).toBe('05551112233');
+  });
+
   it('handleTurn meters a credit and returns the AI reply + re-opens the mic', async () => {
     const twiml = await svc.handleTurn('CA123', 'Do you have a table for two?');
     expect(credits.reserve).toHaveBeenCalledTimes(1);
