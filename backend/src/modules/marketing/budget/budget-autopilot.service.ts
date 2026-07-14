@@ -22,6 +22,9 @@ export interface ProposeResult {
 }
 
 const DEFAULT_APPLY_COOLDOWN_HOURS = 6;
+/** How long an ASSISTED reallocation proposal stays approvable — the amounts
+ *  are computed from tick-time performance data and go stale. */
+const PROPOSAL_TTL_MS = 72 * 60 * 60 * 1000;
 
 function applyCooldownHours(): number {
   const raw = Number(process.env.GROWTH_AUTOPILOT_APPLY_COOLDOWN_HOURS);
@@ -169,12 +172,21 @@ export class BudgetAutopilotService {
     // ASSISTED (default, and AUTONOMOUS while the env flag is off): a material
     // reallocation enqueues a human approval — the pre-autopilot bridge to
     // execution. Nothing moves until an OWNER/MANAGER approves.
+    // A NEWER proposal for the same budget supersedes any still-PENDING older
+    // one: each proposal's amounts are computed from that tick's performance
+    // data, so approving a stale card would commit + live-push OUTDATED
+    // numbers. The new request also carries an expiry for the same reason.
+    await this.prisma.approvalRequest.updateMany({
+      where: { workspaceId, kind: 'BUDGET_REALLOCATION', status: 'PENDING', resourceId: budgetId },
+      data: { status: 'EXPIRED' },
+    });
     const req = await this.approvals.enqueue(workspaceId, {
       kind: 'BUDGET_REALLOCATION',
       summary: `Reallocate ${plan.allocations.filter((a) => Math.abs(a.after - a.before) >= 0.01).length} channel(s) within budget pool ${plan.pool}`,
       payload: { budgetId, runId: run.id, after },
       resourceType: 'growth_budget',
       resourceId: budgetId,
+      expiresAt: new Date(Date.now() + PROPOSAL_TTL_MS),
     });
     return { runId: run.id, status: 'PROPOSED', plan, approvalId: req.id };
   }

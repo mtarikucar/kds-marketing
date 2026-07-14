@@ -63,7 +63,15 @@ export class BudgetExecutorService {
     if (!approval) throw new NotFoundException('Approval request not found');
     if (approval.kind !== 'BUDGET_REALLOCATION') throw new BadRequestException('Not a budget reallocation request');
     if (approval.status === 'APPLIED') return { status: 'ALREADY_APPLIED', applied: 0, skipped: 0, results: [] };
-    if (approval.status !== 'APPROVED') throw new BadRequestException(`Approve the request first (it is ${approval.status})`);
+    // PENDING is accepted: this endpoint IS the one-click approve+apply for a
+    // reallocation. The decision is claimed below only AFTER every
+    // precondition passes — the old approve-then-apply two-step stranded a
+    // request APPROVED-unapplied when apply failed (e.g. kill-switch on): it
+    // vanished from the PENDING-only queue with no retry path, while the UI
+    // told the manager the decision was not recorded.
+    if (approval.status !== 'APPROVED' && approval.status !== 'PENDING') {
+      throw new BadRequestException(`Request is already ${approval.status}`);
+    }
 
     const payload = (approval.payload ?? {}) as { budgetId?: string; runId?: string; after?: AfterAllocation[] };
     const budgetId = payload.budgetId;
@@ -73,6 +81,12 @@ export class BudgetExecutorService {
     const budget = await this.prisma.growthBudget.findFirst({ where: { id: budgetId, workspaceId } });
     if (!budget) throw new NotFoundException('Growth budget not found');
     if (budget.killSwitch || budget.status !== 'ACTIVE') throw new BadRequestException('Budget is not active');
+
+    // Every precondition passed — NOW record the decision (atomic single-winner
+    // claim incl. the expiry guard; a concurrent reject wins or loses cleanly).
+    if (approval.status === 'PENDING') {
+      await this.approvals.approve(workspaceId, approvalId, userId);
+    }
 
     const { results, applied, skipped } = await this.commitAndPush(workspaceId, budgetId, after);
 
