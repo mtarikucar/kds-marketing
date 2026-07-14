@@ -82,11 +82,14 @@ export class EnrollmentService {
       where: { id: courseId },
       select: {
         dripMode: true,
+        // Same id tiebreaker as CoursesService.get: tied legacy positions must
+        // resolve to the SAME order the editor renders, or the SEQUENTIAL gate
+        // 403s the lesson the UI shows as next.
         modules: {
-          orderBy: { position: 'asc' },
+          orderBy: [{ position: 'asc' }, { id: 'asc' }],
           select: {
             lessons: {
-              orderBy: { position: 'asc' },
+              orderBy: [{ position: 'asc' }, { id: 'asc' }],
               select: { id: true, position: true, isPreview: true, gating: true, dripDays: true },
             },
           },

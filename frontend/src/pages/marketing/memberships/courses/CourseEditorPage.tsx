@@ -305,9 +305,10 @@ function ModulesEditor({ course, mutations }: { course: CourseWithModules; mutat
       // cleared value — or a lesson-type switch that hides a field — actually
       // clears the old one. Omitting it left the PATCH a no-op for that field, so
       // e.g. a wrong videoUrl could never be removed. content is for TEXT/QUIZ,
-      // videoUrl for VIDEO; the other is cleared so a stale value can't linger.
+      // videoUrl for VIDEO and PDF (the PDF material link reuses the same asset
+      // URL column); the other is cleared so a stale value can't linger.
       content: values.type === 'TEXT' || values.type === 'QUIZ' ? (values.content ?? '') : '',
-      videoUrl: values.type === 'VIDEO' ? (values.videoUrl ?? '') : '',
+      videoUrl: values.type === 'VIDEO' || values.type === 'PDF' ? (values.videoUrl ?? '') : '',
       durationSec: values.durationSec !== undefined ? Number(values.durationSec) : null,
       isPreview: values.isPreview ?? false,
       gating,
