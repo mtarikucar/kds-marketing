@@ -218,7 +218,8 @@ export default function SitesPage() {
         name: f.name,
         // Guarantee a non-empty POST key per field — an empty name renders
         // <input name=""> which the browser never submits (silent data loss).
-        fields: f.fields.map((fld, i) => ({ ...fld, name: fld.name?.trim() || `field_${i + 1}` })),
+        // Strip the builder-only `_autoName` flag so it's never persisted.
+        fields: f.fields.map(({ _autoName, ...fld }, i) => ({ ...fld, name: fld.name?.trim() || `field_${i + 1}` })),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'sites', 'forms'] });

@@ -15,6 +15,11 @@ export interface FormField {
   type?: string;
   required?: boolean;
   options?: string[];
+  /** Builder-only (stripped before save): true while the `name` POST key should
+   *  auto-track the label. Set on a freshly-added field, cleared once the user
+   *  edits the name. A field LOADED from the server lacks it, so its contractual
+   *  key (email/phone/name) is never rewritten by a label/localization edit. */
+  _autoName?: boolean;
 }
 
 // Must stay in sync with the renderer's whitelist (site-renderer.service.ts).
@@ -38,7 +43,7 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
     [next[i], next[j]] = [next[j], next[i]];
     onChange(next);
   };
-  const add = () => onChange([...fields, { name: '', label: '', type: 'text', required: false }]);
+  const add = () => onChange([...fields, { name: '', label: '', type: 'text', required: false, _autoName: true }]);
 
   // Two fields sharing a `name` POST the same key, so the server's field→value
   // map keeps only one — the other field's value is silently lost. Auto-slugging
@@ -62,8 +67,11 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
               placeholder={t('sites.fieldLabel', 'Label (e.g. Full name)')}
               value={f.label ?? ''}
               onChange={(e) => {
-                // Auto-derive the name from the label until the user has typed a name.
-                const autoName = !f.name || f.name === slugify(f.label ?? '');
+                // Auto-derive the name from the label only while this field is
+                // still tracking (freshly added, name not user-edited). A loaded
+                // field lacks _autoName, so we fall back to "only when blank" —
+                // never rewriting an existing contractual key (email/phone/name).
+                const autoName = f._autoName ?? !f.name;
                 patch(i, { label: e.target.value, ...(autoName ? { name: slugify(e.target.value) } : {}) });
               }}
             />
@@ -87,7 +95,8 @@ export function FormFieldsEditor({ fields, onChange }: { fields: FormField[]; on
               placeholder={t('sites.fieldName', 'name (POST key)')}
               value={f.name}
               aria-invalid={dupName || undefined}
-              onChange={(e) => patch(i, { name: slugify(e.target.value) })}
+              // A manual name edit stops the label from auto-tracking it.
+              onChange={(e) => patch(i, { name: slugify(e.target.value), _autoName: false })}
             />
             {HAS_OPTIONS.has(f.type ?? '') && (
               <TokenListInput
