@@ -99,7 +99,11 @@ export default function AffiliatesPage() {
 
   const { data: affiliatesData, isLoading: affiliatesLoading } = useQuery({
     queryKey: ['marketing', 'affiliates'],
-    queryFn: () => marketingApi.get('/affiliates').then((r) => r.data),
+    // Fetch the full set (backend defaults limit to 20). This list feeds the
+    // referrals fan-out, the affiliate filter dropdown AND the id→name lookup
+    // used by the (server-side unbounded) Commissions tab — so a page-1 cap
+    // silently dropped affiliates 21+ from all three, showing raw ids.
+    queryFn: () => marketingApi.get('/affiliates', { params: { limit: 500 } }).then((r) => r.data),
   });
   const affiliates: Affiliate[] = affiliatesData?.data ?? (Array.isArray(affiliatesData) ? affiliatesData : []);
 
