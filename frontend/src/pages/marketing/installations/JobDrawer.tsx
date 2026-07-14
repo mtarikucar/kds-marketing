@@ -169,10 +169,17 @@ export function JobDrawer({ jobId, crews, onClose, onChanged }: Props) {
               )}
             </div>
 
-            {/* Schedule section — only when REQUESTED */}
-            {job.status === InstallationStatus.REQUESTED && (
+            {/* Schedule / reschedule — the backend allows scheduling from
+                REQUESTED, SCHEDULED and NO_SHOW (SCHEDULABLE_FROM), so a job put
+                on the wrong crew/date, or a no-show that needs re-booking, can be
+                fixed here instead of being stranded. */}
+            {[InstallationStatus.REQUESTED, InstallationStatus.SCHEDULED, InstallationStatus.NO_SHOW].includes(
+              job.status,
+            ) && (
               <div className="rounded-lg border border-border p-4 space-y-3">
-                <p className="text-sm font-semibold text-foreground">Schedule</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {job.status === InstallationStatus.REQUESTED ? 'Schedule' : 'Reschedule'}
+                </p>
                 <Select value={schedCrew} onValueChange={setSchedCrew}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select crew…" />
