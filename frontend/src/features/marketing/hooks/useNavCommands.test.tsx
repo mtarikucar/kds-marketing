@@ -9,6 +9,7 @@ const MANAGER: MarketingUser = {
   id: 'u1', workspaceId: 'w1', email: 'm@x.io', firstName: 'M', lastName: 'X', role: 'MANAGER',
 };
 const REP: MarketingUser = { ...MANAGER, id: 'u2', role: 'REP' };
+const OWNER: MarketingUser = { ...MANAGER, id: 'u3', role: 'OWNER' };
 
 function makeQC() {
   return new QueryClient({
@@ -49,6 +50,17 @@ function renderProbe() {
   );
 }
 
+/** Seeds the workspace-profile cache so useWorkspaceProfile resolves isAgency. */
+function renderProbeInAgency() {
+  const qc = makeQC();
+  qc.setQueryData(['marketing', 'workspace', 'profile'], { kind: 'AGENCY' });
+  return render(
+    <QueryClientProvider client={qc}>
+      <Probe />
+    </QueryClientProvider>,
+  );
+}
+
 describe('useNavCommands', () => {
   it('includes core destinations for a manager', () => {
     loginAs(MANAGER);
@@ -67,5 +79,21 @@ describe('useNavCommands', () => {
     expect(paths).toContain('/dashboard');
     expect(paths).toContain('/leads');
     expect(paths).not.toContain('/custom-objects');
+  });
+
+  it('includes /agency/* destinations for an agency OWNER (palette mirrors the sidebar)', () => {
+    loginAs(OWNER);
+    const { container } = renderProbeInAgency();
+    const paths = pathsOf(container);
+    expect(paths).toContain('/agency/locations');
+    expect(paths).toContain('/agency/snapshots');
+    expect(paths).toContain('/agency/rebilling');
+  });
+
+  it('hides /agency/* from a MANAGER even in an agency workspace (owner-only hub)', () => {
+    loginAs(MANAGER);
+    const { container } = renderProbeInAgency();
+    const paths = pathsOf(container);
+    expect(paths).not.toContain('/agency/locations');
   });
 });
