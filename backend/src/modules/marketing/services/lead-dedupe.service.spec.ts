@@ -19,9 +19,12 @@ function makeSvc() {
 // merge() reads each collision-keyed child's canonical rows via findMany; default
 // them to empty so a happy-path merge doesn't choke on an unmocked delegate.
 function mockCollisionTablesEmpty(prisma: MockPrismaClient) {
-  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate', 'pointsLedger'] as const) {
+  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate', 'pointsLedger', 'autocallSessionItem'] as const) {
     (prisma as any)[t].findMany.mockResolvedValue([]);
   }
+  // LeadAttribution default: canonical has none and no dup to adopt (tests override).
+  (prisma as any).leadAttribution.findUnique.mockResolvedValue(null);
+  (prisma as any).leadAttribution.findFirst.mockResolvedValue(null);
 }
 
 describe('LeadDedupeService.findDuplicates', () => {
@@ -208,6 +211,74 @@ describe('LeadDedupeService.merge', () => {
       expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] } }), data: { leadId: 'a' } }),
     );
     expect(prisma.communityMember.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('re-parents the remaining lead-owned 1:N children (İYS jobs, research candidate, import row)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    // Previously NOT re-parented → orphaned on the tombstone. Same completeness
+    // class as the deals/documents/estimates batch already covered above.
+    for (const delegate of ['iysSyncJob', 'researchCandidate', 'importJobRow']) {
+      expect((prisma as any)[delegate].updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { leadId: { in: ['b'] } }, data: { leadId: 'a' } }),
+      );
+    }
+  });
+
+  it('re-parents autocall session items with the dedup dance (composite [session, lead] unique)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    expect(prisma.autocallSessionItem.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ leadId: { in: ['b'] } }), data: { leadId: 'a' } }),
+    );
+  });
+
+  it('adopts a duplicate attribution onto the canonical when the canonical has none (no ROAS/UTM loss)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+    prisma.leadAttribution.findUnique.mockResolvedValue(null as any); // canonical un-attributed
+    prisma.leadAttribution.findFirst.mockResolvedValue({ id: 'attr-b' } as any); // dup carries one
+
+    await svc.merge(WS, 'a', ['b']);
+
+    // leadId is @unique so no wholesale move — the dup's row is adopted, keeping
+    // its source/UTM/ad attribution instead of orphaning it on the tombstone.
+    expect(prisma.leadAttribution.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'attr-b' }, data: { leadId: 'a' } }),
+    );
+  });
+
+  it('keeps the canonical attribution and does NOT adopt when it already has one', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+    prisma.leadAttribution.findUnique.mockResolvedValue({ leadId: 'a' } as any); // canonical already attributed
+
+    await svc.merge(WS, 'a', ['b']);
+
+    expect(prisma.leadAttribution.findFirst).not.toHaveBeenCalled();
+    expect(prisma.leadAttribution.update).not.toHaveBeenCalled();
   });
 
   it('dedups pointsLedger on the composite source+refId key, then re-parents the rest', async () => {

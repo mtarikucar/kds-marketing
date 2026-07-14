@@ -45,13 +45,19 @@ const SIMPLE_CHILD_DELEGATES = [
   'consentRecord',
   'customerSubscription',
   'couponRedemption',
+  // Pure 1:N audit/history children (no leadId-bearing unique) — same orphaning
+  // risk, so re-parent them wholesale too.
+  'iysSyncJob',
+  'researchCandidate',
+  'importJobRow',
   // NOTE: collision-keyed [<field>, leadId] children (enrollment, customObjectLink,
-  // communityMember, earnedBadge, certificate) are re-parented via reparentDeduped()
-  // in merge(); pointsLedger is handled inline there (composite [source,refId]
-  // collision). customerWallet ([workspaceId, leadId], one per lead) is NOT moved:
-  // a funded dup wallet blocks the merge (pre-tx guard) so its balance is never
-  // silently orphaned — a real balance/currency consolidation is left to a
-  // deliberate flow rather than guessed here.
+  // communityMember, earnedBadge, certificate, autocallSessionItem) are re-parented
+  // via reparentDeduped() in merge(); pointsLedger is handled inline there (composite
+  // [source,refId] collision), as is leadAttribution ([leadId] @unique — canonical
+  // wins, else adopt a dup's so ROAS/UTM attribution isn't lost). customerWallet
+  // ([workspaceId, leadId], one per lead) is NOT moved: a funded dup wallet blocks
+  // the merge (pre-tx guard) so its balance is never silently orphaned — a real
+  // balance/currency consolidation is left to a deliberate flow rather than guessed.
 ] as const;
 
 /** Scalar fields filled onto the canonical from a duplicate when blank. */
@@ -250,6 +256,29 @@ export class LeadDedupeService {
       await this.reparentDeduped(txc, 'communityMember', 'communityId', canonicalId, dupIds);
       await this.reparentDeduped(txc, 'earnedBadge', 'badgeId', canonicalId, dupIds, { workspaceId });
       await this.reparentDeduped(txc, 'certificate', 'courseId', canonicalId, dupIds, { workspaceId });
+      await this.reparentDeduped(txc, 'autocallSessionItem', 'autocallSessionId', canonicalId, dupIds);
+
+      // LeadAttribution — leadId is @unique (exactly one row per lead), so it can
+      // NOT be wholesale-moved (two rows with leadId=canonical violate the unique).
+      // The canonical's own attribution wins; only when it has NONE do we adopt the
+      // earliest duplicate's, so the merged lead keeps its source / UTM / ad-campaign
+      // attribution (ROAS + attribution reporting read it off the canonical) instead
+      // of orphaning it on the tombstone. Any other dup rows stay on their tombstones
+      // (distinct leadId, no collision, no live query surfaces them).
+      const canonAttr = await txc.leadAttribution.findUnique({
+        where: { leadId: canonicalId },
+        select: { leadId: true },
+      });
+      if (!canonAttr) {
+        const adopt = await txc.leadAttribution.findFirst({
+          where: { leadId: { in: dupIds } },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
+        });
+        if (adopt) {
+          await txc.leadAttribution.update({ where: { id: adopt.id }, data: { leadId: canonicalId } });
+        }
+      }
 
       // PointsLedger — unique [workspaceId, leadId, source, refId]: a COMPOSITE
       // collision key, so the single-field helper can't express it. Drop the dup
