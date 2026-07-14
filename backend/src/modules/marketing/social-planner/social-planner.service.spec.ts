@@ -171,6 +171,38 @@ describe('SocialPlannerService', () => {
     expect(updated.data.options.formats).toEqual({ 'acc-1': 'FEED' });
   });
 
+  it('updatePost replaces the draft PENDING targets when targetAccountIds is provided', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue(
+      makePost({ id: 'post-1', status: 'DRAFT', options: {} }),
+    );
+    prisma.socialPost.update.mockResolvedValue(makePost({ id: 'post-1' }));
+    prisma.socialAccount.findMany.mockResolvedValue([
+      makeAccount({ id: 'acc-2', network: 'INSTAGRAM' }),
+    ]);
+    prisma.socialPostTarget.createMany.mockResolvedValue({ count: 1 });
+
+    await svc.updatePost('ws-a', 'post-1', { targetAccountIds: ['acc-2'] });
+
+    // Old PENDING targets removed, then the new set attached — so a draft target
+    // edit persists WITHOUT needing to also schedule.
+    expect(prisma.socialPostTarget.deleteMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws-a', postId: 'post-1', status: 'PENDING' },
+    });
+    expect(prisma.socialPostTarget.createMany).toHaveBeenCalled();
+  });
+
+  it('updatePost leaves targets untouched when targetAccountIds is omitted', async () => {
+    prisma.socialPost.findFirst.mockResolvedValue(
+      makePost({ id: 'post-1', status: 'DRAFT', options: {} }),
+    );
+    prisma.socialPost.update.mockResolvedValue(makePost({ id: 'post-1' }));
+
+    await svc.updatePost('ws-a', 'post-1', { content: 'x' });
+
+    expect(prisma.socialPostTarget.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.socialPostTarget.createMany).not.toHaveBeenCalled();
+  });
+
   it('publishDuePost forwards post.options.linkedin to publishToNetwork opts', async () => {
     const mockPublish = jest
       .spyOn(networkAdapters, 'publishToNetwork')

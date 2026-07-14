@@ -99,6 +99,9 @@ export default function SocialPlannerPage() {
           content: values.content,
           media: values.media,
           formats: values.formats,
+          // Persist target-account edits on the draft itself — previously targets
+          // only changed via /schedule, so an edit without a schedule was dropped.
+          targetAccountIds: values.targetAccountIds,
           options: values.options,
         });
         if (values.scheduledAt) {
