@@ -59,6 +59,15 @@ describe('FormsService', () => {
     expect(outbox.append.mock.calls.map((c) => c[0].type)).toContain('marketing.form.submitted.v1');
   });
 
+  it('de-dupes by phone across ALL number spellings (variant-aware), not the exact one', async () => {
+    await svc.submit('f1', { name: 'Ada', email: 'ada@x.com', phone: '0555 111 22 33' });
+    const where = prisma.lead.findFirst.mock.calls[0][0].where;
+    const phoneClause = where.OR.find((c: any) => c.phoneNormalized);
+    expect(phoneClause.phoneNormalized).toEqual({
+      in: expect.arrayContaining(['5551112233', '05551112233', '905551112233']),
+    });
+  });
+
   it('does NOT de-dupe onto a soft-deleted lead (a new inquiry must stay visible)', async () => {
     // A bulk-deleted (deletedAt) lead is hidden from the list; matching a new
     // form submission onto it would attach the inquiry to an invisible record.

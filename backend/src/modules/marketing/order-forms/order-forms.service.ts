@@ -14,7 +14,7 @@ import { ProductsService } from '../products/products.service';
 import { InvoicesService } from '../invoicing/invoices.service';
 import { CouponsService } from '../coupons/coupons.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
-import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { normalizeEmail, normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 import {
   CreateOrderFormDto,
   UpdateOrderFormDto,
@@ -264,7 +264,10 @@ export class OrderFormsService {
             deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
-              ...(phoneNormalized ? [{ phoneNormalized }] : []),
+              // Match every stored spelling of the number (0- / bare / 90- / +90 /
+              // 00-), like İYS/telephony/leadgen do — an exact match would miss a
+              // paying buyer first stored in a different format and duplicate them.
+              ...(phoneNormalized ? [{ phoneNormalized: { in: localMsisdnVariants(phoneNormalized) } }] : []),
             ],
           },
           select: { id: true, status: true },

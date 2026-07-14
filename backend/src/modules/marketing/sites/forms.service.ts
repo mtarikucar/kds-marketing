@@ -5,7 +5,7 @@ import { LeadAutoAssignerService } from '../services/lead-auto-assigner.service'
 import { AffiliateService } from '../services/affiliate.service';
 import { LeadAttributionService } from '../leads/lead-attribution.service';
 import { MarketingEventTypes } from '../events/marketing-event-types';
-import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { normalizeEmail, normalizePhone, localMsisdnVariants } from '../utils/lead-normalize';
 
 /**
  * Public form submission → lead. Resolves the workspace from the FormDef,
@@ -69,7 +69,10 @@ export class FormsService {
             deletedAt: null,
             OR: [
               ...(emailNormalized ? [{ emailNormalized }] : []),
-              ...(phoneNormalized ? [{ phoneNormalized }] : []),
+              // Match every stored spelling of the number (0- / bare / 90- / +90 /
+              // 00-), like İYS/telephony/leadgen do — an exact match would miss a
+              // lead first stored in a different format and duplicate it.
+              ...(phoneNormalized ? [{ phoneNormalized: { in: localMsisdnVariants(phoneNormalized) } }] : []),
             ],
           },
           select: { id: true, status: true },

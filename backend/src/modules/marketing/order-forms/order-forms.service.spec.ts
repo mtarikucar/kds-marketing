@@ -166,6 +166,21 @@ describe('OrderFormsService', () => {
       );
     });
 
+    it('de-dupes a buyer by phone across ALL number spellings (variant-aware), not the exact one', async () => {
+      prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
+      products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
+      prisma.lead.findFirst.mockResolvedValue(null);
+      prisma.lead.create.mockResolvedValue({ id: 'lead-1' } as any);
+
+      await svc.submit('of_tok', { fullName: 'Jane', email: 'jane@x.com', phone: '0555 111 22 33' } as any, {});
+
+      const where = prisma.lead.findFirst.mock.calls[0][0].where;
+      const phoneClause = where.OR.find((c: any) => c.phoneNormalized);
+      expect(phoneClause.phoneNormalized).toEqual({
+        in: expect.arrayContaining(['5551112233', '05551112233', '905551112233']),
+      });
+    });
+
     it('dedup excludes merged AND soft-deleted leads (a deleted buyer stays visible)', async () => {
       prisma.orderForm.findUnique.mockResolvedValue(FORM as any);
       products.get.mockResolvedValue({ name: 'Pro', price: '10', currency: 'TRY', active: true });
