@@ -52,7 +52,7 @@ export class MarketingUsersController {
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateMarketingUserDto,
   ) {
-    return this.usersService.create(actor.workspaceId, dto);
+    return this.usersService.create(actor.workspaceId, dto, actor.id);
   }
 
   @Get()
