@@ -138,6 +138,67 @@ describe('MarketingUsersService — update() deactivation guards (parity with de
   });
 });
 
+// Phase 3 Task 16 — a workspace must never drop to zero ACTIVE owners.
+// assertNotLastOwner() is count-based (not a blanket "OWNER is untouchable"
+// block), so it must (a) still block the ONLY owner, exactly like the old
+// blanket guard did, and (b)/(d) newly ALLOW managing a non-last owner once
+// a workspace legitimately has more than one — proving the guard is
+// membership-granular, not role-blanket.
+describe('MarketingUsersService — last-owner protection (Task 16)', () => {
+  it('blocks suspending the ONLY active owner via delete() with ConflictException', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'mem-owner', userId: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
+    } as any);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(0); // no other active owners
+    await expect(svc.delete(WS, 'owner-1', 'MANAGER', 'mgr-1')).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.workspaceMembership.count).toHaveBeenCalledWith({
+      where: { workspaceId: WS, role: 'OWNER', status: 'ACTIVE', NOT: { userId: 'owner-1' } },
+    });
+    expect(prisma.workspaceMembership.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('allows suspending ONE of TWO active owners (not the last one)', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'mem-owner-2', userId: 'owner-2', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
+    } as any);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(1); // one other active owner remains
+    (prisma.workspaceMembership.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    await svc.delete(WS, 'owner-2', 'OWNER', 'owner-1');
+    expect(prisma.workspaceMembership.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'owner-2', workspaceId: WS },
+      data: { status: 'SUSPENDED' },
+    });
+  });
+
+  it("blocks demoting the ONLY owner's role via update() with ConflictException", async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'mem-owner', userId: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
+      user: { id: 'owner-1', email: 'o@x.co', firstName: 'O', lastName: 'X', phone: null },
+    } as any);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(0); // no other active owners
+    await expect(
+      svc.update(WS, 'owner-1', { role: 'MANAGER' } as any, 'OWNER', 'owner-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.workspaceMembership.update).not.toHaveBeenCalled();
+  });
+
+  it("allows demoting ONE of TWO owners' role via update() (not the last one)", async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'mem-owner-2', userId: 'owner-2', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
+      user: { id: 'owner-2', email: 'o2@x.co', firstName: 'O2', lastName: 'X', phone: null },
+    } as any);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(1); // one other active owner remains
+    (prisma.workspaceMembership.update as jest.Mock).mockResolvedValue({ role: 'MANAGER', status: 'ACTIVE' });
+    await expect(
+      svc.update(WS, 'owner-2', { role: 'MANAGER' } as any, 'OWNER', 'owner-1'),
+    ).resolves.toMatchObject({ id: 'owner-2', role: 'MANAGER' });
+  });
+});
+
 describe('MarketingUsersService — seat limit', () => {
   describe('update() reactivation', () => {
     it('rejects reactivating a SUSPENDED membership when the workspace is at its seat cap', async () => {

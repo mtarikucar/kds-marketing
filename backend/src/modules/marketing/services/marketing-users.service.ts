@@ -169,24 +169,46 @@ export class MarketingUsersService {
   }
 
   /**
+   * Phase 3 Task 16 — a workspace must keep at least one ACTIVE OWNER. Blocks
+   * any transition that would drop the ACTIVE-OWNER count to zero (suspending
+   * / removing / demoting the last owner). Only relevant when the TARGET is
+   * currently an ACTIVE OWNER — every other role/status is a no-op here, so
+   * callers can invoke this unconditionally before a mutation without first
+   * checking the target's role themselves. Today a workspace has exactly ONE
+   * OWNER (no promote-to-OWNER path exists), so `otherOwners` is always 0 for
+   * an OWNER target and this is equivalent to the old blanket "OWNER can
+   * never be touched" guards it replaces — it only starts allowing anything
+   * once a workspace legitimately has more than one active owner.
+   */
+  private async assertNotLastOwner(workspaceId: string, target: { role: string; userId: string }) {
+    if (target.role !== 'OWNER') return;
+    const otherOwners = await this.prisma.workspaceMembership.count({
+      where: { workspaceId, role: 'OWNER', status: 'ACTIVE', NOT: { userId: target.userId } },
+    });
+    if (otherOwners === 0) {
+      throw new ConflictException('A workspace must keep at least one owner');
+    }
+  }
+
+  /**
    * Authorization for DEACTIVATING (suspending) a member — shared by delete()
    * and update()'s `status: 'INACTIVE'` path so a PATCH can't be a backdoor
-   * around the delete guards: the OWNER membership is never deactivatable, no
-   * one may deactivate themselves (mid-session lockout, recoverable only by
-   * another admin), and a MANAGER target requires an OWNER/MANAGER actor.
-   * Operates on the MEMBERSHIP's role now, not the identity's — a target's
-   * privilege in THIS workspace is what the guard must reason about, since
-   * the same identity can hold a different role in another workspace.
+   * around the delete guards: the last remaining OWNER membership is never
+   * deactivatable (assertNotLastOwner), no one may deactivate themselves
+   * (mid-session lockout, recoverable only by another admin), and a MANAGER
+   * target requires an OWNER/MANAGER actor. Operates on the MEMBERSHIP's role
+   * now, not the identity's — a target's privilege in THIS workspace is what
+   * the guard must reason about, since the same identity can hold a
+   * different role in another workspace.
    */
-  private assertCanDeactivate(
-    membership: { role: string },
+  private async assertCanDeactivate(
+    workspaceId: string,
+    membership: { role: string; userId: string },
     targetUserId: string,
     actorRole: string,
     actorId: string,
   ) {
-    if (membership.role === 'OWNER') {
-      throw new ForbiddenException('The owner account cannot be deactivated');
-    }
+    await this.assertNotLastOwner(workspaceId, { role: membership.role, userId: membership.userId });
     if (targetUserId === actorId) {
       throw new ForbiddenException('You cannot deactivate your own account');
     }
@@ -221,15 +243,19 @@ export class MarketingUsersService {
     if (dto.role && !['MANAGER', 'REP'].includes(dto.role)) {
       throw new BadRequestException('Role must be MANAGER or REP');
     }
+    // A role change on an OWNER membership is necessarily a demotion (the
+    // check above already rejects any dto.role other than MANAGER/REP) — i.e.
+    // it REMOVES owner-ness, so it's subject to the same last-owner
+    // protection as suspending the last owner (Task 16).
     if (dto.role && membership.role === 'OWNER') {
-      throw new BadRequestException('The owner role cannot be changed here');
+      await this.assertNotLastOwner(workspaceId, { role: membership.role, userId: membership.userId });
     }
 
     // Deactivation via update() is a real state change — hold it to the SAME
-    // guards delete() enforces (self-lockout, owner protection, role floor), or a
-    // PATCH silently bypasses them.
+    // guards delete() enforces (self-lockout, last-owner protection, role floor),
+    // or a PATCH silently bypasses them.
     if (dto.status === 'INACTIVE' && membership.status === 'ACTIVE') {
-      this.assertCanDeactivate(membership, id, actorRole, actorId ?? '');
+      await this.assertCanDeactivate(workspaceId, membership, id, actorRole, actorId ?? '');
     }
 
     // Reactivation via this admin path may only flip a SUSPENDED membership
@@ -343,9 +369,9 @@ export class MarketingUsersService {
     if (!membership || membership.role === 'SYSTEM') {
       throw new NotFoundException('User not found');
     }
-    // Same authorization update()'s deactivation path uses (owner-protected, no
-    // self-deactivation, MANAGER target needs an OWNER/MANAGER actor).
-    this.assertCanDeactivate(membership, id, actorRole, actorId);
+    // Same authorization update()'s deactivation path uses (last-owner-protected,
+    // no self-deactivation, MANAGER target needs an OWNER/MANAGER actor).
+    await this.assertCanDeactivate(workspaceId, membership, id, actorRole, actorId);
 
     // SUSPEND the membership, never the shared identity — the user may hold
     // OTHER workspaces' memberships that must stay untouched.
