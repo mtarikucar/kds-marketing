@@ -206,6 +206,12 @@ const OWNED_DELEGATES = [
   // Writes/reads are workspaceId-scoped; the host lookup is findUnique (by the
   // globally-unique hostname) and the verify sweep is whitelisted below.
   'customDomain',
+  // Multi-workspace membership (Phase 2 Task 11: the invite endpoint) —
+  // WorkspaceMembership is workspace-owned (one row per user-per-workspace);
+  // every multi-row/create call carries a literal workspaceId EXCEPT the two
+  // userId-keyed authz-resolution reads exempted below (a user spans
+  // workspaces by design).
+  'workspaceMembership',
 ] as const;
 
 /**
@@ -472,8 +478,6 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'row created via a data var from toData(workspaceId, dto) (fast path + advisory-lock tx); heuristic cannot see through the data variable',
   'ai/knowledge.service.ts:knowledgeDoc.create':
     'row created with { ...data, workspaceId } data var (fast path + advisory-lock tx); heuristic cannot see through the data variable',
-  'services/marketing-users.service.ts:marketingUser.create':
-    'row created with { ...dto, workspaceId } data var (fast path + seat-lock tx); heuristic cannot see through the data variable',
   'sites/sites.service.ts:sitePage.create':
     'row created with { workspaceId, ... } data var (fast path + advisory-lock tx); heuristic cannot see through the data variable',
   'parent-scoped:communityMember.upsert':
@@ -482,6 +486,17 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'leave keyed by (communityId, leadId) under a scoped community read',
   'parent-scoped:communityMember.findMany':
     'roster keyed by a communityId resolved via assertCommunity(workspaceId, …)',
+
+  // Multi-workspace membership (Phase 1 Task 2) — MembershipService is the
+  // authz-resolution seam: a MarketingUser identity spans N workspaces via
+  // WorkspaceMembership rows, so its reads are legitimately keyed by userId
+  // rather than workspaceId. WorkspaceMembership DOES carry a workspaceId
+  // column (it is workspace-owned), so these two call sites are exempted
+  // explicitly rather than by omitting the delegate from OWNED_DELEGATES.
+  'services/membership.service.ts:workspaceMembership.findFirst':
+    'getActiveMembership/resolveDefaultWorkspaceId resolve a membership by (userId, workspaceId) or by userId alone (home-pointer fallback) — a user spans workspaces, so this read is workspace-less by design',
+  'services/membership.service.ts:workspaceMembership.findMany':
+    'listActiveMemberships reads every ACTIVE membership a user holds, across all their workspaces, keyed by userId',
 };
 
 function walkTs(dir: string): string[] {

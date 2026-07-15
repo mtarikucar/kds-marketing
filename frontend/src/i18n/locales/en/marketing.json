@@ -430,6 +430,16 @@
     "updateSuccess": "Profile updated",
     "updateError": "Failed to update profile"
   },
+  "workspace": {
+    "newWorkspace": "New workspace",
+    "createDialogTitle": "New workspace",
+    "createDialogDescription": "Spin up a brand-new workspace for another brand. You will become its owner and switch into it right away.",
+    "nameLabel": "Workspace name",
+    "namePlaceholder": "e.g. My Second Shop",
+    "createButton": "Create",
+    "createSuccess": "Workspace \"{{name}}\" created — you're now in it",
+    "createError": "Failed to create workspace"
+  },
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Performance at a glance",

@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
+  ForbiddenException,
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
@@ -12,10 +13,12 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingLoginDto } from '../dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
+import { CreateWorkspaceDto } from '../dto/create-workspace.dto';
 import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 import { hashBackupCode, openTotpSecret, verifyTotpStep } from '../util/totp';
 import { SmsOtpService } from './sms-otp.service';
+import { MembershipService } from './membership.service';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -51,6 +54,7 @@ export class MarketingAuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private smsOtp: SmsOtpService,
+    private membership: MembershipService,
   ) {}
 
   private bcryptCost(): number {
@@ -95,8 +99,6 @@ export class MarketingAuthService {
     if (user.role === 'SYSTEM') {
       throw new UnauthorizedException('Invalid credentials');
     }
-
-    await this.assertWorkspaceActive(user.workspaceId);
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       throw new UnauthorizedException('Account is temporarily locked');
@@ -159,7 +161,7 @@ export class MarketingAuthService {
       return { twoFactorRequired: true, challengeToken };
     }
 
-    return this.generateTokens(user);
+    return this.issueForDefaultWorkspace(user);
   }
 
   /** NetGSM SMS v2 Task 12 — re-send the SMS challenge code for a pending 2FA
@@ -248,7 +250,7 @@ export class MarketingAuthService {
       ).ok;
     }
     if (!ok) throw new UnauthorizedException('Invalid 2FA code');
-    return this.generateTokens(user);
+    return this.issueForDefaultWorkspace(user);
   }
 
   /** Decodes + validates a 2FA challenge token down to its live, 2FA-armed user. */
@@ -304,11 +306,58 @@ export class MarketingAuthService {
       throw new UnauthorizedException('Session revoked');
     }
 
-    await this.assertWorkspaceActive(user.workspaceId);
+    // Multi-workspace membership Phase 1 Task 6 — a refresh must land back on
+    // the SAME workspace the session was scoped to (the refresh token's own
+    // `wsp` claim), not reset to the user's home workspace: a user active in
+    // wsp-2 who refreshes must stay in wsp-2 even if their home row points
+    // elsewhere. Re-verify the membership is still ACTIVE at refresh time too
+    // (not just at login) — a membership revoked mid-session must kill the
+    // refresh loop, not just wait for the access token to expire.
+    const activeWorkspaceId = typeof payload.wsp === 'string' ? payload.wsp : user.workspaceId;
+    const m = await this.membership.getActiveMembership(user.id, activeWorkspaceId);
+    if (!m) throw new UnauthorizedException('Session revoked');
+    await this.assertWorkspaceActive(activeWorkspaceId);
 
     // Rotate: issue a fresh pair (not just a new access token) so the
     // old refresh ages out even if the client keeps presenting it.
-    return this.generateTokens(user);
+    return this.generateTokens(user, { workspaceId: activeWorkspaceId, role: m.role });
+  }
+
+  /**
+   * Multi-workspace membership Phase 1 Task 5 — a user row no longer IS a
+   * workspace; it HOLDS memberships. Login must land on the ACTIVE membership
+   * MembershipService resolves as "default" (the home pointer if still ACTIVE,
+   * else the most-recently-created ACTIVE membership), not blindly on the home
+   * `workspaceId` column, which may have been suspended, removed, or never
+   * updated after the user's actual default moved elsewhere.
+   */
+  private async issueForDefaultWorkspace(user: {
+    id: string;
+    workspaceId: string;
+    role: string;
+    tokenVersion: number;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone: string | null;
+    avatar: string | null;
+  }) {
+    const activeWorkspaceId = await this.membership.resolveDefaultWorkspaceId(
+      user.id,
+      user.workspaceId,
+    );
+    if (!activeWorkspaceId) throw new UnauthorizedException('No active workspace');
+    const m = await this.membership.getActiveMembership(user.id, activeWorkspaceId);
+    if (!m) throw new UnauthorizedException('No active workspace');
+    await this.assertWorkspaceActive(activeWorkspaceId);
+    // keep the home pointer in sync so next login lands here
+    if (user.workspaceId !== activeWorkspaceId) {
+      await this.prisma.marketingUser.update({
+        where: { id: user.id },
+        data: { workspaceId: activeWorkspaceId },
+      });
+    }
+    return this.generateTokens(user, { workspaceId: activeWorkspaceId, role: m.role });
   }
 
   /** SUSPENDED/CLOSED workspaces stop minting sessions at the door. In-flight
@@ -335,42 +384,74 @@ export class MarketingAuthService {
   }
 
   /**
+   * Multi-workspace membership Phase 1 Task 7 — re-mint the session for a
+   * different workspace the caller already belongs to. This is the ONLY
+   * place besides login/refresh that signs a `wsp` claim, so it must gate on
+   * the same membership check refresh() re-verifies: no ACTIVE
+   * WorkspaceMembership for (userId, targetWorkspaceId) → refuse outright
+   * (403, no distinction from "workspace doesn't exist" — never let a caller
+   * enumerate foreign workspace ids by probing this endpoint). The home
+   * pointer moves to the target so a subsequent login lands here too, and the
+   * minted role comes from the TARGET membership, not the caller's home role.
+   */
+  async switchWorkspace(userId: string, targetWorkspaceId: string) {
+    const user = await this.prisma.marketingUser.findUnique({ where: { id: userId } });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+    const m = await this.membership.getActiveMembership(userId, targetWorkspaceId);
+    if (!m) throw new ForbiddenException('You are not a member of that workspace');
+    await this.assertWorkspaceActive(targetWorkspaceId);
+    await this.prisma.marketingUser.update({
+      where: { id: userId },
+      data: { workspaceId: targetWorkspaceId },
+    });
+    return this.generateTokens(user, { workspaceId: targetWorkspaceId, role: m.role });
+  }
+
+  /**
    * Public token-issue seam for federated logins (SSO/OIDC). The IdP-side
    * identity check happens in {@link SsoService}; once a MarketingUser is
    * matched/provisioned, this mints the SAME marketing session pair the
    * password path does — there is exactly one place that knows how to sign a
    * marketing JWT, and SSO reuses it rather than re-deriving the payload.
    */
-  issueSession(user: {
-    id: string;
-    workspaceId: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone: string | null;
-    avatar: string | null;
-    role: string;
-    tokenVersion: number;
-  }) {
-    return this.generateTokens(user);
+  issueSession(
+    user: {
+      id: string;
+      workspaceId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phone: string | null;
+      avatar: string | null;
+      role: string;
+      tokenVersion: number;
+    },
+    active: { workspaceId: string; role: string },
+  ) {
+    return this.generateTokens(user, active);
   }
 
-  private generateTokens(user: {
-    id: string;
-    workspaceId: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone: string | null;
-    avatar: string | null;
-    role: string;
-    tokenVersion: number;
-  }) {
+  private generateTokens(
+    user: {
+      id: string;
+      workspaceId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phone: string | null;
+      avatar: string | null;
+      role: string;
+      tokenVersion: number;
+    },
+    active: { workspaceId: string; role: string },
+  ) {
     const basePayload = {
       sub: user.id,
       email: user.email,
-      role: user.role,
-      wsp: user.workspaceId,
+      role: active.role, // active membership's role, not the user row's home role
+      wsp: active.workspaceId, // active membership's workspace, not the user row's home workspace
       ver: user.tokenVersion,
       type: 'marketing' as const,
     };
@@ -395,11 +476,11 @@ export class MarketingAuthService {
       refreshToken,
       user: {
         id: user.id,
-        workspaceId: user.workspaceId,
+        workspaceId: active.workspaceId,
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role,
+        role: active.role,
         phone: user.phone,
         avatar: user.avatar,
       },
@@ -448,42 +529,12 @@ export class MarketingAuthService {
       data: { lastLogin: new Date(), lastLoginIp: ip },
     });
 
-    return this.generateTokens(owner);
+    return this.generateTokens(owner, { workspaceId: owner.workspaceId, role: 'OWNER' });
   }
 
   private async provisionWorkspace(dto: RegisterWorkspaceDto, passwordHash: string) {
     return this.prisma.$transaction(async (tx) => {
-      // Deterministic-but-collision-safe slug: try the plain slug, then
-      // suffix -2, -3... (bounded; the unique index is the final arbiter).
-      const base = slugify(dto.workspaceName);
-      let slug = base;
-      for (let i = 2; ; i++) {
-        const taken = await tx.workspace.findUnique({
-          where: { slug },
-          select: { id: true },
-        });
-        if (!taken) break;
-        if (i > 50) throw new ConflictException('Could not allocate a workspace slug');
-        slug = `${base}-${i}`;
-      }
-
-      const workspace = await tx.workspace.create({
-        data: {
-          slug,
-          name: dto.workspaceName,
-          productName: dto.productName,
-          productUrl: dto.productUrl ?? null,
-          productDescription: dto.productDescription ?? null,
-          defaultLanguage: dto.language ?? 'en',
-          // Default to TRY: PayTR (the only PSP live in prod) is TRY-only, so a
-          // USD-defaulted workspace can neither top-up its wallet nor subscribe.
-          defaultCurrency: dto.currency ?? 'TRY',
-          settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
-          // Leaner first-run: memberships + research start OFF (switch on in
-          // Modules). Everything else active.
-          activatedModules: [...DEFAULT_ACTIVATED_MODULES],
-        },
-      });
+      const workspace = await this.createWorkspaceRow(tx, dto);
 
       const ownerUser = await tx.marketingUser.create({
         data: {
@@ -496,98 +547,301 @@ export class MarketingAuthService {
         },
       });
 
-      // Per-workspace research sentinel: ingested leads/activities are
-      // attributed to it. Unguessable address + random password; SYSTEM
-      // role is refused by login, refresh and the guard regardless.
-      await tx.marketingUser.create({
+      // Multi-workspace membership Phase 1 Task 8 — a user row no longer IS a
+      // workspace; it HOLDS memberships (see issueForDefaultWorkspace above).
+      // Without this insert a fresh signup has zero WorkspaceMemberships, so
+      // the very next login 401s with "No active workspace" even though the
+      // owner row itself is fine.
+      await tx.workspaceMembership.create({
         data: {
+          userId: ownerUser.id,
           workspaceId: workspace.id,
-          email: `research+${workspace.id}@system.internal`,
-          password: await bcrypt.hash(
-            `${workspace.id}:${Date.now()}:${Math.random()}`,
-            this.bcryptCost(),
-          ),
-          firstName: 'AI',
-          lastName: 'Research',
-          role: 'SYSTEM',
+          role: 'OWNER',
+          status: 'ACTIVE',
+          acceptedAt: new Date(),
         },
       });
 
-      await tx.marketingDistributionConfig.create({
-        data: { workspaceId: workspace.id, strategy: 'DISABLED' },
-      });
-
-      // Start every workspace on the TRIAL package. A catalog that hasn't
-      // been seeded yet must not block signup — the workspace just lands on
-      // zero entitlements until ops runs seed:packages and assigns a plan.
-      const trialPackage = await tx.package.findUnique({
-        where: { code: 'TRIAL' },
-        select: { id: true, trialDays: true },
-      });
-      if (trialPackage) {
-        const now = new Date();
-        const trialEnd = new Date(
-          now.getTime() + Math.max(1, trialPackage.trialDays) * 24 * 60 * 60 * 1000,
-        );
-        await tx.workspaceSubscription.create({
-          data: {
-            workspaceId: workspace.id,
-            packageId: trialPackage.id,
-            status: 'TRIALING',
-            billingCycle: 'MONTHLY',
-            currency: dto.currency ?? 'TRY',
-            currentPeriodStart: now,
-            currentPeriodEnd: trialEnd,
-            trialEndsAt: trialEnd,
-          },
-        });
-      }
+      // Everything a workspace needs BESIDES its owner: the SYSTEM research
+      // sentinel, a disabled distribution config, and the TRIAL subscription.
+      // Same three sub-steps createOwnedWorkspace's scaffold below composes —
+      // called individually (rather than via provisionWorkspaceScaffold) so
+      // this method's Prisma call ORDER stays byte-for-byte what it was
+      // before this refactor (owner + its membership created BEFORE the
+      // sentinel), which is what the existing registerWorkspace tests assert
+      // on (mock call ordering).
+      await this.createResearchSentinel(tx, workspace.id);
+      await this.createDistributionConfig(tx, workspace.id);
+      await this.createTrialSubscription(tx, workspace.id, dto.currency);
 
       return ownerUser;
     });
   }
 
-  async getProfile(userId: string) {
-    const user = await this.prisma.marketingUser.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        workspaceId: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        avatar: true,
-        role: true,
-        status: true,
-        lastLogin: true,
-        createdAt: true,
+  /**
+   * Slug-collision-safe workspace row (deterministic base, then -2, -3...;
+   * the unique index is the final arbiter). Shared by provisionWorkspace
+   * (registerWorkspace) and createOwnedWorkspace (F1) — the ONLY workspace
+   * taxonomy fields that differ between a brand-new-identity signup and a
+   * logged-in second-workspace create are these, never the identity fields.
+   */
+  private async createWorkspaceRow(
+    tx: Prisma.TransactionClient,
+    dto: {
+      workspaceName: string;
+      productName?: string;
+      productUrl?: string;
+      productDescription?: string;
+      language?: string;
+      currency?: string;
+    },
+  ) {
+    const base = slugify(dto.workspaceName);
+    let slug = base;
+    for (let i = 2; ; i++) {
+      const taken = await tx.workspace.findUnique({
+        where: { slug },
+        select: { id: true },
+      });
+      if (!taken) break;
+      if (i > 50) throw new ConflictException('Could not allocate a workspace slug');
+      slug = `${base}-${i}`;
+    }
+
+    return tx.workspace.create({
+      data: {
+        slug,
+        name: dto.workspaceName,
+        // CreateWorkspaceDto (F1) may omit productName entirely — fall back
+        // to the workspace name itself (Workspace.productName is NOT NULL).
+        productName: dto.productName?.trim() || dto.workspaceName,
+        productUrl: dto.productUrl ?? null,
+        productDescription: dto.productDescription ?? null,
+        defaultLanguage: dto.language ?? 'en',
+        // Default to TRY: PayTR (the only PSP live in prod) is TRY-only, so a
+        // USD-defaulted workspace can neither top-up its wallet nor subscribe.
+        defaultCurrency: dto.currency ?? 'TRY',
+        settings: { businessTypes: [...DEFAULT_BUSINESS_TYPES] },
+        // Leaner first-run: memberships + research start OFF (switch on in
+        // Modules). Everything else active.
+        activatedModules: [...DEFAULT_ACTIVATED_MODULES],
       },
     });
+  }
+
+  /** Per-workspace research sentinel: ingested leads/activities are
+   * attributed to it. Unguessable address + random password; SYSTEM role is
+   * refused by login, refresh and the guard regardless. */
+  private async createResearchSentinel(tx: Prisma.TransactionClient, workspaceId: string) {
+    await tx.marketingUser.create({
+      data: {
+        workspaceId,
+        email: `research+${workspaceId}@system.internal`,
+        password: await bcrypt.hash(
+          `${workspaceId}:${Date.now()}:${Math.random()}`,
+          this.bcryptCost(),
+        ),
+        firstName: 'AI',
+        lastName: 'Research',
+        role: 'SYSTEM',
+      },
+    });
+  }
+
+  /** Every workspace starts with distribution OFF (switched on in Modules). */
+  private async createDistributionConfig(tx: Prisma.TransactionClient, workspaceId: string) {
+    await tx.marketingDistributionConfig.create({
+      data: { workspaceId, strategy: 'DISABLED' },
+    });
+  }
+
+  /** Start every workspace on the TRIAL package. A catalog that hasn't been
+   * seeded yet must not block signup — the workspace just lands on zero
+   * entitlements until ops runs seed:packages and assigns a plan. */
+  private async createTrialSubscription(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    currency?: string,
+  ) {
+    const trialPackage = await tx.package.findUnique({
+      where: { code: 'TRIAL' },
+      select: { id: true, trialDays: true },
+    });
+    if (!trialPackage) return;
+    const now = new Date();
+    const trialEnd = new Date(
+      now.getTime() + Math.max(1, trialPackage.trialDays) * 24 * 60 * 60 * 1000,
+    );
+    await tx.workspaceSubscription.create({
+      data: {
+        workspaceId,
+        packageId: trialPackage.id,
+        status: 'TRIALING',
+        billingCycle: 'MONTHLY',
+        currency: currency ?? 'TRY',
+        currentPeriodStart: now,
+        currentPeriodEnd: trialEnd,
+        trialEndsAt: trialEnd,
+      },
+    });
+  }
+
+  /**
+   * The full workspace scaffold MINUS the owner: workspace row + SYSTEM
+   * sentinel + distribution config + TRIAL subscription, in one composed
+   * call. Used by createOwnedWorkspace (F1), whose caller already has an
+   * identity — there is no owner MarketingUser to create here, only the
+   * membership (added by the caller after this returns). provisionWorkspace
+   * above calls the same four sub-steps directly rather than through this
+   * wrapper, so it can interleave the owner user + membership creates at
+   * their original position (see the comment there).
+   */
+  private async provisionWorkspaceScaffold(
+    tx: Prisma.TransactionClient,
+    dto: {
+      workspaceName: string;
+      productName?: string;
+      productUrl?: string;
+      productDescription?: string;
+      language?: string;
+      currency?: string;
+    },
+  ) {
+    const workspace = await this.createWorkspaceRow(tx, dto);
+    await this.createResearchSentinel(tx, workspace.id);
+    await this.createDistributionConfig(tx, workspace.id);
+    await this.createTrialSubscription(tx, workspace.id, dto.currency);
+    return workspace;
+  }
+
+  /**
+   * Multi-workspace membership — F1: self-serve second-workspace creation.
+   * `registerWorkspace` is public and 409s on an existing email, and
+   * `AgencyService.createLocation` mints the child's OWN NEW owner — neither
+   * lets an ALREADY-LOGGED-IN identity spin up another workspace they own.
+   * This does: same scaffold as registerWorkspace (workspace + SYSTEM
+   * sentinel + distribution config + TRIAL subscription), but the owner is
+   * the CALLER'S EXISTING MarketingUser row — no new identity, no password —
+   * just a fresh ACTIVE OWNER WorkspaceMembership for them. Creating your OWN
+   * new workspace never touches an EXISTING workspace's seat count, so
+   * (unlike MembershipService.invite()) there is no seat check here.
+   * Returns a freshly-minted session scoped to the new workspace so the
+   * caller lands in it immediately (mirrors switchWorkspace's re-mint).
+   */
+  async createOwnedWorkspace(userId: string, dto: CreateWorkspaceDto) {
+    const user = await this.prisma.marketingUser.findUnique({ where: { id: userId } });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+    // The research sentinel owns rows, never sessions. MarketingGuard already
+    // refuses a SYSTEM token at the door, so this can't be reached in
+    // practice — kept as defense-in-depth, same posture as switchWorkspace's
+    // own re-check of a value the guard already validated.
+    if (user.role === 'SYSTEM') {
+      throw new ForbiddenException('System accounts cannot create workspaces');
+    }
+
+    let workspace;
+    try {
+      workspace = await this.prisma.$transaction(async (tx) => {
+        const ws = await this.provisionWorkspaceScaffold(tx, dto);
+
+        await tx.workspaceMembership.create({
+          data: {
+            userId: user.id,
+            workspaceId: ws.id,
+            role: 'OWNER',
+            status: 'ACTIVE',
+            acceptedAt: new Date(),
+          },
+        });
+
+        // Keep the home pointer in sync so a plain next login lands here too
+        // (mirrors switchWorkspace).
+        await tx.marketingUser.update({
+          where: { id: user.id },
+          data: { workspaceId: ws.id },
+        });
+
+        return ws;
+      });
+    } catch (e) {
+      // Two concurrent creates of the SAME workspace name both pass the
+      // in-tx slug-availability check and race on INSERT — the unique index
+      // is the real arbiter. Mirrors registerWorkspace's P2002 handling.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const target = String((e.meta as { target?: unknown } | undefined)?.target ?? '');
+        if (target.includes('slug')) {
+          throw new ConflictException('That workspace name was just taken — try another');
+        }
+        throw new ConflictException('That workspace was just created — please retry');
+      }
+      throw e;
+    }
+
+    const tokens = this.generateTokens(user, { workspaceId: workspace.id, role: 'OWNER' });
+    return {
+      ...tokens,
+      workspace: { id: workspace.id, name: workspace.name, slug: workspace.slug },
+    };
+  }
+
+  /**
+   * Multi-workspace membership Phase 1 Task 8 — GET /auth/profile now also
+   * surfaces the caller's full ACTIVE membership set, so the frontend can
+   * offer a workspace switcher instead of only ever showing the one the
+   * session happens to be scoped to. `workspaceId` is the ACTIVE membership's
+   * workspace (the guard stamps it from the JWT's `wsp` claim onto
+   * `request.marketingUser.workspaceId`), not necessarily the user row's home
+   * workspace.
+   *
+   * `workspace` stays a top-level key (not folded into `user`) — the FE's
+   * `useWorkspaceProfile` hook reads `data.workspace` directly to gate the
+   * agency console on `kind === 'AGENCY'`, so this shape is load-bearing.
+   */
+  async profile(userId: string, workspaceId: string) {
+    const [user, workspace, memberships] = await Promise.all([
+      this.prisma.marketingUser.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          workspaceId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          avatar: true,
+          role: true,
+          status: true,
+          lastLogin: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          // `kind` distinguishes AGENCY / LOCATION / STANDALONE workspaces; the
+          // frontend gates the agency console (sub-accounts, snapshots, rebilling)
+          // on `workspace.kind === 'AGENCY'`. Additive, non-secret, read-only.
+          kind: true,
+          productName: true,
+          productUrl: true,
+          defaultLanguage: true,
+          defaultCurrency: true,
+          settings: true,
+        },
+      }),
+      this.membership.listActiveMemberships(userId),
+    ]);
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
-    const workspace = await this.prisma.workspace.findUnique({
-      where: { id: user.workspaceId },
-      select: {
-        id: true,
-        slug: true,
-        name: true,
-        // `kind` distinguishes AGENCY / LOCATION / STANDALONE workspaces; the
-        // frontend gates the agency console (sub-accounts, snapshots, rebilling)
-        // on `workspace.kind === 'AGENCY'`. Additive, non-secret, read-only.
-        kind: true,
-        productName: true,
-        productUrl: true,
-        defaultLanguage: true,
-        defaultCurrency: true,
-        settings: true,
-      },
-    });
-
-    return { ...user, workspace };
+    return { ...user, workspace, memberships };
   }
 
   /**

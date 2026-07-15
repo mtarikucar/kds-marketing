@@ -15,9 +15,12 @@ import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
+import { Audit } from '../../audit/audit.decorator';
 import { MarketingUsersService } from '../services/marketing-users.service';
+import { MembershipService } from '../services/membership.service';
 import { CreateMarketingUserDto } from '../dto/create-marketing-user.dto';
 import { UpdateMarketingUserDto } from '../dto/update-marketing-user.dto';
+import { InviteMemberDto } from '../dto/invite-member.dto';
 import { MarketingUserPayload } from '../types';
 
 @MarketingRoute()
@@ -25,15 +28,38 @@ import { MarketingUserPayload } from '../types';
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class MarketingUsersController {
-  constructor(private readonly usersService: MarketingUsersService) {}
+  constructor(
+    private readonly usersService: MarketingUsersService,
+    private readonly membershipService: MembershipService,
+  ) {}
 
+  // Multi-workspace membership (Phase 2 Task 11) — invite an existing or
+  // brand-new identity into THIS workspace as MANAGER/REP. Listed before the
+  // create()/:id routes so Nest resolves the literal /invite path first.
+  @Post('invite')
+  @RequirePermission('users.manage')
+  @Audit({ action: 'user.invite', resourceType: 'user' })
+  invite(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: InviteMemberDto,
+  ) {
+    return this.membershipService.invite(actor.workspaceId, actor.id, dto);
+  }
+
+  // F2 (multi-workspace membership follow-up) — this now delegates straight
+  // to the SAME MembershipService.invite() that POST /invite above gates at
+  // users.manage; raised to match so a MANAGER can no longer bypass the
+  // OWNER-only invite bar by hitting /users instead of /users/invite.
+  // update()/delete() below stay on settings.manage — managing EXISTING
+  // members is still MANAGER-level; only ADDING one is owner-level.
   @Post()
-  @RequirePermission('settings.manage')
+  @RequirePermission('users.manage')
+  @Audit({ action: 'user.create', resourceType: 'user' })
   create(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateMarketingUserDto,
   ) {
-    return this.usersService.create(actor.workspaceId, dto);
+    return this.usersService.create(actor.workspaceId, dto, actor.id);
   }
 
   @Get()
@@ -51,6 +77,12 @@ export class MarketingUsersController {
 
   @Patch(':id')
   @RequirePermission('settings.manage')
+  @Audit({
+    action: 'user.update',
+    resourceType: 'user',
+    resourceIdParam: 'id',
+    captureBody: ['role', 'status'],
+  })
   update(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -61,6 +93,7 @@ export class MarketingUsersController {
 
   @Delete(':id')
   @RequirePermission('settings.manage')
+  @Audit({ action: 'user.remove', resourceType: 'user', resourceIdParam: 'id' })
   delete(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,

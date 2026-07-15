@@ -150,17 +150,23 @@ export class RolesService {
     if (actor.id && userId === actor.id) {
       throw new ForbiddenException('You cannot change your own role');
     }
-    const user = await this.prisma.marketingUser.findFirst({
-      where: { id: userId, workspaceId },
-      select: { id: true, role: true, customRoleId: true },
+    // Multi-workspace membership (Task 13 review fix) — a target's workspace
+    // role/customRoleId now live on their WorkspaceMembership, not on the
+    // (frozen-at-creation, now-stale) MarketingUser row. Reading MarketingUser
+    // here would evaluate a promoted/demoted user at their OLD role — e.g. a
+    // user promoted REP→OWNER after their row was created would still read
+    // back as REP, letting a MANAGER actor "outrank" and modify an OWNER.
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId, workspaceId, status: 'ACTIVE' },
+      select: { role: true, customRoleId: true },
     });
-    if (!user) throw new NotFoundException('User not found');
+    if (!membership) throw new NotFoundException('User not found');
     // Can't touch a user who currently out-ranks the actor — assigning ANY role
     // (a custom role REPLACES legacy permissions) would downgrade + lock them out.
     const targetPerms = await this.resolvePermissions({
       workspaceId,
-      role: user.role,
-      customRoleId: user.customRoleId,
+      role: membership.role,
+      customRoleId: membership.customRoleId,
     });
     await this.assertActorOutranks(targetPerms, actor, 'modify this user');
     if (roleId) {
@@ -173,7 +179,7 @@ export class RolesService {
       // path), or a MANAGER could strip an OWNER-role user's restrictive custom
       // role and hand them back full OWNER power (billing.manage/users.manage the
       // manager lacks). Reverting a low-legacy-role (e.g. REP) user is unaffected.
-      await this.assertWithinActorGrant(LEGACY_ROLE_PERMISSIONS[user.role] ?? [], actor);
+      await this.assertWithinActorGrant(LEGACY_ROLE_PERMISSIONS[membership.role] ?? [], actor);
     }
     await this.prisma.marketingUser.update({ where: { id: userId }, data: { customRoleId: roleId } });
     return { userId, customRoleId: roleId };

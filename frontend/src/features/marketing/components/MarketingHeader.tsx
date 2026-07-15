@@ -16,6 +16,7 @@ import { useTwoFactorStatus } from '../hooks/useTwoFactorStatus';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
   IconButton,
   Badge,
@@ -89,6 +90,12 @@ const editProfileSchema = z.object({
 
 type EditProfileValues = z.infer<typeof editProfileSchema>;
 
+const createWorkspaceSchema = z.object({
+  workspaceName: z.string().trim().min(1, 'Workspace name is required'),
+});
+
+type CreateWorkspaceValues = z.infer<typeof createWorkspaceSchema>;
+
 function apiErrorMessage(e: unknown): string | undefined {
   const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data
     ?.message;
@@ -102,7 +109,7 @@ const isMac =
 const PALETTE_SHORTCUT = isMac ? '⌘K' : 'Ctrl K';
 
 export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => void } = {}) {
-  const { user, logout, updateUser } = useMarketingAuthStore();
+  const { user, logout, updateUser, createWorkspace } = useMarketingAuthStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
@@ -113,6 +120,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
 
   // --- Notifications ---
   const { data: unreadCount } = useQuery({
@@ -250,6 +258,39 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
     editProfileMutation.mutate(values);
   });
 
+  // --- Create Workspace (self-serve second brand) ---
+  const createWorkspaceForm = useForm<CreateWorkspaceValues>({
+    resolver: zodResolver(createWorkspaceSchema),
+    defaultValues: { workspaceName: '' },
+  });
+
+  const closeCreateWorkspace = () => {
+    setShowCreateWorkspace(false);
+    createWorkspaceForm.reset();
+  };
+
+  const createWorkspaceMutation = useMutation({
+    mutationFn: (values: CreateWorkspaceValues) =>
+      createWorkspace({ workspaceName: values.workspaceName.trim() }),
+    onSuccess: (workspace: { id: string; name: string; slug: string }) => {
+      // The whole cache belongs to the PREVIOUS workspace — clear it
+      // wholesale (same posture as WorkspaceSwitcher's onSelect) rather than
+      // invalidating query-key by query-key.
+      queryClient.clear();
+      navigate('/dashboard');
+      toast.success(
+        t('workspace.createSuccess', {
+          defaultValue: 'Workspace "{{name}}" created — you\'re now in it',
+          name: workspace.name,
+        }),
+      );
+      closeCreateWorkspace();
+    },
+    onError: (e: unknown) => {
+      toast.error(apiErrorMessage(e) || t('workspace.createError', 'Failed to create workspace'));
+    },
+  });
+
   const handleLogout = () => {
     logout();
     navigate('/login');
@@ -293,6 +334,9 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               <Menu className="h-5 w-5" />
             </IconButton>
           )}
+          {/* Renders nothing for the (overwhelming majority of) users who
+              belong to a single workspace. */}
+          <WorkspaceSwitcher />
           <Breadcrumbs />
         </div>
 
@@ -457,6 +501,12 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setShowChangePassword(true)}>
                 Change Password
+              </DropdownMenuItem>
+              {/* Always visible (unlike WorkspaceSwitcher, which hides for
+                  single-workspace users) — this is the ONLY reachable path
+                  for a single-workspace user to create their 2nd workspace. */}
+              <DropdownMenuItem onSelect={() => setShowCreateWorkspace(true)}>
+                {t('workspace.newWorkspace', 'New workspace')}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={handleLogout}
@@ -628,6 +678,57 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               </Button>
               <Button type="submit" loading={editProfileMutation.isPending}>
                 {t('common.save', 'Save')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Workspace Dialog — self-serve second brand */}
+      <Dialog
+        open={showCreateWorkspace}
+        onOpenChange={(open) => {
+          if (!open) closeCreateWorkspace();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('workspace.createDialogTitle', 'New workspace')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                'workspace.createDialogDescription',
+                'Spin up a brand-new workspace for another brand. You will become its owner and switch into it right away.',
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={createWorkspaceForm.handleSubmit((values) =>
+              createWorkspaceMutation.mutate(values),
+            )}
+            className="flex flex-col gap-4"
+          >
+            <Field
+              label={t('workspace.nameLabel', 'Workspace name')}
+              error={createWorkspaceForm.formState.errors.workspaceName?.message}
+              required
+            >
+              {({ id, describedBy, invalid }) => (
+                <Input
+                  id={id}
+                  autoComplete="off"
+                  placeholder={t('workspace.namePlaceholder', 'e.g. My Second Shop')}
+                  aria-invalid={invalid || undefined}
+                  aria-describedby={describedBy}
+                  {...createWorkspaceForm.register('workspaceName')}
+                />
+              )}
+            </Field>
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={closeCreateWorkspace}>
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button type="submit" loading={createWorkspaceMutation.isPending}>
+                {t('workspace.createButton', 'Create')}
               </Button>
             </DialogFooter>
           </form>

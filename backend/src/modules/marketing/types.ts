@@ -30,6 +30,13 @@ export interface MarketingUserPayload {
   dahili?: string | null;
 }
 
+/** A user's ACTIVE membership as surfaced to the FE switcher / profile. */
+export interface MembershipSummary {
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+}
+
 /** Epic D1 — position of a workspace in the agency / sub-account hierarchy.
  *  STANDALONE: plain single tenant (default). AGENCY: owns LOCATION children.
  *  LOCATION: a sub-account whose `parentWorkspaceId` points at its AGENCY.

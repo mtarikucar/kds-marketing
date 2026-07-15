@@ -49,6 +49,15 @@ export class MarketingGuard implements CanActivate {
         throw new UnauthorizedException('Invalid token type');
       }
 
+      // Fail CLOSED before the membership query: Prisma silently drops an
+      // `undefined` value in a `where` filter (strictUndefinedChecks is not
+      // enabled on this schema), so a falsy `payload.wsp` would otherwise
+      // degrade the `memberships` filter to `{ status: 'ACTIVE' }, take: 1`
+      // and match the user's first ACTIVE membership in ANY workspace.
+      if (!payload.wsp) {
+        throw new UnauthorizedException('Session revoked');
+      }
+
       const marketingUser = await this.prisma.marketingUser.findUnique({
         where: { id: payload.sub },
         select: {
@@ -63,6 +72,13 @@ export class MarketingGuard implements CanActivate {
           // assigned) overrides the legacy OWNER/MANAGER/REP permission mapping.
           customRoleId: true,
           tokenVersion: true,
+          // The ACTIVE membership for the token's active workspace — the source
+          // of truth for this request's role/customRoleId under multi-workspace.
+          memberships: {
+            where: { workspaceId: payload.wsp, status: 'ACTIVE' },
+            select: { workspaceId: true, role: true, customRoleId: true },
+            take: 1,
+          },
         },
       });
 
@@ -76,10 +92,11 @@ export class MarketingGuard implements CanActivate {
         throw new UnauthorizedException('System accounts cannot authenticate');
       }
 
-      // Workspace claim must match the user's CURRENT workspace — a token
-      // minted before an ops-side workspace move would otherwise keep
-      // acting on the old workspace's data.
-      if (payload.wsp !== marketingUser.workspaceId) {
+      // COND 5 (multi-workspace): the session is valid only if the user still
+      // holds an ACTIVE membership for the token's active workspace. Revocation
+      // (SUSPEND / remove) denies the very next request.
+      const membership = marketingUser.memberships[0];
+      if (!membership) {
         throw new UnauthorizedException('Session revoked');
       }
 
@@ -87,8 +104,14 @@ export class MarketingGuard implements CanActivate {
         throw new UnauthorizedException('Session revoked');
       }
 
-      const { tokenVersion: _v, ...publicFields } = marketingUser;
-      request.marketingUser = publicFields;
+      const { tokenVersion: _v, memberships: _m, workspaceId: _home, role: _homeRole, customRoleId: _homeCr, ...rest } = marketingUser;
+      request.marketingUser = {
+        ...rest,
+        // The active workspace + the role/customRoleId resolved FROM the membership.
+        workspaceId: membership.workspaceId,
+        role: membership.role,
+        customRoleId: membership.customRoleId,
+      };
       return true;
     } catch (error) {
       if (error instanceof UnauthorizedException) {

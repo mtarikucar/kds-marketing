@@ -13,14 +13,18 @@ import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingPublic, MarketingRoute } from '../decorators/marketing-public.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
 import { MarketingAuthService } from '../services/marketing-auth.service';
+import { MembershipService } from '../services/membership.service';
 import { MarketingLoginDto } from '../dto/login.dto';
 import { Verify2faDto, ResendTwoFactorSmsDto } from '../dto/two-factor.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
+import { SwitchWorkspaceDto } from '../dto/switch-workspace.dto';
+import { AcceptInviteDto } from '../dto/accept-invite.dto';
 import { MarketingUserPayload } from '../types';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
+import { Audit } from '../../audit/audit.decorator';
 
 // Marketing realm carries platform-wide sales data; treating its auth
 // surface as tightly as the superadmin realm is appropriate.
@@ -36,7 +40,10 @@ const REGISTER_THROTTLE = { default: { limit: 3, ttl: 60_000, blockDuration: 10 
 @UseGuards(MarketingGuard)
 @MarketingRoute()
 export class MarketingAuthController {
-  constructor(private readonly authService: MarketingAuthService) {}
+  constructor(
+    private readonly authService: MarketingAuthService,
+    private readonly membershipService: MembershipService,
+  ) {}
 
   @Post('login')
   @MarketingPublic()
@@ -80,14 +87,44 @@ export class MarketingAuthController {
     return this.authService.refreshToken(dto.refreshToken);
   }
 
+  // Multi-workspace membership Phase 2 Task 12 — the invitee may not have a
+  // session yet (a brand-new identity, or an existing one on a different
+  // device), so this is public and the invite TOKEN is the only credential.
+  // Same throttle envelope as login: a token, like a password, must not be
+  // brute-forceable at speed. The logged-in counterpart lives at
+  // POST /marketing/memberships/:id/accept (MarketingMembershipsController).
+  @Post('accept-invite')
+  @MarketingPublic()
+  @Throttle(LOGIN_THROTTLE)
+  @Audit({ action: 'auth.accept-invite', resourceType: 'membership' })
+  async acceptInvite(@Body() dto: AcceptInviteDto) {
+    const membershipId = await this.membershipService.verifyInviteToken(dto.token);
+    return this.membershipService.accept(membershipId, { password: dto.password });
+  }
+
   @Post('logout')
   logout(@CurrentMarketingUser() user: MarketingUserPayload) {
     return this.authService.logout(user.id);
   }
 
+  // Multi-workspace membership Phase 1 Task 7 — re-mint the session for a
+  // different workspace the caller is an ACTIVE member of. Authenticated
+  // (no @MarketingPublic()): only an already-logged-in session may switch.
+  @Post('switch-workspace')
+  @Audit({ action: 'auth.switch-workspace', resourceType: 'workspace' })
+  switchWorkspace(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Body() dto: SwitchWorkspaceDto,
+  ) {
+    return this.authService.switchWorkspace(user.id, dto.workspaceId);
+  }
+
+  // `user.workspaceId` here is the ACTIVE membership's workspace (the guard
+  // stamps it from the JWT's `wsp` claim), so profile() reads/returns the
+  // workspace the caller is currently scoped to, not necessarily their home.
   @Get('profile')
   getProfile(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.authService.getProfile(user.id);
+    return this.authService.profile(user.id, user.workspaceId);
   }
 
   @Patch('profile')

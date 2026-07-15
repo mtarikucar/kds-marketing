@@ -11,6 +11,7 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
   let prisma: any;
   let jwt: { sign: jest.Mock; verifyAsync: jest.Mock };
   let config: { get: jest.Mock };
+  let membership: { resolveDefaultWorkspaceId: jest.Mock; getActiveMembership: jest.Mock };
   let svc: MarketingAuthService;
 
   const WORKSPACE = { id: 'ws-1', slug: 'acme', status: 'ACTIVE' };
@@ -27,6 +28,9 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         create: jest.fn(),
       },
       marketingDistributionConfig: {
+        create: jest.fn().mockResolvedValue({}),
+      },
+      workspaceMembership: {
         create: jest.fn().mockResolvedValue({}),
       },
       package: {
@@ -49,7 +53,22 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
       }),
     };
     const smsOtp = { issue: jest.fn(), verify: jest.fn() };
-    svc = new MarketingAuthService(prisma, jwt as any, config as any, smsOtp as any);
+    // registerWorkspace never touches MembershipService (the owner IS the
+    // first/only member, minted directly by generateTokens). The login-gate
+    // tests below resolve the default membership onto the user's own home
+    // workspace ('ws-1') with 'REP' (baseUser.role there) — none of their
+    // assertions check the role claim, so this generic default is enough to
+    // keep their pre-existing assertions (which predate MembershipService)
+    // holding without per-test overrides.
+    membership = {
+      resolveDefaultWorkspaceId: jest.fn(async (_userId: string, homeWorkspaceId: string) => homeWorkspaceId),
+      getActiveMembership: jest.fn(async (_userId: string, workspaceId: string) => ({
+        workspaceId,
+        role: 'REP',
+        customRoleId: null,
+      })),
+    };
+    svc = new MarketingAuthService(prisma, jwt as any, config as any, smsOtp as any, membership as any);
   });
 
   describe('registerWorkspace', () => {
@@ -119,6 +138,45 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         type: 'marketing',
       });
       expect(res.user).toMatchObject({ workspaceId: 'ws-new', role: 'OWNER' });
+    });
+
+    it('registerWorkspace creates an ACTIVE OWNER membership for the owner', async () => {
+      prisma.marketingUser.findUnique.mockResolvedValue(null); // email free
+      prisma.workspace.findUnique.mockResolvedValue(null); // slug free
+      prisma.workspace.create.mockResolvedValue({ ...WORKSPACE, id: 'ws-new' });
+      prisma.marketingUser.create
+        .mockResolvedValueOnce({
+          id: 'owner-1',
+          workspaceId: 'ws-new',
+          email: DTO.email,
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          phone: null,
+          avatar: null,
+          role: 'OWNER',
+          tokenVersion: 0,
+        })
+        .mockResolvedValueOnce({ id: 'sys-1', role: 'SYSTEM' });
+
+      await svc.registerWorkspace(DTO);
+
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'owner-1',
+            workspaceId: 'ws-new',
+            role: 'OWNER',
+            status: 'ACTIVE',
+          }),
+        }),
+      );
+      // acceptedAt must be a real timestamp, not left null — an OWNER
+      // membership is never a pending invite.
+      const membershipData = prisma.workspaceMembership.create.mock.calls[0][0].data;
+      expect(membershipData.acceptedAt).toBeInstanceOf(Date);
+      // Exactly one membership — the SYSTEM research sentinel (the other
+      // marketingUser.create call) never gets one; it can't authenticate.
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledTimes(1);
     });
 
     it('suffixes the slug when taken', async () => {

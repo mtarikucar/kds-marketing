@@ -101,6 +101,37 @@ describe('AgencyService — createLocation', () => {
     expect(ownerCreate?.[0]?.data?.workspaceId).toBe(LOCATION_A1);
   });
 
+  it('creates an ACTIVE OWNER membership for the new location owner', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.workspace.findUnique as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve(args?.where?.id === AGENCY_A ? agencyRow() : null),
+    );
+    prisma.marketingUser.findUnique.mockResolvedValue(null as never); // email free
+    (prisma.workspace.create as jest.Mock).mockResolvedValue(locationRow());
+    prisma.marketingUser.create.mockResolvedValue({ id: 'owner-1' } as never);
+    prisma.marketingDistributionConfig.create.mockResolvedValue({ id: 'dist-1' } as never);
+
+    await svc.createLocation(AGENCY_A, {
+      name: 'Location A1',
+      productName: 'Prod',
+      ownerEmail: 'owner@a1.com',
+      ownerPassword: 'password123',
+      ownerFirstName: 'Owen',
+      ownerLastName: 'Owner',
+    });
+
+    expect(prisma.workspaceMembership.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: 'owner-1',
+          workspaceId: LOCATION_A1,
+          role: 'OWNER',
+          status: 'ACTIVE',
+        }),
+      }),
+    );
+  });
+
   it('starts the new location on the TRIAL package so it is usable (not zero-entitlement) out of the box', async () => {
     const { prisma, svc } = makeSvc();
     (prisma.workspace.findUnique as jest.Mock).mockImplementation((args: any) =>
@@ -328,6 +359,7 @@ describe('AgencyService — accessLocation (switch into a sub-account)', () => {
     // Issued FOR the owner → MarketingGuard's wsp===user.workspaceId invariant holds.
     expect(authService.issueSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'owner-1', workspaceId: LOCATION_A1 }),
+      { workspaceId: LOCATION_A1, role: 'OWNER' },
     );
     expect(out).toMatchObject({ accessToken: 'at', refreshToken: 'rt' });
     expect(out.location.id).toBe(LOCATION_A1);

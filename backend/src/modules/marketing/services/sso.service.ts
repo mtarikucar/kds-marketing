@@ -15,6 +15,7 @@ import {
   timingSafeEqual,
   type JsonWebKey as CryptoJsonWebKey,
 } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingAuthService } from './marketing-auth.service';
 import {
@@ -169,8 +170,10 @@ export class SsoService {
 
   /**
    * Handle the IdP redirect: validate state, exchange the code, verify the ID
-   * token (iss/aud/exp/nonce + RS256 signature via JWKS), JIT-match/provision a
-   * MarketingUser in the connection's workspace, and mint a marketing session.
+   * token (iss/aud/exp/nonce + RS256 signature via JWKS), JIT-match/provision
+   * the (GLOBAL) MarketingUser identity and ensure/attach an ACTIVE
+   * WorkspaceMembership for the connection's workspace, then mint a marketing
+   * session for that membership.
    */
   async handleCallback(state: string, code: string) {
     const ctx = this.consumeState(state);
@@ -225,8 +228,11 @@ export class SsoService {
     }
     this.assertDomainAllowed(email, conn.allowedDomains);
 
-    const user = await this.matchOrProvision(ctx.workspaceId, email, claims);
-    return this.authService.issueSession(user);
+    const { user, membership } = await this.matchOrProvision(ctx.workspaceId, email, claims);
+    return this.authService.issueSession(user, {
+      workspaceId: membership.workspaceId,
+      role: membership.role,
+    });
   }
 
   // ===================================================================== //
@@ -534,41 +540,136 @@ export class SsoService {
     return chosen;
   }
 
+  /**
+   * Multi-workspace membership (Phase 2 Task 14) — a MarketingUser identity is
+   * GLOBAL (email is unique across the whole product), but SSO always signs
+   * someone into ONE connection's workspace. So this both matches/provisions
+   * the IDENTITY (global) and ensures a WorkspaceMembership for the target
+   * workspace exists and is ACTIVE — the two are resolved together and the
+   * session is minted off the membership, not the identity's home role.
+   *
+   * - existing identity: looked up by the GLOBAL email unique (never
+   *   workspace-scoped — a workspace-scoped `findFirst` would miss a user
+   *   whose home workspace differs from the SSO target and the JIT `create`
+   *   below would then collide on the global email unique → P2002 → 500).
+   *   A membership for THIS workspace is attached if missing (auto-trusting
+   *   it is safe here: the workspace's SSO admin already opted into this via
+   *   the connection's allowedDomains, so it is not a silent cross-org link
+   *   by an arbitrary actor). An existing non-ACTIVE membership (SUSPENDED or
+   *   still-pending INVITED) is never silently reactivated by SSO.
+   * - no identity: JIT-provision the identity AND its first ACTIVE membership
+   *   together in one transaction so neither can exist without the other.
+   */
   private async matchOrProvision(
     workspaceId: string,
     email: string,
     claims: Record<string, unknown>,
-  ) {
-    const existing = await this.prisma.marketingUser.findFirst({
-      where: { workspaceId, email },
+  ): Promise<{
+    user: {
+      id: string;
+      workspaceId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phone: string | null;
+      avatar: string | null;
+      role: string;
+      tokenVersion: number;
+    };
+    membership: { workspaceId: string; role: string };
+  }> {
+    const existing = await this.prisma.marketingUser.findUnique({
+      where: { email },
     });
+
     if (existing) {
       if (existing.role === 'SYSTEM' || existing.status !== 'ACTIVE') {
         throw new UnauthorizedException('Account cannot sign in via SSO');
       }
-      return existing;
+
+      let membership = await this.prisma.workspaceMembership.findFirst({
+        where: { userId: existing.id, workspaceId },
+      });
+
+      if (!membership) {
+        // Non-atomic check-then-create: two SSO callbacks racing for the same
+        // not-yet-a-member identity can both pass the `!membership` check above
+        // and both call create(). The loser collides on the
+        // @@unique([userId, workspaceId]) index — catch that P2002 and re-read
+        // the row the winner just created instead of bubbling a raw 500. The
+        // re-read can only ever find an ACTIVE row here (this branch is only
+        // reached when no membership existed, and the only writer that can
+        // create one in this race is this same create-ACTIVE-REP path), so
+        // the post-check below still applies uniformly.
+        try {
+          membership = await this.prisma.workspaceMembership.create({
+            data: {
+              userId: existing.id,
+              workspaceId,
+              role: DEFAULT_NEW_USER_ROLE,
+              status: 'ACTIVE',
+              acceptedAt: new Date(),
+            },
+          });
+        } catch (e) {
+          if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+            membership = await this.prisma.workspaceMembership.findFirst({
+              where: { userId: existing.id, workspaceId },
+            });
+          } else {
+            throw e;
+          }
+        }
+      }
+
+      if (!membership || membership.status !== 'ACTIVE') {
+        // SUSPENDED must not be silently overridden by SSO; INVITED must be
+        // accepted through the normal accept flow first — either way, SSO
+        // does not mutate the membership's status here.
+        throw new UnauthorizedException('Account cannot sign in via SSO');
+      }
+
+      return { user: existing, membership };
     }
+
     // JIT provision. No password is usable: store a random sealed-strength
     // sentinel so the password login path can never authenticate this row.
+    // The identity and its first membership are created in ONE transaction
+    // so a mid-way failure never leaves an identity with no membership (or
+    // vice versa).
     const randomPassword = b64url(randomBytes(48));
     try {
-      return await this.prisma.marketingUser.create({
-        data: {
-          workspaceId,
-          email,
-          password: randomPassword,
-          firstName: strClaim(claims.given_name) || email.split('@')[0],
-          lastName: strClaim(claims.family_name),
-          role: DEFAULT_NEW_USER_ROLE,
-        },
+      return await this.prisma.$transaction(async (tx) => {
+        const user = await tx.marketingUser.create({
+          data: {
+            workspaceId,
+            email,
+            password: randomPassword,
+            firstName: strClaim(claims.given_name) || email.split('@')[0],
+            lastName: strClaim(claims.family_name),
+            role: DEFAULT_NEW_USER_ROLE,
+          },
+        });
+        const membership = await tx.workspaceMembership.create({
+          data: {
+            userId: user.id,
+            workspaceId,
+            role: DEFAULT_NEW_USER_ROLE,
+            status: 'ACTIVE',
+            acceptedAt: new Date(),
+          },
+        });
+        return { user, membership };
       });
     } catch (e) {
-      // MarketingUser.email is GLOBALLY unique (not per-workspace), so an email
-      // that already belongs to ANOTHER workspace collides here. Without this
-      // the raw P2002 surfaced as an opaque HTTP 500 on the IdP callback; return
-      // a clean, actionable error instead. (Mirrors createAffiliate's P2002 map.)
+      // MarketingUser.email is GLOBALLY unique. The identity lookup above is
+      // global too (findUnique by email), so this only triggers on a RACE — a
+      // concurrent JIT provision / registration inserting the same email
+      // between the lookup and this create. Map the raw P2002 (an opaque
+      // HTTP 500 on the IdP callback) to a clean, actionable 409; a retried
+      // sign-in finds the now-existing identity and attaches a membership.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('This email is already registered on another workspace');
+        throw new ConflictException('This email was just registered — please retry signing in');
       }
       throw e;
     }

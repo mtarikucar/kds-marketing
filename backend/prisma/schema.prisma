@@ -168,6 +168,7 @@ model MarketingUser {
   offers        LeadOffer[]
   commissions   Commission[]
   notifications MarketingNotification[]
+  memberships   WorkspaceMembership[]
 
   @@index([workspaceId])
   @@index([workspaceId, role])
@@ -175,6 +176,29 @@ model MarketingUser {
   @@index([role])
   @@index([status])
   @@map("marketing_users")
+}
+
+/// Multi-workspace membership — the authoritative source of authorization.
+/// A MarketingUser identity holds N of these; the active one (JWT `wsp`) supplies
+/// the request's role/customRoleId. See docs/superpowers/specs/2026-07-15-*.md.
+model WorkspaceMembership {
+  id              String    @id @default(uuid())
+  userId          String
+  user            MarketingUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId     String
+  role            String    // OWNER | MANAGER | REP (workspace-scoped)
+  customRoleId    String?   // Epic F granular role (workspace-scoped); overrides `role`
+  status          String    @default("ACTIVE") // ACTIVE | INVITED | SUSPENDED
+  invitedByUserId String?
+  acceptedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@index([userId, status])
+  @@index([workspaceId, role])
+  @@map("workspace_memberships")
 }
 
 model Lead {

@@ -7,6 +7,7 @@ import {
 import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
 import { PrismaClient } from '@prisma/client';
 import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { SsoService } from './sso.service';
 import { MarketingAuthService } from './marketing-auth.service';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -163,6 +164,22 @@ describe('SsoService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma = mockDeep<PrismaClient>();
+    // matchOrProvision's JIT path runs in one $transaction; execute the
+    // callback against the same mocked client (mirrors
+    // membership.service.invite.spec.ts's makeSvc()).
+    (prisma.$transaction as unknown as jest.Mock).mockImplementation((fn: any) =>
+      fn(prisma),
+    );
+    // Default membership row for JIT-create tests that don't care about its
+    // exact shape; tests that assert on it override with their own
+    // mockResolvedValue after this.
+    prisma.workspaceMembership.create.mockResolvedValue({
+      id: 'mem-default',
+      userId: 'mu-default',
+      workspaceId: 'ws-1',
+      role: 'REP',
+      status: 'ACTIVE',
+    } as never);
     authService = { issueSession: jest.fn() };
     service = new SsoService(
       prisma as unknown as PrismaService,
@@ -212,11 +229,11 @@ describe('SsoService', () => {
       };
     }
 
-    it('provisions a NEW user in the right workspace and mints a session', async () => {
+    it('(a) JIT: a brand-new email creates the identity + an ACTIVE REP membership, and mints a session for that workspace/role', async () => {
       const { state, nonce } = await startFlow();
       mockIdp(signIdToken(baseClaims({ nonce })));
 
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
       prisma.marketingUser.create.mockResolvedValue({
         id: 'mu-new',
         workspaceId: 'ws-1',
@@ -227,6 +244,13 @@ describe('SsoService', () => {
         avatar: null,
         role: 'REP',
         tokenVersion: 0,
+      } as never);
+      prisma.workspaceMembership.create.mockResolvedValue({
+        id: 'mem-new',
+        userId: 'mu-new',
+        workspaceId: 'ws-1',
+        role: 'REP',
+        status: 'ACTIVE',
       } as never);
       authService.issueSession.mockReturnValue({
         accessToken: 'AT',
@@ -242,33 +266,149 @@ describe('SsoService', () => {
           data: expect.objectContaining({
             workspaceId: 'ws-1',
             email: 'alice@acme.com',
+            role: 'REP',
           }),
         }),
       );
-      expect(authService.issueSession).toHaveBeenCalled();
+      // a first ACTIVE REP membership is created alongside the identity, in
+      // the same $transaction
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'mu-new',
+            workspaceId: 'ws-1',
+            role: 'REP',
+            status: 'ACTIVE',
+          }),
+        }),
+      );
+      expect(authService.issueSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'mu-new' }),
+        { workspaceId: 'ws-1', role: 'REP' },
+      );
       expect(result).toEqual({ accessToken: 'AT', refreshToken: 'RT', user: { id: 'mu-new' } });
     });
 
-    it('maps a globally-unique email collision (email owned by another workspace) to a clean 409, not a raw 500', async () => {
+    it('maps a RACED email collision on the JIT create (P2002) to a clean 409, not a raw 500', async () => {
       const { state, nonce } = await startFlow();
       mockIdp(signIdToken(baseClaims({ nonce })));
-      // Not in THIS workspace…
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
-      // …but the create trips the GLOBAL unique email constraint (the email
-      // already exists on another workspace). Without the guard this was an
-      // opaque HTTP 500 on the IdP callback.
-      const { Prisma } = require('@prisma/client');
+      // No identity exists at lookup time…
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
+      // …but a concurrent JIT provision / registration inserts the same email
+      // before our create commits — the GLOBAL unique trips. Without the
+      // guard this was an opaque HTTP 500 on the IdP callback; a retried
+      // sign-in finds the now-existing identity and attaches a membership.
       prisma.marketingUser.create.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'test' }),
       );
       await expect(service.handleCallback(state, 'auth-code')).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('matches an EXISTING user by email in the workspace (no create)', async () => {
+    it('(b) existing identity with NO membership in this workspace attaches an ACTIVE REP membership (no P2002 on the global email)', async () => {
       const { state, nonce } = await startFlow();
       mockIdp(signIdToken(baseClaims({ nonce })));
 
-      prisma.marketingUser.findFirst.mockResolvedValue({
+      // The identity's home workspace is NOT the SSO target ('ws-OTHER' vs
+      // 'ws-1') — the global email lookup still finds it.
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'mu-existing',
+        workspaceId: 'ws-OTHER',
+        email: 'alice@acme.com',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        phone: null,
+        avatar: null,
+        role: 'REP',
+        status: 'ACTIVE',
+        tokenVersion: 3,
+      } as never);
+      prisma.workspaceMembership.findFirst.mockResolvedValue(null as never); // no membership here yet
+      prisma.workspaceMembership.create.mockResolvedValue({
+        id: 'mem-attached',
+        userId: 'mu-existing',
+        workspaceId: 'ws-1',
+        role: 'REP',
+        status: 'ACTIVE',
+      } as never);
+      authService.issueSession.mockReturnValue({ accessToken: 'AT', refreshToken: 'RT', user: {} });
+
+      await service.handleCallback(state, 'auth-code');
+
+      // never re-attempts to create the identity — that would P2002 on the
+      // global email unique.
+      expect(prisma.marketingUser.create).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'mu-existing',
+            workspaceId: 'ws-1',
+            role: 'REP',
+            status: 'ACTIVE',
+          }),
+        }),
+      );
+      expect(authService.issueSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'mu-existing' }),
+        { workspaceId: 'ws-1', role: 'REP' },
+      );
+    });
+
+    it('(b2) TOCTOU: a racing SSO callback wins the membership create (P2002) — re-reads the winner\'s ACTIVE row instead of a raw 500', async () => {
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce })));
+
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'mu-existing',
+        workspaceId: 'ws-OTHER',
+        email: 'alice@acme.com',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        phone: null,
+        avatar: null,
+        role: 'REP',
+        status: 'ACTIVE',
+        tokenVersion: 3,
+      } as never);
+      // No membership yet when we check...
+      prisma.workspaceMembership.findFirst
+        .mockResolvedValueOnce(null as never) // initial check: not a member yet
+        .mockResolvedValueOnce({
+          // re-read after the P2002: the concurrent callback's winning row
+          id: 'mem-winner',
+          userId: 'mu-existing',
+          workspaceId: 'ws-1',
+          role: 'REP',
+          status: 'ACTIVE',
+        } as never);
+      // ...but a concurrent callback's create() beat us to the
+      // (userId, workspaceId) unique index.
+      prisma.workspaceMembership.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['userId', 'workspaceId'] },
+        }),
+      );
+      authService.issueSession.mockReturnValue({ accessToken: 'AT', refreshToken: 'RT', user: {} });
+
+      const result = await service.handleCallback(state, 'auth-code');
+
+      expect(prisma.marketingUser.create).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledTimes(1);
+      // Re-read (not a raw 500) resolves to the winner's row and mints a session.
+      expect(prisma.workspaceMembership.findFirst).toHaveBeenCalledTimes(2);
+      expect(authService.issueSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'mu-existing' }),
+        { workspaceId: 'ws-1', role: 'REP' },
+      );
+      expect(result).toEqual({ accessToken: 'AT', refreshToken: 'RT', user: {} });
+    });
+
+    it('(c) existing identity with an ACTIVE membership in this workspace reuses it (no membership create)', async () => {
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce })));
+
+      prisma.marketingUser.findUnique.mockResolvedValue({
         id: 'mu-existing',
         workspaceId: 'ws-1',
         email: 'alice@acme.com',
@@ -276,18 +416,91 @@ describe('SsoService', () => {
         lastName: 'Anderson',
         phone: null,
         avatar: null,
-        role: 'MANAGER',
+        role: 'REP',
         status: 'ACTIVE',
         tokenVersion: 3,
+      } as never);
+      // The membership's role (MANAGER) governs the minted session, not the
+      // identity row's home role (REP).
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        id: 'mem-existing',
+        userId: 'mu-existing',
+        workspaceId: 'ws-1',
+        role: 'MANAGER',
+        status: 'ACTIVE',
       } as never);
       authService.issueSession.mockReturnValue({ accessToken: 'AT2', refreshToken: 'RT2', user: {} });
 
       await service.handleCallback(state, 'auth-code');
 
       expect(prisma.marketingUser.create).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.create).not.toHaveBeenCalled();
       expect(authService.issueSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'mu-existing', tokenVersion: 3 }),
+        { workspaceId: 'ws-1', role: 'MANAGER' },
       );
+    });
+
+    it('(d) existing identity with a SUSPENDED membership in this workspace is rejected (401), not reactivated', async () => {
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce })));
+
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'mu-existing',
+        workspaceId: 'ws-1',
+        email: 'alice@acme.com',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        phone: null,
+        avatar: null,
+        role: 'REP',
+        status: 'ACTIVE',
+        tokenVersion: 3,
+      } as never);
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        id: 'mem-suspended',
+        userId: 'mu-existing',
+        workspaceId: 'ws-1',
+        role: 'REP',
+        status: 'SUSPENDED',
+      } as never);
+
+      await expect(service.handleCallback(state, 'auth-code')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(prisma.workspaceMembership.create).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.update).not.toHaveBeenCalled();
+      expect(authService.issueSession).not.toHaveBeenCalled();
+    });
+
+    it('an INVITED (not-yet-accepted) membership is also rejected (401), not silently activated', async () => {
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce })));
+
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'mu-existing',
+        workspaceId: 'ws-1',
+        email: 'alice@acme.com',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        phone: null,
+        avatar: null,
+        role: 'REP',
+        status: 'ACTIVE',
+        tokenVersion: 3,
+      } as never);
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        id: 'mem-invited',
+        userId: 'mu-existing',
+        workspaceId: 'ws-1',
+        role: 'REP',
+        status: 'INVITED',
+      } as never);
+
+      await expect(service.handleCallback(state, 'auth-code')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(authService.issueSession).not.toHaveBeenCalled();
     });
 
     it('rejects a STRING "false" email_verified (not just the boolean) — closes the takeover bypass', async () => {
@@ -299,7 +512,7 @@ describe('SsoService', () => {
 
       await expect(service.handleCallback(state, 'auth-code')).rejects.toBeInstanceOf(UnauthorizedException);
       // Rejected BEFORE any user match/provision.
-      expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
+      expect(prisma.marketingUser.findUnique).not.toHaveBeenCalled();
     });
 
     it('stays lenient when email_verified is ABSENT (enterprise directories omit it)', async () => {
@@ -308,7 +521,7 @@ describe('SsoService', () => {
       delete (claims as Record<string, unknown>).email_verified;
       mockIdp(signIdToken(claims));
 
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
       prisma.marketingUser.create.mockResolvedValue({
         id: 'mu-x', workspaceId: 'ws-1', email: 'alice@acme.com', role: 'REP', tokenVersion: 0,
       } as never);
@@ -397,7 +610,7 @@ describe('SsoService', () => {
       const conn = makeConnection({ allowedDomains: ['allowed.com'] });
       const { state, nonce } = await startFlow(conn);
       mockIdp(signIdToken(baseClaims({ nonce, email: 'alice@acme.com' })));
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
       await expect(service.handleCallback(state, 'code')).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
@@ -408,7 +621,7 @@ describe('SsoService', () => {
       const conn = makeConnection({ allowedDomains: ['acme.com'] });
       const { state, nonce } = await startFlow(conn);
       mockIdp(signIdToken(baseClaims({ nonce, email: 'bob@acme.com' })));
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
       prisma.marketingUser.create.mockResolvedValue({
         id: 'mu-bob', workspaceId: 'ws-1', email: 'bob@acme.com',
         firstName: 'Bob', lastName: '', phone: null, avatar: null, role: 'REP', tokenVersion: 0,
@@ -420,7 +633,7 @@ describe('SsoService', () => {
     it('rejects an unverified email when the IdP says so', async () => {
       const { state, nonce } = await startFlow();
       mockIdp(signIdToken(baseClaims({ nonce, email_verified: false })));
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
       await expect(service.handleCallback(state, 'code')).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
@@ -437,7 +650,7 @@ describe('SsoService', () => {
     it('consumes state (single-use): a second callback with the same state fails', async () => {
       const { state, nonce } = await startFlow();
       mockIdp(signIdToken(baseClaims({ nonce })));
-      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      prisma.marketingUser.findUnique.mockResolvedValue(null as never);
       prisma.marketingUser.create.mockResolvedValue({
         id: 'mu-1', workspaceId: 'ws-1', email: 'alice@acme.com',
         firstName: 'A', lastName: 'A', phone: null, avatar: null, role: 'REP', tokenVersion: 0,

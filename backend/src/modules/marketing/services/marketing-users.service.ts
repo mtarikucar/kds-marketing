@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EntitlementsService } from '../../billing/entitlements.service';
+import { MembershipService } from './membership.service';
 import { CreateMarketingUserDto } from '../dto/create-marketing-user.dto';
 import { UpdateMarketingUserDto } from '../dto/update-marketing-user.dto';
 
@@ -18,12 +19,21 @@ function escapeLockKey(key: string): string {
   return `'${key.replace(/'/g, "''")}'`;
 }
 
+/**
+ * Multi-workspace membership (Phase 2 Task 13) — this service now operates at
+ * MEMBERSHIP granularity, not MarketingUser-row granularity. A MarketingUser
+ * identity can hold N WorkspaceMemberships (one per workspace); "the users of
+ * THIS workspace" is the set of non-SYSTEM memberships for workspaceId, and
+ * "deactivating a user" suspends only the membership that ties them to this
+ * workspace — never the shared identity, which may still be ACTIVE elsewhere.
+ */
 @Injectable()
 export class MarketingUsersService {
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
     private entitlements: EntitlementsService,
+    private membership: MembershipService,
   ) {}
 
   private bcryptCost(): number {
@@ -34,9 +44,16 @@ export class MarketingUsersService {
 
   /**
    * Enforce the package's active-seat limit (maxUsers; -1 = unlimited). SYSTEM
-   * sentinels don't occupy seats. Shared by create() AND update()'s reactivation
-   * path — both consume a seat, so both must pass through here or a workspace at
-   * its cap could bypass the limit (deactivate → create → reactivate).
+   * sentinels don't occupy seats. Counts ACTIVE **and** INVITED memberships —
+   * a pending invite already consumes a seat (spec §5: "invites are bounded
+   * by the seat limit"), so accepting the invite later needs no re-check.
+   * Used by update()'s SUSPENDED→ACTIVE reactivation path — a reactivation
+   * consumes a seat exactly like an invite, so it must pass through the same
+   * check, or a workspace at its cap could bypass the limit
+   * (deactivate → invite → reactivate). create() does NOT call this anymore
+   * (see create()'s docstring) — MembershipService.invite() enforces the
+   * identical check itself now, for both this service's create() AND
+   * POST /marketing/users/invite.
    */
   private async assertSeatAvailable(
     db: Prisma.TransactionClient,
@@ -44,8 +61,8 @@ export class MarketingUsersService {
     maxUsers: number,
   ) {
     if (maxUsers === -1) return;
-    const seats = await db.marketingUser.count({
-      where: { workspaceId, role: { not: 'SYSTEM' }, status: 'ACTIVE' },
+    const seats = await db.workspaceMembership.count({
+      where: { workspaceId, role: { not: 'SYSTEM' }, status: { in: ['ACTIVE', 'INVITED'] } },
     });
     if (seats >= maxUsers) {
       throw new BadRequestException(
@@ -55,130 +72,182 @@ export class MarketingUsersService {
   }
 
   /** Advisory-lock the workspace's seat counter so the seat-check + the
-   *  seat-consuming write (create / reactivate) is atomic — a bare
-   *  count-then-write lets two concurrent requests at (cap-1) both pass and
-   *  exceed maxUsers. Mirrors the research / knowledge / ai-credits quota lock. */
+   *  seat-consuming write (reactivate) is atomic — a bare count-then-write
+   *  lets two concurrent requests at (cap-1) both pass and exceed maxUsers.
+   *  Mirrors the research / knowledge / ai-credits quota lock, and the
+   *  identical lock MembershipService.invite() takes on its own (separate)
+   *  seat-consuming write. */
   private seatLock(tx: Prisma.TransactionClient, workspaceId: string) {
     return tx.$queryRawUnsafe(
       `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('users:' + workspaceId)}))::text AS locked`,
     );
   }
 
-  async create(workspaceId: string, dto: CreateMarketingUserDto) {
-    // Email is the global login identity (unique across workspaces), so the
-    // existence check is intentionally unscoped — but the row is born scoped.
-    const existing = await this.prisma.marketingUser.findUnique({
-      where: { email: dto.email },
-    });
-
-    if (existing) {
-      throw new ConflictException('Email already exists');
-    }
-
-    if (!['MANAGER', 'REP'].includes(dto.role)) {
-      // OWNER exists once per workspace (created at signup); SYSTEM is the
-      // research sentinel — neither is creatable through user management.
-      throw new BadRequestException('Role must be MANAGER or REP');
-    }
-
-    const effective = await this.entitlements.getEffective(workspaceId);
-    // Hash BEFORE taking the lock so the (slow) bcrypt work doesn't hold the
-    // per-workspace seat lock and serialize every concurrent user create on it.
-    const hashedPassword = await bcrypt.hash(dto.password, this.bcryptCost());
-    const data = { ...dto, workspaceId, password: hashedPassword };
-    const select = {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      phone: true,
-      role: true,
-      status: true,
-      createdAt: true,
-    };
-
-    // Unlimited plan — no cap to race against.
-    if (effective.maxUsers === -1) {
-      return this.prisma.marketingUser.create({ data, select });
-    }
-    // Serialize the seat-check + create per workspace under an advisory xact-lock.
-    return this.prisma.$transaction(async (tx) => {
-      await this.seatLock(tx, workspaceId);
-      await this.assertSeatAvailable(tx, workspaceId, effective.maxUsers);
-      return tx.marketingUser.create({ data, select });
-    });
+  /**
+   * Advisory-lock ALL owner-affecting mutations in this workspace onto ONE
+   * key ('owner:'+workspaceId — distinct from the seat-lock key so the two
+   * don't contend unless a single request legitimately needs both). This
+   * serializes the last-owner count + the membership write (Task 16 Fix 1):
+   * without it, two concurrent requests each demoting/suspending a
+   * DIFFERENT owner of a 2-owner workspace could both read otherOwners=1
+   * from their own unlocked count() and both proceed, dropping the
+   * workspace to zero owners. Mirrors seatLock() above.
+   */
+  private ownerLock(tx: Prisma.TransactionClient, workspaceId: string) {
+    return tx.$queryRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('owner:' + workspaceId)}))::text AS locked`,
+    );
   }
 
+  /**
+   * "Create a user" is now "invite a membership" — the MANAGER/REP role
+   * floor, the OWNER/SYSTEM exclusion, AND the seat cap are ALL enforced by
+   * MembershipService.invite() itself (identical BadRequestException), so
+   * this is a thin, unconditional delegate rather than duplicating any of
+   * that. It used to open its OWN advisory-locked transaction around a seat
+   * count before calling invite() — but invite() now takes the SAME
+   * per-workspace pg_advisory_xact_lock on ITS OWN (separate, un-nested)
+   * transaction, and two different connections contending for the identical
+   * lock key — one held by this method's outer transaction while it awaits
+   * invite(), the other opened BY that same invite() call — would
+   * self-deadlock. Delegating outright makes invite() the single seat-cap
+   * choke point for both this admin route and POST /marketing/users/invite,
+   * with no lock nesting. `actorId` becomes the membership's
+   * `invitedByUserId`; it's optional only so existing callers that don't
+   * have an actor in scope keep compiling (the controller always has one).
+   */
+  async create(workspaceId: string, dto: CreateMarketingUserDto, actorId?: string) {
+    return this.membership.invite(workspaceId, actorId ?? '', dto);
+  }
+
+  /**
+   * This workspace's memberships (ACTIVE + INVITED + SUSPENDED — the admin
+   * needs to see pending/suspended, not just active), joined to their
+   * identity. SYSTEM sentinels are excluded — they're not a "user" the admin
+   * manages. `id` is the userId (the identity), matching every other method
+   * on this service which is keyed by userId, not membershipId.
+   */
   async findAll(workspaceId: string) {
-    return this.prisma.marketingUser.findMany({
+    const memberships = await this.prisma.workspaceMembership.findMany({
       where: { workspaceId, role: { not: 'SYSTEM' } },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        // Telephony extension (for the Account Center per-rep table). NOT
-        // dahiliSecret — the sealed SIP password stays write-only.
-        dahili: true,
-        // NetGSM Phase 6 Task 4 — this rep's Netasistan presence-sync opt-in
-        // (for the same per-rep table).
-        netasistanOptIn: true,
-        role: true,
-        status: true,
-        lastLogin: true,
-        createdAt: true,
-        _count: {
-          select: { leads: true, activities: true, commissions: true },
+      include: {
+        user: {
+          select: { email: true, firstName: true, lastName: true, phone: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
+    return memberships.map((m) => ({
+      id: m.userId,
+      email: m.user.email,
+      firstName: m.user.firstName,
+      lastName: m.user.lastName,
+      phone: m.user.phone,
+      role: m.role,
+      status: m.status,
+      createdAt: m.createdAt,
+    }));
   }
 
+  /**
+   * Mirrors findAll()'s join: role/status come from THIS workspace's
+   * membership row, not the (frozen-at-creation, now-stale) MarketingUser
+   * columns — a promoted/suspended-then-reactivated user must read back
+   * their CURRENT membership state here, not what they were at signup.
+   */
   async findOne(workspaceId: string, id: string) {
-    const user = await this.prisma.marketingUser.findFirst({
-      where: { id, workspaceId, role: { not: 'SYSTEM' } },
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId: id, workspaceId, role: { not: 'SYSTEM' } },
       select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        avatar: true,
         role: true,
         status: true,
-        lastLogin: true,
-        createdAt: true,
-        _count: {
-          select: { leads: true, activities: true, commissions: true, tasks: true },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            avatar: true,
+            lastLogin: true,
+            createdAt: true,
+            _count: {
+              select: { leads: true, activities: true, commissions: true, tasks: true },
+            },
+          },
         },
       },
     });
 
-    if (!user) throw new NotFoundException('User not found');
-    return user;
+    if (!membership) throw new NotFoundException('User not found');
+    const { user, role, status } = membership;
+    return { ...user, role, status };
   }
 
   /**
-   * Authorization for DEACTIVATING a user — shared by delete() and update()'s
-   * `status: 'INACTIVE'` path so a PATCH can't be a backdoor around the delete
-   * guards: the OWNER account is never deactivatable, no one may deactivate
-   * themselves (mid-session lockout, recoverable only by another admin), and a
-   * MANAGER target requires an OWNER/MANAGER actor.
+   * Phase 3 Task 16 — a workspace must keep at least one ACTIVE OWNER. Blocks
+   * any transition that would drop the ACTIVE-OWNER count to zero (suspending
+   * / removing / demoting the last owner). Only relevant when the TARGET is
+   * currently an ACTIVE OWNER — every other role/status is a no-op here, so
+   * callers can invoke this unconditionally before a mutation without first
+   * checking the target's role themselves.
+   *
+   * TOCTOU-safe by construction (Task 16 Fix 1): this count is a separate
+   * round trip from the membership write that follows it, so it MUST be
+   * called with a `db` obtained from inside an `ownerLock`-guarded
+   * `$transaction` (see delete()'s and update()'s owner branches) whenever
+   * the target is an ACTIVE OWNER — otherwise two concurrent requests each
+   * demoting/suspending a DIFFERENT owner of a 2-owner workspace could both
+   * observe otherOwners=1 and both proceed, dropping the workspace to zero
+   * owners. Non-owner targets never touch the db (fast no-op), so callers on
+   * the common (non-owner) path can skip invoking this — and skip the lock —
+   * entirely.
+   */
+  private async assertNotLastOwner(
+    db: Prisma.TransactionClient,
+    workspaceId: string,
+    target: { role: string; userId: string },
+  ) {
+    if (target.role !== 'OWNER') return;
+    const otherOwners = await db.workspaceMembership.count({
+      where: { workspaceId, role: 'OWNER', status: 'ACTIVE', NOT: { userId: target.userId } },
+    });
+    if (otherOwners === 0) {
+      throw new ConflictException('A workspace must keep at least one owner');
+    }
+  }
+
+  /**
+   * Authorization for DEACTIVATING (suspending) a member — shared by delete()
+   * and update()'s `status: 'INACTIVE'` path so a PATCH can't be a backdoor
+   * around the delete guards: no one may deactivate themselves (mid-session
+   * lockout, recoverable only by another admin), only an OWNER actor may
+   * touch an OWNER target (Task 16 Fix 2 — closes the gap where a MANAGER
+   * could `DELETE /users/:coOwnerId` and suspend a co-owner; update() already
+   * had an equivalent gate for its own surface), and a MANAGER target
+   * requires an OWNER/MANAGER actor. Operates on the MEMBERSHIP's role now,
+   * not the identity's — a target's privilege in THIS workspace is what the
+   * guard must reason about, since the same identity can hold a different
+   * role in another workspace.
+   *
+   * Deliberately does NOT call assertNotLastOwner — for an OWNER target that
+   * check must run atomically with the write under the per-workspace
+   * advisory lock (Task 16 Fix 1), so callers invoke it separately, inside
+   * their own locked transaction, once this cheap DB-free gate has passed.
    */
   private assertCanDeactivate(
-    user: { id: string; role: string },
+    membership: { role: string; userId: string },
+    targetUserId: string,
     actorRole: string,
     actorId: string,
   ) {
-    if (user.role === 'OWNER') {
-      throw new ForbiddenException('The owner account cannot be deactivated');
-    }
-    if (user.id === actorId) {
+    if (targetUserId === actorId) {
       throw new ForbiddenException('You cannot deactivate your own account');
     }
-    if (user.role === 'MANAGER' && actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
+    if (membership.role === 'OWNER' && actorRole !== 'OWNER') {
+      throw new ForbiddenException('Only an owner can modify an owner account');
+    }
+    if (membership.role === 'MANAGER' && actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
       throw new ForbiddenException('Insufficient permissions');
     }
   }
@@ -190,40 +259,68 @@ export class MarketingUsersService {
     actorRole: string,
     actorId?: string,
   ) {
-    const user = await this.prisma.marketingUser.findFirst({
-      where: { id, workspaceId },
+    // One round trip for both halves: role/status live on the membership,
+    // profile fields (name/email/phone/password) live on the shared identity.
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId: id, workspaceId },
+      include: { user: true },
     });
-    if (!user || user.role === 'SYSTEM') throw new NotFoundException('User not found');
+    if (!membership || membership.role === 'SYSTEM') {
+      throw new NotFoundException('User not found');
+    }
+    const user = membership.user;
 
     // Only the OWNER may touch the OWNER account, and nobody can promote
     // to OWNER through this surface (ownership transfer is an ops action).
-    if (user.role === 'OWNER' && actorRole !== 'OWNER') {
+    if (membership.role === 'OWNER' && actorRole !== 'OWNER') {
       throw new ForbiddenException('Only the owner can modify the owner account');
     }
     if (dto.role && !['MANAGER', 'REP'].includes(dto.role)) {
       throw new BadRequestException('Role must be MANAGER or REP');
     }
-    if (dto.role && user.role === 'OWNER') {
-      throw new BadRequestException('The owner role cannot be changed here');
-    }
+    // A role change on an OWNER membership is necessarily a demotion (the
+    // check above already rejects any dto.role other than MANAGER/REP) — i.e.
+    // it REMOVES owner-ness, so it's subject to the same last-owner
+    // protection as suspending the last owner (Task 16). The count itself
+    // runs later, atomically with the write, inside the owner-locked
+    // transaction (Fix 1) — a separate round trip here would be the exact
+    // TOCTOU that fix closes.
+    const demotingOwner = !!dto.role && membership.role === 'OWNER';
 
     // Deactivation via update() is a real state change — hold it to the SAME
-    // guards delete() enforces (self-lockout, owner protection, role floor), or a
-    // PATCH silently bypasses them.
-    if (dto.status === 'INACTIVE' && user.status === 'ACTIVE') {
-      this.assertCanDeactivate(user, actorRole, actorId ?? '');
+    // guards delete() enforces (self-lockout, only-an-owner-may-touch-an-owner,
+    // role floor), or a PATCH silently bypasses them. Last-owner protection
+    // (for an OWNER target) is likewise deferred to the locked transaction.
+    const deactivating = dto.status === 'INACTIVE' && membership.status === 'ACTIVE';
+    if (deactivating) {
+      this.assertCanDeactivate(membership, id, actorRole, actorId ?? '');
+    }
+    const deactivatingOwner = deactivating && membership.role === 'OWNER';
+
+    // Reactivation via this admin path may only flip a SUSPENDED membership
+    // back to ACTIVE. An INVITED membership must NEVER be flipped straight
+    // to ACTIVE here — that would bypass MembershipService.accept(), which
+    // is the only place a pending invite's REAL password gets set. Doing it
+    // here would produce an ACTIVE member stuck with the unusable
+    // invite-time sentinel password (can never log in) while still
+    // consuming a real seat.
+    if (dto.status === 'ACTIVE' && membership.status === 'INVITED') {
+      throw new BadRequestException(
+        'A pending invite must be accepted by the invitee, not reactivated',
+      );
     }
 
-    // Reactivating an INACTIVE user consumes a seat, exactly like create() — so
-    // re-check the package limit (atomically, at the write below). Without this, a
-    // workspace at its cap could exceed it via deactivate → create → reactivate.
-    const reactivating = dto.status === 'ACTIVE' && user.status !== 'ACTIVE';
+    // Reactivating a SUSPENDED membership consumes a seat, exactly like
+    // create()/invite() — so re-check the package limit (atomically, at the
+    // write below). Without this, a workspace at its cap could exceed it via
+    // deactivate → invite → reactivate.
+    const reactivating = dto.status === 'ACTIVE' && membership.status === 'SUSPENDED';
     const effective = reactivating ? await this.entitlements.getEffective(workspaceId) : null;
 
     // Email is the global unique login identity. When it's being changed, reject
-    // a collision with a clean 409 (mirrors create()) instead of letting the DB
-    // unique constraint surface a raw 500. The P2002 catch below covers the
-    // concurrent same-email race the pre-check can't.
+    // a collision with a clean 409 (mirrors create()/invite()) instead of letting
+    // the DB unique constraint surface a raw 500. The P2002 catch below covers
+    // the concurrent same-email race the pre-check can't.
     if (dto.email && dto.email !== user.email) {
       const clash = await this.prisma.marketingUser.findUnique({
         where: { email: dto.email },
@@ -234,38 +331,83 @@ export class MarketingUsersService {
       }
     }
 
-    const data: any = { ...dto };
+    // Split the dto: role/status are membership-level; everything else
+    // (firstName/lastName/phone/email/password) is identity-level.
+    const { role, status, ...profileDto } = dto;
+    const profileData: any = { ...profileDto };
     if (dto.password) {
       // Use the same configurable cost create() uses. Hard-coding 10
       // here meant operators raising BCRYPT_COST (e.g. to 12 or 14)
       // would silently get downgraded hashes on every password
       // rotation — a real regression in their hardening intent.
-      data.password = await bcrypt.hash(dto.password, this.bcryptCost());
+      profileData.password = await bcrypt.hash(dto.password, this.bcryptCost());
     }
 
-    const select = {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      phone: true,
-      role: true,
-      status: true,
+    const membershipData: any = {};
+    if (role) membershipData.role = role;
+    if (status === 'INACTIVE') membershipData.status = 'SUSPENDED';
+    if (status === 'ACTIVE') membershipData.status = 'ACTIVE';
+
+    const profileSelect = { id: true, email: true, firstName: true, lastName: true, phone: true };
+    const doUpdate = async (db: Prisma.TransactionClient) => {
+      let out = {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        role: membership.role,
+        status: membership.status,
+      };
+      if (Object.keys(profileData).length > 0) {
+        const updated = await db.marketingUser.update({
+          where: { id: user.id },
+          data: profileData,
+          select: profileSelect,
+        });
+        out = { ...out, ...updated };
+      }
+      if (Object.keys(membershipData).length > 0) {
+        const updated = await db.workspaceMembership.update({
+          where: { id: membership.id },
+          data: membershipData,
+          select: { role: true, status: true },
+        });
+        out = { ...out, ...updated };
+      }
+      return out;
     };
-    const doUpdate = (db: Prisma.TransactionClient) =>
-      db.marketingUser.update({ where: { id: user.id }, data, select });
     try {
       // A reactivation consumes a seat — run the seat-check + the ACTIVE flip
       // atomically under the per-workspace lock so two concurrent reactivations
-      // can't both pass the cap (mirrors create()).
-      if (reactivating && effective!.maxUsers !== -1) {
+      // can't both pass the cap (mirrors create()). Demoting or deactivating
+      // an OWNER needs the same atomicity for the last-owner count (Task 16
+      // Fix 1). Both locks can be taken in the SAME transaction (distinct
+      // keys, so they don't self-deadlock) — Prisma's interactive-transaction
+      // client can't be nested, so this single `$transaction` call is the
+      // only place either lock may be acquired for this update.
+      const needsOwnerLock = demotingOwner || deactivatingOwner;
+      const needsSeatLock = reactivating && effective!.maxUsers !== -1;
+      if (needsOwnerLock || needsSeatLock) {
         return await this.prisma.$transaction(async (tx) => {
-          await this.seatLock(tx, workspaceId);
-          await this.assertSeatAvailable(tx, workspaceId, effective!.maxUsers);
+          if (needsOwnerLock) {
+            await this.ownerLock(tx, workspaceId);
+            await this.assertNotLastOwner(tx, workspaceId, {
+              role: membership.role,
+              userId: membership.userId,
+            });
+          }
+          if (needsSeatLock) {
+            await this.seatLock(tx, workspaceId);
+            await this.assertSeatAvailable(tx, workspaceId, effective!.maxUsers);
+          }
           return doUpdate(tx);
         });
       }
-      return await doUpdate(this.prisma);
+      // Neither lock applies — still run both halves (when both are present)
+      // inside one transaction, so a profile edit + a role change either
+      // both land or neither does.
+      return await this.prisma.$transaction((tx) => doUpdate(tx));
     } catch (e) {
       // Lost the concurrent race on the email unique index — clean 409, not 500.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -276,18 +418,42 @@ export class MarketingUsersService {
   }
 
   async delete(workspaceId: string, id: string, actorRole: string, actorId: string) {
-    const user = await this.prisma.marketingUser.findFirst({
-      where: { id, workspaceId },
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId: id, workspaceId },
     });
-    if (!user || user.role === 'SYSTEM') throw new NotFoundException('User not found');
-    // Same authorization update()'s deactivation path uses (owner-protected, no
-    // self-deactivation, MANAGER target needs an OWNER/MANAGER actor).
-    this.assertCanDeactivate(user, actorRole, actorId);
+    if (!membership || membership.role === 'SYSTEM') {
+      throw new NotFoundException('User not found');
+    }
+    // Same authorization update()'s deactivation path uses (no self-deactivation,
+    // only-an-owner-may-touch-an-owner, MANAGER target needs an OWNER/MANAGER
+    // actor). The last-owner check for an OWNER target runs separately below,
+    // atomically with the write.
+    this.assertCanDeactivate(membership, id, actorRole, actorId);
 
-    await this.prisma.marketingUser.update({
-      where: { id: user.id },
-      data: { status: 'INACTIVE' },
-    });
+    if (membership.role === 'OWNER') {
+      // Owner-affecting mutation (Task 16 Fix 1) — the last-owner count and
+      // the SUSPEND write must be atomic under the per-workspace advisory
+      // lock, or two concurrent requests demoting different owners of a
+      // 2-owner workspace could both pass the count and both proceed.
+      await this.prisma.$transaction(async (tx) => {
+        await this.ownerLock(tx, workspaceId);
+        await this.assertNotLastOwner(tx, workspaceId, {
+          role: membership.role,
+          userId: membership.userId,
+        });
+        await tx.workspaceMembership.updateMany({
+          where: { userId: id, workspaceId },
+          data: { status: 'SUSPENDED' },
+        });
+      });
+    } else {
+      // SUSPEND the membership, never the shared identity — the user may hold
+      // OTHER workspaces' memberships that must stay untouched.
+      await this.prisma.workspaceMembership.updateMany({
+        where: { userId: id, workspaceId },
+        data: { status: 'SUSPENDED' },
+      });
+    }
 
     return { message: 'User deactivated successfully' };
   }
