@@ -99,9 +99,12 @@ export class MarketingAuthController {
     return this.authService.switchWorkspace(user.id, dto.workspaceId);
   }
 
+  // `user.workspaceId` here is the ACTIVE membership's workspace (the guard
+  // stamps it from the JWT's `wsp` claim), so profile() reads/returns the
+  // workspace the caller is currently scoped to, not necessarily their home.
   @Get('profile')
   getProfile(@CurrentMarketingUser() user: MarketingUserPayload) {
-    return this.authService.getProfile(user.id);
+    return this.authService.profile(user.id, user.workspaceId);
   }
 
   @Patch('profile')

@@ -227,7 +227,7 @@ export class AgencyService {
         select: PUBLIC_WORKSPACE_FIELDS,
       });
 
-      await tx.marketingUser.create({
+      const ownerUser = await tx.marketingUser.create({
         data: {
           workspaceId: child.id,
           email: input.ownerEmail,
@@ -235,6 +235,20 @@ export class AgencyService {
           firstName: input.ownerFirstName,
           lastName: input.ownerLastName,
           role: 'OWNER',
+        },
+      });
+
+      // Multi-workspace membership Phase 1 Task 8 — same reasoning as
+      // registerWorkspace: the child location's first OWNER needs an ACTIVE
+      // membership row, not just the home workspaceId pointer, or their next
+      // login 401s with "No active workspace".
+      await tx.workspaceMembership.create({
+        data: {
+          userId: ownerUser.id,
+          workspaceId: child.id,
+          role: 'OWNER',
+          status: 'ACTIVE',
+          acceptedAt: new Date(),
         },
       });
 

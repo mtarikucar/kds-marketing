@@ -576,6 +576,21 @@ export class MarketingAuthService {
         },
       });
 
+      // Multi-workspace membership Phase 1 Task 8 — a user row no longer IS a
+      // workspace; it HOLDS memberships (see issueForDefaultWorkspace above).
+      // Without this insert a fresh signup has zero WorkspaceMemberships, so
+      // the very next login 401s with "No active workspace" even though the
+      // owner row itself is fine.
+      await tx.workspaceMembership.create({
+        data: {
+          userId: ownerUser.id,
+          workspaceId: workspace.id,
+          role: 'OWNER',
+          status: 'ACTIVE',
+          acceptedAt: new Date(),
+        },
+      });
+
       // Per-workspace research sentinel: ingested leads/activities are
       // attributed to it. Unguessable address + random password; SYSTEM
       // role is refused by login, refresh and the guard regardless.
@@ -627,47 +642,62 @@ export class MarketingAuthService {
     });
   }
 
-  async getProfile(userId: string) {
-    const user = await this.prisma.marketingUser.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        workspaceId: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        avatar: true,
-        role: true,
-        status: true,
-        lastLogin: true,
-        createdAt: true,
-      },
-    });
+  /**
+   * Multi-workspace membership Phase 1 Task 8 — GET /auth/profile now also
+   * surfaces the caller's full ACTIVE membership set, so the frontend can
+   * offer a workspace switcher instead of only ever showing the one the
+   * session happens to be scoped to. `workspaceId` is the ACTIVE membership's
+   * workspace (the guard stamps it from the JWT's `wsp` claim onto
+   * `request.marketingUser.workspaceId`), not necessarily the user row's home
+   * workspace.
+   *
+   * `workspace` stays a top-level key (not folded into `user`) — the FE's
+   * `useWorkspaceProfile` hook reads `data.workspace` directly to gate the
+   * agency console on `kind === 'AGENCY'`, so this shape is load-bearing.
+   */
+  async profile(userId: string, workspaceId: string) {
+    const [user, workspace, memberships] = await Promise.all([
+      this.prisma.marketingUser.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          workspaceId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          avatar: true,
+          role: true,
+          status: true,
+          lastLogin: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          // `kind` distinguishes AGENCY / LOCATION / STANDALONE workspaces; the
+          // frontend gates the agency console (sub-accounts, snapshots, rebilling)
+          // on `workspace.kind === 'AGENCY'`. Additive, non-secret, read-only.
+          kind: true,
+          productName: true,
+          productUrl: true,
+          defaultLanguage: true,
+          defaultCurrency: true,
+          settings: true,
+        },
+      }),
+      this.membership.listActiveMemberships(userId),
+    ]);
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
-    const workspace = await this.prisma.workspace.findUnique({
-      where: { id: user.workspaceId },
-      select: {
-        id: true,
-        slug: true,
-        name: true,
-        // `kind` distinguishes AGENCY / LOCATION / STANDALONE workspaces; the
-        // frontend gates the agency console (sub-accounts, snapshots, rebilling)
-        // on `workspace.kind === 'AGENCY'`. Additive, non-secret, read-only.
-        kind: true,
-        productName: true,
-        productUrl: true,
-        defaultLanguage: true,
-        defaultCurrency: true,
-        settings: true,
-      },
-    });
-
-    return { ...user, workspace };
+    return { ...user, workspace, memberships };
   }
 
   /**

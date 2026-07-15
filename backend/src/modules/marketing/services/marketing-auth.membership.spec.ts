@@ -338,3 +338,103 @@ describe('MarketingAuthService — switchWorkspace', () => {
     expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Phase 1 Task 8 — GET /auth/profile must surface the caller's full ACTIVE
+ * membership set (so the FE can offer a workspace switcher), while keeping
+ * `workspace` at the top level exactly as before — `useWorkspaceProfile`
+ * reads `data.workspace` directly and must keep working unmodified.
+ */
+describe('MarketingAuthService — profile()', () => {
+  let svc: MarketingAuthService;
+  let prisma: any;
+  let membership: {
+    resolveDefaultWorkspaceId: jest.Mock;
+    getActiveMembership: jest.Mock;
+    listActiveMemberships: jest.Mock;
+  };
+
+  beforeEach(() => {
+    const jwtService = new JwtService();
+    prisma = {
+      marketingUser: { findUnique: jest.fn() },
+      workspace: { findUnique: jest.fn() },
+    };
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'MARKETING_JWT_SECRET') return 'access-secret';
+        if (key === 'MARKETING_JWT_REFRESH_SECRET') return 'refresh-secret';
+        return undefined;
+      }),
+    };
+    const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    membership = {
+      resolveDefaultWorkspaceId: jest.fn(),
+      getActiveMembership: jest.fn(),
+      listActiveMemberships: jest.fn(),
+    };
+    svc = new MarketingAuthService(
+      prisma as never,
+      jwtService,
+      config as never,
+      smsOtp as never,
+      membership as never,
+    );
+  });
+
+  it('returns memberships alongside a top-level workspace (backward-compatible with useWorkspaceProfile)', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue({
+      id: 'u1',
+      workspaceId: 'ws-1',
+      email: 'a@b.co',
+      firstName: 'A',
+      lastName: 'B',
+      phone: null,
+      avatar: null,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      lastLogin: null,
+      createdAt: new Date(),
+    });
+    prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      slug: 'acme',
+      name: 'Acme',
+      kind: 'STANDALONE',
+      productName: 'Acme CRM',
+      productUrl: null,
+      defaultLanguage: 'en',
+      defaultCurrency: 'TRY',
+      settings: {},
+    });
+    membership.listActiveMemberships.mockResolvedValue([
+      { workspaceId: 'ws-1', workspaceName: 'Acme', role: 'OWNER' },
+      { workspaceId: 'ws-2', workspaceName: 'Beta', role: 'REP' },
+    ]);
+
+    const res: any = await svc.profile('u1', 'ws-1');
+
+    // workspace still resolves off the ACTIVE (passed-in) workspaceId, not
+    // the user row's home pointer, and keeps its existing shape.
+    expect(prisma.workspace.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'ws-1' } }),
+    );
+    expect(res.workspace).toMatchObject({ id: 'ws-1', name: 'Acme', kind: 'STANDALONE' });
+    expect(res.memberships).toEqual([
+      { workspaceId: 'ws-1', workspaceName: 'Acme', role: 'OWNER' },
+      { workspaceId: 'ws-2', workspaceName: 'Beta', role: 'REP' },
+    ]);
+    expect(membership.listActiveMemberships).toHaveBeenCalledWith('u1');
+    // User fields stay flat at the top level — nothing pre-existing moved.
+    expect(res.id).toBe('u1');
+    expect(res.email).toBe('a@b.co');
+  });
+
+  it('throws BadRequestException when the user row is gone', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue(null);
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'ws-1' });
+    membership.listActiveMemberships.mockResolvedValue([]);
+
+    await expect(svc.profile('ghost', 'ws-1')).rejects.toThrow('User not found');
+  });
+});

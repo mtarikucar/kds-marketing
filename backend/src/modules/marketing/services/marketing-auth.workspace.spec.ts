@@ -30,6 +30,9 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
       marketingDistributionConfig: {
         create: jest.fn().mockResolvedValue({}),
       },
+      workspaceMembership: {
+        create: jest.fn().mockResolvedValue({}),
+      },
       package: {
         findUnique: jest
           .fn()
@@ -135,6 +138,45 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
         type: 'marketing',
       });
       expect(res.user).toMatchObject({ workspaceId: 'ws-new', role: 'OWNER' });
+    });
+
+    it('registerWorkspace creates an ACTIVE OWNER membership for the owner', async () => {
+      prisma.marketingUser.findUnique.mockResolvedValue(null); // email free
+      prisma.workspace.findUnique.mockResolvedValue(null); // slug free
+      prisma.workspace.create.mockResolvedValue({ ...WORKSPACE, id: 'ws-new' });
+      prisma.marketingUser.create
+        .mockResolvedValueOnce({
+          id: 'owner-1',
+          workspaceId: 'ws-new',
+          email: DTO.email,
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          phone: null,
+          avatar: null,
+          role: 'OWNER',
+          tokenVersion: 0,
+        })
+        .mockResolvedValueOnce({ id: 'sys-1', role: 'SYSTEM' });
+
+      await svc.registerWorkspace(DTO);
+
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'owner-1',
+            workspaceId: 'ws-new',
+            role: 'OWNER',
+            status: 'ACTIVE',
+          }),
+        }),
+      );
+      // acceptedAt must be a real timestamp, not left null — an OWNER
+      // membership is never a pending invite.
+      const membershipData = prisma.workspaceMembership.create.mock.calls[0][0].data;
+      expect(membershipData.acceptedAt).toBeInstanceOf(Date);
+      // Exactly one membership — the SYSTEM research sentinel (the other
+      // marketingUser.create call) never gets one; it can't authenticate.
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledTimes(1);
     });
 
     it('suffixes the slug when taken', async () => {
