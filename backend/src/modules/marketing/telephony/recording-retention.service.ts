@@ -34,8 +34,11 @@ import { R2StorageService } from '../../../common/storage/r2-storage.service';
 export class RecordingRetentionService {
   private readonly logger = new Logger(RecordingRetentionService.name);
 
-  /** Bounded per workspace per tick. */
+  /** Rows reclaimed per DB round-trip. */
   private static readonly BATCH = 200;
+  /** Safety cap on round-trips per workspace per tick (BATCH × this = max
+   *  reclaimed/workspace/tick) so one busy tenant can't monopolise the sweep. */
+  private static readonly MAX_BATCHES_PER_TICK = 50;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -75,28 +78,40 @@ export class RecordingRetentionService {
 
   private async retainWorkspace(workspaceId: string, retentionDays: number): Promise<number> {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 3_600_000);
-    const calls = await this.prisma.salesCall.findMany({
-      where: {
-        workspaceId,
-        recordingStorageKey: { not: null },
-        endedAt: { not: null, lt: cutoff },
-      },
-      select: { id: true, recordingStorageKey: true },
-      take: RecordingRetentionService.BATCH,
-    });
-    if (calls.length === 0) return 0;
+    let total = 0;
+    // DRAIN the past-retention backlog across up to MAX_BATCHES_PER_TICK batches,
+    // not a single 200-row batch per day. A busy tenant ingests far more than 200
+    // recordings/day (ingest runs every 10 min), so a one-batch/day sweep can never
+    // catch up — audio would linger in R2 past the operator's recordingRetentionDays
+    // (ongoing cost + a KVKK retention breach). Each iteration RE-QUERIES, so newly
+    // aged rows and the ones just nulled are handled correctly; the per-tick cap
+    // keeps one workspace from monopolising the sweep.
+    for (let i = 0; i < RecordingRetentionService.MAX_BATCHES_PER_TICK; i++) {
+      const calls = await this.prisma.salesCall.findMany({
+        where: {
+          workspaceId,
+          recordingStorageKey: { not: null },
+          endedAt: { not: null, lt: cutoff },
+        },
+        select: { id: true, recordingStorageKey: true },
+        take: RecordingRetentionService.BATCH,
+      });
+      if (calls.length === 0) break;
 
-    const keys = calls.map((c) => c.recordingStorageKey).filter(Boolean) as string[];
-    await this.r2.deleteKeys(keys);
+      const keys = calls.map((c) => c.recordingStorageKey).filter(Boolean) as string[];
+      await this.r2.deleteKeys(keys);
 
-    // HIGH-1 fix: null recordingUrl in the SAME updateMany as
-    // recordingStorageKey — see the class docstring for why leaving
-    // recordingUrl set would let recording-ingest's DUE query re-select and
-    // re-download this just-purged call within minutes.
-    const res = await this.prisma.salesCall.updateMany({
-      where: { id: { in: calls.map((c) => c.id) }, workspaceId },
-      data: { recordingStorageKey: null, recordingUrl: null },
-    });
-    return res.count;
+      // HIGH-1 fix: null recordingUrl in the SAME updateMany as
+      // recordingStorageKey — see the class docstring for why leaving
+      // recordingUrl set would let recording-ingest's DUE query re-select and
+      // re-download this just-purged call within minutes.
+      const res = await this.prisma.salesCall.updateMany({
+        where: { id: { in: calls.map((c) => c.id) }, workspaceId },
+        data: { recordingStorageKey: null, recordingUrl: null },
+      });
+      total += res.count;
+      if (calls.length < RecordingRetentionService.BATCH) break;
+    }
+    return total;
   }
 }

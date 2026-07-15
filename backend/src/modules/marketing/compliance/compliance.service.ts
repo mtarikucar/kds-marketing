@@ -61,14 +61,23 @@ export class ComplianceService {
       return this.emitSmsOptEvent(workspaceId, leadId, type, granted, meta);
     }
 
-    const record = await this.prisma.consentRecord.create({
-      data: { workspaceId, leadId, type, granted, source: meta.source, ipAddress: meta.ipAddress },
+    // The ConsentRecord write and the opt-out flag flip must commit ATOMICALLY,
+    // exactly like the SMS path (emitSmsOptEvent): a committed ConsentRecord must
+    // always carry its matching flag state. Without the transaction, a flip that
+    // fails after the record commits leaves a recorded email/wa opt-out whose flag
+    // stayed false — and the send path reads ONLY the flag (campaign-sender
+    // isOptedOut / campaigns audience filter), so the contact keeps receiving
+    // campaigns despite an on-record opt-out (a KVKK/GDPR divergence).
+    return this.prisma.$transaction(async (tx) => {
+      const record = await tx.consentRecord.create({
+        data: { workspaceId, leadId, type, granted, source: meta.source, ipAddress: meta.ipAddress },
+      });
+      if (field) {
+        // granted=false → opted OUT (true); granted=true → opted IN (false).
+        await tx.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
+      }
+      return record;
     });
-    if (field) {
-      // granted=false → opted OUT (true); granted=true → opted IN (false).
-      await this.prisma.lead.update({ where: { id: leadId }, data: { [field]: !granted } });
-    }
-    return record;
   }
 
   /**
@@ -429,6 +438,16 @@ export class ComplianceService {
           waOptOut: true,
           deletedAt: new Date(),
         },
+      });
+
+      // A prior EXPORT DataRequest snapshotted the subject's FULL PII into
+      // DataRequest.payload (a durable Json blob, re-served by listRequests).
+      // Erasure must scrub those bodies too — otherwise a complete plaintext copy
+      // of the "erased" subject survives, defeating KVKK/GDPR Art.17. Keep the
+      // audit rows (kind/leadId/completedAt), drop only the PII payload.
+      await tx.dataRequest.updateMany({
+        where: { workspaceId, leadId, kind: 'EXPORT' },
+        data: { payload: Prisma.JsonNull },
       });
 
       return true;
