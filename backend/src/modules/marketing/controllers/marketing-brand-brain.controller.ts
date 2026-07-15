@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
 import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
@@ -10,6 +10,8 @@ import { CurrentMarketingUser } from '../decorators/current-marketing-user.decor
 import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { BrandBrainService } from '../brand-brain/brand-brain.service';
+import { BrandProfileService } from '../brand-brain/brand-profile.service';
+import { BrandProfilePayload } from '../dto/brand-profile.dto';
 
 class SearchDto {
   @IsString() @MaxLength(300) query: string;
@@ -26,7 +28,10 @@ class SearchDto {
 @Controller('marketing/brand-brain')
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 export class MarketingBrandBrainController {
-  constructor(private readonly brain: BrandBrainService) {}
+  constructor(
+    private readonly brain: BrandBrainService,
+    private readonly profiles: BrandProfileService,
+  ) {}
 
   @Post('search')
   @RequirePermission('reports.read')
@@ -40,5 +45,22 @@ export class MarketingBrandBrainController {
   @Audit({ action: 'brand_brain.reindex', resourceType: 'knowledge_base' })
   reindex(@CurrentMarketingUser() a: MarketingUserPayload) {
     return this.brain.reindexWorkspace(a.workspaceId);
+  }
+
+  // No @RequirePermission — PermissionsGuard allows-when-absent (opt-in
+  // gate; see roles/permissions.guard.ts), so this stays readable by any
+  // authenticated marketing user of the workspace, same as before Epic F
+  // permissions existed on this controller.
+  @Get('profile')
+  getProfile(@CurrentMarketingUser() a: MarketingUserPayload) {
+    return this.profiles.get(a.workspaceId);
+  }
+
+  @Put('profile')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'brand_brain.profile.update', resourceType: 'brand_profile' })
+  putProfile(@CurrentMarketingUser() a: MarketingUserPayload, @Body() dto: BrandProfilePayload) {
+    return this.profiles.upsert(a.workspaceId, dto);
   }
 }

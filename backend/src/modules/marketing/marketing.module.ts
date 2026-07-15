@@ -238,6 +238,7 @@ import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { PerformanceLoopService } from './budget/performance-loop.service';
 import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
+import { BrandProfileService } from './brand-brain/brand-profile.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -853,6 +854,7 @@ import { WalletService } from './wallet/wallet.service';
     PerformanceLoopService,
     AgentRunService,
     BrandBrainService,
+    BrandProfileService,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,
@@ -996,6 +998,9 @@ import { WalletService } from './wallet/wallet.service';
     // Multi-workspace membership — the guard (Task 3) and auth service
     // (Tasks 4-7) inject this to resolve authorization from memberships.
     MembershipService,
+    // Brand Brain — BrandContextService (next task) and other modules inject
+    // this to read/write the workspace's consolidated brand profile.
+    BrandProfileService,
   ],
 })
 export class MarketingModule {}
