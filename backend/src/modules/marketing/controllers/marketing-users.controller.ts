@@ -15,9 +15,12 @@ import { RequirePermission } from '../roles/require-permission.decorator';
 import { MarketingRoute } from '../decorators/marketing-public.decorator';
 import { MarketingRoles } from '../decorators/marketing-roles.decorator';
 import { CurrentMarketingUser } from '../decorators/current-marketing-user.decorator';
+import { Audit } from '../../audit/audit.decorator';
 import { MarketingUsersService } from '../services/marketing-users.service';
+import { MembershipService } from '../services/membership.service';
 import { CreateMarketingUserDto } from '../dto/create-marketing-user.dto';
 import { UpdateMarketingUserDto } from '../dto/update-marketing-user.dto';
+import { InviteMemberDto } from '../dto/invite-member.dto';
 import { MarketingUserPayload } from '../types';
 
 @MarketingRoute()
@@ -25,7 +28,23 @@ import { MarketingUserPayload } from '../types';
 @UseGuards(MarketingGuard, MarketingRolesGuard, PermissionsGuard)
 @MarketingRoles('MANAGER')
 export class MarketingUsersController {
-  constructor(private readonly usersService: MarketingUsersService) {}
+  constructor(
+    private readonly usersService: MarketingUsersService,
+    private readonly membershipService: MembershipService,
+  ) {}
+
+  // Multi-workspace membership (Phase 2 Task 11) — invite an existing or
+  // brand-new identity into THIS workspace as MANAGER/REP. Listed before the
+  // create()/:id routes so Nest resolves the literal /invite path first.
+  @Post('invite')
+  @RequirePermission('users.manage')
+  @Audit({ action: 'user.invite', resourceType: 'user' })
+  invite(
+    @CurrentMarketingUser() actor: MarketingUserPayload,
+    @Body() dto: InviteMemberDto,
+  ) {
+    return this.membershipService.invite(actor.workspaceId, actor.id, dto);
+  }
 
   @Post()
   @RequirePermission('settings.manage')

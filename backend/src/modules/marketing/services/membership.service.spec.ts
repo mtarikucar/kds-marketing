@@ -3,7 +3,11 @@ import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-
 
 function makeSvc() {
   const prisma = mockPrismaClient();
-  return { prisma, svc: new MembershipService(prisma as any) };
+  // These tests exercise the pre-existing authz-resolution reads only (never
+  // invite()), so the jwt/config mocks just need to satisfy the constructor.
+  const jwt = { sign: jest.fn() };
+  const config = { get: jest.fn() };
+  return { prisma, svc: new MembershipService(prisma as any, jwt as any, config as any) };
 }
 
 describe('MembershipService', () => {

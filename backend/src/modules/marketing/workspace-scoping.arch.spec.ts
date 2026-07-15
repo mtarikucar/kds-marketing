@@ -206,6 +206,12 @@ const OWNED_DELEGATES = [
   // Writes/reads are workspaceId-scoped; the host lookup is findUnique (by the
   // globally-unique hostname) and the verify sweep is whitelisted below.
   'customDomain',
+  // Multi-workspace membership (Phase 2 Task 11: the invite endpoint) —
+  // WorkspaceMembership is workspace-owned (one row per user-per-workspace);
+  // every multi-row/create call carries a literal workspaceId EXCEPT the two
+  // userId-keyed authz-resolution reads exempted below (a user spans
+  // workspaces by design).
+  'workspaceMembership',
 ] as const;
 
 /**
