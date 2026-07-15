@@ -1,4 +1,5 @@
 import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcryptjs';
 import { MarketingAuthService } from './marketing-auth.service';
 
 /**
@@ -26,7 +27,17 @@ describe('MarketingAuthService — tokens carry the active membership', () => {
       }),
     };
     const smsOtp = { issue: jest.fn(), verify: jest.fn() };
-    svc = new MarketingAuthService({} as never, jwtService, config as never, smsOtp as never);
+    // These tests call generateTokens/issueSession directly, never through
+    // login/verify2fa, so the membership mock's behavior is irrelevant here —
+    // it only needs to exist to satisfy the constructor.
+    const membership = { resolveDefaultWorkspaceId: jest.fn(), getActiveMembership: jest.fn() };
+    svc = new MarketingAuthService(
+      {} as never,
+      jwtService,
+      config as never,
+      smsOtp as never,
+      membership as never,
+    );
   });
 
   it('generateTokens stamps wsp+role from the active membership, not the user row', async () => {
@@ -63,5 +74,101 @@ describe('MarketingAuthService — tokens carry the active membership', () => {
     expect(decoded.wsp).toBe('wsp-4');
     expect(decoded.role).toBe('REP');
     expect(decoded.tokenType).toBe('refresh');
+  });
+});
+
+/**
+ * Phase 1 Task 5 — login/verify2fa no longer trust the MarketingUser row's
+ * home `workspaceId`/`role` at face value; they hand off to
+ * MembershipService to resolve which ACTIVE membership is "default" (home
+ * pointer if still ACTIVE, else most-recently-created ACTIVE membership) and
+ * mint the session for THAT workspace+role. A user with zero ACTIVE
+ * memberships (e.g. removed from every workspace they belonged to) must be
+ * refused outright rather than handed a session for a membership that no
+ * longer exists.
+ */
+describe('MarketingAuthService — login lands on the default membership', () => {
+  let svc: MarketingAuthService;
+  let jwtService: JwtService;
+  let prisma: any;
+  let membership: { resolveDefaultWorkspaceId: jest.Mock; getActiveMembership: jest.Mock };
+
+  const PASSWORD = 'correct-horse-battery-staple';
+  let PASSWORD_HASH: string;
+  beforeAll(async () => {
+    PASSWORD_HASH = await bcrypt.hash(PASSWORD, 4); // low cost — tests only, not security-relevant
+  });
+
+  function baseUser(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'u1',
+      workspaceId: 'home',
+      email: 'a@b.co',
+      password: PASSWORD_HASH,
+      firstName: 'A',
+      lastName: 'B',
+      phone: null,
+      avatar: null,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      failedLogins: 0,
+      lockedUntil: null,
+      tokenVersion: 0,
+      twoFactorEnabled: false,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    jwtService = new JwtService();
+    prisma = {
+      marketingUser: {
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      workspace: {
+        findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
+      },
+    };
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'MARKETING_JWT_SECRET') return 'access-secret';
+        if (key === 'MARKETING_JWT_REFRESH_SECRET') return 'refresh-secret';
+        return undefined;
+      }),
+    };
+    const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    membership = { resolveDefaultWorkspaceId: jest.fn(), getActiveMembership: jest.fn() };
+    svc = new MarketingAuthService(
+      prisma as never,
+      jwtService,
+      config as never,
+      smsOtp as never,
+      membership as never,
+    );
+  });
+
+  it('login lands on the default membership resolved by MembershipService', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+    membership.resolveDefaultWorkspaceId.mockResolvedValue('home');
+    membership.getActiveMembership.mockResolvedValue({
+      workspaceId: 'home',
+      role: 'OWNER',
+      customRoleId: null,
+    });
+
+    const out: any = await svc.login({ email: 'a@b.co', password: PASSWORD } as any);
+
+    expect(membership.resolveDefaultWorkspaceId).toHaveBeenCalledWith('u1', 'home');
+    expect(jwtService.decode(out.accessToken)).toMatchObject({ wsp: 'home', role: 'OWNER' });
+  });
+
+  it('login 401s a user with no ACTIVE membership', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+    membership.resolveDefaultWorkspaceId.mockResolvedValue(null);
+
+    await expect(
+      svc.login({ email: 'a@b.co', password: PASSWORD } as any),
+    ).rejects.toThrow('No active workspace');
   });
 });

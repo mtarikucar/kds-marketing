@@ -16,6 +16,7 @@ import { DEFAULT_BUSINESS_TYPES } from '../dto/create-lead.dto';
 import { DEFAULT_ACTIVATED_MODULES } from '../../billing/entitlements.service';
 import { hashBackupCode, openTotpSecret, verifyTotpStep } from '../util/totp';
 import { SmsOtpService } from './sms-otp.service';
+import { MembershipService } from './membership.service';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -51,6 +52,7 @@ export class MarketingAuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private smsOtp: SmsOtpService,
+    private membership: MembershipService,
   ) {}
 
   private bcryptCost(): number {
@@ -95,8 +97,6 @@ export class MarketingAuthService {
     if (user.role === 'SYSTEM') {
       throw new UnauthorizedException('Invalid credentials');
     }
-
-    await this.assertWorkspaceActive(user.workspaceId);
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       throw new UnauthorizedException('Account is temporarily locked');
@@ -159,8 +159,7 @@ export class MarketingAuthService {
       return { twoFactorRequired: true, challengeToken };
     }
 
-    // TODO(Task 5): resolve default membership
-    return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
+    return this.issueForDefaultWorkspace(user);
   }
 
   /** NetGSM SMS v2 Task 12 — re-send the SMS challenge code for a pending 2FA
@@ -249,8 +248,7 @@ export class MarketingAuthService {
       ).ok;
     }
     if (!ok) throw new UnauthorizedException('Invalid 2FA code');
-    // TODO(Task 5): resolve default membership
-    return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
+    return this.issueForDefaultWorkspace(user);
   }
 
   /** Decodes + validates a 2FA challenge token down to its live, 2FA-armed user. */
@@ -312,6 +310,43 @@ export class MarketingAuthService {
     // old refresh ages out even if the client keeps presenting it.
     // TODO(Task 6): preserve the token's active workspace instead of resetting to home
     return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
+  }
+
+  /**
+   * Multi-workspace membership Phase 1 Task 5 — a user row no longer IS a
+   * workspace; it HOLDS memberships. Login must land on the ACTIVE membership
+   * MembershipService resolves as "default" (the home pointer if still ACTIVE,
+   * else the most-recently-created ACTIVE membership), not blindly on the home
+   * `workspaceId` column, which may have been suspended, removed, or never
+   * updated after the user's actual default moved elsewhere.
+   */
+  private async issueForDefaultWorkspace(user: {
+    id: string;
+    workspaceId: string;
+    role: string;
+    tokenVersion: number;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone: string | null;
+    avatar: string | null;
+  }) {
+    const activeWorkspaceId = await this.membership.resolveDefaultWorkspaceId(
+      user.id,
+      user.workspaceId,
+    );
+    if (!activeWorkspaceId) throw new UnauthorizedException('No active workspace');
+    const m = await this.membership.getActiveMembership(user.id, activeWorkspaceId);
+    if (!m) throw new UnauthorizedException('No active workspace');
+    await this.assertWorkspaceActive(activeWorkspaceId);
+    // keep the home pointer in sync so next login lands here
+    if (user.workspaceId !== activeWorkspaceId) {
+      await this.prisma.marketingUser.update({
+        where: { id: user.id },
+        data: { workspaceId: activeWorkspaceId },
+      });
+    }
+    return this.generateTokens(user, { workspaceId: activeWorkspaceId, role: m.role });
   }
 
   /** SUSPENDED/CLOSED workspaces stop minting sessions at the door. In-flight

@@ -11,6 +11,7 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
   let prisma: any;
   let jwt: { sign: jest.Mock; verifyAsync: jest.Mock };
   let config: { get: jest.Mock };
+  let membership: { resolveDefaultWorkspaceId: jest.Mock; getActiveMembership: jest.Mock };
   let svc: MarketingAuthService;
 
   const WORKSPACE = { id: 'ws-1', slug: 'acme', status: 'ACTIVE' };
@@ -49,7 +50,22 @@ describe('MarketingAuthService — workspace signup + login gates', () => {
       }),
     };
     const smsOtp = { issue: jest.fn(), verify: jest.fn() };
-    svc = new MarketingAuthService(prisma, jwt as any, config as any, smsOtp as any);
+    // registerWorkspace never touches MembershipService (the owner IS the
+    // first/only member, minted directly by generateTokens). The login-gate
+    // tests below resolve the default membership onto the user's own home
+    // workspace ('ws-1') with 'REP' (baseUser.role there) — none of their
+    // assertions check the role claim, so this generic default is enough to
+    // keep their pre-existing assertions (which predate MembershipService)
+    // holding without per-test overrides.
+    membership = {
+      resolveDefaultWorkspaceId: jest.fn(async (_userId: string, homeWorkspaceId: string) => homeWorkspaceId),
+      getActiveMembership: jest.fn(async (_userId: string, workspaceId: string) => ({
+        workspaceId,
+        role: 'REP',
+        customRoleId: null,
+      })),
+    };
+    svc = new MarketingAuthService(prisma, jwt as any, config as any, smsOtp as any, membership as any);
   });
 
   describe('registerWorkspace', () => {

@@ -38,11 +38,16 @@ describe('MarketingAuthService.registerWorkspace — concurrent-duplicate → 40
     const jwt = { sign: jest.fn().mockReturnValue('tok') };
     const config = { get: jest.fn().mockReturnValue(undefined) };
     const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    // registerWorkspace never touches MembershipService — the owner IS the
+    // first/only member, minted directly by generateTokens — so this only
+    // needs to exist to satisfy the constructor.
+    const membership = { resolveDefaultWorkspaceId: jest.fn(), getActiveMembership: jest.fn() };
     const svc = new MarketingAuthService(
       prisma as never,
       jwt as never,
       config as never,
       smsOtp as never,
+      membership as never,
     );
     return { prisma, svc };
   }
@@ -122,11 +127,23 @@ describe('MarketingAuthService — SMS 2FA login integration', () => {
     };
     const config = { get: jest.fn().mockReturnValue('test-secret') };
     const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    // verify2fa() now ends by resolving the default membership (Phase 1 Task
+    // 5): land back on the user's own home workspace/role so this file's
+    // pre-existing assertions (which predate MembershipService) still hold.
+    const membership = {
+      resolveDefaultWorkspaceId: jest.fn(async (_userId: string, homeWorkspaceId: string) => homeWorkspaceId),
+      getActiveMembership: jest.fn(async (_userId: string, workspaceId: string) => ({
+        workspaceId,
+        role: 'REP',
+        customRoleId: null,
+      })),
+    };
     const svc = new MarketingAuthService(
       prisma as never,
       jwt as never,
       config as never,
       smsOtp as never,
+      membership as never,
     );
     return { prisma, jwt, smsOtp, svc };
   }
