@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AnthropicService } from './anthropic.service';
 import { AiCreditsService } from './ai-credits.service';
 import { creditCost, tierFor } from './ai-credit-costs';
+import { BrandContextService } from '../brand-brain/brand-context.service';
 
 export interface ComposeDto {
   kind: 'email' | 'sms' | 'social';
@@ -32,6 +33,7 @@ export class ContentAiService {
     private readonly prisma: PrismaService,
     private readonly anthropic: AnthropicService,
     private readonly credits: AiCreditsService,
+    private readonly brandContext: BrandContextService,
   ) {}
 
   async compose(workspaceId: string, dto: ComposeDto): Promise<ComposeResult> {
@@ -42,6 +44,7 @@ export class ContentAiService {
       where: { id: workspaceId },
       select: { productName: true, productDescription: true, defaultLanguage: true },
     });
+    const brand = await this.brandContext.summaryFor(workspaceId);
 
     await this.credits.reserve(workspaceId, creditCost('content.compose'));
     try {
@@ -53,8 +56,10 @@ export class ContentAiService {
             ? 'Keep it punchy, social-media-appropriate, with a hook. No subject line.'
             : 'Provide a SUBJECT line then the body.';
       const system = [
-        `You are a senior B2B marketing copywriter for "${ws?.productName ?? 'the product'}".`,
-        ws?.productDescription ? `Product: ${ws.productDescription}` : '',
+        brand
+          ? `You are a senior marketing copywriter writing on behalf of this brand:\n${brand}`
+          : `You are a senior B2B marketing copywriter for "${ws?.productName ?? 'the product'}".`,
+        brand ? '' : (ws?.productDescription ? `Product: ${ws.productDescription}` : ''),
         `Write in language code "${lang}". Tone: ${dto.tone ?? 'professional, warm'}.`,
         `Channel: ${dto.kind}. ${limits}`,
         'Output ONLY the copy. For email, format exactly as:\nSUBJECT: <subject>\nBODY:\n<body>',
