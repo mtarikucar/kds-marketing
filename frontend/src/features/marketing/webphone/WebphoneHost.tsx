@@ -402,8 +402,19 @@ export default function WebphoneHost() {
       sipActive={state.status === 'incall'}
       held={!!state.held}
       muted={!!state.muted}
-      onHold={() => void wpRef.current?.hold()}
-      onUnhold={() => void wpRef.current?.unhold()}
+      // Surface a rejected hold/resume — otherwise a failed re-INVITE left the
+      // customer silently stuck on hold with only the un-flipped button icon as
+      // a cue (mirrors CallControlsPanel's own transfer/hangup error toasts).
+      onHold={() =>
+        void wpRef.current?.hold().catch((e: any) =>
+          toast.error(e?.message ?? t('webphone.holdFailed', 'Could not hold the call — try again')),
+        )
+      }
+      onUnhold={() =>
+        void wpRef.current?.unhold().catch((e: any) =>
+          toast.error(e?.message ?? t('webphone.unholdFailed', 'Could not resume the call — the customer may still be on hold')),
+        )
+      }
       onMute={() => wpRef.current?.mute()}
       onUnmute={() => wpRef.current?.unmute()}
       onDtmf={(digit) => void wpRef.current?.sendDtmf(digit)}

@@ -284,16 +284,29 @@ describe('webphone store', () => {
       expect(unhold).not.toHaveBeenCalled();
     });
 
-    it('sets an error and leaves held unset when hold() rejects', async () => {
+    it('RE-THROWS + sets error + leaves held unset when hold() rejects (so the caller can toast)', async () => {
       hold.mockRejectedValueOnce(new Error('re-INVITE rejected'));
       const wp = createWebphone(document.createElement('audio'));
       await wp.start(cfg);
       await wp.call('+90 555 111 22 33');
 
-      await wp.hold();
-
-      expect(wp.getState().held).not.toBe(true);
+      // The rejection must PROPAGATE — WebphoneHost relies on it to toast; the
+      // old silent swallow left the customer stuck on hold with no notice.
+      await expect(wp.hold()).rejects.toThrow('re-INVITE rejected');
+      expect(wp.getState().held).not.toBe(true); // button icon stays truthful
       expect(wp.getState().error).toBe('re-INVITE rejected');
+    });
+
+    it('RE-THROWS when unhold() rejects (a failed resume can leave the customer on hold)', async () => {
+      const wp = createWebphone(document.createElement('audio'));
+      await wp.start(cfg);
+      await wp.call('+90 555 111 22 33');
+      await wp.hold();
+      unhold.mockRejectedValueOnce(new Error('resume rejected'));
+
+      await expect(wp.unhold()).rejects.toThrow('resume rejected');
+      expect(wp.getState().held).toBe(true); // still held — icon reflects reality
+      expect(wp.getState().error).toBe('resume rejected');
     });
 
     it('a fresh call after hold resets held:false', async () => {

@@ -115,7 +115,19 @@ export class DocumentsService {
     if (dto.title !== undefined) data.title = dto.title;
     if (dto.body !== undefined) data.body = dto.body;
     if (dto.type !== undefined) data.type = dto.type;
-    if (dto.leadId !== undefined) data.leadId = dto.leadId;
+    if (dto.leadId !== undefined) {
+      // Mirror create()'s ownership check: leadId is a soft ref (no FK), so
+      // without this an edit could attach a FOREIGN/nonexistent lead id that
+      // just dangles — create() forbids it, update() must too. null clears it.
+      if (dto.leadId) {
+        const lead = await this.prisma.lead.findFirst({
+          where: { id: dto.leadId, workspaceId },
+          select: { id: true },
+        });
+        if (!lead) throw new NotFoundException('Lead not found');
+      }
+      data.leadId = dto.leadId;
+    }
     return this.prisma.document.update({ where: { id, workspaceId }, data });
   }
 

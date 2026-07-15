@@ -52,7 +52,16 @@ export class SubscriptionsService {
   periodKeyFor(interval: string, from: Date): string {
     const y = from.getUTCFullYear();
     if (interval === 'YEAR') return `${y}`;
-    if (interval === 'WEEK') return `${y}-W${String(this.isoWeek(from)).padStart(2, '0')}`;
+    if (interval === 'WEEK') {
+      // The ISO week number and its YEAR must come from the SAME week-numbering
+      // system. ISO weeks 52/53/01 straddle the Dec/Jan boundary, so pairing the
+      // ISO week with the CALENDAR year collapsed two DIFFERENT weeks onto one
+      // key — e.g. 2023-01-01 (ISO 2022-W52) and 2023-12-31 (ISO 2023-W52) both
+      // became "2023-W52", so billOne found the January invoice, treated the
+      // December week as already billed, and silently skipped a week's charge.
+      const { year, week } = this.isoWeekYear(from);
+      return `${year}-W${String(week).padStart(2, '0')}`;
+    }
     return `${y}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`; // MONTH
   }
 
@@ -74,17 +83,17 @@ export class SubscriptionsService {
     return x;
   }
 
-  private isoWeek(d: Date): number {
+  /** ISO-8601 week number AND its week-numbering year (the year of the week's
+   *  Thursday), derived together so a Dec/Jan-boundary week can't pair a week
+   *  number with the wrong year. */
+  private isoWeekYear(d: Date): { year: number; week: number } {
     const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
     const dayNum = (date.getUTCDay() + 6) % 7;
-    date.setUTCDate(date.getUTCDate() - dayNum + 3);
-    const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
-    return (
-      1 +
-      Math.round(
-        (date.getTime() - firstThursday.getTime()) / 86_400_000 / 7,
-      )
-    );
+    date.setUTCDate(date.getUTCDate() - dayNum + 3); // → the Thursday of this ISO week
+    const year = date.getUTCFullYear(); // the ISO week-numbering year
+    const firstThursday = new Date(Date.UTC(year, 0, 4));
+    const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / 86_400_000 / 7);
+    return { year, week };
   }
 
   /** Roll a schedule forward to the first boundary strictly after `now`. */

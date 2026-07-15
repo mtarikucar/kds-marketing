@@ -20,6 +20,25 @@ describe('SubscriptionsService', () => {
       expect(svc.periodKeyFor('YEAR', new Date('2026-06-15T00:00:00Z'))).toBe('2026');
     });
 
+    // WEEK keys must pair the ISO week with its ISO week-NUMBERING year, not the
+    // calendar year — else Dec/Jan-boundary weeks collide onto one key and a
+    // week's invoice is silently skipped.
+    it('periodKeyFor WEEK uses the ISO week-numbering year (no year-boundary collision)', () => {
+      // 2023-01-01 (Sun) is ISO 2022-W52; 2023-12-31 (Sun) is ISO 2023-W52.
+      // With the calendar year both were "2023-W52" — a genuine collision.
+      expect(svc.periodKeyFor('WEEK', new Date('2023-01-01T00:00:00Z'))).toBe('2022-W52');
+      expect(svc.periodKeyFor('WEEK', new Date('2023-12-31T00:00:00Z'))).toBe('2023-W52');
+      // And the two must differ (the actual invariant the billing skip violated).
+      expect(svc.periodKeyFor('WEEK', new Date('2023-01-01T00:00:00Z'))).not.toBe(
+        svc.periodKeyFor('WEEK', new Date('2023-12-31T00:00:00Z')),
+      );
+      // Late-Dec 2024 rolls into ISO 2025-W01; early-Jan 2025 is the SAME week.
+      expect(svc.periodKeyFor('WEEK', new Date('2024-12-30T00:00:00Z'))).toBe('2025-W01');
+      expect(svc.periodKeyFor('WEEK', new Date('2025-01-01T00:00:00Z'))).toBe('2025-W01');
+      // A mid-year sanity check.
+      expect(svc.periodKeyFor('WEEK', new Date('2026-06-15T00:00:00Z'))).toBe('2026-W25');
+    });
+
     it('addInterval CLAMPS month-end (Jan 31 + 1 month -> Feb 28, not Mar 3)', () => {
       const next = svc.addInterval(new Date('2026-01-31T00:00:00Z'), 'MONTH', 1);
       expect(next.toISOString().slice(0, 10)).toBe('2026-02-28');
