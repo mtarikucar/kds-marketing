@@ -39,6 +39,15 @@ export class SseTokenGuard implements CanActivate {
       });
       if (payload.type !== 'marketing') throw new UnauthorizedException('Invalid token type');
 
+      // Fail CLOSED before the membership query: Prisma silently drops an
+      // `undefined` value in a `where` filter (strictUndefinedChecks is not
+      // enabled on this schema), so a falsy `payload.wsp` would otherwise
+      // degrade the `memberships` filter to `{ status: 'ACTIVE' }, take: 1`
+      // and match the user's first ACTIVE membership in ANY workspace.
+      if (!payload.wsp) {
+        throw new UnauthorizedException('Session revoked');
+      }
+
       const user = await this.prisma.marketingUser.findUnique({
         where: { id: payload.sub },
         select: {
@@ -53,17 +62,39 @@ export class SseTokenGuard implements CanActivate {
           // NetGSM Phase 3 Task 3 — the telephony screen-pop stream filters
           // by the rep's own extension; only this guard needs it.
           dahili: true,
+          // The ACTIVE membership for the token's active workspace — the source
+          // of truth for this request's role/customRoleId under multi-workspace.
+          memberships: {
+            where: { workspaceId: payload.wsp, status: 'ACTIVE' },
+            select: { workspaceId: true, role: true, customRoleId: true },
+            take: 1,
+          },
         },
       });
       if (!user || user.status !== 'ACTIVE' || user.role === 'SYSTEM') {
         throw new UnauthorizedException('User not found or inactive');
       }
-      if (payload.wsp !== user.workspaceId) throw new UnauthorizedException('Session revoked');
+
+      // COND 5 (multi-workspace): the session is valid only if the user still
+      // holds an ACTIVE membership for the token's active workspace. Revocation
+      // (SUSPEND / remove) denies the very next request.
+      const membership = user.memberships[0];
+      if (!membership) {
+        throw new UnauthorizedException('Session revoked');
+      }
+
       if (typeof payload.ver === 'number' && payload.ver !== user.tokenVersion) {
         throw new UnauthorizedException('Session revoked');
       }
-      const { tokenVersion: _v, ...publicFields } = user;
-      request.marketingUser = publicFields;
+
+      const { tokenVersion: _v, memberships: _m, workspaceId: _home, role: _homeRole, ...rest } = user;
+      request.marketingUser = {
+        ...rest,
+        // The active workspace + the role/customRoleId resolved FROM the membership.
+        workspaceId: membership.workspaceId,
+        role: membership.role,
+        customRoleId: membership.customRoleId,
+      };
       return true;
     } catch (error) {
       if (error instanceof UnauthorizedException) throw error;
