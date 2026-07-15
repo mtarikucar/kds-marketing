@@ -96,22 +96,33 @@ export class AuditService implements OnModuleInit {
       throw new ServiceUnavailableException('Prospecting audit is not enabled');
     }
     const targetUrl = this.normalizeUrl(dto.targetUrl);
-    const audit = await this.prisma.prospectAudit.create({
-      data: {
-        workspaceId,
-        targetUrl,
-        businessName: dto.businessName?.trim() || null,
-        status: 'PENDING',
-        publicToken: `pa_${randomBytes(18).toString('hex')}`,
-      },
-    });
-    await this.scheduledJob.schedule({
-      workspaceId,
-      kind: PROSPECT_AUDIT_SCAN_KIND,
-      runAt: new Date(),
-      payload: { auditId: audit.id },
-      dedupKey: `prospect-audit:${audit.id}`,
-      maxAttempts: 2,
+    // Create the row AND enqueue its scan job in ONE transaction: a schedule()
+    // failure (transient DB blip) must roll the row back, not leave an orphaned
+    // audit stuck PENDING forever — one with no job ever enqueued shows in
+    // list() indefinitely and its public report page auto-refreshes on "still
+    // running" with nothing behind it. schedule() takes the tx client.
+    const audit = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.prospectAudit.create({
+        data: {
+          workspaceId,
+          targetUrl,
+          businessName: dto.businessName?.trim() || null,
+          status: 'PENDING',
+          publicToken: `pa_${randomBytes(18).toString('hex')}`,
+        },
+      });
+      await this.scheduledJob.schedule(
+        {
+          workspaceId,
+          kind: PROSPECT_AUDIT_SCAN_KIND,
+          runAt: new Date(),
+          payload: { auditId: row.id },
+          dedupKey: `prospect-audit:${row.id}`,
+          maxAttempts: 2,
+        },
+        tx,
+      );
+      return row;
     });
     return this.withReportPath(audit);
   }

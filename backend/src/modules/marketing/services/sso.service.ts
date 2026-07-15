@@ -2,9 +2,11 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   createHash,
   createPublicKey,
@@ -549,16 +551,27 @@ export class SsoService {
     // JIT provision. No password is usable: store a random sealed-strength
     // sentinel so the password login path can never authenticate this row.
     const randomPassword = b64url(randomBytes(48));
-    return this.prisma.marketingUser.create({
-      data: {
-        workspaceId,
-        email,
-        password: randomPassword,
-        firstName: strClaim(claims.given_name) || email.split('@')[0],
-        lastName: strClaim(claims.family_name),
-        role: DEFAULT_NEW_USER_ROLE,
-      },
-    });
+    try {
+      return await this.prisma.marketingUser.create({
+        data: {
+          workspaceId,
+          email,
+          password: randomPassword,
+          firstName: strClaim(claims.given_name) || email.split('@')[0],
+          lastName: strClaim(claims.family_name),
+          role: DEFAULT_NEW_USER_ROLE,
+        },
+      });
+    } catch (e) {
+      // MarketingUser.email is GLOBALLY unique (not per-workspace), so an email
+      // that already belongs to ANOTHER workspace collides here. Without this
+      // the raw P2002 surfaced as an opaque HTTP 500 on the IdP callback; return
+      // a clean, actionable error instead. (Mirrors createAffiliate's P2002 map.)
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('This email is already registered on another workspace');
+      }
+      throw e;
+    }
   }
 
   /** SSRF-safe outbound IdP call with a timeout; never reaches internal hosts. */
