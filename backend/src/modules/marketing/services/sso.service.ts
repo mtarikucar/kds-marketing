@@ -167,8 +167,10 @@ export class SsoService {
 
   /**
    * Handle the IdP redirect: validate state, exchange the code, verify the ID
-   * token (iss/aud/exp/nonce + RS256 signature via JWKS), JIT-match/provision a
-   * MarketingUser in the connection's workspace, and mint a marketing session.
+   * token (iss/aud/exp/nonce + RS256 signature via JWKS), JIT-match/provision
+   * the (GLOBAL) MarketingUser identity and ensure/attach an ACTIVE
+   * WorkspaceMembership for the connection's workspace, then mint a marketing
+   * session for that membership.
    */
   async handleCallback(state: string, code: string) {
     const ctx = this.consumeState(state);
@@ -223,9 +225,11 @@ export class SsoService {
     }
     this.assertDomainAllowed(email, conn.allowedDomains);
 
-    const user = await this.matchOrProvision(ctx.workspaceId, email, claims);
-    // TODO(Task 14): resolve membership
-    return this.authService.issueSession(user, { workspaceId: user.workspaceId, role: user.role });
+    const { user, membership } = await this.matchOrProvision(ctx.workspaceId, email, claims);
+    return this.authService.issueSession(user, {
+      workspaceId: membership.workspaceId,
+      role: membership.role,
+    });
   }
 
   // ===================================================================== //
@@ -533,32 +537,107 @@ export class SsoService {
     return chosen;
   }
 
+  /**
+   * Multi-workspace membership (Phase 2 Task 14) — a MarketingUser identity is
+   * GLOBAL (email is unique across the whole product), but SSO always signs
+   * someone into ONE connection's workspace. So this both matches/provisions
+   * the IDENTITY (global) and ensures a WorkspaceMembership for the target
+   * workspace exists and is ACTIVE — the two are resolved together and the
+   * session is minted off the membership, not the identity's home role.
+   *
+   * - existing identity: looked up by the GLOBAL email unique (never
+   *   workspace-scoped — a workspace-scoped `findFirst` would miss a user
+   *   whose home workspace differs from the SSO target and the JIT `create`
+   *   below would then collide on the global email unique → P2002 → 500).
+   *   A membership for THIS workspace is attached if missing (auto-trusting
+   *   it is safe here: the workspace's SSO admin already opted into this via
+   *   the connection's allowedDomains, so it is not a silent cross-org link
+   *   by an arbitrary actor). An existing non-ACTIVE membership (SUSPENDED or
+   *   still-pending INVITED) is never silently reactivated by SSO.
+   * - no identity: JIT-provision the identity AND its first ACTIVE membership
+   *   together in one transaction so neither can exist without the other.
+   */
   private async matchOrProvision(
     workspaceId: string,
     email: string,
     claims: Record<string, unknown>,
-  ) {
-    const existing = await this.prisma.marketingUser.findFirst({
-      where: { workspaceId, email },
+  ): Promise<{
+    user: {
+      id: string;
+      workspaceId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phone: string | null;
+      avatar: string | null;
+      role: string;
+      tokenVersion: number;
+    };
+    membership: { workspaceId: string; role: string };
+  }> {
+    const existing = await this.prisma.marketingUser.findUnique({
+      where: { email },
     });
+
     if (existing) {
       if (existing.role === 'SYSTEM' || existing.status !== 'ACTIVE') {
         throw new UnauthorizedException('Account cannot sign in via SSO');
       }
-      return existing;
+
+      const membership = await this.prisma.workspaceMembership.findFirst({
+        where: { userId: existing.id, workspaceId },
+      });
+
+      if (!membership) {
+        const created = await this.prisma.workspaceMembership.create({
+          data: {
+            userId: existing.id,
+            workspaceId,
+            role: DEFAULT_NEW_USER_ROLE,
+            status: 'ACTIVE',
+            acceptedAt: new Date(),
+          },
+        });
+        return { user: existing, membership: created };
+      }
+
+      if (membership.status !== 'ACTIVE') {
+        // SUSPENDED must not be silently overridden by SSO; INVITED must be
+        // accepted through the normal accept flow first — either way, SSO
+        // does not mutate the membership's status here.
+        throw new UnauthorizedException('Account cannot sign in via SSO');
+      }
+
+      return { user: existing, membership };
     }
+
     // JIT provision. No password is usable: store a random sealed-strength
     // sentinel so the password login path can never authenticate this row.
+    // The identity and its first membership are created in ONE transaction
+    // so a mid-way failure never leaves an identity with no membership (or
+    // vice versa).
     const randomPassword = b64url(randomBytes(48));
-    return this.prisma.marketingUser.create({
-      data: {
-        workspaceId,
-        email,
-        password: randomPassword,
-        firstName: strClaim(claims.given_name) || email.split('@')[0],
-        lastName: strClaim(claims.family_name),
-        role: DEFAULT_NEW_USER_ROLE,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.marketingUser.create({
+        data: {
+          workspaceId,
+          email,
+          password: randomPassword,
+          firstName: strClaim(claims.given_name) || email.split('@')[0],
+          lastName: strClaim(claims.family_name),
+          role: DEFAULT_NEW_USER_ROLE,
+        },
+      });
+      const membership = await tx.workspaceMembership.create({
+        data: {
+          userId: user.id,
+          workspaceId,
+          role: DEFAULT_NEW_USER_ROLE,
+          status: 'ACTIVE',
+          acceptedAt: new Date(),
+        },
+      });
+      return { user, membership };
     });
   }
 
