@@ -183,6 +183,48 @@ describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
       await svc.finalizeAsset('asset-1', { status: 'FAILED', error: 'boom' });
       expect(wallet.credit).not.toHaveBeenCalled();
     });
+
+    // The wallet pre-debit is on the REQUESTED duration; a shorter clip must
+    // credit back the unused USD (else the real-cash wallet is overcharged even
+    // though the credit meter is trued up).
+    it('COMPLETED shorter-than-requested video → credits back the unused wallet USD (mediagen-reconcile)', async () => {
+      const VIDEO_ASSET = {
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING',
+        model: 'fal-ai/veo3/fast', // $0.25/sec
+        costCreditsReserved: 250, params: { campaignItemId: 'ci-1' }, type: 'VIDEO', durationSec: 10,
+      };
+      const { svc, prisma, wallet } = makeSvc({
+        asset: VIDEO_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-2.5') }, // reserved 10s = $2.50
+      });
+      (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
+      (prisma as any).generatedAsset.updateMany.mockResolvedValue({ count: 1 });
+      const r2up = (svc as any).r2.upload as jest.Mock;
+      r2up.mockResolvedValue({ url: 'https://r2/v.mp4', key: 'social/ws-1/v.mp4', mime: 'video/mp4' });
+
+      // Provider returns a 4s clip (< the requested 10s).
+      await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'https://fal/v.mp4', mime: 'video/mp4', durationSec: 4 }] });
+
+      // reserved $2.50 − actual (4s × $0.25 = $1.00) = $1.50 credited back.
+      expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({ ref: 'mediagen-reconcile:asset-1', kind: 'REFUND' }));
+      expect(wallet.credit.mock.calls[0][1].amount.toString()).toBe('1.5');
+    });
+
+    it('COMPLETED at the EXACT requested duration → no wallet reconcile (nothing unused)', async () => {
+      const VIDEO_ASSET = {
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING', model: 'fal-ai/veo3/fast',
+        costCreditsReserved: 250, params: { campaignItemId: 'ci-1' }, type: 'VIDEO', durationSec: 10,
+      };
+      const { svc, prisma, wallet } = makeSvc({
+        asset: VIDEO_ASSET,
+        walletEntry: { workspaceId: WS, delta: new Prisma.Decimal('-2.5') },
+      });
+      (svc as any).download = jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), size: 1 });
+      (prisma as any).generatedAsset.updateMany.mockResolvedValue({ count: 1 });
+      ((svc as any).r2.upload as jest.Mock).mockResolvedValue({ url: 'u', key: 'k', mime: 'video/mp4' });
+      await svc.finalizeAsset('asset-1', { status: 'COMPLETED', outputs: [{ url: 'u', mime: 'video/mp4', durationSec: 10 }] });
+      expect(wallet.credit).not.toHaveBeenCalled();
+    });
   });
 
   describe('deleteAsset refund', () => {
@@ -197,6 +239,26 @@ describe('MediaGenService engine wallet drawdown (Growth Autopilot D4)', () => {
       });
       await svc.deleteAsset(WS, 'asset-1');
       expect(wallet.credit).toHaveBeenCalledWith(WS, expect.objectContaining({ ref: 'mediagen-refund:asset-1' }));
+    });
+
+    // A concurrent finalize can write r2Key AFTER getAsset's stale snapshot read
+    // it as null — deleting the STALE keys would orphan the freshly-stored blob.
+    it('deletes the R2 keys off the CURRENT (deleted) row, not the stale pre-claim snapshot', async () => {
+      const staleAsset = {
+        id: 'asset-1', workspaceId: WS, status: 'GENERATING', model: DEFAULT_IMAGE_MODEL,
+        costCreditsReserved: 3, params: {}, r2Key: null, thumbnailR2Key: null, // stale: r2Key not yet written
+      };
+      const { svc, prisma } = makeSvc({ asset: staleAsset });
+      // The delete claim lost to a concurrent finalize (row already terminal)…
+      prisma.generatedAsset.updateMany.mockResolvedValue({ count: 0 });
+      // …but delete() returns the row's CURRENT keys (the finalize stored keyA).
+      prisma.generatedAsset.delete.mockResolvedValue({ r2Key: 'social/ws-1/keyA.png', thumbnailR2Key: null });
+      const r2 = (svc as any).r2;
+
+      await svc.deleteAsset(WS, 'asset-1');
+
+      // The freshly-stored blob is deleted (not the stale null snapshot → no orphan).
+      expect(r2.deleteKeys).toHaveBeenCalledWith(['social/ws-1/keyA.png']);
     });
   });
 
