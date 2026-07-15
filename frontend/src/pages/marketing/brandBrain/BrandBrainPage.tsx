@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Callout } from '@/components/ui/Callout';
 import { searchBrandBrain, reindexBrandBrain, type Citation } from '../../../features/marketing/api/brandBrain.service';
+import BrandProfileEditor from './BrandProfileEditor';
 
 /**
  * Brand Brain (Faz 1) — ask over your own knowledge base and get answers grounded
@@ -55,6 +56,8 @@ export default function BrandBrainPage({ embedded }: { embedded?: boolean } = {}
         actions={reindexButton}
       />
       )}
+
+      <BrandProfileEditor />
 
       <div className="flex gap-2">
         <Input

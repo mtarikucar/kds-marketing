@@ -1970,6 +1970,10 @@
         "title": "Add knowledge",
         "desc": "Give the AI your menu, hours and policies to answer from."
       },
+      "brand": {
+        "title": "Build your Brand Brain",
+        "desc": "Tell the AI who you are so every message and campaign sounds like your brand."
+      },
       "channel": {
         "title": "Connect a channel",
         "desc": "Web chat, WhatsApp or SMS — where customers message you."
@@ -2721,6 +2725,25 @@
       "business": "Business",
       "kit": "Brand Kit",
       "brain": "Brand Brain"
+    },
+    "brain": {
+      "editor": {
+        "title": "Brand profile",
+        "subtitle": "The one consolidated profile that grounds every AI — conversations, content, social and voice.",
+        "brandName": "Brand name",
+        "tagline": "Tagline",
+        "description": "Description",
+        "valueProps": "Value propositions",
+        "toneWords": "Tone words",
+        "voiceGuide": "Voice guide",
+        "icpDescription": "Ideal customer",
+        "audienceObjections": "Audience objections",
+        "oneItemPerLine": "One item per line.",
+        "activate": "Grounding active",
+        "activateHint": "Only an active profile grounds the AI — a draft is saved but has no effect yet.",
+        "saved": "Brand profile saved",
+        "saveFailed": "Save failed"
+      }
     }
   },
   "calls": {
