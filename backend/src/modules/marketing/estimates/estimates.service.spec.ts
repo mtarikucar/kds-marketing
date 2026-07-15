@@ -68,9 +68,13 @@ describe('EstimatesService', () => {
 
       const res = await svc.convertToInvoice(WS, 'e1');
 
+      // The estimate's snapshotted tax is preserved: invoices.create is told to
+      // TRUST the incoming items (preResolvedItems), never re-resolve from
+      // CURRENT rates — else an archived/edited rate would bill a total the
+      // customer never accepted.
       expect(invoices.create).toHaveBeenCalledWith(
         WS,
-        expect.objectContaining({ leadId: 'lead-1', currency: 'TRY' }),
+        expect.objectContaining({ leadId: 'lead-1', currency: 'TRY', preResolvedItems: true }),
       );
       expect(prisma.estimate.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -100,6 +104,25 @@ describe('EstimatesService', () => {
       } as any);
       await expect(svc.convertToInvoice(WS, 'e1')).rejects.toBeInstanceOf(ConflictException);
     });
+
+    it('refuses to convert an EXPIRED still-SENT estimate (stale price)', async () => {
+      prisma.estimate.findFirst.mockResolvedValue({
+        id: 'e1', status: 'SENT', convertedInvoiceId: null,
+        validUntil: new Date(Date.now() - 86_400_000), // yesterday
+      } as any);
+      await expect(svc.convertToInvoice(WS, 'e1')).rejects.toThrow(/expired/i);
+      expect(invoices.create).not.toHaveBeenCalled();
+    });
+
+    it('still converts an ACCEPTED estimate past validUntil (it was accepted in time)', async () => {
+      prisma.estimate.findFirst.mockResolvedValue({
+        id: 'e1', status: 'ACCEPTED', convertedInvoiceId: null, leadId: null, currency: 'TRY', notes: null,
+        items: [{ description: 'x', qty: 1, unitPrice: 100 }], acceptedAt: new Date(),
+        validUntil: new Date(Date.now() - 86_400_000),
+      } as any);
+      prisma.estimate.updateMany.mockResolvedValue({ count: 1 } as any);
+      await expect(svc.convertToInvoice(WS, 'e1')).resolves.toMatchObject({ id: 'inv-1' });
+    });
   });
 
   describe('public accept / decline (token-gated)', () => {
@@ -119,6 +142,14 @@ describe('EstimatesService', () => {
     it('refuses to accept an already-declined estimate via token', async () => {
       prisma.estimate.findUnique.mockResolvedValue({ id: 'e1', status: 'DECLINED' } as any);
       await expect(svc.publicAccept('es_tok')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.estimate.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to accept an EXPIRED estimate (past validUntil) — no lock-in at the stale price', async () => {
+      prisma.estimate.findUnique.mockResolvedValue({
+        id: 'e1', status: 'SENT', validUntil: new Date(Date.now() - 86_400_000),
+      } as any);
+      await expect(svc.publicAccept('es_tok')).rejects.toThrow(/expired/i);
       expect(prisma.estimate.update).not.toHaveBeenCalled();
     });
 

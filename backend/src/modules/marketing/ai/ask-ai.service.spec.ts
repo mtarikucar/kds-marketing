@@ -79,5 +79,25 @@ describe('AskAiService', () => {
     // active leads only — the AI must not surface soft-deleted / merged contacts
     expect(where.deletedAt).toBeNull();
     expect(where.mergedIntoId).toBeNull();
+    // No actor passed → no REP scope (a MANAGER/OWNER sees the whole workspace).
+    expect(where.assignedToId).toBeUndefined();
+  });
+
+  it('scopes search_leads to a REP\'s OWN leads (no reading another rep\'s contact PII)', async () => {
+    anthropic.complete
+      .mockResolvedValueOnce({ text: '', toolUses: [{ type: 'tool_use', id: 't1', name: 'search_leads', input: { city: 'Izmir' } }], stopReason: 'tool_use', usage: {} })
+      .mockResolvedValueOnce({ text: 'done', toolUses: [], stopReason: 'end_turn', usage: {} });
+    await svc.ask(WS, 'list izmir leads', { id: 'rep-9', role: 'REP' });
+    const where = prisma.lead.findMany.mock.calls[0][0].where;
+    // Mirrors the row-level scope the normal lead list enforces for a REP.
+    expect(where.assignedToId).toBe('rep-9');
+  });
+
+  it('does NOT scope for a MANAGER (full-workspace visibility)', async () => {
+    anthropic.complete
+      .mockResolvedValueOnce({ text: '', toolUses: [{ type: 'tool_use', id: 't1', name: 'search_leads', input: {} }], stopReason: 'tool_use', usage: {} })
+      .mockResolvedValueOnce({ text: 'done', toolUses: [], stopReason: 'end_turn', usage: {} });
+    await svc.ask(WS, 'all leads', { id: 'mgr-1', role: 'MANAGER' });
+    expect(prisma.lead.findMany.mock.calls[0][0].where.assignedToId).toBeUndefined();
   });
 });

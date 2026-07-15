@@ -71,6 +71,13 @@ export class InvoicesService {
       discount?: number;
       notes?: string;
       dueDate?: string;
+      /** Trust the incoming items' already-snapshotted taxRatePct instead of
+       *  re-resolving from the CURRENT TaxRate rows. Set by estimate→invoice
+       *  conversion so the invoice bills the tax the customer ACCEPTED, even if
+       *  the rate was later archived/edited (a converted estimate is a committed
+       *  historical document — see money.util's "editing a rate later never
+       *  rewrites historical totals" invariant). */
+      preResolvedItems?: boolean;
       // Set by the CustomerSubscription sweep so the invoice is born already
       // stamped — the (subscriptionId, subscriptionPeriodKey) partial-unique
       // index then enforces one-invoice-per-period AT INSERT (no orphan window).
@@ -83,11 +90,15 @@ export class InvoicesService {
     },
   ) {
     // Re-snapshot each line's tax rate from the workspace's TaxRate rows, then
-    // compute subtotal/taxTotal/total from those trusted snapshots.
-    const items = await this.taxRates.resolveItemTaxes(
-      workspaceId,
-      (Array.isArray(dto.items) ? dto.items : []) as PricedItem[],
-    );
+    // compute subtotal/taxTotal/total from those trusted snapshots — UNLESS the
+    // caller already holds a committed snapshot (estimate→invoice conversion),
+    // in which case re-resolving would rewrite the accepted total.
+    const items = dto.preResolvedItems
+      ? (Array.isArray(dto.items) ? dto.items : [])
+      : await this.taxRates.resolveItemTaxes(
+          workspaceId,
+          (Array.isArray(dto.items) ? dto.items : []) as PricedItem[],
+        );
     const totals = computeMoneyTotals(items);
     this.assertInRange(totals.total);
     // Coupon discount is applied AFTER tax and clamped to the gross total.

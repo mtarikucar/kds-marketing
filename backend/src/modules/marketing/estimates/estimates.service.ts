@@ -149,9 +149,25 @@ export class EstimatesService {
     if (estimate.status !== 'ACCEPTED' && estimate.status !== 'SENT') {
       throw new ConflictException('Only a sent or accepted estimate can be converted');
     }
+    // A still-SENT (unaccepted) estimate past its validUntil is an expired quote
+    // — converting it would bill the now-stale price. An ACCEPTED estimate was
+    // accepted while valid (publicAccept enforces expiry), so it stays convertible.
+    if (
+      estimate.status === 'SENT' &&
+      estimate.validUntil &&
+      estimate.validUntil.getTime() < Date.now()
+    ) {
+      throw new ConflictException('This estimate has expired');
+    }
     const invoice = await this.invoices.create(workspaceId, {
       leadId: estimate.leadId ?? undefined,
+      // Trust the estimate's ALREADY-SNAPSHOTTED per-line taxRatePct — the
+      // customer accepted this total. Without this, invoices.create re-resolves
+      // tax from the CURRENT rates, so an archived/edited rate would bill a
+      // DIFFERENT amount than the accepted quote (and estimate.total would
+      // permanently disagree with the linked invoice.total).
       items: estimate.items as unknown as PricedItem[],
+      preResolvedItems: true,
       currency: estimate.currency,
       notes: estimate.notes ?? undefined,
     });
@@ -216,6 +232,17 @@ export class EstimatesService {
     if (!estimate) throw new NotFoundException('Estimate not found');
     if (estimate.status === 'DECLINED') {
       throw new ConflictException('This estimate was already declined');
+    }
+    // The public page renders "Valid until <date>" — enforce it: a customer must
+    // not be able to accept (and lock in) a quote past its stated expiry, at the
+    // now-stale price. (Sibling LeadOffers enforces the same on accept.) An
+    // already-ACCEPTED estimate stays accepted (idempotent re-accept).
+    if (
+      estimate.status !== 'ACCEPTED' &&
+      estimate.validUntil &&
+      estimate.validUntil.getTime() < Date.now()
+    ) {
+      throw new ConflictException('This estimate has expired');
     }
     if (estimate.status !== 'ACCEPTED') {
       await this.prisma.estimate.update({
