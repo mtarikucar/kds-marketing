@@ -93,6 +93,20 @@ describe('MarketingUsersService — deactivate (delete) guards', () => {
     prisma.workspaceMembership.findFirst.mockResolvedValue(null);
     await expect(svc.delete(WS, 'ghost-1', 'OWNER', 'owner-1')).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  // Task 16 Fix 2 — assertCanDeactivate used to lack the "only an OWNER may
+  // touch an OWNER" gate that update() already had, so a MANAGER could
+  // DELETE /users/:coOwnerId and suspend a co-owner. Must be rejected before
+  // ever reaching the last-owner count (no DB round trip at all).
+  it('refuses to let a MANAGER deactivate an OWNER target (Fix 2 — only an owner may touch an owner)', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'mem-owner', userId: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
+    } as any);
+    await expect(svc.delete(WS, 'owner-1', 'MANAGER', 'mgr-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.workspaceMembership.count).not.toHaveBeenCalled();
+    expect(prisma.workspaceMembership.updateMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('MarketingUsersService — update() deactivation guards (parity with delete())', () => {
@@ -110,13 +124,36 @@ describe('MarketingUsersService — update() deactivation guards (parity with de
     expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 
-  it('refuses to deactivate the OWNER account via a status update', async () => {
+  // This used to pass via the self-suspend check (actor === target), not the
+  // last-owner guard — count() was left unmocked (=> undefined), so it never
+  // actually proved assertNotLastOwner fires here. Split into two: one that
+  // still proves self-suspend is blocked for an OWNER, and one (Fix 3) that
+  // uses a DIFFERENT actor + an explicit count()=0 mock so the ConflictException
+  // demonstrably comes from the last-owner guard, not the self-suspend gate.
+  it('still blocks an OWNER from deactivating themselves via a status update (self-suspend gate)', async () => {
     const { prisma, svc } = makeSvc(-1);
     prisma.workspaceMembership.findFirst.mockResolvedValue({
       id: 'mem-owner', userId: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
       user: { id: 'owner-1', email: 'o@x.co', firstName: 'O', lastName: 'X', phone: null },
     } as any);
     await expect((svc.update as any)(WS, 'owner-1', { status: 'INACTIVE' }, 'OWNER', 'owner-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.workspaceMembership.count).not.toHaveBeenCalled();
+    expect(prisma.workspaceMembership.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks deactivating the ONLY owner via a status update from a DIFFERENT actor (last-owner guard, Fix 3)', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'mem-owner', userId: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
+      user: { id: 'owner-1', email: 'o@x.co', firstName: 'O', lastName: 'X', phone: null },
+    } as any);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(0); // no other active owners
+    await expect(
+      (svc.update as any)(WS, 'owner-1', { status: 'INACTIVE' }, 'OWNER', 'owner-2'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.workspaceMembership.count).toHaveBeenCalledWith({
+      where: { workspaceId: WS, role: 'OWNER', status: 'ACTIVE', NOT: { userId: 'owner-1' } },
+    });
     expect(prisma.workspaceMembership.update).not.toHaveBeenCalled();
   });
 
@@ -145,13 +182,19 @@ describe('MarketingUsersService — update() deactivation guards (parity with de
 // a workspace legitimately has more than one — proving the guard is
 // membership-granular, not role-blanket.
 describe('MarketingUsersService — last-owner protection (Task 16)', () => {
+  // Actor must be an OWNER here (not a MANAGER) — since Task 16 Fix 2, a
+  // MANAGER is rejected by the "only an owner may touch an owner" gate
+  // before ever reaching the last-owner count (see the dedicated Fix 2 test
+  // in the "deactivate (delete) guards" describe block above); this test's
+  // job is to prove the last-owner guard itself, so it uses a DIFFERENT
+  // OWNER actor to get past that gate.
   it('blocks suspending the ONLY active owner via delete() with ConflictException', async () => {
     const { prisma, svc } = makeSvc(-1);
     prisma.workspaceMembership.findFirst.mockResolvedValue({
       id: 'mem-owner', userId: 'owner-1', workspaceId: WS, role: 'OWNER', status: 'ACTIVE',
     } as any);
     (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(0); // no other active owners
-    await expect(svc.delete(WS, 'owner-1', 'MANAGER', 'mgr-1')).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.delete(WS, 'owner-1', 'OWNER', 'owner-2')).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.workspaceMembership.count).toHaveBeenCalledWith({
       where: { workspaceId: WS, role: 'OWNER', status: 'ACTIVE', NOT: { userId: 'owner-1' } },
     });

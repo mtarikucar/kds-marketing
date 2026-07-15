@@ -84,6 +84,22 @@ export class MarketingUsersService {
   }
 
   /**
+   * Advisory-lock ALL owner-affecting mutations in this workspace onto ONE
+   * key ('owner:'+workspaceId — distinct from the seat-lock key so the two
+   * don't contend unless a single request legitimately needs both). This
+   * serializes the last-owner count + the membership write (Task 16 Fix 1):
+   * without it, two concurrent requests each demoting/suspending a
+   * DIFFERENT owner of a 2-owner workspace could both read otherOwners=1
+   * from their own unlocked count() and both proceed, dropping the
+   * workspace to zero owners. Mirrors seatLock() above.
+   */
+  private ownerLock(tx: Prisma.TransactionClient, workspaceId: string) {
+    return tx.$queryRawUnsafe(
+      `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('owner:' + workspaceId)}))::text AS locked`,
+    );
+  }
+
+  /**
    * "Create a user" is now "invite a membership" — the MANAGER/REP role
    * floor, the OWNER/SYSTEM exclusion, AND the seat cap are ALL enforced by
    * MembershipService.invite() itself (identical BadRequestException), so
@@ -174,15 +190,26 @@ export class MarketingUsersService {
    * / removing / demoting the last owner). Only relevant when the TARGET is
    * currently an ACTIVE OWNER — every other role/status is a no-op here, so
    * callers can invoke this unconditionally before a mutation without first
-   * checking the target's role themselves. Today a workspace has exactly ONE
-   * OWNER (no promote-to-OWNER path exists), so `otherOwners` is always 0 for
-   * an OWNER target and this is equivalent to the old blanket "OWNER can
-   * never be touched" guards it replaces — it only starts allowing anything
-   * once a workspace legitimately has more than one active owner.
+   * checking the target's role themselves.
+   *
+   * TOCTOU-safe by construction (Task 16 Fix 1): this count is a separate
+   * round trip from the membership write that follows it, so it MUST be
+   * called with a `db` obtained from inside an `ownerLock`-guarded
+   * `$transaction` (see delete()'s and update()'s owner branches) whenever
+   * the target is an ACTIVE OWNER — otherwise two concurrent requests each
+   * demoting/suspending a DIFFERENT owner of a 2-owner workspace could both
+   * observe otherOwners=1 and both proceed, dropping the workspace to zero
+   * owners. Non-owner targets never touch the db (fast no-op), so callers on
+   * the common (non-owner) path can skip invoking this — and skip the lock —
+   * entirely.
    */
-  private async assertNotLastOwner(workspaceId: string, target: { role: string; userId: string }) {
+  private async assertNotLastOwner(
+    db: Prisma.TransactionClient,
+    workspaceId: string,
+    target: { role: string; userId: string },
+  ) {
     if (target.role !== 'OWNER') return;
-    const otherOwners = await this.prisma.workspaceMembership.count({
+    const otherOwners = await db.workspaceMembership.count({
       where: { workspaceId, role: 'OWNER', status: 'ACTIVE', NOT: { userId: target.userId } },
     });
     if (otherOwners === 0) {
@@ -193,24 +220,32 @@ export class MarketingUsersService {
   /**
    * Authorization for DEACTIVATING (suspending) a member — shared by delete()
    * and update()'s `status: 'INACTIVE'` path so a PATCH can't be a backdoor
-   * around the delete guards: the last remaining OWNER membership is never
-   * deactivatable (assertNotLastOwner), no one may deactivate themselves
-   * (mid-session lockout, recoverable only by another admin), and a MANAGER
-   * target requires an OWNER/MANAGER actor. Operates on the MEMBERSHIP's role
-   * now, not the identity's — a target's privilege in THIS workspace is what
-   * the guard must reason about, since the same identity can hold a
-   * different role in another workspace.
+   * around the delete guards: no one may deactivate themselves (mid-session
+   * lockout, recoverable only by another admin), only an OWNER actor may
+   * touch an OWNER target (Task 16 Fix 2 — closes the gap where a MANAGER
+   * could `DELETE /users/:coOwnerId` and suspend a co-owner; update() already
+   * had an equivalent gate for its own surface), and a MANAGER target
+   * requires an OWNER/MANAGER actor. Operates on the MEMBERSHIP's role now,
+   * not the identity's — a target's privilege in THIS workspace is what the
+   * guard must reason about, since the same identity can hold a different
+   * role in another workspace.
+   *
+   * Deliberately does NOT call assertNotLastOwner — for an OWNER target that
+   * check must run atomically with the write under the per-workspace
+   * advisory lock (Task 16 Fix 1), so callers invoke it separately, inside
+   * their own locked transaction, once this cheap DB-free gate has passed.
    */
-  private async assertCanDeactivate(
-    workspaceId: string,
+  private assertCanDeactivate(
     membership: { role: string; userId: string },
     targetUserId: string,
     actorRole: string,
     actorId: string,
   ) {
-    await this.assertNotLastOwner(workspaceId, { role: membership.role, userId: membership.userId });
     if (targetUserId === actorId) {
       throw new ForbiddenException('You cannot deactivate your own account');
+    }
+    if (membership.role === 'OWNER' && actorRole !== 'OWNER') {
+      throw new ForbiddenException('Only an owner can modify an owner account');
     }
     if (membership.role === 'MANAGER' && actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
       throw new ForbiddenException('Insufficient permissions');
@@ -246,17 +281,21 @@ export class MarketingUsersService {
     // A role change on an OWNER membership is necessarily a demotion (the
     // check above already rejects any dto.role other than MANAGER/REP) — i.e.
     // it REMOVES owner-ness, so it's subject to the same last-owner
-    // protection as suspending the last owner (Task 16).
-    if (dto.role && membership.role === 'OWNER') {
-      await this.assertNotLastOwner(workspaceId, { role: membership.role, userId: membership.userId });
-    }
+    // protection as suspending the last owner (Task 16). The count itself
+    // runs later, atomically with the write, inside the owner-locked
+    // transaction (Fix 1) — a separate round trip here would be the exact
+    // TOCTOU that fix closes.
+    const demotingOwner = !!dto.role && membership.role === 'OWNER';
 
     // Deactivation via update() is a real state change — hold it to the SAME
-    // guards delete() enforces (self-lockout, last-owner protection, role floor),
-    // or a PATCH silently bypasses them.
-    if (dto.status === 'INACTIVE' && membership.status === 'ACTIVE') {
-      await this.assertCanDeactivate(workspaceId, membership, id, actorRole, actorId ?? '');
+    // guards delete() enforces (self-lockout, only-an-owner-may-touch-an-owner,
+    // role floor), or a PATCH silently bypasses them. Last-owner protection
+    // (for an OWNER target) is likewise deferred to the locked transaction.
+    const deactivating = dto.status === 'INACTIVE' && membership.status === 'ACTIVE';
+    if (deactivating) {
+      this.assertCanDeactivate(membership, id, actorRole, actorId ?? '');
     }
+    const deactivatingOwner = deactivating && membership.role === 'OWNER';
 
     // Reactivation via this admin path may only flip a SUSPENDED membership
     // back to ACTIVE. An INVITED membership must NEVER be flipped straight
@@ -341,15 +380,31 @@ export class MarketingUsersService {
     try {
       // A reactivation consumes a seat — run the seat-check + the ACTIVE flip
       // atomically under the per-workspace lock so two concurrent reactivations
-      // can't both pass the cap (mirrors create()).
-      if (reactivating && effective!.maxUsers !== -1) {
+      // can't both pass the cap (mirrors create()). Demoting or deactivating
+      // an OWNER needs the same atomicity for the last-owner count (Task 16
+      // Fix 1). Both locks can be taken in the SAME transaction (distinct
+      // keys, so they don't self-deadlock) — Prisma's interactive-transaction
+      // client can't be nested, so this single `$transaction` call is the
+      // only place either lock may be acquired for this update.
+      const needsOwnerLock = demotingOwner || deactivatingOwner;
+      const needsSeatLock = reactivating && effective!.maxUsers !== -1;
+      if (needsOwnerLock || needsSeatLock) {
         return await this.prisma.$transaction(async (tx) => {
-          await this.seatLock(tx, workspaceId);
-          await this.assertSeatAvailable(tx, workspaceId, effective!.maxUsers);
+          if (needsOwnerLock) {
+            await this.ownerLock(tx, workspaceId);
+            await this.assertNotLastOwner(tx, workspaceId, {
+              role: membership.role,
+              userId: membership.userId,
+            });
+          }
+          if (needsSeatLock) {
+            await this.seatLock(tx, workspaceId);
+            await this.assertSeatAvailable(tx, workspaceId, effective!.maxUsers);
+          }
           return doUpdate(tx);
         });
       }
-      // Not a reactivation — still run both halves (when both are present)
+      // Neither lock applies — still run both halves (when both are present)
       // inside one transaction, so a profile edit + a role change either
       // both land or neither does.
       return await this.prisma.$transaction((tx) => doUpdate(tx));
@@ -369,16 +424,36 @@ export class MarketingUsersService {
     if (!membership || membership.role === 'SYSTEM') {
       throw new NotFoundException('User not found');
     }
-    // Same authorization update()'s deactivation path uses (last-owner-protected,
-    // no self-deactivation, MANAGER target needs an OWNER/MANAGER actor).
-    await this.assertCanDeactivate(workspaceId, membership, id, actorRole, actorId);
+    // Same authorization update()'s deactivation path uses (no self-deactivation,
+    // only-an-owner-may-touch-an-owner, MANAGER target needs an OWNER/MANAGER
+    // actor). The last-owner check for an OWNER target runs separately below,
+    // atomically with the write.
+    this.assertCanDeactivate(membership, id, actorRole, actorId);
 
-    // SUSPEND the membership, never the shared identity — the user may hold
-    // OTHER workspaces' memberships that must stay untouched.
-    await this.prisma.workspaceMembership.updateMany({
-      where: { userId: id, workspaceId },
-      data: { status: 'SUSPENDED' },
-    });
+    if (membership.role === 'OWNER') {
+      // Owner-affecting mutation (Task 16 Fix 1) — the last-owner count and
+      // the SUSPEND write must be atomic under the per-workspace advisory
+      // lock, or two concurrent requests demoting different owners of a
+      // 2-owner workspace could both pass the count and both proceed.
+      await this.prisma.$transaction(async (tx) => {
+        await this.ownerLock(tx, workspaceId);
+        await this.assertNotLastOwner(tx, workspaceId, {
+          role: membership.role,
+          userId: membership.userId,
+        });
+        await tx.workspaceMembership.updateMany({
+          where: { userId: id, workspaceId },
+          data: { status: 'SUSPENDED' },
+        });
+      });
+    } else {
+      // SUSPEND the membership, never the shared identity — the user may hold
+      // OTHER workspaces' memberships that must stay untouched.
+      await this.prisma.workspaceMembership.updateMany({
+        where: { userId: id, workspaceId },
+        data: { status: 'SUSPENDED' },
+      });
+    }
 
     return { message: 'User deactivated successfully' };
   }
