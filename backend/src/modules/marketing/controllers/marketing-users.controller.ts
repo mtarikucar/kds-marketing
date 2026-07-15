@@ -46,8 +46,14 @@ export class MarketingUsersController {
     return this.membershipService.invite(actor.workspaceId, actor.id, dto);
   }
 
+  // F2 (multi-workspace membership follow-up) — this now delegates straight
+  // to the SAME MembershipService.invite() that POST /invite above gates at
+  // users.manage; raised to match so a MANAGER can no longer bypass the
+  // OWNER-only invite bar by hitting /users instead of /users/invite.
+  // update()/delete() below stay on settings.manage — managing EXISTING
+  // members is still MANAGER-level; only ADDING one is owner-level.
   @Post()
-  @RequirePermission('settings.manage')
+  @RequirePermission('users.manage')
   @Audit({ action: 'user.create', resourceType: 'user' })
   create(
     @CurrentMarketingUser() actor: MarketingUserPayload,

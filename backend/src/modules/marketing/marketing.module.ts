@@ -21,6 +21,7 @@ import {
   MarketingDashboardController,
   MarketingReportsController,
   MarketingUsersController,
+  MarketingWorkspacesController,
   MarketingCommissionsController,
   MarketingNotificationsController,
   MarketingLeadsIngestController,
@@ -548,6 +549,8 @@ import { WalletService } from './wallet/wallet.service';
     MarketingDistributionController,
     // Multi-workspace membership — logged-in accept-invite (Phase 2 Task 12).
     MarketingMembershipsController,
+    // Multi-workspace membership — F1: self-serve second-workspace creation.
+    MarketingWorkspacesController,
     SalesCallController,
     DialerController,
     AutocallDialerController,
