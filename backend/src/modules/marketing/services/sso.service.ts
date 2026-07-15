@@ -15,7 +15,6 @@ import {
   timingSafeEqual,
   type JsonWebKey as CryptoJsonWebKey,
 } from 'crypto';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingAuthService } from './marketing-auth.service';
 import {
