@@ -476,6 +476,17 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'leave keyed by (communityId, leadId) under a scoped community read',
   'parent-scoped:communityMember.findMany':
     'roster keyed by a communityId resolved via assertCommunity(workspaceId, …)',
+
+  // Multi-workspace membership (Phase 1 Task 2) — MembershipService is the
+  // authz-resolution seam: a MarketingUser identity spans N workspaces via
+  // WorkspaceMembership rows, so its reads are legitimately keyed by userId
+  // rather than workspaceId. WorkspaceMembership DOES carry a workspaceId
+  // column (it is workspace-owned), so these two call sites are exempted
+  // explicitly rather than by omitting the delegate from OWNED_DELEGATES.
+  'services/membership.service.ts:workspaceMembership.findFirst':
+    'getActiveMembership/resolveDefaultWorkspaceId resolve a membership by (userId, workspaceId) or by userId alone (home-pointer fallback) — a user spans workspaces, so this read is workspace-less by design',
+  'services/membership.service.ts:workspaceMembership.findMany':
+    'listActiveMemberships reads every ACTIVE membership a user holds, across all their workspaces, keyed by userId',
 };
 
 function walkTs(dir: string): string[] {

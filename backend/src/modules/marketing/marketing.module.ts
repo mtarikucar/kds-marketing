@@ -58,6 +58,8 @@ import { MarketingGuard } from './guards/marketing.guard';
 import { MarketingRolesGuard } from './guards/marketing-roles.guard';
 import { IngestTokenGuard } from './guards/ingest-token.guard';
 import { LeadQuotaResolver } from './services/lead-quota.resolver';
+// Multi-workspace membership — authz resolution reads (Phase 1 Task 2).
+import { MembershipService } from './services/membership.service';
 import { MarketingResearchService } from './services/marketing-research.service';
 import { MarketingIngestTokensService } from './services/marketing-ingest-tokens.service';
 import { MarketingResearchController } from './controllers/marketing-research.controller';
@@ -677,6 +679,9 @@ import { WalletService } from './wallet/wallet.service';
     LeadAutoAssignerService,
     // Daily lead quota (Phase-F entitlement seam) — used by the ingest path.
     LeadQuotaResolver,
+    // Multi-workspace membership — authz-resolution reads (Phase 1 Task 2);
+    // consumed by the guard (Task 3) and auth service (Tasks 4-7).
+    MembershipService,
     // Research settings surface: profiles + per-workspace ingest tokens.
     MarketingResearchService,
     MarketingIngestTokensService,
@@ -981,6 +986,9 @@ import { WalletService } from './wallet/wallet.service';
     // InternalApiModule's lead-scoring surface delegates writes through this
     // service so the controller never touches marketing-owned tables directly.
     MarketingLeadsService,
+    // Multi-workspace membership — the guard (Task 3) and auth service
+    // (Tasks 4-7) inject this to resolve authorization from memberships.
+    MembershipService,
   ],
 })
 export class MarketingModule {}
