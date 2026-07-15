@@ -128,4 +128,18 @@ describe('MembershipService.invite', () => {
     expect(prisma.marketingUser.create).not.toHaveBeenCalled();
     expect(prisma.workspaceMembership.create).not.toHaveBeenCalled();
   });
+
+  // Phase 2 Task 12 — the token invite() mints must be the SAME shape
+  // verifyInviteToken() (accept's entry point) accepts, round-tripped through
+  // a real JwtService rather than asserting on decoded claims alone.
+  it('the inviteToken invite() mints round-trips through verifyInviteToken()', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.marketingUser.create as jest.Mock).mockResolvedValue({ id: 'u-new' });
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-roundtrip' });
+
+    const { inviteToken } = await svc.invite(WS, ACTOR, { email: 'rt@x.co', role: 'REP' });
+
+    await expect(svc.verifyInviteToken(inviteToken!)).resolves.toBe('mem-roundtrip');
+  });
 });

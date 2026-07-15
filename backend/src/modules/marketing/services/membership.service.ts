@@ -1,7 +1,15 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MembershipSummary } from '../types';
@@ -195,5 +203,113 @@ export class MembershipService {
       }
       throw e;
     }
+  }
+
+  /**
+   * Phase 2 Task 12 — decode+validate an invite token minted by invite()
+   * above down to its membershipId. Lives next to invite() since this is the
+   * only place that knows the token's shape: `typ` (not `type`), so it can
+   * NEVER be verified as a marketing SESSION (MarketingGuard only ever
+   * accepts `type === 'marketing'`) — it is only ever meaningful here.
+   */
+  async verifyInviteToken(token: string): Promise<string> {
+    let payload: { membershipId?: string; typ?: string };
+    try {
+      payload = await this.jwt.verifyAsync(token, {
+        secret: this.config.get<string>('MARKETING_JWT_SECRET'),
+        algorithms: ['HS256'],
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid invite token');
+    }
+    if (payload.typ !== 'marketing-invite' || !payload.membershipId) {
+      throw new UnauthorizedException('Invalid invite token');
+    }
+    return payload.membershipId;
+  }
+
+  /**
+   * Phase 2 Task 12 — flip an INVITED membership to ACTIVE. Two callers:
+   *  - the public token-accept route (`opts.userId` absent) — the invite
+   *    TOKEN itself (verified above) is the caller's only credential;
+   *  - the logged-in accept route (`opts.userId` = the caller's own id) —
+   *    accepts a second-workspace invite while already signed in elsewhere.
+   *    `opts.userId` must match the membership's OWN userId, or this is
+   *    someone else's invite (403).
+   *
+   * The claim is an atomic `updateMany` gated on `status: 'INVITED'` (plus a
+   * literal `workspaceId`, satisfying the workspace-scoping fitness test even
+   * though the id alone is already unique) so a concurrent double-accept —
+   * two tabs, or a retried request — can only ever flip the row once; the
+   * loser sees a clean 409 rather than a silent no-op.
+   *
+   * A brand-new invited identity (Task 11's pending MarketingUser: an
+   * unusable random sentinel, NOT a bcrypt hash — a real hash is always 60
+   * chars) must set its real password HERE, in the same accept step, inside
+   * the SAME transaction as the claim so a rolled-back claim never leaves a
+   * stray password change behind. An identity that already has a real
+   * password (an existing user invited into a second workspace) never has
+   * its password touched, even if `opts.password` is sent — the logged-in
+   * accept path never sends one at all.
+   */
+  async accept(
+    membershipId: string,
+    opts: { userId?: string; password?: string } = {},
+  ): Promise<{ status: 'ACTIVE'; workspaceId: string }> {
+    const membership = await this.prisma.workspaceMembership.findUnique({
+      where: { id: membershipId },
+      include: { user: { select: { id: true, password: true } } },
+    });
+    if (!membership) {
+      throw new NotFoundException('Invite not found');
+    }
+
+    if (opts.userId && membership.userId !== opts.userId) {
+      throw new ForbiddenException('This invite belongs to a different account');
+    }
+
+    // A real bcrypt hash is always exactly 60 chars; the pending-identity
+    // sentinel invite() stores (b64url of 48 random bytes) never is — that
+    // length check is the whole distinction between "brand-new invited
+    // identity, needs a real password now" and "existing identity, already
+    // has one".
+    const needsPassword = membership.user.password.length !== 60;
+    if (needsPassword && !opts.password) {
+      throw new BadRequestException('Password required to accept');
+    }
+    // Hash BEFORE opening the transaction (mirrors registerWorkspace) — the
+    // CPU-bound bcrypt work has no business holding a DB transaction open.
+    const passwordHash = needsPassword
+      ? await bcrypt.hash(opts.password!, this.bcryptCost())
+      : null;
+
+    return this.prisma.$transaction(async (tx) => {
+      const claim = await tx.workspaceMembership.updateMany({
+        where: { id: membershipId, workspaceId: membership.workspaceId, status: 'INVITED' },
+        data: { status: 'ACTIVE', acceptedAt: new Date() },
+      });
+      if (claim.count === 0) {
+        // Already accepted/declined/gone by the time we got here — a
+        // concurrent accept won the race. Report it rather than silently
+        // no-op-ing.
+        throw new ConflictException('Invite is no longer pending');
+      }
+
+      if (passwordHash) {
+        await tx.marketingUser.update({
+          where: { id: membership.userId },
+          data: { password: passwordHash },
+        });
+      }
+
+      return { status: 'ACTIVE' as const, workspaceId: membership.workspaceId };
+    });
+  }
+
+  /** Same env-tunable bcrypt cost as MarketingAuthService (BCRYPT_COST, default 12). */
+  private bcryptCost(): number {
+    const raw = this.config.get<string>('BCRYPT_COST');
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed >= 10 && parsed <= 15 ? parsed : 12;
   }
 }

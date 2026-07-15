@@ -60,6 +60,8 @@ import { IngestTokenGuard } from './guards/ingest-token.guard';
 import { LeadQuotaResolver } from './services/lead-quota.resolver';
 // Multi-workspace membership — authz resolution reads (Phase 1 Task 2).
 import { MembershipService } from './services/membership.service';
+// Multi-workspace membership — the logged-in accept-invite route (Phase 2 Task 12).
+import { MarketingMembershipsController } from './controllers/marketing-memberships.controller';
 import { MarketingResearchService } from './services/marketing-research.service';
 import { MarketingIngestTokensService } from './services/marketing-ingest-tokens.service';
 import { MarketingResearchController } from './controllers/marketing-research.controller';
@@ -544,6 +546,8 @@ import { WalletService } from './wallet/wallet.service';
     MarketingCommissionsController,
     MarketingNotificationsController,
     MarketingDistributionController,
+    // Multi-workspace membership — logged-in accept-invite (Phase 2 Task 12).
+    MarketingMembershipsController,
     SalesCallController,
     DialerController,
     AutocallDialerController,
