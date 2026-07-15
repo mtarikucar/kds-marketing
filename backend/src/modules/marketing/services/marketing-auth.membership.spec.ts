@@ -234,7 +234,11 @@ describe('MarketingAuthService — refreshToken preserves the active workspace',
   }
 
   it('refresh keeps the token active workspace (does not reset to home)', async () => {
-    const refresh = sign({ sub: 'u1', wsp: 'wsp-2', role: 'REP', ver: 0, type: 'marketing', tokenType: 'refresh' });
+    // Stale token claim says OWNER; the re-verified membership says REP.
+    // The minted access token must carry the membership's role, not the
+    // stale claim — this is what catches a regression that reads
+    // payload.role instead of calling MembershipService.getActiveMembership.
+    const refresh = sign({ sub: 'u1', wsp: 'wsp-2', role: 'OWNER', ver: 0, type: 'marketing', tokenType: 'refresh' });
     prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
     membership.getActiveMembership.mockResolvedValue({ workspaceId: 'wsp-2', role: 'REP', customRoleId: null });
 
