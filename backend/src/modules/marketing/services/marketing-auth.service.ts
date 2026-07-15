@@ -159,7 +159,8 @@ export class MarketingAuthService {
       return { twoFactorRequired: true, challengeToken };
     }
 
-    return this.generateTokens(user);
+    // TODO(Task 5): resolve default membership
+    return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
   }
 
   /** NetGSM SMS v2 Task 12 — re-send the SMS challenge code for a pending 2FA
@@ -248,7 +249,8 @@ export class MarketingAuthService {
       ).ok;
     }
     if (!ok) throw new UnauthorizedException('Invalid 2FA code');
-    return this.generateTokens(user);
+    // TODO(Task 5): resolve default membership
+    return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
   }
 
   /** Decodes + validates a 2FA challenge token down to its live, 2FA-armed user. */
@@ -308,7 +310,8 @@ export class MarketingAuthService {
 
     // Rotate: issue a fresh pair (not just a new access token) so the
     // old refresh ages out even if the client keeps presenting it.
-    return this.generateTokens(user);
+    // TODO(Task 6): preserve the token's active workspace instead of resetting to home
+    return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
   }
 
   /** SUSPENDED/CLOSED workspaces stop minting sessions at the door. In-flight
@@ -341,36 +344,42 @@ export class MarketingAuthService {
    * password path does — there is exactly one place that knows how to sign a
    * marketing JWT, and SSO reuses it rather than re-deriving the payload.
    */
-  issueSession(user: {
-    id: string;
-    workspaceId: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone: string | null;
-    avatar: string | null;
-    role: string;
-    tokenVersion: number;
-  }) {
-    return this.generateTokens(user);
+  issueSession(
+    user: {
+      id: string;
+      workspaceId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phone: string | null;
+      avatar: string | null;
+      role: string;
+      tokenVersion: number;
+    },
+    active: { workspaceId: string; role: string },
+  ) {
+    return this.generateTokens(user, active);
   }
 
-  private generateTokens(user: {
-    id: string;
-    workspaceId: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone: string | null;
-    avatar: string | null;
-    role: string;
-    tokenVersion: number;
-  }) {
+  private generateTokens(
+    user: {
+      id: string;
+      workspaceId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phone: string | null;
+      avatar: string | null;
+      role: string;
+      tokenVersion: number;
+    },
+    active: { workspaceId: string; role: string },
+  ) {
     const basePayload = {
       sub: user.id,
       email: user.email,
-      role: user.role,
-      wsp: user.workspaceId,
+      role: active.role, // active membership's role, not the user row's home role
+      wsp: active.workspaceId, // active membership's workspace, not the user row's home workspace
       ver: user.tokenVersion,
       type: 'marketing' as const,
     };
@@ -395,11 +404,11 @@ export class MarketingAuthService {
       refreshToken,
       user: {
         id: user.id,
-        workspaceId: user.workspaceId,
+        workspaceId: active.workspaceId,
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role,
+        role: active.role,
         phone: user.phone,
         avatar: user.avatar,
       },
@@ -448,7 +457,7 @@ export class MarketingAuthService {
       data: { lastLogin: new Date(), lastLoginIp: ip },
     });
 
-    return this.generateTokens(owner);
+    return this.generateTokens(owner, { workspaceId: owner.workspaceId, role: 'OWNER' });
   }
 
   private async provisionWorkspace(dto: RegisterWorkspaceDto, passwordHash: string) {

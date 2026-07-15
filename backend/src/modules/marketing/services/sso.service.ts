@@ -224,7 +224,8 @@ export class SsoService {
     this.assertDomainAllowed(email, conn.allowedDomains);
 
     const user = await this.matchOrProvision(ctx.workspaceId, email, claims);
-    return this.authService.issueSession(user);
+    // TODO(Task 14): resolve membership
+    return this.authService.issueSession(user, { workspaceId: user.workspaceId, role: user.role });
   }
 
   // ===================================================================== //

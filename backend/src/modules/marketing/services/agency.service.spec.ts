@@ -328,6 +328,7 @@ describe('AgencyService — accessLocation (switch into a sub-account)', () => {
     // Issued FOR the owner → MarketingGuard's wsp===user.workspaceId invariant holds.
     expect(authService.issueSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'owner-1', workspaceId: LOCATION_A1 }),
+      { workspaceId: LOCATION_A1, role: 'OWNER' },
     );
     expect(out).toMatchObject({ accessToken: 'at', refreshToken: 'rt' });
     expect(out.location.id).toBe(LOCATION_A1);

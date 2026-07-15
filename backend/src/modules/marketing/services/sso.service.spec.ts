@@ -272,6 +272,7 @@ describe('SsoService', () => {
       expect(prisma.marketingUser.create).not.toHaveBeenCalled();
       expect(authService.issueSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'mu-existing', tokenVersion: 3 }),
+        { workspaceId: 'ws-1', role: 'MANAGER' },
       );
     });
 

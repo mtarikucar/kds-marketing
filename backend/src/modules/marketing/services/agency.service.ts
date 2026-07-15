@@ -385,7 +385,10 @@ export class AgencyService {
     this.logger.log(
       `agency access: user ${actorUserId} (agency ${agencyWorkspaceId}) entered location ${locationId} as owner ${owner.id}`,
     );
-    const session = this.authService.issueSession(owner);
+    const session = this.authService.issueSession(owner, {
+      workspaceId: owner.workspaceId,
+      role: owner.role,
+    });
     return { ...session, location };
   }
 
