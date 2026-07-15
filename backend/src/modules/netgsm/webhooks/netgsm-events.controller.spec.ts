@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { NetgsmEventsController } from './netgsm-events.controller';
 import { netgsmWebhookToken, payloadDigest } from './netgsm-webhook.util';
 
@@ -389,6 +389,7 @@ describe('NetgsmEventsController — iys', () => {
       netgsmWebhookEvent: {
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
     outbox = { append: jest.fn().mockResolvedValue('outbox-id') };
@@ -431,6 +432,31 @@ describe('NetgsmEventsController — iys', () => {
       },
       idempotencyKey: 'ws-1:iys:tx-2',
     });
+  });
+
+  // The archive commits BEFORE the publish loop, so a transient outbox failure
+  // used to dedup-suppress İYS's redelivery and permanently drop the consent
+  // change (an İYS RET never applied = KVKK exposure). The failed row must be
+  // UN-archived so the redelivery re-publishes it, the rest of the batch must
+  // still be processed, and the response must be non-2xx to trigger redelivery.
+  it('un-archives a row whose publish failed, keeps processing the batch, and signals a retryable failure', async () => {
+    const token = netgsmWebhookToken('ws-1', 'iys');
+    const elA = { transactionid: 'tx-1', recipient: '905551112233', type: 'MESAJ', status: 'RET', source: 'HS_WEB' };
+    const elB = { transactionid: 'tx-2', recipient: '905551112244', type: 'MESAJ', status: 'ONAY', source: 'HS_WEB' };
+    outbox.append
+      .mockRejectedValueOnce(new Error('deadlock')) // tx-1 publish blows up
+      .mockResolvedValueOnce('outbox-id');          // tx-2 still goes through
+
+    await expect(controller.iys('ws-1', token, [elA, elB])).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+
+    // The failed element's dedup-ledger row was deleted → redelivery re-publishes it.
+    expect(prisma.netgsmWebhookEvent.deleteMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws-1', purpose: 'iys', externalId: 'tx-1' },
+    });
+    // The loop was NOT aborted: the second element still published.
+    expect(outbox.append).toHaveBeenCalledTimes(2);
   });
 
   it('archives + publishes nothing when every element in the batch was already seen', async () => {

@@ -183,6 +183,25 @@ describe('IysSyncService', () => {
       expect(prisma.channel.findMany).not.toHaveBeenCalled();
     });
 
+    // A creds-bearing channel WITHOUT a brandCode must not mark the whole
+    // workspace unconfigured when a LATER channel is fully configured — that
+    // would DLQ every İYS proof-of-consent job despite a valid setup.
+    it('resolveCreds skips a creds-without-brandCode channel and uses the next fully-configured one', async () => {
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel(), { ...activeSmsChannel(), id: 'ch-2' }] as any);
+      registry.resolveConfig
+        .mockReturnValueOnce({ secrets: { usercode: 'u1', password: 'p1' }, public: {} }) // no brandCode
+        .mockReturnValueOnce({ secrets: { usercode: 'u2', password: 'p2' }, public: { brandCode: 'BR2' } });
+      await expect((svc as any).resolveCreds('ws-1')).resolves.toEqual({
+        usercode: 'u2', password: 'p2', brandCode: 'BR2',
+      });
+    });
+
+    it("resolveCreds still reports 'no brandCode' when creds exist but no channel carries one", async () => {
+      prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);
+      registry.resolveConfig.mockReturnValueOnce({ secrets: { usercode: 'u1', password: 'p1' }, public: {} });
+      await expect((svc as any).resolveCreds('ws-1')).resolves.toEqual({ reason: 'no brandCode' });
+    });
+
     it('sends a PENDING job and stamps SENT + refid (matched by order)', async () => {
       prisma.iysSyncJob.findMany.mockResolvedValue([job()] as any);
       prisma.channel.findMany.mockResolvedValue([activeSmsChannel()] as any);

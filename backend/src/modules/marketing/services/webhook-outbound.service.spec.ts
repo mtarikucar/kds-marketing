@@ -51,6 +51,29 @@ describe('WebhookOutboundService.fanOut', () => {
     );
   });
 
+  // DomainEventBus swallows a listener throw and the outbox never re-dispatches,
+  // so one endpoint's create/schedule failure used to abort the loop and
+  // silently drop the event for every endpoint AFTER it — permanently.
+  it('one endpoint failing does not drop the event for the remaining endpoints', async () => {
+    const { prisma, scheduledJob, svc } = makeSvc();
+    prisma.webhookEndpoint.findMany.mockResolvedValue([
+      { id: 'ep-bad', events: ['marketing.lead.created.v1'] },
+      { id: 'ep-good', events: ['marketing.lead.created.v1'] },
+    ] as any);
+    (prisma.webhookDelivery.create as jest.Mock)
+      .mockRejectedValueOnce(new Error('db blip')) // ep-bad's delivery row fails
+      .mockResolvedValueOnce({ id: 'd2' });        // ep-good's succeeds
+
+    await expect(svc.fanOut(evt() as any)).resolves.toBeUndefined();
+
+    // ep-good still got its delivery row + job despite ep-bad's failure.
+    expect(prisma.webhookDelivery.create).toHaveBeenCalledTimes(2);
+    expect(scheduledJob.schedule).toHaveBeenCalledTimes(1);
+    expect(scheduledJob.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ deliveryId: 'd2' }) }),
+    );
+  });
+
   it('skips endpoints not subscribed to the event type', async () => {
     const { prisma, scheduledJob, svc } = makeSvc();
     prisma.webhookEndpoint.findMany.mockResolvedValue([
