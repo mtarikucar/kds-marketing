@@ -16,6 +16,9 @@ const switchWorkspaceMock = vi.fn();
 let storeState: {
   memberships: { workspaceId: string; workspaceName: string; role: string }[];
   user: { workspaceId: string } | null;
+  /** Non-null exactly while impersonating a sub-account. Omitted (undefined)
+   *  in most tests, which the switcher's `!!s.agencyReturn` treats as falsy. */
+  agencyReturn?: { user: { workspaceId: string }; refreshToken: string; locationName: string } | null;
 };
 
 vi.mock('../../../store/marketingAuthStore', () => ({
@@ -103,6 +106,23 @@ describe('WorkspaceSwitcher', () => {
     const switchOrder = switchWorkspaceMock.mock.invocationCallOrder[0];
     const clearOrder = clearSpy.mock.invocationCallOrder[0];
     expect(switchOrder).toBeLessThan(clearOrder);
+  });
+
+  it('renders nothing while impersonating a sub-account, even with more than one membership', () => {
+    storeState = {
+      memberships: [
+        { workspaceId: 'ws1', workspaceName: 'WS One', role: 'OWNER' },
+        { workspaceId: 'ws2', workspaceName: 'WS Two', role: 'MANAGER' },
+      ],
+      user: { workspaceId: 'loc1' },
+      agencyReturn: {
+        user: { workspaceId: 'ws1' },
+        refreshToken: 'stashed-refresh-token',
+        locationName: 'Sub-account Location',
+      },
+    };
+    const { container } = renderSwitcher();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('selecting the CURRENT workspace is a no-op', async () => {

@@ -26,10 +26,17 @@ export function WorkspaceSwitcher() {
   const memberships = useMarketingAuthStore((s) => s.memberships);
   const activeWorkspaceId = useMarketingAuthStore((s) => s.user?.workspaceId);
   const switchWorkspace = useMarketingAuthStore((s) => s.switchWorkspace);
+  const impersonating = useMarketingAuthStore((s) => !!s.agencyReturn);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [isSwitching, setIsSwitching] = useState(false);
 
+  // An agency operator impersonating a sub-account (agencyReturn set) must
+  // not also be able to switch between their OWN workspaces — the two
+  // session-swap flows (impersonation vs. multi-workspace) would tangle
+  // over the same token slots in the store. Checked before the membership
+  // count so it wins even when the user has more than one membership.
+  if (impersonating) return null;
   if (!memberships || memberships.length <= 1) return null;
 
   const activeMembership = memberships.find((m) => m.workspaceId === activeWorkspaceId);
