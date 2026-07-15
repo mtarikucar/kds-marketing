@@ -7,6 +7,7 @@ import {
 import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
 import { PrismaClient } from '@prisma/client';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { SsoService } from './sso.service';
 import { MarketingAuthService } from './marketing-auth.service';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -335,6 +336,57 @@ describe('SsoService', () => {
         expect.objectContaining({ id: 'mu-existing' }),
         { workspaceId: 'ws-1', role: 'REP' },
       );
+    });
+
+    it('(b2) TOCTOU: a racing SSO callback wins the membership create (P2002) — re-reads the winner\'s ACTIVE row instead of a raw 500', async () => {
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce })));
+
+      prisma.marketingUser.findUnique.mockResolvedValue({
+        id: 'mu-existing',
+        workspaceId: 'ws-OTHER',
+        email: 'alice@acme.com',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        phone: null,
+        avatar: null,
+        role: 'REP',
+        status: 'ACTIVE',
+        tokenVersion: 3,
+      } as never);
+      // No membership yet when we check...
+      prisma.workspaceMembership.findFirst
+        .mockResolvedValueOnce(null as never) // initial check: not a member yet
+        .mockResolvedValueOnce({
+          // re-read after the P2002: the concurrent callback's winning row
+          id: 'mem-winner',
+          userId: 'mu-existing',
+          workspaceId: 'ws-1',
+          role: 'REP',
+          status: 'ACTIVE',
+        } as never);
+      // ...but a concurrent callback's create() beat us to the
+      // (userId, workspaceId) unique index.
+      prisma.workspaceMembership.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['userId', 'workspaceId'] },
+        }),
+      );
+      authService.issueSession.mockReturnValue({ accessToken: 'AT', refreshToken: 'RT', user: {} });
+
+      const result = await service.handleCallback(state, 'auth-code');
+
+      expect(prisma.marketingUser.create).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.create).toHaveBeenCalledTimes(1);
+      // Re-read (not a raw 500) resolves to the winner's row and mints a session.
+      expect(prisma.workspaceMembership.findFirst).toHaveBeenCalledTimes(2);
+      expect(authService.issueSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'mu-existing' }),
+        { workspaceId: 'ws-1', role: 'REP' },
+      );
+      expect(result).toEqual({ accessToken: 'AT', refreshToken: 'RT', user: {} });
     });
 
     it('(c) existing identity with an ACTIVE membership in this workspace reuses it (no membership create)', async () => {

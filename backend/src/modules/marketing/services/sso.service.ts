@@ -13,6 +13,7 @@ import {
   timingSafeEqual,
   type JsonWebKey as CryptoJsonWebKey,
 } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MarketingAuthService } from './marketing-auth.service';
 import {
@@ -584,24 +585,42 @@ export class SsoService {
         throw new UnauthorizedException('Account cannot sign in via SSO');
       }
 
-      const membership = await this.prisma.workspaceMembership.findFirst({
+      let membership = await this.prisma.workspaceMembership.findFirst({
         where: { userId: existing.id, workspaceId },
       });
 
       if (!membership) {
-        const created = await this.prisma.workspaceMembership.create({
-          data: {
-            userId: existing.id,
-            workspaceId,
-            role: DEFAULT_NEW_USER_ROLE,
-            status: 'ACTIVE',
-            acceptedAt: new Date(),
-          },
-        });
-        return { user: existing, membership: created };
+        // Non-atomic check-then-create: two SSO callbacks racing for the same
+        // not-yet-a-member identity can both pass the `!membership` check above
+        // and both call create(). The loser collides on the
+        // @@unique([userId, workspaceId]) index — catch that P2002 and re-read
+        // the row the winner just created instead of bubbling a raw 500. The
+        // re-read can only ever find an ACTIVE row here (this branch is only
+        // reached when no membership existed, and the only writer that can
+        // create one in this race is this same create-ACTIVE-REP path), so
+        // the post-check below still applies uniformly.
+        try {
+          membership = await this.prisma.workspaceMembership.create({
+            data: {
+              userId: existing.id,
+              workspaceId,
+              role: DEFAULT_NEW_USER_ROLE,
+              status: 'ACTIVE',
+              acceptedAt: new Date(),
+            },
+          });
+        } catch (e) {
+          if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+            membership = await this.prisma.workspaceMembership.findFirst({
+              where: { userId: existing.id, workspaceId },
+            });
+          } else {
+            throw e;
+          }
+        }
       }
 
-      if (membership.status !== 'ACTIVE') {
+      if (!membership || membership.status !== 'ACTIVE') {
         // SUSPENDED must not be silently overridden by SSO; INVITED must be
         // accepted through the normal accept flow first — either way, SSO
         // does not mutate the membership's status here.
