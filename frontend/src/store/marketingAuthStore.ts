@@ -73,6 +73,21 @@ interface MarketingAuthState {
    *  moving between their OWN workspaces, not an agency operator borrowing a
    *  sub-account's identity. */
   switchWorkspace: (workspaceId: string) => Promise<void>;
+  /** Self-serve "second brand" flow: creates a brand-new STANDALONE workspace
+   *  owned by the CURRENT identity and auto-switches the session into it —
+   *  mirrors `switchWorkspace`'s token-swap (same `agencyReturn`-untouched
+   *  posture), except there is no pre-existing target membership to select
+   *  FROM, since the workspace didn't exist until this call created it.
+   *  Resolves with the new workspace's `{ id, name, slug }` summary so the
+   *  caller (the profile-menu "New workspace" dialog) can toast/navigate. */
+  createWorkspace: (dto: {
+    workspaceName: string;
+    productName?: string;
+    productUrl?: string;
+    productDescription?: string;
+    language?: string;
+    currency?: string;
+  }) => Promise<{ id: string; name: string; slug: string }>;
   logout: () => void;
 }
 
@@ -180,6 +195,37 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
         } catch (err) {
           console.warn('switchWorkspace: failed to refresh memberships after switch', err);
         }
+      },
+
+      createWorkspace: async (dto) => {
+        // Same dynamic-import rationale as switchWorkspace above — sidesteps
+        // the membershipApi -> marketingApi -> this store circular-import cycle.
+        const { createWorkspaceApi, fetchMemberships } = await import(
+          '../features/marketing/api/membershipApi'
+        );
+        const data = await createWorkspaceApi(dto);
+        set((state) => ({
+          user: state.user
+            ? { ...state.user, workspaceId: data.user.workspaceId, role: data.user.role }
+            : data.user,
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          // NOTE: agencyReturn is intentionally left untouched — same
+          // rationale as switchWorkspace: this is the user's OWN session
+          // moving into a workspace they just created for themselves, not
+          // agency impersonation.
+        }));
+        // Best-effort, same posture as switchWorkspace: the token swap above
+        // has already committed and the workspace already exists
+        // server-side, so a hiccup refreshing the membership list must not
+        // fail the create itself.
+        try {
+          const memberships = await fetchMemberships();
+          set({ memberships });
+        } catch (err) {
+          console.warn('createWorkspace: failed to refresh memberships after create', err);
+        }
+        return data.workspace;
       },
 
       logout: () => {

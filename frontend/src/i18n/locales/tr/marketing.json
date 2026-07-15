@@ -687,6 +687,16 @@
     "updateSuccess": "Profil güncellendi",
     "updateError": "Profil güncellenemedi"
   },
+  "workspace": {
+    "newWorkspace": "Yeni workspace",
+    "createDialogTitle": "Yeni workspace",
+    "createDialogDescription": "Başka bir marka için yepyeni bir workspace oluşturun. Sahibi siz olacaksınız ve hemen içine geçeceksiniz.",
+    "nameLabel": "Workspace adı",
+    "namePlaceholder": "örn. İkinci Mağazam",
+    "createButton": "Oluştur",
+    "createSuccess": "\"{{name}}\" workspace'i oluşturuldu — artık içindesiniz",
+    "createError": "Workspace oluşturulamadı"
+  },
   "dashboard": {
     "title": "Gösterge Paneli",
     "subtitle": "Performansa bir bakış",

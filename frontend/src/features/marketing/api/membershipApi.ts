@@ -32,6 +32,35 @@ export function fetchMemberships(): Promise<MembershipSummary[]> {
   return marketingApi.get('/auth/profile').then((r) => r.data.memberships ?? []);
 }
 
+export interface CreateWorkspaceDto {
+  workspaceName: string;
+  productName?: string;
+  productUrl?: string;
+  productDescription?: string;
+  language?: string;
+  currency?: string;
+}
+
+export interface CreateWorkspaceResult {
+  user: MarketingUser;
+  accessToken: string;
+  refreshToken: string;
+  workspace: { id: string; name: string; slug: string };
+}
+
+/** POST /marketing/workspaces — authenticated (any role, any current
+ *  workspace). Spins up a brand-new STANDALONE workspace with the caller as
+ *  its OWNER via a fresh ACTIVE membership, using the caller's EXISTING
+ *  identity (no new password/email). The response is an AUTO-SWITCH
+ *  session already scoped to the new workspace — same `{ user, accessToken,
+ *  refreshToken }` shape as {@link switchWorkspaceApi}, plus the created
+ *  `workspace` summary so the caller can toast/display it. This is the
+ *  self-serve "second brand" flow — see MarketingHeader's "New workspace"
+ *  profile-menu action. */
+export function createWorkspaceApi(dto: CreateWorkspaceDto): Promise<CreateWorkspaceResult> {
+  return marketingApi.post('/workspaces', dto).then((r) => r.data as CreateWorkspaceResult);
+}
+
 export interface InviteMemberDto {
   email: string;
   role: string;

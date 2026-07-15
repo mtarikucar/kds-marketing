@@ -8,9 +8,14 @@ import { useMarketingAuthStore, type MarketingUser } from './marketingAuthStore'
 vi.mock('../features/marketing/api/membershipApi', () => ({
   switchWorkspaceApi: vi.fn(),
   fetchMemberships: vi.fn(),
+  createWorkspaceApi: vi.fn(),
 }));
 
-import { switchWorkspaceApi, fetchMemberships } from '../features/marketing/api/membershipApi';
+import {
+  switchWorkspaceApi,
+  fetchMemberships,
+  createWorkspaceApi,
+} from '../features/marketing/api/membershipApi';
 
 const baseUser: MarketingUser = {
   id: 'u1',
@@ -138,6 +143,113 @@ describe('marketingAuthStore — switchWorkspace', () => {
     vi.mocked(fetchMemberships).mockResolvedValue(memberships);
 
     await useMarketingAuthStore.getState().switchWorkspace('ws2');
+
+    expect(fetchMemberships).toHaveBeenCalledTimes(1);
+    expect(useMarketingAuthStore.getState().memberships).toEqual(memberships);
+  });
+});
+
+describe('marketingAuthStore — createWorkspace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useMarketingAuthStore.setState(
+      {
+        ...initialState,
+        user: baseUser,
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        isAuthenticated: true,
+        agencyReturn: null,
+        memberships: [],
+      },
+      true,
+    );
+  });
+
+  afterEach(() => {
+    useMarketingAuthStore.setState(initialState, true);
+  });
+
+  it('swaps the token pair and updates user.workspaceId/role from the create response', async () => {
+    vi.mocked(createWorkspaceApi).mockResolvedValue({
+      user: { ...baseUser, workspaceId: 'ws-new', role: 'OWNER' },
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      workspace: { id: 'ws-new', name: 'Second Shop', slug: 'second-shop' },
+    });
+    vi.mocked(fetchMemberships).mockResolvedValue([
+      { workspaceId: 'ws1', workspaceName: 'WS One', role: 'OWNER' },
+      { workspaceId: 'ws-new', workspaceName: 'Second Shop', role: 'OWNER' },
+    ]);
+
+    const workspace = await useMarketingAuthStore
+      .getState()
+      .createWorkspace({ workspaceName: 'Second Shop' });
+
+    expect(createWorkspaceApi).toHaveBeenCalledWith({ workspaceName: 'Second Shop' });
+    expect(workspace).toEqual({ id: 'ws-new', name: 'Second Shop', slug: 'second-shop' });
+
+    const state = useMarketingAuthStore.getState();
+    expect(state.accessToken).toBe('new-access');
+    expect(state.refreshToken).toBe('new-refresh');
+    expect(state.user?.workspaceId).toBe('ws-new');
+    expect(state.user?.role).toBe('OWNER');
+    // Other user fields (identity) are preserved by the merge, not clobbered.
+    expect(state.user?.email).toBe(baseUser.email);
+    expect(state.user?.id).toBe(baseUser.id);
+  });
+
+  it('does NOT touch agencyReturn (creating a workspace is not impersonation)', async () => {
+    vi.mocked(createWorkspaceApi).mockResolvedValue({
+      user: { ...baseUser, workspaceId: 'ws-new', role: 'OWNER' },
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      workspace: { id: 'ws-new', name: 'Second Shop', slug: 'second-shop' },
+    });
+    vi.mocked(fetchMemberships).mockResolvedValue([]);
+
+    expect(useMarketingAuthStore.getState().agencyReturn).toBeNull();
+    await useMarketingAuthStore.getState().createWorkspace({ workspaceName: 'Second Shop' });
+    expect(useMarketingAuthStore.getState().agencyReturn).toBeNull();
+  });
+
+  it('resolves even when fetchMemberships() rejects after a successful create (best-effort refresh)', async () => {
+    vi.mocked(createWorkspaceApi).mockResolvedValue({
+      user: { ...baseUser, workspaceId: 'ws-new', role: 'OWNER' },
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      workspace: { id: 'ws-new', name: 'Second Shop', slug: 'second-shop' },
+    });
+    vi.mocked(fetchMemberships).mockRejectedValue(new Error('profile fetch failed'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      useMarketingAuthStore.getState().createWorkspace({ workspaceName: 'Second Shop' }),
+    ).resolves.toEqual({ id: 'ws-new', name: 'Second Shop', slug: 'second-shop' });
+
+    // The token swap already committed — that must not be undone by the
+    // membership-refresh failure.
+    const state = useMarketingAuthStore.getState();
+    expect(state.accessToken).toBe('new-access');
+    expect(state.refreshToken).toBe('new-refresh');
+    expect(state.user?.workspaceId).toBe('ws-new');
+    warnSpy.mockRestore();
+  });
+
+  it('refreshes memberships from fetchMemberships() after a successful create', async () => {
+    vi.mocked(createWorkspaceApi).mockResolvedValue({
+      user: { ...baseUser, workspaceId: 'ws-new', role: 'OWNER' },
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      workspace: { id: 'ws-new', name: 'Second Shop', slug: 'second-shop' },
+    });
+    const memberships = [
+      { workspaceId: 'ws1', workspaceName: 'WS One', role: 'OWNER' },
+      { workspaceId: 'ws-new', workspaceName: 'Second Shop', role: 'OWNER' },
+    ];
+    vi.mocked(fetchMemberships).mockResolvedValue(memberships);
+
+    await useMarketingAuthStore.getState().createWorkspace({ workspaceName: 'Second Shop' });
 
     expect(fetchMemberships).toHaveBeenCalledTimes(1);
     expect(useMarketingAuthStore.getState().memberships).toEqual(memberships);
