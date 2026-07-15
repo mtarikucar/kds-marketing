@@ -168,6 +168,25 @@ export class CustomFieldsService {
     return this.list(workspaceId, true, entity);
   }
 
+  /** Parse an ISO-ish date OR the Turkish day-first "DD.MM.YYYY" (optionally
+   *  " HH:mm[:ss]"), which `new Date()` alone returns Invalid Date for — so
+   *  a normally-formatted Turkish CSV date column no longer fails every row.
+   *  Dot-separated is unambiguous vs ISO (dash) and US (slash). */
+  private parseDate(raw: unknown): Date | null {
+    if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
+    const s = String(raw).trim();
+    const m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (m) {
+      const day = Number(m[1]);
+      const month = Number(m[2]);
+      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+      const dt = new Date(Date.UTC(Number(m[3]), month - 1, day, Number(m[4] ?? 0), Number(m[5] ?? 0), Number(m[6] ?? 0)));
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+    const dt = new Date(s);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+
   private coerce(def: DefRow, raw: unknown, mode: 'create' | 'update'): unknown {
     const bad = (msg: string): never => {
       throw new BadRequestException(`"${def.key}": ${msg}`);
@@ -178,15 +197,21 @@ export class CustomFieldsService {
         if (raw === '' || raw === null || Number.isNaN(n)) bad('must be a number');
         return n;
       }
-      case 'BOOL':
+      case 'BOOL': {
         if (typeof raw === 'boolean') return raw;
-        if (raw === 'true' || raw === 'false') return raw === 'true';
+        // Tolerant textual booleans — CSV import feeds the raw cell text, so
+        // ordinary spellings (Yes/No, 1/0, on/off, the Turkish Evet/Hayır) must
+        // parse; strict true/false alone rejected perfectly valid import rows.
+        const s = String(raw).trim().toLowerCase();
+        if (['true', '1', 'yes', 'y', 'on', 'evet'].includes(s)) return true;
+        if (['false', '0', 'no', 'n', 'off', 'hayır', 'hayir'].includes(s)) return false;
         return bad('must be a boolean');
+      }
       case 'DATE':
       case 'DATETIME': {
-        const d = new Date(raw as string);
-        if (Number.isNaN(d.getTime())) bad('must be a valid date');
-        return d.toISOString();
+        const d = this.parseDate(raw);
+        if (!d) bad('must be a valid date');
+        return d!.toISOString();
       }
       case 'SELECT': {
         const opts = (def.options as { value: string }[] | null) ?? [];
@@ -253,7 +278,12 @@ export class CustomFieldsService {
     }
     if (mode === 'create') {
       for (const d of defs) {
-        if (d.required && (out[d.key] === undefined || out[d.key] === null)) {
+        // An empty MULTISELECT array is a PRESENT-but-empty value that passed
+        // coercion untouched — it must not satisfy `required` (a required
+        // multi-select with no choices is effectively unfilled).
+        const val = out[d.key];
+        const emptyArray = Array.isArray(val) && val.length === 0;
+        if (d.required && (val === undefined || val === null || emptyArray)) {
           throw new BadRequestException(`Custom field "${d.key}" is required`);
         }
       }

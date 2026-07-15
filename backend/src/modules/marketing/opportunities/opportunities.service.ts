@@ -279,6 +279,28 @@ export class OpportunitiesService {
       value: Number(created.value),
       occurredAt: now.toISOString(),
     });
+    // A deal born directly on a terminal stage (reachable via the API — the
+    // kanban never offers "+ Add" on a Won/Lost column) must ALSO fire its
+    // won/lost event, matching move()/win()/lose(). Without this a born-resolved
+    // deal enters won/lost REPORTING while skipping every won/lost AUTOMATION
+    // (the won-trigger workflow, Meta CAPI conversion).
+    if (status === 'WON') {
+      void this.emit(MarketingEventTypes.OpportunityWon, `opp-won:${created.id}`, {
+        workspaceId,
+        opportunityId: created.id,
+        leadId: created.leadId,
+        value: Number(created.value),
+        occurredAt: now.toISOString(),
+      });
+    } else if (status === 'LOST') {
+      void this.emit(MarketingEventTypes.OpportunityLost, `opp-lost:${created.id}`, {
+        workspaceId,
+        opportunityId: created.id,
+        leadId: created.leadId,
+        reason: null,
+        occurredAt: now.toISOString(),
+      });
+    }
     return created;
   }
 

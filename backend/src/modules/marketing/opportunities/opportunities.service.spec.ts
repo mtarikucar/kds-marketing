@@ -63,12 +63,27 @@ describe('OpportunitiesService', () => {
       });
     });
 
-    it('lands as WON with wonAt when created directly in a win stage', async () => {
-      prisma.opportunity.create.mockResolvedValue({ id: 'o2', value: 100 } as any);
+    it('lands as WON with wonAt when created directly in a win stage AND fires opportunity.won', async () => {
+      prisma.opportunity.create.mockResolvedValue({ id: 'o2', value: 100, leadId: 'l1' } as any);
       await svc.create(WS, { name: 'Quick win', stageId: 's-won', value: 100 } as any, MGR);
       const arg = prisma.opportunity.create.mock.calls[0][0] as any;
       expect(arg.data.status).toBe('WON');
       expect(arg.data.wonAt).toBeInstanceOf(Date);
+      // A born-won deal must ALSO emit OpportunityWon — else it enters won
+      // reporting but skips the won-trigger workflow + Meta CAPI conversion.
+      const emitted = outbox.append.mock.calls.map((c) => c[0].idempotencyKey);
+      expect(emitted).toEqual(expect.arrayContaining(['opp-created:o2', 'opp-won:o2']));
+      const wonEvt = outbox.append.mock.calls.find((c) => c[0].idempotencyKey === 'opp-won:o2')[0];
+      expect(wonEvt.type).toBe('marketing.opportunity.won.v1');
+      expect(wonEvt.payload).toMatchObject({ opportunityId: 'o2', value: 100 });
+    });
+
+    it('a born-LOST deal fires opportunity.lost, not opportunity.won', async () => {
+      prisma.opportunity.create.mockResolvedValue({ id: 'o3', value: 0, leadId: null } as any);
+      await svc.create(WS, { name: 'Dead on arrival', stageId: 's-lost' } as any, MGR);
+      const keys = outbox.append.mock.calls.map((c) => c[0].idempotencyKey);
+      expect(keys).toEqual(expect.arrayContaining(['opp-created:o3', 'opp-lost:o3']));
+      expect(keys).not.toContain('opp-won:o3');
     });
 
     it('rejects a stageId that is not in the pipeline', async () => {
