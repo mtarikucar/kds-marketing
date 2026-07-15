@@ -15,8 +15,11 @@ function makeDeps() {
   const anthropic = { complete: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
   const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
   const knowledge = { search: jest.fn().mockResolvedValue([]) };
-  const svc = new NetgsmIvrService(prisma as any, anthropic as any, credits as any, knowledge as any);
-  return { prisma, anthropic, credits, knowledge, svc };
+  // Default: no ACTIVE BrandProfile — keeps every pre-existing test's system
+  // prompt assertions unaffected. Brand-injection tests override per-case.
+  const brandContext = { summaryFor: jest.fn().mockResolvedValue(null) };
+  const svc = new NetgsmIvrService(prisma as any, anthropic as any, credits as any, knowledge as any, brandContext as any);
+  return { prisma, anthropic, credits, knowledge, brandContext, svc };
 }
 
 const CHANNEL = {
@@ -141,6 +144,33 @@ describe('NetgsmIvrService', () => {
     expect(arg.system).toContain('Yardımcı resepsiyonist');
     expect(arg.maxTokens).toBe(120);
     expect(arg.tier).toBe('conversation');
+  });
+
+  it('info digit "1" with an ACTIVE brand profile: brand block is grounded into the system prompt', async () => {
+    const { prisma, anthropic, brandContext, svc } = makeDeps();
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    anthropic.complete.mockResolvedValue({ text: 'Çalışma saatlerimiz 09:00 - 22:00 arasıdır.' });
+    brandContext.summaryFor.mockResolvedValue('Brand: Acme\nWe sell X.');
+
+    await svc.handle({ ...INPUT, tus_bilgisi: '1' });
+
+    const arg = anthropic.complete.mock.calls[0][0];
+    expect(arg.system).toContain('Brand: Acme');
+  });
+
+  it('info digit "1" with no ACTIVE brand profile: system prompt carries no brand block', async () => {
+    const { prisma, anthropic, brandContext, svc } = makeDeps();
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+    anthropic.complete.mockResolvedValue({ text: 'Çalışma saatlerimiz 09:00 - 22:00 arasıdır.' });
+    // default mock already resolves null; assert explicitly for clarity here.
+    brandContext.summaryFor.mockResolvedValue(null);
+
+    await svc.handle({ ...INPUT, tus_bilgisi: '1' });
+
+    const arg = anthropic.complete.mock.calls[0][0];
+    expect(arg.system).not.toContain('Marka hakkında');
   });
 
   it('info digit refunds credit when Claude throws', async () => {

@@ -25,8 +25,11 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
   const spend = { settle: jest.fn().mockResolvedValue(null) };
   const candidates = { stage: jest.fn().mockResolvedValue({ staged: 1, duplicates: 0 }) };
   const prisma = { researchProfile: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) } };
-  const svc = new ResearchWorkerService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, candidates as any);
-  return { svc, complete, credits, runs, sources, spend, candidates, prisma };
+  // Default: no ACTIVE BrandProfile — keeps every pre-existing test's brief
+  // assertions unaffected. Brand-injection tests override per-case.
+  const brandContext = { summaryFor: jest.fn().mockResolvedValue(null) };
+  const svc = new ResearchWorkerService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, candidates as any, brandContext as any);
+  return { svc, complete, credits, runs, sources, spend, candidates, prisma, brandContext };
 }
 
 const toolUse = (id: string, name: string, input: unknown) => ({ id, name, input });
@@ -59,6 +62,31 @@ describe('ResearchWorkerService', () => {
     expect(r.researched).toBe(1); // the malformed candidate is dropped
     expect(candidates.stage).toHaveBeenCalledWith('ws1', 'p1', 'run1', [expect.objectContaining({ externalRef: 'phone:+905551112233' })]);
     expect(spend.settle).toHaveBeenCalledWith('ws1', expect.objectContaining({ unit: 'RESEARCH_LEAD', quantity: 1 }));
+  });
+
+  it('grounds the brief in the workspace brand block when an ACTIVE BrandProfile exists', async () => {
+    const { svc, complete, brandContext } = deps({
+      completions: [completion([toolUse('t2', 'submit_candidates', { candidates: [] })])],
+    });
+    brandContext.summaryFor.mockResolvedValue('Brand: Acme\nWe sell X.');
+
+    await svc.runProfile(JOB);
+
+    expect(brandContext.summaryFor).toHaveBeenCalledWith('ws1');
+    const brief = complete.mock.calls[0][0].messages[0].content;
+    expect(brief).toContain('BRAND CONTEXT');
+    expect(brief).toContain('Brand: Acme');
+  });
+
+  it('omits the BRAND CONTEXT line when no ACTIVE BrandProfile exists', async () => {
+    const { svc, complete } = deps({
+      completions: [completion([toolUse('t2', 'submit_candidates', { candidates: [] })])],
+    });
+
+    await svc.runProfile(JOB);
+
+    const brief = complete.mock.calls[0][0].messages[0].content;
+    expect(brief).not.toContain('BRAND CONTEXT');
   });
 
   it('refunds the credit reserve if the run throws', async () => {

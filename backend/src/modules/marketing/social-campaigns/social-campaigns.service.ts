@@ -432,6 +432,7 @@ export class SocialCampaignsService implements OnModuleInit {
       const brandKit = await this.prisma.brandKit.findUnique({ where: { workspaceId } });
       const brief = (c.brief ?? {}) as Record<string, any>;
 
+      // Copy is brand-grounded transitively: ContentAiService.compose injects the BrandProfile block itself.
       const copy = await this.contentAi.compose(workspaceId, {
         kind: 'social',
         goal: item.topic ?? c.goal ?? c.name,
