@@ -167,8 +167,19 @@ export const useMarketingAuthStore = create<MarketingAuthState>()(
           // workspace switch is NOT impersonation, so there is no agency
           // session to stash and no "return to agency" banner to arm.
         }));
-        const memberships = await fetchMemberships();
-        set({ memberships });
+        // Best-effort: the token swap above has already committed, so a
+        // hiccup fetching the refreshed membership list (network blip, a
+        // stale profile response, etc.) must NOT fail the switch itself —
+        // callers (the top-bar WorkspaceSwitcher) await this action before
+        // clearing the query cache and navigating, and the switch already
+        // succeeded server-side. Worst case the membership list is stale
+        // until the next profile fetch.
+        try {
+          const memberships = await fetchMemberships();
+          set({ memberships });
+        } catch (err) {
+          console.warn('switchWorkspace: failed to refresh memberships after switch', err);
+        }
       },
 
       logout: () => {

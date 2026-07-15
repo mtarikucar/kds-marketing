@@ -16,6 +16,7 @@ import { useTwoFactorStatus } from '../hooks/useTwoFactorStatus';
 import { QUICK_ACTIONS } from '../quickActions';
 import { fmtDate } from '../utils/format';
 import Breadcrumbs from './Breadcrumbs';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
   IconButton,
   Badge,
@@ -293,6 +294,9 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               <Menu className="h-5 w-5" />
             </IconButton>
           )}
+          {/* Renders nothing for the (overwhelming majority of) users who
+              belong to a single workspace. */}
+          <WorkspaceSwitcher />
           <Breadcrumbs />
         </div>
 

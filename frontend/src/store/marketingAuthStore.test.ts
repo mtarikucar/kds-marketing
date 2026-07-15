@@ -103,6 +103,28 @@ describe('marketingAuthStore — switchWorkspace', () => {
     expect(useMarketingAuthStore.getState().agencyReturn).toEqual(stash);
   });
 
+  it('resolves even when fetchMemberships() rejects after a successful token swap (best-effort refresh)', async () => {
+    vi.mocked(switchWorkspaceApi).mockResolvedValue({
+      user: { ...baseUser, workspaceId: 'ws2', role: 'MANAGER' },
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+    });
+    vi.mocked(fetchMemberships).mockRejectedValue(new Error('profile fetch failed'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      useMarketingAuthStore.getState().switchWorkspace('ws2'),
+    ).resolves.toBeUndefined();
+
+    // The token swap already committed — that must not be undone by the
+    // membership-refresh failure.
+    const state = useMarketingAuthStore.getState();
+    expect(state.accessToken).toBe('new-access');
+    expect(state.refreshToken).toBe('new-refresh');
+    expect(state.user?.workspaceId).toBe('ws2');
+    warnSpy.mockRestore();
+  });
+
   it('refreshes memberships from fetchMemberships() after a successful switch', async () => {
     vi.mocked(switchWorkspaceApi).mockResolvedValue({
       user: { ...baseUser, workspaceId: 'ws2', role: 'MANAGER' },
