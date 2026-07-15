@@ -71,6 +71,13 @@ export class InvoicesService {
       discount?: number;
       notes?: string;
       dueDate?: string;
+      /** Trust the incoming items' already-snapshotted taxRatePct instead of
+       *  re-resolving from the CURRENT TaxRate rows. Set by estimate→invoice
+       *  conversion so the invoice bills the tax the customer ACCEPTED, even if
+       *  the rate was later archived/edited (a converted estimate is a committed
+       *  historical document — see money.util's "editing a rate later never
+       *  rewrites historical totals" invariant). */
+      preResolvedItems?: boolean;
       // Set by the CustomerSubscription sweep so the invoice is born already
       // stamped — the (subscriptionId, subscriptionPeriodKey) partial-unique
       // index then enforces one-invoice-per-period AT INSERT (no orphan window).
@@ -83,34 +90,53 @@ export class InvoicesService {
     },
   ) {
     // Re-snapshot each line's tax rate from the workspace's TaxRate rows, then
-    // compute subtotal/taxTotal/total from those trusted snapshots.
-    const items = await this.taxRates.resolveItemTaxes(
-      workspaceId,
-      (Array.isArray(dto.items) ? dto.items : []) as PricedItem[],
-    );
+    // compute subtotal/taxTotal/total from those trusted snapshots — UNLESS the
+    // caller already holds a committed snapshot (estimate→invoice conversion),
+    // in which case re-resolving would rewrite the accepted total.
+    const items = dto.preResolvedItems
+      ? (Array.isArray(dto.items) ? dto.items : [])
+      : await this.taxRates.resolveItemTaxes(
+          workspaceId,
+          (Array.isArray(dto.items) ? dto.items : []) as PricedItem[],
+        );
     const totals = computeMoneyTotals(items);
     this.assertInRange(totals.total);
     // Coupon discount is applied AFTER tax and clamped to the gross total.
     const discount = Math.max(0, Math.min(Math.round(dto.discount ?? 0), totals.total));
-    return this.prisma.invoice.create({
-      data: {
-        workspaceId,
-        leadId: dto.leadId ?? null,
-        number: `INV-${randomBytes(4).toString('hex').toUpperCase()}`,
-        items: items as unknown as Prisma.InputJsonValue,
-        currency: (dto.currency ?? 'TRY').toUpperCase(),
-        subtotal: totals.subtotal,
-        taxTotal: totals.taxTotal,
-        discount,
-        total: totals.total - discount,
-        notes: dto.notes ?? null,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-        publicToken: `in_${randomBytes(18).toString('hex')}`,
-        subscriptionId: dto.subscriptionId ?? null,
-        subscriptionPeriodKey: dto.subscriptionPeriodKey ?? null,
-        orderFormId: dto.orderFormId ?? null,
-      },
-    });
+    // Invoice numbers are 4 random bytes (8 hex chars) — short enough that a
+    // busy workspace can collide (birthday bound). The (workspaceId, number)
+    // unique index turns that into a retriable P2002: regenerate the number
+    // and retry instead of silently sharing a number (pre-index) or 500ing.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.invoice.create({
+          data: {
+            workspaceId,
+            leadId: dto.leadId ?? null,
+            number: `INV-${randomBytes(4).toString('hex').toUpperCase()}`,
+            items: items as unknown as Prisma.InputJsonValue,
+            currency: (dto.currency ?? 'TRY').toUpperCase(),
+            subtotal: totals.subtotal,
+            taxTotal: totals.taxTotal,
+            discount,
+            total: totals.total - discount,
+            notes: dto.notes ?? null,
+            dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+            publicToken: `in_${randomBytes(18).toString('hex')}`,
+            subscriptionId: dto.subscriptionId ?? null,
+            subscriptionPeriodKey: dto.subscriptionPeriodKey ?? null,
+            orderFormId: dto.orderFormId ?? null,
+          },
+        });
+      } catch (e) {
+        const isNumberCollision =
+          e instanceof Prisma.PrismaClientKnownRequestError &&
+          e.code === 'P2002' &&
+          (((e.meta?.target as string[] | string | undefined) ?? '').toString().includes('number'));
+        if (isNumberCollision && attempt < 3) continue;
+        throw e;
+      }
+    }
   }
   async update(workspaceId: string, id: string, dto: any) {
     const existing = await this.prisma.invoice.findFirst({ where: { id, workspaceId } });
@@ -537,13 +563,15 @@ export class InvoicesService {
     }
     const json = (await res.json().catch(() => null)) as Record<string, any> | null;
     if (!res.ok || json?.status !== 'success' || json?.paymentStatus !== 'SUCCESS') return false;
-    // Bind the retrieved payment to THIS invoice. The retrieve keys off the
-    // `token` alone and returns whatever payment that token represents — it
-    // ignores the request's conversationId — so without checking the RESPONSE's
-    // conversationId/basketId (both set to inv.id at init), a token for a
-    // same-amount paid invoice B could settle invoice A. (PayTR binds via the
-    // hashed merchant_oid; Iyzico has no equivalent, so we check it here.)
-    if (String(json.conversationId ?? '') !== inv.id && String(json.basketId ?? '') !== inv.id) {
+    // Bind the retrieved payment to THIS invoice via the RESPONSE's basketId
+    // (set to inv.id at init). The response's conversationId is just an ECHO of
+    // the retrieve REQUEST's conversationId — which we set to inv.id ourselves
+    // two lines up — so it matches by construction and carries no binding
+    // information: including it in an AND neutralized the whole check, letting
+    // a token for a same-amount paid invoice B settle invoice A. (PayTR binds
+    // via the hashed merchant_oid; Iyzico has no equivalent, so bind on
+    // basketId alone.)
+    if (String(json.basketId ?? '') !== inv.id) {
       this.logger.warn(`Iyzico token/invoice mismatch for invoice ${inv.id} — refusing to settle`);
       return false;
     }

@@ -101,7 +101,7 @@ const voiceKeyRowSchema = z.object({
 
 const IYS_MESSAGE_TYPES = ['BILGILENDIRME', 'TICARI'] as const;
 
-const campaignSchema = z
+export const campaignSchema = z
   .object({
     name: z.string().min(1, 'Required').max(120),
     channel: z.enum(CHANNELS),
@@ -125,11 +125,14 @@ const campaignSchema = z
     voiceAudioId: z.string().optional(),
     voiceKeys: z.array(voiceKeyRowSchema),
   })
-  // The plain-text body is only mandatory when there's no HTML to fall back on.
-  // With an HTML template attached we auto-derive the plain-text version, so an
-  // empty field must not block the operator.
+  // The plain-text body is only optional when an EMAIL HTML template is attached
+  // (we auto-derive the plain text from it). For every OTHER channel the HTML is
+  // dropped before submit, so the body must always be required there — otherwise
+  // leftover EMAIL bodyHtml (not cleared when the channel switches) lets a blank
+  // SMS/VOICE campaign pass the form and then 400 on the backend.
   .superRefine((v, ctx) => {
-    if (!v.bodyHtml?.trim() && !v.body.trim()) {
+    const htmlFallback = v.channel === 'EMAIL' && !!v.bodyHtml?.trim();
+    if (!htmlFallback && !v.body.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['body'], message: 'Required' });
     }
     // Mirrors the backend's CampaignsService.assertVoiceConfig — msg XOR
@@ -458,7 +461,16 @@ export default function CampaignsPage() {
       }),
     onSuccess: ({ data }) => {
       if (data.subject) form.setValue('subject', data.subject);
-      if (data.body) form.setValue('body', data.body);
+      if (data.body) {
+        // For a VOICE campaign the spoken text is `voiceMsg`; `body` is only an
+        // internal, not-read-aloud label. Route generated copy to the field that
+        // the call actually uses so the AI output isn't silently lost.
+        if (selectedChannel === 'VOICE') {
+          form.setValue('voiceMsg', data.body, { shouldValidate: true });
+        } else {
+          form.setValue('body', data.body);
+        }
+      }
       toast.success(t('campaigns.composed', 'Draft ready'));
     },
     onError: (e: any) =>
@@ -581,7 +593,19 @@ export default function CampaignsPage() {
                     control={form.control}
                     name="channel"
                     render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value}
+                        onValueChange={(v) => {
+                          field.onChange(v);
+                          // Drop any attached EMAIL template when leaving EMAIL so
+                          // its HTML can't satisfy the body requirement for a
+                          // channel that never sends HTML.
+                          if (v !== 'EMAIL') {
+                            form.setValue('bodyHtml', '');
+                            form.setValue('emailTemplateId', '');
+                          }
+                        }}
+                      >
                         <SelectTrigger id={id}>
                           <SelectValue />
                         </SelectTrigger>

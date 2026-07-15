@@ -78,7 +78,14 @@ export default function LeadDetailPage() {
   const convert = useConvertDialog();
   const [faxOpen, setFaxOpen] = useState(false);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
+    // Also refresh the leads LIST + dashboard — the singular detail key does not
+    // prefix-match ['marketing','leads',{filters}], so a convert/status change on
+    // this page otherwise left the row stale in the list until the 30s poll.
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
+  };
 
   const {
     data: lead,

@@ -149,3 +149,91 @@ describe('TagsService.list', () => {
     expect(out[0]).toMatchObject({ id: 't1', name: 'vip', count: 3 });
   });
 });
+
+describe('TagsService.remove — segment-reference guard', () => {
+  it('refuses (409) to delete a tag a segment still references, and does NOT delete', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.tag.findFirst.mockResolvedValue({ id: 't1', workspaceId: WS } as any);
+    // A "leads WITHOUT tag t1" segment — deleting t1 would explode it to the
+    // whole workspace, so the delete must be blocked.
+    prisma.segment.findMany.mockResolvedValue([
+      { name: 'No-VIP', definition: { op: 'and', children: [{ field: 'tag', cmp: 'hasNot', value: 't1' }] } },
+    ] as any);
+    await expect(svc.remove(WS, 't1')).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.remove(WS, 't1')).rejects.toThrow(/No-VIP/);
+    expect(prisma.tag.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes when no segment references the tag (a segment on a DIFFERENT tag is fine)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.tag.findFirst.mockResolvedValue({ id: 't1', workspaceId: WS } as any);
+    prisma.segment.findMany.mockResolvedValue([
+      { name: 'Other', definition: { op: 'or', children: [{ field: 'tag', cmp: 'has', value: 't-other' }, { field: 'city', cmp: 'eq', value: 'Izmir' }] } },
+    ] as any);
+    (prisma.tag.delete as jest.Mock).mockResolvedValue({ id: 't1' } as any);
+    const res: any = await svc.remove(WS, 't1');
+    expect(prisma.tag.delete).toHaveBeenCalledWith({ where: { id: 't1' } });
+    expect(res).toEqual({ id: 't1' });
+  });
+});
+
+describe('TagsService.bulkAssign — emits tag.added for the real delta', () => {
+  it('links only the not-yet-linked leads and emits tag.added per newly-tagged lead', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.tag.findUnique.mockResolvedValue({ id: 't1', name: 'vip' } as any); // resolveOrCreate
+    prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }, { id: 'l2' }] as any);
+    // l1 already carries t1; only l2 is a new link → only l2 gets an event.
+    prisma.leadTag.findMany.mockResolvedValue([{ leadId: 'l1', tagId: 't1' }] as any);
+    (prisma.leadTag.createMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const out: any = await svc.bulkAssign(WS, ['l1', 'l2'], ['vip'], 'u1');
+
+    expect(prisma.leadTag.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [{ leadId: 'l2', tagId: 't1', assignedById: 'u1' }],
+        skipDuplicates: true,
+      }),
+    );
+    // Exactly one event — for l2, the only real addition.
+    const added = outbox.append.mock.calls.filter((c: any[]) => c[0].type === 'marketing.lead.tag.added.v1');
+    expect(added).toHaveLength(1);
+    expect(added[0][0].payload).toMatchObject({ leadId: 'l2', workspaceId: WS, tagIds: ['t1'] });
+    expect(out).toEqual({ leads: 2, tags: 1 });
+  });
+
+  it('emits nothing when every lead already carries the tag', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.tag.findUnique.mockResolvedValue({ id: 't1', name: 'vip' } as any);
+    prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }] as any);
+    prisma.leadTag.findMany.mockResolvedValue([{ leadId: 'l1', tagId: 't1' }] as any);
+    await svc.bulkAssign(WS, ['l1'], ['vip']);
+    expect(prisma.leadTag.createMany).not.toHaveBeenCalled();
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+});
+
+describe('TagsService.bulkUnassign — emits tag.removed for real removals', () => {
+  it('emits tag.removed only for leads that actually had the link', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }, { id: 'l2' }] as any);
+    // Only l1 carries t1 before the delete.
+    prisma.leadTag.findMany.mockResolvedValue([{ leadId: 'l1', tagId: 't1' }] as any);
+    (prisma.leadTag.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const res: any = await svc.bulkUnassign(WS, ['l1', 'l2'], ['t1']);
+
+    expect(res).toEqual({ removed: 1 });
+    const removed = outbox.append.mock.calls.filter((c: any[]) => c[0].type === 'marketing.lead.tag.removed.v1');
+    expect(removed).toHaveLength(1);
+    expect(removed[0][0].payload).toMatchObject({ leadId: 'l1', workspaceId: WS, tagIds: ['t1'] });
+  });
+
+  it('emits nothing when no lead had a matching link', async () => {
+    const { prisma, outbox, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([{ id: 'l1' }] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    (prisma.leadTag.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+    await svc.bulkUnassign(WS, ['l1'], ['t1']);
+    expect(outbox.append).not.toHaveBeenCalled();
+  });
+});

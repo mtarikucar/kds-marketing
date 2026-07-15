@@ -22,7 +22,10 @@ describe('CampaignsService', () => {
         update: jest.fn().mockResolvedValue({}),
       },
       lead: { findMany: jest.fn().mockResolvedValue([{ id: 'l1' }, { id: 'l2' }]) },
-      campaignRecipient: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      campaignRecipient: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
     };
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
     // Default: entitled to sms (matches every plan block — no regression).
@@ -269,6 +272,51 @@ describe('CampaignsService', () => {
       prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', status: 'SENDING' });
       await expect(svc.setVariants(WS, 'c1', { variants: [{ key: 'A', body: 'x' }] }))
         .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // A SCHEDULED campaign already froze recipients WITH their variantKey — a
+    // variant edit would leave them pointing at a removed key (silently
+    // degraded to control), so it reverts to DRAFT + drops the frozen rows.
+    it('reverts a SCHEDULED campaign to DRAFT and drops frozen recipients on a variant edit', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+      await svc.setVariants(WS, 'c1', { abEnabled: true, variants: [{ key: 'B', body: 'x' }] });
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith('campaign.launch', 'c1');
+      expect(prisma.campaignRecipient.deleteMany).toHaveBeenCalledWith({ where: { campaignId: 'c1', workspaceId: WS } });
+      // The status-DRAFT revert is the LAST campaign.updateMany call.
+      const lastUpdate = prisma.campaign.updateMany.mock.calls.at(-1)[0];
+      expect(lastUpdate.data).toMatchObject({ status: 'DRAFT' });
+    });
+
+    it('does NOT revert a still-DRAFT campaign (nothing frozen yet)', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({ id: 'c1', status: 'DRAFT' });
+      await svc.setVariants(WS, 'c1', { variants: [{ key: 'A', body: 'x' }] });
+      expect(scheduledJobs.cancel).not.toHaveBeenCalled();
+      expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update — SCHEDULED audience change re-freeze safety', () => {
+    it('reverts SCHEDULED → DRAFT and drops frozen recipients when the audience filter changes', async () => {
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', audienceFilter: [{ field: 'city', op: 'eq', value: 'Izmir' }],
+      });
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+      const out: any = await svc.update(WS, 'c1', { audienceFilter: [{ field: 'city', op: 'eq', value: 'Ankara' }] });
+      expect(scheduledJobs.cancel).toHaveBeenCalledWith('campaign.launch', 'c1');
+      expect(prisma.campaignRecipient.deleteMany).toHaveBeenCalledWith({ where: { campaignId: 'c1', workspaceId: WS } });
+      expect(out.status).toBe('DRAFT');
+      // Reverted → it must NOT re-queue the launch job.
+      expect(scheduledJobs.schedule).not.toHaveBeenCalled();
+    });
+
+    it('an UNCHANGED audience filter on a SCHEDULED campaign does not revert (deep-equal, not identity)', async () => {
+      const filter = [{ field: 'city', op: 'eq', value: 'Izmir' }];
+      prisma.campaign.findFirst.mockResolvedValue({
+        id: 'c1', workspaceId: WS, status: 'SCHEDULED', channel: 'EMAIL', audienceFilter: filter, scheduledAt: new Date(Date.now() + 86_400_000),
+      });
+      prisma.campaign.update.mockResolvedValue({ id: 'c1', status: 'SCHEDULED' });
+      await svc.update(WS, 'c1', { audienceFilter: [{ field: 'city', op: 'eq', value: 'Izmir' }], scheduledAt: new Date(Date.now() + 86_400_000).toISOString() });
+      expect(prisma.campaignRecipient.deleteMany).not.toHaveBeenCalled();
     });
   });
 

@@ -194,6 +194,18 @@ export class IvrService {
         if (!option.targetMenuId) {
           return { twiml: await this.renderMenuTwiml(workspaceId, menuId) };
         }
+        // Honor the target menu's `enabled` flag. The builder UI promises
+        // "disabled menus are skipped by the phone tree", but only the ROOT
+        // fall-through checked it — so a caller could still be routed INTO a
+        // disabled submenu. Treat a disabled target like an unavailable option:
+        // re-prompt this menu (same as an unmapped digit above).
+        const target = await this.prisma.ivrMenu.findFirst({
+          where: { id: option.targetMenuId, workspaceId },
+          select: { enabled: true },
+        });
+        if (!target?.enabled) {
+          return { twiml: await this.renderMenuTwiml(workspaceId, menuId) };
+        }
         // targetMenu was validated same-workspace at write time; re-scope here.
         return {
           twiml: await this.renderMenuTwiml(workspaceId, option.targetMenuId),

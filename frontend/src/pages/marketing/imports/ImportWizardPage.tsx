@@ -10,7 +10,8 @@
  * Past imports list at the bottom via GET /imports.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
@@ -51,10 +52,13 @@ import {
   useImportJob,
   useUploadImport,
   useCommitImport,
+  importListKey,
   type ImportJob,
   type ImportDedupePolicy,
   type UploadResult,
 } from './importsApi';
+import { buildSampleRows } from './csv-preview';
+import { useCustomFields } from '../crm/hooks';
 
 // ── Native fields the backend accepts + special values ───────────────────────
 
@@ -151,13 +155,10 @@ function UploadStep({ onDone }: UploadStepProps) {
           { filename: file.name, content },
           {
             onSuccess: (result) => {
-              // Parse sample rows client-side for preview in the mapping step.
-              const lines = content.split('\n').filter(Boolean);
-              const headers = lines[0]?.split(',').map((h) => h.trim().replace(/^"|"$/g, '')) ?? [];
-              const sampleRows = lines.slice(1, 4).map((line) => {
-                const cells = line.split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
-                return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? '']));
-              });
+              // Quote-aware preview parse keyed by the backend's own headers, so
+              // the "Sample values" shown line up with what the backend actually
+              // reads (a naive split(',') shifts columns after a quoted comma).
+              const sampleRows = buildSampleRows(content, result.headers);
               onDone(result, sampleRows);
             },
             onError: (err: unknown) => {
@@ -247,11 +248,42 @@ interface MapStepProps {
 function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext }: MapStepProps) {
   const { t } = useTranslation('marketing');
 
+  // The backend applies `cf:<key>` mappings (buildLeadData) and — in create
+  // mode — REJECTS rows missing a required custom field. Without offering the
+  // workspace's custom fields here, a workspace with any required LEAD custom
+  // field got a 100% failed import with no in-wizard remedy.
+  const { data: customFieldDefs } = useCustomFields();
+  const fieldOptions = useMemo(
+    () => [
+      ...FIELD_OPTIONS,
+      ...(customFieldDefs ?? [])
+        .filter((d) => d.entity === 'LEAD' && !d.archived)
+        .map((d) => ({ value: `cf:${d.key}`, label: `${d.label}${d.required ? ' *' : ''} (custom)` })),
+    ],
+    [customFieldDefs],
+  );
+
   // businessName is the one hard-required native field — the backend rejects
   // EVERY row without it. The auto-mapping synonyms are English-only, so a
   // Turkish header (e.g. "Firma Adı") arrives unmapped; without this guard the
   // user could run a silently 100%-failed import. Block Next until it's mapped.
   const hasBusinessName = Object.values(mapping).includes('businessName');
+
+  // Two columns mapped to the SAME native field silently drop one on import: the
+  // backend's buildLeadData assigns per field, so the LAST header mapped wins for
+  // every row and the other column's data vanishes. Block Next until resolved.
+  // '__skip' may repeat freely; 'tags' legitimately merges multiple columns.
+  const duplicateFields = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const field of Object.values(mapping)) {
+      if (field === '__skip' || field === 'tags') continue;
+      counts.set(field, (counts.get(field) ?? 0) + 1);
+    }
+    return [...counts.entries()].filter(([, n]) => n > 1).map(([field]) => field);
+  }, [mapping]);
+  const duplicateLabels = duplicateFields
+    .map((f) => fieldOptions.find((o) => o.value === f)?.label ?? f)
+    .join(', ');
 
   const setField = (header: string, field: string) => {
     onMappingChange({ ...mapping, [header]: field });
@@ -303,7 +335,7 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {FIELD_OPTIONS.map((opt) => (
+                      {fieldOptions.map((opt) => (
                         <SelectItem key={opt.value} value={opt.value} className="text-xs">
                           {opt.label}
                         </SelectItem>
@@ -326,12 +358,22 @@ function MapStep({ headers, mapping, onMappingChange, sampleRows, onBack, onNext
         </Callout>
       )}
 
+      {duplicateFields.length > 0 && (
+        <Callout tone="warning" icon={<AlertCircle className="h-4 w-4" />}>
+          {t('import.duplicateFields', {
+            defaultValue:
+              'More than one column is mapped to the same field ({{fields}}). Only one would be imported — map each field once.',
+            fields: duplicateLabels,
+          })}
+        </Callout>
+      )}
+
       <div className="flex gap-3 pt-2">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           {t('common.back', { defaultValue: 'Back' })}
         </Button>
-        <Button onClick={onNext} disabled={!hasBusinessName}>
+        <Button onClick={onNext} disabled={!hasBusinessName || duplicateFields.length > 0}>
           {t('common.next', { defaultValue: 'Next' })}
           <ArrowRight className="h-4 w-4" aria-hidden="true" />
         </Button>
@@ -442,7 +484,19 @@ interface ProgressStepProps {
 
 function ProgressStep({ jobId, onStartNew }: ProgressStepProps) {
   const { t } = useTranslation('marketing');
+  const qc = useQueryClient();
   const { data: job } = useImportJob(jobId, true);
+
+  // The polled job surfaces completion, but the "Import history" list below was
+  // fetched at commit time (job RUNNING, processed 0) and nothing else refreshes
+  // it — invalidate it once the job reaches a terminal status so the history row
+  // shows the final counts/status instead of the frozen RUNNING snapshot.
+  const jobStatus = job?.status;
+  useEffect(() => {
+    if (jobStatus === 'DONE' || jobStatus === 'FAILED') {
+      qc.invalidateQueries({ queryKey: importListKey() });
+    }
+  }, [jobStatus, qc]);
 
   if (!job) {
     return (

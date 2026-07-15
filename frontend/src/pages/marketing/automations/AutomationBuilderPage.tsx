@@ -193,8 +193,15 @@ export default function AutomationBuilderPage() {
         status={existingStatus}
         canToggle={isEdit && !!existingStatus}
         saving={save.isPending}
+        saveDisabled={!!filtersError}
         onBack={onBack}
-        onSave={() => save.mutate()}
+        // Guard as well as disable: never persist while the trigger-filters JSON
+        // is invalid (patchState skips the bad value, so Save would write stale
+        // filters under a false "saved" toast).
+        onSave={() => {
+          if (filtersError) return;
+          save.mutate();
+        }}
         onToggleStatus={() => toggleStatus.mutate()}
       />
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">

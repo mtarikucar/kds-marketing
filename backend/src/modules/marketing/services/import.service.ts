@@ -114,8 +114,33 @@ export class ImportService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.runner.registerHandler('import.batch', (job: ClaimedJob) =>
-      this.processBatch(job.payload.jobId, job.payload.offset ?? 0),
+    this.runner.registerHandler(
+      'import.batch',
+      (job: ClaimedJob) => this.processBatch(job.payload.jobId, job.payload.offset ?? 0),
+      // The batch job exhausted its retries (e.g. a DB blip mid-import):
+      // without this the ImportJob stayed RUNNING forever and the wizard
+      // polled "Import running…" indefinitely. Flip it terminal with a
+      // visible reason; rows already imported stay imported.
+      async (job: ClaimedJob, error: string) => {
+        const jobId = job.payload?.jobId as string | undefined;
+        if (!jobId) return;
+        const imp = await this.prisma.importJob.findUnique({
+          where: { id: jobId },
+          select: { status: true, errors: true },
+        });
+        if (!imp || imp.status !== 'RUNNING') return;
+        const prevErrors = (imp.errors as { row: number; message: string }[] | null) ?? [];
+        await this.prisma.importJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'FAILED',
+            errors: [
+              ...prevErrors,
+              { row: -1, message: `import aborted — batch job exhausted retries: ${error}` },
+            ] as Prisma.InputJsonValue,
+          },
+        });
+      },
     );
   }
 
@@ -313,13 +338,17 @@ export class ImportService implements OnModuleInit {
         let leadId: string | null = null;
         let rowStatus = 'DONE';
         // Decide the action up-front (no writes yet). A converted/WON customer
-        // is never overwritten from a CSV row.
+        // is never OVERWRITTEN from a CSV row — but that guard only applies to
+        // the UPDATE write. Under the CREATE policy ("Always create") the user
+        // explicitly asked for a new lead, so a match against a customer must
+        // not silently skip the row (it contradicted the option's promise).
         const action: 'created' | 'updated' | 'skipped' =
-          (existing && policy === 'SKIP') ||
-          (existing && (existing.convertedTenantId || existing.status === 'WON'))
+          existing && policy === 'SKIP'
             ? 'skipped'
             : existing && policy === 'UPDATE'
-              ? 'updated'
+              ? existing.convertedTenantId || existing.status === 'WON'
+                ? 'skipped'
+                : 'updated'
               : 'created';
         if (action === 'skipped') rowStatus = 'SKIPPED';
 

@@ -191,6 +191,60 @@ describe('AttributionService', () => {
     expect(out.totalRevenue).toBe(1000);
   });
 
+  // ── Aggregated currency (finding: revenue was mislabeled with workspace default) ──
+  const convDates = {
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    convertedAt: new Date('2026-01-02T00:00:00Z'),
+  };
+
+  it('reports the single currency when all contributing offers share one', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'A', workspaceId: WS, source: 'WEBSITE', status: 'WON', ...convDates,
+        offers: [{ status: 'ACCEPTED', customPrice: 1000, planMonthlyPrice: null, planCurrency: 'TRY' }],
+        activities: [],
+      },
+    ]);
+    const out = await svc.attribution(WS, { model: 'first' });
+    expect(out.currency).toBe('TRY');
+    expect(out.totalRevenue).toBe(1000);
+  });
+
+  it('returns null currency when contributing offers span MULTIPLE currencies (mixed)', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'A', workspaceId: WS, source: 'WEBSITE', status: 'WON', ...convDates,
+        offers: [{ status: 'ACCEPTED', customPrice: 1000, planMonthlyPrice: null, planCurrency: 'USD' }],
+        activities: [],
+      },
+      {
+        id: 'B', workspaceId: WS, source: 'INSTAGRAM', status: 'WON', ...convDates,
+        offers: [{ status: 'ACCEPTED', customPrice: 500, planMonthlyPrice: null, planCurrency: 'TRY' }],
+        activities: [],
+      },
+    ]);
+    const out = await svc.attribution(WS, { model: 'first' });
+    expect(out.currency).toBeNull();
+    expect(out.totalRevenue).toBe(1500);
+  });
+
+  it('ignores a zero-price (free) offer\'s currency — null currency, but the conversion still counts', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'A', workspaceId: WS, source: 'WEBSITE', status: 'WON', ...convDates,
+        offers: [{ status: 'ACCEPTED', customPrice: 0, planMonthlyPrice: 0, planCurrency: 'USD' }],
+        activities: [],
+      },
+    ]);
+    const out = await svc.attribution(WS, { model: 'first' });
+    expect(out.currency).toBeNull();
+    expect(out.totalRevenue).toBe(0);
+    expect(out.conversions).toBe(1);
+  });
+
   it('reports per-channel conversionRate from touched vs converted leads', async () => {
     const { prisma, svc } = makeSvc();
     (prisma.lead.findMany as jest.Mock).mockResolvedValue([

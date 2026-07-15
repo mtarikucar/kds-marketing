@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, type SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
@@ -54,10 +54,61 @@ const EMPTY_LEAD_VALUES: LeadFormValues = {
   nextFollowUp: '',
 };
 
+/** The optional string/date fields whose emptied value must be sent as an
+ *  explicit `null` on EDIT so a previously-set value is actually cleared (the
+ *  numeric tableCount/branchCount can't be cleared this way — the backend's
+ *  @EmptyStringToNumber transform maps null/'' → undefined = unchanged). */
+const CLEARABLE_TEXT_FIELDS = [
+  'phone',
+  'whatsapp',
+  'email',
+  'address',
+  'city',
+  'region',
+  'currentSystem',
+  'notes',
+  'nextFollowUp',
+] as const;
+
+/**
+ * Build the create/update payload from the form values.
+ *
+ * CREATE: omit empty optionals so the backend never stores "".
+ * EDIT: send an explicit `null` for an emptied optional string/date field so a
+ * previously-set value is actually CLEARED — omitting it leaves that field a
+ * no-op in the PATCH (PartialType), which is why clearing a field used to be
+ * silently ignored.
+ */
+export function buildLeadPayload(
+  values: LeadFormValues,
+  opts: { isEdit: boolean; customFields?: Record<string, unknown> },
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    businessName: values.businessName.trim(),
+    contactPerson: values.contactPerson.trim(),
+    businessType: values.businessType,
+    source: values.source,
+    priority: values.priority,
+  };
+  // Numeric optionals — only set when present (see CLEARABLE_TEXT_FIELDS note).
+  if (values.tableCount) payload.tableCount = parseInt(values.tableCount, 10);
+  if (values.branchCount) payload.branchCount = parseInt(values.branchCount, 10);
+  if (opts.customFields) payload.customFields = opts.customFields;
+
+  for (const key of CLEARABLE_TEXT_FIELDS) {
+    const raw = values[key];
+    const val = key === 'nextFollowUp' ? raw || '' : (raw ?? '').trim();
+    if (val) payload[key] = val;
+    else if (opts.isEdit) payload[key] = null; // explicit clear on edit
+  }
+  return payload;
+}
+
 export default function CreateLeadPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { t } = useTranslation('marketing');
+  const queryClient = useQueryClient();
   const isEdit = !!id;
 
   const form = useForm<LeadFormValues>({
@@ -125,6 +176,12 @@ export default function CreateLeadPage() {
         : marketingApi.post('/leads', data),
     onSuccess: (res) => {
       const leadId = isEdit ? id : res.data.id;
+      // The list, dashboard and (on edit) the detail page all read shared caches
+      // that would otherwise serve stale pre-edit data for up to staleTime — so
+      // the just-saved change looks like it silently failed. Invalidate them.
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'leads'] });
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'dashboard'] });
+      if (isEdit) queryClient.invalidateQueries({ queryKey: ['marketing', 'lead', id] });
       toast.success(isEdit ? t('createLead.updateSuccess') : t('createLead.createSuccess'));
       navigate(`/leads/${leadId}`);
     },
@@ -141,27 +198,12 @@ export default function CreateLeadPage() {
   });
 
   const onSubmit: SubmitHandler<LeadFormValues> = (values) => {
-    // Strip empty optional strings so the backend doesn't store "".
-    const payload: Record<string, unknown> = {
-      businessName: values.businessName.trim(),
-      contactPerson: values.contactPerson.trim(),
-      businessType: values.businessType,
-      source: values.source,
-      priority: values.priority,
-    };
-    if (values.phone) payload.phone = values.phone.trim();
-    if (values.whatsapp) payload.whatsapp = values.whatsapp.trim();
-    if (values.email) payload.email = values.email.trim();
-    if (values.address) payload.address = values.address.trim();
-    if (values.city) payload.city = values.city.trim();
-    if (values.region) payload.region = values.region.trim();
-    if (values.tableCount) payload.tableCount = parseInt(values.tableCount, 10);
-    if (values.branchCount) payload.branchCount = parseInt(values.branchCount, 10);
-    if (values.currentSystem) payload.currentSystem = values.currentSystem.trim();
-    if (values.notes) payload.notes = values.notes.trim();
-    if (values.nextFollowUp) payload.nextFollowUp = values.nextFollowUp;
-    if (activeCustomFields.length) payload.customFields = cfValues;
-    mutation.mutate(payload);
+    mutation.mutate(
+      buildLeadPayload(values, {
+        isEdit,
+        customFields: activeCustomFields.length ? cfValues : undefined,
+      }),
+    );
   };
 
   const fieldErr = (msg?: string) =>

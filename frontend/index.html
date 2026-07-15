@@ -42,6 +42,24 @@
         "description": "Hepsi bir arada pazarlama ve CRM platformu — CRM, omnichannel inbox, kampanya, otomasyon, funnel, sosyal planlayıcı ve faturalama tek panelde."
       }
     </script>
+    <!-- Pre-paint theme: mirror themeStore/resolveTheme so a persisted dark theme
+         paints dark on first frame instead of flashing white (FOUC) before React
+         hydrates. ThemeProvider remains the source of truth afterwards. -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('kds-theme');
+          var pref = raw ? (JSON.parse(raw).state || {}).pref : 'system';
+          var dark =
+            pref === 'dark' ||
+            ((!pref || pref === 'system') &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          /* private mode / bad JSON — fall back to the CSS default (light) */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

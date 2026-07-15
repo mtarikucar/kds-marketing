@@ -31,7 +31,10 @@ describe('BudgetExecutorService', () => {
       },
       adRuleLog: { findFirst: jest.fn().mockResolvedValue((overrides as any).recentRuleWrite ? { id: 'log-1' } : null) },
     };
-    const approvals = { markApplied: jest.fn().mockResolvedValue({}) };
+    const approvals = {
+      markApplied: jest.fn().mockResolvedValue({}),
+      approve: jest.fn().mockResolvedValue({ id: APPROVAL, status: 'APPROVED' }),
+    };
     const capability = { canWriteBudget: jest.fn((p: string) => (overrides.canWrite ? overrides.canWrite(p) : false)) };
     const ads = { setDailyBudget: jest.fn().mockResolvedValue({ id: 'c1', dailyBudget: 100 }) };
     const svc = new BudgetExecutorService(prisma as any, approvals as any, capability as any, ads as any);
@@ -57,9 +60,48 @@ describe('BudgetExecutorService', () => {
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('refuses to apply a request that has not been approved', async () => {
-    const { svc } = make({ approval: { ...approvedReallocation([]), status: 'PENDING' } });
-    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
+  it('refuses a request that was already decided against (REJECTED/EXPIRED)', async () => {
+    const { svc, approvals } = make({ approval: { ...approvedReallocation([]), status: 'REJECTED' } });
+    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toThrow(/already REJECTED/);
+    expect(approvals.approve).not.toHaveBeenCalled();
+  });
+
+  it('one-click PENDING apply: preconditions FIRST, then the decision, then execution', async () => {
+    const { svc, approvals } = make({
+      approval: { ...approvedReallocation([{ channel: 'META', campaignRef: '', budget: 120 }]), status: 'PENDING' },
+      budget: activeBudget,
+    });
+    const out = await svc.apply(WS, APPROVAL, USER);
+    // The decision is recorded through the atomic claim path…
+    expect(approvals.approve).toHaveBeenCalledWith(WS, APPROVAL, USER);
+    // …and the plan committed + request applied in the same call.
+    expect(approvals.markApplied).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(out.status).toBe('NO_LIVE_WRITE'); // no write capability in this fixture
+  });
+
+  it('a failed precondition (killed budget) leaves a PENDING request UNDECIDED — no stranded APPROVED-unapplied', async () => {
+    // The old two-step approved first and applied second: a kill-switch failure
+    // stranded the request APPROVED-unapplied, invisible in the PENDING-only
+    // queue, with no retry path — while the UI said the decision was not
+    // recorded. Now the decision only lands after every precondition passes.
+    const { svc, approvals } = make({
+      approval: { ...approvedReallocation([{ channel: 'META', campaignRef: '', budget: 120 }]), status: 'PENDING' },
+      budget: { ...activeBudget, killSwitch: true },
+    });
+    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toThrow(/not active/);
+    expect(approvals.approve).not.toHaveBeenCalled();
+    expect(approvals.markApplied).not.toHaveBeenCalled();
+  });
+
+  it('an APPROVED-but-unapplied request (legacy stranding / post-claim crash) can be re-applied', async () => {
+    const { svc, approvals } = make({
+      approval: approvedReallocation([{ channel: 'META', campaignRef: '', budget: 120 }]),
+      budget: activeBudget,
+    });
+    const out = await svc.apply(WS, APPROVAL, USER);
+    expect(approvals.approve).not.toHaveBeenCalled(); // already decided — no re-decide
+    expect(approvals.markApplied).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(out.status).toBe('NO_LIVE_WRITE');
   });
 
   it('is idempotent — an already-applied request short-circuits', async () => {

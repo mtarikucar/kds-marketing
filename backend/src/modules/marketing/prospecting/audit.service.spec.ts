@@ -30,6 +30,9 @@ describe('AuditService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       lead: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      // request() now creates the row + schedules the scan in ONE transaction;
+      // run the callback against the same mock client.
+      $transaction: jest.fn().mockImplementation(async (fn: any) => fn(prisma)),
     };
     scheduledJob = { schedule: jest.fn().mockResolvedValue('job1') };
     leads = { create: jest.fn().mockResolvedValue({ id: 'lead1' }) };
@@ -67,6 +70,19 @@ describe('AuditService', () => {
     it('rejects a non-http(s) target', async () => {
       process.env.PAGESPEED_API_KEY = 'psi-key';
       await expect(svc.request(WS, { targetUrl: 'javascript:alert(1)' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('creates the row and schedules atomically — a schedule() failure rolls the row back (no orphan stuck PENDING)', async () => {
+      process.env.PAGESPEED_API_KEY = 'psi-key';
+      // The scan enqueue fails inside the transaction…
+      scheduledJob.schedule.mockRejectedValue(new Error('db blip'));
+      await expect(svc.request(WS, { targetUrl: 'acme.example' })).rejects.toThrow('db blip');
+      // …so create + schedule ran inside the SAME $transaction (which rejects,
+      // rolling the just-created audit back — no orphaned PENDING row).
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(scheduledJob.schedule).toHaveBeenCalledTimes(1);
+      // schedule was handed the tx client (2nd arg), not a bare prisma call.
+      expect(scheduledJob.schedule.mock.calls[0].length).toBe(2);
     });
   });
 

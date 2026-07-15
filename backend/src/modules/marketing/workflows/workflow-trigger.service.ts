@@ -73,8 +73,10 @@ export class WorkflowTriggerService implements OnModuleInit {
       for (const wf of candidates) {
         const filters = (wf.trigger as any)?.filters ?? [];
         if (!this.handler.matchesAll(filters, ctx)) continue;
+        // Pass the (stable) source event id so a redelivered event — including a
+        // LEADLESS one the active-per-lead index can't dedupe — is idempotent.
         await this.executor
-          .start(wf as any, subject, p, 0)
+          .start(wf as any, subject, p, 0, event.id)
           .catch((e) => this.logger.error(`workflow ${wf.id} start failed: ${e?.message ?? e}`));
       }
     } catch (e: any) {

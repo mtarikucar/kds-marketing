@@ -121,6 +121,17 @@ describe('SegmentCompilerService.validate', () => {
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('rejects an EMPTY in/nin list (would compile to a match-all / match-nothing audience)', async () => {
+    // native
+    await expect(svc.validate(WS, { field: 'status', cmp: 'nin', value: [] }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.validate(WS, { field: 'status', cmp: 'in', value: [] }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    // custom field
+    await expect(svc.validate(WS, { field: 'cf:budget', cmp: 'nin', value: [] }))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('rejects a tree that is too deep', async () => {
     let node: any = { field: 'status', cmp: 'eq', value: 'NEW' };
     for (let i = 0; i < 8; i++) node = { op: 'and', children: [node] };

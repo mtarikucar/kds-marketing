@@ -120,7 +120,14 @@ export class SalesCallService {
     const stale = active.filter((c) => c.startedAt.getTime() < cutoff);
     if (stale.length) {
       await this.prisma.salesCall.updateMany({
-        where: { id: { in: stale.map((c) => c.id) }, workspaceId },
+        // status:'INITIATED' is REQUIRED, not just for scoping: the stale set is
+        // purely time-based, so a genuinely-live 30-min call (or one whose CDR/
+        // hangup webhook is arriving right now) can qualify. Without the guard
+        // this CANCELLED write races the CDR reconciler / finalizeCall and can
+        // regress an already-CONNECTED row (losing its duration + recording,
+        // permanently — every downstream write is scoped to non-terminal/
+        // CONNECTED). Matches CallCdrSyncService / finalizeCall / handleAnswer.
+        where: { id: { in: stale.map((c) => c.id) }, workspaceId, status: 'INITIATED' },
         data: {
           status: 'CANCELLED',
           endedAt: new Date(),

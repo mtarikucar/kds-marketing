@@ -6,9 +6,13 @@ const D = (n: number) => new Prisma.Decimal(n);
 
 function makeDeps(budget: any) {
   const create = jest.fn().mockResolvedValue({ id: 'run-1' });
+  const supersede = jest.fn().mockResolvedValue({ count: 0 });
   const prisma = {
     growthBudget: { findFirst: jest.fn().mockResolvedValue(budget) },
     autopilotRun: { create, findFirst: jest.fn().mockResolvedValue(null) },
+    // The ASSISTED enqueue path supersedes older PENDING proposals for the
+    // same budget before creating the new one.
+    approvalRequest: { updateMany: supersede },
   } as any;
   const perf = { collect: jest.fn() } as any;
   const enqueue = jest.fn().mockResolvedValue({ id: 'appr-1' });
@@ -19,7 +23,7 @@ function makeDeps(budget: any) {
     governorDebited: jest.fn().mockResolvedValue(D(0)),
   } as any;
   const ledger = { netSpent: jest.fn().mockResolvedValue(D(0)) } as any;
-  return { prisma, perf, approvals, enqueue, create, executor, wallet, ledger };
+  return { prisma, perf, approvals, enqueue, create, supersede, executor, wallet, ledger };
 }
 
 function makeSvc(d: ReturnType<typeof makeDeps>) {
@@ -80,6 +84,31 @@ describe('BudgetAutopilotService (shadow)', () => {
     // a material proposal enqueues a human approval (the bridge to execution)
     expect(r.approvalId).toBe('appr-1');
     expect(approvals.enqueue).toHaveBeenCalledWith('ws1', expect.objectContaining({ kind: 'BUDGET_REALLOCATION' }));
+  });
+
+  it('a NEW proposal supersedes older PENDING ones for the same budget and carries an expiry', async () => {
+    const { prisma, perf, approvals, supersede, enqueue } = makeDeps({
+      id: 'b1', workspaceId: 'ws1', status: 'ACTIVE', killSwitch: false,
+      totalAmount: D(200), explorationPct: 0, targetRoas: null, allocations: baseAllocs,
+    });
+    perf.collect.mockResolvedValue([
+      { channel: 'META', campaignRef: '', currentBudget: 100, spend: 100, revenue: 400 },
+      { channel: 'GOOGLE', campaignRef: '', currentBudget: 100, spend: 100, revenue: 150 },
+    ]);
+    const svc = makeSvc({ prisma, perf, approvals } as any);
+    await svc.propose('ws1', 'b1');
+
+    // Amounts are computed from THIS tick's performance data — approving a
+    // stale earlier card would live-push outdated numbers. Older PENDING
+    // proposals for the budget are expired before the new one is enqueued…
+    expect(supersede).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws1', kind: 'BUDGET_REALLOCATION', status: 'PENDING', resourceId: 'b1' },
+      data: { status: 'EXPIRED' },
+    });
+    // …and the new proposal expires on its own instead of living forever.
+    const enq = enqueue.mock.calls[0][1];
+    expect(enq.expiresAt).toBeInstanceOf(Date);
+    expect(enq.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('respects a target ROAS floor from the budget (holds when nothing clears it)', async () => {

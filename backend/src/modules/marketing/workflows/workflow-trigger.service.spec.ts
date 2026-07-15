@@ -21,12 +21,24 @@ describe('WorkflowTriggerService', () => {
     return { svc, prisma, executor, handler, bus };
   }
 
-  const event = { payload: { workspaceId: WS, leadId: 'lead-1' }, tenantId: null } as any;
+  const event = { id: 'evt-1', payload: { workspaceId: WS, leadId: 'lead-1' }, tenantId: null } as any;
 
-  it('starts a workflow whose trigger type + filters match', async () => {
+  it('starts a workflow whose trigger type + filters match, threading the source event id for idempotency', async () => {
     const h = build([{ id: 'wf-1', status: 'ACTIVE', trigger: { type: 'lead.created', filters: [] } }]);
     await (h.svc as any).onEvent('lead.created', event);
     expect(h.executor.start).toHaveBeenCalledTimes(1);
+    // event.id is passed so a redelivered event (incl. a leadless one the
+    // active-per-lead index can't dedupe) is a P2002 no-op, not a double-enroll.
+    expect(h.executor.start).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), 0, 'evt-1');
+  });
+
+  it('a LEADLESS trigger still threads the event id (its only dedup on redelivery)', async () => {
+    const h = build([{ id: 'wf-1', status: 'ACTIVE', trigger: { type: 'webhook.received', filters: [] } }]);
+    const leadless = { id: 'evt-hook', payload: { workspaceId: WS }, tenantId: null } as any;
+    await (h.svc as any).onEvent('webhook.received', leadless);
+    expect(h.executor.start).toHaveBeenCalledWith(
+      expect.anything(), { leadId: null, conversationId: null }, expect.anything(), 0, 'evt-hook',
+    );
   });
 
   it('skips a workflow whose filters do not match', async () => {

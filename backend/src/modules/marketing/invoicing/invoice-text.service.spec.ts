@@ -5,7 +5,11 @@ const WS = 'ws-1';
 
 function makeDeps() {
   const prisma: any = {
-    invoice: { findFirst: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+    invoice: {
+      findFirst: jest.fn(),
+      update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     lead: { findFirst: jest.fn() },
     channel: { findFirst: jest.fn() },
   };
@@ -64,5 +68,20 @@ describe('InvoiceTextService', () => {
     d.adapter.send.mockResolvedValue({ status: 'FAILED', error: 'provider down' });
     await expect(svc.sendByText(WS, 'inv1', 'SMS')).rejects.toBeInstanceOf(BadRequestException);
     expect(d.quota.refund).toHaveBeenCalledWith(WS, 'SMS');
+  });
+
+  it('the DRAFT→SENT flip is a CONDITIONAL claim — a mid-send pay/void is never resurrected to SENT', async () => {
+    d.prisma.invoice.findFirst.mockResolvedValue({ ...sentInvoice, status: 'DRAFT' });
+    d.prisma.lead.findFirst.mockResolvedValue({ phone: '+90555', whatsapp: null });
+    d.prisma.channel.findFirst.mockResolvedValue({ id: 'ch1', type: 'SMS' });
+    d.adapter.send.mockResolvedValue({ status: 'SENT', externalMessageId: 'm1' });
+    await svc.sendByText(WS, 'inv1', 'SMS');
+    // The SMS send takes seconds; an invoice paid or voided in that window must
+    // match 0 rows here (status guard), not be flipped back to payable SENT.
+    expect(d.prisma.invoice.updateMany).toHaveBeenCalledWith({
+      where: { id: 'inv1', workspaceId: WS, status: 'DRAFT' },
+      data: { status: 'SENT' },
+    });
+    expect(d.prisma.invoice.update).not.toHaveBeenCalled();
   });
 });

@@ -77,7 +77,7 @@ export default function InvoicesPage() {
   // movement) and texting the pay link (a billable outbound SMS to a real
   // customer). A single stray click on an icon button must not do either —
   // mirrors the `void` action's ConfirmDialog guard in this same file.
-  const [confirmAction, setConfirmAction] = useState<{ inv: InvoiceRow; kind: 'wallet' | 'text' } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ inv: InvoiceRow; kind: 'wallet' | 'text' | 'markPaid' } | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: invoices, isError, refetch } = useQuery<InvoiceRow[]>({
@@ -122,7 +122,7 @@ export default function InvoicesPage() {
 
   const markPaid = useMutation({
     mutationFn: (id: string) => marketingApi.post(`/invoices/${id}/mark-paid`),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); setConfirmAction(null); toast.success(t('invoices.markedPaid', { defaultValue: 'Invoice marked paid' })); },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? t('invoices.markPaidFailed', { defaultValue: 'Could not mark the invoice as paid' })),
   });
 
@@ -417,7 +417,10 @@ export default function InvoicesPage() {
                             </button>
                           )}
                           <button
-                            onClick={() => markPaid.mutate(inv.id)}
+                            // PAID is terminal (no edit/void/revert) and fires the
+                            // invoice.paid workflow trigger — confirm like void does,
+                            // instead of settling on a single stray click.
+                            onClick={() => setConfirmAction({ inv, kind: 'markPaid' })}
                             disabled={markPaid.isPending && markPaid.variables === inv.id}
                             title={t('invoices.markPaid', 'Mark paid')}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md text-success hover:bg-success-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
@@ -471,7 +474,9 @@ export default function InvoicesPage() {
         title={
           confirmAction?.kind === 'wallet'
             ? t('invoices.payWalletTitle', 'Pay from store credit?')
-            : t('invoices.textToPayTitle', 'Text the pay link?')
+            : confirmAction?.kind === 'markPaid'
+              ? t('invoices.markPaidTitle', 'Mark this invoice as paid?')
+              : t('invoices.textToPayTitle', 'Text the pay link?')
         }
         description={
           confirmAction?.kind === 'wallet'
@@ -484,24 +489,39 @@ export default function InvoicesPage() {
                   number: confirmAction.inv.number,
                 },
               )
-            : confirmAction?.kind === 'text'
+            : confirmAction?.kind === 'markPaid'
               ? t(
-                  'invoices.textToPayDesc',
-                  'Send invoice {{number}}’s pay link to the contact by SMS?',
+                  'invoices.markPaidDesc',
+                  'Mark invoice {{number}} as paid? Paid is final — it cannot be edited, voided or reverted, and it may trigger automations.',
                   { number: confirmAction.inv.number },
                 )
-              : undefined
+              : confirmAction?.kind === 'text'
+                ? t(
+                    'invoices.textToPayDesc',
+                    'Send invoice {{number}}’s pay link to the contact by SMS?',
+                    { number: confirmAction.inv.number },
+                  )
+                : undefined
         }
         confirmLabel={
           confirmAction?.kind === 'wallet'
             ? t('invoices.payWalletConfirm', 'Pay now')
-            : t('invoices.textToPayConfirm', 'Send SMS')
+            : confirmAction?.kind === 'markPaid'
+              ? t('invoices.markPaidConfirm', 'Mark paid')
+              : t('invoices.textToPayConfirm', 'Send SMS')
         }
-        tone={confirmAction?.kind === 'wallet' ? 'danger' : 'default'}
-        loading={confirmAction?.kind === 'wallet' ? payWallet.isPending : textToPay.isPending}
+        tone={confirmAction?.kind === 'text' ? 'default' : 'danger'}
+        loading={
+          confirmAction?.kind === 'wallet'
+            ? payWallet.isPending
+            : confirmAction?.kind === 'markPaid'
+              ? markPaid.isPending
+              : textToPay.isPending
+        }
         onConfirm={() => {
           if (!confirmAction) return;
           if (confirmAction.kind === 'wallet') payWallet.mutate(confirmAction.inv.id);
+          else if (confirmAction.kind === 'markPaid') markPaid.mutate(confirmAction.inv.id);
           else textToPay.mutate(confirmAction.inv.id);
         }}
       />

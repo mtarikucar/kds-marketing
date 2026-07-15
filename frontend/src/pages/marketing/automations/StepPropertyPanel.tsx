@@ -55,7 +55,11 @@ export function StepPropertyPanel({
         )}
       </div>
 
-      <StepFields step={step} onPatch={onPatch} count={count} />
+      {/* Key by index for the SAME reason as AdvancedJsonField below: StepFields
+          holds local-state editors (e.g. WebhookEditor's `draft`) that would
+          otherwise show/overwrite the previous step's value when switching to
+          another step of the same type. */}
+      <StepFields key={index} step={step} onPatch={onPatch} count={count} />
 
       {/* Key by index so switching steps REMOUNTS the JSON editor: its `draft`
           is local state seeded once, so without this it would keep showing (and,

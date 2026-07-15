@@ -281,6 +281,7 @@ export class SocialPlannerService implements OnModuleInit {
       mediaUrls?: string[];
       formats?: Record<string, string>;
       media?: MediaDescriptor[];
+      targetAccountIds?: string[];
       options?: Record<string, unknown>;
     },
   ) {
@@ -292,6 +293,14 @@ export class SocialPlannerService implements OnModuleInit {
       media: dto.media,
       options: dto.options,
     });
+    // Replace the draft's PENDING targets when the editor changed them — mirrors
+    // schedulePost, so a target edit persists WITHOUT also requiring a schedule.
+    if (dto.targetAccountIds?.length) {
+      await this.prisma.socialPostTarget.deleteMany({
+        where: { workspaceId, postId, status: 'PENDING' },
+      });
+      await this.attachTargets(workspaceId, postId, dto.targetAccountIds);
+    }
     return this.prisma.socialPost.update({
       where: { id: postId },
       data: {

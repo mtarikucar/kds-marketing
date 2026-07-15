@@ -39,7 +39,7 @@ import { AdManagementSection } from './AdManagementSection';
 import { AdRulesSection } from './AdRulesSection';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { fmtDateTime } from '../../../features/marketing/utils/format';
-import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
+import { formatMoney } from '../../../lib/money';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -176,13 +176,19 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
 
   const accounts: AdAccount[] = Array.isArray(accountsData) ? accountsData : [];
 
-  // Pick a currency to label spend with: the first connected account's currency
-  // (ad spend is single-currency per account; mixed-currency workspaces are rare
-  // and the raw provider value is preserved server-side regardless).
-  const currency = useMemo(
-    () => asWorkspaceCurrency(accounts.find((a) => a.currency)?.currency),
-    [accounts],
-  );
+  // Pick a currency to label spend with, SCOPED to the active provider filter so
+  // a provider-filtered view uses THAT provider's currency instead of just the
+  // first connected account's — otherwise filtering to a EUR TikTok account while
+  // the first account is a USD Meta one would render EUR metrics under a $ symbol.
+  // (ad spend is single-currency per account; the raw provider value is preserved
+  // server-side regardless.)
+  const currency = useMemo(() => {
+    const scoped = provider === 'ALL' ? accounts : accounts.filter((a) => a.provider === provider);
+    // The ad account's REAL provider currency (any ISO code) — not
+    // asWorkspaceCurrency, which coerced anything outside TRY/USD/EUR/GBP to ₺,
+    // rendering e.g. a CAD account's spend as Turkish Lira.
+    return scoped.find((a) => a.currency)?.currency || 'USD';
+  }, [accounts, provider]);
 
   // Only Meta accounts support campaign / rule management.
   const metaAccounts = useMemo(() => accounts.filter((a) => a.provider === 'META'), [accounts]);
@@ -195,6 +201,11 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     queryClient.invalidateQueries({ queryKey: ['marketing', 'ads', 'accounts'] });
   const invalidateMetrics = () =>
     queryClient.invalidateQueries({ queryKey: ['marketing', 'ads', 'metrics'] });
+  // The breakdown table lives under a sibling key that ['...','metrics'] does NOT
+  // prefix-match, so a pull/disconnect refreshed the summary but left the
+  // breakdown rows stale. Invalidate it alongside the metrics.
+  const invalidateBreakdown = () =>
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'ads', 'breakdown'] });
 
   const startTikTokConnect = async () => {
     try {
@@ -251,6 +262,7 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     onSuccess: () => {
       invalidateAccounts();
       invalidateMetrics();
+      invalidateBreakdown();
       setDisconnectTarget(null);
       toast.success(t('ads.toast.disconnected', { defaultValue: 'Ad account disconnected' }));
     },
@@ -262,6 +274,7 @@ export default function AdReportingPage({ embedded }: { embedded?: boolean } = {
     onSuccess: (res) => {
       invalidateAccounts();
       invalidateMetrics();
+      invalidateBreakdown();
       toast.success(
         t('ads.toast.pulled', { defaultValue: 'Refreshed — {{count}} day(s) updated', count: res.written }),
       );
@@ -494,7 +507,7 @@ function BreakdownCard({
   from: string;
   to: string;
   provider?: AdProvider;
-  currency: ReturnType<typeof asWorkspaceCurrency>;
+  currency: string;
 }) {
   const { t } = useTranslation('marketing');
   const [dimension, setDimension] = useState<AdBreakdownDimension>('placement');
@@ -590,7 +603,7 @@ interface OverviewViewProps {
   totals: Bucket;
   ctr: number;
   cpl: number;
-  currency: ReturnType<typeof asWorkspaceCurrency>;
+  currency: string;
   byDay: Array<Bucket & { date: string }>;
   byProvider: Partial<Record<AdProvider, Bucket>>;
   onGoToAccounts: () => void;

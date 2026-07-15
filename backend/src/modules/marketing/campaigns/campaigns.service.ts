@@ -124,6 +124,16 @@ export class CampaignsService {
         data: { abEnabled, abMode, abTestPercent, abWinnerMetric, abWinnerKey: null, abDecideAt: null },
       }),
     ]);
+    // A SCHEDULED campaign's recipients were frozen WITH their variantKey at
+    // launch(). Replacing the variant set here would leave a recipient pointing
+    // at a removed/renamed key — the sender silently degrades it to the control
+    // body. Revert to DRAFT (cancel launch + drop the all-unsent frozen
+    // recipients) so a re-launch re-freezes against the new variant set.
+    if (c.status === 'SCHEDULED') {
+      await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, campaignId);
+      await this.prisma.campaignRecipient.deleteMany({ where: { campaignId, workspaceId } });
+      await this.prisma.campaign.updateMany({ where: { id: campaignId, workspaceId }, data: { status: 'DRAFT' } });
+    }
     return this.getVariants(workspaceId, campaignId);
   }
 
@@ -230,6 +240,25 @@ export class CampaignsService {
     if (dto.audienceFilter !== undefined) data.audienceFilter = dto.audienceFilter;
     if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
     const updated = await this.prisma.campaign.update({ where: { id: existing.id }, data });
+
+    // A SCHEDULED campaign froze its audience into CampaignRecipient rows at
+    // launch(). If the audience filter actually CHANGES, those frozen rows are
+    // stale — the scheduled send would go to the ORIGINAL audience (including
+    // leads the operator just excluded), wasting credits and hitting people
+    // they dropped, while the UI shows the new (narrower) filter as saved.
+    // Revert to DRAFT: cancel the queued launch, drop the (all-unsent — it
+    // hasn't started SENDING) frozen recipients, so a re-launch re-freezes from
+    // the new filter. Same revert pattern the scheduledAt-cleared branch uses.
+    const audienceChanged =
+      dto.audienceFilter !== undefined &&
+      JSON.stringify(existing.audienceFilter ?? null) !== JSON.stringify(dto.audienceFilter ?? null);
+    if (existing.status === 'SCHEDULED' && audienceChanged) {
+      await this.scheduledJobs.cancel(CAMPAIGN_LAUNCH_KIND, existing.id);
+      await this.prisma.campaignRecipient.deleteMany({ where: { campaignId: existing.id, workspaceId } });
+      await this.prisma.campaign.update({ where: { id: existing.id }, data: { status: 'DRAFT' } });
+      updated.status = 'DRAFT';
+      return updated; // reverted — skip the scheduledAt re-schedule (job is cancelled)
+    }
 
     // A SCHEDULED campaign already has its `campaign.launch` job queued (audience
     // frozen, recipients materialized). Editing scheduledAt here must move that

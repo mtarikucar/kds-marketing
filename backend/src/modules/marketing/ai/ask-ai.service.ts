@@ -52,7 +52,11 @@ export class AskAiService {
     private readonly credits: AiCreditsService,
   ) {}
 
-  async ask(workspaceId: string, question: string): Promise<{ answer: string }> {
+  async ask(
+    workspaceId: string,
+    question: string,
+    actor?: { id: string; role: string },
+  ): Promise<{ answer: string }> {
     if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
     await this.credits.reserve(workspaceId, creditCost('ask_ai.question'));
     try {
@@ -70,7 +74,7 @@ export class AskAiService {
         for (const tu of res.toolUses) {
           let out: unknown;
           try {
-            out = await this.runTool(workspaceId, tu.name, tu.input as any);
+            out = await this.runTool(workspaceId, tu.name, tu.input as any, actor);
           } catch (err) {
             // A single tool failure (e.g. the model guessed an invalid status
             // enum, which Prisma rejects) must NOT abort the whole conversation
@@ -95,12 +99,22 @@ export class AskAiService {
     }
   }
 
-  private async runTool(workspaceId: string, name: string, input: any): Promise<unknown> {
+  private async runTool(
+    workspaceId: string,
+    name: string,
+    input: any,
+    actor?: { id: string; role: string },
+  ): Promise<unknown> {
+    // A REP only sees leads assigned to them everywhere else (marketing-leads
+    // findAll forces assignedToId), so Ask-AI's lead tools must apply the SAME
+    // row-level scope — otherwise a REP could read the phone/email of leads
+    // owned by OTHER reps, PII they can't see anywhere in the app.
+    const repScope = actor?.role === 'REP' ? { assignedToId: actor.id } : {};
     switch (name) {
       case 'search_leads': {
         // Active leads only — the AI must not surface soft-deleted or merged-away
         // contacts (hidden from the lead list everywhere else).
-        const where: any = { workspaceId, deletedAt: null, mergedIntoId: null };
+        const where: any = { workspaceId, deletedAt: null, mergedIntoId: null, ...repScope };
         if (input?.status) where.status = String(input.status).toUpperCase();
         if (input?.city) where.city = { contains: String(input.city), mode: 'insensitive' };
         if (input?.query) where.OR = [
@@ -114,7 +128,7 @@ export class AskAiService {
         return { count: leads.length, leads };
       }
       case 'lead_stats': {
-        const grouped = await this.prisma.lead.groupBy({ by: ['status'], where: { workspaceId, deletedAt: null, mergedIntoId: null }, _count: { _all: true } });
+        const grouped = await this.prisma.lead.groupBy({ by: ['status'], where: { workspaceId, deletedAt: null, mergedIntoId: null, ...repScope }, _count: { _all: true } });
         return grouped.map((g) => ({ status: g.status, count: g._count._all }));
       }
       case 'list_tasks': {

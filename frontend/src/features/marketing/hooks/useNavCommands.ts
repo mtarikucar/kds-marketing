@@ -32,9 +32,13 @@ export function useNavCommands(): NavCommand[] {
   const { has } = useEntitlements();
   const { isAgency } = useWorkspaceProfile();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  // The Agency hub is `ownerOnly` in navigation.ts, so the palette must pass
+  // isOwner too — otherwise an agency OWNER can't jump to /agency/* pages the
+  // sidebar (which does pass isOwner) shows them.
+  const isOwner = user?.role === 'OWNER';
 
   return useMemo(() => {
-    const hubs = visibleNav(NAV_HUBS, { isManager, has, isAgency });
+    const hubs = visibleNav(NAV_HUBS, { isManager, isOwner, has, isAgency });
     const commands: NavCommand[] = [];
     const seen = new Set<string>();
     const push = (c: NavCommand) => {
@@ -62,5 +66,5 @@ export function useNavCommands(): NavCommand[] {
     // `has` and `isAgency` come from cached queries; include primitives that
     // actually change the output. `t` is stable per language.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isManager, isAgency, t, has]);
+  }, [isManager, isOwner, isAgency, t, has]);
 }

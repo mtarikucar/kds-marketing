@@ -51,6 +51,9 @@ export const FEATURE_LABELS: Record<string, string> = {
 interface Props {
   packages?: PackageRow[];
   currentPackageCode?: string;
+  /** The subscription's ACTUAL billing cycle — so the same package on the OTHER
+   *  cycle is not treated as the current plan (blocking a monthly→yearly switch). */
+  currentBillingCycle?: 'MONTHLY' | 'YEARLY';
   currency: 'TRY' | 'USD';
   providers: string[];
   cycle: 'MONTHLY' | 'YEARLY';
@@ -65,6 +68,7 @@ interface Props {
 export function PackageMatrix({
   packages,
   currentPackageCode,
+  currentBillingCycle,
   currency,
   providers,
   cycle,
@@ -109,7 +113,12 @@ export function PackageMatrix({
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {(packages ?? []).map((p) => {
-          const isCurrent = currentPackageCode === p.code;
+          // Only "current" when BOTH the package AND the selected cycle match the
+          // active subscription — otherwise the same plan on the other cycle
+          // looked like the current plan and its button was disabled, so a monthly
+          // subscriber could never switch to the yearly ("2 months free") version.
+          const isCurrent =
+            currentPackageCode === p.code && (!currentBillingCycle || currentBillingCycle === cycle);
           const popular = p.code === 'GROWTH';
           return (
             <div

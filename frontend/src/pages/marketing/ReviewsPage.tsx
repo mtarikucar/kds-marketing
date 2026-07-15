@@ -68,7 +68,15 @@ function reviewStatusLabel(status: string, t: (k: string, d: string) => string) 
   if (status === 'PRIVATE_FEEDBACK') return t('reviews.statusPrivate', 'Private feedback');
   if (status === 'PUBLIC_ROUTED') return t('reviews.statusPublic', 'Public routed');
   if (status === 'REPLIED') return t('reviews.statusReplied', 'Replied');
+  if (status === 'SYNCED') return t('reviews.statusSynced', 'Imported');
   return status;
+}
+
+/** Reviews the user can compose/save a reply to — the backend reply/draft
+ *  endpoints accept any status, so a provider-synced (SYNCED) review must be
+ *  repliable too, not just gate-routed ones. */
+function isRepliable(status: string): boolean {
+  return status === 'PRIVATE_FEEDBACK' || status === 'PUBLIC_ROUTED' || status === 'SYNCED';
 }
 
 // ── Stars helper ──────────────────────────────────────────────────────────────
@@ -302,7 +310,7 @@ export default function ReviewsPage() {
                     {t('reviews.yourReply', 'Your reply')}: {r.replyText}
                   </div>
                 ) : (
-                  (r.status === 'PRIVATE_FEEDBACK' || r.status === 'PUBLIC_ROUTED') && (
+                  isRepliable(r.status) && (
                     <div className="space-y-2">
                       <Textarea
                         value={replyText[r.id] ?? r.replyDraft ?? ''}

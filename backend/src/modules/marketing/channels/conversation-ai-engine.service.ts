@@ -448,10 +448,23 @@ export class ConversationAiEngineService implements OnModuleInit {
     const lead = convo.leadId
       ? await this.prisma.lead.findFirst({
           where: { id: convo.leadId, workspaceId, deletedAt: null, mergedIntoId: null },
-          select: { contactPerson: true, businessName: true },
+          select: { contactPerson: true, businessName: true, waOptOut: true, smsOptOut: true, emailOptOut: true },
         })
       : null;
     if (convo.leadId && !lead) return;
+
+    // İYS/KVKK: a proactive follow-up is an unsolicited COMMERCIAL re-engagement
+    // (unlike a direct reply to the customer's own inbound message, which is a
+    // service message), so it MUST honor the per-channel marketing opt-out —
+    // the schema contract every other outbound surface (campaign-sender,
+    // workflow actions, autocall dialer) already enforces. The contact may have
+    // opted out (compliance toggle, unsubscribe link, ESP bounce, İYS RET) in
+    // the hours between the last AI reply and this job firing. Gate BEFORE
+    // reserving a credit so a suppressed nudge costs nothing.
+    if (lead && this.isOptedOut(channel.type, lead)) {
+      this.logger.debug(`convo=${conversationId} follow-up suppressed: contact opted out of ${channel.type}`);
+      return;
+    }
 
     const cost = creditCost('conversation.followup');
     await this.credits.reserve(workspaceId, cost);
@@ -476,18 +489,42 @@ export class ConversationAiEngineService implements OnModuleInit {
       if (text) {
         await this.sender.send({ workspaceId, conversationId, text, authorType: 'AI' });
         sent = true;
-        const nextCount = convo.followupCount + 1;
-        await this.prisma.conversation.update({
-          where: { id: conversationId },
-          data: { followupCount: nextCount },
-        });
-        if (nextCount < policy.maxFollowups) {
-          await this.scheduleFollowup(workspaceId, conversationId, agent);
+        // Post-send bookkeeping is non-fatal (mirrors reply()'s BUG 1 FIX): a
+        // throw here would propagate with the message ALREADY delivered, the
+        // ScheduledJob runner would retry the job, the un-persisted
+        // followupCount would pass the max-followups guard again, and the
+        // customer would receive a DUPLICATE nudge (+ a second credit). Log
+        // and swallow instead — worst case the counter stays stale and no
+        // further nudge is scheduled, which is safe.
+        try {
+          const nextCount = convo.followupCount + 1;
+          await this.prisma.conversation.update({
+            where: { id: conversationId },
+            data: { followupCount: nextCount },
+          });
+          if (nextCount < policy.maxFollowups) {
+            await this.scheduleFollowup(workspaceId, conversationId, agent);
+          }
+        } catch (e) {
+          this.logger.warn(`followup bookkeeping failed (non-fatal): ${(e as Error).message}`);
         }
       }
     } finally {
       if (!sent) await this.credits.refund(workspaceId, cost);
     }
+  }
+
+  /** Per-channel marketing opt-out (mirrors campaign-sender.isOptedOut). Only
+   *  the İYS-regulated channel types carry a Lead flag; WEBCHAT / INSTAGRAM /
+   *  MESSENGER are session-scoped reactive channels with no opt-out column. */
+  private isOptedOut(
+    channelType: string,
+    lead: { emailOptOut?: boolean | null; smsOptOut?: boolean | null; waOptOut?: boolean | null },
+  ): boolean {
+    if (channelType === 'EMAIL') return !!lead.emailOptOut;
+    if (channelType === 'SMS') return !!lead.smsOptOut;
+    if (channelType === 'WHATSAPP') return !!lead.waOptOut;
+    return false;
   }
 
   // ---- Prompt assembly -----------------------------------------------------

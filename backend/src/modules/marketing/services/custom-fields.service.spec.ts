@@ -31,6 +31,46 @@ describe('CustomFieldsService.validateAndNormalize', () => {
     expect(out).toEqual({ budget: 1500, tier: 'gold', signed: true });
   });
 
+  // CSV import feeds raw cell text — ordinary boolean spellings must parse, not
+  // fail the whole row. (Only 'true'/'false' passed before.)
+  it('coerces tolerant textual BOOLs (Yes/No, 1/0, Evet/Hayır, on/off)', async () => {
+    const truthy = ['Yes', 'y', '1', 'ON', 'Evet', 'TRUE'];
+    for (const v of truthy) {
+      expect(await svc.validateAndNormalize(WS, 'LEAD', { signed: v }, 'update')).toEqual({ signed: true });
+    }
+    const falsy = ['No', 'n', '0', 'off', 'Hayır', 'hayir', 'FALSE'];
+    for (const v of falsy) {
+      expect(await svc.validateAndNormalize(WS, 'LEAD', { signed: v }, 'update')).toEqual({ signed: false });
+    }
+    await expect(svc.validateAndNormalize(WS, 'LEAD', { signed: 'maybe' }, 'update'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('parses a Turkish day-first DATE (DD.MM.YYYY) that new Date() alone rejects', async () => {
+    prisma.customFieldDef.findMany.mockResolvedValue([
+      { id: 'dt', workspaceId: WS, entity: 'LEAD', key: 'dob', type: 'DATE', options: null, required: false, archived: false },
+    ] as any);
+    // 15.07.1990 (day 15 > 12, so it can't be misread as MM.DD) → 1990-07-15.
+    const out = await svc.validateAndNormalize(WS, 'LEAD', { dob: '15.07.1990' }, 'update');
+    expect(out.dob).toBe('1990-07-15T00:00:00.000Z');
+    // ISO still works via the fallback.
+    expect((await svc.validateAndNormalize(WS, 'LEAD', { dob: '2026-01-02' }, 'update')).dob)
+      .toBe('2026-01-02T00:00:00.000Z');
+    // A genuinely invalid date still fails (month 13).
+    await expect(svc.validateAndNormalize(WS, 'LEAD', { dob: '01.13.2026' }, 'update'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('a required MULTISELECT is NOT satisfied by an empty array', async () => {
+    prisma.customFieldDef.findMany.mockResolvedValue([
+      { id: 'm1', workspaceId: WS, entity: 'LEAD', key: 'labels', type: 'MULTISELECT', options: [{ value: 'a' }], required: true, archived: false },
+    ] as any);
+    await expect(svc.validateAndNormalize(WS, 'LEAD', { labels: [] }, 'create'))
+      .rejects.toThrow(/required/);
+    // A non-empty valid selection satisfies it.
+    expect(await svc.validateAndNormalize(WS, 'LEAD', { labels: ['a'] }, 'create')).toEqual({ labels: ['a'] });
+  });
+
   it('rejects a SELECT value not in options', async () => {
     await expect(svc.validateAndNormalize(WS, 'LEAD', { tier: 'platinum' }, 'create'))
       .rejects.toBeInstanceOf(BadRequestException);

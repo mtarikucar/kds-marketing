@@ -181,7 +181,7 @@ export class MarketingAiController {
   @RequiresFeature('askAi')
   @RequirePermission('leads.write')
   ask(@CurrentMarketingUser() actor: MarketingUserPayload, @Body() dto: AskAiDto) {
-    return this.askAi.ask(actor.workspaceId, dto.question);
+    return this.askAi.ask(actor.workspaceId, dto.question, { id: actor.id, role: actor.role });
   }
 
   // ---- Credit meter (read-only; powers the billing gauge) ----

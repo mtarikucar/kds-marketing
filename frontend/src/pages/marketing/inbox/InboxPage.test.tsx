@@ -112,6 +112,20 @@ describe('InboxPage — composer draft isolation', () => {
   });
 
   it('marks a thread read AND refreshes the list so the unread badge clears now', async () => {
+    // cA carries unread messages — opening it must mark them read (a thread with
+    // nothing unread is left alone; see the next test).
+    get.mockImplementation((url: string) =>
+      url === '/conversations'
+        ? Promise.resolve({
+            data: [
+              { id: 'cA', status: 'OPEN', aiPaused: false, unreadCount: 2 },
+              { id: 'cB', status: 'OPEN', aiPaused: false, unreadCount: 0 },
+            ],
+          })
+        : Promise.resolve({
+            data: { conversation: { id: 'x', aiPaused: false }, lead: null, messages: [], channel: null },
+          }),
+    );
     render(<InboxPage />, { wrapper });
     await screen.findByRole('button', { name: 'cA' });
     const listCalls = () => get.mock.calls.filter((c) => c[0] === '/conversations').length;
@@ -123,6 +137,15 @@ describe('InboxPage — composer draft isolation', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/conversations/cA/read'));
     // …and re-fetches the list, so the badge updates without waiting for the poll.
     await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+  });
+
+  it('does NOT re-mark an already-read thread on open (no redundant POST)', async () => {
+    // Default fixture: cA/cB both unreadCount 0 — opening cA has nothing to mark.
+    render(<InboxPage />, { wrapper });
+    await userEvent.click(await screen.findByRole('button', { name: 'cA' }));
+    // Give the mark-read effect a chance to (not) fire.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(post).not.toHaveBeenCalledWith('/conversations/cA/read');
   });
 });
 

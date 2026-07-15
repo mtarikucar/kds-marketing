@@ -436,8 +436,14 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'module created under a course resolved via assertCourse(workspaceId, …)',
   'parent-scoped:courseModule.updateMany':
     'reorder keyed by (id, courseId) with the course resolved via a scoped read',
+  'parent-scoped:courseModule.aggregate':
+    'max(position) append keyed by a courseId resolved via assertCourse(workspaceId, …)',
   'parent-scoped:lesson.count':
     'lesson count keyed by a courseId/module resolved via a scoped read',
+  'parent-scoped:lesson.aggregate':
+    'max(position) append keyed by a moduleId resolved via assertModule(workspaceId, …)',
+  'parent-scoped:lesson.updateMany':
+    'delete-gap renumber keyed by a moduleId from a workspace-scoped assertLesson; Lesson has no workspaceId column',
   'parent-scoped:lesson.create':
     'lesson created under a module resolved via assertModule(workspaceId, …)',
   'parent-scoped:lesson.findFirst':

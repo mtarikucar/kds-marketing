@@ -48,6 +48,8 @@ export const schema = z
     kind: z.enum(['PERCENT', 'FIXED']),
     // For PERCENT this is whole %, for FIXED it's the major-unit amount (×100 on submit).
     value: z.coerce.number().min(0.01),
+    // Required for FIXED (currency-denominated); enforced in the superRefine.
+    currency: z.string().optional(),
     maxRedemptions: z.coerce.number().int().min(1).optional().or(z.literal('')),
     expiresAt: z.string().optional().or(z.literal('')),
     active: z.boolean(),
@@ -59,6 +61,11 @@ export const schema = z
   .superRefine((val, ctx) => {
     if (val.kind === 'PERCENT' && (val.value < 1 || val.value > 100)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['value'], message: 'percentRange' });
+    }
+    // A FIXED coupon is a currency amount; the backend rejects it without a
+    // currency (assertShape), so every FIXED coupon used to 400. Require it here.
+    if (val.kind === 'FIXED' && !val.currency) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currency'], message: 'required' });
     }
   });
 type FormValues = z.infer<typeof schema>;
@@ -76,13 +83,13 @@ export default function CouponsPage({ embedded }: { embedded?: boolean } = {}) {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { code: '', kind: 'PERCENT', value: 10, maxRedemptions: '', expiresAt: '', active: true },
+    defaultValues: { code: '', kind: 'PERCENT', value: 10, currency: 'TRY', maxRedemptions: '', expiresAt: '', active: true },
   });
   const kind = form.watch('kind');
 
   const openCreate = () => {
     setEditing(null);
-    form.reset({ code: '', kind: 'PERCENT', value: 10, maxRedemptions: '', expiresAt: '', active: true });
+    form.reset({ code: '', kind: 'PERCENT', value: 10, currency: 'TRY', maxRedemptions: '', expiresAt: '', active: true });
     setOpen(true);
   };
   const openEdit = (c: Coupon) => {
@@ -91,6 +98,7 @@ export default function CouponsPage({ embedded }: { embedded?: boolean } = {}) {
       code: c.code,
       kind: c.kind,
       value: c.kind === 'FIXED' ? c.value / 100 : c.value,
+      currency: c.currency ?? 'TRY',
       maxRedemptions: c.maxRedemptions ?? '',
       expiresAt: c.expiresAt ? c.expiresAt.slice(0, 10) : '',
       active: c.active,
@@ -105,6 +113,8 @@ export default function CouponsPage({ embedded }: { embedded?: boolean } = {}) {
         kind: v.kind,
         // FIXED is stored in minor units; PERCENT is a whole percent.
         value: v.kind === 'FIXED' ? Math.round(Number(v.value) * 100) : Math.round(Number(v.value)),
+        // FIXED is currency-denominated and the backend requires it; PERCENT has none.
+        currency: v.kind === 'FIXED' ? v.currency : undefined,
         maxRedemptions: v.maxRedemptions ? Number(v.maxRedemptions) : undefined,
         expiresAt: v.expiresAt || undefined,
         active: v.active,
@@ -239,6 +249,28 @@ export default function CouponsPage({ embedded }: { embedded?: boolean } = {}) {
                 )}
               </Field>
             </div>
+            {/* A FIXED coupon is a currency amount — the backend requires a
+                currency, so surface a picker (else every FIXED coupon 400s). */}
+            {kind === 'FIXED' && (
+              <Field label={t('coupons.form.currency', { defaultValue: 'Currency' })} error={fieldErr(errors.currency?.message)} required>
+                {({ id }) => (
+                  <Controller
+                    control={form.control}
+                    name="currency"
+                    render={({ field }) => (
+                      <Select value={field.value ?? 'TRY'} onValueChange={field.onChange}>
+                        <SelectTrigger id={id}><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {['TRY', 'USD', 'EUR'].map((c) => (
+                            <SelectItem key={c} value={c}>{c}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                )}
+              </Field>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Field label={t('coupons.form.maxRedemptions', { defaultValue: 'Max uses (optional)' })} error={fieldErr(errors.maxRedemptions?.message as string)}>
                 {({ id, describedBy, invalid }) => (

@@ -246,7 +246,9 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
     // instead (see telephony-control.controller.ts), which act on the live
     // netsantral call directly and work regardless of any SIP leg.
 
-    /** Put the call on hold (re-INVITE, RFC 6337). No-op if not in a call. */
+    /** Put the call on hold (re-INVITE, RFC 6337). No-op if not in a call.
+     *  RE-THROWS on failure (like call()) so the caller can surface it — `held`
+     *  stays false, so the button icon never lies about the true SIP state. */
     async hold() {
       if (!user || state.status !== 'incall') return;
       try {
@@ -254,10 +256,12 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
         set({ held: true });
       } catch (e: any) {
         set({ error: e?.message ?? 'hold failed' });
+        throw e;
       }
     },
 
-    /** Take the call off hold. No-op if not in a call. */
+    /** Take the call off hold. No-op if not in a call. RE-THROWS on failure so a
+     *  rejected resume can't leave the customer silently stuck on hold. */
     async unhold() {
       if (!user || state.status !== 'incall') return;
       try {
@@ -265,6 +269,7 @@ export function createWebphone(remoteAudio: HTMLAudioElement) {
         set({ held: false });
       } catch (e: any) {
         set({ error: e?.message ?? 'unhold failed' });
+        throw e;
       }
     },
 

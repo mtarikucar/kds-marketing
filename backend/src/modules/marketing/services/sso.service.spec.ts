@@ -6,7 +6,7 @@ import {
 } from 'crypto';
 import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
 import { PrismaClient } from '@prisma/client';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import { SsoService } from './sso.service';
 import { MarketingAuthService } from './marketing-auth.service';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -247,6 +247,21 @@ describe('SsoService', () => {
       );
       expect(authService.issueSession).toHaveBeenCalled();
       expect(result).toEqual({ accessToken: 'AT', refreshToken: 'RT', user: { id: 'mu-new' } });
+    });
+
+    it('maps a globally-unique email collision (email owned by another workspace) to a clean 409, not a raw 500', async () => {
+      const { state, nonce } = await startFlow();
+      mockIdp(signIdToken(baseClaims({ nonce })));
+      // Not in THIS workspace…
+      prisma.marketingUser.findFirst.mockResolvedValue(null as never);
+      // …but the create trips the GLOBAL unique email constraint (the email
+      // already exists on another workspace). Without the guard this was an
+      // opaque HTTP 500 on the IdP callback.
+      const { Prisma } = require('@prisma/client');
+      prisma.marketingUser.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.handleCallback(state, 'auth-code')).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('matches an EXISTING user by email in the workspace (no create)', async () => {

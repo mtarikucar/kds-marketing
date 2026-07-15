@@ -142,9 +142,12 @@ export default function AgentStudioPage({ embedded }: { embedded?: boolean } = {
       const payload = {
         name: values.name,
         persona: values.persona,
-        tone: values.tone || undefined,
-        goals: values.goals || undefined,
-        guardrails: values.guardrails || undefined,
+        // On EDIT send the value explicitly (empty when blanked) so clearing
+        // tone/goals/guardrails persists — an omitted key on the PATCH is a no-op,
+        // leaving the old text. On CREATE omit an empty one.
+        tone: editingId ? (values.tone ?? '') : (values.tone || undefined),
+        goals: editingId ? (values.goals ?? '') : (values.goals || undefined),
+        guardrails: editingId ? (values.guardrails ?? '') : (values.guardrails || undefined),
         language: values.language,
         maxRepliesPerConvoDaily: values.maxRepliesPerConvoDaily,
         kbDocIds: values.kbDocIds,

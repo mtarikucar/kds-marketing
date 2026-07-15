@@ -242,8 +242,10 @@ export class SegmentCompilerService {
       // later evaluation. Mirrors the native-field shape guard below.
       if (needsValue) {
         if (cmp === 'in' || cmp === 'nin') {
-          if (!Array.isArray(leaf.value)) {
-            throw new BadRequestException(`custom field "${key}" ${cmp} needs a list at ${path}`);
+          // Reject an EMPTY list too — `nin []` → `NOT: { OR: [] }` matches every
+          // lead (silent workspace-wide audience); `in []` matches nothing.
+          if (!Array.isArray(leaf.value) || leaf.value.length === 0) {
+            throw new BadRequestException(`custom field "${key}" ${cmp} needs a non-empty list at ${path}`);
           }
         } else if (cmp === 'contains' || cmp === 'startsWith') {
           if (typeof leaf.value !== 'string') {
@@ -285,8 +287,11 @@ export class SegmentCompilerService {
           throw new BadRequestException(`"${field}" between needs two valid ${type} values at ${path}`);
         }
       } else if (cmp === 'in' || cmp === 'nin') {
-        if (!Array.isArray(leaf.value) || leaf.value.some(bad)) {
-          throw new BadRequestException(`"${field}" ${cmp} needs a list of valid ${type} values at ${path}`);
+        // An EMPTY list must be rejected: `nin []` compiles to `notIn: []`, which
+        // Prisma treats as match-EVERY-lead (a saved segment / campaign audience
+        // silently targets the whole workspace), and `in []` matches nothing.
+        if (!Array.isArray(leaf.value) || leaf.value.length === 0 || leaf.value.some(bad)) {
+          throw new BadRequestException(`"${field}" ${cmp} needs a non-empty list of valid ${type} values at ${path}`);
         }
       } else if (Array.isArray(leaf.value) || bad(leaf.value)) {
         throw new BadRequestException(`"${field}" needs a single valid ${type} value at ${path}`);

@@ -125,8 +125,18 @@ export function LessonFormDialog({ open, onOpenChange, lesson, onSubmit, isPendi
             )}
           </Field>
 
-          {watchedType === 'VIDEO' && (
-            <Field label={t('memberships.lessons.videoUrl', { defaultValue: 'Video URL' })} error={fieldErr(errors.videoUrl?.message)}>
+          {(watchedType === 'VIDEO' || watchedType === 'PDF') && (
+            // PDF reuses the same asset-URL column as VIDEO — without this field
+            // the PDF type was unusable end-to-end (no way to attach material,
+            // and switching a VIDEO lesson to PDF silently destroyed its URL).
+            <Field
+              label={
+                watchedType === 'PDF'
+                  ? t('memberships.lessons.pdfUrl', { defaultValue: 'PDF URL' })
+                  : t('memberships.lessons.videoUrl', { defaultValue: 'Video URL' })
+              }
+              error={fieldErr(errors.videoUrl?.message)}
+            >
               {({ id, describedBy, invalid }) => (
                 <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} placeholder="https://…" {...form.register('videoUrl')} />
               )}

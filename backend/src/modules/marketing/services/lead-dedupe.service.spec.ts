@@ -19,7 +19,7 @@ function makeSvc() {
 // merge() reads each collision-keyed child's canonical rows via findMany; default
 // them to empty so a happy-path merge doesn't choke on an unmocked delegate.
 function mockCollisionTablesEmpty(prisma: MockPrismaClient) {
-  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate', 'pointsLedger', 'autocallSessionItem'] as const) {
+  for (const t of ['enrollment', 'customObjectLink', 'communityMember', 'earnedBadge', 'certificate', 'pointsLedger', 'autocallSessionItem', 'workflowRun'] as const) {
     (prisma as any)[t].findMany.mockResolvedValue([]);
   }
   // LeadAttribution default: canonical has none and no dup to adopt (tests override).
@@ -134,6 +134,55 @@ describe('LeadDedupeService.merge', () => {
       type: 'marketing.lead.merged.v1',
       payload: { canonicalId: 'a', mergedIds: ['b'], workspaceId: WS },
     });
+  });
+
+  it('consolidates WorkflowRun without the active_per_lead P2002 — stops the colliding dup live run, keeps a dup-only one, moves the rest', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma);
+    // wf1: BOTH the canonical and the dup hold a LIVE run → moving the dup's onto
+    // the canonical would violate workflow_runs_active_per_lead. wf2: only the dup
+    // has a live run → it survives (its automation continues for the merged lead).
+    (prisma.workflowRun.findMany as jest.Mock).mockResolvedValue([
+      { id: 'run-canon', leadId: 'a', workflowId: 'wf1' },
+      { id: 'run-dup', leadId: 'b', workflowId: 'wf1' },
+      { id: 'run-dup2', leadId: 'b', workflowId: 'wf2' },
+    ] as any);
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    // Only the colliding dup run is stopped — the canonical's survives, and the
+    // dup-only wf2 run is NOT stopped.
+    expect(prisma.workflowRun.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, id: { in: ['run-dup'] } }, data: { status: 'STOPPED' } }),
+    );
+    // Then every dup run is re-parented onto the canonical (stopped ones are now
+    // outside the partial index; the survivor is the single live run).
+    expect(prisma.workflowRun.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, leadId: { in: ['b'] } }, data: { leadId: 'a' } }),
+    );
+  });
+
+  it('moves WorkflowRuns with NO stop when there is no live-run collision', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findMany.mockResolvedValue([canonical, dup] as any);
+    prisma.leadTag.findMany.mockResolvedValue([] as any);
+    prisma.campaignRecipient.findMany.mockResolvedValue([] as any);
+    mockCollisionTablesEmpty(prisma); // workflowRun.findMany → [] (no live runs)
+    (prisma.lead.updateMany as any).mockResolvedValue({ count: 1 });
+
+    await svc.merge(WS, 'a', ['b']);
+
+    const stopCall = (prisma.workflowRun.updateMany as jest.Mock).mock.calls.find(
+      (c) => (c[0] as any)?.data?.status === 'STOPPED',
+    );
+    expect(stopCall).toBeUndefined();
+    expect(prisma.workflowRun.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: WS, leadId: { in: ['b'] } }, data: { leadId: 'a' } }),
+    );
   });
 
   it('carries a per-channel opt-out from a duplicate onto the canonical (never re-subscribes)', async () => {

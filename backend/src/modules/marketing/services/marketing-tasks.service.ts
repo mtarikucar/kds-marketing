@@ -307,10 +307,16 @@ export class MarketingTasksService {
       throw new ForbiddenException('You can only complete your own tasks');
     }
 
-    const updated = await this.prisma.marketingTask.update({
-      where: { id: task.id },
-      data: { status: 'COMPLETED', completedAt: new Date() },
-    });
+    // Re-completing an already-COMPLETED task must NOT overwrite completedAt with
+    // a later timestamp — the original completion time is the record of truth
+    // (reporting, SLAs). Preserve it: only stamp completedAt on a real transition.
+    const updated =
+      task.status === 'COMPLETED'
+        ? task
+        : await this.prisma.marketingTask.update({
+            where: { id: task.id },
+            data: { status: 'COMPLETED', completedAt: new Date() },
+          });
 
     // Fire the `task.completed` workflow trigger (the event was never emitted,
     // so task-completion automations were dead). Only on a real transition into

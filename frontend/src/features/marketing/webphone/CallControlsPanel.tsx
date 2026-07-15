@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -94,6 +94,19 @@ export default function CallControlsPanel({
     },
     onError: (e: any) => toast.error(errMsg(e, t('webphone.controls.transferFailed', 'Transfer failed'))),
   });
+
+  // WebphoneHost reuses ONE panel instance across calls (it's never unmounted),
+  // so reset all transient UI state the moment the call leaves — otherwise a
+  // ticked "Attended" flag, an open transfer dialog, or the keypad would leak
+  // into the NEXT call (silently turning an intended blind transfer into an
+  // attended one, or popping a dialog the rep didn't open).
+  useEffect(() => {
+    if (!callId && !sipActive) {
+      setAttended(false);
+      setShowTransfer(false);
+      setShowKeypad(false);
+    }
+  }, [callId, sipActive]);
 
   if (!callId && !sipActive) return null;
 

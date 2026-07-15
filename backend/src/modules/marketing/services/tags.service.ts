@@ -124,8 +124,43 @@ export class TagsService {
     }
   }
 
+  /**
+   * Names of segments whose saved definition references this tagId. A DYNAMIC
+   * segment stores tag predicates as { field: 'tag', cmp: 'has'|'hasNot',
+   * value: <tagId> } inside a nested and/or tree. Deleting the tag would
+   * SILENTLY rewrite those segments' meaning: compile() turns a `hasNot` leaf
+   * into { tags: { none: { tagId } } }, which — once no lead carries the deleted
+   * tag — matches EVERY lead, so a "leads WITHOUT tag X" audience explodes to the
+   * whole workspace (and a `has` leaf empties). That compiled filter feeds
+   * segment previews AND Meta/TikTok/LinkedIn Custom Audience sync, so the
+   * blast radius is exporting every lead's PII. Block the delete instead.
+   */
+  private async segmentsReferencingTag(
+    workspaceId: string,
+    tagId: string,
+  ): Promise<string[]> {
+    const segments = await this.prisma.segment.findMany({
+      where: { workspaceId },
+      select: { name: true, definition: true },
+    });
+    const refs = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object') return false;
+      const n = node as { children?: unknown; field?: unknown; value?: unknown };
+      if (Array.isArray(n.children)) return n.children.some(refs);
+      return n.field === 'tag' && n.value === tagId;
+    };
+    return segments.filter((s) => refs(s.definition)).map((s) => s.name);
+  }
+
   async remove(workspaceId: string, id: string) {
     await this.getOwned(workspaceId, id);
+    const dependents = await this.segmentsReferencingTag(workspaceId, id);
+    if (dependents.length) {
+      const shown = dependents.slice(0, 5).join(', ');
+      throw new ConflictException(
+        `This tag is used by ${dependents.length} segment(s): ${shown}${dependents.length > 5 ? ', …' : ''}. Remove it from those segments first.`,
+      );
+    }
     await this.prisma.tag.delete({ where: { id } }); // cascades lead_tags
     return { id };
   }
@@ -245,14 +280,40 @@ export class TagsService {
       select: { id: true },
     });
     const validIds = leads.map((l) => l.id);
+    if (!tags.length || !validIds.length) {
+      return { leads: validIds.length, tags: tags.length };
+    }
+    // Compute the ACTUALLY-new (leadId, tagId) links so we emit tag.added only for
+    // real additions — mirroring assignToLead. Without this the bulk path minted
+    // links but fired NO domain event, so tag.added workflow triggers + outbound
+    // webhooks silently skipped exactly the high-volume cohort-tagging operation.
+    const existing = await this.prisma.leadTag.findMany({
+      where: { leadId: { in: validIds }, tagId: { in: tags.map((t) => t.id) } },
+      select: { leadId: true, tagId: true },
+    });
+    const linked = new Set(existing.map((e) => `${e.leadId}:${e.tagId}`));
     const data: { leadId: string; tagId: string; assignedById: string | null }[] = [];
+    const addedByLead = new Map<string, { ids: string[]; names: string[] }>();
     for (const leadId of validIds) {
       for (const tag of tags) {
+        if (linked.has(`${leadId}:${tag.id}`)) continue;
         data.push({ leadId, tagId: tag.id, assignedById: actorId ?? null });
+        const acc = addedByLead.get(leadId) ?? { ids: [], names: [] };
+        acc.ids.push(tag.id);
+        acc.names.push(tag.name);
+        addedByLead.set(leadId, acc);
       }
     }
     if (data.length) {
       await this.prisma.leadTag.createMany({ data, skipDuplicates: true });
+      for (const [leadId, added] of addedByLead) {
+        await this.emit('marketing.lead.tag.added.v1', {
+          leadId,
+          workspaceId,
+          tagIds: added.ids,
+          tagNames: added.names,
+        });
+      }
     }
     return { leads: validIds.length, tags: tags.length };
   }
@@ -263,9 +324,29 @@ export class TagsService {
       select: { id: true },
     });
     const validIds = leads.map((l) => l.id);
+    // Capture which leads actually carry a matching link BEFORE deleting, so we
+    // emit tag.removed only for real removals (mirrors unassignFromLead's
+    // res.count>0 guard). Bulk-unassign previously fired no event at all.
+    const toRemove = validIds.length
+      ? await this.prisma.leadTag.findMany({
+          where: { leadId: { in: validIds }, tagId: { in: tagIds } },
+          select: { leadId: true, tagId: true },
+        })
+      : [];
     const res = await this.prisma.leadTag.deleteMany({
       where: { leadId: { in: validIds }, tagId: { in: tagIds } },
     });
+    if (toRemove.length) {
+      const byLead = new Map<string, string[]>();
+      for (const r of toRemove) {
+        const acc = byLead.get(r.leadId) ?? [];
+        acc.push(r.tagId);
+        byLead.set(r.leadId, acc);
+      }
+      for (const [leadId, ids] of byLead) {
+        await this.emit('marketing.lead.tag.removed.v1', { leadId, workspaceId, tagIds: ids });
+      }
+    }
     return { removed: res.count };
   }
 }

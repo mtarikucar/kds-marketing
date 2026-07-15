@@ -132,7 +132,9 @@ describe('formFromEstimate', () => {
     expect(form.notes).toBe('hi');
     expect(form.validUntil).toBe('2026-07-15');
     expect(form.items).toEqual([
-      { description: 'Plan', qty: '1', price: '99', taxRateId: 'tr1' },
+      // taxRatePct (the persisted rate snapshot) is carried so a committed
+      // estimate's total stays fixed even after the live rate later changes.
+      { description: 'Plan', qty: '1', price: '99', taxRateId: 'tr1', taxRatePct: 20 },
     ]);
   });
 

@@ -40,6 +40,26 @@ describe('ResearchCandidateService', () => {
     expect(r.accepted).toBe(1);
   });
 
+  it('leaves a quota-CLIPPED candidate PENDING (only the linked one is marked ACCEPTED)', async () => {
+    const { svc, prisma, ingest } = make();
+    const base = { businessName: 'X', businessType: 'CAFE', painPoint: 'p', evidence: 'e', pitch: 'pi', priority: 'HIGH', city: null, region: null, instagram: null, website: null, email: null, branchCount: null, currentSystem: null, stage: null };
+    (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([
+      { id: 'c1', externalRef: 'phone:+901', phone: '+901', ...base },
+      { id: 'c2', externalRef: 'phone:+902', phone: '+902', ...base }, // clipped by the daily quota → no lead
+    ]);
+    (ingest.ingest as jest.Mock).mockResolvedValue({ created: 1, skipped: 0, clipped: 1, errors: [] });
+    (prisma.lead.findMany as jest.Mock).mockResolvedValue([{ id: 'lead1', externalRef: 'phone:+901' }]); // only c1 got a lead
+
+    const r = await svc.accept('ws1', ['c1', 'c2']);
+
+    // c1 is accepted+linked; c2 is NOT updated (stays PENDING so it can be accepted tomorrow).
+    expect(prisma.researchCandidate.update).toHaveBeenCalledTimes(1);
+    expect(prisma.researchCandidate.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'c1' }, data: expect.objectContaining({ status: 'ACCEPTED', leadId: 'lead1' }) }),
+    );
+    expect(r.accepted).toBe(1);
+  });
+
   it('accept is a no-op when nothing is PENDING', async () => {
     const { svc, prisma, ingest } = make();
     (prisma.researchCandidate.findMany as jest.Mock).mockResolvedValue([]);

@@ -88,6 +88,45 @@ describe('EnrollmentService', () => {
     expect(gamification.award).toHaveBeenCalledWith(WS, 'lead-1', 'COURSE_COMPLETE', 'c1');
   });
 
+  // Completion is decided on RAW counts, not the rounded display pct: on a course
+  // with >=200 lessons, Math.round(199/200*100) === 100, which under the old
+  // `pct >= 100` test would graduate + mint a certificate ONE lesson early.
+  it('does NOT complete at total-1 on a 200-lesson course (no rounding-up graduation)', async () => {
+    const { prisma, certificates, gamification, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1', enrolledAt: new Date('2026-06-01') } as any);
+    const lessons = Array.from({ length: 200 }, (_, i) => ({ id: 'l' + i, position: i, isPreview: false, gating: 'FREE', dripDays: null }));
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l198' } as any);
+    prisma.course.findUnique.mockResolvedValue(course(null, lessons) as any);
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    // 199 of 200 done → round(99.5) = 100 (display), but done < total → still ACTIVE.
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(199);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }));
+
+    const out: any = await svc.markLessonComplete(WS, 'e1', 'l198');
+    expect(out.progressPct).toBe(100); // display rounds up…
+    expect(out.status).toBe('ACTIVE'); // …but the credential is NOT granted
+    expect(out.completedAt).toBeNull();
+    expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
+    expect(gamification.award).not.toHaveBeenCalledWith(WS, 'lead-1', 'COURSE_COMPLETE', 'c1');
+  });
+
+  it('completes only when ALL 200 lessons are done', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.enrollment.findFirst.mockResolvedValue({ id: 'e1', courseId: 'c1', leadId: 'lead-1', enrolledAt: new Date('2026-06-01') } as any);
+    const lessons = Array.from({ length: 200 }, (_, i) => ({ id: 'l' + i, position: i, isPreview: false, gating: 'FREE', dripDays: null }));
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l199' } as any);
+    prisma.course.findUnique.mockResolvedValue(course(null, lessons) as any);
+    (prisma.lessonProgress.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.lessonProgress.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(200);
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }));
+
+    const out: any = await svc.markLessonComplete(WS, 'e1', 'l199');
+    expect(out.status).toBe('COMPLETED');
+    expect(certificates.issueForEnrollment).toHaveBeenCalled();
+  });
+
   // Concurrency: two lessons of the same enrollment completed near-simultaneously.
   // The recompute must reflect the AUTHORITATIVE live completed set (re-counted
   // after this request's own upsert), NOT a pre-upsert snapshot that omits a

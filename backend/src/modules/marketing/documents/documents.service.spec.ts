@@ -19,6 +19,29 @@ describe('DocumentsService', () => {
         ConflictException,
       );
     });
+
+    it('rejects attaching a FOREIGN/unknown lead on edit (mirrors create()\'s ownership check)', async () => {
+      prisma.document.findFirst.mockResolvedValue({ id: 'd1', status: 'DRAFT' } as any);
+      prisma.lead.findFirst.mockResolvedValue(null as any); // not in this workspace
+      await expect(svc.update(WS, 'd1', { leadId: 'foreign-lead' } as any)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.document.update).not.toHaveBeenCalled();
+    });
+
+    it('attaches an in-workspace lead, and allows clearing it (null)', async () => {
+      prisma.document.findFirst.mockResolvedValue({ id: 'd1', status: 'DRAFT' } as any);
+      prisma.lead.findFirst.mockResolvedValue({ id: 'l1' } as any);
+      (prisma.document.update as jest.Mock).mockResolvedValue({ id: 'd1' });
+      await svc.update(WS, 'd1', { leadId: 'l1' } as any);
+      expect((prisma.document.update as jest.Mock).mock.calls[0][0].data).toMatchObject({ leadId: 'l1' });
+
+      // Clearing (explicit null) skips the lookup and writes null.
+      (prisma.lead.findFirst as jest.Mock).mockClear();
+      await svc.update(WS, 'd1', { leadId: null } as any);
+      expect(prisma.lead.findFirst).not.toHaveBeenCalled();
+      expect((prisma.document.update as jest.Mock).mock.calls[1][0].data).toMatchObject({ leadId: null });
+    });
   });
 
   describe('send', () => {

@@ -74,9 +74,14 @@ export class InvoiceTextService {
     }
 
     // A DRAFT must become SENT so the public pay page resolves the link.
-    if (inv.status === 'DRAFT') {
-      await this.prisma.invoice.update({ where: { id: inv.id }, data: { status: 'SENT' } });
-    }
+    // CONDITIONAL claim (not an unconditional update off the pre-send read):
+    // the SMS send above takes seconds, and an invoice paid or voided in that
+    // window must not be resurrected to SENT — payable again. Mirrors the
+    // settle()/payWithWallet claim pattern.
+    await this.prisma.invoice.updateMany({
+      where: { id: inv.id, workspaceId, status: 'DRAFT' },
+      data: { status: 'SENT' },
+    });
     return { sent: true, channel: channelType, payUrl };
   }
 }

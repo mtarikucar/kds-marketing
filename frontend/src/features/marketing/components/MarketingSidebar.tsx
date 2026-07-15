@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { LogOut, PanelLeftClose, PanelLeft, Star, ChevronRight } from 'lucide-react';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useSidebarPrefsStore } from '../../../store/sidebarPrefsStore';
 import { APP_VERSION } from '../../../lib/env';
-import { NAV_HUBS, visibleNav, findActiveHub, splitByTier, type NavHub } from '../navigation';
+import { NAV_HUBS, visibleNav, findActiveHub, splitByTier, shouldAutoOpenAdvanced, type NavHub } from '../navigation';
 import { useEntitlements } from '../hooks/useEntitlements';
 import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
@@ -69,11 +69,16 @@ export default function MarketingSidebar({
   // Auto-open "More" when the user NAVIGATES into an advanced page (keyed on the
   // active hub id, so a later manual collapse is respected instead of snapping
   // back open). The section is then driven purely by `advancedOpen`, so the
-  // toggle always does something.
+  // toggle always does something. The mount / reload run is skipped (see
+  // shouldAutoOpenAdvanced) so a persisted manual collapse survives F5.
   const activeInAdvanced = !!activeHub && advancedRest.some((h) => h.id === activeHub.id);
   const activeHubId = activeHub?.id;
+  const prevHubId = useRef(activeHubId);
   useEffect(() => {
-    if (activeInAdvanced) setAdvancedOpen(true);
+    if (shouldAutoOpenAdvanced(prevHubId.current, activeHubId, activeInAdvanced)) {
+      setAdvancedOpen(true);
+    }
+    prevHubId.current = activeHubId;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeHubId]);
 

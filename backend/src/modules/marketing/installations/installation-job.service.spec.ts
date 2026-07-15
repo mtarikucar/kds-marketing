@@ -22,6 +22,39 @@ describe('InstallationJobService', () => {
     );
   });
 
+  describe('eligibleCustomers', () => {
+    it('excludes converted customers whose tenant already has an active job (the 409 audience)', async () => {
+      prisma.installationJob.findMany.mockResolvedValue([
+        { tenantId: 't-busy' },
+        { tenantId: 't-busy' }, // duplicate active rows collapse into one exclusion
+      ] as any);
+      prisma.lead.findMany.mockResolvedValue([{ id: 'l-free', convertedTenantId: 't-free' }] as any);
+
+      await svc.eligibleCustomers(WS);
+
+      // Active (non-CANCELLED) jobs feed the exclusion…
+      expect(prisma.installationJob.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { workspaceId: WS, status: { not: 'CANCELLED' } },
+        }),
+      );
+      // …and the lead query excludes exactly those tenants.
+      const where = (prisma.lead.findMany as jest.Mock).mock.calls[0][0].where;
+      expect(where.convertedTenantId).toEqual({ not: null, notIn: ['t-busy'] });
+      expect(where.deletedAt).toBeNull();
+    });
+
+    it('with NO active jobs, omits notIn entirely (never an accidental empty-list filter)', async () => {
+      prisma.installationJob.findMany.mockResolvedValue([] as any);
+      prisma.lead.findMany.mockResolvedValue([] as any);
+
+      await svc.eligibleCustomers(WS);
+
+      const where = (prisma.lead.findMany as jest.Mock).mock.calls[0][0].where;
+      expect(where.convertedTenantId).toEqual({ not: null });
+    });
+  });
+
   describe('createForConversion', () => {
     it('is idempotent — returns the existing non-cancelled job', async () => {
       prisma.installationJob.findFirst.mockResolvedValue({ id: 'job-existing' } as any);

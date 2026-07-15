@@ -370,14 +370,24 @@ export class IysSyncService {
     reason?: string;
   }> {
     const channels = await this.prisma.channel.findMany({ where: { workspaceId, type: 'SMS', status: 'ACTIVE' } });
+    // A workspace can hold >1 ACTIVE SMS channel. Keep scanning past a
+    // creds-bearing channel that lacks a brandCode — returning early there
+    // would mark the WHOLE workspace unconfigured (every İYS proof-of-consent
+    // job DLQs with 'no brandCode') even when a later channel is fully
+    // configured. Only report 'no brandCode' after the loop, when creds
+    // existed somewhere but no channel carried a usable brandCode.
+    let sawCredsWithoutBrand = false;
     for (const ch of channels) {
       const cfg = this.registry.resolveConfig(ch as any);
       if (cfg.secrets?.usercode && cfg.secrets?.password) {
         const brandCode = typeof cfg.public?.brandCode === 'string' ? cfg.public.brandCode.trim() : '';
-        if (!brandCode) return { reason: 'no brandCode' };
+        if (!brandCode) {
+          sawCredsWithoutBrand = true;
+          continue;
+        }
         return { usercode: cfg.secrets.usercode, password: cfg.secrets.password, brandCode };
       }
     }
-    return { reason: 'no creds' };
+    return { reason: sawCredsWithoutBrand ? 'no brandCode' : 'no creds' };
   }
 }

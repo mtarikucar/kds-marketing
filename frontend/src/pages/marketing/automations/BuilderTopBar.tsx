@@ -12,6 +12,9 @@ export interface BuilderTopBarProps {
   /** True for an existing workflow (enables Activate/Pause). */
   canToggle: boolean;
   saving: boolean;
+  /** Block Save when the builder has an unresolved error (e.g. invalid trigger
+   *  filters JSON) — otherwise a save would silently persist stale state. */
+  saveDisabled?: boolean;
   onBack: () => void;
   onSave: () => void;
   onToggleStatus: () => void;
@@ -25,7 +28,7 @@ function statusTone(status: string) {
 
 /** Sticky builder header: back, inline name, status, Save, Activate/Pause. */
 export function BuilderTopBar({
-  name, onNameChange, status, canToggle, saving, onBack, onSave, onToggleStatus,
+  name, onNameChange, status, canToggle, saving, saveDisabled, onBack, onSave, onToggleStatus,
 }: BuilderTopBarProps) {
   const { t } = useTranslation('marketing');
   const isActive = status === 'ACTIVE';
@@ -50,7 +53,7 @@ export function BuilderTopBar({
           {isActive ? t('automations.pause', 'Pause') : t('automations.activate', 'Activate')}
         </Button>
       )}
-      <Button size="sm" onClick={onSave} loading={saving} disabled={saving}>
+      <Button size="sm" onClick={onSave} loading={saving} disabled={saving || saveDisabled}>
         {t('common.save', 'Save')}
       </Button>
     </div>

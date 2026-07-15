@@ -147,7 +147,9 @@ export const ruleSchema = z
     windowDays: z
       .union([z.string(), z.number()])
       .transform((v) => (v === '' || v == null ? undefined : Number(v)))
-      .refine((v) => v === undefined || (Number.isFinite(v) && v >= 1), 'invalidNumber')
+      // Mirror the backend @IsInt @Min(1) @Max(90) so an ordinary value like 180
+      // gets an inline error instead of a raw server 400.
+      .refine((v) => v === undefined || (Number.isInteger(v) && v >= 1 && v <= 90), 'invalidNumber')
       .optional(),
     action: z.enum(['INCREASE_BUDGET', 'DECREASE_BUDGET', 'PAUSE', 'RESUME']),
     actionValue: optionalNumber,

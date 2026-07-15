@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Logger, NotFoundException, Param, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Logger, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { OutboxService } from '../../outbox/outbox.service';
@@ -179,6 +179,7 @@ export class NetgsmEventsController {
     const fresh = await this.archiveFresh(workspaceId, 'iys', rows);
     if (fresh.length === 0) return { ok: true };
 
+    let publishFailed = false;
     for (const r of fresh) {
       const statusRaw = (this.stringField(r.el, ['status', 'durum']) ?? '').toUpperCase();
       // Strict tri-state: only an EXACT 'ONAY'/'RET' is ever published as a
@@ -208,12 +209,37 @@ export class NetgsmEventsController {
       const transactionId =
         this.stringField(r.el, ['transactionid']) ?? this.stringField(r.el, ['submitid']) ?? r.externalId;
 
-      await this.outbox.append({
-        type: 'marketing.iys.consent.v1',
-        tenantId: null,
-        payload: { workspaceId, recipient, type, status, source, transactionId },
-        idempotencyKey: `${workspaceId}:iys:${r.externalId}`,
-      });
+      try {
+        await this.outbox.append({
+          type: 'marketing.iys.consent.v1',
+          tenantId: null,
+          payload: { workspaceId, recipient, type, status, source, transactionId },
+          idempotencyKey: `${workspaceId}:iys:${r.externalId}`,
+        });
+      } catch (e) {
+        // The element was archived BEFORE this publish, so a transient append
+        // failure (DB blip/deadlock) would otherwise dedup-suppress İYS's
+        // redelivery and PERMANENTLY drop this consent change — an İYS RET
+        // never applied to the lead is a KVKK exposure. Un-archive the row so
+        // the redelivery sees it as fresh and re-publishes it, keep processing
+        // the rest of the batch, and signal a retryable failure at the end.
+        await this.prisma.netgsmWebhookEvent
+          .deleteMany({ where: { workspaceId, purpose: 'iys', externalId: r.externalId } })
+          .catch((delErr: any) =>
+            this.logger.error(`iys un-archive failed for ${r.externalId}: ${delErr?.message ?? delErr}`),
+          );
+        this.logger.error(
+          `iys publish failed for ${r.externalId} (un-archived for redelivery): ${(e as Error)?.message ?? e}`,
+        );
+        publishFailed = true;
+      }
+    }
+
+    // Partial failure → non-2xx so İYS/NetGSM redelivers the batch. The rows
+    // that DID publish stay archived (redelivery dedups them); only the
+    // un-archived failures are re-processed.
+    if (publishFailed) {
+      throw new ServiceUnavailableException('İYS batch partially failed — retry');
     }
 
     return { ok: true };

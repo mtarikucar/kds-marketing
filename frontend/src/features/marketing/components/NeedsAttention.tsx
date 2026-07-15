@@ -98,7 +98,9 @@ export default function NeedsAttention({
     items.push({
       id: 'offers',
       count: offers,
-      to: '/documents?tab=offers&status=SENT',
+      // Count is activeOffers (DRAFT+SENT); don't hardcode status=SENT or a
+      // draft-only "open offers" count dead-ends on an empty SENT-filtered list.
+      to: '/documents?tab=offers',
       label: t('needsAttention.openOffers'),
       tone: 'primary',
       icon: <FileText className="w-5 h-5" />,

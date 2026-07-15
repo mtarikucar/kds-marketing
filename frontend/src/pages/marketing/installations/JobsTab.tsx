@@ -350,7 +350,8 @@ export function JobsTab({
             </Field>
             {convertedLeads.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No converted customers yet — jobs are created for leads that have a tenant.
+                No eligible customers — jobs are created for converted leads, and every
+                converted customer already has an active job.
               </p>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

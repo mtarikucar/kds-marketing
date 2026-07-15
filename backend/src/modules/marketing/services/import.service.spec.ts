@@ -207,6 +207,35 @@ describe('ImportService.processBatch', () => {
     );
   });
 
+  it('CREATE policy ("Always create") creates a NEW lead even when the match is a converted customer', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, dedupePolicy: 'CREATE' } as any);
+    prisma.importJobRow.findMany.mockResolvedValue([
+      { id: 'r1', rowIndex: 0, raw: { business: 'Acme', email: 'a@x.com' } },
+    ] as any);
+    // Same email as a converted customer — the old guard silently SKIPPED this
+    // row, contradicting the option's promise. The customer-protection guard
+    // only applies to the UPDATE write path (never overwrite), not to creates.
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'existing-1',
+      customFields: {},
+      status: 'WON',
+      convertedTenantId: 'tenant-1',
+    } as any);
+    (prisma.lead.create as jest.Mock).mockResolvedValue({ id: 'lead-2' });
+    (prisma.importJobRow.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+    (prisma.importJobRow.count as jest.Mock).mockResolvedValue(0);
+
+    await svc.processBatch('imp-1', 0);
+
+    expect(prisma.lead.update).not.toHaveBeenCalled(); // still never overwrites the customer
+    expect(prisma.lead.create).toHaveBeenCalled();
+    expect(prisma.importJobRow.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'r1' }, data: expect.objectContaining({ status: 'DONE' }) }),
+    );
+  });
+
   it('selects the normalized identifiers its single-key-match preservation relies on', async () => {
     // The UPDATE path reads existing.emailNormalized / existing.phoneNormalized to
     // decide whether a row that matched on ONE key may overwrite the OTHER. Those
@@ -321,5 +350,38 @@ describe('ImportService.processBatch', () => {
     prisma.importJob.findUnique.mockResolvedValue({ ...baseJob, status: 'DONE' } as any);
     await svc.processBatch('imp-1', 0);
     expect(prisma.importJobRow.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImportService — batch-job exhaustion flips the ImportJob FAILED', () => {
+  it('the registered onExhausted hook marks a RUNNING import FAILED with a visible reason', async () => {
+    const { prisma, runner, svc } = makeSvc();
+    svc.onModuleInit();
+    // registerHandler(kind, fn, onExhausted) — grab the hook.
+    const onExhausted = (runner.registerHandler as jest.Mock).mock.calls[0][2];
+    expect(typeof onExhausted).toBe('function');
+
+    prisma.importJob.findUnique.mockResolvedValue({ status: 'RUNNING', errors: [{ row: 3, message: 'x' }] } as any);
+    (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+
+    await onExhausted({ payload: { jobId: 'imp-1' } }, 'db blip');
+
+    // Without this the wizard polled "Import running…" forever after a DLQ.
+    const call = (prisma.importJob.update as jest.Mock).mock.calls[0][0];
+    expect(call.where).toEqual({ id: 'imp-1' });
+    expect(call.data.status).toBe('FAILED');
+    expect(call.data.errors).toEqual([
+      { row: 3, message: 'x' },
+      { row: -1, message: expect.stringContaining('db blip') },
+    ]);
+  });
+
+  it('is a no-op for an import that already finished (no resurrect-to-FAILED)', async () => {
+    const { prisma, runner, svc } = makeSvc();
+    svc.onModuleInit();
+    const onExhausted = (runner.registerHandler as jest.Mock).mock.calls[0][2];
+    prisma.importJob.findUnique.mockResolvedValue({ status: 'DONE', errors: null } as any);
+    await onExhausted({ payload: { jobId: 'imp-1' } }, 'late failure');
+    expect(prisma.importJob.update).not.toHaveBeenCalled();
   });
 });

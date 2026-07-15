@@ -26,7 +26,11 @@ const SIMPLE_CHILD_DELEGATES = [
   'installationJob',
   'contactIdentity',
   'conversation',
-  'workflowRun',
+  // NOTE: workflowRun is NOT here — it carries a PARTIAL unique
+  // `workflow_runs_active_per_lead` (workflowId, leadId) WHERE status IN
+  // ('RUNNING','WAITING'), so a wholesale move would P2002 when the canonical and
+  // a duplicate both have a LIVE run of the same workflow. Handled explicitly in
+  // merge() (reparentWorkflowRuns) before the wholesale loop.
   'booking',
   'review',
   'voiceCall',
@@ -303,6 +307,12 @@ export class LeadDedupeService {
         data: { leadId: canonicalId },
       });
 
+      // WorkflowRun — partial unique `workflow_runs_active_per_lead` on
+      // (workflowId, leadId) WHERE status IN ('RUNNING','WAITING'). Consolidate so
+      // at most ONE live run per workflow survives on the canonical, else the move
+      // P2002s (two live runs of the same workflow across the merged leads).
+      await this.reparentWorkflowRuns(txc, workspaceId, canonicalId, dupIds);
+
       // Union custom fields (canonical wins per key) + fill blank scalars.
       const customFields = this.mergeCustomFields(canonical, dups);
       const filled = this.fillBlanks(canonical, dups);
@@ -367,6 +377,55 @@ export class LeadDedupeService {
     }
     await txc[delegate].updateMany({
       where: { leadId: { in: dupIds }, ...scope },
+      data: { leadId: canonicalId },
+    });
+  }
+
+  /**
+   * Consolidate WorkflowRun onto the canonical WITHOUT tripping the partial unique
+   * `workflow_runs_active_per_lead` (workflowId, leadId) WHERE status IN
+   * ('RUNNING','WAITING'). A duplicate and the canonical are commonly BOTH enrolled
+   * in the same trigger workflow (each lead's creation fires it), so each holds a
+   * live run — a naive wholesale move would put two live runs on (workflow,
+   * canonical) and throw P2002, aborting the entire merge (an opaque 500; the pair
+   * could never be deduped while the nurture flows stay live, which can be days).
+   * Keep exactly ONE live run per workflow (prefer the canonical's, so its own
+   * automation continues), STOP the rest — the executor already treats a run
+   * STOPPED because its lead was merged as terminal (finish(..,'STOPPED','lead
+   * deleted or merged mid-run')) and never advances it. Then move every dup run:
+   * the stopped ones are outside the partial index, the surviving live one is now
+   * the single live run on the canonical.
+   */
+  private async reparentWorkflowRuns(
+    txc: Record<string, any>,
+    workspaceId: string,
+    canonicalId: string,
+    dupIds: string[],
+  ): Promise<void> {
+    const liveRuns: { id: string; leadId: string; workflowId: string }[] =
+      await txc.workflowRun.findMany({
+        where: {
+          workspaceId,
+          leadId: { in: [canonicalId, ...dupIds] },
+          status: { in: ['RUNNING', 'WAITING'] },
+        },
+        select: { id: true, leadId: true, workflowId: true },
+      });
+    // Pick the survivor per workflowId — the canonical's run wins when it has one.
+    const keepByWf = new Map<string, string>();
+    for (const r of liveRuns) {
+      const cur = keepByWf.get(r.workflowId);
+      if (!cur || r.leadId === canonicalId) keepByWf.set(r.workflowId, r.id);
+    }
+    const stopIds = liveRuns.filter((r) => keepByWf.get(r.workflowId) !== r.id).map((r) => r.id);
+    if (stopIds.length) {
+      await txc.workflowRun.updateMany({
+        where: { workspaceId, id: { in: stopIds } },
+        data: { status: 'STOPPED' },
+      });
+    }
+    await txc.workflowRun.updateMany({
+      where: { workspaceId, leadId: { in: dupIds } },
       data: { leadId: canonicalId },
     });
   }

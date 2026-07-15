@@ -478,6 +478,58 @@ describe('WebphoneHost — live status pill (call_status SSE)', () => {
     expect(screen.queryByText(/^connected$/i)).not.toBeInTheDocument();
   });
 
+  it('a call_status for a DIFFERENT call does NOT downgrade the active call already shown Connected (finding #6)', async () => {
+    // Deliver the CONNECTED frame first, then gate the foreign frame so it only
+    // arrives AFTER the active call is set and shown Connected.
+    let releaseForeign!: () => void;
+    const foreignGate = new Promise<void>((r) => {
+      releaseForeign = r;
+    });
+    const encoder = new TextEncoder();
+    const frames = [
+      callStatusFrame({ salesCallId: 'call-1', status: 'CONNECTED' }),
+      callStatusFrame({ salesCallId: 'call-2', status: 'RINGING' }),
+    ];
+    let i = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (i === 0) {
+                i += 1;
+                return { value: encoder.encode(frames[0]), done: false };
+              }
+              if (i === 1) {
+                await foreignGate;
+                i += 1;
+                return { value: encoder.encode(frames[1]), done: false };
+              }
+              return new Promise(() => {});
+            },
+          }),
+        },
+      }),
+    );
+    renderHost();
+    await waitFor(() => expect(start).toHaveBeenCalled());
+
+    act(() => setActiveCallId('call-1'));
+    expect(await screen.findByText(/connected/i)).toBeInTheDocument();
+
+    // The foreign RINGING frame for call-2 now arrives — it must be dropped.
+    await act(async () => {
+      releaseForeign();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/connected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/calling/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ringing/i)).not.toBeInTheDocument();
+  });
+
   it('clears the pill once the active call ends (activeCallId -> null)', async () => {
     vi.stubGlobal('fetch', sseFetchMock([callStatusFrame({ salesCallId: 'call-1', status: 'CONNECTED' })]));
     renderHost();

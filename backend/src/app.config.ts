@@ -54,6 +54,13 @@ export function configureApp(app: NestExpressApplication): void {
   // ESP delivery-feedback (bounces/complaints) — HMAC over the raw body too.
   app.use('/api/public/esp/feedback', bodyParser.raw({ type: '*/*', limit: '2mb' }));
 
+  // CSV lead imports advertise up to 50,000 rows / 10MB (the upload DTO
+  // validates exactly that) — the generic 200kb JSON cap below would reject any
+  // realistically-sized file before it ever reached the controller. Mount a
+  // larger parser on just this route BEFORE the generic one (body-parser skips
+  // already-parsed bodies); 12mb leaves headroom for JSON string escaping.
+  app.use('/api/marketing/imports', bodyParser.json({ limit: '12mb' }));
+
   // Tight generic body limit (the marketing API has no file/webhook payloads;
   // the bulk lead-ingest endpoint caps its batch size in the DTO).
   app.use(bodyParser.json({ limit: '200kb' }));

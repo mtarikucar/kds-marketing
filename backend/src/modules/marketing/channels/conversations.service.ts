@@ -44,9 +44,13 @@ export class ConversationsService {
     });
     if (!convo) throw new NotFoundException('Conversation not found');
     const [messages, lead, channel] = await Promise.all([
+      // Take the most RECENT 500 messages, not the oldest 500 — a long-running
+      // thread (>500 messages) would otherwise show ancient history and HIDE the
+      // latest customer message, so an agent replies with no view of it. Fetched
+      // desc, reversed below to the chronological order the thread renders in.
       this.prisma.message.findMany({
         where: { workspaceId, conversationId },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: 'desc' },
         take: 500,
       }),
       this.prisma.lead.findFirst({
@@ -66,7 +70,8 @@ export class ConversationsService {
         select: { id: true, type: true, name: true, agentProfileId: true },
       }),
     ]);
-    return { conversation: convo, messages, lead, channel };
+    // Reverse the desc-fetched recent window back to chronological (oldest→newest).
+    return { conversation: convo, messages: messages.reverse(), lead, channel };
   }
 
   /** Agent reply — a human takeover, so the AI is paused for this thread. */

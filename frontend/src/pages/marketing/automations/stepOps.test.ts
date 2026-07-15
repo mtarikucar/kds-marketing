@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { appendStep, deleteStepAt, moveStepAt } from './stepOps';
+import { appendStep, deleteStepAt, moveStepAt, NEW_STEP } from './stepOps';
+
+describe('NEW_STEP contract with the backend DSL', () => {
+  it('http_webhook_out seeds `payload` and NOT the stripped `method`/`body`', () => {
+    // Backend DSL schema is { type, url, payload? }; seeding method/body let an
+    // edited webhook body silently vanish on save.
+    const seed = NEW_STEP.http_webhook_out as Record<string, unknown>;
+    expect(seed).toHaveProperty('payload');
+    expect(seed).not.toHaveProperty('method');
+    expect(seed).not.toHaveProperty('body');
+  });
+});
 
 describe('appendStep', () => {
   it('appends a default-configured step of the given type', () => {

@@ -64,22 +64,45 @@ export class ApprovalRequestService {
 
   /** Mark an approved request as applied (called by the executor after it runs). */
   async markApplied(workspaceId: string, id: string) {
-    const req = await this.owned(workspaceId, id);
-    if (req.status !== 'APPROVED') throw new BadRequestException(`cannot apply a ${req.status} request`);
-    return this.prisma.approvalRequest.update({ where: { id }, data: { status: 'APPLIED', appliedAt: new Date() } });
+    await this.owned(workspaceId, id); // 404 for missing/cross-workspace
+    // Conditional claim, not read-check-then-update: a concurrent decide()
+    // could interleave between the read and an unconditional write, letting a
+    // late REJECTED overwrite an already-executed (money-moved) request.
+    const claim = await this.prisma.approvalRequest.updateMany({
+      where: { id, workspaceId, status: 'APPROVED' },
+      data: { status: 'APPLIED', appliedAt: new Date() },
+    });
+    if (claim.count === 0) {
+      const fresh = await this.owned(workspaceId, id);
+      throw new BadRequestException(`cannot apply a ${fresh.status} request`);
+    }
+    return this.owned(workspaceId, id);
   }
 
   private async decide(workspaceId: string, id: string, userId: string, status: 'APPROVED' | 'REJECTED') {
     const req = await this.owned(workspaceId, id);
-    if (req.status !== 'PENDING') throw new BadRequestException(`request already ${req.status}`);
     if (req.expiresAt && req.expiresAt.getTime() < Date.now()) {
-      await this.prisma.approvalRequest.update({ where: { id }, data: { status: 'EXPIRED' } });
+      // Only a still-PENDING row may flip to EXPIRED — never clobber a decision.
+      await this.prisma.approvalRequest.updateMany({
+        where: { id, workspaceId, status: 'PENDING' },
+        data: { status: 'EXPIRED' },
+      });
       throw new BadRequestException('request has expired');
     }
-    return this.prisma.approvalRequest.update({
-      where: { id },
+    // Atomic single-winner decision: two concurrent approve/reject clicks both
+    // read PENDING, but only the first conditional write claims the row — the
+    // loser gets "already decided" instead of silently overwriting the winner
+    // (the docblock's "guarded against double-decision" promise, now enforced
+    // at the write, not just the read).
+    const claim = await this.prisma.approvalRequest.updateMany({
+      where: { id, workspaceId, status: 'PENDING' },
       data: { status, decidedById: userId, decidedAt: new Date() },
     });
+    if (claim.count === 0) {
+      const fresh = await this.owned(workspaceId, id);
+      throw new BadRequestException(`request already ${fresh.status}`);
+    }
+    return this.owned(workspaceId, id);
   }
 
   private async owned(workspaceId: string, id: string) {

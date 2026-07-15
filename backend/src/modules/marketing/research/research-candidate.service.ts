@@ -92,13 +92,22 @@ export class ResearchCandidateService {
     });
     const byRef = new Map(leads.map((l) => [l.externalRef, l.id]));
     const now = new Date();
+    let accepted = 0;
     for (const r of rows) {
+      const leadId = byRef.get(r.externalRef);
+      // Only mark ACCEPTED when ingest actually created/linked a Lead. A candidate
+      // CLIPPED by the daily lead quota (or one whose ingest errored) has no lead,
+      // so leave it PENDING — otherwise it would flip to ACCEPTED with leadId=null
+      // and vanish from the review queue forever, never becoming a lead and never
+      // re-acceptable after the quota resets (silent loss of a qualified prospect).
+      if (!leadId) continue;
       await this.prisma.researchCandidate.update({
         where: { id: r.id },
-        data: { status: 'ACCEPTED', leadId: byRef.get(r.externalRef) ?? null, decidedAt: now },
+        data: { status: 'ACCEPTED', leadId, decidedAt: now },
       });
+      accepted += 1;
     }
-    return { accepted: rows.length, ingest: result };
+    return { accepted, ingest: result };
   }
 
   async reject(workspaceId: string, ids: string[]): Promise<{ rejected: number }> {

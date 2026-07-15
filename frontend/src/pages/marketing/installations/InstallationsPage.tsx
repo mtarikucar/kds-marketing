@@ -58,14 +58,16 @@ export default function InstallationsPage() {
         .then((r) => r.data),
   });
 
-  const { data: leadsData } = useQuery<PaginatedResponse<Lead>>({
-    queryKey: ['marketing', 'leads', 'converted'],
-    queryFn: () =>
-      marketingApi.get('/leads', { params: { limit: 100 } }).then((r) => r.data),
+  // Backend-derived eligibility (converted customers WITHOUT an active job):
+  // the old client-side cross-reference offered already-jobbed customers too —
+  // converted leads get an auto-created job, so "New Job" almost always 409ed.
+  const { data: eligibleData } = useQuery<Lead[]>({
+    queryKey: ['marketing', 'installations', 'eligible-customers'],
+    queryFn: () => marketingApi.get('/installations/eligible-customers').then((r) => r.data),
     enabled: isManager,
     staleTime: 60_000,
   });
-  const convertedLeads = (leadsData?.data || []).filter((l) => l.convertedTenantId);
+  const convertedLeads = eligibleData || [];
 
   return (
     <div className="space-y-6">

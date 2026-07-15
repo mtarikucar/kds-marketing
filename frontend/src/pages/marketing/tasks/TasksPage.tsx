@@ -69,6 +69,33 @@ interface RepRow extends MarketingUserInfo {
 
 // ── Component ───────────────────────────────────────────────────────────────
 
+/**
+ * Build the task create/update payload.
+ *
+ * CREATE: omit an empty optional so we don't store "".
+ * EDIT: send `description` EXPLICITLY (empty when blanked) so clearing it
+ * actually persists — an omitted key on the PATCH is a no-op (partial update),
+ * which is why a blanked description used to be silently kept.
+ */
+export function buildTaskPayload(values: TaskFormValues, isEdit: boolean): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    title: values.title,
+    type: values.type,
+    priority: values.priority,
+    // Combine the local date + time into a full ISO datetime so the hour the
+    // rep picked is exactly what gets stored (no off-by-one, no end-of-day).
+    dueDate: localDateTimeToIso(values.dueDate, values.dueTime),
+    ...(values.leadId ? { leadId: values.leadId } : {}),
+    ...(values.assignedToId ? { assignedToId: values.assignedToId } : {}),
+  };
+  if (isEdit) {
+    payload.description = values.description ?? '';
+  } else if (values.description) {
+    payload.description = values.description;
+  }
+  return payload;
+}
+
 export default function TasksPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
@@ -188,18 +215,7 @@ export default function TasksPage() {
   // ── Form submit handlers ─────────────────────────────────────────────────
 
   const handleFormSubmit = (values: TaskFormValues) => {
-    const payload: Record<string, unknown> = {
-      title: values.title,
-      type: values.type,
-      priority: values.priority,
-      // Combine the local date + time into a full ISO datetime so the hour the
-      // rep picked is exactly what gets stored (no off-by-one, no end-of-day).
-      dueDate: localDateTimeToIso(values.dueDate, values.dueTime),
-      ...(values.description ? { description: values.description } : {}),
-      ...(values.leadId ? { leadId: values.leadId } : {}),
-      ...(values.assignedToId ? { assignedToId: values.assignedToId } : {}),
-    };
-
+    const payload = buildTaskPayload(values, !!editingTask);
     if (editingTask) {
       updateMutation.mutate({ id: editingTask.id, data: payload });
     } else {

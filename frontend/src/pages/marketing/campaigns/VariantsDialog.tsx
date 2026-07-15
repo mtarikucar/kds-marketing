@@ -96,7 +96,7 @@ export function VariantsDialog({ campaignId, open, onOpenChange }: { campaignId:
               <div className="flex flex-wrap items-center gap-3 pl-1 text-muted-foreground">
                 <label className="flex items-center gap-1">
                   {t('campaigns.abTestPct', 'Test on')}
-                  <input type="number" min={5} max={50} value={abTestPercent} onChange={(e) => setAbTestPercent(Math.min(50, Math.max(5, Number(e.target.value) || 20)))}
+                  <input type="number" min={5} max={50} step={1} value={abTestPercent} onChange={(e) => setAbTestPercent(Math.round(Math.min(50, Math.max(5, Number(e.target.value) || 20))))}
                     className="w-16 rounded border border-border bg-surface-muted px-2 py-1" />%
                 </label>
                 <label className="flex items-center gap-1">

@@ -84,9 +84,13 @@ export default function ManualPaymentsPage() {
   const reject = useMutation({
     mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) =>
       platformApi.post(`/payments/${orderId}/reject`, { reason }),
-    onSuccess: () => {
+    onSuccess: ({ data }) => {
       queryClient.invalidateQueries({ queryKey: ['platform', 'payments'] });
-      toast.success('Order rejected');
+      // Mirror approve: settleFailure returns { settled: false } when the order
+      // was already settled (e.g. a concurrent PSP success won the race) — a
+      // blanket success toast would tell the operator a paid order was rejected.
+      if (data.settled) toast.success('Order rejected');
+      else toast.warning('Not rejected — the order was already settled. Refresh the queue.');
       setRejectTarget(null);
     },
     onError: (e: any) => toast.error(e.response?.data?.message ?? 'Reject failed'),

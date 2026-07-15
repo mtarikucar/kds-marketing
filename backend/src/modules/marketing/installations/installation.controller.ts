@@ -102,6 +102,14 @@ export class InstallationController {
     return this.jobs.list(actor.workspaceId, filter);
   }
 
+  /** Converted customers without an active job — the "New Job" dialog's
+   *  audience. Manager-gated like the create it feeds. */
+  @Get('eligible-customers')
+  @MarketingRoles('MANAGER')
+  eligibleCustomers(@CurrentMarketingUser() actor: MarketingUserPayload) {
+    return this.jobs.eligibleCustomers(actor.workspaceId);
+  }
+
   @Post('jobs')
   @MarketingRoles('MANAGER')
   @RequirePermission('settings.manage')

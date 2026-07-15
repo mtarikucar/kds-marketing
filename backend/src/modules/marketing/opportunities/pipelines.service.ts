@@ -53,7 +53,7 @@ export class PipelinesService {
     const existing = await this.prisma.pipeline.findFirst({
       where: { workspaceId, archived: false },
       orderBy: [{ isDefault: 'desc' }, { position: 'asc' }],
-      include: { stages: { orderBy: { position: 'asc' } } },
+      include: { stages: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
     });
     if (existing) return existing;
 
@@ -74,7 +74,7 @@ export class PipelinesService {
           })),
         },
       },
-      include: { stages: { orderBy: { position: 'asc' } } },
+      include: { stages: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
     });
   }
 
@@ -84,14 +84,14 @@ export class PipelinesService {
     return this.prisma.pipeline.findMany({
       where: { workspaceId, archived: false },
       orderBy: [{ isDefault: 'desc' }, { position: 'asc' }],
-      include: { stages: { orderBy: { position: 'asc' } } },
+      include: { stages: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
     });
   }
 
   async get(workspaceId: string, id: string) {
     const pipeline = await this.prisma.pipeline.findFirst({
       where: { id, workspaceId },
-      include: { stages: { orderBy: { position: 'asc' } } },
+      include: { stages: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
     });
     if (!pipeline) throw new NotFoundException('Pipeline not found');
     return pipeline;
@@ -124,7 +124,7 @@ export class PipelinesService {
             })),
           },
         },
-        include: { stages: { orderBy: { position: 'asc' } } },
+        include: { stages: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
       });
     });
   }
@@ -146,7 +146,7 @@ export class PipelinesService {
           isDefault: dto.isDefault,
           archived: dto.archived,
         },
-        include: { stages: { orderBy: { position: 'asc' } } },
+        include: { stages: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
       });
     });
   }
@@ -173,15 +173,21 @@ export class PipelinesService {
 
   async addStage(workspaceId: string, pipelineId: string, dto: CreateStageDto) {
     await this.get(workspaceId, pipelineId); // scoped existence check
-    const count = await this.prisma.pipelineStage.count({
+    // max+1, NOT count(): removeStage deletes without repacking, so after any
+    // deletion the surviving positions are sparse and count() lands on an
+    // already-occupied slot — two stages then share a position and the board's
+    // `orderBy position asc` renders them in nondeterministic order.
+    const agg = await this.prisma.pipelineStage.aggregate({
       where: { workspaceId, pipelineId },
+      _max: { position: true },
     });
+    const nextPosition = (agg._max.position ?? -1) + 1;
     return this.prisma.pipelineStage.create({
       data: {
         workspaceId,
         pipelineId,
         name: dto.name,
-        position: dto.position ?? count,
+        position: dto.position ?? nextPosition,
         probability: dto.probability ?? 0,
         isWon: dto.isWon ?? false,
         isLost: dto.isLost ?? false,
@@ -246,7 +252,16 @@ export class PipelinesService {
     if (remaining <= 1) {
       throw new ConflictException('A pipeline must keep at least one stage');
     }
-    await this.prisma.pipelineStage.delete({ where: { id: stageId } });
+    // Delete AND close the position gap in one transaction so the surviving
+    // stages stay a dense 0..n-1 sequence — the next max+1 append can't tie a
+    // survivor, and the board ordering stays stable.
+    await this.prisma.$transaction([
+      this.prisma.pipelineStage.delete({ where: { id: stageId } }),
+      this.prisma.pipelineStage.updateMany({
+        where: { workspaceId, pipelineId, position: { gt: stage.position } },
+        data: { position: { decrement: 1 } },
+      }),
+    ]);
     return { message: 'Stage deleted' };
   }
 

@@ -160,7 +160,11 @@ function LeafRow({ leaf, choices, choiceFor, tags, onChange, onRemove }: LeafRow
     const c = choiceFor(field);
     const nextCmps = comparatorsFor(c);
     const nextCmp = nextCmps.includes(leaf.cmp) ? leaf.cmp : nextCmps[0];
-    onChange({ field, cmp: nextCmp, value: c?.group === 'tag' ? '' : '' });
+    // A bool field needs a CONCRETE value so its Yes/No dropdown shows a selection
+    // — an '' renders as an empty (placeholder-less) dropdown yet silently coerces
+    // to `false` on the backend, inverting an intended suppression audience.
+    const value = c?.dataType === 'bool' ? false : '';
+    onChange({ field, cmp: nextCmp, value });
   };
 
   const onCmpChange = (cmp: string) => {

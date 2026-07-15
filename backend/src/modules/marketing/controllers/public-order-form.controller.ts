@@ -91,9 +91,16 @@ export class PublicOrderFormController {
     @Body() body: PublicOrderSubmitDto,
     @Req() req: Request,
   ) {
+    // The POST is a same-origin fetch from the GET page, so the Referer carries
+    // the landing URL incl. its query string — without passing it, the D10
+    // first-touch attribution branch in submit() was dead code and order-form
+    // leads never got UTM/click-id attribution (mirrors public-site.controller).
+    const referer = typeof req.headers.referer === 'string' ? req.headers.referer : undefined;
     return this.orderForms.submit(token, body, {
       ip: getClientIp(req),
       userAgent: req.headers['user-agent'],
+      url: referer,
+      referrer: referer,
     });
   }
 }

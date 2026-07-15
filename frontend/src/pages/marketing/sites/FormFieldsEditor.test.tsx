@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { FormFieldsEditor, type FormField } from './FormFieldsEditor';
 
 vi.mock('react-i18next', () => ({
@@ -35,5 +35,59 @@ describe('FormFieldsEditor duplicate-name warning', () => {
       />,
     );
     expect(screen.queryByText(/another field uses this name/i)).toBeNull();
+  });
+});
+
+describe('FormFieldsEditor name/label coupling', () => {
+  it('does NOT rewrite a LOADED field\'s name when its label is edited (protects the email/phone POST key)', () => {
+    const onChange = vi.fn();
+    // A field loaded from the server has no _autoName flag.
+    render(<FormFieldsEditor fields={[field('email', 'Email')]} onChange={onChange} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Label/i), { target: { value: 'Email address' } });
+
+    const next = onChange.mock.calls[0][0];
+    expect(next[0].label).toBe('Email address');
+    expect(next[0].name).toBe('email'); // NOT rewritten to email_address
+  });
+
+  it('DOES auto-derive the name from the label for a freshly-added field (_autoName)', () => {
+    const onChange = vi.fn();
+    render(
+      <FormFieldsEditor
+        fields={[{ name: '', label: '', type: 'text', required: false, _autoName: true }]}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/Label/i), { target: { value: 'Company name' } });
+
+    expect(onChange.mock.calls[0][0][0].name).toBe('company_name');
+  });
+});
+
+describe('FormFieldsEditor name typing', () => {
+  it('keeps a trailing underscore while TYPING so multi-word keys like utm_source are typeable', () => {
+    const onChange = vi.fn();
+    render(<FormFieldsEditor fields={[field('utm', 'U')]} onChange={onChange} />);
+
+    // The strict slugify stripped the trailing '_' on every keystroke, so
+    // "utm_source" collapsed to "utmsource" — the '_' vanished as you typed.
+    fireEvent.change(screen.getByPlaceholderText(/name \(POST key\)/i), { target: { value: 'utm_' } });
+    expect(onChange.mock.calls[0][0][0].name).toBe('utm_');
+  });
+
+  it('allows clearing the input mid-edit (no snap to the literal "field") and commits strictly on blur', () => {
+    const onChange = vi.fn();
+    render(<FormFieldsEditor fields={[field('utm', 'U')]} onChange={onChange} />);
+    const input = screen.getByPlaceholderText(/name \(POST key\)/i);
+
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onChange.mock.calls[0][0][0].name).toBe(''); // empty allowed mid-edit
+
+    // Blur commits the strict slugify: current rendered value 'utm' stays 'utm'.
+    fireEvent.blur(input);
+    const afterBlur = onChange.mock.calls[1][0][0].name;
+    expect(afterBlur).toBe('utm'); // strict form of the still-rendered prop value
   });
 });

@@ -70,25 +70,36 @@ export class WebhookOutboundService implements OnModuleInit {
     for (const ep of endpoints) {
       const subscribed = (ep.events as string[]) ?? [];
       if (subscribed.length && !subscribed.includes(event.type)) continue;
-      const delivery = await this.prisma.webhookDelivery.create({
-        data: {
+      // Per-endpoint isolation: DomainEventBus swallows a listener throw (the
+      // outbox marks the event dispatched, never re-dispatches), so an
+      // unhandled create/schedule failure here wouldn't just skip THIS
+      // endpoint — it would abort the loop and silently, permanently drop the
+      // event for every endpoint after it. Log and continue instead.
+      try {
+        const delivery = await this.prisma.webhookDelivery.create({
+          data: {
+            workspaceId,
+            endpointId: ep.id,
+            eventId: event.id,
+            eventType: event.type,
+          },
+          select: { id: true },
+        });
+        await this.scheduledJob.schedule({
           workspaceId,
-          endpointId: ep.id,
-          eventId: event.id,
-          eventType: event.type,
-        },
-        select: { id: true },
-      });
-      await this.scheduledJob.schedule({
-        workspaceId,
-        kind: 'webhook.deliver',
-        runAt: new Date(),
-        payload: {
-          deliveryId: delivery.id,
-          event: { id: event.id, type: event.type, payload: event.payload },
-        } as Prisma.InputJsonValue,
-        maxAttempts: WEBHOOK_MAX_ATTEMPTS,
-      });
+          kind: 'webhook.deliver',
+          runAt: new Date(),
+          payload: {
+            deliveryId: delivery.id,
+            event: { id: event.id, type: event.type, payload: event.payload },
+          } as Prisma.InputJsonValue,
+          maxAttempts: WEBHOOK_MAX_ATTEMPTS,
+        });
+      } catch (e) {
+        this.logger.error(
+          `fanOut for endpoint ${ep.id} (event ${event.id} ${event.type}) failed: ${(e as Error).message}`,
+        );
+      }
     }
   }
 

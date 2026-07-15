@@ -188,21 +188,42 @@ export class DialerService {
     // Claim the item SKIPPED if not already terminal; then always run the
     // idempotent CAS-advance (it no-ops if the cursor already moved, and unsticks
     // a cursor stranded by a crash between a prior claim and its advance).
-    await this.prisma.dialSessionItem.updateMany({
+    const claim = await this.prisma.dialSessionItem.updateMany({
       where: { id: current.itemId, workspaceId, outcome: null },
       data: { outcome: 'SKIPPED' },
     });
+    if (claim.count > 0 && current.callId) {
+      // The item was DIALED but the rep skipped instead of logging an outcome —
+      // free the single line now (mirrors dial()'s own rollback and logOutcome),
+      // or every subsequent Dial in the workspace 409s "Sales line is busy"
+      // until the 30-min stale sweep. Best-effort: an already-finalized call
+      // ("Call already logged") must not strand the (already-claimed) queue.
+      await this.salesCalls
+        .logCall(workspaceId, current.callId, marketingUserId, { status: 'CANCELLED' } as any)
+        .catch(() => undefined);
+    }
     return this.advance(workspaceId, id, marketingUserId, session.currentIndex);
   }
 
   /** Cancel the whole session. */
   async cancel(workspaceId: string, id: string, marketingUserId: string) {
-    await this.loadSession(workspaceId, id, marketingUserId);
+    const session = await this.loadSession(workspaceId, id, marketingUserId);
+    // Resolve the in-flight call BEFORE flipping the session — currentLead()
+    // returns null for a non-ACTIVE session, so the lookup must happen first.
+    const current = session.status === 'ACTIVE' ? await this.currentLead(workspaceId, session) : null;
     // Scoped guarded update — only flips an ACTIVE session.
-    await this.prisma.dialSession.updateMany({
+    const claim = await this.prisma.dialSession.updateMany({
       where: { id, workspaceId, marketingUserId, status: 'ACTIVE' },
       data: { status: 'CANCELLED' },
     });
+    if (claim.count > 0 && current?.callId) {
+      // Ending the session mid-call would otherwise strand the INITIATED call
+      // and hold the workspace's single sales line for up to 30 minutes.
+      // Best-effort, same as skip(): an already-logged call is tolerated.
+      await this.salesCalls
+        .logCall(workspaceId, current.callId, marketingUserId, { status: 'CANCELLED' } as any)
+        .catch(() => undefined);
+    }
     return { id, status: 'CANCELLED' };
   }
 

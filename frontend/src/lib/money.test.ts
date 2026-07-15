@@ -16,6 +16,17 @@ describe('formatMoney', () => {
   it('coerces null to zero (USD)', () => {
     expect(formatMoney(null, 'USD')).toBe('$0.00');
   });
+
+  it('formats an ARBITRARY ISO currency (e.g. an ad account CAD) with its own symbol, not ₺', () => {
+    const out = formatMoney(50, 'CAD');
+    expect(out).toMatch(/CA?\$|CAD/); // CA$ / C$ / CAD depending on the runtime ICU
+    expect(out).not.toContain('₺'); // must NOT be mislabeled as Turkish Lira
+    expect(out).toContain('50');
+  });
+
+  it('falls back to "<amount> <CODE>" for an invalid currency code', () => {
+    expect(formatMoney(50, 'NOTACODE')).toBe('50.00 NOTACODE');
+  });
 });
 
 describe('asWorkspaceCurrency', () => {

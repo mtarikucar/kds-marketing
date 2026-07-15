@@ -4,9 +4,12 @@ import { WorkspacesAdminService } from './workspaces-admin.service';
 function makeSvc() {
   const prisma: any = {
     workspace: {
-      findUnique: jest.fn().mockResolvedValue({ id: 'ws-1' }),
+      findUnique: jest.fn().mockResolvedValue({ id: 'ws-1', kind: 'STANDALONE' }),
       count: jest.fn().mockResolvedValue(0),
       update: jest.fn().mockResolvedValue({ id: 'ws-1', kind: 'AGENCY' }),
+    },
+    marketingUser: {
+      updateMany: jest.fn().mockResolvedValue({ count: 3 }),
     },
   };
   return { prisma, svc: new WorkspacesAdminService(prisma as any) };
@@ -46,5 +49,41 @@ describe('WorkspacesAdminService.update — workspace tier (agency designation)'
     const { prisma, svc } = makeSvc();
     prisma.workspace.findUnique.mockResolvedValue(null);
     await expect(svc.update('ghost', { name: 'X' } as any)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('refuses ANY tier change on a LOCATION sub-account (its tier belongs to the parent agency)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'loc-1', kind: 'LOCATION' });
+    await expect(svc.update('loc-1', { kind: 'AGENCY' } as any)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.update('loc-1', { kind: 'STANDALONE' } as any)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.workspace.update).not.toHaveBeenCalled();
+  });
+
+  it('still allows non-tier edits (e.g. rename) on a LOCATION', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.findUnique.mockResolvedValue({ id: 'loc-1', kind: 'LOCATION' });
+    await svc.update('loc-1', { name: 'Renamed' } as any);
+    expect(prisma.workspace.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ name: 'Renamed' }) }),
+    );
+  });
+});
+
+describe('WorkspacesAdminService.updateStatus — suspension takes effect immediately', () => {
+  it('SUSPENDED bumps every user tokenVersion (revokes in-flight access tokens now, not at 8h expiry)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', slug: 's', name: 'W', status: 'SUSPENDED' });
+    await svc.updateStatus('ws-1', 'SUSPENDED');
+    expect(prisma.marketingUser.updateMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws-1' },
+      data: { tokenVersion: { increment: 1 } },
+    });
+  });
+
+  it('re-ACTIVATING does not churn tokenVersion (users simply log in again)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspace.update.mockResolvedValue({ id: 'ws-1', slug: 's', name: 'W', status: 'ACTIVE' });
+    await svc.updateStatus('ws-1', 'ACTIVE');
+    expect(prisma.marketingUser.updateMany).not.toHaveBeenCalled();
   });
 });

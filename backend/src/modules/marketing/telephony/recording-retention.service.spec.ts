@@ -107,4 +107,38 @@ describe('RecordingRetentionService', () => {
     await svc.retain();
     expect(prisma.salesCall.findMany.mock.calls[0][0].take).toBe(200);
   });
+
+  it('DRAINS the backlog across multiple batches, not one 200-row batch per tick', async () => {
+    const { prisma, r2, svc } = makeSvc();
+    prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-1', recordingRetentionDays: 30 }]);
+    const fullBatch = Array.from({ length: 200 }, (_, i) => ({ id: 'c' + i, recordingStorageKey: 'k/' + i }));
+    const tailBatch = Array.from({ length: 20 }, (_, i) => ({ id: 't' + i, recordingStorageKey: 'kt/' + i }));
+    prisma.salesCall.findMany
+      .mockResolvedValueOnce(fullBatch) // a full batch → keep draining
+      .mockResolvedValueOnce(tailBatch) // < BATCH → the final batch
+      .mockResolvedValue([]);
+    prisma.salesCall.updateMany
+      .mockResolvedValueOnce({ count: 200 })
+      .mockResolvedValueOnce({ count: 20 });
+
+    const result = await svc.retain();
+
+    // Two read/delete/update cycles ran — the old single-batch/day cap is gone.
+    expect(prisma.salesCall.findMany).toHaveBeenCalledTimes(2);
+    expect(r2.deleteKeys).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ deleted: 220 });
+  });
+
+  it('caps the drain at MAX_BATCHES_PER_TICK so one busy workspace cannot monopolise the sweep', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.telephonyConfig.findMany.mockResolvedValue([{ workspaceId: 'ws-1', recordingRetentionDays: 30 }]);
+    const fullBatch = Array.from({ length: 200 }, (_, i) => ({ id: 'c' + i, recordingStorageKey: 'k/' + i }));
+    prisma.salesCall.findMany.mockResolvedValue(fullBatch); // always full → never breaks naturally
+    prisma.salesCall.updateMany.mockResolvedValue({ count: 200 });
+
+    const result = await svc.retain();
+
+    expect(prisma.salesCall.findMany).toHaveBeenCalledTimes(50); // MAX_BATCHES_PER_TICK
+    expect(result).toEqual({ deleted: 200 * 50 });
+  });
 });

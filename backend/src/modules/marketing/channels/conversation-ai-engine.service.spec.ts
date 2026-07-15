@@ -95,6 +95,50 @@ describe('ConversationAiEngineService.reply', () => {
     expect(h.credits.reserve).not.toHaveBeenCalled();
   });
 
+  // İYS/KVKK: a proactive follow-up is an unsolicited COMMERCIAL re-engagement,
+  // so it must honor the per-channel marketing opt-out — the contact may have
+  // unsubscribed in the hours between the last reply and the job firing.
+  it('proactive follow-up: suppressed (no send, no credit) when the contact opted out of the channel', async () => {
+    const h = build({
+      agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } },
+      channel: { type: 'WHATSAPP' },
+    });
+    h.prisma.lead.findFirst.mockResolvedValue({ businessName: 'Acme', contactPerson: 'Ayşe', waOptOut: true });
+    await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+    expect(h.sender.send).not.toHaveBeenCalled();
+    expect(h.credits.reserve).not.toHaveBeenCalled();
+  });
+
+  it('proactive follow-up: an opt-out on a DIFFERENT channel does not suppress (per-channel gate)', async () => {
+    const h = build({
+      agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } },
+      channel: { type: 'WHATSAPP' },
+    });
+    h.prisma.lead.findFirst.mockResolvedValue({
+      businessName: 'Acme', contactPerson: 'Ayşe', waOptOut: false, emailOptOut: true,
+    });
+    await (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } });
+    expect(h.sender.send).toHaveBeenCalledTimes(1);
+  });
+
+  // A post-send bookkeeping throw must NOT propagate: the runner would retry
+  // the job, the un-persisted followupCount would pass the guard again, and
+  // the customer would get a DUPLICATE nudge (+ a second credit).
+  it('proactive follow-up: a post-send bookkeeping failure is swallowed (no retry → no duplicate nudge)', async () => {
+    const h = build({
+      agent: { followup: { enabled: true, afterHours: 24, maxFollowups: 3 } },
+      channel: { type: 'WHATSAPP' },
+    });
+    h.prisma.lead.findFirst.mockResolvedValue({ businessName: 'Acme', contactPerson: 'Ayşe' });
+    h.prisma.conversation.update.mockRejectedValue(new Error('db blip after send'));
+    await expect(
+      (h.engine as any).handleFollowupJob({ payload: { workspaceId: WS, conversationId: CONVO } }),
+    ).resolves.toBeUndefined();
+    // The message went out exactly once and, because it WAS sent, no refund.
+    expect(h.sender.send).toHaveBeenCalledTimes(1);
+    expect(h.credits.refund).not.toHaveBeenCalled();
+  });
+
   it('happy path: claims a daily slot atomically, sends one AI reply, meters a credit', async () => {
     const h = build();
     await run(h);

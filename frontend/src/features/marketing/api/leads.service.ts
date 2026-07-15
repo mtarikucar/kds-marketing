@@ -199,7 +199,17 @@ export function bulkEnrollLeads(
 
 /** GET /leads/export.csv — download the filtered lead list as a CSV file. */
 export async function exportLeadsCsv(params: LeadListParams): Promise<void> {
-  const res = await marketingApi.get('/leads/export.csv', { params, responseType: 'blob' });
+  // Drop empty-string / null / undefined filters BEFORE they hit the query
+  // string. axios only omits null/undefined, so a bare `assignmentStatus=` (the
+  // default "All" state) would otherwise reach the backend LeadFilterDto, whose
+  // `assignmentStatus` is @IsIn(['unassigned','assigned','mine']) with no
+  // empty-string coercion → 400, breaking Export in its most common state.
+  // Mirrors the list query's `value || undefined` normalization so callers can't
+  // reintroduce the divergence.
+  const cleanParams = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+  );
+  const res = await marketingApi.get('/leads/export.csv', { params: cleanParams, responseType: 'blob' });
   const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;

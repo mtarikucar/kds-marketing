@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ComplianceService } from './compliance.service';
 import {
   mockPrismaClient,
@@ -43,6 +44,21 @@ describe('ComplianceService', () => {
 
     await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false, { source: 'form' });
 
+    expect(prisma.lead.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'lead-1' }, data: { emailOptOut: true } }),
+    );
+  });
+
+  it('writes the EMAIL ConsentRecord and flips the flag INSIDE one $transaction (atomic, like SMS)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as any);
+    (prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr-e' });
+    (prisma.lead.update as jest.Mock).mockResolvedValue({});
+    await svc.recordConsent(WS, 'lead-1', 'MARKETING_EMAIL', false, { source: 'form' });
+    // The record + flag flip must commit together — a lost flip would leave an
+    // on-record opt-out the send path (flag-only) ignores.
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.consentRecord.create).toHaveBeenCalled();
     expect(prisma.lead.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'lead-1' }, data: { emailOptOut: true } }),
     );
@@ -475,6 +491,21 @@ describe('ComplianceService', () => {
         expect.objectContaining({
           where: { id: 'dr1', workspaceId: WS, status: 'PENDING' },
           data: expect.objectContaining({ status: 'COMPLETED' }),
+        }),
+      );
+    });
+
+    it('scrubs the PII body of prior EXPORT DataRequests so no plaintext copy survives', async () => {
+      const { prisma, svc } = makeSvc();
+      armPendingErasure(prisma);
+      await svc.fulfillErasure(WS, 'dr1', 'mgr-1');
+      // A prior access-export snapshotted the full PII into DataRequest.payload;
+      // erasure must null those bodies (keep the audit rows) or a plaintext copy of
+      // the "erased" subject survives — and listRequests would re-serve it.
+      expect(prisma.dataRequest.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { workspaceId: WS, leadId: 'lead-1', kind: 'EXPORT' },
+          data: expect.objectContaining({ payload: Prisma.JsonNull }),
         }),
       );
     });

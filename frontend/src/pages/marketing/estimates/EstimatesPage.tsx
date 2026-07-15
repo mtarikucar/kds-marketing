@@ -56,6 +56,7 @@ interface ItemRow {
   qty: string;
   price: string; // major units in the form; converted to minor on save
   taxRateId?: string; // optional per-line tax rate (mirrors the invoice form)
+  taxRatePct?: number; // persisted snapshot (read) — the money-math source for a committed estimate
 }
 
 interface FormState {
@@ -95,6 +96,7 @@ export function formFromEstimate(e: Estimate): FormState {
       qty: String(it.qty),
       price: String((it.unitPrice || 0) / 100),
       taxRateId: it.taxRateId ?? undefined,
+      taxRatePct: it.taxRatePct, // carry the persisted rate snapshot for committed-estimate display
     })),
   };
 }
@@ -112,8 +114,11 @@ export function normalizeEstimateItems(
     .filter((it) => it.description.trim())
     .map((it) => ({
       description: it.description.trim(),
-      qty: Math.max(0, Math.round(Number(it.qty) || 0)),
-      unitPrice: Math.max(0, Math.round(Number(it.price) * 100 || 0)),
+      // Clamp to the backend's @Max(1_000_000) on qty and unitPrice (kuruş) so a
+      // high-value line matches what the server accepts — otherwise the preview
+      // showed a total the save then rejected with a cryptic 400.
+      qty: Math.min(1_000_000, Math.max(0, Math.round(Number(it.qty) || 0))),
+      unitPrice: Math.min(1_000_000, Math.max(0, Math.round(Number(it.price) * 100 || 0))),
       ...(it.taxRateId ? { taxRateId: it.taxRateId } : {}),
     }));
 }
@@ -299,10 +304,30 @@ export default function EstimatesPage({ embedded }: { embedded?: boolean } = {})
   // preview can never disagree with the figure the server persists — in
   // particular, blank-description lines (dropped on save) no longer inflate it.
   const { formSubtotal, formTax, formTotal } = useMemo(() => {
+    // A committed (non-DRAFT) estimate is READ-ONLY here — show its PERSISTED
+    // per-line tax snapshot (EstimateItem.taxRatePct) so the total keeps matching
+    // the list card + the customer's view even after an admin later changes that
+    // tax rate. A DRAFT previews against the CURRENT rates and stays identical to
+    // the save payload via computeFormTotals.
+    const committed = !!form.id && form.status !== 'DRAFT';
+    if (committed) {
+      let subtotal = 0;
+      let tax = 0;
+      for (const it of form.items) {
+        if (!it.description.trim()) continue;
+        const qty = Math.min(1_000_000, Math.max(0, Math.round(Number(it.qty) || 0)));
+        const unitPrice = Math.min(1_000_000, Math.max(0, Math.round(Number(it.price) * 100 || 0)));
+        const line = qty * unitPrice;
+        const pct = it.taxRatePct ?? pctOf(it.taxRateId);
+        subtotal += line;
+        tax += Math.round((line * pct) / 100);
+      }
+      return { formSubtotal: subtotal, formTax: tax, formTotal: subtotal + tax };
+    }
     const { subtotal, tax, total } = computeFormTotals(form.items, pctOf);
     return { formSubtotal: subtotal, formTax: tax, formTotal: total };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.items, taxRates]);
+  }, [form.items, form.id, form.status, taxRates]);
 
   const isDraft = !form.id || form.status === 'DRAFT';
   const rows = estimates ?? [];
@@ -464,6 +489,7 @@ export default function EstimatesPage({ embedded }: { embedded?: boolean } = {})
                     <Input
                       type="number"
                       min={0}
+                      max={1000000}
                       disabled={!isDraft}
                       value={it.qty}
                       onChange={(e) =>
@@ -479,6 +505,7 @@ export default function EstimatesPage({ embedded }: { embedded?: boolean } = {})
                     <Input
                       type="number"
                       min={0}
+                      max={10000}
                       step="0.01"
                       disabled={!isDraft}
                       value={it.price}

@@ -1948,6 +1948,13 @@ model WorkflowRun {
   workflowVersion Int       @default(1)
   leadId          String?
   conversationId  String?
+  /// The source domain-event id (stable across outbox redelivery). Durable
+  /// idempotency for LEADLESS enrollment — workflow_runs_active_per_lead only
+  /// dedupes non-null leadIds, so a raw partial-unique index on
+  /// (workflowId, triggerEventId) WHERE triggerEventId IS NOT NULL stops a
+  /// redelivered leadless trigger from double-enrolling. Raw index (partial),
+  /// like workflow_runs_active_per_lead — not expressible in @@unique.
+  triggerEventId  String?
   status          String    @default("RUNNING") // RUNNING | WAITING | DONE | FAILED | STOPPED
   cursor          Json
   context         Json
@@ -2680,6 +2687,9 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Numbers are short random hex — uniqueness must be enforced, not assumed;
+  // create() retries on P2002 with a fresh number.
+  @@unique([workspaceId, number], map: "invoices_workspaceId_number_key")
   @@index([workspaceId, status])
   @@index([subscriptionId])
   @@index([workspaceId, leadId, orderFormId])

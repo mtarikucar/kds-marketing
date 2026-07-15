@@ -87,12 +87,15 @@ export default function SitesPage() {
     reset: resetPage,
     setValue,
     watch,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, isDirty },
   } = useForm<PageFormValues>({
     resolver: zodResolver(pageSchema),
     defaultValues: { title: '', slug: '', blocks: '[]' },
   });
   const [builderView, setBuilderView] = useState<'canvas' | 'json'>('canvas');
+  // Esc / overlay-click on the builder while edits are unsaved must confirm
+  // before discarding — one stray keypress erased a whole editing session.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   // Form-creator form (RHF)
   const {
@@ -218,7 +221,8 @@ export default function SitesPage() {
         name: f.name,
         // Guarantee a non-empty POST key per field — an empty name renders
         // <input name=""> which the browser never submits (silent data loss).
-        fields: f.fields.map((fld, i) => ({ ...fld, name: fld.name?.trim() || `field_${i + 1}` })),
+        // Strip the builder-only `_autoName` flag so it's never persisted.
+        fields: f.fields.map(({ _autoName, ...fld }, i) => ({ ...fld, name: fld.name?.trim() || `field_${i + 1}` })),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'sites', 'forms'] });
@@ -229,9 +233,14 @@ export default function SitesPage() {
   });
 
   const openFormEdit = async (id: string) => {
-    const full = await marketingApi.get('/sites/forms').then((r) => r.data as Array<{ id: string; name: string; fields?: FormField[] }>);
-    const f = full.find((x) => x.id === id);
-    if (f) setFormEdit({ id: f.id, name: f.name, fields: Array.isArray(f.fields) ? f.fields : [] });
+    try {
+      const full = await marketingApi.get('/sites/forms').then((r) => r.data as Array<{ id: string; name: string; fields?: FormField[] }>);
+      const f = full.find((x) => x.id === id);
+      if (f) setFormEdit({ id: f.id, name: f.name, fields: Array.isArray(f.fields) ? f.fields : [] });
+      else toast.error(t('sites.loadFailed', 'Could not load the page — try again'));
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? t('sites.loadFailed', 'Could not load the page — try again'));
+    }
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -245,16 +254,22 @@ export default function SitesPage() {
   };
 
   const openEdit = async (p: PageRow) => {
-    const full = await marketingApi.get(`/sites/${p.id}`).then((r) => r.data);
-    setEditId(full.id);
-    resetPage({
-      title: full.title,
-      slug: full.slug,
-      blocks: JSON.stringify(full.blocks ?? [], null, 2),
-    });
-    setAiPrompt('');
-    setBuilderView('canvas');
-    setDialogOpen(true);
+    // Await + guard: an unhandled failure made the Edit button silently do
+    // nothing (no dialog, no toast, just an unhandled rejection).
+    try {
+      const full = await marketingApi.get(`/sites/${p.id}`).then((r) => r.data);
+      setEditId(full.id);
+      resetPage({
+        title: full.title,
+        slug: full.slug,
+        blocks: JSON.stringify(full.blocks ?? [], null, 2),
+      });
+      setAiPrompt('');
+      setBuilderView('canvas');
+      setDialogOpen(true);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? t('sites.loadFailed', 'Could not load the page — try again'));
+    }
   };
 
   const publicUrl = (slug: string) =>
@@ -448,7 +463,15 @@ export default function SitesPage() {
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
-          if (!open) { setDialogOpen(false); setEditId(null); resetPage(); setAiPrompt(''); }
+          if (!open) {
+            // Confirm before discarding unsaved work (Esc / overlay click used
+            // to erase the whole session, incl. an undrafted AI prompt).
+            if (isDirty || aiPrompt.trim()) {
+              setConfirmDiscard(true);
+              return; // controlled dialog stays open until confirmed
+            }
+            setDialogOpen(false); setEditId(null); resetPage(); setAiPrompt('');
+          }
         }}
       >
         <DialogContent className={builderView === 'canvas' ? 'max-w-3xl' : 'max-w-2xl'}>
@@ -584,6 +607,20 @@ export default function SitesPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Discard unsaved builder edits confirm */}
+      <ConfirmDialog
+        open={confirmDiscard}
+        onOpenChange={(open) => { if (!open) setConfirmDiscard(false); }}
+        title={t('sites.discardTitle', 'Discard unsaved changes?')}
+        description={t('sites.discardDesc', 'Your edits to this page have not been saved and will be lost.')}
+        confirmLabel={t('sites.discardConfirm', 'Discard')}
+        tone="danger"
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          setDialogOpen(false); setEditId(null); resetPage(); setAiPrompt('');
+        }}
+      />
 
       {/* Delete page confirm */}
       <ConfirmDialog

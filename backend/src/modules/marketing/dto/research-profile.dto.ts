@@ -3,14 +3,38 @@ import {
   IsNotEmpty,
   IsOptional,
   IsIn,
-  IsObject,
   IsArray,
   ArrayMaxSize,
   MaxLength,
   MinLength,
   Matches,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { BUSINESS_TYPE_PATTERN } from './create-lead.dto';
+
+/** The targeting geo. Shape-validated (not a bare @IsObject) because the
+ *  research agent's search_places joins regions/cities as arrays — a
+ *  string sneaked in via the raw API turned every run into a
+ *  ".join is not a function" crash that still consumed the reserved credits. */
+export class ResearchGeoDto {
+  @IsOptional() @IsString() @MaxLength(80)
+  country?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  regions?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  cities?: string[];
+}
 
 export class CreateResearchProfileDto {
   @IsString() @IsNotEmpty() @MaxLength(120)
@@ -24,9 +48,10 @@ export class CreateResearchProfileDto {
   @IsOptional() @IsString() @MaxLength(1000)
   productPitch?: string;
 
-  /** { country?, regions?: string[], cities?: string[] } */
-  @IsOptional() @IsObject()
-  geo?: Record<string, unknown>;
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResearchGeoDto)
+  geo?: ResearchGeoDto;
 
   @IsOptional() @IsIn(['en', 'tr', 'ru', 'uz', 'ar'])
   language?: string;
@@ -55,8 +80,10 @@ export class UpdateResearchProfileDto {
   @IsOptional() @IsString() @MaxLength(1000)
   productPitch?: string;
 
-  @IsOptional() @IsObject()
-  geo?: Record<string, unknown>;
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResearchGeoDto)
+  geo?: ResearchGeoDto;
 
   @IsOptional() @IsIn(['en', 'tr', 'ru', 'uz', 'ar'])
   language?: string;

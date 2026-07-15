@@ -99,9 +99,14 @@ export class CoursesService {
     const course = await this.prisma.course.findFirst({
       where: { id, workspaceId },
       include: {
+        // Stable id tiebreaker: legacy rows may carry tied positions (the old
+        // count()-based append could collide after a delete), and Postgres
+        // returns ties in unspecified order — the editor and the SEQUENTIAL
+        // gating query must resolve the SAME order or the "next" lesson the UI
+        // shows unlocked can 403.
         modules: {
-          orderBy: { position: 'asc' },
-          include: { lessons: { orderBy: { position: 'asc' } } },
+          orderBy: [{ position: 'asc' }, { id: 'asc' }],
+          include: { lessons: { orderBy: [{ position: 'asc' }, { id: 'asc' }] } },
         },
       },
     });
@@ -196,14 +201,21 @@ export class CoursesService {
 
   async addModule(workspaceId: string, courseId: string, title: string) {
     await this.assertCourse(workspaceId, courseId);
-    const position = await this.prisma.courseModule.count({ where: { courseId } });
+    // max+1, NOT count(): after a delete the surviving positions exceed the
+    // count, so a count()-append collides with an existing position and the
+    // display/gating order of the tied rows becomes nondeterministic.
+    const agg = await this.prisma.courseModule.aggregate({
+      where: { courseId },
+      _max: { position: true },
+    });
+    const position = (agg._max.position ?? -1) + 1;
     return this.prisma.courseModule.create({ data: { courseId, title, position } });
   }
 
   private async assertModule(workspaceId: string, moduleId: string) {
     const m = await this.prisma.courseModule.findFirst({
       where: { id: moduleId, course: { workspaceId } },
-      select: { id: true, courseId: true },
+      select: { id: true, courseId: true, position: true },
     });
     if (!m) throw new NotFoundException('Module not found');
     return m;
@@ -228,6 +240,12 @@ export class CoursesService {
     await this.prisma.$transaction([
       this.prisma.lessonProgress.deleteMany({ where: { lessonId: { in: lessonIds } } }),
       this.prisma.courseModule.delete({ where: { id: moduleId } }),
+      // Close the position gap so the next max+1 append lands after the last
+      // module and never ties with a survivor.
+      this.prisma.courseModule.updateMany({
+        where: { courseId: m.courseId, position: { gt: m.position } },
+        data: { position: { decrement: 1 } },
+      }),
     ]);
     // The module's lessons are gone — re-derive every enrollment's stored progress
     // (and graduate anyone now at 100% over the remaining lessons).
@@ -249,7 +267,15 @@ export class CoursesService {
 
   async addLesson(workspaceId: string, moduleId: string, dto: LessonInput) {
     const m = await this.assertModule(workspaceId, moduleId);
-    const position = await this.prisma.lesson.count({ where: { moduleId } });
+    // max+1, NOT count(): a delete leaves surviving positions above the count,
+    // so a count()-append collides with an existing lesson — and with no lesson
+    // reorder endpoint the tie is unhealable, flipping the editor order vs the
+    // SEQUENTIAL gate order (403 on the lesson the UI shows unlocked).
+    const agg = await this.prisma.lesson.aggregate({
+      where: { moduleId },
+      _max: { position: true },
+    });
+    const position = (agg._max.position ?? -1) + 1;
     const lesson = await this.prisma.lesson.create({
       data: {
         moduleId,
@@ -278,7 +304,7 @@ export class CoursesService {
   private async assertLesson(workspaceId: string, lessonId: string) {
     const l = await this.prisma.lesson.findFirst({
       where: { id: lessonId, module: { course: { workspaceId } } },
-      select: { id: true, module: { select: { courseId: true } } },
+      select: { id: true, moduleId: true, position: true, module: { select: { courseId: true } } },
     });
     if (!l) throw new NotFoundException('Lesson not found');
     return l;
@@ -313,7 +339,11 @@ export class CoursesService {
       const pct = Math.round((done / total) * 100);
       // Only an ACTIVE → COMPLETED crossing graduates + issues. A COMPLETED
       // enrollment keeps its status and certificate even if pct is recomputed.
-      const graduates = pct >= 100 && e.status !== 'COMPLETED';
+      // Graduate on RAW counts, not the rounded display pct: Math.round pushes
+      // 99.5% → 100, so a >=200-lesson course would graduate + certify an
+      // enrollment sitting at done === total-1. `done` is filtered to live
+      // lessons so it can't exceed `total`; require the full set.
+      const graduates = done >= total && e.status !== 'COMPLETED';
       const updated = await this.prisma.enrollment.update({
         where: { id: e.id },
         data: {
@@ -359,6 +389,11 @@ export class CoursesService {
     await this.prisma.$transaction([
       this.prisma.lessonProgress.deleteMany({ where: { lessonId } }),
       this.prisma.lesson.delete({ where: { id: lessonId } }),
+      // Close the position gap so the next max+1 append never ties a survivor.
+      this.prisma.lesson.updateMany({
+        where: { moduleId: lesson.moduleId, position: { gt: lesson.position } },
+        data: { position: { decrement: 1 } },
+      }),
     ]);
     // The course now has one fewer lesson — re-derive every enrollment's stored
     // progress so it isn't stale (and graduate anyone now at 100%).

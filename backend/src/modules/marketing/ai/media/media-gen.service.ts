@@ -289,6 +289,12 @@ export class MediaGenService implements OnModuleInit {
       });
       if (claim.count === 1) {
         await this.reconcile(asset.workspaceId, reserved, actual);
+        // The credit meter is trued up to the provider's ACTUAL duration above,
+        // so the real-cash wallet pre-debit (charged on the REQUESTED duration)
+        // must be too — else a 10s request that returns a 4s clip refunds the
+        // credit delta but keeps the wallet overcharged for capacity never used.
+        const actualUsd = estimateMediaUsd(asset.model, primary.durationSec ?? asset.durationSec ?? undefined);
+        await this.reconcileEngineWallet(asset.workspaceId, assetId, asset.params, actualUsd);
       } else {
         // Lost the finalize race (webhook + poll both completed the same asset):
         // the winner already stored its own object, so delete ours to avoid an
@@ -372,6 +378,44 @@ export class MediaGenService implements OnModuleInit {
       // Best-effort: a refund failure must not mask the terminalization; the
       // ledger ref stays claimable by a later retry of the same terminal path.
       this.logger.warn(`engine wallet refund failed for asset ${assetId}: ${String((e as Error)?.message ?? e)}`);
+    }
+  }
+
+  /**
+   * True up an engine generation's real-cash wallet pre-debit to the ACTUAL
+   * output (D4). The debit was taken on the REQUESTED duration; when the
+   * provider returns a shorter clip, credit the unused USD back. Mirrors
+   * refundEngineWalletDebit's ledger lookup + ref-idempotency, but for the
+   * partial estimate-vs-actual delta on a SUCCESS (that method only fires on a
+   * terminal failure). Only credits a positive diff (actual can never exceed the
+   * requested, capped duration), and is a no-op for non-engine / undebited rows.
+   */
+  private async reconcileEngineWallet(
+    workspaceId: string,
+    assetId: string,
+    params: unknown,
+    actualUsd: number,
+  ): Promise<void> {
+    if (!isEngineAsset(params) || !(actualUsd >= 0)) return;
+    try {
+      const entry = await this.prisma.growthWalletLedgerEntry.findUnique({
+        where: { ref: `mediagen:${assetId}` },
+        select: { workspaceId: true, delta: true },
+      });
+      if (!entry || entry.workspaceId !== workspaceId) return;
+      const reservedUsd = new Prisma.Decimal(entry.delta).negated();
+      const refundUsd = reservedUsd.minus(new Prisma.Decimal(actualUsd));
+      if (refundUsd.lte(0)) return;
+      await this.wallet.credit(workspaceId, {
+        amount: refundUsd,
+        kind: 'REFUND',
+        ref: `mediagen-reconcile:${assetId}`, // ref-idempotent: never double-credits
+        note: 'engine media generation partial refund (shorter than requested)',
+      });
+    } catch (e) {
+      // Best-effort, like refundEngineWalletDebit — a reconcile hiccup must not
+      // fail the already-committed finalize; the ref stays claimable on retry.
+      this.logger.warn(`engine wallet reconcile failed for asset ${assetId}: ${String((e as Error)?.message ?? e)}`);
     }
   }
 
@@ -523,8 +567,15 @@ export class MediaGenService implements OnModuleInit {
         await this.refundEngineWalletDebit(workspaceId, id, (a as { params?: unknown }).params);
       }
     }
-    await this.r2.deleteKeys([a.r2Key, a.thumbnailR2Key].filter(Boolean) as string[]);
-    await this.prisma.generatedAsset.delete({ where: { id } });
+    // Delete the row FIRST and read the R2 keys off the DELETED record, not the
+    // pre-claim snapshot `a`: if a concurrent finalize stored an object and set
+    // r2Key AFTER getAsset read it (a.r2Key still null), deleting the stale keys
+    // would miss the freshly-stored blob and orphan it forever (the sweep only
+    // knows surviving rows). delete() returns the row's CURRENT keys atomically.
+    const deleted = await this.prisma.generatedAsset.delete({ where: { id } });
+    await this.r2
+      .deleteKeys([deleted.r2Key, deleted.thumbnailR2Key].filter(Boolean) as string[])
+      .catch(() => undefined);
     return { deleted: true };
   }
 

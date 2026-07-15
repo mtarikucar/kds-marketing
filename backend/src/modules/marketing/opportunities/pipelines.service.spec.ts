@@ -125,6 +125,26 @@ describe('PipelinesService', () => {
     });
   });
 
+  describe('addStage — position from max+1 (no post-delete collision)', () => {
+    it('appends AFTER the last surviving stage, not at count() (which collides after a delete)', async () => {
+      prisma.pipeline.findFirst.mockResolvedValue({ id: 'p1', stages: [] } as any);
+      // Survivors at 0,1,3,4,5 (a middle stage was deleted) → count()=5 would
+      // COLLIDE with the stage already at 5; max+1 must land at 6.
+      (prisma.pipelineStage.aggregate as any).mockResolvedValue({ _max: { position: 5 } });
+      (prisma.pipelineStage.create as any).mockImplementation((a: any) => Promise.resolve({ id: 'new', ...a.data }));
+      const out: any = await svc.addStage(WS, 'p1', { name: 'Demo' } as any);
+      expect(out.position).toBe(6);
+    });
+
+    it('appends the first stage at position 0 on an empty pipeline', async () => {
+      prisma.pipeline.findFirst.mockResolvedValue({ id: 'p1', stages: [] } as any);
+      (prisma.pipelineStage.aggregate as any).mockResolvedValue({ _max: { position: null } });
+      (prisma.pipelineStage.create as any).mockImplementation((a: any) => Promise.resolve({ id: 'new', ...a.data }));
+      const out: any = await svc.addStage(WS, 'p1', { name: 'New' } as any);
+      expect(out.position).toBe(0);
+    });
+  });
+
   describe('removeStage', () => {
     it('refuses while the stage still holds opportunities', async () => {
       prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's1' } as any);
@@ -137,6 +157,23 @@ describe('PipelinesService', () => {
       prisma.opportunity.count.mockResolvedValue(0 as any);
       prisma.pipelineStage.count.mockResolvedValue(1 as any);
       await expect(svc.removeStage(WS, 'p1', 's1')).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('deletes AND closes the position gap so survivors stay dense 0..n-1', async () => {
+      prisma.pipelineStage.findFirst.mockResolvedValue({ id: 's2', position: 2 } as any);
+      prisma.opportunity.count.mockResolvedValue(0 as any);
+      prisma.pipelineStage.count.mockResolvedValue(4 as any);
+      (prisma.$transaction as any).mockResolvedValue([]);
+      (prisma.pipelineStage.delete as any).mockResolvedValue({ id: 's2' });
+      (prisma.pipelineStage.updateMany as any).mockResolvedValue({ count: 3 });
+
+      await svc.removeStage(WS, 'p1', 's2');
+
+      // Positions ABOVE the deleted stage shift down by one, closing the gap.
+      expect(prisma.pipelineStage.updateMany).toHaveBeenCalledWith({
+        where: { workspaceId: WS, pipelineId: 'p1', position: { gt: 2 } },
+        data: { position: { decrement: 1 } },
+      });
     });
   });
 

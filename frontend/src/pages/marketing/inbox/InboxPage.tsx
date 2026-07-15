@@ -202,17 +202,21 @@ export default function InboxPage() {
     setDraft('');
   }, [selectedId]);
 
-  // Mark read on open — and refresh the list so the unread badge on the thread
-  // you just opened clears immediately, instead of lingering until the next 30s
-  // poll / SSE event (the POST zeroes unreadCount server-side, but nothing was
-  // re-reading the list).
+  // Mark read on open AND whenever a new inbound bumps the OPEN thread's unread
+  // count back up: an SSE message frame refetches the list, so a message landing
+  // while the agent is still reading would otherwise re-surface (and keep
+  // climbing) a badge on the very thread in focus. Keyed on the selected
+  // conversation's unreadCount so it re-fires on a new message but only POSTs
+  // when there is actually something unread — no redundant POST on every list
+  // refetch, and no loop (the POST zeroes the count, settling the effect).
+  const selectedUnread = conversations?.find((c) => c.id === selectedId)?.unreadCount ?? 0;
   useEffect(() => {
-    if (selectedId)
+    if (selectedId && selectedUnread > 0)
       marketingApi
         .post(`/conversations/${selectedId}/read`)
         .then(() => queryClient.invalidateQueries({ queryKey: ['marketing', 'conversations'] }))
         .catch(() => undefined);
-  }, [selectedId, queryClient]);
+  }, [selectedId, selectedUnread, queryClient]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
@@ -225,10 +229,16 @@ export default function InboxPage() {
   };
 
   const reply = useMutation({
-    mutationFn: (text: string) =>
-      marketingApi.post(`/conversations/${selectedId}/reply`, { text }),
-    onSuccess: () => {
-      setDraft('');
+    mutationFn: async (text: string) => {
+      const convoId = selectedId;
+      await marketingApi.post(`/conversations/${convoId}/reply`, { text });
+      return convoId;
+    },
+    onSuccess: (convoId) => {
+      // Only clear the composer if the agent is STILL on the thread we sent to —
+      // a slow send that resolves after they switched threads must not wipe the
+      // new thread's in-progress draft.
+      if (convoId === selectedId) setDraft('');
       invalidate();
     },
     onError: (e: any) =>

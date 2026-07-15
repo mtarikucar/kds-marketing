@@ -17,7 +17,7 @@ import {
 import { CampaignDialog } from './CampaignDialog';
 import { LaunchAdDialog } from './LaunchAdDialog';
 import type { CreateCampaignFormValues } from './adManagementSchemas';
-import { formatMoney, asWorkspaceCurrency } from '../../../lib/money';
+import { formatMoney } from '../../../lib/money';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -42,7 +42,9 @@ interface AdManagementSectionProps {
 export function AdManagementSection({ account }: AdManagementSectionProps) {
   const { t } = useTranslation('marketing');
   const queryClient = useQueryClient();
-  const currency = asWorkspaceCurrency(account.currency);
+  // Use the ad account's REAL provider currency (any ISO code, e.g. CAD/JPY) —
+  // not asWorkspaceCurrency, which coerced anything outside TRY/USD/EUR/GBP to ₺.
+  const currency = account.currency || 'USD';
   const tokenExpired = account.status === 'TOKEN_EXPIRED';
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -123,7 +125,9 @@ export function AdManagementSection({ account }: AdManagementSectionProps) {
 
   const saveBudget = (entityId: string) => {
     const value = Number(budgetDraft);
-    if (!Number.isFinite(value) || value <= 0) {
+    // Mirror the backend SetBudgetDto @Min(0.01) so a sub-minimum amount gets an
+    // inline message instead of an opaque server 400.
+    if (!Number.isFinite(value) || value < 0.01) {
       toast.error(t('ads.manage.toast.budgetInvalid', { defaultValue: 'Enter a valid budget amount' }));
       return;
     }

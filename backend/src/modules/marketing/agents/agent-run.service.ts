@@ -1,6 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+
+/** A RUNNING row older than this was stranded by a crash/deploy — no live agent
+ *  run takes an hour; the longest (research) is bounded well under it. */
+const STALE_RUN_MS = 60 * 60 * 1000;
 
 export interface StartRunInput {
   agent: string;
@@ -35,7 +40,26 @@ export interface ToolCallInput {
  */
 @Injectable()
 export class AgentRunService {
+  private readonly logger = new Logger(AgentRunService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Crash recovery: a deploy/restart mid-run leaves rows permanently RUNNING
+   *  with no finishedAt in the user-visible audit feed (track()'s finally only
+   *  runs in a live process). Sweep them FAILED, mirroring the scheduled-jobs
+   *  reaper. */
+  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'agent-run-reaper' })
+  async reapStaleRuns(): Promise<void> {
+    try {
+      const res = await this.prisma.agentRun.updateMany({
+        where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - STALE_RUN_MS) } },
+        data: { status: 'FAILED', error: 'stranded by a process restart', finishedAt: new Date() },
+      });
+      if (res.count > 0) this.logger.warn(`agent-run reaper: failed ${res.count} stale RUNNING run(s)`);
+    } catch (e) {
+      this.logger.error(`agent-run reaper failed: ${(e as Error)?.message ?? e}`);
+    }
+  }
 
   async start(workspaceId: string, input: StartRunInput): Promise<string> {
     const run = await this.prisma.agentRun.create({

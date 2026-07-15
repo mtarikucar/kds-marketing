@@ -102,29 +102,59 @@ describe('CoursesService', () => {
     expect(certificates.backfillForCourse).not.toHaveBeenCalled();
   });
 
-  it('appends a module at the next position', async () => {
+  it('appends a module at the next position (max+1)', async () => {
     const { prisma, svc } = makeSvc();
     prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
-    (prisma.courseModule.count as jest.Mock).mockResolvedValue(2);
+    (prisma.courseModule.aggregate as jest.Mock).mockResolvedValue({ _max: { position: 1 } });
     (prisma.courseModule.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'm1', ...a.data }));
     const out: any = await svc.addModule(WS, 'c1', 'Module 3');
     expect(out.position).toBe(2);
   });
 
-  it('appends a lesson scoped through its module', async () => {
+  // The old count()-append collided after a delete: [A(0),B(1),C(2)] minus A
+  // leaves count=2 while C already sits at position 2. max+1 must land at 3.
+  it('appends a module AFTER the last survivor of a delete (no position collision)', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1' } as any);
-    (prisma.lesson.count as jest.Mock).mockResolvedValue(1);
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    (prisma.courseModule.aggregate as jest.Mock).mockResolvedValue({ _max: { position: 2 } }); // survivors at 1,2
+    (prisma.courseModule.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'm4', ...a.data }));
+    const out: any = await svc.addModule(WS, 'c1', 'Module 4');
+    expect(out.position).toBe(3);
+  });
+
+  it('appends the FIRST module at position 0 (empty course)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.course.findFirst.mockResolvedValue({ id: 'c1' } as any);
+    (prisma.courseModule.aggregate as jest.Mock).mockResolvedValue({ _max: { position: null } });
+    (prisma.courseModule.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'm1', ...a.data }));
+    const out: any = await svc.addModule(WS, 'c1', 'Module 1');
+    expect(out.position).toBe(0);
+  });
+
+  it('appends a lesson scoped through its module (max+1)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1', position: 0 } as any);
+    (prisma.lesson.aggregate as jest.Mock).mockResolvedValue({ _max: { position: 0 } });
     (prisma.lesson.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'l1', ...a.data }));
     (prisma.lesson.findMany as jest.Mock).mockResolvedValue([]); // recompute no-ops (empty)
     const out: any = await svc.addLesson(WS, 'm1', { title: 'Lesson 2', type: 'VIDEO' });
     expect(out).toMatchObject({ moduleId: 'm1', position: 1, type: 'VIDEO' });
   });
 
+  it('appends a lesson AFTER the last survivor of a delete (no tie → SEQUENTIAL order stays deterministic)', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1', position: 0 } as any);
+    (prisma.lesson.aggregate as jest.Mock).mockResolvedValue({ _max: { position: 2 } }); // survivors at 1,2
+    (prisma.lesson.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'l4', ...a.data }));
+    (prisma.lesson.findMany as jest.Mock).mockResolvedValue([]);
+    const out: any = await svc.addLesson(WS, 'm1', { title: 'Lesson D', type: 'VIDEO' });
+    expect(out.position).toBe(3); // NOT count()=2, which would tie the existing lesson at 2
+  });
+
   it('addLesson recomputes progress (grown denominator → ACTIVE progress drops, never a wrong graduation)', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1' } as any);
-    (prisma.lesson.count as jest.Mock).mockResolvedValue(2);
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1', position: 0 } as any);
+    (prisma.lesson.aggregate as jest.Mock).mockResolvedValue({ _max: { position: 1 } });
     (prisma.lesson.create as jest.Mock).mockImplementation((a: any) => Promise.resolve({ id: 'l3', ...a.data }));
     // After adding, 3 live lessons; an ACTIVE enrollment done 2 of 3.
     (prisma.lesson.findMany as jest.Mock).mockResolvedValue([{ id: 'l1' }, { id: 'l2' }, { id: 'l3' }]);
@@ -152,7 +182,7 @@ describe('CoursesService', () => {
 
   it('removeLesson clears the lesson progress so it cannot orphan (done/total inflation)', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1', module: { courseId: 'c1' } } as any); // assertLesson
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1', moduleId: 'm1', position: 0, module: { courseId: 'c1' } } as any); // assertLesson
     (prisma.$transaction as any).mockResolvedValue([]);
     (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
     (prisma.lesson.delete as jest.Mock).mockResolvedValue({ id: 'l1' });
@@ -161,6 +191,12 @@ describe('CoursesService', () => {
     // LessonProgress has no FK to Lesson, so the progress rows must be deleted
     // explicitly — otherwise they orphan and inflate done/total on enrollments.
     expect(prisma.lessonProgress.deleteMany).toHaveBeenCalledWith({ where: { lessonId: 'l1' } });
+    // The gap is closed in the same transaction so the next max+1 append can
+    // never tie a surviving lesson's position.
+    expect(prisma.lesson.updateMany).toHaveBeenCalledWith({
+      where: { moduleId: 'm1', position: { gt: 0 } },
+      data: { position: { decrement: 1 } },
+    });
   });
 
   // Removing an INCOMPLETE lesson shrinks the course's lesson set. A learner who
@@ -170,7 +206,7 @@ describe('CoursesService', () => {
   // fire to trigger the crossing).
   it('removeLesson graduates an enrollment now at 100% over the remaining lessons', async () => {
     const { prisma, certificates, svc } = makeSvc();
-    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1', module: { courseId: 'c1' } } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1', moduleId: 'm1', position: 0, module: { courseId: 'c1' } } as any);
     (prisma.$transaction as any).mockResolvedValue([]);
     (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
     (prisma.lesson.delete as jest.Mock).mockResolvedValue({ id: 'l1' });
@@ -197,11 +233,40 @@ describe('CoursesService', () => {
     );
   });
 
+  // Graduation crosses on RAW counts, not the rounded display pct: on a course
+  // recompute over >=200 live lessons, Math.round(199/200*100) === 100, which the
+  // old `pct >= 100` test would have graduated + certified one lesson early.
+  it('does NOT graduate an enrollment at total-1 of a 200-lesson course (raw-count crossing)', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'lx', moduleId: 'm1', position: 0, module: { courseId: 'c1' } } as any);
+    (prisma.$transaction as any).mockResolvedValue([]);
+    (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+    (prisma.lesson.delete as jest.Mock).mockResolvedValue({ id: 'lx' });
+    (prisma.lesson.findMany as jest.Mock).mockResolvedValue(
+      Array.from({ length: 200 }, (_, i) => ({ id: 'l' + i })),
+    );
+    (prisma.enrollment.findMany as jest.Mock).mockResolvedValue([
+      { id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', status: 'ACTIVE' },
+    ]);
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(199); // round(99.5)=100, but 199<200
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) =>
+      Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }),
+    );
+
+    await svc.removeLesson(WS, 'lx');
+
+    // pct still displays 100, but the enrollment is NOT graduated + NOT certified.
+    const updateArg = (prisma.enrollment.update as jest.Mock).mock.calls[0][0];
+    expect(updateArg.data.progressPct).toBe(100);
+    expect(updateArg.data.status).toBeUndefined();
+    expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
+  });
+
   // Recompute must keep a still-incomplete learner ACTIVE (only refresh the pct)
   // and must NEVER re-issue / un-graduate an already-COMPLETED enrollment.
   it('removeLesson refreshes pct without graduating a still-incomplete learner or re-issuing a graduate', async () => {
     const { prisma, certificates, svc } = makeSvc();
-    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1', module: { courseId: 'c1' } } as any);
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'l1', moduleId: 'm1', position: 0, module: { courseId: 'c1' } } as any);
     (prisma.$transaction as any).mockResolvedValue([]);
     (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
     (prisma.lesson.delete as jest.Mock).mockResolvedValue({ id: 'l1' });
@@ -233,7 +298,7 @@ describe('CoursesService', () => {
 
   it('removeModule clears progress for all of its lessons before deleting', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1' } as any); // assertModule
+    prisma.courseModule.findFirst.mockResolvedValue({ id: 'm1', courseId: 'c1', position: 0 } as any); // assertModule
     (prisma.lesson.findMany as jest.Mock).mockResolvedValue([{ id: 'l1' }, { id: 'l2' }]);
     (prisma.$transaction as any).mockResolvedValue([]);
     (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });

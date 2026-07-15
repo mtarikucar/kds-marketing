@@ -102,6 +102,12 @@ class UpdatePostDto {
   @IsOptional() @IsObject()
   formats?: Record<string, string>;
 
+  /** Editable publish targets for a DRAFT — replaces the post's PENDING targets.
+   *  Without this a draft's target edits were silently dropped unless the user
+   *  also scheduled (only schedule re-attached targets). */
+  @IsOptional() @IsArray() @IsString({ each: true }) @ArrayMaxSize(20)
+  targetAccountIds?: string[];
+
   /** Per-network publish options (e.g. { linkedin: { visibility } }, { tiktok: {...} }). */
   @IsOptional() @IsObject()
   options?: Record<string, unknown>;

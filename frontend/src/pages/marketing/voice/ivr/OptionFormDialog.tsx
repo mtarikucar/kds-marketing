@@ -62,10 +62,6 @@ export function OptionFormDialog({
     defaultValues: EMPTY,
   });
 
-  useEffect(() => {
-    if (open) form.reset(EMPTY);
-  }, [open, form]);
-
   const action = form.watch('action');
 
   // Digits already mapped on this menu can't be reused (backend rejects dupes).
@@ -73,6 +69,17 @@ export function OptionFormDialog({
     () => new Set((menu?.options ?? []).map((o) => o.digit)),
     [menu],
   );
+
+  // On open, default the digit to the first FREE keypad key. A hard-coded '1'
+  // pre-selected an already-mapped (and disabled) digit on a menu whose first
+  // option is '1', so adding a 2nd option submitted '1' and 400d on the backend
+  // dup-digit guard — on the most common add-another-option flow.
+  useEffect(() => {
+    if (open) {
+      const firstFree = IVR_DIGITS.find((d) => !usedDigits.has(d)) ?? IVR_DIGITS[0];
+      form.reset({ ...EMPTY, digit: firstFree });
+    }
+  }, [open, form, usedDigits]);
 
   // Candidate submenu targets: every OTHER menu (a SUBMENU can't target itself).
   const targetCandidates = useMemo(

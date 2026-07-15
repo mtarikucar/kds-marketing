@@ -78,15 +78,23 @@ export function CampaignDetailDialog({ campaignId, onClose }: CampaignDetailDial
   const navigate = useNavigate();
   const open = !!campaignId;
 
+  // While a send is in flight the counts + recipient rows change server-side;
+  // poll so an open detail dialog tracks live progress instead of freezing on the
+  // snapshot from when it opened (the list polls, but never invalidated these).
+  const LIVE_STATUSES = ['SENDING', 'SCHEDULED'];
   const campaignQuery = useQuery<CampaignFull>({
     queryKey: ['marketing', 'campaigns', campaignId],
     queryFn: () => marketingApi.get(`/campaigns/${campaignId}`).then((r) => r.data),
     enabled: open,
+    refetchInterval: (query) =>
+      query.state.data && LIVE_STATUSES.includes(query.state.data.status) ? 5000 : false,
   });
   const recipientsQuery = useQuery<RecipientRow[]>({
     queryKey: ['marketing', 'campaigns', campaignId, 'recipients'],
     queryFn: () => marketingApi.get(`/campaigns/${campaignId}/recipients`).then((r) => r.data),
     enabled: open,
+    refetchInterval: () =>
+      campaignQuery.data && LIVE_STATUSES.includes(campaignQuery.data.status) ? 5000 : false,
   });
 
   // Provision a Social Campaign from this blast via the dedicated prefill

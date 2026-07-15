@@ -83,12 +83,25 @@ export class PageFunnelsService {
   }
 
   async update(workspaceId: string, id: string, dto: UpdateFunnelInput) {
-    await this.get(workspaceId, id); // scoped existence check
+    const existing = await this.get(workspaceId, id); // scoped existence check
     const data: Prisma.FunnelUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.slug !== undefined) data.slug = this.slug(dto.slug, dto.slug);
     if (dto.steps !== undefined) data.steps = this.normSteps(dto.steps);
     if (dto.published !== undefined) data.published = dto.published;
+    // A published funnel with ZERO steps serves nothing — the public URL the
+    // user just copied is a guaranteed 404. Judge the EFFECTIVE post-update
+    // state (incoming steps when provided, else the stored ones).
+    const effectivePublished = dto.published ?? existing.published;
+    const effectiveSteps =
+      dto.steps !== undefined
+        ? (data.steps as unknown[])
+        : Array.isArray(existing.steps)
+          ? (existing.steps as unknown[])
+          : [];
+    if (effectivePublished && effectiveSteps.length === 0) {
+      throw new BadRequestException('A published funnel needs at least one step');
+    }
     try {
       const res = await this.prisma.funnel.updateMany({ where: { id, workspaceId }, data });
       if (res.count === 0) throw new NotFoundException('Funnel not found');
