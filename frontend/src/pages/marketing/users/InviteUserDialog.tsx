@@ -1,11 +1,18 @@
 /**
- * InviteUserDialog — create a new marketing team member.
- * Uses RHF + Zod (marketingUserSchema) for immediate validation,
- * then fires the createMutation from the parent.
+ * InviteUserDialog — invite a new team member into this workspace.
+ *
+ * Multi-workspace membership Phase 2 Task 15 — "Add user" is now "Invite
+ * member": the backend's POST /users/invite (and POST /users, which now
+ * delegates to the same invite path) creates an INVITED membership and lets
+ * the invitee accept via a token link; any password/name submitted here
+ * would be silently IGNORED server-side, so this form only collects what
+ * the invite DTO actually uses — email + role. The invitee sets their own
+ * name/password when they accept (see pages/marketing/AcceptInvitePage.tsx).
  */
 import { useEffect } from 'react';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { UserPlus } from 'lucide-react';
 import {
   Dialog,
@@ -18,7 +25,6 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
-import { PhoneInput } from '@/components/ui/PhoneInput';
 import {
   Select,
   SelectTrigger,
@@ -26,26 +32,28 @@ import {
   SelectContent,
   SelectItem,
 } from '@/components/ui/Select';
-import {
-  marketingUserSchema,
-  type MarketingUserFormValues,
-} from '@/features/marketing/schemas';
+
+const inviteMemberSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .min(1, 'required')
+    .refine((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), { message: 'emailInvalid' }),
+  role: z.enum(['MANAGER', 'REP']),
+});
+
+export type InviteMemberFormValues = z.infer<typeof inviteMemberSchema>;
 
 interface InviteUserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: MarketingUserFormValues) => void;
+  onSubmit: (values: InviteMemberFormValues) => void;
   isPending: boolean;
 }
 
-// Schema messages mirror original SCHEMA_MESSAGES map
 const MSG: Record<string, string> = {
-  required: 'Please fill in all required fields.',
+  required: 'Please enter an email address.',
   emailInvalid: 'Please enter a valid email address.',
-  passwordMin: 'Password must be at least 8 characters.',
-  passwordWeak: 'Password must include upper, lower case letters and a number.',
-  passwordMismatch: 'Passwords do not match.',
-  phoneInvalid: 'Please enter a valid phone number.',
 };
 const msg = (key: string) => MSG[key] ?? key;
 
@@ -57,22 +65,16 @@ export function InviteUserDialog({
 }: InviteUserDialogProps) {
   const {
     register,
-    control,
     handleSubmit,
     setValue,
     watch,
     reset,
     formState: { errors },
-  } = useForm<MarketingUserFormValues>({
-    resolver: zodResolver(marketingUserSchema),
+  } = useForm<InviteMemberFormValues>({
+    resolver: zodResolver(inviteMemberSchema),
     defaultValues: {
-      firstName: '',
-      lastName: '',
       email: '',
-      phone: '',
       role: 'REP',
-      password: '',
-      passwordConfirm: '',
     },
   });
 
@@ -85,48 +87,19 @@ export function InviteUserDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <UserPlus className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
-            Add Team Member
+            Invite Team Member
           </DialogTitle>
         </DialogHeader>
 
-        <form
-          id="invite-user-form"
-          onSubmit={handleSubmit(onSubmit)}
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2"
-        >
-          <Field label="First Name" required error={errors.firstName ? msg(errors.firstName.message ?? '') : undefined}>
-            {({ id, describedBy, invalid }) => (
-              <Input
-                id={id}
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                placeholder="Jane"
-                {...register('firstName')}
-              />
-            )}
-          </Field>
-
-          <Field label="Last Name" required error={errors.lastName ? msg(errors.lastName.message ?? '') : undefined}>
-            {({ id, describedBy, invalid }) => (
-              <Input
-                id={id}
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                placeholder="Doe"
-                {...register('lastName')}
-              />
-            )}
-          </Field>
-
+        <form id="invite-user-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Field
             label="Email"
             required
             error={errors.email ? msg(errors.email.message ?? '') : undefined}
-            className="sm:col-span-2"
           >
             {({ id, describedBy, invalid }) => (
               <Input
@@ -136,25 +109,6 @@ export function InviteUserDialog({
                 aria-invalid={invalid}
                 placeholder="jane@example.com"
                 {...register('email')}
-              />
-            )}
-          </Field>
-
-          <Field label="Phone" error={errors.phone ? msg(errors.phone.message ?? '') : undefined}>
-            {({ id, describedBy, invalid }) => (
-              <Controller
-                name="phone"
-                control={control}
-                render={({ field }) => (
-                  <PhoneInput
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid}
-                    value={field.value ?? ''}
-                    onChange={field.onChange}
-                    onBlur={field.onBlur}
-                  />
-                )}
               />
             )}
           </Field>
@@ -173,39 +127,9 @@ export function InviteUserDialog({
             )}
           </Field>
 
-          <Field
-            label="Password"
-            required
-            error={errors.password ? msg(errors.password.message ?? '') : undefined}
-          >
-            {({ id, describedBy, invalid }) => (
-              <Input
-                id={id}
-                type="password"
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                placeholder="Min 8 chars, upper+lower+digit"
-                {...register('password')}
-              />
-            )}
-          </Field>
-
-          <Field
-            label="Confirm Password"
-            required
-            error={errors.passwordConfirm ? msg(errors.passwordConfirm.message ?? '') : undefined}
-          >
-            {({ id, describedBy, invalid }) => (
-              <Input
-                id={id}
-                type="password"
-                aria-describedby={describedBy}
-                aria-invalid={invalid}
-                placeholder="Repeat password"
-                {...register('passwordConfirm')}
-              />
-            )}
-          </Field>
+          <p className="text-caption text-muted-foreground">
+            They'll get a link to join and set their own password — no password to set here.
+          </p>
         </form>
 
         <DialogFooter>
@@ -215,7 +139,7 @@ export function InviteUserDialog({
             </Button>
           </DialogClose>
           <Button type="submit" form="invite-user-form" loading={isPending}>
-            Create
+            Send Invite
           </Button>
         </DialogFooter>
       </DialogContent>

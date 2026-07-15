@@ -3,20 +3,28 @@
  *
  * Preserved verbatim:
  *   - useQuery(['marketing','users']) + endpoint /users
- *   - createMutation (POST /users) + invalidation
  *   - deleteMutation (DELETE /users/:id) + invalidation
  *   - editMutation (PATCH /users/:id) + invalidation
  *   - reactivateMutation (PATCH /users/:id { status:'ACTIVE' }) + invalidation
  *   - resetPasswordMutation (PATCH /users/:id { password }) + invalidation
  *   - manager-only gating (route handled by MarketingProtectedRoute in App.tsx)
- *   - marketingUserSchema + passwordSchema from features/marketing/schemas
+ *
+ * Multi-workspace membership Phase 2 Task 15 — "Add user" reconciled to
+ * "Invite member": inviteMutation now calls membershipApi.inviteMember
+ * (POST /users/invite) instead of the old POST /users create (which the
+ * backend now delegates to the same invite path anyway — any password/name
+ * it received was already being silently ignored). The users list already
+ * returns pending members (`status: 'INVITED'`), so they get their own
+ * badge + a "Cancel invite" action instead of "Reactivate" (PATCHing an
+ * INVITED membership straight to ACTIVE 400s server-side — see
+ * marketing-users.service.ts's update()).
  *
  * Presentation upgrade:
- *   - PageHeader with "Add Member" action
- *   - Table primitives + Avatar + role/status Badge
- *   - DropdownMenu row actions (edit / reset password / deactivate|reactivate)
- *   - ConfirmDialog for deactivate/reactivate confirmations
- *   - InviteUserDialog (RHF+Zod invite form)
+ *   - PageHeader with "Invite Member" action
+ *   - Table primitives + Avatar + role/status Badge (incl. Pending/Suspended)
+ *   - DropdownMenu row actions (edit / reset password / deactivate|reactivate|cancel invite)
+ *   - ConfirmDialog for deactivate/reactivate/cancel-invite confirmations
+ *   - InviteUserDialog (RHF+Zod invite form — email + role only)
  *   - EditUserDialog (RHF+Zod edit form)
  *   - ResetPasswordDialog (RHF+Zod password reset)
  *   - Skeleton loading + EmptyState
@@ -26,6 +34,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { MoreHorizontal, Users } from 'lucide-react';
 import marketingApi from '@/features/marketing/api/marketingApi';
+import { inviteMember } from '@/features/marketing/api/membershipApi';
 import { fmtDateTime } from '@/features/marketing/utils/format';
 import { DistributionConfigCard } from '@/features/marketing/components';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -44,10 +53,9 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/DropdownMenu';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
-import { InviteUserDialog } from './InviteUserDialog';
+import { InviteUserDialog, type InviteMemberFormValues } from './InviteUserDialog';
 import { EditUserDialog, type EditUserSubmit } from './EditUserDialog';
 import { ResetPasswordDialog } from './ResetPasswordDialog';
-import type { MarketingUserFormValues } from '@/features/marketing/schemas';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface MarketingUser {
@@ -75,8 +83,16 @@ function roleTone(role: string): 'warning' | 'primary' | 'neutral' {
   return 'neutral';
 }
 
-function statusTone(status: string): 'success' | 'danger' {
-  return status === 'ACTIVE' ? 'success' : 'danger';
+function statusLabel(status: string): string {
+  if (status === 'INVITED') return 'Pending';
+  if (status === 'SUSPENDED') return 'Suspended';
+  return 'Active';
+}
+
+function statusTone(status: string): 'success' | 'warning' | 'danger' {
+  if (status === 'INVITED') return 'warning';
+  if (status === 'SUSPENDED') return 'danger';
+  return 'success';
 }
 
 function initials(u: MarketingUser): string {
@@ -100,15 +116,15 @@ export default function MarketingUsersPage() {
   });
 
   // ── Mutations ────────────────────────────────────────────────────────────
-  const createMutation = useMutation({
-    mutationFn: (data: any) => marketingApi.post('/users', data),
-    onSuccess: () => {
+  const inviteMutation = useMutation({
+    mutationFn: (data: { email: string; role: string }) => inviteMember(data),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'users'] });
       setInviteOpen(false);
-      toast.success('User created');
+      toast.success(`Invitation sent to ${variables.email}`);
     },
     onError: (err: any) => {
-      toast.error(err.response?.data?.message || 'Failed to create user');
+      toast.error(err.response?.data?.message || 'Failed to send invitation');
     },
   });
 
@@ -126,14 +142,17 @@ export default function MarketingUsersPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => marketingApi.delete(`/users/${id}`),
-    onSuccess: () => {
+    mutationFn: (user: MarketingUser) => marketingApi.delete(`/users/${user.id}`),
+    onSuccess: (_data, user) => {
       queryClient.invalidateQueries({ queryKey: ['marketing', 'users'] });
       setConfirmUser(null);
-      toast.success('User deactivated');
+      toast.success(user.status === 'INVITED' ? 'Invitation canceled' : 'User deactivated');
     },
-    onError: () => {
-      toast.error('Failed to deactivate user');
+    onError: (err: any, user) => {
+      toast.error(
+        err.response?.data?.message ||
+          (user.status === 'INVITED' ? 'Failed to cancel invitation' : 'Failed to deactivate user'),
+      );
     },
   });
 
@@ -164,13 +183,9 @@ export default function MarketingUsersPage() {
   });
 
   // ── Handlers ─────────────────────────────────────────────────────────────
-  const handleInvite = (values: MarketingUserFormValues) => {
-    createMutation.mutate({
+  const handleInvite = (values: InviteMemberFormValues) => {
+    inviteMutation.mutate({
       email: values.email,
-      password: values.password,
-      firstName: values.firstName,
-      lastName: values.lastName,
-      phone: values.phone || undefined,
       role: values.role,
     });
   };
@@ -188,7 +203,7 @@ export default function MarketingUsersPage() {
   const handleConfirmAction = () => {
     if (!confirmUser) return;
     if (confirmUser.action === 'deactivate') {
-      deleteMutation.mutate(confirmUser.user.id);
+      deleteMutation.mutate(confirmUser.user);
     } else {
       reactivateMutation.mutate(confirmUser.user.id);
     }
@@ -206,7 +221,7 @@ export default function MarketingUsersPage() {
         actions={
           <Button onClick={() => setInviteOpen(true)}>
             <Users className="h-4 w-4" aria-hidden="true" />
-            Add Member
+            Invite Member
           </Button>
         }
       />
@@ -229,7 +244,7 @@ export default function MarketingUsersPage() {
             description="Invite someone to get started."
             action={
               <Button size="sm" onClick={() => setInviteOpen(true)}>
-                Add Member
+                Invite Member
               </Button>
             }
             className="border-0"
@@ -242,7 +257,7 @@ export default function MarketingUsersPage() {
                   <TH>Name</TH>
                   <TH>Email</TH>
                   <TH>Role</TH>
-                  <TH className="hidden md:table-cell">Status</TH>
+                  <TH>Status</TH>
                   <TH className="hidden md:table-cell" numeric>Leads</TH>
                   <TH className="hidden lg:table-cell">Last Login</TH>
                   <TH className="w-10" />
@@ -265,9 +280,9 @@ export default function MarketingUsersPage() {
                         {roleLabel(u.role)}
                       </Badge>
                     </TD>
-                    <TD className="hidden md:table-cell">
+                    <TD>
                       <Badge tone={statusTone(u.status)} size="sm">
-                        {u.status}
+                        {statusLabel(u.status)}
                       </Badge>
                     </TD>
                     <TD className="hidden md:table-cell" numeric>
@@ -294,16 +309,12 @@ export default function MarketingUsersPage() {
                             Reset password
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          {u.status === 'ACTIVE' ? (
-                            <DropdownMenuItem
-                              className="text-danger focus:text-danger"
-                              onClick={() =>
-                                setConfirmUser({ user: u, action: 'deactivate' })
-                              }
-                            >
-                              Deactivate
-                            </DropdownMenuItem>
-                          ) : (
+                          {u.status === 'SUSPENDED' ? (
+                            // A SUSPENDED membership can be reactivated (PATCH
+                            // status:'ACTIVE'). An INVITED one CANNOT — see
+                            // marketing-users.service.ts's update(), which
+                            // 400s "must be accepted by the invitee, not
+                            // reactivated" — so that path only ever shows here.
                             <DropdownMenuItem
                               className="text-success focus:text-success"
                               onClick={() =>
@@ -311,6 +322,15 @@ export default function MarketingUsersPage() {
                               }
                             >
                               Reactivate
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              className="text-danger focus:text-danger"
+                              onClick={() =>
+                                setConfirmUser({ user: u, action: 'deactivate' })
+                              }
+                            >
+                              {u.status === 'INVITED' ? 'Cancel invite' : 'Deactivate'}
                             </DropdownMenuItem>
                           )}
                         </DropdownMenuContent>
@@ -329,7 +349,7 @@ export default function MarketingUsersPage() {
         open={inviteOpen}
         onOpenChange={setInviteOpen}
         onSubmit={handleInvite}
-        isPending={createMutation.isPending}
+        isPending={inviteMutation.isPending}
       />
 
       {/* Edit dialog */}
@@ -350,22 +370,30 @@ export default function MarketingUsersPage() {
         isPending={resetPasswordMutation.isPending}
       />
 
-      {/* Confirm deactivate/reactivate */}
+      {/* Confirm deactivate/reactivate/cancel-invite */}
       <ConfirmDialog
         open={!!confirmUser}
         onOpenChange={(open) => { if (!open) setConfirmUser(null); }}
         title={
-          confirmUser?.action === 'deactivate'
-            ? 'Deactivate user?'
-            : 'Reactivate user?'
+          confirmUser?.action !== 'deactivate'
+            ? 'Reactivate user?'
+            : confirmUser?.user.status === 'INVITED'
+              ? 'Cancel invite?'
+              : 'Deactivate user?'
         }
         description={
-          confirmUser?.action === 'deactivate'
-            ? `${confirmUser?.user.firstName} ${confirmUser?.user.lastName} will lose access immediately.`
-            : `${confirmUser?.user.firstName} ${confirmUser?.user.lastName} will regain access.`
+          confirmUser?.action !== 'deactivate'
+            ? `${confirmUser?.user.firstName} ${confirmUser?.user.lastName} will regain access.`
+            : confirmUser?.user.status === 'INVITED'
+              ? `The pending invitation for ${confirmUser?.user.email} will be canceled.`
+              : `${confirmUser?.user.firstName} ${confirmUser?.user.lastName} will lose access immediately.`
         }
         confirmLabel={
-          confirmUser?.action === 'deactivate' ? 'Deactivate' : 'Reactivate'
+          confirmUser?.action !== 'deactivate'
+            ? 'Reactivate'
+            : confirmUser?.user.status === 'INVITED'
+              ? 'Cancel invite'
+              : 'Deactivate'
         }
         tone={confirmUser?.action === 'deactivate' ? 'danger' : 'default'}
         onConfirm={handleConfirmAction}

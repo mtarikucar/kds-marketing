@@ -17,6 +17,7 @@ const PrivacyPage              = lazy(() => import('./pages/legal/PrivacyPage'))
 const TermsPage                = lazy(() => import('./pages/legal/TermsPage'));
 const MarketingLoginPage       = lazy(() => import('./pages/marketing/MarketingLoginPage'));
 const RegisterWorkspacePage    = lazy(() => import('./pages/marketing/RegisterWorkspacePage'));
+const AcceptInvitePage         = lazy(() => import('./pages/marketing/AcceptInvitePage'));
 const WidgetChatPage           = lazy(() => import('./pages/marketing/WidgetChatPage'));
 const MarketingDashboardPage   = lazy(() => import('./pages/marketing/MarketingDashboardPage'));
 const InboxPage                = lazy(() => import('./pages/marketing/inbox/InboxPage'));
@@ -148,6 +149,9 @@ export default function App() {
       <Route path="/terms"    element={<S><TermsPage /></S>} />
       <Route path="/login"    element={<S><MarketingLoginPage /></S>} />
       <Route path="/register" element={<S><RegisterWorkspacePage /></S>} />
+      {/* Public accept-invite landing — the invite TOKEN in the query string
+          is the only credential (Task 15); no auth guard, unlike login/register. */}
+      <Route path="/accept-invite" element={<S><AcceptInvitePage /></S>} />
       {/* Public web-chat surface — embedded in an iframe by widget.js. */}
       <Route path="/widget"   element={<S><WidgetChatPage /></S>} />
       {/* Public self-service booking page (no auth). */}
