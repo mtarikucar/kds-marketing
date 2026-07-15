@@ -18,6 +18,7 @@ import {
 import { MessageSenderService } from './message-sender.service';
 import { ConversationStreamService } from './conversation-stream.service';
 import { normalizeEmail, normalizePhone } from '../utils/lead-normalize';
+import { BrandContextService } from '../brand-brain/brand-context.service';
 
 const AI_REPLY_KIND = 'conversation.ai_reply';
 const FOLLOWUP_KIND = 'conversation.followup';
@@ -87,6 +88,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly stream: ConversationStreamService,
+    private readonly brandContext: BrandContextService,
   ) {}
 
   onModuleInit(): void {
@@ -220,7 +222,8 @@ export class ConversationAiEngineService implements OnModuleInit {
         Array.isArray(agent.kbDocIds) ? (agent.kbDocIds as string[]) : undefined,
         4,
       );
-      const system = this.buildSystem(agent, lead, kb);
+      const brand = await this.brandContext.summaryFor(workspaceId);
+      const system = this.buildSystem(agent, lead, kb, brand);
       const messages = this.buildHistory(history);
 
       const outcome = await this.runToolLoop(workspaceId, conversationId, system, messages, agent);
@@ -476,8 +479,9 @@ export class ConversationAiEngineService implements OnModuleInit {
         take: HISTORY_LIMIT,
       });
       history.reverse();
+      const brand = await this.brandContext.summaryFor(workspaceId);
       const system =
-        this.buildSystem(agent, lead, []) +
+        this.buildSystem(agent, lead, [], brand) +
         '\n\nThe customer went quiet. Write ONE short, friendly, non-pushy follow-up to re-engage them. Do not repeat earlier messages verbatim.';
       const res = await this.anthropic.complete({
         system,
@@ -539,6 +543,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     },
     lead: { businessName?: string; contactPerson?: string; phone?: string | null; email?: string | null; city?: string | null; status?: string } | null,
     kb: Array<{ title: string; snippet: string }>,
+    brand: string | null,
   ): string {
     const parts: string[] = [
       'You are a customer-facing assistant answering on a messaging channel.',
@@ -549,6 +554,7 @@ export class ConversationAiEngineService implements OnModuleInit {
     if (agent.goals) parts.push(`Goals: ${agent.goals}`);
     if (agent.guardrails) parts.push(`Guardrails (never violate): ${agent.guardrails}`);
     parts.push(`Reply in language code "${agent.language}". Keep replies short and chat-appropriate.`);
+    if (brand) parts.push(`About this brand (ground every reply in this):\n${brand}`);
     if (lead) {
       const known = [
         lead.contactPerson && `name: ${lead.contactPerson}`,
