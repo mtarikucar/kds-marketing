@@ -3598,6 +3598,31 @@ model BrandKit {
   @@map("brand_kits")
 }
 
+/// Brand Brain — the workspace's consolidated brand/product profile. The
+/// structured "header" (always-on AI grounding block); deep materials live as
+/// KnowledgeDoc/KnowledgeChunk. Seeds BrandKit/ResearchProfile/Workspace fields
+/// but never silently overwrites user edits. See docs/superpowers/specs/2026-07-16-*.
+model BrandProfile {
+  id                 String    @id @default(uuid())
+  workspaceId        String    @unique
+  brandName          String
+  tagline            String?
+  description        String?   @db.Text
+  valueProps         Json?     // string[]
+  toneWords          Json?     // string[]
+  voiceGuide         String?   @db.Text
+  icpDescription     String?   @db.Text
+  audienceObjections Json?     // string[]
+  offerings          Json?     // [{ name, blurb, price? }]
+  sources            Json?     // [{ type, url?, handle?, scrapedAt }]
+  socialHandles      Json?     // [{ network, handle }]
+  status             String    @default("DRAFT") // DRAFT | ACTIVE
+  lastAnalyzedAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  @@map("brand_profiles")
+}
+
 /// A single AI-generated media asset (image or video) and its generation
 /// lifecycle. status: QUEUED|GENERATING|READY|FAILED|BLOCKED. fal result URLs
 /// are re-hosted to R2 on READY; `r2Key` is the canonical store.
