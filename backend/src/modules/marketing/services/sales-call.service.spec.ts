@@ -89,9 +89,11 @@ describe('SalesCallService', () => {
 
       await svc.startCall(WS, REP, { toPhone: '05551234567' } as any);
 
+      // The cancel is an ATOMIC CLAIM (status:'INITIATED' guard) so it can never
+      // regress a row a concurrent CDR-sync/finalizeCall just flipped to CONNECTED.
       expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: { in: ['c-stale'] }, workspaceId: WS },
+          where: { id: { in: ['c-stale'] }, workspaceId: WS, status: 'INITIATED' },
           data: expect.objectContaining({ status: 'CANCELLED' }),
         }),
       );
@@ -173,7 +175,7 @@ describe('SalesCallService', () => {
           expect.objectContaining({ where: { workspaceId: WS, marketingUserId: REP, status: 'INITIATED' } }),
         );
         expect(prisma.salesCall.updateMany).toHaveBeenCalledWith(
-          expect.objectContaining({ where: { id: { in: ['c-stale-rep'] }, workspaceId: WS } }),
+          expect.objectContaining({ where: { id: { in: ['c-stale-rep'] }, workspaceId: WS, status: 'INITIATED' } }),
         );
       });
     });
