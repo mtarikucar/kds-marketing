@@ -725,7 +725,13 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
       resourceId: 'old-res',
       channelExpiration: new Date(Date.now() + 3600_000), // ~1h out ⇒ due
     });
-    // renewWatches is now advisory-locked; make the try-lock acquire.
+    // renewWatches is advisory-locked; the lock now runs as a try-xact-lock
+    // INSIDE one interactive transaction (connection-pinned, auto-released) —
+    // run the transaction callback against the same mock client and make the
+    // try-lock acquire.
+    (prisma.$transaction as jest.Mock).mockImplementation((fn: any) =>
+      typeof fn === 'function' ? fn(prisma) : Promise.all(fn),
+    );
     (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ locked: true }] as never);
     prisma.googleCalendarConnection.findMany.mockResolvedValue([near] as never);
     safeFetchSpy
