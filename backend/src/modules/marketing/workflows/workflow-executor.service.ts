@@ -44,12 +44,16 @@ export class WorkflowExecutorService implements OnModuleInit {
     this.runner.registerHandler(RESUME_KIND, (job) => this.resume(job));
   }
 
-  /** Start a run. Returns the runId, or null if a live run already exists. */
+  /** Start a run. Returns the runId, or null if a live run already exists (or
+   *  this exact trigger event already started one — durable idempotency for
+   *  leadless enrollment). `triggerEventId` is the source domain-event id;
+   *  omit it for child workflows (they aren't event-triggered). */
   async start(
     workflow: { id: string; workspaceId: string; version: number; trigger: unknown; steps: unknown },
     subject: StartSubject,
     triggerPayload: Record<string, unknown>,
     depth = 0,
+    triggerEventId?: string | null,
   ): Promise<string | null> {
     if (depth > MAX_WORKFLOW_DEPTH) {
       this.logger.warn(`workflow ${workflow.id} exceeded max chain depth ${MAX_WORKFLOW_DEPTH}`);
@@ -64,6 +68,7 @@ export class WorkflowExecutorService implements OnModuleInit {
           workflowVersion: workflow.version,
           leadId: subject.leadId ?? null,
           conversationId: subject.conversationId ?? null,
+          triggerEventId: triggerEventId ?? null,
           status: 'RUNNING',
           cursor: { stepIndex: 0 },
           context: { _trigger: triggerPayload } as Prisma.InputJsonValue,
@@ -72,7 +77,10 @@ export class WorkflowExecutorService implements OnModuleInit {
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        return null; // a live run for this (workflow, lead) already exists
+        // Either a live run for this (workflow, lead) already exists, OR this
+        // exact source event already started a run (workflow_runs_trigger_event)
+        // — a redelivered event must be a no-op, not a duplicate enrollment.
+        return null;
       }
       throw e;
     }

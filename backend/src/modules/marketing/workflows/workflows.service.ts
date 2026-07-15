@@ -115,7 +115,16 @@ export class WorkflowsService {
     if (dto.description !== undefined) data.description = dto.description;
     // Any DSL-touching field re-validates the WHOLE definition (a goto goal's
     // bounds depend on steps.length, so shrinking steps must re-check the goal)
-    // and bumps version so in-flight runs keep the definition they started on.
+    // and bumps `version` as an edit counter.
+    // NOTE — in-flight runs are NOT versioned: the executor's advance() re-reads
+    // the LIVE workflow row each resume, so an edit here takes effect on runs
+    // already in progress (they execute the new step content, and a run past a
+    // now-removed step completes gracefully — the executor tolerates an
+    // out-of-range cursor). `version`/`WorkflowRun.workflowVersion` is currently
+    // only metadata. Honoring it (a per-run definition snapshot) is a deliberate
+    // design change — it interacts with the workflow-deleted-mid-run guard and
+    // child-workflow lookup — tracked as the "workflow definition snapshot" item,
+    // not silently done here.
     if (dto.trigger !== undefined || dto.steps !== undefined || dto.goal !== undefined) {
       // undefined = keep existing goal; null = clear it; object = replace it.
       const effectiveGoal = dto.goal === undefined ? existing.goal : dto.goal;

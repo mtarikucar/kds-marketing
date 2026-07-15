@@ -119,6 +119,24 @@ describe('WorkflowExecutorService', () => {
     expect(runId).toBeNull();
   });
 
+  it('persists triggerEventId so a redelivered event is deduped (durable idempotency)', async () => {
+    const h = build([{ type: 'stop_workflow' }], []);
+    await h.executor.start(
+      { id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'webhook.received', filters: [] }, steps: [] } as any,
+      { leadId: null }, {}, 0, 'evt-hook-1',
+    );
+    expect(h.prisma.workflowRun.create.mock.calls[0][0].data).toMatchObject({ triggerEventId: 'evt-hook-1' });
+  });
+
+  it('a child workflow start carries NO triggerEventId (not event-triggered)', async () => {
+    const h = build([{ type: 'stop_workflow' }], []);
+    await h.executor.start(
+      { id: 'wf-child', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any,
+      { leadId: 'lead-1' }, {}, 1, // depth 1, no triggerEventId
+    );
+    expect(h.prisma.workflowRun.create.mock.calls[0][0].data.triggerEventId).toBeNull();
+  });
+
   it('bumps stats: started on create, completed on DONE', async () => {
     const h = build([{ type: 'notify_user', message: 'm' }], [{}]);
     await h.executor.start({ id: 'wf-1', workspaceId: WS, version: 1, trigger: { type: 'lead.created', filters: [] }, steps: [] } as any, { leadId: 'lead-1' }, {});
