@@ -182,4 +182,34 @@ describe('MarketingGuard — active-membership role resolution', () => {
     jwt.verifyAsync.mockResolvedValue({ sub: 'u1', wsp: 'wsp-2', ver: 0, type: 'marketing' });
     await expect(guard.canActivate(ctxWithAuthHeader('Bearer t'))).rejects.toThrow('Session revoked');
   });
+
+  it('populates customRoleId from the ACTIVE membership, never from the user row', async () => {
+    // user row customRoleId = 'row-cr' (home workspace's assignment), but the
+    // active membership for wsp-2 carries a DIFFERENT custom role. A guard
+    // that reads `marketingUser.customRoleId` instead of `membership.customRoleId`
+    // would silently leak the row's permission grant into this workspace.
+    prisma.marketingUser.findUnique.mockResolvedValue({
+      id: 'u1', workspaceId: 'wsp-home', email: 'a@b.co', firstName: 'A', lastName: 'B',
+      role: 'OWNER', status: 'ACTIVE', customRoleId: 'row-cr', tokenVersion: 0,
+      memberships: [{ workspaceId: 'wsp-2', role: 'REP', customRoleId: 'mem-cr', status: 'ACTIVE' }],
+    });
+    jwt.verifyAsync.mockResolvedValue({ sub: 'u1', wsp: 'wsp-2', ver: 0, type: 'marketing' });
+    const ctx = ctxWithAuthHeader('Bearer t');
+    await guard.canActivate(ctx);
+    const req = ctx.switchToHttp().getRequest();
+    expect(req.marketingUser.customRoleId).toBe('mem-cr');
+  });
+
+  it('fails closed (401 Session revoked) when payload.wsp is empty/undefined, before any membership lookup', async () => {
+    // Guards against a Prisma footgun: this schema does not enable
+    // strictUndefinedChecks, so an `undefined` value in a `where` filter is
+    // silently DROPPED rather than rejected. If `payload.wsp` were undefined
+    // and this check did not run first, `memberships: { where: { workspaceId:
+    // undefined, status: 'ACTIVE' }, take: 1 } }` would degrade to matching
+    // the user's first ACTIVE membership in ANY workspace — a fail-open bug.
+    jwt.verifyAsync.mockResolvedValue({ sub: 'u1', ver: 0, type: 'marketing' }); // no `wsp`
+    await expect(guard.canActivate(ctxWithAuthHeader('Bearer t'))).rejects.toThrow(UnauthorizedException);
+    await expect(guard.canActivate(ctxWithAuthHeader('Bearer t'))).rejects.toThrow('Session revoked');
+    expect(prisma.marketingUser.findUnique).not.toHaveBeenCalled();
+  });
 });

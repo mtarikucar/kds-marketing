@@ -49,6 +49,15 @@ export class MarketingGuard implements CanActivate {
         throw new UnauthorizedException('Invalid token type');
       }
 
+      // Fail CLOSED before the membership query: Prisma silently drops an
+      // `undefined` value in a `where` filter (strictUndefinedChecks is not
+      // enabled on this schema), so a falsy `payload.wsp` would otherwise
+      // degrade the `memberships` filter to `{ status: 'ACTIVE' }, take: 1`
+      // and match the user's first ACTIVE membership in ANY workspace.
+      if (!payload.wsp) {
+        throw new UnauthorizedException('Session revoked');
+      }
+
       const marketingUser = await this.prisma.marketingUser.findUnique({
         where: { id: payload.sub },
         select: {
