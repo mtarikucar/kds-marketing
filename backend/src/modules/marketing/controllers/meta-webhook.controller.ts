@@ -84,57 +84,77 @@ export class MetaWebhookController {
     if (!type || !this.registry.has(type)) return;
     const adapter = this.registry.get(type);
     for (const entry of body?.entry ?? []) {
-      const externalId = this.externalIdFor(type, entry);
+      if (type === 'WHATSAPP') {
+        // One WABA entry (entry.id = WABA id) batches changes[] that can span
+        // DIFFERENT phone numbers — each change carries its own
+        // value.metadata.phone_number_id, and each number is an independent
+        // Channel row, possibly in a DIFFERENT workspace. Resolving the
+        // channel once per entry routed EVERY message/receipt in the entry to
+        // whichever number appeared first: inbound messages ingested into the
+        // wrong tenant (KVKK) and receipts silently no-oping under the wrong
+        // workspaceId (messages stuck at SENT). Resolve per change.
+        for (const change of entry?.changes ?? []) {
+          const phoneId = change?.value?.metadata?.phone_number_id;
+          if (!phoneId) continue;
+          const channel = await this.resolver.byExternalId(type, String(phoneId));
+          if (!channel) {
+            this.logger.warn(`meta inbound for unregistered ${type} id=${phoneId} — skipping`);
+            continue;
+          }
+          await this.handleEntry(adapter, channel, body.object, { ...entry, changes: [change] });
+        }
+        continue;
+      }
+      // Messenger / Instagram: the page id is the entry id (one page per entry).
+      const externalId = entry?.id ? String(entry.id) : null;
       if (!externalId) continue;
       const channel = await this.resolver.byExternalId(type, externalId);
       if (!channel) {
         this.logger.warn(`meta inbound for unregistered ${type} id=${externalId} — skipping`);
         continue;
       }
-      const config = this.registry.resolveConfig(channel);
-      const inbounds = adapter.parseInbound
-        ? adapter.parseInbound(config, { object: body.object, entry: [entry] })
-        : [];
-      for (const msg of inbounds) {
-        await this.ingress.ingest(
-          { id: channel.id, workspaceId: channel.workspaceId, type: channel.type },
-          msg,
-        );
-      }
-      // Delivery/read receipts ride the same signed webhook — advance the
-      // matching OUTBOUND Message's status (no conversation side-effects).
-      if (adapter.parseStatusUpdates) {
-        const updates = adapter.parseStatusUpdates(config, { object: body.object, entry: [entry] });
-        if (updates.length) await this.receipts.apply(channel.workspaceId, updates);
-      }
-      // Meta Lead Ads (Instant Form) submissions arrive on the SAME page webhook
-      // as Messenger, but under entry[].changes[] with field==='leadgen' (not
-      // entry[].messaging[]). Fetch + create the lead with the page token we
-      // already resolved. Best-effort per change: one bad form never rejects the
-      // shared (already-200-ACKed) process() promise.
-      for (const ch of entry?.changes ?? []) {
-        if (ch?.field === 'leadgen' && ch?.value?.leadgen_id) {
-          await this.leadgen
-            .ingest(
-              { id: channel.id, workspaceId: channel.workspaceId, externalId: channel.externalId },
-              config,
-              ch.value,
-            )
-            .catch((e) => this.logger.error(`leadgen ingest failed: ${e?.message ?? e}`));
-        }
-      }
+      await this.handleEntry(adapter, channel, body.object, entry);
     }
   }
 
-  private externalIdFor(type: string, entry: any): string | null {
-    if (type === 'WHATSAPP') {
-      for (const ch of entry?.changes ?? []) {
-        const id = ch?.value?.metadata?.phone_number_id;
-        if (id) return String(id);
-      }
-      return null;
+  /** Parse + route ONE entry (already scoped to a single resolved channel). */
+  private async handleEntry(
+    adapter: ReturnType<ChannelAdapterRegistry['get']>,
+    channel: { id: string; workspaceId: string; type: string; externalId: string | null },
+    object: string,
+    entry: any,
+  ): Promise<void> {
+    const config = this.registry.resolveConfig(channel as any);
+    const inbounds = adapter.parseInbound
+      ? adapter.parseInbound(config, { object, entry: [entry] })
+      : [];
+    for (const msg of inbounds) {
+      await this.ingress.ingest(
+        { id: channel.id, workspaceId: channel.workspaceId, type: channel.type },
+        msg,
+      );
     }
-    // Messenger / Instagram: the page id is the entry id.
-    return entry?.id ? String(entry.id) : null;
+    // Delivery/read receipts ride the same signed webhook — advance the
+    // matching OUTBOUND Message's status (no conversation side-effects).
+    if (adapter.parseStatusUpdates) {
+      const updates = adapter.parseStatusUpdates(config, { object, entry: [entry] });
+      if (updates.length) await this.receipts.apply(channel.workspaceId, updates);
+    }
+    // Meta Lead Ads (Instant Form) submissions arrive on the SAME page webhook
+    // as Messenger, but under entry[].changes[] with field==='leadgen' (not
+    // entry[].messaging[]). Fetch + create the lead with the page token we
+    // already resolved. Best-effort per change: one bad form never rejects the
+    // shared (already-200-ACKed) process() promise.
+    for (const ch of entry?.changes ?? []) {
+      if (ch?.field === 'leadgen' && ch?.value?.leadgen_id) {
+        await this.leadgen
+          .ingest(
+            { id: channel.id, workspaceId: channel.workspaceId, externalId: channel.externalId },
+            config,
+            ch.value,
+          )
+          .catch((e) => this.logger.error(`leadgen ingest failed: ${e?.message ?? e}`));
+      }
+    }
   }
 }

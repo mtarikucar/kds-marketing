@@ -66,13 +66,68 @@ describe('MetaWebhookController — signature + challenge', () => {
     expect(res2.status).toHaveBeenCalledWith(403);
   });
 
-  it('externalIdFor extracts the WhatsApp phone_number_id and the page id', () => {
-    const waId = (controller as any).externalIdFor('WHATSAPP', {
-      changes: [{ value: { metadata: { phone_number_id: '99' } } }],
-    });
-    expect(waId).toBe('99');
-    const pageId = (controller as any).externalIdFor('MESSENGER', { id: 'page-7' });
-    expect(pageId).toBe('page-7');
+  it('routes a mixed multi-number WABA entry PER CHANGE — each phone number to ITS OWN channel/workspace', async () => {
+    // One WABA entry batches changes[] spanning DIFFERENT phone numbers; each
+    // number is an independent Channel row, possibly in a different workspace.
+    // Resolving once per entry used to route EVERY message in the entry to
+    // whichever number appeared first (cross-tenant misroute) and apply the
+    // other number's receipts under the wrong workspaceId (silent no-op).
+    const ingest = jest.fn().mockResolvedValue(undefined);
+    const apply = jest.fn().mockResolvedValue(undefined);
+    const adapter = {
+      // Echo back one inbound per change so routing is observable.
+      parseInbound: (_cfg: any, payload: any) => {
+        const change = payload.entry[0].changes[0];
+        return change.value.messages
+          ? [{ externalMessageId: change.value.messages[0].id, from: 'x', text: 'hi' }]
+          : [];
+      },
+      parseStatusUpdates: (_cfg: any, payload: any) => {
+        const change = payload.entry[0].changes[0];
+        return (change.value.statuses ?? []).map((s: any) => ({
+          externalMessageId: s.id,
+          status: 'DELIVERED' as const,
+        }));
+      },
+    };
+    const registry = { has: () => true, get: () => adapter, resolveConfig: () => ({}) };
+    const byExternalId = jest.fn(async (_type: string, id: string) =>
+      id === 'PN-A'
+        ? { id: 'ch-A', workspaceId: 'ws-A', type: 'WHATSAPP', externalId: 'PN-A' }
+        : { id: 'ch-B', workspaceId: 'ws-B', type: 'WHATSAPP', externalId: 'PN-B' },
+    );
+    const ctrl = new MetaWebhookController(
+      { byExternalId } as any,
+      registry as any,
+      { ingest } as any,
+      { apply } as any,
+      { ingest: jest.fn() } as any,
+    );
+    const body = {
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: 'WABA-1',
+          changes: [
+            { value: { metadata: { phone_number_id: 'PN-A' }, messages: [{ id: 'wamid.A' }] } },
+            { value: { metadata: { phone_number_id: 'PN-B' }, statuses: [{ id: 'wamid.B', status: 'delivered' }] } },
+          ],
+        },
+      ],
+    };
+    await (ctrl as any).process(body);
+
+    // Each phone number resolved individually…
+    expect(byExternalId).toHaveBeenCalledWith('WHATSAPP', 'PN-A');
+    expect(byExternalId).toHaveBeenCalledWith('WHATSAPP', 'PN-B');
+    // …the message landed in A's workspace, and B's receipt in B's workspace.
+    expect(ingest).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ch-A', workspaceId: 'ws-A' }),
+      expect.objectContaining({ externalMessageId: 'wamid.A' }),
+    );
+    expect(apply).toHaveBeenCalledWith('ws-B', [
+      { externalMessageId: 'wamid.B', status: 'DELIVERED' },
+    ]);
   });
 
   it('applies delivery/read receipts through MessageReceiptService', async () => {

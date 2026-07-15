@@ -59,6 +59,7 @@ describe('ScheduledJobService', () => {
 
   it('reschedules in place (no second row) when a PENDING dedup row exists', async () => {
     prisma.scheduledJob.findFirst.mockResolvedValue({ id: 'job-existing' });
+    prisma.scheduledJob.updateMany.mockResolvedValue({ count: 1 }); // conditional claim wins
     const id = await svc.schedule({
       workspaceId: WS,
       kind: 'conversation.followup',
@@ -68,11 +69,31 @@ describe('ScheduledJobService', () => {
     });
     expect(id).toBe('job-existing');
     expect(prisma.scheduledJob.create).not.toHaveBeenCalled();
-    expect(prisma.scheduledJob.update).toHaveBeenCalledTimes(1);
-    expect(prisma.scheduledJob.update.mock.calls[0][0]).toMatchObject({
-      where: { id: 'job-existing' },
+    // The reschedule is an ATOMIC conditional claim — the where carries the
+    // status guard so a row the runner just claimed can never be rewritten.
+    expect(prisma.scheduledJob.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.scheduledJob.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { id: 'job-existing', status: 'PENDING' },
       data: { runAt: RUN_AT, payload: { n: 2 }, workspaceId: WS },
     });
+  });
+
+  it('falls through to CREATE when the runner claims the row mid-reschedule (lost conditional claim)', async () => {
+    // findFirst saw a PENDING row, but the runner flipped it to RUNNING before
+    // our write — the unguarded update used to rewrite the RUNNING row (silently
+    // losing the reschedule). Now the conditional claim misses and a fresh
+    // PENDING row is created for the new time instead.
+    prisma.scheduledJob.findFirst.mockResolvedValue({ id: 'job-existing' });
+    prisma.scheduledJob.updateMany.mockResolvedValue({ count: 0 }); // claim lost
+    const id = await svc.schedule({
+      workspaceId: WS,
+      kind: 'conversation.followup',
+      runAt: RUN_AT,
+      payload: { n: 2 },
+      dedupKey: 'conv-1',
+    });
+    expect(id).toBe('job-new');
+    expect(prisma.scheduledJob.create).toHaveBeenCalledTimes(1);
   });
 
   it('collapses a P2002 create race onto the winner PENDING row (clean, not a 500)', async () => {

@@ -76,6 +76,10 @@ describe('ScheduledJobRunnerService', () => {
     expect(call.data.lastError).toMatch(/no handler/);
   });
 
+  /** The status-carrying bookkeeping update (skips the pre-handler lockedAt heartbeat). */
+  const statusCall = () =>
+    prisma.scheduledJob.update.mock.calls.map((c: any[]) => c[0]).find((c: any) => c.data && 'status' in c.data);
+
   it('backs off a transient failure: stays PENDING with attempts+1 and a future runAt', async () => {
     runner.registerHandler('k', async () => {
       throw new Error('boom');
@@ -84,7 +88,7 @@ describe('ScheduledJobRunnerService', () => {
 
     await runner.tick();
 
-    const call = prisma.scheduledJob.update.mock.calls[0][0];
+    const call = statusCall();
     expect(call.where).toEqual({ id: 'j3' });
     expect(call.data.status).toBe('PENDING');
     expect(call.data.attempts).toBe(1);
@@ -102,9 +106,49 @@ describe('ScheduledJobRunnerService', () => {
 
     await runner.tick();
 
-    const call = prisma.scheduledJob.update.mock.calls[0][0];
+    const call = statusCall();
     expect(call.data.status).toBe('FAILED');
     expect(call.data.attempts).toBe(5);
+  });
+
+  it('re-stamps lockedAt (heartbeat) immediately before invoking each handler', async () => {
+    // claimBatch stamps lockedAt once for the whole batch; a row queued behind
+    // slow handlers for >15 min would look stale to another replica's reaper
+    // and get double-run. The pre-handler heartbeat keeps live claims fresh.
+    const order: string[] = [];
+    prisma.scheduledJob.update.mockImplementation((args: any) => {
+      order.push('data' in args && 'lockedAt' in args.data && !('status' in args.data) ? 'heartbeat' : 'bookkeeping');
+      return Promise.resolve({});
+    });
+    runner.registerHandler('k', async () => {
+      order.push('handler');
+    });
+    claim([{ id: 'j1', workspaceId: WS, kind: 'k', payload: {}, attempts: 0 }]);
+
+    await runner.tick();
+
+    expect(order).toEqual(['heartbeat', 'handler', 'bookkeeping']);
+  });
+
+  it('skips an overlapping tick while the previous one is still running (no in-process double-claim)', async () => {
+    // A long batch can outlast the minute interval; session advisory locks are
+    // re-entrant per connection, so only this in-process guard reliably stops
+    // an overlapping tick from reaping + double-running the first tick's jobs.
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    runner.registerHandler('slow', async () => {
+      await gate;
+    });
+    claim([{ id: 'j1', workspaceId: WS, kind: 'slow', payload: {}, attempts: 0 }]);
+
+    const first = runner.tick(); // enters, blocks in the handler
+    await new Promise((r) => setImmediate(r));
+    const claimsBefore = prisma.$queryRaw.mock.calls.length;
+    await runner.tick(); // overlapping tick must return immediately
+    expect(prisma.$queryRaw.mock.calls.length).toBe(claimsBefore); // no second claimBatch
+
+    release();
+    await first;
   });
 
   it('reaps stuck rows via conflict-safe SQL before claiming', async () => {

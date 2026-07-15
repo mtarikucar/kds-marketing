@@ -92,6 +92,16 @@ describe('marketing decoupling — split readiness (architecture fitness)', () =
     const forbidden =
       /\b(?:this\.prisma|tx|prisma)\.(lead|leadOffer|leadActivity|marketingUser|marketingTask|marketingNotification|commission|installationCrew|installationJob|installationTask|salesCall|salesTarget|marketingDistributionConfig)\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\b/;
     const allowPath = /\/modules\/marketing\//;
+    // Deliberate, justified exception — NOT a leak. The operator control
+    // plane's suspend/close flips workspace.status and must bump every tenant
+    // user's tokenVersion in the SAME code path, so in-flight access tokens
+    // die on the very next request (the guard's ver check) instead of
+    // surviving up to 8h. Routing that bump through an async marketing
+    // consumer would reopen a window between the status flip and the
+    // revocation — the exact gap the bump exists to close. When marketing
+    // physically splits, this becomes a synchronous admin API call on the
+    // marketing service; until then the direct write is the honest seam.
+    const ALLOWED_WRITERS = new Set(['src/modules/platform/services/workspaces-admin.service.ts']);
     const offenders: string[] = [];
     function walk(dir: string): void {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -106,8 +116,10 @@ describe('marketing decoupling — split readiness (architecture fitness)', () =
           // Windows (path.join emits backslashes there, which made EVERY
           // marketing file look non-exempt and fail this guard locally).
           if (allowPath.test(full.split(path.sep).join('/'))) continue;
+          const rel = path.relative(BACKEND_ROOT, full).split(path.sep).join('/');
+          if (ALLOWED_WRITERS.has(rel)) continue;
           if (forbidden.test(fs.readFileSync(full, 'utf8'))) {
-            offenders.push(path.relative(BACKEND_ROOT, full));
+            offenders.push(rel);
           }
         }
       }

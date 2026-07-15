@@ -17,7 +17,12 @@ import { PrismaService } from "../../prisma/prisma.service";
  * across different jobs are mathematically possible but harmless — the loser
  * just retries next tick. The 32-bit hash space gives ~4B distinct slots.
  */
-// NOTE: for short-running work where connection-safety matters, prefer withAdvisoryXactLock below.
+/** Upper bound on a lock-holding cron body. A body that exceeds it has the
+ *  transaction (and therefore the lock) forcibly released and the error
+ *  surfaces to the cron's own logger — strictly better than the silent
+ *  stall/duplicate the old session-lock semantics allowed. */
+const LOCK_BODY_TIMEOUT_MS = 55 * 60 * 1000;
+
 export async function withAdvisoryLock(
   prisma: PrismaService,
   jobName: string,
@@ -25,24 +30,32 @@ export async function withAdvisoryLock(
   logger?: Logger,
 ): Promise<void> {
   const lockId = djb2(jobName);
-  // Parameterized (no Unsafe): lockId is always an integer, but binding it keeps
-  // the query off the raw-SQL surface and is defensive if the key derivation
-  // ever changes. Session-level + non-blocking is intentional — losers skip this
-  // tick rather than block, so do NOT swap this for pg_advisory_xact_lock.
-  const acquired = await prisma.$queryRaw<{ locked: boolean }[]>`
-    SELECT pg_try_advisory_lock(${lockId}) AS locked
-  `;
-  if (!acquired[0]?.locked) {
-    logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
-    return;
-  }
-  try {
-    await run();
-  } finally {
-    // Release explicitly — Postgres also releases at session end, but
-    // long-lived connection pools mean "session end" is hours away.
-    await prisma.$queryRaw`SELECT pg_advisory_unlock(${lockId})`;
-  }
+  // CONNECTION-SAFE: the old implementation acquired pg_try_advisory_lock and
+  // released pg_advisory_unlock via two bare $queryRaw calls, each on an
+  // ARBITRARY pooled connection. Session advisory locks are per-connection and
+  // RE-ENTRANT, which broke this in two ways: (a) a release landing on a
+  // different connection was a silent no-op, leaking the lock to an idle
+  // pooled session for hours — every subsequent tick on every replica skipped
+  // and the whole cron silently stalled; (b) an overlapping tick whose acquire
+  // happened to land on the ORIGINAL holding connection re-acquired the lock
+  // re-entrantly and ran concurrently (duplicate job execution). Running the
+  // try-xact-lock INSIDE one interactive transaction pins acquire+hold+release
+  // to a single connection and releases at COMMIT/ROLLBACK — crash-safe, no
+  // leak, no re-entrant double-entry. `run()` itself still executes its
+  // queries on the normal pool; the transaction connection just holds the lock.
+  await prisma.$transaction(
+    async (tx) => {
+      const acquired = await tx.$queryRaw<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(${lockId}) AS locked
+      `;
+      if (!acquired[0]?.locked) {
+        logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
+        return;
+      }
+      await run();
+    },
+    { maxWait: 5_000, timeout: LOCK_BODY_TIMEOUT_MS },
+  );
 }
 
 /** Deterministic 32-bit hash. Stable for the same input across processes. */

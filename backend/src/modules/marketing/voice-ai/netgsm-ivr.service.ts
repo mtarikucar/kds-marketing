@@ -254,10 +254,37 @@ export class NetgsmIvrService {
     if (!candidates.length) return null;
     // externalId is stored with a possible leading 0 / prefix — match on the
     // last-10-digit suffix via an OR of `endsWith` candidates.
-    return this.prisma.channel.findFirst({
-      where: { type: 'VOICE', OR: candidates.map((d) => ({ externalId: { endsWith: d } })) },
+    //
+    // ACTIVE only: a tenant that DISABLES its VOICE channel must actually go
+    // silent (every sibling inbound resolver — public-channel-resolver, MO,
+    // webchat — already enforces this; this path was the lone exception,
+    // answering + metering credits on a switched-off channel).
+    //
+    // FAIL CLOSED on cross-workspace ambiguity: the suffix match is NOT an
+    // exact identity — two tenants can legitimately store the same subscriber
+    // number in different formats ('05551112233' vs '+905551112233'), both
+    // passing the exact-string uniqueness guard at registration yet both
+    // matching here. An arbitrary findFirst pick would route the call to the
+    // WRONG tenant's AI: its knowledge base read aloud to another tenant's
+    // caller (KVKK), its wallet billed, its VoiceCall rows polluted with the
+    // caller's PII. If the candidates match channels in more than one
+    // workspace, refuse to answer (the caller hears the neutral unknown-line
+    // fallback) rather than guess.
+    const matches = await this.prisma.channel.findMany({
+      where: { type: 'VOICE', status: 'ACTIVE', OR: candidates.map((d) => ({ externalId: { endsWith: d } })) },
       select: { id: true, workspaceId: true, agentProfileId: true, configPublic: true },
+      orderBy: { createdAt: 'asc' },
+      take: 5,
     });
+    if (!matches.length) return null;
+    const workspaces = new Set(matches.map((m) => m.workspaceId));
+    if (workspaces.size > 1) {
+      this.logger.error(
+        `IVR channel resolution AMBIGUOUS across workspaces for suffix(es) ${candidates.join(',')} — refusing to answer (fail closed)`,
+      );
+      return null;
+    }
+    return matches[0];
   }
 
   private async generateInfo(workspaceId: string, agent: any, dtmf: string): Promise<string> {

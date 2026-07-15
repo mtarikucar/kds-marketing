@@ -37,8 +37,17 @@ export class ScheduledJobService {
         select: { id: true },
       });
       if (existing) {
-        await db.scheduledJob.update({
-          where: { id: existing.id },
+        // ATOMIC conditional reschedule: the runner can claim this row
+        // (PENDING→RUNNING) between the findFirst and this write. An
+        // unconditional update would then rewrite runAt/payload on a row that
+        // is ALREADY EXECUTING with the old payload (or is DONE) and report
+        // success — the reschedule silently lost (a campaign the user moved
+        // to next week still launches now, and nothing exists for the new
+        // time). Guard on status and, when the claim won the race, fall
+        // through to CREATE a fresh PENDING row instead (the P2002 catch
+        // below still collapses a concurrent-create race).
+        const claimed = await db.scheduledJob.updateMany({
+          where: { id: existing.id, status: 'PENDING' },
           data: {
             runAt: opts.runAt,
             payload: opts.payload,
@@ -46,7 +55,7 @@ export class ScheduledJobService {
             ...(opts.maxAttempts ? { maxAttempts: opts.maxAttempts } : {}),
           },
         });
-        return existing.id;
+        if (claimed.count > 0) return existing.id;
       }
     }
     try {

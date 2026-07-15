@@ -66,8 +66,32 @@ export class ScheduledJobRunnerService {
     return [...this.handlers.keys()];
   }
 
+  /** In-process overlap guard — see tick(). */
+  private ticking = false;
+
   @Cron(CronExpression.EVERY_MINUTE, { name: 'scheduled-job-runner' })
   async tick(): Promise<void> {
+    // A minute tick can legitimately outlast its interval (a 100-job batch
+    // behind slow AI/media handlers). Postgres session advisory locks are
+    // RE-ENTRANT per connection, so an overlapping tick in THIS process could
+    // re-acquire the lock on the same pooled connection and run CONCURRENTLY —
+    // its reaper would then revive rows the first tick still holds in memory
+    // and double-run them (duplicate sends). One boolean kills that whole
+    // class for the in-process case; the advisory lock keeps covering the
+    // cross-replica case.
+    if (this.ticking) {
+      this.logger.debug('tick skipped: previous tick still running');
+      return;
+    }
+    this.ticking = true;
+    try {
+      await this.tickBody();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async tickBody(): Promise<void> {
     await withAdvisoryLock(this.prisma, 'scheduled-job-runner', async () => {
       // Each phase is isolated. The reaper MUST NOT be able to block dispatch:
       // it runs first, and a single thrown error here (e.g. a unique-violation)
@@ -189,6 +213,16 @@ export class ScheduledJobRunnerService {
       return;
     }
     try {
+      // Heartbeat: claimBatch stamps lockedAt ONCE for up to 100 rows, but a
+      // row can wait many minutes in this in-memory queue behind slow
+      // handlers. Without a re-stamp it would look stale (>15 min) to another
+      // replica's reaper while still queued here — revived, re-claimed and
+      // DOUBLE-RUN. Re-stamp immediately before execution so only genuinely
+      // dead claims ever age out.
+      await this.prisma.scheduledJob.update({
+        where: { id: job.id },
+        data: { lockedAt: new Date() },
+      });
       const result = await handler(job);
       if (result && typeof result === 'object' && 'reschedule' in result && result.reschedule) {
         // Self-rescheduling chain: advance THIS row in place rather than creating

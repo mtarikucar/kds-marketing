@@ -2,7 +2,7 @@ import { NetgsmIvrService } from './netgsm-ivr.service';
 
 function makeDeps() {
   const prisma = {
-    channel: { findFirst: jest.fn() },
+    channel: { findMany: jest.fn().mockResolvedValue([]) },
     agentProfile: { findFirst: jest.fn() },
     // Default: no lead matches (unknown caller) — every pre-existing test in
     // this file predates lead personalization and asserts the unpersonalized
@@ -34,7 +34,7 @@ const INPUT = { arayan_no: '0533 123 45 67', santral_no: '0850 840 73 03', arana
 describe('NetgsmIvrService', () => {
   it('first hit (no DTMF): greets + menu, records transcript, result "1"', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     const r = await svc.handle(INPUT);
@@ -59,7 +59,7 @@ describe('NetgsmIvrService', () => {
 
   it('unknown channel: safe default greeting, no throw, result "0"', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(null);
+    prisma.channel.findMany.mockResolvedValue([]);
 
     const r = await svc.handle(INPUT);
     expect(r.status).toBe('success');
@@ -69,9 +69,50 @@ describe('NetgsmIvrService', () => {
     expect(prisma.voiceCall.upsert).not.toHaveBeenCalled();
   });
 
+  it('resolves ONLY ACTIVE voice channels (a DISABLED channel must go silent, not answer + meter)', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+
+    await svc.handle(INPUT);
+
+    const where = prisma.channel.findMany.mock.calls[0][0].where;
+    expect(where.status).toBe('ACTIVE');
+    expect(where.type).toBe('VOICE');
+  });
+
+  it('FAILS CLOSED when the suffix match is ambiguous across workspaces (no cross-tenant hijack)', async () => {
+    const { prisma, svc } = makeDeps();
+    // Two tenants stored the same subscriber number in different formats —
+    // both suffix-match. Answering with an arbitrary pick would read the
+    // WRONG tenant's KB aloud, bill its wallet and write the caller's PII
+    // into its VoiceCall rows. The caller must get the neutral fallback.
+    prisma.channel.findMany.mockResolvedValue([
+      { ...CHANNEL, id: 'ch-A', workspaceId: 'ws-A' },
+      { ...CHANNEL, id: 'ch-B', workspaceId: 'ws-B' },
+    ]);
+
+    const r = await svc.handle(INPUT);
+    expect(r.result).toBe('0'); // neutral unknown-line greeting
+    expect(prisma.voiceCall.upsert).not.toHaveBeenCalled(); // no wrong-tenant writes
+  });
+
+  it('multiple matches in the SAME workspace resolve deterministically (first row), no fail-closed', async () => {
+    const { prisma, svc } = makeDeps();
+    prisma.channel.findMany.mockResolvedValue([
+      { ...CHANNEL, id: 'ch-1' },
+      { ...CHANNEL, id: 'ch-2' },
+    ]);
+    prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
+
+    const r = await svc.handle(INPUT);
+    expect(r.result).toBe('1'); // answered normally
+    expect(prisma.voiceCall.upsert).toHaveBeenCalled();
+  });
+
   it('agent digit "2": dynamic redirect to handoffNumber', async () => {
     const { prisma, anthropic, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
@@ -84,7 +125,7 @@ describe('NetgsmIvrService', () => {
 
   it('info digit "1": Claude generates info text, reserves credit, result "1"', async () => {
     const { prisma, anthropic, credits, knowledge, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     anthropic.complete.mockResolvedValue({ text: 'Çalışma saatlerimiz 09:00 - 22:00 arasıdır.' });
 
@@ -104,7 +145,7 @@ describe('NetgsmIvrService', () => {
 
   it('info digit refunds credit when Claude throws', async () => {
     const { prisma, anthropic, credits, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     anthropic.complete.mockRejectedValue(new Error('boom'));
 
@@ -118,12 +159,12 @@ describe('NetgsmIvrService', () => {
 
   it('resolves channel by santral_no when aranan_no does not match (last-10-digit)', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     await svc.handle({ ...INPUT, aranan_no: '' });
     // findFirst called with an externalId set containing the normalized santral number
-    const where = prisma.channel.findFirst.mock.calls[0][0].where;
+    const where = prisma.channel.findMany.mock.calls[0][0].where;
     expect(JSON.stringify(where)).toContain('8508407303');
   });
 
@@ -140,7 +181,7 @@ describe('NetgsmIvrService', () => {
 
   it('known caller (no DTMF) WITH ivrPersonalize opt-in: greets by name, stamps leadId on the VoiceCall row', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL_PERSONALIZE);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL_PERSONALIZE]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
 
@@ -160,7 +201,7 @@ describe('NetgsmIvrService', () => {
 
   it('known caller WITHOUT ivrPersonalize (default off): does NOT speak the name (Caller-ID is spoofable), still stamps leadId', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL); // no ivrPersonalize flag
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]); // no ivrPersonalize flag
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
 
@@ -174,7 +215,7 @@ describe('NetgsmIvrService', () => {
 
   it('unknown caller (no lead match): greeting + VoiceCall unaffected, leadId null', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     // default mock already resolves null; assert explicitly for clarity here.
     prisma.lead.findFirst.mockResolvedValue(null);
@@ -189,7 +230,7 @@ describe('NetgsmIvrService', () => {
 
   it('agent digit "2", known caller with an assigned rep: dynamic redirect to the rep dahili (not the tenant handoffNumber)', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue(LEAD_WITH_REP);
 
@@ -201,7 +242,7 @@ describe('NetgsmIvrService', () => {
 
   it('agent digit "2", known caller with an assigned rep but no dahili: falls back to the rep phone', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL);
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue({
       id: 'lead-3', contactPerson: 'Zeynep Kaya', assignedTo: { dahili: null, phone: '5551112233' },
@@ -213,9 +254,9 @@ describe('NetgsmIvrService', () => {
 
   it('agent digit "2", known caller with no assigned rep: falls back to configured priorityQueue', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue({
+    prisma.channel.findMany.mockResolvedValue([{
       ...CHANNEL, configPublic: { ...CHANNEL.configPublic, priorityQueue: '850-queue-vip' },
-    });
+    }]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP); // assignedTo: null
 
@@ -225,7 +266,7 @@ describe('NetgsmIvrService', () => {
 
   it('agent digit "2", known caller with no rep/queue configured: falls back to the tenant handoffNumber (prior behavior)', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue(CHANNEL); // no priorityQueue configured
+    prisma.channel.findMany.mockResolvedValue([CHANNEL]); // no priorityQueue configured
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
     prisma.lead.findFirst.mockResolvedValue(LEAD_NO_REP);
 
@@ -235,13 +276,13 @@ describe('NetgsmIvrService', () => {
 
   it('configPublic.ivrMenu honored: a configured digit answers straight from config, bypassing Claude/agent-handoff', async () => {
     const { prisma, anthropic, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue({
+    prisma.channel.findMany.mockResolvedValue([{
       ...CHANNEL,
       configPublic: {
         ...CHANNEL.configPublic,
         ivrMenu: { '3': { data: 'Şubemiz hafta içi 09:00-18:00 açıktır.', redirect: '850-queue-sales' } },
       },
-    });
+    }]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     const r = await svc.handle({ ...INPUT, tus_bilgisi: '3' });
@@ -254,10 +295,10 @@ describe('NetgsmIvrService', () => {
 
   it('configPublic.ivrMenu entry without a redirect: result "1", no redirect field', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue({
+    prisma.channel.findMany.mockResolvedValue([{
       ...CHANNEL,
       configPublic: { ...CHANNEL.configPublic, ivrMenu: { '3': { data: 'Bilgilendirme mesajı.' } } },
-    });
+    }]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     const r = await svc.handle({ ...INPUT, tus_bilgisi: '3' });
@@ -268,10 +309,10 @@ describe('NetgsmIvrService', () => {
 
   it('configPublic.ivrMenu still honors an AGENT_DIGITS entry (e.g. "2") when explicitly configured', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue({
+    prisma.channel.findMany.mockResolvedValue([{
       ...CHANNEL,
       configPublic: { ...CHANNEL.configPublic, ivrMenu: { '2': { data: 'Özel karşılama.', redirect: '850-queue-custom' } } },
-    });
+    }]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
@@ -281,10 +322,10 @@ describe('NetgsmIvrService', () => {
 
   it('malformed configPublic.ivrMenu entries are dropped, not thrown — falls through to the hardcoded menu', async () => {
     const { prisma, svc } = makeDeps();
-    prisma.channel.findFirst.mockResolvedValue({
+    prisma.channel.findMany.mockResolvedValue([{
       ...CHANNEL,
       configPublic: { ...CHANNEL.configPublic, ivrMenu: { '2': { data: 123 }, '9': 'not-an-object' } },
-    });
+    }]);
     prisma.agentProfile.findFirst.mockResolvedValue(AGENT);
 
     const r = await svc.handle({ ...INPUT, tus_bilgisi: '2' });
