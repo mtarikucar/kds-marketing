@@ -9,12 +9,13 @@ function makeSvc() {
       upsert: jest.fn(),
     },
   };
-  return { svc: new BrandProfileService(prisma), prisma };
+  const context: any = { invalidate: jest.fn() };
+  return { svc: new BrandProfileService(prisma, context), prisma, context };
 }
 
 describe('BrandProfileService', () => {
   it('upsert creates with brandName + DRAFT, only touching sent fields', async () => {
-    const { svc, prisma } = makeSvc();
+    const { svc, prisma, context } = makeSvc();
     (prisma.brandProfile.upsert as jest.Mock).mockImplementation(({ create }) => Promise.resolve({ id: 'b1', ...create }));
     const res = await svc.upsert('ws-1', { brandName: 'Acme', valueProps: ['fast', 'cheap'] });
     const call = (prisma.brandProfile.upsert as jest.Mock).mock.calls[0][0];
@@ -23,6 +24,8 @@ describe('BrandProfileService', () => {
     // A field not sent must not appear in the update payload (partial-safe).
     expect('tagline' in call.update).toBe(false);
     expect(res).toMatchObject({ id: 'b1', brandName: 'Acme' });
+    // Every write path invalidates the cached brand-context block.
+    expect(context.invalidate).toHaveBeenCalledWith('ws-1');
   });
 
   it('get returns the workspace profile', async () => {

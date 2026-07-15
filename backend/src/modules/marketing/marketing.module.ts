@@ -239,6 +239,7 @@ import { PerformanceLoopService } from './budget/performance-loop.service';
 import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
 import { BrandProfileService } from './brand-brain/brand-profile.service';
+import { BrandContextService } from './brand-brain/brand-context.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -855,6 +856,7 @@ import { WalletService } from './wallet/wallet.service';
     AgentRunService,
     BrandBrainService,
     BrandProfileService,
+    BrandContextService,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,
@@ -998,9 +1000,13 @@ import { WalletService } from './wallet/wallet.service';
     // Multi-workspace membership — the guard (Task 3) and auth service
     // (Tasks 4-7) inject this to resolve authorization from memberships.
     MembershipService,
-    // Brand Brain — BrandContextService (next task) and other modules inject
-    // this to read/write the workspace's consolidated brand profile.
+    // Brand Brain — other modules inject this to read/write the workspace's
+    // consolidated brand profile.
     BrandProfileService,
+    // Brand Brain — the cached always-on brand block. Tasks 4-6 inject this
+    // into conversation-ai-engine/content-ai/social/voice/research to ground
+    // every workspace AI in the brand's identity.
+    BrandContextService,
   ],
 })
 export class MarketingModule {}
