@@ -172,3 +172,83 @@ describe('MarketingAuthService — login lands on the default membership', () =>
     ).rejects.toThrow('No active workspace');
   });
 });
+
+/**
+ * Phase 1 Task 6 — refreshToken must NOT reset the session to the user's
+ * home workspace. It has to preserve whichever workspace the refresh token
+ * itself was scoped to (its `wsp` claim) and re-verify, at refresh time, that
+ * the membership backing that workspace is still ACTIVE — a membership
+ * revoked mid-session must kill the refresh loop rather than silently
+ * surviving on the stale token until the 8h access token expires.
+ */
+describe('MarketingAuthService — refreshToken preserves the active workspace', () => {
+  let svc: MarketingAuthService;
+  let jwtService: JwtService;
+  let prisma: any;
+  let membership: { resolveDefaultWorkspaceId: jest.Mock; getActiveMembership: jest.Mock };
+
+  function baseUser(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'u1',
+      workspaceId: 'home',
+      email: 'a@b.co',
+      firstName: 'A',
+      lastName: 'B',
+      phone: null,
+      avatar: null,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      tokenVersion: 0,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    jwtService = new JwtService();
+    prisma = {
+      marketingUser: { findUnique: jest.fn() },
+      workspace: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+    };
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'MARKETING_JWT_SECRET') return 'access-secret';
+        if (key === 'MARKETING_JWT_REFRESH_SECRET') return 'refresh-secret';
+        return undefined;
+      }),
+    };
+    const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    membership = { resolveDefaultWorkspaceId: jest.fn(), getActiveMembership: jest.fn() };
+    svc = new MarketingAuthService(
+      prisma as never,
+      jwtService,
+      config as never,
+      smsOtp as never,
+      membership as never,
+    );
+  });
+
+  /** Signs a refresh token exactly like generateTokens does, so refreshToken's
+   *  own jwtService.verifyAsync(refreshSecret) accepts it. */
+  function sign(payload: Record<string, unknown>) {
+    return jwtService.sign(payload, { secret: 'refresh-secret', algorithm: 'HS256' });
+  }
+
+  it('refresh keeps the token active workspace (does not reset to home)', async () => {
+    const refresh = sign({ sub: 'u1', wsp: 'wsp-2', role: 'REP', ver: 0, type: 'marketing', tokenType: 'refresh' });
+    prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+    membership.getActiveMembership.mockResolvedValue({ workspaceId: 'wsp-2', role: 'REP', customRoleId: null });
+
+    const out: any = await svc.refreshToken(refresh);
+
+    expect(membership.getActiveMembership).toHaveBeenCalledWith('u1', 'wsp-2');
+    expect(jwtService.decode(out.accessToken)).toMatchObject({ wsp: 'wsp-2', role: 'REP' });
+  });
+
+  it('refresh 401s when the token workspace membership was revoked', async () => {
+    const refresh = sign({ sub: 'u1', wsp: 'wsp-2', ver: 0, type: 'marketing', tokenType: 'refresh' });
+    prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+    membership.getActiveMembership.mockResolvedValue(null);
+
+    await expect(svc.refreshToken(refresh)).rejects.toThrow('Session revoked');
+  });
+});

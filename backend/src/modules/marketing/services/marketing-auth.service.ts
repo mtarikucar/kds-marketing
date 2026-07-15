@@ -304,12 +304,21 @@ export class MarketingAuthService {
       throw new UnauthorizedException('Session revoked');
     }
 
-    await this.assertWorkspaceActive(user.workspaceId);
+    // Multi-workspace membership Phase 1 Task 6 — a refresh must land back on
+    // the SAME workspace the session was scoped to (the refresh token's own
+    // `wsp` claim), not reset to the user's home workspace: a user active in
+    // wsp-2 who refreshes must stay in wsp-2 even if their home row points
+    // elsewhere. Re-verify the membership is still ACTIVE at refresh time too
+    // (not just at login) — a membership revoked mid-session must kill the
+    // refresh loop, not just wait for the access token to expire.
+    const activeWorkspaceId = typeof payload.wsp === 'string' ? payload.wsp : user.workspaceId;
+    const m = await this.membership.getActiveMembership(user.id, activeWorkspaceId);
+    if (!m) throw new UnauthorizedException('Session revoked');
+    await this.assertWorkspaceActive(activeWorkspaceId);
 
     // Rotate: issue a fresh pair (not just a new access token) so the
     // old refresh ages out even if the client keeps presenting it.
-    // TODO(Task 6): preserve the token's active workspace instead of resetting to home
-    return this.generateTokens(user, { workspaceId: user.workspaceId, role: user.role });
+    return this.generateTokens(user, { workspaceId: activeWorkspaceId, role: m.role });
   }
 
   /**
