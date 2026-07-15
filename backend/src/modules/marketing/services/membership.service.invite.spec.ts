@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { MembershipService } from './membership.service';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
@@ -110,6 +110,22 @@ describe('MembershipService.invite', () => {
     await expect(
       svc.invite(WS, ACTOR, { email: 'exist@x.co', role: 'REP' }),
     ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.workspaceMembership.create).not.toHaveBeenCalled();
+  });
+
+  it('customRoleId that does not belong to this workspace → 400, no create at all', async () => {
+    const { prisma, svc } = makeSvc();
+    (prisma.customRole.findFirst as jest.Mock).mockResolvedValue(null); // not found in this workspace
+
+    await expect(
+      svc.invite(WS, ACTOR, { email: 'exist@x.co', role: 'REP', customRoleId: 'role-other-ws' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.customRole.findFirst).toHaveBeenCalledWith({
+      where: { id: 'role-other-ws', workspaceId: WS },
+      select: { id: true },
+    });
+    expect(prisma.marketingUser.create).not.toHaveBeenCalled();
     expect(prisma.workspaceMembership.create).not.toHaveBeenCalled();
   });
 });

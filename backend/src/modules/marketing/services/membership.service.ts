@@ -104,6 +104,17 @@ export class MembershipService {
       throw new BadRequestException('Role must be MANAGER or REP');
     }
 
+    if (dto.customRoleId) {
+      // Mirrors RolesService.owned(): a workspace-scoped lookup guarantees a
+      // stale or cross-workspace customRoleId can never be persisted onto a
+      // new membership (would silently produce a permission-less invitee).
+      const role = await this.prisma.customRole.findFirst({
+        where: { id: dto.customRoleId, workspaceId },
+        select: { id: true },
+      });
+      if (!role) throw new BadRequestException('Custom role not found in this workspace');
+    }
+
     try {
       return await this.prisma.$transaction(async (tx) => {
         const existing = await tx.marketingUser.findUnique({
