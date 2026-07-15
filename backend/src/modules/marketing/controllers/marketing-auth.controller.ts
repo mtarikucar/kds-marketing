@@ -19,8 +19,10 @@ import { ChangePasswordDto } from '../dto/change-password.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import { RegisterWorkspaceDto } from '../dto/register-workspace.dto';
+import { SwitchWorkspaceDto } from '../dto/switch-workspace.dto';
 import { MarketingUserPayload } from '../types';
 import { getClientIp } from '../../../common/helpers/client-ip.helper';
+import { Audit } from '../../audit/audit.decorator';
 
 // Marketing realm carries platform-wide sales data; treating its auth
 // surface as tightly as the superadmin realm is appropriate.
@@ -83,6 +85,18 @@ export class MarketingAuthController {
   @Post('logout')
   logout(@CurrentMarketingUser() user: MarketingUserPayload) {
     return this.authService.logout(user.id);
+  }
+
+  // Multi-workspace membership Phase 1 Task 7 — re-mint the session for a
+  // different workspace the caller is an ACTIVE member of. Authenticated
+  // (no @MarketingPublic()): only an already-logged-in session may switch.
+  @Post('switch-workspace')
+  @Audit({ action: 'auth.switch-workspace', resourceType: 'workspace' })
+  switchWorkspace(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Body() dto: SwitchWorkspaceDto,
+  ) {
+    return this.authService.switchWorkspace(user.id, dto.workspaceId);
   }
 
   @Get('profile')

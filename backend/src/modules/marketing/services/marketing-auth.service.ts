@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
+  ForbiddenException,
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
@@ -379,6 +380,32 @@ export class MarketingAuthService {
       data: { tokenVersion: { increment: 1 } },
     });
     return { message: 'Logged out' };
+  }
+
+  /**
+   * Multi-workspace membership Phase 1 Task 7 — re-mint the session for a
+   * different workspace the caller already belongs to. This is the ONLY
+   * place besides login/refresh that signs a `wsp` claim, so it must gate on
+   * the same membership check refresh() re-verifies: no ACTIVE
+   * WorkspaceMembership for (userId, targetWorkspaceId) → refuse outright
+   * (403, no distinction from "workspace doesn't exist" — never let a caller
+   * enumerate foreign workspace ids by probing this endpoint). The home
+   * pointer moves to the target so a subsequent login lands here too, and the
+   * minted role comes from the TARGET membership, not the caller's home role.
+   */
+  async switchWorkspace(userId: string, targetWorkspaceId: string) {
+    const user = await this.prisma.marketingUser.findUnique({ where: { id: userId } });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+    const m = await this.membership.getActiveMembership(userId, targetWorkspaceId);
+    if (!m) throw new ForbiddenException('You are not a member of that workspace');
+    await this.assertWorkspaceActive(targetWorkspaceId);
+    await this.prisma.marketingUser.update({
+      where: { id: userId },
+      data: { workspaceId: targetWorkspaceId },
+    });
+    return this.generateTokens(user, { workspaceId: targetWorkspaceId, role: m.role });
   }
 
   /**

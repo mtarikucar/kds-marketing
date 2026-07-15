@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { MarketingAuthService } from './marketing-auth.service';
@@ -254,5 +255,86 @@ describe('MarketingAuthService — refreshToken preserves the active workspace',
     membership.getActiveMembership.mockResolvedValue(null);
 
     await expect(svc.refreshToken(refresh)).rejects.toThrow('Session revoked');
+  });
+});
+
+/**
+ * Phase 1 Task 7 — switchWorkspace re-mints the session for a DIFFERENT
+ * workspace the caller already belongs to. It must verify an ACTIVE
+ * WorkspaceMembership for (userId, targetWorkspaceId) BEFORE minting — this
+ * is the property refresh() later trusts blindly (it re-verifies the `wsp`
+ * claim's membership, but never re-derives it), so a switch that signed a
+ * `wsp` claim for a workspace the caller isn't an ACTIVE member of would let
+ * that claim ride the refresh loop forever. A non-member target must 403
+ * with no distinction from "workspace doesn't exist" (no enumeration).
+ */
+describe('MarketingAuthService — switchWorkspace', () => {
+  let svc: MarketingAuthService;
+  let jwtService: JwtService;
+  let prisma: any;
+  let membership: { resolveDefaultWorkspaceId: jest.Mock; getActiveMembership: jest.Mock };
+
+  function baseUser(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'u1',
+      workspaceId: 'home',
+      email: 'a@b.co',
+      firstName: 'A',
+      lastName: 'B',
+      phone: null,
+      avatar: null,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      tokenVersion: 0,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    jwtService = new JwtService();
+    prisma = {
+      marketingUser: {
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      workspace: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+    };
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'MARKETING_JWT_SECRET') return 'access-secret';
+        if (key === 'MARKETING_JWT_REFRESH_SECRET') return 'refresh-secret';
+        return undefined;
+      }),
+    };
+    const smsOtp = { issue: jest.fn(), verify: jest.fn() };
+    membership = { resolveDefaultWorkspaceId: jest.fn(), getActiveMembership: jest.fn() };
+    svc = new MarketingAuthService(
+      prisma as never,
+      jwtService,
+      config as never,
+      smsOtp as never,
+      membership as never,
+    );
+  });
+
+  it('switchWorkspace re-mints for a workspace the user is an ACTIVE member of', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+    membership.getActiveMembership.mockResolvedValue({ workspaceId: 'wsp-2', role: 'MANAGER', customRoleId: null });
+
+    const out: any = await svc.switchWorkspace('u1', 'wsp-2');
+
+    expect(membership.getActiveMembership).toHaveBeenCalledWith('u1', 'wsp-2');
+    expect(jwtService.decode(out.accessToken)).toMatchObject({ wsp: 'wsp-2', role: 'MANAGER' });
+    expect(prisma.marketingUser.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'u1' }, data: { workspaceId: 'wsp-2' } }),
+    );
+  });
+
+  it('switchWorkspace 403s a non-member target (no enumeration)', async () => {
+    prisma.marketingUser.findUnique.mockResolvedValue(baseUser());
+    membership.getActiveMembership.mockResolvedValue(null);
+
+    await expect(svc.switchWorkspace('u1', 'foreign')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 });
