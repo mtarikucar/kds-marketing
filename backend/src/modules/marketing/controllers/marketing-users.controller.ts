@@ -48,6 +48,7 @@ export class MarketingUsersController {
 
   @Post()
   @RequirePermission('settings.manage')
+  @Audit({ action: 'user.create', resourceType: 'user' })
   create(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Body() dto: CreateMarketingUserDto,
@@ -70,6 +71,12 @@ export class MarketingUsersController {
 
   @Patch(':id')
   @RequirePermission('settings.manage')
+  @Audit({
+    action: 'user.update',
+    resourceType: 'user',
+    resourceIdParam: 'id',
+    captureBody: ['role', 'status'],
+  })
   update(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,
@@ -80,6 +87,7 @@ export class MarketingUsersController {
 
   @Delete(':id')
   @RequirePermission('settings.manage')
+  @Audit({ action: 'user.remove', resourceType: 'user', resourceIdParam: 'id' })
   delete(
     @CurrentMarketingUser() actor: MarketingUserPayload,
     @Param('id') id: string,

@@ -96,6 +96,7 @@ export class MarketingAuthController {
   @Post('accept-invite')
   @MarketingPublic()
   @Throttle(LOGIN_THROTTLE)
+  @Audit({ action: 'auth.accept-invite', resourceType: 'membership' })
   async acceptInvite(@Body() dto: AcceptInviteDto) {
     const membershipId = await this.membershipService.verifyInviteToken(dto.token);
     return this.membershipService.accept(membershipId, { password: dto.password });
