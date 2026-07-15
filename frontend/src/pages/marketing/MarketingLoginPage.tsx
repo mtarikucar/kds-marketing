@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { fetchMemberships } from '../../features/marketing/api/membershipApi';
 import { loginErrorMessage } from '../../features/marketing/api/authError';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Field } from '../../components/ui/Field';
@@ -21,7 +22,7 @@ type LoginValues = z.infer<typeof loginSchema>;
 export default function MarketingLoginPage() {
   const navigate = useNavigate();
   const { t } = useTranslation('marketing');
-  const { login, isAuthenticated } = useMarketingAuthStore();
+  const { login, setMemberships, isAuthenticated } = useMarketingAuthStore();
 
   const {
     register,
@@ -43,6 +44,15 @@ export default function MarketingLoginPage() {
     try {
       const { data } = await marketingApi.post('/auth/login', values);
       login(data.user, data.accessToken, data.refreshToken);
+      // Best-effort: the login response itself carries no `memberships`
+      // (only GET /auth/profile does), so fetch it as a follow-up. A hiccup
+      // here must never block navigation into the app — the workspace
+      // switcher just stays empty until the next successful profile fetch.
+      try {
+        setMemberships(await fetchMemberships());
+      } catch {
+        // ignored — see comment above
+      }
       navigate('/dashboard');
     } catch (err: any) {
       setError('root', { message: loginErrorMessage(err, t) });

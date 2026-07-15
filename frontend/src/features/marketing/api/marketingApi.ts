@@ -74,18 +74,27 @@ marketingApi.interceptors.request.use(async (config) => {
   return config;
 });
 
-// Unauthenticated auth endpoints. A 401 from these means "bad credentials /
-// bad or expired token" — NOT "access token expired mid-session". Running the
-// refresh-retry path here is wrong: when logged out there is no refresh token,
-// so refreshMarketingToken() rejects with 'no refresh token', and the response
-// interceptor then surfaces THAT error instead of the real 401. The login page
-// would show "no refresh token" instead of "wrong credentials". So these paths
-// must bypass refresh entirely and let the original 401 propagate.
+// Unauthenticated (or auth-adjacent) auth endpoints. A 401 from these means
+// "bad credentials / bad or expired token / not a member" — NOT "access
+// token expired mid-session". Running the refresh-retry path here is wrong:
+// when logged out there is no refresh token, so refreshMarketingToken()
+// rejects with 'no refresh token', and the response interceptor then
+// surfaces THAT error instead of the real 401. The login page would show
+// "no refresh token" instead of "wrong credentials". So these paths must
+// bypass refresh entirely and let the original error propagate.
+// - /auth/switch-workspace: a 401 here means the target workspace rejected
+//   THIS user (e.g. deactivated), not "access token needs refreshing" —
+//   retrying after a refresh would just repeat the same rejection.
+// - /auth/accept-invite: called with an invite token, often by a user who
+//   isn't logged in (or is logged into an unrelated session) yet — a 401/403
+//   here is about the invite token's validity, which a token refresh can't fix.
 export const NO_REFRESH_PATHS = [
   '/auth/login',
   '/auth/register-workspace',
   '/auth/2fa/verify',
   '/auth/refresh',
+  '/auth/switch-workspace',
+  '/auth/accept-invite',
 ] as const;
 
 export function isNoRefreshPath(url: string | undefined | null): boolean {

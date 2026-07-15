@@ -24,10 +24,18 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
   },
 }));
 
+// Stub membershipApi — the login page's best-effort post-login membership
+// fetch. Resolves to an empty list; error-path behavior is covered by the
+// store's own test.
+vi.mock('../../features/marketing/api/membershipApi', () => ({
+  fetchMemberships: vi.fn(() => Promise.resolve([])),
+}));
+
 // Stub the auth store — isolated, not authenticated by default.
 vi.mock('../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: () => ({
     login: vi.fn(),
+    setMemberships: vi.fn(),
     isAuthenticated: false,
   }),
 }));
