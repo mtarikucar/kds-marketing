@@ -35,12 +35,15 @@ export class ReviewGateController {
       `s.querySelectorAll('span').forEach(el=>{el.onclick=()=>{r=+el.dataset.v;s.querySelectorAll('span').forEach(x=>x.classList.toggle('on',+x.dataset.v<=r));` +
       `if(r>=4){post('');}else{document.getElementById('fb').style.display='block';}};});` +
       `document.getElementById('send').onclick=()=>post(document.getElementById('t').value);` +
-      // Without the .catch a transient failure (offline / gateway 5xx / non-JSON)
-      // silently dropped the submission — a 5★ customer was never routed to leave
-      // the review, and a <4★ customer's private feedback vanished with no notice.
-      // Now a failure shows a retry message instead of losing the response.
+      // A non-OK response (dead/expired token 404, throttle 429, gateway 5xx)
+      // still returns a JSON error ENVELOPE, so parsing it succeeds — without the
+      // x.ok guard the else-branch showed "Thank you!" for a rating that was
+      // NEVER saved (a 5★ customer thinks their review posted but was never
+      // routed to the review site; a <4★ customer's feedback vanished). Throw on
+      // !ok so both bad-response and transient (offline / non-JSON) failures land
+      // in the .catch retry message instead of the false-success panel.
       `function post(text){err.textContent='';fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:r,text})})` +
-      `.then(x=>x.json()).then(d=>{if(d.redirectUrl&&/^https?:\\/\\//i.test(d.redirectUrl)){location.href=d.redirectUrl;}else{s.style.display='none';document.getElementById('fb').style.display='none';document.getElementById('done').style.display='block';}})` +
+      `.then(function(x){if(!x.ok)throw new Error('bad');return x.json();}).then(d=>{if(d.redirectUrl&&/^https?:\\/\\//i.test(d.redirectUrl)){location.href=d.redirectUrl;}else{s.style.display='none';document.getElementById('fb').style.display='none';document.getElementById('done').style.display='block';}})` +
       `.catch(function(){err.textContent='Could not submit — please check your connection and try again.';});}</script></body></html>`,
     );
   }

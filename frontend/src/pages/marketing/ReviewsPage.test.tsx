@@ -93,6 +93,25 @@ describe('ReviewsPage', () => {
     expect(screen.getAllByRole('button', { name: /ai draft/i })[1]).not.toBeDisabled();
   });
 
+  // A provider-synced review (status SYNCED) must be repliable — the backend
+  // reply/draft endpoints accept any status, so hiding the reply UI for SYNCED
+  // meant an imported 1★ Google review could never be answered from the app.
+  it('shows the reply/AI-draft UI for an imported (SYNCED) review', async () => {
+    (marketingApi.get as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+      url === '/reviews'
+        ? Promise.resolve({
+            data: [{ id: 'rv1', status: 'SYNCED', createdAt: '2026-01-01T00:00:00Z', rating: 1, text: 'bad' }],
+          })
+        : Promise.resolve({ data: [] }),
+    );
+    render(<ReviewsPage />, { wrapper });
+    // The AI-draft button (part of the reply affordance) renders for SYNCED.
+    expect(await screen.findByRole('button', { name: /ai draft/i })).toBeInTheDocument();
+    // …and its status badge reads "Imported", not the raw enum "SYNCED".
+    expect(screen.getByText(/imported/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^SYNCED$/)).toBeNull();
+  });
+
   // Same per-row bleed on the sources list: connecting one source must not disable
   // the Connect button on the other sources (shared connectSource mutation).
   it('connecting one review source does not disable the other sources’ Connect buttons', async () => {
