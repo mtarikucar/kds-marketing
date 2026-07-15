@@ -339,7 +339,11 @@ export class CoursesService {
       const pct = Math.round((done / total) * 100);
       // Only an ACTIVE → COMPLETED crossing graduates + issues. A COMPLETED
       // enrollment keeps its status and certificate even if pct is recomputed.
-      const graduates = pct >= 100 && e.status !== 'COMPLETED';
+      // Graduate on RAW counts, not the rounded display pct: Math.round pushes
+      // 99.5% → 100, so a >=200-lesson course would graduate + certify an
+      // enrollment sitting at done === total-1. `done` is filtered to live
+      // lessons so it can't exceed `total`; require the full set.
+      const graduates = done >= total && e.status !== 'COMPLETED';
       const updated = await this.prisma.enrollment.update({
         where: { id: e.id },
         data: {

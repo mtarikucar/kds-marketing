@@ -233,6 +233,35 @@ describe('CoursesService', () => {
     );
   });
 
+  // Graduation crosses on RAW counts, not the rounded display pct: on a course
+  // recompute over >=200 live lessons, Math.round(199/200*100) === 100, which the
+  // old `pct >= 100` test would have graduated + certified one lesson early.
+  it('does NOT graduate an enrollment at total-1 of a 200-lesson course (raw-count crossing)', async () => {
+    const { prisma, certificates, svc } = makeSvc();
+    prisma.lesson.findFirst.mockResolvedValue({ id: 'lx', moduleId: 'm1', position: 0, module: { courseId: 'c1' } } as any);
+    (prisma.$transaction as any).mockResolvedValue([]);
+    (prisma.lessonProgress.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+    (prisma.lesson.delete as jest.Mock).mockResolvedValue({ id: 'lx' });
+    (prisma.lesson.findMany as jest.Mock).mockResolvedValue(
+      Array.from({ length: 200 }, (_, i) => ({ id: 'l' + i })),
+    );
+    (prisma.enrollment.findMany as jest.Mock).mockResolvedValue([
+      { id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', status: 'ACTIVE' },
+    ]);
+    (prisma.lessonProgress.count as jest.Mock).mockResolvedValue(199); // round(99.5)=100, but 199<200
+    (prisma.enrollment.update as jest.Mock).mockImplementation((a: any) =>
+      Promise.resolve({ id: 'e1', workspaceId: WS, courseId: 'c1', leadId: 'lead-1', ...a.data }),
+    );
+
+    await svc.removeLesson(WS, 'lx');
+
+    // pct still displays 100, but the enrollment is NOT graduated + NOT certified.
+    const updateArg = (prisma.enrollment.update as jest.Mock).mock.calls[0][0];
+    expect(updateArg.data.progressPct).toBe(100);
+    expect(updateArg.data.status).toBeUndefined();
+    expect(certificates.issueForEnrollment).not.toHaveBeenCalled();
+  });
+
   // Recompute must keep a still-incomplete learner ACTIVE (only refresh the pct)
   // and must NEVER re-issue / un-graduate an already-COMPLETED enrollment.
   it('removeLesson refreshes pct without graduating a still-incomplete learner or re-issuing a graduate', async () => {

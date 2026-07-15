@@ -189,7 +189,12 @@ export class EnrollmentService {
           })
         : 0;
       const pct = total ? Math.round((done / total) * 100) : 0;
-      const isComplete = pct >= 100;
+      // Decide completion from the RAW counts, never the rounded display pct:
+      // Math.round rounds 99.5% up to 100, so on a course with >=200 live lessons
+      // a learner at done === total-1 would round to 100 and be graduated (+ minted
+      // a certificate, + awarded COURSE_COMPLETE) one lesson early. `done` is
+      // filtered to live lessons so it can't exceed `total`; require the full set.
+      const isComplete = total > 0 && done >= total;
       return tx.enrollment.update({
         where: { id },
         data: {
