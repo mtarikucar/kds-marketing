@@ -29,7 +29,10 @@ function makeSvc() {
   const config = {
     get: jest.fn((key: string) => (key === 'MARKETING_JWT_SECRET' ? 'invite-secret' : undefined)),
   };
-  const svc = new MembershipService(prisma as any, jwt, config as any);
+  // accept() never touches entitlements (only invite() does) — a default
+  // unlimited stub just satisfies the constructor.
+  const entitlements = { getEffective: jest.fn().mockResolvedValue({ maxUsers: -1 }) };
+  const svc = new MembershipService(prisma as any, jwt, config as any, entitlements as any);
   return { prisma, svc, jwt };
 }
 

@@ -11,17 +11,21 @@ import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-
  * A real JwtService is used (not a jest.fn() stub) so `.decode()` can inspect
  * the accept token's claims, mirroring marketing-auth.membership.spec.ts.
  */
-function makeSvc() {
+function makeSvc(maxUsers: number = -1) {
   const prisma = mockPrismaClient();
   // invite() runs in one $transaction; execute the callback against the same
   // mocked client (mirrors marketing-users.service.spec.ts's makeSvc()).
   (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
+  (prisma.$queryRawUnsafe as any).mockResolvedValue([{ locked: 'x' }]);
   const jwt = new JwtService();
   const config = {
     get: jest.fn((key: string) => (key === 'MARKETING_JWT_SECRET' ? 'invite-secret' : undefined)),
   };
-  const svc = new MembershipService(prisma as any, jwt, config as any);
-  return { prisma, svc, jwt };
+  // Defaults to unlimited so the existing (non-seat-cap) tests below are
+  // unaffected; the seat-cap describe block overrides this per-test.
+  const entitlements = { getEffective: jest.fn().mockResolvedValue({ maxUsers }) };
+  const svc = new MembershipService(prisma as any, jwt, config as any, entitlements as any);
+  return { prisma, svc, jwt, entitlements };
 }
 
 const WS = 'ws-1';
@@ -141,5 +145,60 @@ describe('MembershipService.invite', () => {
     const { inviteToken } = await svc.invite(WS, ACTOR, { email: 'rt@x.co', role: 'REP' });
 
     await expect(svc.verifyInviteToken(inviteToken!)).resolves.toBe('mem-roundtrip');
+  });
+});
+
+// Task 13 review fix (Fix 2) — the seat cap used to be enforced ONLY by
+// MarketingUsersService.create()'s own wrapper, leaving this route (the
+// controller's POST /marketing/users/invite calls this method directly)
+// completely unbounded. invite() must now enforce it itself, under the same
+// per-workspace advisory lock create() used to take.
+describe('MembershipService.invite — seat cap (Fix 2)', () => {
+  it('rejects an invite when the workspace is already at its seat cap', async () => {
+    const { prisma, svc } = makeSvc(5);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(5); // at cap
+    await expect(
+      svc.invite(WS, ACTOR, { email: 'over-cap@x.co', role: 'REP' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.marketingUser.findUnique).not.toHaveBeenCalled();
+    expect(prisma.workspaceMembership.create).not.toHaveBeenCalled();
+  });
+
+  it('counts INVITED memberships toward the cap, not just ACTIVE', async () => {
+    const { prisma, svc } = makeSvc(2);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(2); // e.g. 1 ACTIVE + 1 INVITED
+    await expect(
+      svc.invite(WS, ACTOR, { email: 'over-cap@x.co', role: 'REP' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.workspaceMembership.count).toHaveBeenCalledWith({
+      where: { workspaceId: WS, role: { not: 'SYSTEM' }, status: { in: ['ACTIVE', 'INVITED'] } },
+    });
+  });
+
+  it('allows the invite when a seat is free, under the per-workspace advisory lock', async () => {
+    const { prisma, svc } = makeSvc(5);
+    (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(4); // room for one more
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue({ id: 'u-existing' });
+    (prisma.workspaceMembership.findFirst as jest.Mock).mockResolvedValue(null); // no dup
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-ok' });
+
+    const out = await svc.invite(WS, ACTOR, { email: 'room@x.co', role: 'REP' });
+
+    expect(out).toEqual({ membershipId: 'mem-ok', status: 'INVITED' });
+    const lockSql = (prisma.$queryRawUnsafe as jest.Mock).mock.calls[0][0] as string;
+    expect(lockSql).toContain('pg_advisory_xact_lock');
+    expect(lockSql).toContain('users:ws-1');
+  });
+
+  it('skips the count/lock entirely on an unlimited (-1) plan', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    (prisma.marketingUser.findUnique as jest.Mock).mockResolvedValue({ id: 'u-existing' });
+    (prisma.workspaceMembership.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.workspaceMembership.create as jest.Mock).mockResolvedValue({ id: 'mem-unlimited' });
+
+    await svc.invite(WS, ACTOR, { email: 'unlimited@x.co', role: 'REP' });
+
+    expect(prisma.workspaceMembership.count).not.toHaveBeenCalled();
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 });

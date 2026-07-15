@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { RolesService } from './roles.service';
 import {
   mockPrismaClient,
@@ -52,7 +57,7 @@ describe('RolesService', () => {
 
   it('assignToUser refuses a role more powerful than the actor', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u1' } as any);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({ role: undefined, customRoleId: undefined } as any);
     // the target role grants billing.manage, which a MANAGER actor does not hold
     prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['billing.manage'] } as any);
     await expect(svc.assignToUser(WS, 'u1', 'r1', MANAGER)).rejects.toBeInstanceOf(ForbiddenException);
@@ -61,8 +66,9 @@ describe('RolesService', () => {
 
   it('assignToUser refuses to modify a user more powerful than the actor (no OWNER lock-out)', async () => {
     const { prisma, svc } = makeSvc();
-    // Target is an OWNER (holds billing.manage / users.manage a MANAGER lacks).
-    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'owner-1', role: 'OWNER', customRoleId: null } as any);
+    // Target's ACTIVE membership in this workspace is OWNER (holds
+    // billing.manage / users.manage a MANAGER lacks).
+    prisma.workspaceMembership.findFirst.mockResolvedValue({ role: 'OWNER', customRoleId: null } as any);
     // Even a harmless weak role must be refused — assigning it would REPLACE the
     // OWNER's legacy permissions, downgrading + locking them out of settings.
     prisma.customRole.findFirst.mockResolvedValue({ id: 'weak', permissions: ['leads.read'] } as any);
@@ -77,7 +83,7 @@ describe('RolesService', () => {
   it('assignToUser refuses to UNASSIGN a role when the restored legacy perms exceed the actor', async () => {
     const { prisma, svc } = makeSvc();
     // Legacy role OWNER (full perms), currently MASKED by a weak custom role.
-    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'owner-1', role: 'OWNER', customRoleId: 'weak' } as any);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({ role: 'OWNER', customRoleId: 'weak' } as any);
     // Current perms resolve to the weak role → the MANAGER out-ranks them, so the
     // actor-outranks check passes and only the new within-grant guard can catch it.
     prisma.customRole.findFirst.mockResolvedValue({ id: 'weak', permissions: ['leads.read'] } as any);
@@ -88,11 +94,37 @@ describe('RolesService', () => {
   it('assignToUser allows UNASSIGN when the restored legacy perms are within the actor grant', async () => {
     const { prisma, svc } = makeSvc();
     // Legacy role REP (a subset of MANAGER's grant) → reverting is safe.
-    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'rep-1', role: 'REP', customRoleId: 'r1' } as any);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({ role: 'REP', customRoleId: 'r1' } as any);
     prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read'] } as any);
     (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
     const out = await svc.assignToUser(WS, 'rep-1', null, MANAGER);
     expect(out).toEqual({ userId: 'rep-1', customRoleId: null });
+  });
+
+  // Fix 1a (Task 13 review) — the outranks check must evaluate the target at
+  // their CURRENT membership role, not their frozen-at-creation MarketingUser
+  // role. A user promoted to OWNER after their row was created would still
+  // read back as e.g. REP off the stale column, letting a MANAGER "outrank"
+  // and modify an OWNER — this is exactly the bug the fix closes.
+  it('assignToUser evaluates a promoted target at their CURRENT membership role, not a stale MarketingUser role', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspaceMembership.findFirst.mockResolvedValue({ role: 'OWNER', customRoleId: null } as any);
+    await expect(svc.assignToUser(WS, 'promoted-1', null, MANAGER)).rejects.toBeInstanceOf(ForbiddenException);
+    // The read must come from the membership, scoped to THIS workspace and
+    // the ACTIVE row — never from marketingUser.
+    expect(prisma.workspaceMembership.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'promoted-1', workspaceId: WS, status: 'ACTIVE' },
+      select: { role: true, customRoleId: true },
+    });
+    expect(prisma.marketingUser.findFirst).not.toHaveBeenCalled();
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+  });
+
+  it('assignToUser 404s when the target has no ACTIVE membership in this workspace', async () => {
+    const { prisma, svc } = makeSvc();
+    prisma.workspaceMembership.findFirst.mockResolvedValue(null);
+    await expect(svc.assignToUser(WS, 'ghost-1', null, MANAGER)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 
   it('resolves a custom role permission set when assigned', async () => {
@@ -165,18 +197,19 @@ describe('RolesService', () => {
   // Self-action footgun: assigning yourself a weaker custom role strips your own
   // admin access (a custom role REPLACES legacy perms) → self-lockout. Role
   // changes must target OTHERS. Mirrors the user-account self-deactivation guard.
+  // This guard fires BEFORE any membership read, so no mock is needed for it.
   it('assignToUser refuses to change the actor’s OWN role', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'me', role: 'MANAGER', customRoleId: null } as any);
     await expect(
       svc.assignToUser(WS, 'me', null, { ...MANAGER, id: 'me' } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.workspaceMembership.findFirst).not.toHaveBeenCalled();
     expect(prisma.marketingUser.update).not.toHaveBeenCalled();
   });
 
   it('assignToUser validates the user + role belong to the workspace', async () => {
     const { prisma, svc } = makeSvc();
-    prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u1' } as any);
+    prisma.workspaceMembership.findFirst.mockResolvedValue({ role: undefined, customRoleId: undefined } as any);
     prisma.customRole.findFirst.mockResolvedValue({ id: 'r1', permissions: ['leads.read'] } as any);
     (prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
     const out = await svc.assignToUser(WS, 'u1', 'r1', OWNER);

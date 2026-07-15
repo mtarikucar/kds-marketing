@@ -47,9 +47,13 @@ export class MarketingUsersService {
    * sentinels don't occupy seats. Counts ACTIVE **and** INVITED memberships —
    * a pending invite already consumes a seat (spec §5: "invites are bounded
    * by the seat limit"), so accepting the invite later needs no re-check.
-   * Shared by create() (invite) AND update()'s reactivation path — both
-   * consume a seat, so both must pass through here or a workspace at its cap
-   * could bypass the limit (deactivate → invite → reactivate).
+   * Used by update()'s SUSPENDED→ACTIVE reactivation path — a reactivation
+   * consumes a seat exactly like an invite, so it must pass through the same
+   * check, or a workspace at its cap could bypass the limit
+   * (deactivate → invite → reactivate). create() does NOT call this anymore
+   * (see create()'s docstring) — MembershipService.invite() enforces the
+   * identical check itself now, for both this service's create() AND
+   * POST /marketing/users/invite.
    */
   private async assertSeatAvailable(
     db: Prisma.TransactionClient,
@@ -68,9 +72,11 @@ export class MarketingUsersService {
   }
 
   /** Advisory-lock the workspace's seat counter so the seat-check + the
-   *  seat-consuming write (create / reactivate) is atomic — a bare
-   *  count-then-write lets two concurrent requests at (cap-1) both pass and
-   *  exceed maxUsers. Mirrors the research / knowledge / ai-credits quota lock. */
+   *  seat-consuming write (reactivate) is atomic — a bare count-then-write
+   *  lets two concurrent requests at (cap-1) both pass and exceed maxUsers.
+   *  Mirrors the research / knowledge / ai-credits quota lock, and the
+   *  identical lock MembershipService.invite() takes on its own (separate)
+   *  seat-consuming write. */
   private seatLock(tx: Prisma.TransactionClient, workspaceId: string) {
     return tx.$queryRawUnsafe(
       `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('users:' + workspaceId)}))::text AS locked`,
@@ -78,28 +84,24 @@ export class MarketingUsersService {
   }
 
   /**
-   * "Create a user" is now "invite a membership" — the MANAGER/REP role floor
-   * and the OWNER/SYSTEM exclusion are enforced by MembershipService.invite
-   * itself (identical BadRequestException), so this stays a thin seat-guarded
-   * wrapper rather than duplicating that check. `actorId` becomes the
-   * membership's `invitedByUserId`; it's optional only so existing callers
-   * that don't have an actor in scope keep compiling (the controller always
-   * has one).
+   * "Create a user" is now "invite a membership" — the MANAGER/REP role
+   * floor, the OWNER/SYSTEM exclusion, AND the seat cap are ALL enforced by
+   * MembershipService.invite() itself (identical BadRequestException), so
+   * this is a thin, unconditional delegate rather than duplicating any of
+   * that. It used to open its OWN advisory-locked transaction around a seat
+   * count before calling invite() — but invite() now takes the SAME
+   * per-workspace pg_advisory_xact_lock on ITS OWN (separate, un-nested)
+   * transaction, and two different connections contending for the identical
+   * lock key — one held by this method's outer transaction while it awaits
+   * invite(), the other opened BY that same invite() call — would
+   * self-deadlock. Delegating outright makes invite() the single seat-cap
+   * choke point for both this admin route and POST /marketing/users/invite,
+   * with no lock nesting. `actorId` becomes the membership's
+   * `invitedByUserId`; it's optional only so existing callers that don't
+   * have an actor in scope keep compiling (the controller always has one).
    */
   async create(workspaceId: string, dto: CreateMarketingUserDto, actorId?: string) {
-    const effective = await this.entitlements.getEffective(workspaceId);
-
-    // Unlimited plan — no cap to race against.
-    if (effective.maxUsers === -1) {
-      return this.membership.invite(workspaceId, actorId ?? '', dto);
-    }
-    // Serialize the seat-check + invite per workspace under an advisory
-    // xact-lock (a pending INVITE consumes a seat — see assertSeatAvailable).
-    return this.prisma.$transaction(async (tx) => {
-      await this.seatLock(tx, workspaceId);
-      await this.assertSeatAvailable(tx, workspaceId, effective.maxUsers);
-      return this.membership.invite(workspaceId, actorId ?? '', dto);
-    });
+    return this.membership.invite(workspaceId, actorId ?? '', dto);
   }
 
   /**
@@ -131,28 +133,39 @@ export class MarketingUsersService {
     }));
   }
 
+  /**
+   * Mirrors findAll()'s join: role/status come from THIS workspace's
+   * membership row, not the (frozen-at-creation, now-stale) MarketingUser
+   * columns — a promoted/suspended-then-reactivated user must read back
+   * their CURRENT membership state here, not what they were at signup.
+   */
   async findOne(workspaceId: string, id: string) {
-    const user = await this.prisma.marketingUser.findFirst({
-      where: { id, workspaceId, role: { not: 'SYSTEM' } },
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: { userId: id, workspaceId, role: { not: 'SYSTEM' } },
       select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        avatar: true,
         role: true,
         status: true,
-        lastLogin: true,
-        createdAt: true,
-        _count: {
-          select: { leads: true, activities: true, commissions: true, tasks: true },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            avatar: true,
+            lastLogin: true,
+            createdAt: true,
+            _count: {
+              select: { leads: true, activities: true, commissions: true, tasks: true },
+            },
+          },
         },
       },
     });
 
-    if (!user) throw new NotFoundException('User not found');
-    return user;
+    if (!membership) throw new NotFoundException('User not found');
+    const { user, role, status } = membership;
+    return { ...user, role, status };
   }
 
   /**
@@ -219,11 +232,24 @@ export class MarketingUsersService {
       this.assertCanDeactivate(membership, id, actorRole, actorId ?? '');
     }
 
-    // Reactivating a non-ACTIVE membership consumes a seat, exactly like
+    // Reactivation via this admin path may only flip a SUSPENDED membership
+    // back to ACTIVE. An INVITED membership must NEVER be flipped straight
+    // to ACTIVE here — that would bypass MembershipService.accept(), which
+    // is the only place a pending invite's REAL password gets set. Doing it
+    // here would produce an ACTIVE member stuck with the unusable
+    // invite-time sentinel password (can never log in) while still
+    // consuming a real seat.
+    if (dto.status === 'ACTIVE' && membership.status === 'INVITED') {
+      throw new BadRequestException(
+        'A pending invite must be accepted by the invitee, not reactivated',
+      );
+    }
+
+    // Reactivating a SUSPENDED membership consumes a seat, exactly like
     // create()/invite() — so re-check the package limit (atomically, at the
     // write below). Without this, a workspace at its cap could exceed it via
     // deactivate → invite → reactivate.
-    const reactivating = dto.status === 'ACTIVE' && membership.status !== 'ACTIVE';
+    const reactivating = dto.status === 'ACTIVE' && membership.status === 'SUSPENDED';
     const effective = reactivating ? await this.entitlements.getEffective(workspaceId) : null;
 
     // Email is the global unique login identity. When it's being changed, reject

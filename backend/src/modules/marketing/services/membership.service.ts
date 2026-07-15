@@ -12,6 +12,7 @@ import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { EntitlementsService } from '../../billing/entitlements.service';
 import { MembershipSummary } from '../types';
 import { InviteMemberDto } from '../dto/invite-member.dto';
 
@@ -26,6 +27,12 @@ function b64url(input: Buffer | string): string {
     .replace(/\//g, '_');
 }
 
+/** Single-quote a lock key for the raw advisory-lock SELECT. Mirrors
+ *  marketing-users.service.ts's local helper of the same name. */
+function escapeLockKey(key: string): string {
+  return `'${key.replace(/'/g, "''")}'`;
+}
+
 /**
  * The membership lifecycle + authorization-resolution seam. A MarketingUser
  * identity holds N WorkspaceMemberships; the active one supplies the request's
@@ -38,6 +45,7 @@ export class MembershipService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   /** The ACTIVE membership binding a user to a workspace, or null. */
@@ -100,6 +108,12 @@ export class MembershipService {
    * either the MarketingUser.email unique or the (userId, workspaceId)
    * membership unique (a concurrent duplicate invite) maps to the same 409
    * the pre-check throws.
+   *
+   * Task 13 review fix — this is the SOLE seat-cap enforcement point: it used
+   * to be checked only by MarketingUsersService.create()'s own wrapper,
+   * leaving POST /marketing/users/invite (which calls this method directly)
+   * completely unbounded. create() now delegates straight here with no local
+   * check of its own, so both routes share this one implementation.
    */
   async invite(
     workspaceId: string,
@@ -123,8 +137,33 @@ export class MembershipService {
       if (!role) throw new BadRequestException('Custom role not found in this workspace');
     }
 
+    // Seat cap (-1 = unlimited, nothing to check). Read OUTSIDE the
+    // transaction (cheap, cached 30s by EntitlementsService) — only the
+    // count + the seat-consuming create need to be atomic.
+    const effective = await this.entitlements.getEffective(workspaceId);
+
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (effective.maxUsers !== -1) {
+          // Advisory-lock the workspace's seat counter so the seat-check + the
+          // seat-consuming membership create is atomic — a bare count-then-write
+          // lets two concurrent invites at (cap-1) both pass and exceed
+          // maxUsers. Mirrors marketing-users.service.ts's seatLock. Counts
+          // ACTIVE **and** INVITED memberships — a pending invite already
+          // consumes a seat, so accepting it later needs no re-check.
+          await tx.$queryRawUnsafe(
+            `SELECT pg_advisory_xact_lock(hashtext(${escapeLockKey('users:' + workspaceId)}))::text AS locked`,
+          );
+          const seats = await tx.workspaceMembership.count({
+            where: { workspaceId, role: { not: 'SYSTEM' }, status: { in: ['ACTIVE', 'INVITED'] } },
+          });
+          if (seats >= effective.maxUsers) {
+            throw new BadRequestException(
+              `Seat limit reached (${effective.maxUsers}) — upgrade your package to add users`,
+            );
+          }
+        }
+
         const existing = await tx.marketingUser.findUnique({
           where: { email: dto.email },
         });

@@ -14,17 +14,20 @@ const WS = 'ws-1';
 
 function makeSvc(maxUsers: number) {
   const prisma = mockPrismaClient();
-  // The seat-limit paths (create/invite + reactivation) run under an
-  // advisory-locked $transaction; make it execute the callback against the
-  // same mock client.
+  // The reactivation seat-limit path runs under an advisory-locked
+  // $transaction; make it execute the callback against the same mock
+  // client. (create() no longer locks anything itself — see create()'s
+  // docstring in marketing-users.service.ts — so this only matters for
+  // update()'s SUSPENDED→ACTIVE reactivation tests below.)
   (prisma.$transaction as any).mockImplementation(async (fn: any) => fn(prisma));
   (prisma.$queryRawUnsafe as any).mockResolvedValue([{ locked: 'x' }]);
   const config = { get: () => undefined } as any;
   const entitlements = { getEffective: jest.fn().mockResolvedValue({ maxUsers }) } as any;
   // Multi-workspace membership (Phase 2 Task 13) — create() now delegates the
-  // actual row-creation to MembershipService.invite(); mocked here so these
-  // are true unit tests of the seat-guard wrapper, not of invite() itself
-  // (that's covered by membership.service.invite.spec.ts).
+  // actual row-creation (AND the seat cap — Fix 2) to
+  // MembershipService.invite(); mocked here so these are true unit tests of
+  // the thin delegate, not of invite() itself (that's covered by
+  // membership.service.invite.spec.ts).
   const membership = { invite: jest.fn() } as any;
   const svc = new MarketingUsersService(prisma as any, config, entitlements, membership);
   return { prisma, svc, entitlements, membership };
@@ -201,59 +204,79 @@ describe('MarketingUsersService — seat limit', () => {
         svc.update(WS, 'u1', { status: 'ACTIVE' } as any, 'MANAGER'),
       ).resolves.toBeDefined();
     });
-  });
 
-  describe('create() (delegates to MembershipService.invite under the seat guard)', () => {
-    it('still enforces the seat cap (shared check) — and never reaches invite()', async () => {
-      const { prisma, svc, membership } = makeSvc(5);
-      (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(5); // at cap
+    // Fix 3 (Task 13 review) — an INVITED membership flipped straight to
+    // ACTIVE through this admin path bypasses MembershipService.accept(),
+    // which is the ONLY place a pending invite's real password gets set.
+    // That would produce an ACTIVE member stuck with the unusable
+    // invite-time sentinel password (can never log in) while still
+    // consuming a real seat. Only SUSPENDED→ACTIVE may proceed here.
+    it('rejects reactivating an INVITED membership straight to ACTIVE (must go through accept())', async () => {
+      const { prisma, svc } = makeSvc(-1);
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        id: 'mem-u1', userId: 'u1', workspaceId: WS, role: 'REP', status: 'INVITED',
+        user: { id: 'u1', email: 'u1@b.com', firstName: 'U', lastName: '1', phone: null },
+      } as any);
       await expect(
-        svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any, 'actor-1'),
+        svc.update(WS, 'u1', { status: 'ACTIVE' } as any, 'MANAGER'),
       ).rejects.toBeInstanceOf(BadRequestException);
-      expect(membership.invite).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.update).not.toHaveBeenCalled();
+      expect(prisma.marketingUser.update).not.toHaveBeenCalled();
+      // No seat-cap machinery should even run for a rejected transition.
+      expect(prisma.workspaceMembership.count).not.toHaveBeenCalled();
     });
 
-    it('delegates to MembershipService.invite with the actor id, on a free seat', async () => {
-      const { prisma, svc, membership } = makeSvc(5);
-      (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(4);
+    it('SUSPENDED→ACTIVE reactivation still works after the INVITED guard (parity check)', async () => {
+      const { prisma, svc } = makeSvc(-1);
+      prisma.workspaceMembership.findFirst.mockResolvedValue({
+        id: 'mem-u2', userId: 'u2', workspaceId: WS, role: 'REP', status: 'SUSPENDED',
+        user: { id: 'u2', email: 'u2@b.com', firstName: 'U', lastName: '2', phone: null },
+      } as any);
+      (prisma.workspaceMembership.update as jest.Mock).mockResolvedValue({ role: 'REP', status: 'ACTIVE' });
+      await expect(
+        svc.update(WS, 'u2', { status: 'ACTIVE' } as any, 'MANAGER'),
+      ).resolves.toMatchObject({ id: 'u2', status: 'ACTIVE' });
+    });
+  });
+
+  // Fix 2 (Task 13 review) — create() is now an UNCONDITIONAL thin delegate:
+  // the seat cap lives ENTIRELY in MembershipService.invite() (see
+  // membership.service.invite.spec.ts's "seat cap (Fix 2)" block), so this
+  // service no longer counts seats or takes its own lock before calling
+  // invite() — doing so, on TOP of invite()'s own identical lock, would
+  // self-deadlock two separate connections contending for the same
+  // pg_advisory_xact_lock key (see create()'s docstring).
+  describe('create() (unconditional thin delegate to MembershipService.invite)', () => {
+    it('delegates straight to MembershipService.invite with the actor id — no local seat check or lock', async () => {
+      const { prisma, svc, membership, entitlements } = makeSvc(5);
       (membership.invite as jest.Mock).mockResolvedValue({ membershipId: 'mem-new', status: 'INVITED' });
       const dto = { email: 'a@b.com', password: 'Abcd1234', firstName: 'A', lastName: 'B', role: 'REP' };
       const out = await svc.create(WS, dto as any, 'actor-1');
       expect(membership.invite).toHaveBeenCalledWith(WS, 'actor-1', dto);
       expect(out).toEqual({ membershipId: 'mem-new', status: 'INVITED' });
+      expect(entitlements.getEffective).not.toHaveBeenCalled();
+      expect(prisma.workspaceMembership.count).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
     });
 
-    // Seat count includes INVITED, not just ACTIVE — a pending invite already
-    // consumes a seat, so accepting it later needs no re-check.
-    it('counts INVITED memberships toward the seat cap, not just ACTIVE', async () => {
-      const { prisma, svc, membership } = makeSvc(2);
-      (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(2); // e.g. 1 ACTIVE + 1 INVITED
+    it('propagates the BadRequestException MembershipService.invite throws at its own seat cap', async () => {
+      const { svc, membership } = makeSvc(5);
+      (membership.invite as jest.Mock).mockRejectedValue(
+        new BadRequestException('Seat limit reached (5) — upgrade your package to add users'),
+      );
       await expect(
-        svc.create(WS, { email: 'new@b.com', password: 'Abcd1234', role: 'REP' } as any, 'actor-1'),
+        svc.create(WS, { email: 'over-cap@b.com', password: 'Abcd1234', role: 'REP' } as any, 'actor-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
-      expect(prisma.workspaceMembership.count).toHaveBeenCalledWith({
-        where: { workspaceId: WS, role: { not: 'SYSTEM' }, status: { in: ['ACTIVE', 'INVITED'] } },
-      });
-      expect(membership.invite).not.toHaveBeenCalled();
     });
   });
 
-  // A bare seat-count-then-write lets two concurrent seat-consuming requests at
-  // (cap-1) BOTH pass and exceed maxUsers. The seat-check + write is serialized
-  // under a per-workspace advisory xact-lock (the research / knowledge pattern).
-  describe('seat-limit — advisory-lock race safety', () => {
-    it('create() serializes the seat-check + invite under a per-workspace advisory lock', async () => {
-      const { prisma, svc, membership } = makeSvc(5);
-      (prisma.workspaceMembership.count as jest.Mock).mockResolvedValue(4);
-      (membership.invite as jest.Mock).mockResolvedValue({ membershipId: 'mem-new', status: 'INVITED' });
-      await svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any, 'actor-1');
-      expect(prisma.$transaction).toHaveBeenCalled();
-      const lockSql = (prisma.$queryRawUnsafe as jest.Mock).mock.calls[0][0] as string;
-      expect(lockSql).toContain('pg_advisory_xact_lock');
-      expect(lockSql).toContain('users:ws-1');
-      expect(membership.invite).toHaveBeenCalled();
-    });
-
+  // A bare seat-count-then-write lets two concurrent seat-consuming
+  // reactivations at (cap-1) BOTH pass and exceed maxUsers. update()'s
+  // reactivation path is serialized under a per-workspace advisory xact-lock
+  // (the research / knowledge pattern) — the create() side of this is now
+  // MembershipService.invite()'s own concern (see its spec).
+  describe('seat-limit — advisory-lock race safety (update() reactivation)', () => {
     it('reactivation locks the seat-check + the ACTIVE flip', async () => {
       const { prisma, svc } = makeSvc(5);
       prisma.workspaceMembership.findFirst.mockResolvedValue({
@@ -267,14 +290,6 @@ describe('MarketingUsersService — seat limit', () => {
       const lockSql = (prisma.$queryRawUnsafe as jest.Mock).mock.calls[0][0] as string;
       expect(lockSql).toContain('users:ws-1');
       expect(prisma.workspaceMembership.update).toHaveBeenCalled();
-    });
-
-    it('create() on an unlimited (-1) plan skips the lock', async () => {
-      const { prisma, svc, membership } = makeSvc(-1);
-      (membership.invite as jest.Mock).mockResolvedValue({ membershipId: 'mem-new', status: 'INVITED' });
-      await svc.create(WS, { email: 'a@b.com', password: 'Abcd1234', role: 'REP' } as any, 'actor-1');
-      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
-      expect(membership.invite).toHaveBeenCalled();
     });
   });
 
@@ -365,5 +380,81 @@ describe('MarketingUsersService — findAll()', () => {
     const { prisma, svc } = makeSvc(-1);
     (prisma.workspaceMembership.findMany as jest.Mock).mockResolvedValue([]);
     await expect(svc.findAll(WS)).resolves.toEqual([]);
+  });
+});
+
+// Fix 1b (Task 13 review) — findOne() used to read role/status off the
+// (frozen-at-creation, now-stale) MarketingUser row; it must join the
+// membership the same way findAll() does.
+describe('MarketingUsersService — findOne()', () => {
+  it("returns the MEMBERSHIP's role/status (not the stale MarketingUser columns), joined to the identity", async () => {
+    const { prisma, svc } = makeSvc(-1);
+    (prisma.workspaceMembership.findFirst as jest.Mock).mockResolvedValue({
+      role: 'MANAGER',
+      status: 'ACTIVE',
+      user: {
+        id: 'u1',
+        email: 'a@b.com',
+        firstName: 'A',
+        lastName: 'B',
+        phone: '+905551112233',
+        avatar: null,
+        lastLogin: new Date('2024-02-01'),
+        createdAt: new Date('2024-01-01'),
+        _count: { leads: 3, activities: 5, commissions: 1, tasks: 2 },
+      },
+    });
+
+    const out = await svc.findOne(WS, 'u1');
+
+    expect(prisma.workspaceMembership.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', workspaceId: WS, role: { not: 'SYSTEM' } },
+      select: {
+        role: true,
+        status: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            avatar: true,
+            lastLogin: true,
+            createdAt: true,
+            _count: {
+              select: { leads: true, activities: true, commissions: true, tasks: true },
+            },
+          },
+        },
+      },
+    });
+    expect(out).toEqual({
+      id: 'u1',
+      email: 'a@b.com',
+      firstName: 'A',
+      lastName: 'B',
+      phone: '+905551112233',
+      avatar: null,
+      lastLogin: new Date('2024-02-01'),
+      createdAt: new Date('2024-01-01'),
+      _count: { leads: 3, activities: 5, commissions: 1, tasks: 2 },
+      role: 'MANAGER',
+      status: 'ACTIVE',
+    });
+  });
+
+  it('404s when no membership ties this user to the workspace', async () => {
+    const { prisma, svc } = makeSvc(-1);
+    (prisma.workspaceMembership.findFirst as jest.Mock).mockResolvedValue(null);
+    await expect(svc.findOne(WS, 'ghost-1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('404s on a SYSTEM sentinel membership (not a manageable "user")', async () => {
+    // The `role: { not: 'SYSTEM' }` filter means the mocked findFirst simply
+    // returns null for a SYSTEM row, same as a real Prisma query would.
+    const { prisma, svc } = makeSvc(-1);
+    (prisma.workspaceMembership.findFirst as jest.Mock).mockResolvedValue(null);
+    await expect(svc.findOne(WS, 'sys-1')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

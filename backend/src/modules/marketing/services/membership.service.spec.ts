@@ -4,10 +4,16 @@ import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-
 function makeSvc() {
   const prisma = mockPrismaClient();
   // These tests exercise the pre-existing authz-resolution reads only (never
-  // invite()), so the jwt/config mocks just need to satisfy the constructor.
+  // invite()), so the jwt/config/entitlements mocks just need to satisfy the
+  // constructor. entitlements defaults to unlimited so a stray call from
+  // invite() (not exercised by this file) wouldn't seat-limit anything.
   const jwt = { sign: jest.fn() };
   const config = { get: jest.fn() };
-  return { prisma, svc: new MembershipService(prisma as any, jwt as any, config as any) };
+  const entitlements = { getEffective: jest.fn().mockResolvedValue({ maxUsers: -1 }) };
+  return {
+    prisma,
+    svc: new MembershipService(prisma as any, jwt as any, config as any, entitlements as any),
+  };
 }
 
 describe('MembershipService', () => {
