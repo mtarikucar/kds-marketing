@@ -135,6 +135,27 @@ describe('publishLinkedIn — /rest/posts (text + image + multiImage)', () => {
     expect(postBody.content.multiImage).toBeUndefined();
   });
 
+  it('a safeFetch THROW on the raw image download (SSRF-block / DNS / timeout, after a successful init) is caught → {ok:false}, not propagated', async () => {
+    // The init call goes through linkedinRest (which catches). But the raw image-bytes download
+    // `safeFetch(item.url)` (network-adapters.ts:539) is NOT wrapped, and safeFetch THROWS on
+    // SSRF-block / DNS failure / ECONNRESET / AbortError. publishLinkedIn must catch it and return
+    // {ok:false} like every sibling adapter; otherwise the uncaught throw propagates through
+    // publishToNetwork into publishDuePost and strands the post in PUBLISHING with targets PENDING.
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/rest/images')) {
+        return Promise.resolve(
+          res({ json: { value: { uploadUrl: 'https://dms-uploads.example/up', image: 'urn:li:image:x' } } }),
+        );
+      }
+      // the raw image-bytes download (safeFetch GET item.url) THROWS — unreachable/blocked host
+      return Promise.reject(new Error('getaddrinfo ENOTFOUND media.example'));
+    });
+    const r = await publishToNetwork(account('LI_PERSON'), 'with image', ['https://media.example/a.jpg']);
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toMatch(/ENOTFOUND|error/i);
+  });
+
   it('multiImage: 2+ images → content.multiImage.images[] of urns', async () => {
     let n = 0;
     mockFetch.mockImplementation((url: string) => {

@@ -607,6 +607,7 @@ async function publishLinkedIn(
   if (!isNetworkConfigured('LINKEDIN')) {
     return { ok: false, error: 'LinkedIn not configured: set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET' };
   }
+  try {
   const token = revealToken(account);
   if (!token) return { ok: false, error: 'accessToken could not be decrypted' };
 
@@ -655,6 +656,14 @@ async function publishLinkedIn(
   const id = result.restliId;
   if (!id) return { ok: false, error: 'LinkedIn /rest/posts returned no x-restli-id' };
   return { ok: true, externalPostId: String(id) };
+  } catch (e: any) {
+    // Media download/upload helpers call safeFetch, which THROWS on SSRF-block, DNS
+    // failure, ECONNRESET or timeout. Match every sibling adapter: never let a throw
+    // escape into publishDuePost (which would strand the post in PUBLISHING).
+    const msg = e?.message ?? String(e);
+    logger.warn(`LinkedIn publish error (${account.externalId}): ${msg}`);
+    return { ok: false, error: msg.slice(0, 500) };
+  }
 }
 
 /**
