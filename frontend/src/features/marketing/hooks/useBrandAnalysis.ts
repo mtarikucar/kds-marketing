@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   startBrandAnalysis,
   getBrandAnalysisRun,
@@ -18,6 +18,7 @@ const TERMINAL: BrandAnalysisRun['status'][] = ['READY_FOR_REVIEW', 'APPLIED', '
  */
 export function useBrandAnalysis() {
   const [runId, setRunId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const start = useMutation({
     mutationFn: (input: StartAnalysisInput) => startBrandAnalysis(input),
@@ -37,6 +38,19 @@ export function useBrandAnalysis() {
   const apply = useMutation({
     mutationFn: ({ runId: id, draft }: { runId: string; draft?: BrandAnalysisDraft }) =>
       applyBrandAnalysis(id, draft ?? undefined),
+    onSuccess: (_res, vars) => {
+      // The backend flips the run to APPLIED on a successful apply, but
+      // polling already stopped at the READY_FOR_REVIEW terminal status
+      // (APPLIED is also terminal, so a refetch would never happen either).
+      // Patch the cached run directly so the wizard's `step` (derived from
+      // run.data.status) advances to 'done' instead of staying stuck on
+      // 'review' — otherwise a second Apply click would 400 against an
+      // already-applied run.
+      queryClient.setQueryData(
+        ['marketing', 'brand-brain', 'run', vars.runId],
+        (old: BrandAnalysisRun | undefined) => (old ? { ...old, status: 'APPLIED' as const } : old),
+      );
+    },
   });
 
   return {

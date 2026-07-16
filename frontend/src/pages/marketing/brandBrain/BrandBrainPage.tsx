@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { BrainCircuit, Search, RefreshCw, FileText } from 'lucide-react';
+import { BrainCircuit, Search, RefreshCw, FileText, Sparkles } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Callout } from '@/components/ui/Callout';
 import { searchBrandBrain, reindexBrandBrain, type Citation } from '../../../features/marketing/api/brandBrain.service';
 import BrandProfileEditor from './BrandProfileEditor';
+import BrandBrainWizard from './BrandBrainWizard';
 
 /**
  * Brand Brain (Faz 1) — ask over your own knowledge base and get answers grounded
@@ -22,6 +23,7 @@ export default function BrandBrainPage({ embedded }: { embedded?: boolean } = {}
   const { t } = useTranslation('marketing');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Citation[] | null>(null);
+  const [wizard, setWizard] = useState(false);
 
   const search = useMutation({
     mutationFn: () => searchBrandBrain(query.trim()),
@@ -38,12 +40,18 @@ export default function BrandBrainPage({ embedded }: { embedded?: boolean } = {}
   // Mirrors the button's isPending guard so Enter can't double-fire the search.
   const submit = () => query.trim() && !search.isPending && search.mutate();
 
-  // The header's only action — when embedded (no PageHeader) it moves into the
-  // search toolbar row so the button is never lost.
+  // The header's only actions — when embedded (no PageHeader) they move into
+  // the search toolbar row so neither button is ever lost.
   const reindexButton = (
     <Button variant="secondary" onClick={() => reindex.mutate()} disabled={reindex.isPending}>
       <RefreshCw className={`mr-1.5 h-4 w-4 ${reindex.isPending ? 'animate-spin' : ''}`} />
       {t('brain.reindex', 'Reindex')}
+    </Button>
+  );
+  const wizardButton = (
+    <Button variant="outline" onClick={() => setWizard(true)}>
+      <Sparkles className="mr-1.5 h-4 w-4" aria-hidden="true" />
+      {t('brain.setupWithAi', 'Set up with AI ✨')}
     </Button>
   );
 
@@ -53,9 +61,16 @@ export default function BrandBrainPage({ embedded }: { embedded?: boolean } = {}
       <PageHeader
         title={t('brain.title', 'Brand Brain')}
         description={t('brain.subtitle', 'Grounded, cited answers from your own knowledge base — never made up.')}
-        actions={reindexButton}
+        actions={
+          <div className="flex gap-2">
+            {wizardButton}
+            {reindexButton}
+          </div>
+        }
       />
       )}
+
+      {wizard && <BrandBrainWizard onDone={() => setWizard(false)} />}
 
       <BrandProfileEditor />
 
@@ -70,6 +85,7 @@ export default function BrandBrainPage({ embedded }: { embedded?: boolean } = {}
         <Button onClick={submit} disabled={!query.trim() || search.isPending}>
           <Search className="mr-1.5 h-4 w-4" />{search.isPending ? t('brain.searching', 'Searching…') : t('brain.search', 'Search')}
         </Button>
+        {embedded && wizardButton}
         {embedded && reindexButton}
       </div>
 
