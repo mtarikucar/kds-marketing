@@ -90,4 +90,31 @@ describe('BrandBrainWizard', () => {
     // flips to APPLIED so `step` recomputes) — not stay stuck on review.
     await waitFor(() => expect(screen.getByRole('button', { name: /finish/i })).toBeInTheDocument());
   });
+
+  it('shows an error + Start over affordance when the run ends FAILED (no AI/providers configured), and never applies', async () => {
+    vi.mocked(svc.getBrandAnalysisRun).mockResolvedValue({
+      id: 'run1',
+      status: 'FAILED',
+      inputs: {},
+      draft: null,
+      error: 'AI is not configured',
+    });
+
+    renderWizard();
+
+    fireEvent.change(screen.getByLabelText(/website url/i), { target: { value: 'https://acme.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /analyze/i }));
+
+    // Failure surface renders — error text + a "Start over" affordance, not a
+    // blank/broken review.
+    await waitFor(() => expect(screen.getByText('AI is not configured')).toBeInTheDocument());
+    const startOverButton = screen.getByRole('button', { name: /start over/i });
+    expect(startOverButton).toBeInTheDocument();
+
+    expect(svc.applyBrandAnalysis).not.toHaveBeenCalled();
+
+    // Clicking "Start over" resets the wizard back to the sources step.
+    fireEvent.click(startOverButton);
+    expect(screen.getByLabelText(/website url/i)).toBeInTheDocument();
+  });
 });
