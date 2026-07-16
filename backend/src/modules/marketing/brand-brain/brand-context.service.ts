@@ -24,7 +24,7 @@ export class BrandContextService {
     if (hit && hit.exp > Date.now()) return hit.block;
     const p = await this.prisma.brandProfile.findUnique({ where: { workspaceId } });
     const block = p && p.status === 'ACTIVE' ? this.render(p) : null;
-    if (this.cache.size >= MAX_CACHE) {
+    if (!this.cache.has(workspaceId) && this.cache.size >= MAX_CACHE) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
     }

@@ -73,5 +73,38 @@ describe('BrandContextService', () => {
       await svc.summaryFor(`ws-${i}`);
     }
     expect((svc as any).cache.size).toBeLessThanOrEqual(MAX_CACHE);
+    // Oldest-first: the very first key inserted (ws-0) must be gone, and the
+    // most-recently inserted key must still be present.
+    expect((svc as any).cache.has('ws-0')).toBe(false);
+    expect((svc as any).cache.has(`ws-${MAX_CACHE + 49}`)).toBe(true);
+  });
+
+  it('does not evict an unrelated entry when re-summarizing an already-cached key while full (Map.set on an existing key does not grow size)', async () => {
+    const MAX_CACHE = 1000;
+    const { svc, prisma } = makeSvc();
+    (prisma.brandProfile.findUnique as jest.Mock).mockResolvedValue({
+      status: 'ACTIVE',
+      brandName: 'Acme',
+      valueProps: [],
+    });
+    // Fill to exactly MAX_CACHE distinct workspaces.
+    for (let i = 0; i < MAX_CACHE; i++) {
+      await svc.summaryFor(`ws-${i}`);
+    }
+    expect((svc as any).cache.size).toBe(MAX_CACHE);
+
+    // Force a MIDDLE key's (not the oldest) TTL to have expired, then re-summarize
+    // it — this is a refresh of an EXISTING key, not a new insert. The oldest key
+    // (ws-0) is still valid and unrelated to this refresh: it must survive.
+    const cache: Map<string, { block: string | null; exp: number }> = (svc as any).cache;
+    const entry = cache.get('ws-500')!;
+    cache.set('ws-500', { ...entry, exp: Date.now() - 1 });
+
+    await svc.summaryFor('ws-500');
+
+    expect(cache.size).toBe(MAX_CACHE);
+    expect(cache.has('ws-500')).toBe(true);
+    // The unrelated oldest entry must NOT have been spuriously evicted by this refresh.
+    expect(cache.has('ws-0')).toBe(true);
   });
 });

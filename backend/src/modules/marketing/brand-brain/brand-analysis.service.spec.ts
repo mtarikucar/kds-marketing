@@ -33,18 +33,30 @@ function makeSvc() {
 
 describe('BrandAnalysisService', () => {
   describe('startAnalysis', () => {
-    it('creates a QUEUED run and schedules the async analyze job (deduped per workspace)', async () => {
+    it('re-attaches to an already-active run instead of creating a second one', async () => {
       const { svc, prisma, scheduledJob } = makeSvc();
-      prisma.brandAnalysisRun.updateMany.mockResolvedValue({ count: 0 });
+      prisma.brandAnalysisRun.findFirst.mockResolvedValue({ id: 'existing' });
+
+      const result = await svc.startAnalysis('ws1', { websiteUrl: 'https://acme.example' });
+
+      expect(result).toEqual({ runId: 'existing' });
+      expect(prisma.brandAnalysisRun.findFirst).toHaveBeenCalledWith({
+        where: { workspaceId: 'ws1', status: { in: ['QUEUED', 'RUNNING'] } },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      expect(prisma.brandAnalysisRun.create).not.toHaveBeenCalled();
+      expect(scheduledJob.schedule).not.toHaveBeenCalled();
+    });
+
+    it('no active run: creates a QUEUED run and schedules the async analyze job (deduped per workspace)', async () => {
+      const { svc, prisma, scheduledJob } = makeSvc();
+      prisma.brandAnalysisRun.findFirst.mockResolvedValue(null);
       prisma.brandAnalysisRun.create.mockResolvedValue({ id: 'run1', workspaceId: 'ws1', status: 'QUEUED' });
 
       const result = await svc.startAnalysis('ws1', { websiteUrl: 'https://acme.example' });
 
       expect(result).toEqual({ runId: 'run1' });
-      expect(prisma.brandAnalysisRun.updateMany).toHaveBeenCalledWith({
-        where: { workspaceId: 'ws1', status: { in: ['QUEUED', 'RUNNING'] } },
-        data: expect.objectContaining({ status: 'FAILED' }),
-      });
       expect(prisma.brandAnalysisRun.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ workspaceId: 'ws1', status: 'QUEUED' }),
@@ -57,10 +69,6 @@ describe('BrandAnalysisService', () => {
           payload: { runId: 'run1' },
         }),
       );
-
-      const updateManyOrder = prisma.brandAnalysisRun.updateMany.mock.invocationCallOrder[0];
-      const createOrder = prisma.brandAnalysisRun.create.mock.invocationCallOrder[0];
-      expect(updateManyOrder).toBeLessThan(createOrder);
     });
   });
 

@@ -31,12 +31,18 @@ export class BrandAnalysisService {
 
   /** Create a QUEUED run + schedule the async analyze job (deduped per workspace). */
   async startAnalysis(workspaceId: string, inputs: BrandSourceInput): Promise<{ runId: string }> {
-    // Supersede any still-active run for this workspace so a repeat "Set up with AI"
-    // (two tabs / a restart) can't orphan an earlier QUEUED/RUNNING run.
-    await this.prisma.brandAnalysisRun.updateMany({
+    // Re-attach to an already-active run instead of creating a second one: a repeat
+    // "Set up with AI" (two tabs / a reload) must not spawn a concurrent job — the
+    // ScheduledJob dedupKey only collapses PENDING rows, so a second schedule while
+    // the first is RUNNING would execute twice = double metered Firecrawl/Apify spend —
+    // nor orphan the earlier run. A genuinely-stuck run is failed by the 45-min reaper
+    // (reapStaleRuns), after which a fresh start creates a new one.
+    const active = await this.prisma.brandAnalysisRun.findFirst({
       where: { workspaceId, status: { in: ['QUEUED', 'RUNNING'] } },
-      data: { status: 'FAILED', error: 'Superseded by a newer analysis', completedAt: new Date() },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
     });
+    if (active) return { runId: active.id };
     const run = await this.prisma.brandAnalysisRun.create({
       data: { workspaceId, status: 'QUEUED', inputs: inputs as any },
     });
