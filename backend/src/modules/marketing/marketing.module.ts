@@ -240,6 +240,10 @@ import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
 import { BrandProfileService } from './brand-brain/brand-profile.service';
 import { BrandContextService } from './brand-brain/brand-context.service';
+import { WebsiteBrandSource } from './brand-brain/sources/website.source';
+import { SocialBrandSource } from './brand-brain/sources/social.source';
+import { GbpBrandSource } from './brand-brain/sources/gbp.source';
+import { UploadBrandSource } from './brand-brain/sources/upload.source';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -857,6 +861,12 @@ import { WalletService } from './wallet/wallet.service';
     BrandBrainService,
     BrandProfileService,
     BrandContextService,
+    // Brand Brain — source adapters (Task 10): pure collectors over the
+    // Task-9 provider fetchers. Injected by the analysis runner (Task 12).
+    WebsiteBrandSource,
+    SocialBrandSource,
+    GbpBrandSource,
+    UploadBrandSource,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,
