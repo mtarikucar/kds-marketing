@@ -192,7 +192,11 @@ model WorkspaceMembership {
   invitedByUserId String?
   acceptedAt      DateTime?
   createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  // @default(now()) mirrors the shipped 20260715150000_workspace_memberships
+  // migration (updatedAt has a DB DEFAULT CURRENT_TIMESTAMP); declaring it here
+  // keeps schema ↔ migrations in parity without a prod ALTER. Inert at runtime
+  // (Prisma always sets updatedAt on writes via @updatedAt).
+  updatedAt       DateTime  @updatedAt @default(now())
 
   @@unique([userId, workspaceId])
   @@index([workspaceId])
@@ -4172,7 +4176,7 @@ model AdMetricBreakdown {
   convValue1dView  Decimal  @default(0) @db.Decimal(14, 2)
   pulledAt         DateTime @default(now())
 
-  @@unique([adAccountId, date, campaignId, adSetId, adId, placement, breakdownType, breakdownValue], name: "adBreakdown_dim")
+  @@unique([adAccountId, date, campaignId, adSetId, adId, placement, breakdownType, breakdownValue], name: "adBreakdown_dim", map: "adBreakdown_dim")
   @@index([workspaceId, date])
   @@index([adAccountId, campaignId, date])
   @@map("ad_metric_breakdowns")
