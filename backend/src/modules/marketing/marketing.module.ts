@@ -244,6 +244,7 @@ import { WebsiteBrandSource } from './brand-brain/sources/website.source';
 import { SocialBrandSource } from './brand-brain/sources/social.source';
 import { GbpBrandSource } from './brand-brain/sources/gbp.source';
 import { UploadBrandSource } from './brand-brain/sources/upload.source';
+import { BrandSynthesisService } from './brand-brain/brand-synthesis.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -867,6 +868,10 @@ import { WalletService } from './wallet/wallet.service';
     SocialBrandSource,
     GbpBrandSource,
     UploadBrandSource,
+    // Brand Brain — synthesis (Task 11): one metered Claude tool-use call that
+    // turns gathered source material into a structured draft. Injected by the
+    // analysis runner (Task 12).
+    BrandSynthesisService,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,

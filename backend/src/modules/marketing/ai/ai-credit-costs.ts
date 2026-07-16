@@ -28,6 +28,10 @@ export const AI_CREDIT_COSTS = {
   // hard caps bound actual spend. firecrawl/apify money is metered separately via
   // the RESEARCH SpendLedger channel.
   'research.qualify': { credits: 3, tier: 'default' as AiModelTier },
+  // Brand Brain — one synthesis call over all gathered source material (website
+  // crawl + GBP + social + uploads) into a structured brand draft. Firecrawl/Apify
+  // money is metered separately via the RESEARCH SpendLedger channel.
+  'brand.analyze': { credits: 5, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;
