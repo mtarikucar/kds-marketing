@@ -247,6 +247,7 @@ import { UploadBrandSource } from './brand-brain/sources/upload.source';
 import { BrandSynthesisService } from './brand-brain/brand-synthesis.service';
 import { BrandAnalysisService } from './brand-brain/brand-analysis.service';
 import { BrandAnalysisRunnerService } from './brand-brain/brand-analysis.runner';
+import { BrandApplyService } from './brand-brain/brand-apply.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -878,6 +879,10 @@ import { WalletService } from './wallet/wallet.service';
     // ScheduledJob backbone (metered, failure-isolated, idempotent).
     BrandAnalysisService,
     BrandAnalysisRunnerService,
+    // Brand Brain — apply (Task 13): the review→apply capstone that
+    // diff-safe-seeds the draft across BrandProfile/BrandKit/ResearchProfile/
+    // Workspace.productDescription/KnowledgeDocs. Consumed by the controller.
+    BrandApplyService,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,
