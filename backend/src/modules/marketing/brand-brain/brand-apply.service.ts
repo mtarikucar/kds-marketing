@@ -107,8 +107,15 @@ export class BrandApplyService {
 
   /** REPLACE the brand-brain-sourced knowledge set (keep the user's MANUAL docs), then reindex. */
   private async seedKnowledgeDocs(ws: string, docs: BrandAnalysisDraft['knowledgeDocs'] | undefined): Promise<void> {
+    // Only replace the brand-brain KB when the draft carries a real docs array — a
+    // partial/edited draft that omits (or malforms) knowledgeDocs must NOT wipe the
+    // seeded set. Build the validated set BEFORE deleting so a bad row can't
+    // delete-then-throw.
+    if (!Array.isArray(docs)) return;
+    const valid = docs.filter((d): d is { title: string; content: string } =>
+      !!d && typeof (d as any).title === 'string' && typeof (d as any).content === 'string');
     await this.prisma.knowledgeDoc.deleteMany({ where: { workspaceId: ws, source: 'brand-brain' } });
-    for (const d of docs ?? []) {
+    for (const d of valid) {
       try {
         await this.knowledge.create(ws, { title: d.title, content: d.content, source: 'brand-brain' });
       } catch (e) {
