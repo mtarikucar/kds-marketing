@@ -212,6 +212,32 @@ describe('BrandApplyService', () => {
       });
     });
 
+    it('F3: knowledgeDocs is a valid empty array -> deleteMany IS called (legit "clear all"), reindexed, run APPLIED', async () => {
+      const { svc, prisma, knowledge, brain } = makeSvc();
+      prisma.brandAnalysisRun.findFirst.mockResolvedValue({
+        id: 'run1',
+        workspaceId: 'ws1',
+        status: 'READY_FOR_REVIEW',
+        draft: FULL_DRAFT,
+      });
+      prisma.brandKit.findUnique.mockResolvedValue(null);
+      prisma.researchProfile.findFirst.mockResolvedValue(null);
+      prisma.workspace.findUnique.mockResolvedValue({ productDescription: null });
+
+      const editedDraft: BrandAnalysisDraft = { ...FULL_DRAFT, knowledgeDocs: [] };
+
+      const result = await svc.apply('ws1', 'run1', editedDraft);
+
+      expect(result).toEqual({ applied: true });
+      expect(prisma.knowledgeDoc.deleteMany).toHaveBeenCalledWith({ where: { workspaceId: 'ws1', source: 'brand-brain' } });
+      expect(knowledge.create).not.toHaveBeenCalled();
+      expect(brain.reindexWorkspace).toHaveBeenCalledWith('ws1');
+      expect(prisma.brandAnalysisRun.update).toHaveBeenCalledWith({
+        where: { id: 'run1' },
+        data: { status: 'APPLIED', completedAt: expect.any(Date) },
+      });
+    });
+
     it('F2: knowledgeDocs is a malformed non-array -> deleteMany NOT called, no throw', async () => {
       const { svc, prisma } = makeSvc();
       prisma.brandAnalysisRun.findFirst.mockResolvedValue({
