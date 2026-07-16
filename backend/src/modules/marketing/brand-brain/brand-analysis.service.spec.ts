@@ -7,6 +7,7 @@ function makeSvc() {
       findUnique: jest.fn(),
       update: jest.fn(),
       findFirst: jest.fn(),
+      updateMany: jest.fn(),
     },
     workspace: { findUnique: jest.fn() },
   };
@@ -34,11 +35,16 @@ describe('BrandAnalysisService', () => {
   describe('startAnalysis', () => {
     it('creates a QUEUED run and schedules the async analyze job (deduped per workspace)', async () => {
       const { svc, prisma, scheduledJob } = makeSvc();
+      prisma.brandAnalysisRun.updateMany.mockResolvedValue({ count: 0 });
       prisma.brandAnalysisRun.create.mockResolvedValue({ id: 'run1', workspaceId: 'ws1', status: 'QUEUED' });
 
       const result = await svc.startAnalysis('ws1', { websiteUrl: 'https://acme.example' });
 
       expect(result).toEqual({ runId: 'run1' });
+      expect(prisma.brandAnalysisRun.updateMany).toHaveBeenCalledWith({
+        where: { workspaceId: 'ws1', status: { in: ['QUEUED', 'RUNNING'] } },
+        data: expect.objectContaining({ status: 'FAILED' }),
+      });
       expect(prisma.brandAnalysisRun.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ workspaceId: 'ws1', status: 'QUEUED' }),
@@ -51,6 +57,10 @@ describe('BrandAnalysisService', () => {
           payload: { runId: 'run1' },
         }),
       );
+
+      const updateManyOrder = prisma.brandAnalysisRun.updateMany.mock.invocationCallOrder[0];
+      const createOrder = prisma.brandAnalysisRun.create.mock.invocationCallOrder[0];
+      expect(updateManyOrder).toBeLessThan(createOrder);
     });
   });
 
@@ -90,6 +100,34 @@ describe('BrandAnalysisService', () => {
         expect.objectContaining({ source: 'gbp' }),
         expect.objectContaining({ source: 'uploads' }),
       ]);
+    });
+
+    it('accrues costUsd as the sum of each spend.settle amount', async () => {
+      const { svc, prisma, synthesis, spend, website, social, gbp, upload } = makeSvc();
+      prisma.brandAnalysisRun.findUnique.mockResolvedValue({
+        id: 'run1',
+        workspaceId: 'ws1',
+        status: 'QUEUED',
+        inputs: { websiteUrl: 'x' },
+      });
+      website.collect.mockResolvedValue({ source: 'website', status: 'ok', raw: [{ url: 'x' }], firecrawlPages: 3 });
+      social.collect.mockResolvedValue({ source: 'social', status: 'ok', raw: [{}], apifyRuns: 1 });
+      gbp.collect.mockResolvedValue({ source: 'gbp', status: 'inert', raw: null });
+      upload.collect.mockResolvedValue({ source: 'uploads', status: 'inert', raw: null });
+      spend.settle.mockImplementation((_workspaceId: string, opts: { unit: string }) => {
+        if (opts.unit === 'FIRECRAWL_PAGE') return Promise.resolve({ amount: 2, quantity: 3 });
+        if (opts.unit === 'APIFY_RUN') return Promise.resolve({ amount: 1, quantity: 1 });
+        return Promise.resolve(null);
+      });
+      const draft = { profile: {}, researchProfile: {}, brandKitHints: {}, knowledgeDocs: [] };
+      synthesis.synthesize.mockResolvedValue(draft);
+      prisma.workspace.findUnique.mockResolvedValue({ defaultLanguage: 'tr' });
+
+      await svc.runAnalysis('run1');
+
+      const lastCall = prisma.brandAnalysisRun.update.mock.calls[prisma.brandAnalysisRun.update.mock.calls.length - 1];
+      expect(lastCall[0].data.status).toBe('READY_FOR_REVIEW');
+      expect(lastCall[0].data.costUsd).toBe(3);
     });
 
     it('synthesis failure sets FAILED with the error', async () => {

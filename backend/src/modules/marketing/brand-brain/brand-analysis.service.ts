@@ -31,6 +31,12 @@ export class BrandAnalysisService {
 
   /** Create a QUEUED run + schedule the async analyze job (deduped per workspace). */
   async startAnalysis(workspaceId: string, inputs: BrandSourceInput): Promise<{ runId: string }> {
+    // Supersede any still-active run for this workspace so a repeat "Set up with AI"
+    // (two tabs / a restart) can't orphan an earlier QUEUED/RUNNING run.
+    await this.prisma.brandAnalysisRun.updateMany({
+      where: { workspaceId, status: { in: ['QUEUED', 'RUNNING'] } },
+      data: { status: 'FAILED', error: 'Superseded by a newer analysis', completedAt: new Date() },
+    });
     const run = await this.prisma.brandAnalysisRun.create({
       data: { workspaceId, status: 'QUEUED', inputs: inputs as any },
     });
