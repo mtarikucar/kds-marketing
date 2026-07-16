@@ -57,6 +57,42 @@ describe('useBrandAnalysis', () => {
     expect(result.current.isPolling).toBe(false);
   });
 
+  it('observes an intermediate RUNNING status before polling stops at READY_FOR_REVIEW', async () => {
+    // Real 3s refetchInterval + follow-up assertions need more than the 5s default.
+    const RUNNING_RUN = {
+      id: 'run1',
+      status: 'RUNNING' as const,
+      inputs: {},
+      draft: null,
+    };
+    vi.mocked(brandBrainService.getBrandAnalysisRun)
+      .mockResolvedValueOnce(RUNNING_RUN)
+      .mockResolvedValue(READY_RUN);
+
+    const { result } = renderHook(() => useBrandAnalysis(), { wrapper });
+
+    result.current.start.mutate({ websiteUrl: 'https://x.com' });
+
+    await waitFor(() => expect(result.current.runId).toBe('run1'));
+
+    // First fetch resolves RUNNING — the hook must still be polling.
+    await waitFor(() => expect(result.current.run.data?.status).toBe('RUNNING'));
+    expect(result.current.isPolling).toBe(true);
+
+    // The 3s refetchInterval fires a second fetch, which resolves READY_FOR_REVIEW.
+    await waitFor(() => expect(result.current.run.data?.status).toBe('READY_FOR_REVIEW'), {
+      timeout: 5000,
+    });
+    expect(result.current.isPolling).toBe(false);
+
+    const callsAtReady = vi.mocked(brandBrainService.getBrandAnalysisRun).mock.calls.length;
+    expect(callsAtReady).toBeGreaterThanOrEqual(2);
+
+    // Polling has stopped: no further calls should accrue after READY.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(vi.mocked(brandBrainService.getBrandAnalysisRun).mock.calls.length).toBe(callsAtReady);
+  }, 8000);
+
   it('applies the run via applyBrandAnalysis', async () => {
     const { result } = renderHook(() => useBrandAnalysis(), { wrapper });
 
