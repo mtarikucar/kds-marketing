@@ -245,6 +245,8 @@ import { SocialBrandSource } from './brand-brain/sources/social.source';
 import { GbpBrandSource } from './brand-brain/sources/gbp.source';
 import { UploadBrandSource } from './brand-brain/sources/upload.source';
 import { BrandSynthesisService } from './brand-brain/brand-synthesis.service';
+import { BrandAnalysisService } from './brand-brain/brand-analysis.service';
+import { BrandAnalysisRunnerService } from './brand-brain/brand-analysis.runner';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -872,6 +874,10 @@ import { WalletService } from './wallet/wallet.service';
     // turns gathered source material into a structured draft. Injected by the
     // analysis runner (Task 12).
     BrandSynthesisService,
+    // Brand Brain — async brand-extraction run (Task 12): rides the
+    // ScheduledJob backbone (metered, failure-isolated, idempotent).
+    BrandAnalysisService,
+    BrandAnalysisRunnerService,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,
@@ -1022,6 +1028,9 @@ import { WalletService } from './wallet/wallet.service';
     // into conversation-ai-engine/content-ai/social/voice/research to ground
     // every workspace AI in the brand's identity.
     BrandContextService,
+    // Brand Brain — async brand-extraction run (Task 12): Task 13's
+    // controller/apply consume startAnalysis/getRun.
+    BrandAnalysisService,
   ],
 })
 export class MarketingModule {}
