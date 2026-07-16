@@ -65,6 +65,20 @@ describe('Two-factor auth (e2e)', () => {
     ctx.prisma.marketingUser.findUnique.mockResolvedValue(user as never);
     ctx.prisma.workspace.findUnique.mockResolvedValue({ status: 'ACTIVE' } as never);
     (ctx.prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
+    // verify2fa's TOTP branch atomically claims the 30s time-step via
+    // marketingUser.updateMany (RFC 6238 replay guard); the shared harness
+    // defaults this to { count: 0 } (no rows claimed), so drive the
+    // claim-succeeds case explicitly for this happy-path test.
+    (ctx.prisma.marketingUser.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    // Multi-workspace: issueForDefaultWorkspace() resolves the session's
+    // workspace/role off a live WorkspaceMembership row (resolveDefaultWorkspaceId
+    // + getActiveMembership both read workspaceMembership.findFirst), not off the
+    // MarketingUser row's own `role`/`workspaceId` columns. findFirst defaults to
+    // `undefined` (not-found) in the harness, so without this the claim resolves
+    // to "no active workspace" and 401s even though the 2FA code itself checks out.
+    ctx.prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'wm-1', workspaceId: 'ws-1', role: 'OWNER', customRoleId: null,
+    } as never);
 
     const login = await request(app.getHttpServer())
       .post('/api/marketing/auth/login')
