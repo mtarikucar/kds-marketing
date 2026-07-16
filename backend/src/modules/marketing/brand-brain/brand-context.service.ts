@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 
 const TTL_MS = 60_000;
+const MAX_CACHE = 1000;
 
 /**
  * Brand Brain — the cached, always-on compact brand block every workspace AI
@@ -23,6 +24,10 @@ export class BrandContextService {
     if (hit && hit.exp > Date.now()) return hit.block;
     const p = await this.prisma.brandProfile.findUnique({ where: { workspaceId } });
     const block = p && p.status === 'ACTIVE' ? this.render(p) : null;
+    if (this.cache.size >= MAX_CACHE) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest !== undefined) this.cache.delete(oldest);
+    }
     this.cache.set(workspaceId, { block, exp: Date.now() + TTL_MS });
     return block;
   }

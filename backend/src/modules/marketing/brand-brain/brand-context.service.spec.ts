@@ -60,4 +60,18 @@ describe('BrandContextService', () => {
     await svc.summaryFor('ws-1');
     expect(prisma.brandProfile.findUnique).toHaveBeenCalledTimes(2);
   });
+
+  it('bounds the in-memory cache to MAX_CACHE entries with oldest-first eviction', async () => {
+    const MAX_CACHE = 1000;
+    const { svc, prisma } = makeSvc();
+    (prisma.brandProfile.findUnique as jest.Mock).mockResolvedValue({
+      status: 'ACTIVE',
+      brandName: 'Acme',
+      valueProps: [],
+    });
+    for (let i = 0; i < MAX_CACHE + 50; i++) {
+      await svc.summaryFor(`ws-${i}`);
+    }
+    expect((svc as any).cache.size).toBeLessThanOrEqual(MAX_CACHE);
+  });
 });
