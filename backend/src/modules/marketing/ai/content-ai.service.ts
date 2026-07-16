@@ -23,9 +23,10 @@ export interface ComposeResult {
 
 /**
  * Content AI — marketing-copy generation (email/SMS/social). Grounded on the
- * workspace's product (name/description). Reserves 1 credit, refunds on
- * failure. The model returns plain text; we parse a lightweight
- * SUBJECT:/BODY: convention for email.
+ * workspace's Brand Brain block when an ACTIVE BrandProfile exists, falling
+ * back to the workspace's product (name/description) otherwise. Reserves 1
+ * credit, refunds on failure. The model returns plain text; we parse a
+ * lightweight SUBJECT:/BODY: convention for email.
  */
 @Injectable()
 export class ContentAiService {

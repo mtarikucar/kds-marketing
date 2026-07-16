@@ -1,5 +1,6 @@
 import {
   IsString,
+  IsNotEmpty,
   IsOptional,
   IsIn,
   IsArray,
@@ -13,7 +14,7 @@ import { Type } from 'class-transformer';
  *  grounding context (name/blurb/optional price), mirroring the shape
  *  the schema comment documents for BrandProfile.offerings. */
 export class OfferingDto {
-  @IsString() @MaxLength(200)
+  @IsString() @IsNotEmpty() @MaxLength(200)
   name: string;
 
   @IsOptional() @IsString() @MaxLength(1000)
@@ -25,10 +26,10 @@ export class OfferingDto {
 
 /** One social handle the brand owns (e.g. { network: 'instagram', handle: '@acme' }). */
 export class SocialHandleDto {
-  @IsString() @MaxLength(60)
+  @IsString() @IsNotEmpty() @MaxLength(60)
   network: string;
 
-  @IsString() @MaxLength(200)
+  @IsString() @IsNotEmpty() @MaxLength(200)
   handle: string;
 }
 
