@@ -3623,6 +3623,25 @@ model BrandProfile {
   @@map("brand_profiles")
 }
 
+/// Brand Brain — one async extraction run: crawl/scrape the workspace's sources,
+/// synthesize a draft BrandProfile (+ proposed ResearchProfile / BrandKit hints /
+/// selected KnowledgeDocs) for the user to review & apply. sourceResults is cached
+/// so re-synthesis never re-crawls. See docs/superpowers/specs/2026-07-16-*.
+model BrandAnalysisRun {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  status        String    @default("QUEUED") // QUEUED | RUNNING | READY_FOR_REVIEW | APPLIED | FAILED
+  inputs        Json      // { websiteUrl?, socialHandles[], gbpUrl?, uploadKeys[] }
+  sourceResults Json?     // per-source raw+status, cached so re-synthesis doesn't re-crawl
+  draft         Json?     // AI-synthesized BrandProfile + proposed ResearchProfile + BrandKit hints + doc refs
+  costUsd       Float?    // metered external spend (Firecrawl/Apify) for this run
+  error         String?
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+  @@index([workspaceId, status])
+  @@map("brand_analysis_runs")
+}
+
 /// A single AI-generated media asset (image or video) and its generation
 /// lifecycle. status: QUEUED|GENERATING|READY|FAILED|BLOCKED. fal result URLs
 /// are re-hosted to R2 on READY; `r2Key` is the canonical store.
