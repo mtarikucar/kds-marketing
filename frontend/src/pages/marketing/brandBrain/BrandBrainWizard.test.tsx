@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import BrandBrainWizard from './BrandBrainWizard';
+import BrandBrainWizard, { ANALYZE_TIMEOUT_MS } from './BrandBrainWizard';
 import * as svc from '../../../features/marketing/api/brandBrain.service';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -116,5 +116,42 @@ describe('BrandBrainWizard', () => {
     // Clicking "Start over" resets the wizard back to the sources step.
     fireEvent.click(startOverButton);
     expect(screen.getByLabelText(/website url/i)).toBeInTheDocument();
+  });
+
+  describe('analyzing timeout (F1: crash-recovery escape hatch)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('shows the timeout failure surface + Start over if analysis never reaches a terminal status, and never applies', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.mocked(svc.getBrandAnalysisRun).mockResolvedValue({
+        id: 'run1',
+        status: 'RUNNING',
+        inputs: {},
+        draft: null,
+      });
+
+      renderWizard();
+
+      fireEvent.change(screen.getByLabelText(/website url/i), { target: { value: 'https://acme.com' } });
+      fireEvent.click(screen.getByRole('button', { name: /analyze/i }));
+
+      await waitFor(() => expect(svc.startBrandAnalysis).toHaveBeenCalled());
+      // Still analyzing — spinner surface, no timeout copy yet.
+      expect(screen.getByText(/analyzing your brand/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ANALYZE_TIMEOUT_MS + 1000);
+      });
+
+      expect(screen.getByText(/taking longer than expected/i)).toBeInTheDocument();
+      const startOverButton = screen.getByRole('button', { name: /start over/i });
+      expect(startOverButton).toBeInTheDocument();
+      expect(svc.applyBrandAnalysis).not.toHaveBeenCalled();
+
+      fireEvent.click(startOverButton);
+      expect(screen.getByLabelText(/website url/i)).toBeInTheDocument();
+    });
   });
 });

@@ -51,8 +51,15 @@ export class BrandAnalysisService {
   }
 
   /** The job body: QUEUED → RUNNING → collect all sources (isolated) → meter →
-   *  synthesize → READY_FOR_REVIEW. Synthesis failure → FAILED. Idempotent: a
-   *  non-QUEUED run is a no-op (a retry that already progressed). */
+   *  synthesize → READY_FOR_REVIEW. Synthesis failure → FAILED. A re-entered
+   *  RUNNING run is a safe no-op: this pipeline's collection is SEQUENTIAL and
+   *  can legitimately run well past the ScheduledJob reaper's 15min stale-lock
+   *  window (up to 8 Firecrawl scrapes + up to 10 Apify calls + synthesis), so
+   *  a re-dispatch while the original invocation is still alive must NOT be
+   *  treated as crash evidence — the original invocation finishes and writes
+   *  the real terminal state. Crash recovery for a truly-dead run is handled
+   *  out-of-band by BrandAnalysisRunnerService's time-based reaper (45min),
+   *  which is comfortably above any legitimate run duration. */
   async runAnalysis(runId: string): Promise<void> {
     const run = await this.prisma.brandAnalysisRun.findUnique({ where: { id: runId } });
     if (!run || run.status !== 'QUEUED') return;

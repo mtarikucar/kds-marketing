@@ -33,6 +33,11 @@ const NETWORKS: Array<{ value: Network; label: string }> = [
   { value: 'LINKEDIN', label: 'LinkedIn' },
 ];
 
+// Client-side escape: if polling never reaches a terminal status (e.g. a
+// crashed backend run somehow never resolves, or the poll itself is stuck),
+// stop showing an endless spinner and surface the failure branch instead (F1).
+export const ANALYZE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — genuine hangs only; the backend reaper is the authoritative 45min cleanup
+
 // One list item per line in the textarea — same idiom as BrandProfileEditor
 // (no dependency on a chip/tag input).
 const lines = (s: string) =>
@@ -68,6 +73,11 @@ export default function BrandBrainWizard({ onDone }: { onDone: () => void }) {
     null,
   );
 
+  // Client-side escape hatch (F1): if analyzing runs longer than
+  // ANALYZE_TIMEOUT_MS without reaching a terminal status, stop polling
+  // silently forever and show the failure surface instead.
+  const [timedOut, setTimedOut] = useState(false);
+
   const status = run.data?.status;
   const step: 'sources' | 'analyzing' | 'review' | 'done' = !runId
     ? 'sources'
@@ -76,6 +86,15 @@ export default function BrandBrainWizard({ onDone }: { onDone: () => void }) {
       : status === 'APPLIED'
         ? 'done'
         : 'analyzing'; // QUEUED/RUNNING/undefined/FAILED handled inside
+
+  useEffect(() => {
+    if (step !== 'analyzing' || run.data?.status === 'FAILED') {
+      setTimedOut(false);
+      return;
+    }
+    const t = setTimeout(() => setTimedOut(true), ANALYZE_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [step, run.data?.status]);
 
   // Seed the editable copy once the draft is ready.
   useEffect(() => {
@@ -217,7 +236,7 @@ export default function BrandBrainWizard({ onDone }: { onDone: () => void }) {
   }
 
   if (step === 'analyzing') {
-    if (status === 'FAILED') {
+    if (status === 'FAILED' || timedOut) {
       return (
         <Card>
           <CardHeader>
@@ -225,11 +244,19 @@ export default function BrandBrainWizard({ onDone }: { onDone: () => void }) {
           </CardHeader>
           <CardContent>
             <Callout tone="danger" title={t('brand.wizard.failedTitle', 'Analysis failed')}>
-              {run.data?.error ?? t('brand.wizard.failedDesc', 'Something went wrong while analyzing your sources.')}
+              {timedOut
+                ? t('brand.wizard.timedOut', 'This is taking longer than expected. Please try again.')
+                : (run.data?.error ?? t('brand.wizard.failedDesc', 'Something went wrong while analyzing your sources.'))}
             </Callout>
           </CardContent>
           <CardFooter className="justify-end border-t border-border pt-4">
-            <Button variant="secondary" onClick={reset}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setTimedOut(false);
+                reset();
+              }}
+            >
               {t('brand.wizard.startOver', 'Start over')}
             </Button>
           </CardFooter>

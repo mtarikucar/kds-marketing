@@ -5,7 +5,8 @@ describe('BrandAnalysisRunnerService', () => {
   it('registers the brand-brain.analyze handler on module init', () => {
     const runner: any = { registerHandler: jest.fn() };
     const analysis: any = { runAnalysis: jest.fn() };
-    const svc = new BrandAnalysisRunnerService(runner, analysis);
+    const prisma: any = { $executeRaw: jest.fn().mockResolvedValue(0) };
+    const svc = new BrandAnalysisRunnerService(runner, analysis, prisma);
 
     svc.onModuleInit();
 
@@ -15,7 +16,8 @@ describe('BrandAnalysisRunnerService', () => {
   it('the registered handler delegates to runAnalysis with the job payload runId', async () => {
     const runner: any = { registerHandler: jest.fn() };
     const analysis: any = { runAnalysis: jest.fn() };
-    const svc = new BrandAnalysisRunnerService(runner, analysis);
+    const prisma: any = { $executeRaw: jest.fn().mockResolvedValue(0) };
+    const svc = new BrandAnalysisRunnerService(runner, analysis, prisma);
 
     svc.onModuleInit();
     const handler = runner.registerHandler.mock.calls[0][1];
@@ -26,5 +28,27 @@ describe('BrandAnalysisRunnerService', () => {
     analysis.runAnalysis.mockClear();
     await handler({ id: 'job2', workspaceId: 'ws1', kind: BRAND_ANALYZE_KIND, payload: {}, attempts: 0 });
     expect(analysis.runAnalysis).not.toHaveBeenCalled();
+  });
+
+  describe('reapStaleRuns', () => {
+    it('flips runs stuck RUNNING past the stale threshold to FAILED via raw SQL', async () => {
+      const runner: any = { registerHandler: jest.fn() };
+      const analysis: any = { runAnalysis: jest.fn() };
+      const prisma: any = { $executeRaw: jest.fn().mockResolvedValue(0) };
+      const svc = new BrandAnalysisRunnerService(runner, analysis, prisma);
+
+      await svc.reapStaleRuns();
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('swallows errors (best-effort) instead of throwing', async () => {
+      const runner: any = { registerHandler: jest.fn() };
+      const analysis: any = { runAnalysis: jest.fn() };
+      const prisma: any = { $executeRaw: jest.fn().mockRejectedValueOnce(new Error('db down')) };
+      const svc = new BrandAnalysisRunnerService(runner, analysis, prisma);
+
+      await expect(svc.reapStaleRuns()).resolves.toBeUndefined();
+    });
   });
 });

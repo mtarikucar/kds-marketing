@@ -115,9 +115,23 @@ describe('BrandAnalysisService', () => {
       expect(lastCall[0].data.error).toBe('model exploded');
     });
 
-    it('is idempotent: a non-QUEUED run is a no-op', async () => {
-      const { svc, prisma } = makeSvc();
+    it('is idempotent: a still-RUNNING run is a no-op (concurrent re-dispatch of a slow-but-alive run must not clobber it)', async () => {
+      const { svc, prisma, synthesis, website, social, gbp, upload } = makeSvc();
       prisma.brandAnalysisRun.findUnique.mockResolvedValue({ id: 'run1', workspaceId: 'ws1', status: 'RUNNING' });
+
+      await svc.runAnalysis('run1');
+
+      expect(prisma.brandAnalysisRun.update).not.toHaveBeenCalled();
+      expect(website.collect).not.toHaveBeenCalled();
+      expect(social.collect).not.toHaveBeenCalled();
+      expect(gbp.collect).not.toHaveBeenCalled();
+      expect(upload.collect).not.toHaveBeenCalled();
+      expect(synthesis.synthesize).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: a terminal (APPLIED) run is a no-op', async () => {
+      const { svc, prisma } = makeSvc();
+      prisma.brandAnalysisRun.findUnique.mockResolvedValue({ id: 'run1', workspaceId: 'ws1', status: 'APPLIED' });
 
       await svc.runAnalysis('run1');
 
