@@ -404,13 +404,8 @@
     "timeInvalid": "Invalid time"
   },
   "login": {
-<<<<<<< HEAD
-    "title": "Jeeta",
-    "subtitle": "Sign in to grow your business",
-=======
     "title": "Jeeta Growth",
-    "subtitle": "Sign in to manage your leads",
->>>>>>> 6e490cd (fix(brand): present the public site as "Jeeta Growth" for TikTok app review)
+    "subtitle": "Sign in to grow your business",
     "emailLabel": "Email",
     "passwordLabel": "Password",
     "submit": "Sign in",
