@@ -22,7 +22,7 @@ export default function LandingPage() {
 
   // Brand the tab from the active locale.
   useEffect(() => {
-    document.title = `Jeeta — ${t('landing.hero.titleLead')} ${t('landing.hero.titleAccent')}`;
+    document.title = `Jeeta Growth — ${t('landing.hero.titleLead')} ${t('landing.hero.titleAccent')}`;
   }, [t, i18n.language]);
 
   // Smooth in-page anchor scrolling (respecting reduced-motion).

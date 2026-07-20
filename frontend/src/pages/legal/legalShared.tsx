@@ -10,8 +10,8 @@ import LandingFooter from '../landing/LandingFooter';
  * Confirmed by the operator (2026-06-24). Update here to keep both documents in sync.
  */
 export const LEGAL = {
-  brand: 'Jeeta',
-  entity: 'Jeeta',
+  brand: 'Jeeta Growth',
+  entity: 'Jeeta Growth',
   email: 'admin@jeetagrowth.com',
   city: 'Ankara',
   countryTr: 'Türkiye',
@@ -60,7 +60,7 @@ export function LegalLayout({ content }: { content: LegalContent }) {
   const reduced = usePrefersReducedMotion();
 
   useEffect(() => {
-    document.title = `${doc.title} — Jeeta`;
+    document.title = `Jeeta Growth ${doc.title}`;
   }, [doc.title]);
 
   useEffect(() => {

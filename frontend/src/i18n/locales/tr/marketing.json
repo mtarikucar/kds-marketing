@@ -661,8 +661,13 @@
     "timeInvalid": "Geçersiz saat"
   },
   "login": {
+<<<<<<< HEAD
     "title": "Jeeta",
     "subtitle": "İşletmenizi büyütmek için giriş yapın",
+=======
+    "title": "Jeeta Growth",
+    "subtitle": "Lead'lerini yönetmek için giriş yap",
+>>>>>>> 6e490cd (fix(brand): present the public site as "Jeeta Growth" for TikTok app review)
     "emailLabel": "E-posta",
     "passwordLabel": "Parola",
     "submit": "Giriş yap",
