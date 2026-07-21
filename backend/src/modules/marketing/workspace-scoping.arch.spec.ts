@@ -212,6 +212,12 @@ const OWNED_DELEGATES = [
   // userId-keyed authz-resolution reads exempted below (a user spans
   // workspaces by design).
   'workspaceMembership',
+  // Brand Brain (Task 2): the workspace's consolidated brand/product profile
+  // — one row per workspace, keyed by a unique workspaceId.
+  'brandProfile',
+  // Brand Brain (Task 12): one async brand-extraction run per invocation —
+  // startAnalysis's create carries a literal workspaceId.
+  'brandAnalysisRun',
 ] as const;
 
 /**

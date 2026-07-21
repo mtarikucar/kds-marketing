@@ -73,11 +73,13 @@ describe('ConversationAiEngineService.reply', () => {
     const scheduledJobs = { schedule: jest.fn().mockResolvedValue('job'), cancel: jest.fn().mockResolvedValue(true) };
     const runner = { registerHandler: jest.fn() };
     const stream = { push: jest.fn() };
+    const brandContext = { summaryFor: jest.fn().mockResolvedValue(null) };
     const engine = new ConversationAiEngineService(
       prisma, {} as any, anthropic as any, credits as any, knowledge as any,
       sender as any, scheduledJobs as any, runner as any, stream as any,
+      brandContext as any,
     );
-    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream };
+    return { engine, prisma, anthropic, credits, sender, scheduledJobs, stream, brandContext };
   }
 
   const run = (h: any) => (h.engine as any).reply(WS, CONVO);
@@ -151,6 +153,25 @@ describe('ConversationAiEngineService.reply', () => {
     // No post-send read-modify-write counter bump remains.
     expect(h.prisma.conversation.update).not.toHaveBeenCalled();
     expect(h.credits.refund).not.toHaveBeenCalled();
+  });
+
+  // Brand Brain: the compact brand block, when present, must be grounded into
+  // the system prompt sent to the model — customer-facing replies should be
+  // consistent with the workspace's brand profile.
+  it('brand block: when BrandContextService returns a block, the system prompt sent to Claude contains it', async () => {
+    const h = build();
+    h.brandContext.summaryFor.mockResolvedValue('Brand: Acme\nWe sell X.');
+    await run(h);
+    const system = h.anthropic.complete.mock.calls[0][0].system as string;
+    expect(system).toContain('About this brand');
+    expect(system).toContain('Brand: Acme\nWe sell X.');
+  });
+
+  it('brand block: when BrandContextService returns null (default), the system prompt has no brand section', async () => {
+    const h = build();
+    await run(h);
+    const system = h.anthropic.complete.mock.calls[0][0].system as string;
+    expect(system).not.toContain('About this brand');
   });
 
   it('gate: a human-paused conversation gets no AI reply', async () => {

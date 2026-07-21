@@ -2276,6 +2276,10 @@
         "title": "Bilgi ekle",
         "desc": "AI'ın yanıt vereceği menü, çalışma saatleri ve politikaları ekle."
       },
+      "brand": {
+        "title": "Marka Beynini oluştur",
+        "desc": "AI'a kim olduğunu anlat, her mesaj ve kampanya markana uygun sesle çıksın."
+      },
       "channel": {
         "title": "Kanal bağla",
         "desc": "Web sohbeti, WhatsApp veya SMS — müşterilerin sana yazdığı yer."
@@ -3089,6 +3093,7 @@
   "nav.brandBrain": "Brand Brain",
   "brain.title": "Brand Brain",
   "brain.search": "Ara",
+  "brain.setupWithAi": "AI ile kur ✨",
   "budget": {
     "title": "Bütçe Otopilotu",
     "subtitle": "Tek bir büyüme bütçesi belirleyin — Jeeta bütçeyi dengeler, yeniden dağıtım önerir ve her harcamayı bu bütçeye işler.",
@@ -3575,6 +3580,58 @@
       "business": "İşletme",
       "kit": "Marka Kiti",
       "brain": "Marka Beyni"
+    },
+    "brain": {
+      "editor": {
+        "title": "Marka profili",
+        "subtitle": "Her AI'ı temellendiren tek profil — konuşmalar, içerik, sosyal ve ses.",
+        "brandName": "Marka adı",
+        "tagline": "Slogan",
+        "description": "Açıklama",
+        "valueProps": "Değer önermeleri",
+        "toneWords": "Ton kelimeleri",
+        "voiceGuide": "Ses rehberi",
+        "icpDescription": "İdeal müşteri",
+        "audienceObjections": "Kitle itirazları",
+        "oneItemPerLine": "Her satıra bir öğe.",
+        "activate": "Temellendirme etkin",
+        "activateHint": "Yalnızca etkin bir profil AI'ı temellendirir — taslak kaydedilir ama henüz etkisi olmaz.",
+        "saved": "Marka profili kaydedildi",
+        "saveFailed": "Kayıt başarısız"
+      }
+    },
+    "wizard": {
+      "title": "Marka Beynini AI ile kur",
+      "subtitle": "Bize birkaç kaynak ver, marka profilini, hedeflemeni ve başlangıç bilgi tabanını taslak olarak hazırlayalım — sen onaylamadan hiçbiri yayına girmez.",
+      "websiteUrl": "Web sitesi URL'si",
+      "gbpQuery": "Google İşletme adı veya URL'si",
+      "socialHandles": "Sosyal hesaplar",
+      "network": "Ağ",
+      "handle": "Kullanıcı adı",
+      "addAccount": "Hesap ekle",
+      "deferredNote": "Dosya yükleme ve bağlı sosyal hesaplardan otomatik doldurma yakında geliyor — şimdilik okumamızı istediğin hesap adlarını yapıştır.",
+      "analyze": "Analiz et",
+      "analyzing": "Markan kaynaklarında analiz ediliyor…",
+      "failedTitle": "Analiz başarısız",
+      "failedDesc": "Kaynaklarını analiz ederken bir şeyler ters gitti.",
+      "startOver": "Baştan başla",
+      "reviewTitle": "Marka Beynini gözden geçir",
+      "reviewSubtitle": "Bunu kaynaklarından taslak olarak hazırladık — yayına girmeden önce dilediğini düzenle.",
+      "brandName": "Marka adı",
+      "description": "Açıklama",
+      "valueProps": "Değer önermeleri",
+      "toneWords": "Ton kelimeleri",
+      "proposedTargeting": "Önerilen hedefleme",
+      "brandKitTone": "Ton: {{tone}}",
+      "brandKitCta": "CTA: {{cta}}",
+      "knowledgeDocsCount": "{{n}} bilgi dokümanı eklenecek",
+      "editLater": "Her şeyi daha sonra Marka Beyni'nden yeniden ince ayarlayabilirsin.",
+      "applyActivate": "Uygula ve etkinleştir",
+      "applied": "Marka Beyni kuruldu — artık her AI markanla konuşuyor",
+      "applyFailed": "Uygulama başarısız",
+      "doneTitle": "Marka Beynin yayında",
+      "doneDesc": "Çalışma alanındaki her AI artık markanla konuşuyor — konuşmalar, içerik, sosyal ve ses.",
+      "finish": "Bitir"
     }
   },
   "calls": {

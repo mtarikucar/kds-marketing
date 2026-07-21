@@ -51,8 +51,11 @@ describe('Marketing auth (e2e)', () => {
     });
 
     it('401s a token whose workspace claim no longer matches the user (session revoked)', async () => {
+      // Multi-workspace: "revoked" = the user holds NO ACTIVE membership for the
+      // token's active workspace (the guard's `memberships` include filters to
+      // wsp + ACTIVE and returns none), so the session is denied on the next request.
       ctx.prisma.marketingUser.findUnique.mockResolvedValue(
-        mockMarketingUser({ workspaceId: 'ws-moved' }) as never,
+        mockMarketingUser({ memberships: [] }) as never,
       );
       const token = signMarketingToken({ sub: 'mu-1', wsp: 'ws-1' });
       const res = await request(app.getHttpServer())
