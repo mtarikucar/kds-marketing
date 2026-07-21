@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SocialPlannerService, SOCIAL_PUBLISH_KIND } from './social-planner.service';
 import * as networkAdapters from './network-adapters';
 import * as secretBox from '../../../common/crypto/secret-box.helper';
@@ -58,6 +58,7 @@ describe('SocialPlannerService', () => {
   let prisma: any;
   let scheduledJobs: any;
   let runner: any;
+  let credits: any;
 
   beforeEach(() => {
     prisma = {
@@ -84,8 +85,9 @@ describe('SocialPlannerService', () => {
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
     runner = { registerHandler: jest.fn() };
     const r2 = { isConfigured: () => false, upload: jest.fn(), deleteKeys: jest.fn() };
+    credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
 
-    svc = new SocialPlannerService(prisma as any, scheduledJobs as any, runner as any, r2 as any);
+    svc = new SocialPlannerService(prisma as any, scheduledJobs as any, runner as any, r2 as any, credits as any);
   });
 
   // ── onModuleInit ──────────────────────────────────────────────────────────
@@ -358,6 +360,169 @@ describe('SocialPlannerService', () => {
       }),
     );
 
+    mockPublish.mockRestore();
+  });
+
+  // ── X (Twitter) credit metering ───────────────────────────────────────────
+
+  function twitterPost(content: string) {
+    const twTarget = makeTarget({
+      id: 'tgt-tw',
+      network: 'TWITTER',
+      account: makeAccount({ id: 'acc-tw', network: 'TWITTER' }),
+    });
+    return {
+      ...makePost({ status: 'SCHEDULED', content }),
+      targets: [twTarget],
+    };
+  }
+
+  it('publishDuePost reserves exactly 2 credits for a plain-text TWITTER post', async () => {
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockResolvedValue({ ok: true, externalPostId: 'tw-1' });
+    prisma.socialPost.findFirst.mockResolvedValue(twitterPost('Just a plain tweet'));
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
+    expect(credits.refund).not.toHaveBeenCalled();
+    mockPublish.mockRestore();
+  });
+
+  it('publishDuePost reserves 20 credits for a TWITTER post containing a URL', async () => {
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockResolvedValue({ ok: true, externalPostId: 'tw-2' });
+    prisma.socialPost.findFirst.mockResolvedValue(twitterPost('check https://example.com now'));
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 20);
+    expect(credits.refund).not.toHaveBeenCalled();
+    mockPublish.mockRestore();
+  });
+
+  it('publishDuePost refunds the reserved credits when the TWITTER publish fails', async () => {
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockResolvedValue({ ok: false, error: 'twitter api 500' });
+    prisma.socialPost.findFirst.mockResolvedValue(twitterPost('a failing tweet'));
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
+    expect(credits.refund).toHaveBeenCalledWith('ws-a', 2);
+    expect(prisma.socialPostTarget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'tgt-tw' },
+        data: expect.objectContaining({ status: 'FAILED' }),
+      }),
+    );
+    mockPublish.mockRestore();
+  });
+
+  it('publishDuePost refunds the reserved credits exactly once when the TWITTER publish THROWS, and re-throws', async () => {
+    const boom = new Error('twitter adapter exploded');
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockRejectedValue(boom);
+    prisma.socialPost.findFirst.mockResolvedValue(twitterPost('a throwing tweet'));
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    // The throw still propagates the same way it does today (no swallow).
+    await expect(svc.publishDuePost('post-1', 'ws-a')).rejects.toThrow(boom);
+
+    expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
+    // Refunded exactly once — the thrown-error path must not also reach the
+    // returned-{ok:false} refund branch (no double-refund).
+    expect(credits.refund).toHaveBeenCalledTimes(1);
+    expect(credits.refund).toHaveBeenCalledWith('ws-a', 2);
+    mockPublish.mockRestore();
+  });
+
+  it('publishDuePost does NOT reserve/refund credits for non-Twitter targets', async () => {
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockResolvedValue({ ok: true, externalPostId: 'ext' });
+    const postWithTargets = {
+      ...makePost({ status: 'SCHEDULED' }),
+      targets: [
+        makeTarget({ id: 't-fb', network: 'FACEBOOK', account: makeAccount({ id: 'a-fb', network: 'FACEBOOK' }) }),
+        makeTarget({ id: 't-ig', network: 'INSTAGRAM', account: makeAccount({ id: 'a-ig', network: 'INSTAGRAM' }) }),
+        makeTarget({ id: 't-li', network: 'LINKEDIN', account: makeAccount({ id: 'a-li', network: 'LINKEDIN' }) }),
+      ],
+    };
+    prisma.socialPost.findFirst.mockResolvedValue(postWithTargets);
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    expect(credits.reserve).not.toHaveBeenCalled();
+    expect(credits.refund).not.toHaveBeenCalled();
+    mockPublish.mockRestore();
+  });
+
+  it('publishDuePost marks the TWITTER target FAILED (not a crash) when credits are exhausted, and still publishes other targets', async () => {
+    const mockPublish = jest
+      .spyOn(networkAdapters, 'publishToNetwork')
+      .mockResolvedValue({ ok: true, externalPostId: 'ext-fb' });
+    credits.reserve.mockRejectedValue(
+      new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED', message: 'Monthly AI credit limit reached (100)' }),
+    );
+
+    const twTarget = makeTarget({
+      id: 'tgt-tw',
+      network: 'TWITTER',
+      account: makeAccount({ id: 'acc-tw', network: 'TWITTER' }),
+    });
+    const fbTarget = makeTarget({
+      id: 'tgt-fb',
+      network: 'FACEBOOK',
+      account: makeAccount({ id: 'acc-fb', network: 'FACEBOOK' }),
+    });
+    const postWithTargets = {
+      ...makePost({ status: 'SCHEDULED', content: 'tweet me' }),
+      targets: [twTarget, fbTarget],
+    };
+    prisma.socialPost.findFirst.mockResolvedValue(postWithTargets);
+    prisma.socialPost.update.mockResolvedValue({});
+    prisma.socialPostTarget.update.mockResolvedValue({});
+
+    await svc.publishDuePost('post-1', 'ws-a');
+
+    // Twitter target failed WITHOUT ever hitting the vendor, and surfaces the code
+    expect(mockPublish).toHaveBeenCalledTimes(1); // only the FB target published
+    expect(mockPublish).toHaveBeenCalledWith(fbTarget.account, 'tweet me', [], expect.any(Object));
+    expect(credits.refund).not.toHaveBeenCalled(); // nothing was reserved → nothing to refund
+    expect(prisma.socialPostTarget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'tgt-tw' },
+        data: expect.objectContaining({
+          status: 'FAILED',
+          error: expect.stringContaining('AI_CREDITS_EXHAUSTED'),
+        }),
+      }),
+    );
+    // FB target still published, post ends PUBLISHED (at least one target live)
+    expect(prisma.socialPostTarget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'tgt-fb' },
+        data: expect.objectContaining({ status: 'PUBLISHED' }),
+      }),
+    );
+    expect(prisma.socialPost.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'PUBLISHED' }) }),
+    );
     mockPublish.mockRestore();
   });
 

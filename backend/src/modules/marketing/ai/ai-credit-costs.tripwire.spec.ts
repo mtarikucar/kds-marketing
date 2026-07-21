@@ -19,6 +19,8 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'media.video.generate',
       'research.qualify',
       'review.reply_draft',
+      'social.publish.x',
+      'social.publish.x_link',
       'voice.analysis',
       'voice.copilot',
       'voice.turn',
@@ -43,6 +45,12 @@ describe('ai-credit-costs — cost table tripwire', () => {
       // guards against a typo'd action key being readable
       expect(action.length).toBeGreaterThan(0);
     }
+  });
+
+  it('prices X (Twitter) publishing; a link tweet costs more than a plain one', () => {
+    expect(creditCost('social.publish.x')).toBe(2);
+    expect(creditCost('social.publish.x_link')).toBe(20);
+    expect(creditCost('social.publish.x_link')).toBeGreaterThan(creditCost('social.publish.x'));
   });
 
   it('classification runs on the cheap light tier; ask runs deeper at 2 credits', () => {
