@@ -20,7 +20,8 @@ describe('SocialPlannerService — media + per-target format', () => {
     scheduledJobs = { schedule: jest.fn().mockResolvedValue('job-1') };
     runner = { registerHandler: jest.fn() };
     r2 = { isConfigured: jest.fn().mockReturnValue(true), upload: jest.fn(), deleteKeys: jest.fn().mockResolvedValue(undefined) };
-    svc = new SocialPlannerService(prisma, scheduledJobs, runner, r2);
+    const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
+    svc = new SocialPlannerService(prisma, scheduledJobs, runner, r2, credits as any);
   });
 
   it('uploadMedia rejects when R2 is not configured', async () => {

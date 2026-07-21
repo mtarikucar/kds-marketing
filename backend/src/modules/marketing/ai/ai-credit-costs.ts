@@ -28,6 +28,14 @@ export const AI_CREDIT_COSTS = {
   // hard caps bound actual spend. firecrawl/apify money is metered separately via
   // the RESEARCH SpendLedger channel.
   'research.qualify': { credits: 3, tier: 'default' as AiModelTier },
+  // Social publishing — X (Twitter) is the ONLY network with a real per-post API
+  // cost, so it's the only publish action metered into AI credits (Meta/IG/
+  // LinkedIn/TikTok publishing is free and stays uncharged). X charges ~$0.015/plain
+  // post and ~$0.20/link post; at ~$0.01/credit (rounded up to never under-charge,
+  // per media-models.config's anchor) → 2 and 20 credits. `tier` is unused here
+  // (publishing never calls an LLM) — 'light' is a harmless placeholder.
+  'social.publish.x': { credits: 2, tier: 'light' as AiModelTier },
+  'social.publish.x_link': { credits: 20, tier: 'light' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

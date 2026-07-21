@@ -18,6 +18,19 @@ import {
 import { publishToNetwork, isNetworkConfigured, PostFormat } from './network-adapters';
 import { queryCreatorInfo } from './tiktok-creator-info.util';
 import { R2StorageService, UploadedMedia, UploadInput } from '../../../common/storage/r2-storage.service';
+import { AiCreditsService } from '../ai/ai-credits.service';
+import { creditCost } from '../ai/ai-credit-costs';
+
+/** X (Twitter) is the only publish network with a real per-post API cost. A tweet
+ *  carrying a URL is billed by X at ~13× a plain one, so it maps to a pricier
+ *  credit action. Returns null for every other (free-to-publish) network. */
+function twitterPublishAction(
+  network: string,
+  content: string,
+): 'social.publish.x' | 'social.publish.x_link' | null {
+  if (network !== 'TWITTER') return null;
+  return /https?:\/\//i.test(content ?? '') ? 'social.publish.x_link' : 'social.publish.x';
+}
 
 export const SOCIAL_PUBLISH_KIND = 'social.publish';
 /** Delete a published post's uploaded R2 media this long after success. */
@@ -71,6 +84,7 @@ export class SocialPlannerService implements OnModuleInit {
     private readonly scheduledJobs: ScheduledJobService,
     private readonly runner: ScheduledJobRunnerService,
     private readonly r2: R2StorageService,
+    private readonly credits: AiCreditsService,
   ) {}
 
   onModuleInit(): void {
@@ -415,12 +429,50 @@ export class SocialPlannerService implements OnModuleInit {
     let failedCount = 0;
 
     for (const target of pendingTargets) {
-      const result = await publishToNetwork(target.account, post.content, mediaUrls, {
-        format: formats[target.socialAccountId] ?? 'FEED',
-        mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
-        linkedin: options.linkedin,
-        tiktok: options.tiktok as any,
-      });
+      // X (Twitter) is the only network that charges per post — meter it into AI
+      // credits BEFORE the vendor call (a link tweet costs more). Every other
+      // network publishes for free, so `xAction` is null and nothing is reserved.
+      const xAction = twitterPublishAction(target.account.network, post.content);
+      if (xAction) {
+        try {
+          await this.credits.reserve(workspaceId, creditCost(xAction));
+        } catch (e: any) {
+          // AI_CREDITS_EXHAUSTED (or any metering error) → fail THIS Twitter target
+          // gracefully like any other publish error; do NOT crash the fan-out so
+          // other (free) targets in the same post still publish.
+          const resp = typeof e?.getResponse === 'function' ? e.getResponse() : e?.response;
+          const code = resp?.code ?? e?.code;
+          const reason = code
+            ? `${code}: ${resp?.message ?? e?.message ?? ''}`.trim()
+            : e?.message ?? 'AI credit reservation failed';
+          await this.prisma.socialPostTarget.update({
+            where: { id: target.id },
+            data: { status: 'FAILED', error: reason.slice(0, 500) },
+          });
+          failedCount++;
+          this.logger.warn(
+            `Post ${postId} target ${target.id} (TWITTER) credit reserve failed: ${reason}`,
+          );
+          continue;
+        }
+      }
+
+      let result;
+      try {
+        result = await publishToNetwork(target.account, post.content, mediaUrls, {
+          format: formats[target.socialAccountId] ?? 'FEED',
+          mediaMime: mediaUrls.map((u) => mimeByUrl[u]),
+          linkedin: options.linkedin,
+          tiktok: options.tiktok as any,
+        });
+      } catch (err) {
+        // An UNEXPECTED throw (not a returned {ok:false}) must also refund the
+        // reserved X credits before propagating — otherwise the charge leaks. This
+        // path re-throws (preserving today's behavior), so it can NEVER also reach
+        // the returned-error refund below → no double-refund.
+        if (xAction) await this.credits.refund(workspaceId, creditCost(xAction));
+        throw err;
+      }
 
       if (result.ok) {
         await this.prisma.socialPostTarget.update({
@@ -429,6 +481,8 @@ export class SocialPlannerService implements OnModuleInit {
         });
         publishedCount++;
       } else {
+        // A failed publish must not be charged — refund the reserved X credits.
+        if (xAction) await this.credits.refund(workspaceId, creditCost(xAction));
         await this.prisma.socialPostTarget.update({
           where: { id: target.id },
           data: { status: 'FAILED', error: result.error?.slice(0, 500) ?? 'unknown error' },
