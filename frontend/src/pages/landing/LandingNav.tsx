@@ -8,10 +8,10 @@ import { Btn, LangToggle, SHELL, useScrolled } from './landingShared';
 
 function Brand({ dark }: { dark: boolean }) {
   return (
-    <Link to="/" className="flex items-center gap-2.5" aria-label="Jeeta">
+    <Link to="/" className="flex items-center gap-2.5" aria-label="Jeeta Growth">
       <img src="/logo-mark.png" alt="" className="h-9 w-9 rounded-xl object-cover shadow-sm ring-1 ring-black/5" />
       <span className={cn('font-display text-xl font-bold tracking-tight', dark ? 'text-white' : 'text-slate-900')}>
-        Jeeta
+        Jeeta Growth
       </span>
     </Link>
   );

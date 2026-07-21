@@ -39,9 +39,9 @@ export default function LandingFooter() {
         <div className="grid gap-10 md:grid-cols-[1.4fr_2fr]">
           {/* Brand */}
           <div>
-            <Link to="/" className="flex items-center gap-2.5" aria-label="Jeeta">
+            <Link to="/" className="flex items-center gap-2.5" aria-label="Jeeta Growth">
               <img src="/logo-mark.png" alt="" className="h-9 w-9 rounded-xl object-cover ring-1 ring-white/10" />
-              <span className="font-display text-xl font-bold tracking-tight text-white">Jeeta</span>
+              <span className="font-display text-xl font-bold tracking-tight text-white">Jeeta Growth</span>
             </Link>
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-slate-400">
               {t('landing.footer.tagline')}
@@ -77,7 +77,7 @@ export default function LandingFooter() {
         </div>
 
         <div className="mt-12 flex flex-col items-center justify-between gap-3 border-t border-white/10 pt-6 sm:flex-row">
-          <p className="text-sm text-slate-500">© {year} Jeeta. {t('landing.footer.rights')}</p>
+          <p className="text-sm text-slate-500">© {year} Jeeta Growth. {t('landing.footer.rights')}</p>
           <p className="text-sm text-slate-500">{t('landing.footer.madeIn')}</p>
         </div>
       </div>
