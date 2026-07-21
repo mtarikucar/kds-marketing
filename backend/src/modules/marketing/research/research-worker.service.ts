@@ -11,6 +11,7 @@ import { RESEARCH_TOOLS, dispatchResearchTool, ResearchToolCtx } from './researc
 import { ResearchCandidateService, StagedCandidate } from './research-candidate.service';
 import { ResearchJob } from './research-job.service';
 import { EXTERNAL_REF_PATTERN } from '../dto/ingest-leads.dto';
+import { BrandContextService } from '../brand-brain/brand-context.service';
 
 export interface ResearchRunResult {
   runId: string | null;
@@ -47,6 +48,7 @@ export class ResearchWorkerService {
     private readonly sources: ResearchSourcesService,
     private readonly spend: ResearchSpendService,
     private readonly candidates: ResearchCandidateService,
+    private readonly brandContext: BrandContextService,
   ) {}
 
   async runProfile(job: ResearchJob): Promise<ResearchRunResult> {
@@ -67,7 +69,8 @@ export class ResearchWorkerService {
           const ctx: ResearchToolCtx = { workspaceId: job.workspaceId, runId, geo, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
 
-          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(job) }];
+          const brand = await this.brandContext.summaryFor(job.workspaceId);
+          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(job, brand) }];
           let candidates: StagedCandidate[] = [];
           let toolCalls = 0;
           const deadline = Date.now() + MAX_WALL_MS;
@@ -162,12 +165,13 @@ export class ResearchWorkerService {
     'Write painPoint/evidence/pitch in the profile language. Padding weak leads is worse than returning few. ' +
     'When done, call submit_candidates exactly once with your final list.';
 
-  private buildBrief(job: ResearchJob): string {
+  private buildBrief(job: ResearchJob, brand: string | null): string {
     const p = job.profile;
     const geo = p.geo as { country?: string; regions?: string[]; cities?: string[] } | null;
     const bt = Array.isArray(p.businessTypes) ? (p.businessTypes as string[]).join(', ') : '';
     return [
       `PRODUCT: ${job.productName ?? ''}${job.productUrl ? ` (${job.productUrl})` : ''}`,
+      brand ? `BRAND CONTEXT: ${brand}` : '',
       job.productDescription ? `WHAT IT DOES: ${job.productDescription}` : '',
       `ICP (who to find + what pain): ${p.icpDescription}`,
       p.productPitch ? `PITCH ANGLE: ${p.productPitch}` : '',

@@ -10,6 +10,7 @@ describe('ai-credit-costs — cost table tripwire', () => {
   it('pins the metered AI actions (a new action = a conscious cost decision)', () => {
     expect(Object.keys(AI_CREDIT_COSTS).sort()).toEqual([
       'ask_ai.question',
+      'brand.analyze',
       'content.compose',
       'conversation.followup',
       'conversation.reply',

@@ -84,6 +84,14 @@ export async function createTestApp(
     delegate.findMany?.mockResolvedValue([]);
     delegate.count?.mockResolvedValue(0);
     delegate.groupBy?.mockResolvedValue([]);
+    // Object-returning bulk/aggregate ops default to a safe empty shape too, so a
+    // service that computes `agg._max.x` / `claim.count` doesn't crash an
+    // otherwise-unrelated spec with "reading '_max'/'count' of undefined". Specs
+    // override per-method when they drive a specific value.
+    delegate.aggregate?.mockResolvedValue({ _max: {}, _min: {}, _count: 0, _avg: {}, _sum: {} });
+    delegate.updateMany?.mockResolvedValue({ count: 0 });
+    delegate.deleteMany?.mockResolvedValue({ count: 0 });
+    delegate.createMany?.mockResolvedValue({ count: 0 });
   }
 
   const builder = Test.createTestingModule({ imports: [AppModule] })
@@ -203,18 +211,28 @@ export function mockPlatformOperator(
 
 /** The user row MarketingGuard re-reads after verifying a token. */
 export function mockMarketingUser(over: Partial<Record<string, unknown>> = {}) {
+  const role = (over.role as string | undefined) ?? 'OWNER';
+  const workspaceId = (over.workspaceId as string | undefined) ?? 'ws-1';
+  const customRoleId = (over.customRoleId as string | null | undefined) ?? null;
   return {
     id: 'mu-1',
-    workspaceId: 'ws-1',
+    workspaceId,
     email: 'owner@example.com',
     firstName: 'Olive',
     lastName: 'Owner',
-    role: 'OWNER',
+    role,
     status: 'ACTIVE',
     // Epic F — null means "fall back to the legacy role→permission mapping".
     // Specs that exercise custom-role enforcement set this + customRole.findUnique.
-    customRoleId: null,
+    customRoleId,
     tokenVersion: 0,
+    // Multi-workspace (v2.147.0): MarketingGuard resolves the active workspace's
+    // role/customRoleId from `marketingUser.memberships[0]` (the include is
+    // filtered to wsp + status ACTIVE) and 401s ('Session revoked') when absent.
+    // Provide one ACTIVE membership matching this row so the guard authorizes
+    // exactly as production does. A spec can override `memberships: []` to
+    // exercise the revoked-session path.
+    memberships: [{ workspaceId, role, customRoleId }],
     ...over,
   };
 }

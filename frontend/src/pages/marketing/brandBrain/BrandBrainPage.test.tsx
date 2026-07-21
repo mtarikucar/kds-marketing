@@ -7,7 +7,12 @@ import * as svc from '../../../features/marketing/api/brandBrain.service';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, o?: { defaultValue?: string } | string) => (typeof o === 'string' ? o : (o?.defaultValue ?? k)) }) }));
-vi.mock('../../../features/marketing/api/brandBrain.service', () => ({ searchBrandBrain: vi.fn(), reindexBrandBrain: vi.fn() }));
+vi.mock('../../../features/marketing/api/brandBrain.service', () => ({
+  searchBrandBrain: vi.fn(),
+  reindexBrandBrain: vi.fn(),
+  getBrandProfile: vi.fn().mockResolvedValue(null),
+  putBrandProfile: vi.fn(),
+}));
 
 function renderPage(props: { embedded?: boolean } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

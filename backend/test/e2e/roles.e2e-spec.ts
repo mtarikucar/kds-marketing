@@ -49,7 +49,13 @@ describe('Custom roles (e2e)', () => {
     expect(create.status).toBe(201);
     expect(create.body.id).toBe('r1');
 
-    ctx.prisma.marketingUser.findFirst.mockResolvedValue({ id: 'u2' } as never);
+    // Multi-workspace membership (Task 13 review fix, 0b7c35ca): assignToUser()
+    // reads the TARGET's role/customRoleId off their live WorkspaceMembership
+    // row, not the (frozen-at-creation) MarketingUser row, so it can't evaluate
+    // a promoted/demoted user at a stale role. workspaceMembership.findFirst
+    // defaults to undefined (not-found) in the harness, so without this the
+    // service 404s with "User not found" before ever reaching customRole/update.
+    ctx.prisma.workspaceMembership.findFirst.mockResolvedValue({ role: 'REP', customRoleId: null } as never);
     ctx.prisma.customRole.findFirst.mockResolvedValue({ id: 'r1' } as never);
     (ctx.prisma.marketingUser.update as jest.Mock).mockResolvedValue({});
     const assign = await request(app.getHttpServer())

@@ -70,4 +70,44 @@ export class FirecrawlProvider {
       .filter((r) => !!r.url)
       .map((r) => ({ url: r.url as string, title: r.title, description: r.description }));
   }
+
+  /** Crawl a site to markdown: map its URLs, then scrape a bounded, brand-relevant
+   *  subset. Returns [] when disabled. The map call throws on a real outage (per
+   *  the provider convention); individual page 404s are normal crawl attrition —
+   *  they're skipped, and only successfully-scraped pages are returned (hence only
+   *  they get metered), so the no-false-billing intent is preserved. */
+  async crawl(rootUrl: string, opts: { limit: number }): Promise<Array<{ url: string; markdown: string }>> {
+    if (!this.isConfigured()) return [];
+    const limit = Math.min(Math.max(opts.limit, 1), 20);
+    let links: string[] = [];
+    try {
+      const mapped = await this.post<{ links?: string[]; data?: string[] }>('/v1/map', { url: rootUrl });
+      links = mapped?.links ?? mapped?.data ?? [];
+    } catch (e) {
+      this.logger.warn(`firecrawl map failed for ${rootUrl}: ${e instanceof Error ? e.message : e}`);
+      links = []; // fall back to just the root page below
+    }
+    // Prioritise the root + brand-relevant pages (about / products / services /
+    // pricing), in TR + EN, then fill with the rest. Dedupe, bound to `limit`.
+    const RELEVANT = /(about|hakk|product|urun|ürün|service|hizmet|pricing|fiyat|menu|corporate|kurumsal)/i;
+    const ordered = [rootUrl, ...links.filter((u) => RELEVANT.test(u)), ...links];
+    const seen = new Set<string>();
+    const targets: string[] = [];
+    for (const u of ordered) {
+      if (typeof u !== 'string' || seen.has(u)) continue;
+      seen.add(u);
+      targets.push(u);
+      if (targets.length >= limit) break;
+    }
+    const pages: Array<{ url: string; markdown: string }> = [];
+    for (const u of targets) {
+      try {
+        const r = await this.scrape(u);
+        if (r?.markdown) pages.push({ url: u, markdown: r.markdown });
+      } catch (e) {
+        this.logger.warn(`firecrawl scrape skipped ${u}: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+    return pages;
+  }
 }

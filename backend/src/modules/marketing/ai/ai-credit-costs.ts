@@ -36,6 +36,10 @@ export const AI_CREDIT_COSTS = {
   // (publishing never calls an LLM) — 'light' is a harmless placeholder.
   'social.publish.x': { credits: 2, tier: 'light' as AiModelTier },
   'social.publish.x_link': { credits: 20, tier: 'light' as AiModelTier },
+  // Brand Brain — one synthesis call over all gathered source material (website
+  // crawl + GBP + social + uploads) into a structured brand draft. Firecrawl/Apify
+  // money is metered separately via the RESEARCH SpendLedger channel.
+  'brand.analyze': { credits: 5, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

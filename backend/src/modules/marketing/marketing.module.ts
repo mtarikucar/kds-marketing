@@ -238,6 +238,16 @@ import { BudgetAutopilotCron } from './budget/budget-autopilot.cron';
 import { PerformanceLoopService } from './budget/performance-loop.service';
 import { AgentRunService } from './agents/agent-run.service';
 import { BrandBrainService } from './brand-brain/brand-brain.service';
+import { BrandProfileService } from './brand-brain/brand-profile.service';
+import { BrandContextService } from './brand-brain/brand-context.service';
+import { WebsiteBrandSource } from './brand-brain/sources/website.source';
+import { SocialBrandSource } from './brand-brain/sources/social.source';
+import { GbpBrandSource } from './brand-brain/sources/gbp.source';
+import { UploadBrandSource } from './brand-brain/sources/upload.source';
+import { BrandSynthesisService } from './brand-brain/brand-synthesis.service';
+import { BrandAnalysisService } from './brand-brain/brand-analysis.service';
+import { BrandAnalysisRunnerService } from './brand-brain/brand-analysis.runner';
+import { BrandApplyService } from './brand-brain/brand-apply.service';
 import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
@@ -853,6 +863,26 @@ import { WalletService } from './wallet/wallet.service';
     PerformanceLoopService,
     AgentRunService,
     BrandBrainService,
+    BrandProfileService,
+    BrandContextService,
+    // Brand Brain — source adapters (Task 10): pure collectors over the
+    // Task-9 provider fetchers. Injected by the analysis runner (Task 12).
+    WebsiteBrandSource,
+    SocialBrandSource,
+    GbpBrandSource,
+    UploadBrandSource,
+    // Brand Brain — synthesis (Task 11): one metered Claude tool-use call that
+    // turns gathered source material into a structured draft. Injected by the
+    // analysis runner (Task 12).
+    BrandSynthesisService,
+    // Brand Brain — async brand-extraction run (Task 12): rides the
+    // ScheduledJob backbone (metered, failure-isolated, idempotent).
+    BrandAnalysisService,
+    BrandAnalysisRunnerService,
+    // Brand Brain — apply (Task 13): the review→apply capstone that
+    // diff-safe-seeds the draft across BrandProfile/BrandKit/ResearchProfile/
+    // Workspace.productDescription/KnowledgeDocs. Consumed by the controller.
+    BrandApplyService,
     TrendRemixService,
     VideoPipelineService,
     McpToolRegistry,
@@ -996,6 +1026,16 @@ import { WalletService } from './wallet/wallet.service';
     // Multi-workspace membership — the guard (Task 3) and auth service
     // (Tasks 4-7) inject this to resolve authorization from memberships.
     MembershipService,
+    // Brand Brain — other modules inject this to read/write the workspace's
+    // consolidated brand profile.
+    BrandProfileService,
+    // Brand Brain — the cached always-on brand block. Tasks 4-6 inject this
+    // into conversation-ai-engine/content-ai/social/voice/research to ground
+    // every workspace AI in the brand's identity.
+    BrandContextService,
+    // Brand Brain — async brand-extraction run (Task 12): Task 13's
+    // controller/apply consume startAnalysis/getRun.
+    BrandAnalysisService,
   ],
 })
 export class MarketingModule {}

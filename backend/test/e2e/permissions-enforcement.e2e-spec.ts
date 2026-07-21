@@ -124,27 +124,39 @@ describe('Granular permission enforcement (e2e)', () => {
   // ── Manager-tier config (settings.manage): team-member management is
   //    @MarketingRoles('MANAGER') (no feature gate), so every 403 here is
   //    unambiguously the PermissionsGuard. REP blocked, MANAGER allowed.
-  describe("settings.manage — POST /marketing/users (MANAGER-only today)", () => {
-    const path = '/api/marketing/users';
-    const body = { email: 'rep@x.com', firstName: 'R', lastName: 'P', role: 'REP', password: 'Sup3rSecret!' };
+  //
+  //    NOTE: this used to target POST /marketing/users, but commit 180f1e07
+  //    ("feat(membership): self-serve workspace creation + align invite
+  //    permission") deliberately RAISED that route from settings.manage to
+  //    users.manage — POST /marketing/users delegates to the same
+  //    MembershipService.invite() as POST /marketing/users/invite, and a
+  //    MANAGER holding only settings.manage must not be able to bypass the
+  //    OWNER-only invite bar by hitting /users instead of /users/invite (see
+  //    the "users.manage" describe block below, which already covers that
+  //    route). update()/delete() on an EXISTING member stay settings.manage
+  //    per that same commit, so PATCH /marketing/users/:id is the current,
+  //    accurate example of a settings.manage-gated route on this controller.
+  describe("settings.manage — PATCH /marketing/users/:id (MANAGER-only today)", () => {
+    const path = '/api/marketing/users/user-1';
+    const body = { firstName: 'Updated' };
 
     it('legacy MANAGER passes (held settings.manage via fallback)', async () => {
-      const res = await send('post', path, legacy('MANAGER'), body);
+      const res = await send('patch', path, legacy('MANAGER'), body);
       expect(res.status).not.toBe(403);
     });
 
     it('legacy REP is forbidden — exactly as before', async () => {
-      const res = await send('post', path, legacy('REP'), body);
+      const res = await send('patch', path, legacy('REP'), body);
       expect(res.status).toBe(403);
     });
 
     it('custom role without settings.manage is forbidden (403)', async () => {
-      const res = await send('post', path, custom(['leads.write', 'campaigns.send']), body);
+      const res = await send('patch', path, custom(['leads.write', 'campaigns.send']), body);
       expect(res.status).toBe(403);
     });
 
     it('custom role with settings.manage passes the guard', async () => {
-      const res = await send('post', path, custom(['settings.manage']), body);
+      const res = await send('patch', path, custom(['settings.manage']), body);
       expect(res.status).not.toBe(403);
     });
   });

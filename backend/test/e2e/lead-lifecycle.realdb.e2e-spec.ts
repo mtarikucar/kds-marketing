@@ -143,6 +143,17 @@ describeRealDb('Lead lifecycle — real DB (e2e)', () => {
       ],
     });
 
+    // Multi-workspace guard (v2.147.0): an authenticated request is only valid
+    // when the user holds an ACTIVE WorkspaceMembership for the token's workspace
+    // (MarketingGuard resolves role from it). Seed one per HUMAN user; the SYSTEM
+    // sentinel never authenticates, so it needs none.
+    await prisma.workspaceMembership.createMany({
+      data: [
+        { userId: managerId, workspaceId, role: 'MANAGER', status: 'ACTIVE' },
+        { userId: repId, workspaceId, role: 'REP', status: 'ACTIVE' },
+      ],
+    });
+
     await prisma.ingestToken.create({
       data: {
         workspaceId,
@@ -179,6 +190,7 @@ describeRealDb('Lead lifecycle — real DB (e2e)', () => {
         prisma.outboxEvent.deleteMany({ where: { tenantId: `tenant-${SEED}` } }),
       );
       await del(() => prisma.workspaceSubscription.deleteMany({ where: { workspaceId } }));
+      await del(() => prisma.workspaceMembership.deleteMany({ where: { workspaceId } }));
       await del(() => prisma.marketingUser.deleteMany({ where: { workspaceId } }));
       await del(() => prisma.package.deleteMany({ where: { id: packageId } }));
       await del(() => prisma.workspace.deleteMany({ where: { id: workspaceId } }));

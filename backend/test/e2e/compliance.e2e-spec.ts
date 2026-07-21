@@ -36,6 +36,12 @@ describe('Compliance (e2e)', () => {
     ctx.prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1' } as never);
     (ctx.prisma.consentRecord.create as jest.Mock).mockResolvedValue({ id: 'cr1' });
     (ctx.prisma.lead.update as jest.Mock).mockResolvedValue({});
+    // recordConsent() writes the ConsentRecord + flips the lead's opt-out flag
+    // inside an interactive $transaction(tx => ...); the deep mock's
+    // $transaction is an un-implemented jest.fn() that returns undefined
+    // without ever invoking the callback, so tx.consentRecord.create/
+    // tx.lead.update above never fire unless the callback is wired through.
+    (ctx.prisma.$transaction as jest.Mock).mockImplementation((fn: any) => fn(ctx.prisma));
 
     const res = await request(app.getHttpServer())
       .post('/api/marketing/compliance/leads/lead-1/consent')

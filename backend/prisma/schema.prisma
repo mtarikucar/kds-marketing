@@ -192,7 +192,11 @@ model WorkspaceMembership {
   invitedByUserId String?
   acceptedAt      DateTime?
   createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  // @default(now()) mirrors the shipped 20260715150000_workspace_memberships
+  // migration (updatedAt has a DB DEFAULT CURRENT_TIMESTAMP); declaring it here
+  // keeps schema ↔ migrations in parity without a prod ALTER. Inert at runtime
+  // (Prisma always sets updatedAt on writes via @updatedAt).
+  updatedAt       DateTime  @updatedAt @default(now())
 
   @@unique([userId, workspaceId])
   @@index([workspaceId])
@@ -3598,6 +3602,50 @@ model BrandKit {
   @@map("brand_kits")
 }
 
+/// Brand Brain — the workspace's consolidated brand/product profile. The
+/// structured "header" (always-on AI grounding block); deep materials live as
+/// KnowledgeDoc/KnowledgeChunk. Seeds BrandKit/ResearchProfile/Workspace fields
+/// but never silently overwrites user edits. See docs/superpowers/specs/2026-07-16-*.
+model BrandProfile {
+  id                 String    @id @default(uuid())
+  workspaceId        String    @unique
+  brandName          String
+  tagline            String?
+  description        String?   @db.Text
+  valueProps         Json?     // string[]
+  toneWords          Json?     // string[]
+  voiceGuide         String?   @db.Text
+  icpDescription     String?   @db.Text
+  audienceObjections Json?     // string[]
+  offerings          Json?     // [{ name, blurb, price? }]
+  sources            Json?     // [{ type, url?, handle?, scrapedAt }]
+  socialHandles      Json?     // [{ network, handle }]
+  status             String    @default("DRAFT") // DRAFT | ACTIVE
+  lastAnalyzedAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  @@map("brand_profiles")
+}
+
+/// Brand Brain — one async extraction run: crawl/scrape the workspace's sources,
+/// synthesize a draft BrandProfile (+ proposed ResearchProfile / BrandKit hints /
+/// selected KnowledgeDocs) for the user to review & apply. sourceResults is cached
+/// so re-synthesis never re-crawls. See docs/superpowers/specs/2026-07-16-*.
+model BrandAnalysisRun {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  status        String    @default("QUEUED") // QUEUED | RUNNING | READY_FOR_REVIEW | APPLIED | FAILED
+  inputs        Json      // { websiteUrl?, socialHandles[], gbpUrl?, uploadKeys[] }
+  sourceResults Json?     // per-source raw+status, cached so re-synthesis doesn't re-crawl
+  draft         Json?     // AI-synthesized BrandProfile + proposed ResearchProfile + BrandKit hints + doc refs
+  costUsd       Float?    // metered external spend (Firecrawl/Apify) for this run
+  error         String?
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+  @@index([workspaceId, status])
+  @@map("brand_analysis_runs")
+}
+
 /// A single AI-generated media asset (image or video) and its generation
 /// lifecycle. status: QUEUED|GENERATING|READY|FAILED|BLOCKED. fal result URLs
 /// are re-hosted to R2 on READY; `r2Key` is the canonical store.
@@ -4128,7 +4176,7 @@ model AdMetricBreakdown {
   convValue1dView  Decimal  @default(0) @db.Decimal(14, 2)
   pulledAt         DateTime @default(now())
 
-  @@unique([adAccountId, date, campaignId, adSetId, adId, placement, breakdownType, breakdownValue], name: "adBreakdown_dim")
+  @@unique([adAccountId, date, campaignId, adSetId, adId, placement, breakdownType, breakdownValue], name: "adBreakdown_dim", map: "adBreakdown_dim")
   @@index([workspaceId, date])
   @@index([adAccountId, campaignId, date])
   @@map("ad_metric_breakdowns")

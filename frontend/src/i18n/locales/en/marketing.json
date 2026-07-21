@@ -1970,6 +1970,10 @@
         "title": "Add knowledge",
         "desc": "Give the AI your menu, hours and policies to answer from."
       },
+      "brand": {
+        "title": "Build your Brand Brain",
+        "desc": "Tell the AI who you are so every message and campaign sounds like your brand."
+      },
       "channel": {
         "title": "Connect a channel",
         "desc": "Web chat, WhatsApp or SMS — where customers message you."
@@ -2618,6 +2622,7 @@
   "nav.brandBrain": "Brand Brain",
   "brain.title": "Brand Brain",
   "brain.search": "Search",
+  "brain.setupWithAi": "Set up with AI ✨",
   "nav.studio": "Growth Studio",
   "studio.title": "Growth Studio",
   "studio.tab.calendar": "Content Calendar",
@@ -2721,6 +2726,58 @@
       "business": "Business",
       "kit": "Brand Kit",
       "brain": "Brand Brain"
+    },
+    "brain": {
+      "editor": {
+        "title": "Brand profile",
+        "subtitle": "The one consolidated profile that grounds every AI — conversations, content, social and voice.",
+        "brandName": "Brand name",
+        "tagline": "Tagline",
+        "description": "Description",
+        "valueProps": "Value propositions",
+        "toneWords": "Tone words",
+        "voiceGuide": "Voice guide",
+        "icpDescription": "Ideal customer",
+        "audienceObjections": "Audience objections",
+        "oneItemPerLine": "One item per line.",
+        "activate": "Grounding active",
+        "activateHint": "Only an active profile grounds the AI — a draft is saved but has no effect yet.",
+        "saved": "Brand profile saved",
+        "saveFailed": "Save failed"
+      }
+    },
+    "wizard": {
+      "title": "Set up your Brand Brain with AI",
+      "subtitle": "Give us a few sources and we’ll draft your brand profile, targeting and a starter knowledge base — nothing goes live until you review it.",
+      "websiteUrl": "Website URL",
+      "gbpQuery": "Google Business name or URL",
+      "socialHandles": "Social accounts",
+      "network": "Network",
+      "handle": "Handle",
+      "addAccount": "Add account",
+      "deferredNote": "File uploads and prefilling from your connected social accounts are coming soon — for now, paste the handles you want us to read.",
+      "analyze": "Analyze",
+      "analyzing": "Analyzing your brand across your sources…",
+      "failedTitle": "Analysis failed",
+      "failedDesc": "Something went wrong while analyzing your sources.",
+      "startOver": "Start over",
+      "reviewTitle": "Review your Brand Brain",
+      "reviewSubtitle": "We drafted this from your sources — edit anything before it goes live.",
+      "brandName": "Brand name",
+      "description": "Description",
+      "valueProps": "Value propositions",
+      "toneWords": "Tone words",
+      "proposedTargeting": "Proposed targeting",
+      "brandKitTone": "Tone: {{tone}}",
+      "brandKitCta": "CTA: {{cta}}",
+      "knowledgeDocsCount": "{{n}} knowledge docs will be added",
+      "editLater": "You can fine-tune everything again later from Brand Brain.",
+      "applyActivate": "Apply & activate",
+      "applied": "Brand Brain set up — every AI now speaks your brand",
+      "applyFailed": "Apply failed",
+      "doneTitle": "Your Brand Brain is live",
+      "doneDesc": "Every AI in the workspace now speaks your brand — conversations, content, social and voice.",
+      "finish": "Finish"
     }
   },
   "calls": {

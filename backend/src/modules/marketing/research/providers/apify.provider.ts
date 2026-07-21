@@ -6,6 +6,8 @@ const APIFY_TIMEOUT_MS = Number(process.env.APIFY_TIMEOUT_MS ?? 90_000);
 // Actor slugs are env-overridable so ops can swap actors without a deploy.
 const PLACES_ACTOR = process.env.APIFY_PLACES_ACTOR ?? 'compass~crawler-google-places';
 const INSTAGRAM_ACTOR = process.env.APIFY_INSTAGRAM_ACTOR ?? 'apify~instagram-scraper';
+// Facebook/LinkedIn have no default: those scrapers are gated/variable, so an
+// unset actor slug means "stay inert" rather than guessing a public actor.
 
 type RawPlace = {
   placeId?: string; title?: string; address?: string; city?: string; state?: string;
@@ -57,6 +59,28 @@ export class ApifyProvider {
     return Array.isArray(body) ? (body as T[]) : [];
   }
 
+  /** Shared RawPlace → PlaceHit mapping, used by both the prospecting search
+   *  (searchPlaces) and the workspace's own-profile lookup (scrapeGoogleBusiness). */
+  private mapPlace(p: RawPlace): PlaceHit {
+    return {
+      placeId: p.placeId,
+      name: p.title ?? 'Unknown',
+      address: p.address,
+      city: p.city,
+      region: p.state,
+      phone: p.phoneUnformatted ?? p.phone,
+      website: p.website,
+      category: p.categoryName,
+      rating: p.totalScore,
+      reviewsCount: p.reviewsCount,
+      permanentlyClosed: p.permanentlyClosed,
+      latestReviews: (p.reviews ?? [])
+        .filter((r) => !!r.text)
+        .slice(0, 5)
+        .map((r) => ({ text: (r.text as string).slice(0, 500), rating: r.stars, date: r.publishedAtDate })),
+    };
+  }
+
   /** Google Maps places search for an ICP query within a geo. */
   async searchPlaces(opts: { query: string; geo: Geo; limit: number }): Promise<PlaceHit[]> {
     // Defensive against malformed persisted geo (e.g. cities saved as a string
@@ -73,23 +97,23 @@ export class ApifyProvider {
       reviewsSort: 'newest',
       maxReviews: 5,
     });
-    return rows.map((p) => ({
-      placeId: p.placeId,
-      name: p.title ?? 'Unknown',
-      address: p.address,
-      city: p.city,
-      region: p.state,
-      phone: p.phoneUnformatted ?? p.phone,
-      website: p.website,
-      category: p.categoryName,
-      rating: p.totalScore,
-      reviewsCount: p.reviewsCount,
-      permanentlyClosed: p.permanentlyClosed,
-      latestReviews: (p.reviews ?? [])
-        .filter((r) => !!r.text)
-        .slice(0, 5)
-        .map((r) => ({ text: (r.text as string).slice(0, 500), rating: r.stars, date: r.publishedAtDate })),
-    }));
+    return rows.map((p) => this.mapPlace(p));
+  }
+
+  /** Scrape the workspace's OWN Google Business profile (name/address/URL query),
+   *  pulling more reviews than prospecting — reviews are a voice/objection goldmine
+   *  for the brand. Null when disabled or not found. */
+  async scrapeGoogleBusiness(query: string): Promise<PlaceHit | null> {
+    const clean = query.trim();
+    if (!clean) return null;
+    const rows = await this.runActor<RawPlace>(PLACES_ACTOR, {
+      searchStringsArray: [clean],
+      maxCrawledPlacesPerSearch: 1,
+      language: 'tr',
+      reviewsSort: 'newest',
+      maxReviews: 10,
+    });
+    return rows[0] ? this.mapPlace(rows[0]) : null;
   }
 
   /** Look up a single Instagram business handle. */
@@ -105,6 +129,33 @@ export class ApifyProvider {
       bio: r.biography?.slice(0, 500),
       followers: r.followersCount,
       website: r.externalUrl,
+      isBusiness: r.isBusinessAccount,
+    };
+  }
+
+  /** Scrape one of the workspace's OWN social accounts. Instagram reuses the
+   *  existing IG path; Facebook/LinkedIn use env-configured actors (unset →
+   *  null, graceful — those platforms' scrapers are gated/variable, so staying
+   *  inert is correct). */
+  async scrapeSocial(network: 'INSTAGRAM' | 'FACEBOOK' | 'LINKEDIN', handle: string): Promise<SocialHit | null> {
+    const clean = handle.replace(/^@/, '').trim();
+    if (!clean) return null;
+    if (network === 'INSTAGRAM') return this.lookupInstagram(clean);
+    const actor = network === 'FACEBOOK' ? process.env.APIFY_FACEBOOK_ACTOR : process.env.APIFY_LINKEDIN_ACTOR;
+    if (!actor) return null; // no actor configured for this network → inert
+    const rows = await this.runActor<Record<string, any>>(actor, {
+      usernames: [clean],
+      startUrls: [{ url: clean }],
+      resultsLimit: 1,
+    });
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      handle: `@${clean}`,
+      fullName: r.fullName ?? r.name ?? r.title,
+      bio: (r.biography ?? r.bio ?? r.description ?? '')?.toString().slice(0, 500) || undefined,
+      followers: r.followersCount ?? r.followers,
+      website: r.externalUrl ?? r.website ?? r.url,
       isBusiness: r.isBusinessAccount,
     };
   }

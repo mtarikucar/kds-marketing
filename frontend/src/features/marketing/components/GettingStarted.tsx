@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { CheckCircle, ChevronRight, X } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
+import { getBrandProfile } from '../api/brandBrain.service';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useOnboardingStore } from '../../../store/onboardingStore';
 import {
@@ -43,6 +44,11 @@ export default function GettingStarted() {
     queryFn: () => marketingApi.get('/ai/knowledge').then((r) => r.data),
     enabled: active,
   });
+  const brandProfile = useQuery({
+    queryKey: ['marketing', 'brand-brain', 'profile'],
+    queryFn: getBrandProfile,
+    enabled: active,
+  });
   const channels = useQuery<any[]>({
     queryKey: ['marketing', 'channels'],
     queryFn: () => marketingApi.get('/channels').then((r) => r.data),
@@ -70,6 +76,7 @@ export default function GettingStarted() {
   const steps = [
     { id: 'agent', to: '/inbox?tab=agents', done: (agents.data?.length ?? 0) > 0 },
     { id: 'knowledge', to: '/inbox?tab=knowledge', done: (docs.data?.length ?? 0) > 0 },
+    { id: 'brand', to: '/branding?tab=brain', done: brandProfile.data?.status === 'ACTIVE' },
     { id: 'channel', to: '/inbox?tab=channels', done: (channels.data?.length ?? 0) > 0 },
     { id: 'leads', to: '/leads', done: (leads.data?.meta?.total ?? 0) > 0 },
     // "Invite your team" — done once there's more than just the owner.

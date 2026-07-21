@@ -943,6 +943,10 @@
         "title": "Bilim qo'shing",
         "desc": "AI javob berishi uchun menyu, ish vaqti va qoidalarni bering."
       },
+      "brand": {
+        "title": "Brand Brain'ni yarating",
+        "desc": "AI'ga kim ekaningizni ayting — har bir xabar va kampaniya brendingiz ovozida chiqsin."
+      },
       "channel": {
         "title": "Kanal ulang",
         "desc": "Veb-chat, WhatsApp yoki SMS — mijozlar sizga yozadigan joy."
