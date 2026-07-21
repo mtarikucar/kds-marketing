@@ -1,6 +1,8 @@
 # Unified AI-Credit Metered Billing — Design Spec
 
-**Date:** 2026-07-21 · **Status:** design approved (pricing owner-decided), not yet planned/built
+**Date:** 2026-07-21 · **Status:** SUPERSEDED IN PART — see banner.
+
+> ⚠️ **CORRECTION (2026-07-22, discovered during build):** the "build a new wallet/ledger/guard/grant/top-up" design below **OVER-SCOPED** it — that engine ALREADY EXISTS and is live: `marketing/ai/ai-credits.service.ts` (`AiCreditsService.reserve/refund/usage`, advisory-lock, monthly `UsageCounter`), cost catalog `ai/ai-credit-costs.ts` (anchor: ~$0.01/credit, tripwire-pinned), plan allowance `Package.limits.aiCreditsMonthly` (`billing/entitlements.service.ts`), top-up via `ai_credit_boost` `WorkspaceAddOn`, and it's wired into fal + all AI actions. **Do NOT build a parallel system.** The ONLY real gap — social/X publishing not metered — was SHIPPED on the existing engine (commit da2ff19: `social.publish.x`=2cr, `social.publish.x_link`=20cr). Read this spec for the requirement/economics intent, NOT the data-model/module design. Actual delta + reality: `docs/superpowers/plans/2026-07-22-unified-ai-credit-billing.md`.
 **Owner decisions locked:** (1) UNIFIED credit wallet (X API + fal.ai + future), not per-vendor; (2) allowances VARY BY PLAN; (3) ABSTRACT units ("credits", not raw $) so vendor price swings are absorbed by margin.
 
 ---
