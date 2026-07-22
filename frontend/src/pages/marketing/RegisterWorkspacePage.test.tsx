@@ -153,6 +153,24 @@ describe('RegisterWorkspacePage', () => {
     );
   });
 
+  it('sends productDescription when provided', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const user = userEvent.setup();
+    renderPage();
+    await fillRequired(user);
+    await user.type(
+      screen.getByLabelText(/register.productDescription/i),
+      'We run a cloud POS for cafes.',
+    );
+    await user.click(screen.getByRole('button', { name: /register.submit/i }));
+    await waitFor(() =>
+      expect(marketingApi.post).toHaveBeenCalledWith(
+        '/auth/register-workspace',
+        expect.objectContaining({ productDescription: 'We run a cloud POS for cafes.' }),
+      ),
+    );
+  });
+
   it('shows a login link', () => {
     renderPage();
     expect(screen.getByRole('link', { name: /login.submit/i })).toBeInTheDocument();

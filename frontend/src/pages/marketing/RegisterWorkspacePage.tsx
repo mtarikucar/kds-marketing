@@ -10,6 +10,7 @@ import { passwordSchema } from '../../features/marketing/schemas';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Field } from '../../components/ui/Field';
 import { Input } from '../../components/ui/Input';
+import { Textarea } from '../../components/ui/Textarea';
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 
@@ -43,6 +44,12 @@ const registerSchema = z.object({
     .trim()
     .max(255)
     .refine((v) => !v || isHttpUrl(v), { message: 'invalidUrl' })
+    .optional()
+    .transform((v) => v || undefined),
+  productDescription: z
+    .string()
+    .trim()
+    .max(2000)
     .optional()
     .transform((v) => v || undefined),
   firstName: z.string().trim().min(1, 'required').max(100),
@@ -187,6 +194,30 @@ export default function RegisterWorkspacePage() {
                   )}
                 </Field>
               </div>
+
+              <Field
+                label={t('register.productDescription', 'What does your business do?')}
+                hint={t(
+                  'register.productDescriptionHint',
+                  'A sentence or two — the AI builds your strategy and content around this.',
+                )}
+                error={errors.productDescription?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Textarea
+                    id={id}
+                    rows={3}
+                    maxLength={2000}
+                    placeholder={t(
+                      'register.productDescriptionPlaceholder',
+                      'e.g. We run a cloud POS for independent cafes and small restaurant groups.',
+                    )}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    {...register('productDescription')}
+                  />
+                )}
+              </Field>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field
