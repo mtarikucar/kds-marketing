@@ -1967,6 +1967,10 @@
     "reopen": "Show setup guide",
     "reopened": "Setup guide reopened",
     "steps": {
+      "strategy": {
+        "title": "Build your growth strategy",
+        "desc": "Let the AI map your channels, audience and content plan."
+      },
       "agent": {
         "title": "Create your first AI agent",
         "desc": "Define how your AI greets and answers customers."

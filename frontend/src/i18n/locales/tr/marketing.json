@@ -2273,6 +2273,10 @@
     "reopen": "Kurulum rehberini göster",
     "reopened": "Kurulum rehberi yeniden açıldı",
     "steps": {
+      "strategy": {
+        "title": "Büyüme stratejini oluştur",
+        "desc": "AI kanallarını, kitleni ve içerik planını çıkarsın."
+      },
       "agent": {
         "title": "İlk AI temsilcini oluştur",
         "desc": "AI'ın müşterileri nasıl karşılayıp yanıtlayacağını tanımla."
