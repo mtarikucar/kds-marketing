@@ -16,10 +16,8 @@ import {
 } from '@/components/ui';
 import { DashboardHero } from './dashboard/DashboardHero';
 import { WelcomeDialog } from './dashboard/WelcomeDialog';
-import { KpiGrid } from './dashboard/KpiGrid';
 import { TodaySummary } from './dashboard/TodaySummary';
 import { MonthlyMetrics } from './dashboard/MonthlyMetrics';
-import { LeadsByStatus } from './dashboard/LeadsByStatus';
 import { TopPerformers } from './dashboard/TopPerformers';
 
 export default function MarketingDashboardPage() {
@@ -43,11 +41,6 @@ export default function MarketingDashboardPage() {
   const { data: stats } = useQuery({
     queryKey: ['marketing', 'dashboard', 'stats'],
     queryFn: () => marketingApi.get('/dashboard/stats').then((r) => r.data),
-  });
-
-  const { data: leadsByStatus } = useQuery({
-    queryKey: ['marketing', 'dashboard', 'leads-by-status'],
-    queryFn: () => marketingApi.get('/dashboard/leads-by-status').then((r) => r.data),
   });
 
   const { data: today } = useQuery({
@@ -83,6 +76,22 @@ export default function MarketingDashboardPage() {
     refetchInterval: 60_000,
   });
   const unreadCount = (convos ?? []).reduce((n: number, c: any) => n + (c.unreadCount ?? 0), 0);
+
+  // Only surface the "today" / "this month" cards once they actually hold a
+  // non-zero number — keeps a fresh workspace clean instead of a grid of zeros.
+  const todayHasData = Boolean(
+    today &&
+      ((today.todayTasks ?? 0) > 0 ||
+        (today.completedTasks ?? 0) > 0 ||
+        (today.todayActivities ?? 0) > 0 ||
+        (today.overdueTasks ?? 0) > 0),
+  );
+  const monthlyHasData = Boolean(
+    monthly &&
+      ((monthly.newLeads ?? 0) > 0 ||
+        (monthly.wonLeads ?? 0) > 0 ||
+        (monthly.activitiesCount ?? 0) > 0),
+  );
 
   // The guide PDFs are shipped from frontend/public, so their URLs are just
   // the Vite base path + filename. Resolving at runtime keeps the
@@ -157,19 +166,18 @@ export default function MarketingDashboardPage() {
         unreadCount={unreadCount}
       />
 
-      {/* The day's work sits above the at-a-glance metrics. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <TodaySummary today={today} />
-        <MonthlyMetrics monthly={monthly} />
-      </div>
-
-      {/* KPI tiles — the "performance at a glance" report, below the day's work.
-          Trimmed to the two numbers no other section shows (2026-07): queues
-          live in NeedsAttention, NEW/WON/LOST live in LeadsByStatus. */}
-      <KpiGrid stats={stats} />
-
-      {/* Leads by Status breakdown */}
-      <LeadsByStatus leadsByStatus={leadsByStatus} />
+      {/* The day's work + this month's activity — but ONLY once there's
+          something to show. A brand-new workspace shouldn't greet the user with
+          a wall of "Nothing scheduled / No activity / 0" empty cards; the Hero
+          and the setup checklist carry the first-run experience instead. The
+          vanity KPI tiles and the leads-by-status breakdown moved to Analytics,
+          where at-a-glance reporting belongs. */}
+      {(todayHasData || monthlyHasData) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {todayHasData && <TodaySummary today={today} />}
+          {monthlyHasData && <MonthlyMetrics monthly={monthly} />}
+        </div>
+      )}
 
       {/* Top Performers — manager only */}
       {isManager && topPerformers && topPerformers.length > 0 && (

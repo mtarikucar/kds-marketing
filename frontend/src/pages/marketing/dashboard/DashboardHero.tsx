@@ -27,7 +27,7 @@ interface DashboardHeroProps {
  *  - brand-new workspace (no leads yet) → "start with your first lead"
  *  - work waiting → jump to the most urgent queue (overdue → unassigned → tasks)
  *  - all clear → a positive nudge back into the pipeline
- * Renders nothing while stats are still loading (KpiGrid shows the skeletons).
+ * Renders nothing while stats are still loading.
  */
 export function DashboardHero({ stats, today, isManager, firstName }: DashboardHeroProps) {
   const { t } = useTranslation('marketing');
