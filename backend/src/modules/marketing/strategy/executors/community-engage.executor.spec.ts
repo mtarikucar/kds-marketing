@@ -8,7 +8,7 @@ jest.mock('../channels/discord.adapter', () => ({
   postToDiscord: jest.fn(async () => ({ ok: true, id: 'dmsg1' })),
 }));
 jest.mock('../channels/reddit.adapter', () => ({
-  isRedditConfigured: jest.fn(() => false),
+  isRedditConfigured: jest.fn(async () => false),
   postToReddit: jest.fn(async () => ({ ok: true, id: 'rt3_1' })),
 }));
 
@@ -31,9 +31,11 @@ function deps(overrides: { compose?: any; composeError?: any; post?: any } = {})
   const planner = {
     createPost: jest.fn().mockResolvedValue(overrides.post ?? { id: 'post1', status: 'DRAFT' }),
   };
-  const prisma = {} as any;
-  const svc = new CommunityEngageExecutor(content as any, planner as any, prisma);
-  return { svc, content, planner };
+  // The community-channel service is only consumed through the mocked adapters
+  // (which take it as an opaque handle), so a stub identity is sufficient here.
+  const channels = { __tag: 'CommunityChannelService' } as any;
+  const svc = new CommunityEngageExecutor(content as any, planner as any, channels);
+  return { svc, content, planner, channels };
 }
 
 const PAYLOAD = {
@@ -50,7 +52,7 @@ describe('CommunityEngageExecutor', () => {
     // Default: nothing configured → stage-a-draft is the safe default.
     mResolveDiscord.mockResolvedValue(null);
     mPostDiscord.mockResolvedValue({ ok: true, id: 'dmsg1' });
-    mIsReddit.mockReturnValue(false);
+    mIsReddit.mockResolvedValue(false);
     mPostReddit.mockResolvedValue({ ok: true, id: 'rt3_1' });
   });
   afterEach(() => jest.clearAllMocks());
@@ -146,13 +148,13 @@ describe('CommunityEngageExecutor', () => {
   });
 
   it('submits to Reddit when configured and returns the reddit ref (no draft staged)', async () => {
-    mIsReddit.mockReturnValue(true);
+    mIsReddit.mockResolvedValue(true);
     mPostReddit.mockResolvedValue({ ok: true, id: 'abc123' });
-    const { svc, planner } = deps();
+    const { svc, planner, channels } = deps();
 
     const r = await svc.run('ws1', PAYLOAD); // channelKey 'reddit'
 
-    expect(mPostReddit).toHaveBeenCalledWith({
+    expect(mPostReddit).toHaveBeenCalledWith('ws1', channels, {
       subreddit: 'r/Metin2',
       title: 'Remember the spider dungeon?',
       text: 'Remember grinding the spider dungeon? Come home. 🕷️',
@@ -162,7 +164,7 @@ describe('CommunityEngageExecutor', () => {
   });
 
   it('falls back to staging a draft when the Reddit submit fails', async () => {
-    mIsReddit.mockReturnValue(true);
+    mIsReddit.mockResolvedValue(true);
     mPostReddit.mockResolvedValue({ ok: false, error: 'SUBREDDIT_NOEXIST' });
     const { svc, planner } = deps();
 

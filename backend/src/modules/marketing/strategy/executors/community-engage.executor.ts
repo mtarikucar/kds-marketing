@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { PrismaService } from '../../../../prisma/prisma.service';
 import { ContentAiService } from '../../ai/content-ai.service';
 import { SocialPlannerService } from '../../social-planner/social-planner.service';
 import { Executor } from '../strategy.types';
 import { postToDiscord, resolveDiscordWebhookUrl } from '../channels/discord.adapter';
 import { isRedditConfigured, postToReddit } from '../channels/reddit.adapter';
+import { CommunityChannelService } from '../channels/community-channel.service';
 
 /** The executor-ready config a COMMUNITY_ENGAGE action carries — one native
  *  post idea aimed at a specific community the audience gathers in. */
@@ -45,7 +45,7 @@ export class CommunityEngageExecutor implements Executor {
   constructor(
     private readonly content: ContentAiService,
     private readonly planner: SocialPlannerService,
-    private readonly prisma: PrismaService,
+    private readonly channels: CommunityChannelService,
   ) {}
 
   async run(workspaceId: string, payload: unknown): Promise<{ resultRef?: string }> {
@@ -96,8 +96,10 @@ export class CommunityEngageExecutor implements Executor {
     body: string,
   ): Promise<{ resultRef: string } | null> {
     if (p.channelKey === 'discord') {
-      const webhookUrl = await resolveDiscordWebhookUrl(workspaceId, this.prisma);
-      if (!webhookUrl) return null; // not configured → stage a draft
+      // Resolve THIS workspace's own connected Discord webhook (sealed); global env
+      // is only a last-resort fallback inside the adapter.
+      const webhookUrl = await resolveDiscordWebhookUrl(workspaceId, this.channels);
+      if (!webhookUrl) return null; // not connected → stage a draft
       const r = await postToDiscord(webhookUrl, { content: body });
       if (r.ok) return { resultRef: `discord:${r.id ?? ''}` };
       this.logger.warn(
@@ -106,10 +108,11 @@ export class CommunityEngageExecutor implements Executor {
       return null;
     }
     if (p.channelKey === 'reddit') {
-      if (!isRedditConfigured()) return null; // inert without creds → stage a draft
+      // Inert unless this workspace connected its OWN Reddit account AND env creds exist.
+      if (!(await isRedditConfigured(workspaceId, this.channels))) return null; // → stage a draft
       // The subreddit MUST be one you own/are authorized to post in — the caller
       // (strategy synthesis) is responsible for only targeting such communities.
-      const r = await postToReddit({ subreddit: p.community, title: p.title, text: body });
+      const r = await postToReddit(workspaceId, this.channels, { subreddit: p.community, title: p.title, text: body });
       if (r.ok) return { resultRef: `reddit:${r.id ?? ''}` };
       this.logger.warn(
         `community-engage: Reddit submit failed for ws ${workspaceId} ("${p.title}" → ${p.community}): ${r.error} — staging draft instead`,
