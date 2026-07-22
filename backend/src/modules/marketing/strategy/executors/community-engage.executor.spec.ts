@@ -1,5 +1,25 @@
 import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+
+// The channel adapters are module-level functions; mock them so no test ever
+// touches live Discord/Reddit and we can drive the configured/ok/fail branches.
+jest.mock('../channels/discord.adapter', () => ({
+  resolveDiscordWebhookUrl: jest.fn(async () => null),
+  isDiscordConfigured: jest.fn(async () => false),
+  postToDiscord: jest.fn(async () => ({ ok: true, id: 'dmsg1' })),
+}));
+jest.mock('../channels/reddit.adapter', () => ({
+  isRedditConfigured: jest.fn(() => false),
+  postToReddit: jest.fn(async () => ({ ok: true, id: 'rt3_1' })),
+}));
+
 import { CommunityEngageExecutor } from './community-engage.executor';
+import { resolveDiscordWebhookUrl, postToDiscord } from '../channels/discord.adapter';
+import { isRedditConfigured, postToReddit } from '../channels/reddit.adapter';
+
+const mResolveDiscord = resolveDiscordWebhookUrl as jest.Mock;
+const mPostDiscord = postToDiscord as jest.Mock;
+const mIsReddit = isRedditConfigured as jest.Mock;
+const mPostReddit = postToReddit as jest.Mock;
 
 function deps(overrides: { compose?: any; composeError?: any; post?: any } = {}) {
   const content = {
@@ -11,7 +31,8 @@ function deps(overrides: { compose?: any; composeError?: any; post?: any } = {})
   const planner = {
     createPost: jest.fn().mockResolvedValue(overrides.post ?? { id: 'post1', status: 'DRAFT' }),
   };
-  const svc = new CommunityEngageExecutor(content as any, planner as any);
+  const prisma = {} as any;
+  const svc = new CommunityEngageExecutor(content as any, planner as any, prisma);
   return { svc, content, planner };
 }
 
@@ -25,6 +46,15 @@ const PAYLOAD = {
 };
 
 describe('CommunityEngageExecutor', () => {
+  beforeEach(() => {
+    // Default: nothing configured → stage-a-draft is the safe default.
+    mResolveDiscord.mockResolvedValue(null);
+    mPostDiscord.mockResolvedValue({ ok: true, id: 'dmsg1' });
+    mIsReddit.mockReturnValue(false);
+    mPostReddit.mockResolvedValue({ ok: true, id: 'rt3_1' });
+  });
+  afterEach(() => jest.clearAllMocks());
+
   it('has kind COMMUNITY_ENGAGE', () => {
     expect(deps().svc.kind).toBe('COMMUNITY_ENGAGE');
   });
@@ -39,17 +69,17 @@ describe('CommunityEngageExecutor', () => {
         kind: 'social',
         goal: expect.stringContaining('Remember the spider dungeon?'),
         tone: 'playful',
-        // The community + native format are threaded into the compose context.
         context: expect.stringContaining('r/Metin2'),
       }),
     );
     expect(content.compose.mock.calls[0][1].context).toMatch(/meme/i);
 
-    // The staged draft notes the target community (posting itself is P5).
     const createArg = planner.createPost.mock.calls[0][1];
     expect(createArg.content).toContain('Remember grinding the spider dungeon?');
     expect(createArg.options).toMatchObject({ channelKey: 'reddit', community: 'r/Metin2', format: 'meme' });
 
+    // Reddit not configured → safe default: staged draft, no live submit.
+    expect(mPostReddit).not.toHaveBeenCalled();
     expect(r).toEqual({ resultRef: 'community:post1' });
   });
 
@@ -85,5 +115,70 @@ describe('CommunityEngageExecutor', () => {
   it('throws on a non-object payload', async () => {
     const { svc } = deps();
     await expect(svc.run('ws1', null)).rejects.toThrow(BadRequestException);
+  });
+
+  // ─────────────────────────────── P5 live posting (opt-in, owned channels)
+
+  it('posts to Discord when configured and returns the discord ref (no draft staged)', async () => {
+    mResolveDiscord.mockResolvedValue('https://discord.com/api/webhooks/1/x');
+    mPostDiscord.mockResolvedValue({ ok: true, id: 'dmsg9' });
+    const { svc, planner } = deps();
+
+    const r = await svc.run('ws1', { ...PAYLOAD, channelKey: 'discord' });
+
+    expect(mPostDiscord).toHaveBeenCalledWith('https://discord.com/api/webhooks/1/x', {
+      content: 'Remember grinding the spider dungeon? Come home. 🕷️',
+    });
+    expect(planner.createPost).not.toHaveBeenCalled();
+    expect(r).toEqual({ resultRef: 'discord:dmsg9' });
+  });
+
+  it('falls back to staging a draft when the Discord post fails', async () => {
+    mResolveDiscord.mockResolvedValue('https://discord.com/api/webhooks/1/x');
+    mPostDiscord.mockResolvedValue({ ok: false, error: 'HTTP 401' });
+    const { svc, planner } = deps();
+
+    const r = await svc.run('ws1', { ...PAYLOAD, channelKey: 'discord' });
+
+    expect(mPostDiscord).toHaveBeenCalled();
+    expect(planner.createPost).toHaveBeenCalled();
+    expect(r).toEqual({ resultRef: 'community:post1' });
+  });
+
+  it('submits to Reddit when configured and returns the reddit ref (no draft staged)', async () => {
+    mIsReddit.mockReturnValue(true);
+    mPostReddit.mockResolvedValue({ ok: true, id: 'abc123' });
+    const { svc, planner } = deps();
+
+    const r = await svc.run('ws1', PAYLOAD); // channelKey 'reddit'
+
+    expect(mPostReddit).toHaveBeenCalledWith({
+      subreddit: 'r/Metin2',
+      title: 'Remember the spider dungeon?',
+      text: 'Remember grinding the spider dungeon? Come home. 🕷️',
+    });
+    expect(planner.createPost).not.toHaveBeenCalled();
+    expect(r).toEqual({ resultRef: 'reddit:abc123' });
+  });
+
+  it('falls back to staging a draft when the Reddit submit fails', async () => {
+    mIsReddit.mockReturnValue(true);
+    mPostReddit.mockResolvedValue({ ok: false, error: 'SUBREDDIT_NOEXIST' });
+    const { svc, planner } = deps();
+
+    const r = await svc.run('ws1', PAYLOAD);
+
+    expect(mPostReddit).toHaveBeenCalled();
+    expect(planner.createPost).toHaveBeenCalled();
+    expect(r).toEqual({ resultRef: 'community:post1' });
+  });
+
+  it('stages a draft for an unconfigured/other channel (unchanged behaviour)', async () => {
+    const { svc, planner } = deps();
+    const r = await svc.run('ws1', { ...PAYLOAD, channelKey: 'forum', community: 'Some Forum' });
+    expect(mPostDiscord).not.toHaveBeenCalled();
+    expect(mPostReddit).not.toHaveBeenCalled();
+    expect(planner.createPost).toHaveBeenCalled();
+    expect(r).toEqual({ resultRef: 'community:post1' });
   });
 });
