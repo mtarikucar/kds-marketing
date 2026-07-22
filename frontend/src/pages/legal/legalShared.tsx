@@ -5,22 +5,12 @@ import { usePrefersReducedMotion, SHELL } from '../landing/landingShared';
 import LandingNav from '../landing/LandingNav';
 import LandingFooter from '../landing/LandingFooter';
 
-/**
- * Company / legal identity used across the Privacy Policy and Terms of Service.
- * Confirmed by the operator (2026-06-24). Update here to keep both documents in sync.
- */
-export const LEGAL = {
-  brand: 'Jeeta Growth',
-  entity: 'Jeeta Growth',
-  email: 'admin@jeetagrowth.com',
-  city: 'Ankara',
-  countryTr: 'Türkiye',
-  countryEn: 'Türkiye',
-  /** Courts / governing law seat. */
-  jurisdiction: 'Ankara',
-  effectiveDateTr: '24 Haziran 2026',
-  effectiveDateEn: 'June 24, 2026',
-} as const;
+// Legal identity lives in its own import-free module (./legalConfig) to avoid a
+// circular dependency — this file imports the landing footer, which also reads
+// LEGAL. Imported for local use here (LegalLayout) AND re-exported so existing
+// `import { LEGAL } from '../legalShared'` call sites (terms.ts, privacy.ts) keep working.
+import { LEGAL } from './legalConfig';
+export { LEGAL };
 
 export interface LegalSection {
   id: string;
@@ -167,6 +157,37 @@ export function LegalLayout({ content }: { content: LegalContent }) {
                   {LEGAL.email}
                   <ArrowUpRight className="h-4 w-4" />
                 </a>
+              </div>
+
+              {/* Business information — the registered legal entity, so the public
+                  site stays consistent with the GİB vergi levhası (and platform
+                  vetting cross-checks). No tax number is published. */}
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+                <p className="text-[15px] font-semibold text-slate-900">
+                  {pickLang(i18n.language) === 'tr' ? 'İşletme Bilgileri' : 'Business Information'}
+                </p>
+                <dl className="mt-3 space-y-1.5 text-[14px] leading-relaxed text-slate-600">
+                  <div>
+                    <dt className="inline font-medium text-slate-500">{pickLang(i18n.language) === 'tr' ? 'Marka' : 'Brand'}: </dt>
+                    <dd className="inline">{LEGAL.brand}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-slate-500">{pickLang(i18n.language) === 'tr' ? 'Yasal Unvan' : 'Legal name'}: </dt>
+                    <dd className="inline">{LEGAL.legalName} ({pickLang(i18n.language) === 'tr' ? LEGAL.businessType : LEGAL.businessTypeEn})</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-slate-500">{pickLang(i18n.language) === 'tr' ? 'Vergi Dairesi' : 'Tax office'}: </dt>
+                    <dd className="inline">{LEGAL.taxOffice}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-slate-500">{pickLang(i18n.language) === 'tr' ? 'Adres' : 'Address'}: </dt>
+                    <dd className="inline">{LEGAL.address}, {LEGAL.countryTr}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-slate-500">{pickLang(i18n.language) === 'tr' ? 'E-posta' : 'Email'}: </dt>
+                    <dd className="inline">{LEGAL.email}</dd>
+                  </div>
+                </dl>
               </div>
             </article>
           </div>
