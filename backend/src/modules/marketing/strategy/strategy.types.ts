@@ -86,3 +86,18 @@ export interface MarketingStrategyBrief {
   budget: string;
   competitors: string[];
 }
+
+/**
+ * One synthesized ActionPlan item — what synthesis emits inside its
+ * `submit_strategy` finalize tool and what the orchestrator persists as a
+ * `StrategyAction` row (status PROPOSED) before dispatching to the matching
+ * executor. `payload` is the executor-ready config for `kind`; the executor
+ * (not this type) knows how to run it.
+ */
+export interface StrategyActionItem {
+  kind: ActionKind;
+  title: string;
+  rationale: string;
+  payload: Record<string, unknown>;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH';
+}
