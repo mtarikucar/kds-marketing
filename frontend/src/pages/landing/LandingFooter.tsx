@@ -1,9 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { LangToggle, SHELL } from './landingShared';
+import { LEGAL } from '../legal/legalConfig';
 
 export default function LandingFooter() {
-  const { t } = useTranslation('marketing');
+  const { t, i18n } = useTranslation('marketing');
+  const tr = (i18n.language || 'tr').slice(0, 2) === 'tr';
   const year = new Date().getFullYear();
 
   const columns: Array<{ title: string; links: Array<{ label: string; href?: string; to?: string }> }> = [
@@ -45,6 +47,9 @@ export default function LandingFooter() {
             </Link>
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-slate-400">
               {t('landing.footer.tagline')}
+            </p>
+            <p className="mt-3 max-w-xs text-xs leading-relaxed text-slate-500">
+              {LEGAL.legalName} — {tr ? LEGAL.businessType : LEGAL.businessTypeEn} · {LEGAL.taxOffice} · {LEGAL.address}
             </p>
             <div className="mt-5">
               <LangToggle tone="dark" />
