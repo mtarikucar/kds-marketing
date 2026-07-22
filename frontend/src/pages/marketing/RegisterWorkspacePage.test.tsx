@@ -34,8 +34,14 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
 vi.mock('../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: () => ({
     login: vi.fn(),
+    setMemberships: vi.fn(),
     isAuthenticated: false,
   }),
+}));
+
+// Stub membership hydration (register mirrors login's best-effort fetch).
+vi.mock('../../features/marketing/api/membershipApi', () => ({
+  fetchMemberships: vi.fn(() => Promise.resolve([])),
 }));
 
 import RegisterWorkspacePage from './RegisterWorkspacePage';

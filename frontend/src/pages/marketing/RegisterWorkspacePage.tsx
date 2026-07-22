@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { fetchMemberships } from '../../features/marketing/api/membershipApi';
 import { passwordSchema } from '../../features/marketing/schemas';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Field } from '../../components/ui/Field';
@@ -45,7 +46,7 @@ type RegisterValues = z.infer<typeof registerSchema>;
 export default function RegisterWorkspacePage() {
   const navigate = useNavigate();
   const { t, i18n } = useTranslation('marketing');
-  const { login, isAuthenticated } = useMarketingAuthStore();
+  const { login, setMemberships, isAuthenticated } = useMarketingAuthStore();
 
   const {
     register,
@@ -70,6 +71,15 @@ export default function RegisterWorkspacePage() {
         language: i18n.language?.split('-')[0],
       });
       login(data.user, data.accessToken, data.refreshToken);
+      // Best-effort membership hydration (parity with MarketingLoginPage): the
+      // register response carries no `memberships` — only GET /auth/profile does
+      // — so fetch it as a follow-up. A hiccup here must never block signup; the
+      // workspace switcher just stays empty until the next profile fetch.
+      try {
+        setMemberships(await fetchMemberships());
+      } catch {
+        // ignored — see comment above
+      }
       navigate('/dashboard?welcome=1');
     } catch (err: any) {
       setError('root', {
