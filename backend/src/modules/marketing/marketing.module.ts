@@ -494,6 +494,16 @@ import { CouponsService } from './coupons/coupons.service';
 import { MarketingWalletController } from './controllers/marketing-wallet.controller';
 import { WalletService } from './wallet/wallet.service';
 
+// Strategy Engine — the archetype-adaptive MarketingStrategy brain (hybrid
+// onboarding → synthesis → console). Registered flat (like every other feature
+// in this module) so the controllers' guards + the services' AI/research/brand
+// deps all resolve in this single injector.
+import { StrategyService } from './strategy/strategy.service';
+import { StrategyIntakeService } from './strategy/intake/strategy-intake.service';
+import { StrategySynthesisService } from './strategy/synthesis/strategy-synthesis.service';
+import { StrategyController } from './strategy/strategy.controller';
+import { StrategyIntakeController } from './strategy/strategy-intake.controller';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -671,6 +681,9 @@ import { WalletService } from './wallet/wallet.service';
     SocialCampaignsController,
     LinkedinAdsOAuthController,
     GoogleAdsOAuthController,
+    // Strategy Engine — onboarding + console surfaces.
+    StrategyIntakeController,
+    StrategyController,
   ],
   providers: [
     // Services
@@ -1006,6 +1019,11 @@ import { WalletService } from './wallet/wallet.service';
     // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
     LinkedinAdsOAuthService,
     GoogleAdsOAuthService,
+    // Strategy Engine — read/decision service + hybrid-onboarding intake + the
+    // strategist synthesis brain (all consume AI/research/brand providers above).
+    StrategyService,
+    StrategyIntakeService,
+    StrategySynthesisService,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
