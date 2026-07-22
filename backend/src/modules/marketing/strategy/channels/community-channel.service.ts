@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { sealSecret, openSecret, isSecretBoxConfigured } from '../../../../common/crypto/secret-box.helper';
 
@@ -265,7 +266,11 @@ export class CommunityChannelService {
     sealedSecret: string,
     meta?: Record<string, unknown>,
   ) {
-    const data = { sealedSecret, status: 'ACTIVE', meta: meta ?? undefined };
+    const data = {
+      sealedSecret,
+      status: 'ACTIVE',
+      meta: (meta ?? undefined) as Prisma.InputJsonValue | undefined,
+    };
     return this.prisma.communityChannelConfig.upsert({
       where: { workspaceId_provider: { workspaceId, provider } },
       create: { workspaceId, provider, ...data },
