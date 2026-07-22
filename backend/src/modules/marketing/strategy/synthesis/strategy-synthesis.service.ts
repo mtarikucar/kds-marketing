@@ -9,7 +9,7 @@ import { ResearchSourcesService } from '../../research/providers/research-source
 import { ResearchSpendService } from '../../budget/research-spend.service';
 import { RESEARCH_TOOLS, dispatchResearchTool, ResearchToolCtx } from '../../research/research-toolset';
 import { validateBrief } from '../strategy.schema';
-import { ARCHETYPES } from '../archetypes';
+import { ARCHETYPES, archetypeMeta } from '../archetypes';
 import { ActionKind, BusinessArchetype, StrategyActionItem } from '../strategy.types';
 
 export interface StrategySynthesisResult {
@@ -260,8 +260,26 @@ export class StrategySynthesisService {
     const qa = extractQa(session.transcript);
     return [
       `AUTO-ANALYSIS: ${JSON.stringify(session.autoAnalysis ?? {})}`,
+      this.priorsLine(session.autoAnalysis),
       qa ? `INTERVIEW (operator answers):\n${qa}` : '',
       'Research the market/audience/competitors with the tools, then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  /** When the intake auto-analysis already suggested an archetype, thread its
+   *  registry priors (channel fit-scores + the archetype-specific interview
+   *  angles) into the strategist prompt as a STARTING point to adjust with
+   *  research — not a hard constraint. */
+  private priorsLine(autoAnalysis: unknown): string {
+    const suggested = (autoAnalysis as { suggestedArchetype?: unknown } | null)?.suggestedArchetype;
+    if (typeof suggested !== 'string' || !(suggested in ARCHETYPES)) return '';
+    const meta = archetypeMeta(suggested as BusinessArchetype);
+    return [
+      `PRIORS (suggested archetype ${suggested}, adjust with research):`,
+      `- channel fit priors: ${JSON.stringify(meta.channelPriors)}`,
+      meta.interviewDeltas.length ? `- archetype angles to probe: ${meta.interviewDeltas.join(' | ')}` : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -270,10 +288,17 @@ export class StrategySynthesisService {
   private readonly SYSTEM =
     'You are a senior marketing strategist inside a multi-tenant marketing-automation platform. ' +
     'Research the market, audience and competitors with the tools, then submit ONE strategy via submit_strategy. ' +
-    'Classify the business into exactly one BusinessArchetype key. ' +
+    'Classify the business into exactly one BusinessArchetype key (e.g. B2B_LOCAL_SERVICE, B2B_SAAS, B2C_ECOMMERCE, B2C_COMMUNITY_NICHE, CREATOR_MEDIA, LOCAL_RETAIL_FOOD, OTHER). ' +
     'Produce a COMPLETE brief: identity (product/voice/positioning/usp), audience (ICP), channels (key + 0-1 fitScore + rationale), contentPillars (title/angle/formats/tone), goals (objective + kpis), budget, competitors. ' +
     'Then a prioritized ActionPlan of typed StrategyAction items (kind ∈ LEAD_HUNT|CONTENT|CHANNEL_SETUP|AD_CAMPAIGN|COMMUNITY_ENGAGE) with executor-ready payloads. ' +
-    'For a B2C community/niche business, research WHERE the audience gathers (subreddits, Discords, forums) + what content resonates (memes, tutorials) and put that into channels + contentPillars. ' +
+    'If PRIORS are supplied for a suggested archetype, START from those channel fit-scores and probe angles, then adjust them with what your research finds. ' +
+    'Be archetype-adaptive in HOW you drive growth: ' +
+    'a B2B business (leadApproach B2B_PROSPECT) grows by prospecting named accounts — favour LEAD_HUNT actions on channels like linkedin/email/google-maps. ' +
+    'a B2C / community / creator business (leadApproach B2C_AUDIENCE) grows by becoming native in the communities its audience already inhabits — favour COMMUNITY_ENGAGE + CONTENT over outbound. ' +
+    'For a B2C_COMMUNITY_NICHE / B2C_ECOMMERCE / CREATOR_MEDIA business you MUST use the research tools to DISCOVER the SPECIFIC communities the audience gathers in — name the actual subreddits, Discord servers, forums, and niche platforms (do not guess a generic channel) — and the content FORMATS that resonate there (memes, tutorials, clips, guides). ' +
+    'Write each discovered community into brief.channels with a channel key (reddit, discord, forum, youtube, tiktok, x) and name the SPECIFIC community in that channel rationale (e.g. rationale "r/<subreddit> is where they gather"). ' +
+    'Write channel-native brief.contentPillars whose angle+tone match each community (e.g. a meme pillar for a Reddit community, a tutorial pillar for a Discord/forum). ' +
+    'Emit COMMUNITY_ENGAGE actions, one per community post idea, with payload { channelKey, community, title, angle, tone, format } — channelKey is the channel key, community is the specific subreddit/server/forum, format is the native content format (meme/tutorial/clip). ' +
     'Call submit_strategy exactly once when done.';
 }
 

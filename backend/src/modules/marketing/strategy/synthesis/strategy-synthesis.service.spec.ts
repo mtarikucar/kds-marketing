@@ -91,6 +91,52 @@ describe('StrategySynthesisService', () => {
     expect(r).toEqual({ strategyId: 'strat1', actionCount: 2 });
   });
 
+  it('B2C acceptance: classifies a community-niche business + writes communities into channels/pillars + emits COMMUNITY_ENGAGE actions (PROPOSED)', async () => {
+    const B2C_BRIEF = {
+      identity: { product: 'Private Metin2 server', voice: 'playful, nostalgic', positioning: 'The classic-era server', usp: 'Pre-2010 mechanics, no pay-to-win' },
+      audience: 'Nostalgic Metin2 veterans, 20-35, EU',
+      channels: [
+        { key: 'reddit', fitScore: 0.9, rationale: 'r/Metin2 is where nostalgic players gather' },
+        { key: 'discord', fitScore: 0.85, rationale: 'The "Metin2 Classic EU" Discord server hosts the active raid community' },
+      ],
+      contentPillars: [
+        { title: 'Nostalgia memes', angle: 'classic-era in-jokes', formats: ['meme', 'image'], tone: 'playful meme humor' },
+        { title: 'Boss-run tutorials', angle: 'how classic mechanics worked', formats: ['clip', 'guide'], tone: 'helpful community insider' },
+      ],
+      goals: { objective: 'Grow active players to 2k', kpis: ['DAU', 'Discord joins'] },
+      budget: 'Bootstrap: organic community + $200/mo ads',
+      competitors: ['OtherServer.gg'],
+    };
+    const B2C_ACTIONS = [
+      { kind: 'COMMUNITY_ENGAGE', title: 'Drop a classic-era meme in r/Metin2', rationale: 'Where the audience is', priority: 'HIGH', payload: { channelKey: 'reddit', community: 'r/Metin2', title: 'Remember grinding at the spider dungeon?', angle: 'nostalgia', tone: 'playful', format: 'meme' } },
+      { kind: 'COMMUNITY_ENGAGE', title: 'Share a boss-run tutorial in the Discord', rationale: 'Helpful native content builds trust', priority: 'MEDIUM', payload: { channelKey: 'discord', community: 'Metin2 Classic EU', title: 'Classic Meley strategy', angle: 'tutorial', tone: 'insider', format: 'tutorial' } },
+    ];
+    const { svc, complete, credits, prisma } = deps({
+      completions: [
+        completion([toolUse('t1', 'search_web', { query: 'metin2 private server community reddit discord' })]),
+        completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_COMMUNITY_NICHE', brief: B2C_BRIEF, actions: B2C_ACTIONS })]),
+      ],
+    });
+    const r = await svc.synthesize('ws1', 'sess1');
+
+    expect(credits.reserve).toHaveBeenCalledWith('ws1', 8);
+    const upsert = prisma.marketingStrategy.upsert.mock.calls[0][0];
+    expect(upsert.create.archetype).toBe('B2C_COMMUNITY_NICHE');
+    // Communities are written into the brief's channels WITH the specific community in the rationale.
+    const persistedChannels = upsert.create.brief.channels;
+    expect(persistedChannels.map((c: any) => c.key)).toEqual(expect.arrayContaining(['reddit', 'discord']));
+    expect(persistedChannels.find((c: any) => c.key === 'reddit').rationale).toMatch(/r\/Metin2/);
+    expect(persistedChannels.find((c: any) => c.key === 'discord').rationale).toMatch(/Discord/i);
+    // Channel-native content pillars with a meme/community tone.
+    expect(upsert.create.brief.contentPillars.some((p: any) => /meme/i.test(p.tone) || p.formats.includes('meme'))).toBe(true);
+    // COMMUNITY_ENGAGE actions inserted PROPOSED, carrying the executor-ready community payload.
+    const inserted = prisma.strategyAction.createMany.mock.calls[0][0].data;
+    expect(inserted).toHaveLength(2);
+    expect(inserted.every((a: any) => a.kind === 'COMMUNITY_ENGAGE' && a.status === 'PROPOSED')).toBe(true);
+    expect(inserted[0].payload).toMatchObject({ channelKey: 'reddit', community: 'r/Metin2', format: 'meme' });
+    expect(r).toEqual({ strategyId: 'strat1', actionCount: 2 });
+  });
+
   it('rejects + refunds + does NOT upsert on an invalid brief', async () => {
     const badBrief = { ...GOOD_BRIEF, channels: [] }; // channels min(1) violated
     const { svc, credits, prisma } = deps({
