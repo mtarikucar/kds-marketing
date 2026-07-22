@@ -9,6 +9,7 @@ import { NAV_HUBS, visibleNav, findActiveHub, splitByTier, shouldAutoOpenAdvance
 import { useEntitlements } from '../hooks/useEntitlements';
 import { useWorkspaceProfile } from '../hooks/useWorkspaceProfile';
 import { cn } from '../../../components/ui/cn';
+import { ThemeToggle, LanguageSwitcher } from '@/components/ui';
 
 const STORAGE_KEY = 'kds-sidebar-collapsed';
 
@@ -228,6 +229,15 @@ export default function MarketingSidebar({
       {/* Settings (gear) + user + logout */}
       <div className="shrink-0 space-y-1 border-t border-border px-3 py-3">
         {settingsHub && renderHub(settingsHub, { pinnable: false })}
+        {/* Theme + language — only in the mobile drawer (forceExpanded). On
+            desktop these live in the top bar; on mobile the bar hides them to
+            avoid overflow, so this is their reachable home. */}
+        {forceExpanded && (
+          <div className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
+            <LanguageSwitcher />
+            <ThemeToggle />
+          </div>
+        )}
         <div
           className={cn(
             'flex items-center rounded-lg py-1.5',
