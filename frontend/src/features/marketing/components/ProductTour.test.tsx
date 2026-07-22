@@ -29,9 +29,17 @@ describe('ProductTour', () => {
     useTourStore.setState({ open: false, dismissed: {} });
   });
 
-  it('auto-starts for a manager and steps through to done', async () => {
+  it('does NOT auto-start for a manager (WelcomeDialog owns first-touch)', () => {
+    renderTour('/dashboard');
+    expect(screen.queryByText('Jump anywhere with ⌘K')).not.toBeInTheDocument();
+    expect(useTourStore.getState().open).toBe(false);
+  });
+
+  it('opens on demand (menu launch) and steps through to done', async () => {
     const user = userEvent.setup();
     renderTour('/dashboard');
+    // The header "Take a tour" menu entry calls the store's setOpen(true).
+    useTourStore.setState({ open: true });
     expect(await screen.findByText('Jump anywhere with ⌘K')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByText('A focused menu')).toBeInTheDocument();
@@ -42,15 +50,11 @@ describe('ProductTour', () => {
     expect(useTourStore.getState().open).toBe(false);
   });
 
-  it('does NOT auto-start on the fresh-register (?welcome=1) moment', () => {
-    renderTour('/dashboard?welcome=1');
-    expect(screen.queryByText('Jump anywhere with ⌘K')).not.toBeInTheDocument();
-    expect(useTourStore.getState().open).toBe(false);
-  });
-
-  it('does not auto-start once dismissed', () => {
+  it('relaunches from the menu even once dismissed', async () => {
     useTourStore.setState({ open: false, dismissed: { w1: true } });
     renderTour('/dashboard');
     expect(screen.queryByText('Jump anywhere with ⌘K')).not.toBeInTheDocument();
+    useTourStore.setState({ open: true });
+    expect(await screen.findByText('Jump anywhere with ⌘K')).toBeInTheDocument();
   });
 });
