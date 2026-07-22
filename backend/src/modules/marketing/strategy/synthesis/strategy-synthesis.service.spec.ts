@@ -44,8 +44,9 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
     marketingStrategy: { upsert: jest.fn().mockResolvedValue({ id: 'strat1' }) },
     strategyAction: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   };
-  const svc = new StrategySynthesisService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any);
-  return { svc, complete, credits, runs, sources, spend, prisma };
+  const orchestrator = { applyPlan: jest.fn().mockResolvedValue({ lane: 'ASSISTED', applied: 0, skipped: 0 }) };
+  const svc = new StrategySynthesisService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, orchestrator as any);
+  return { svc, complete, credits, runs, sources, spend, prisma, orchestrator };
 }
 
 describe('StrategySynthesisService', () => {
@@ -89,6 +90,16 @@ describe('StrategySynthesisService', () => {
     expect(inserted[0]).toMatchObject({ workspaceId: 'ws1', strategyId: 'strat1', kind: 'COMMUNITY_ENGAGE', priority: 'HIGH', status: 'PROPOSED' });
     expect(inserted[1].priority).toBe('MEDIUM'); // defaulted
     expect(r).toEqual({ strategyId: 'strat1', actionCount: 2 });
+  });
+
+  it('hands the freshly-seeded plan to the orchestrator (autonomy lane hook)', async () => {
+    const { svc, orchestrator } = deps({
+      completions: [
+        completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_COMMUNITY_NICHE', brief: GOOD_BRIEF, actions: GOOD_ACTIONS })]),
+      ],
+    });
+    await svc.synthesize('ws1', 'sess1');
+    expect(orchestrator.applyPlan).toHaveBeenCalledWith('ws1');
   });
 
   it('B2C acceptance: classifies a community-niche business + writes communities into channels/pillars + emits COMMUNITY_ENGAGE actions (PROPOSED)', async () => {

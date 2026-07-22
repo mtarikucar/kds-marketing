@@ -505,6 +505,7 @@ import { StrategyOrchestrator } from './strategy/orchestrator/strategy-orchestra
 import { LeadHuntExecutor } from './strategy/executors/lead-hunt.executor';
 import { ContentExecutor } from './strategy/executors/content.executor';
 import { CommunityEngageExecutor } from './strategy/executors/community-engage.executor';
+import { AdCampaignExecutor } from './strategy/executors/ad-campaign.executor';
 import { StrategyController } from './strategy/strategy.controller';
 import { StrategyIntakeController } from './strategy/strategy-intake.controller';
 
@@ -1035,6 +1036,9 @@ import { StrategyIntakeController } from './strategy/strategy-intake.controller'
     LeadHuntExecutor,
     ContentExecutor,
     CommunityEngageExecutor,
+    // Strategy Engine — P4: ad-campaign executor (spend-safe PAUSED shell).
+    // Autonomy lanes live in the orchestrator.
+    AdCampaignExecutor,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,

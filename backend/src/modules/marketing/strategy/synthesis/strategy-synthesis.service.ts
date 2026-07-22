@@ -11,6 +11,7 @@ import { RESEARCH_TOOLS, dispatchResearchTool, ResearchToolCtx } from '../../res
 import { validateBrief } from '../strategy.schema';
 import { ARCHETYPES, archetypeMeta } from '../archetypes';
 import { ActionKind, BusinessArchetype, StrategyActionItem } from '../strategy.types';
+import { StrategyOrchestrator } from '../orchestrator/strategy-orchestrator.service';
 
 export interface StrategySynthesisResult {
   strategyId: string | null;
@@ -127,9 +128,15 @@ export class StrategySynthesisService {
     private readonly runs: AgentRunService,
     private readonly sources: ResearchSourcesService,
     private readonly spend: ResearchSpendService,
+    private readonly orchestrator: StrategyOrchestrator,
   ) {}
 
-  async synthesize(workspaceId: string, sessionId: string): Promise<StrategySynthesisResult> {
+  /**
+   * @param extraContext optional outcome summary from the living feedback loop —
+   *   folded into the strategist prompt so a re-synthesis adapts to what the
+   *   previous plan's execution actually produced.
+   */
+  async synthesize(workspaceId: string, sessionId: string, extraContext?: string): Promise<StrategySynthesisResult> {
     if (!this.sources.isEnabled()) return { strategyId: null, actionCount: 0, skipped: 'sources-not-configured' };
     if (!this.anthropic.isEnabled()) return { strategyId: null, actionCount: 0, skipped: 'ai-not-configured' };
 
@@ -145,7 +152,7 @@ export class StrategySynthesisService {
           const ctx: ResearchToolCtx = { workspaceId, runId, geo: {}, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
           const tools = [...RESEARCH_TOOLS, SUBMIT_STRATEGY_TOOL];
-          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(session) }];
+          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(session, extraContext) }];
 
           let submission: { archetype?: unknown; brief?: unknown; actions?: unknown } | null = null;
           let toolCalls = 0;
@@ -194,6 +201,14 @@ export class StrategySynthesisService {
           await this.prisma.strategyIntakeSession
             .updateMany({ where: { id: sessionId, workspaceId }, data: { status: 'COMPLETE' } })
             .catch(() => undefined);
+
+          // Autonomy hook: hand the freshly-seeded PROPOSED plan to the lane-aware
+          // orchestrator. A no-op for SHADOW/ASSISTED (the common path); only an
+          // AUTONOMOUS workspace with the env kill-switch on auto-executes here.
+          // Never fail the synthesis on an apply error.
+          await this.orchestrator.applyPlan(workspaceId).catch((e) => {
+            this.logger.error(`strategy synthesis ${runId}: applyPlan failed (ws ${workspaceId}): ${(e as Error)?.message ?? e}`);
+          });
 
           this.logger.log(`strategy synthesis ${runId}: ${archetype} + ${actionCount} actions (ws ${workspaceId})`);
           return { strategyId, actionCount };
@@ -256,12 +271,13 @@ export class StrategySynthesisService {
     return out;
   }
 
-  private buildBrief(session: { autoAnalysis: unknown; transcript: unknown }): string {
+  private buildBrief(session: { autoAnalysis: unknown; transcript: unknown }, extraContext?: string): string {
     const qa = extractQa(session.transcript);
     return [
       `AUTO-ANALYSIS: ${JSON.stringify(session.autoAnalysis ?? {})}`,
       this.priorsLine(session.autoAnalysis),
       qa ? `INTERVIEW (operator answers):\n${qa}` : '',
+      extraContext ? extraContext.trim() : '',
       'Research the market/audience/competitors with the tools, then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.',
     ]
       .filter(Boolean)
