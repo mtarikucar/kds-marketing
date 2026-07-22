@@ -3,6 +3,7 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import { ActionKind, Executor } from '../strategy.types';
 import { LeadHuntExecutor } from '../executors/lead-hunt.executor';
 import { ContentExecutor } from '../executors/content.executor';
+import { CommunityEngageExecutor } from '../executors/community-engage.executor';
 
 export type ExecuteResult =
   | { status: 'DONE'; resultRef: string | null }
@@ -15,7 +16,7 @@ export type ExecuteResult =
  * (approve → execute). It owns the action's execution lifecycle:
  * APPROVED → RUNNING → DONE (stamping the executor's `resultRef`) or → FAILED
  * (recording the error, never crashing the caller). Kinds without an executor
- * yet (AD_CAMPAIGN / COMMUNITY_ENGAGE / CHANNEL_SETUP — later phases) no-op
+ * yet (AD_CAMPAIGN / CHANNEL_SETUP — later phases) no-op
  * gracefully: the action stays APPROVED and `{ skipped }` is returned.
  */
 @Injectable()
@@ -27,10 +28,12 @@ export class StrategyOrchestrator {
     private readonly prisma: PrismaService,
     leadHunt: LeadHuntExecutor,
     content: ContentExecutor,
+    communityEngage: CommunityEngageExecutor,
   ) {
     this.registry = new Map<ActionKind, Executor>([
       [leadHunt.kind, leadHunt],
       [content.kind, content],
+      [communityEngage.kind, communityEngage],
     ]);
   }
 
@@ -45,7 +48,7 @@ export class StrategyOrchestrator {
 
     const executor = this.registry.get(action.kind as ActionKind);
     if (!executor) {
-      // AD_CAMPAIGN / COMMUNITY_ENGAGE / CHANNEL_SETUP are later phases — leave the
+      // AD_CAMPAIGN / CHANNEL_SETUP are later phases — leave the
       // action APPROVED so it can run once its executor ships. Not a failure.
       this.logger.log(`no executor for kind ${action.kind} yet — leaving action ${actionId} APPROVED`);
       return { skipped: 'executor-not-available' };

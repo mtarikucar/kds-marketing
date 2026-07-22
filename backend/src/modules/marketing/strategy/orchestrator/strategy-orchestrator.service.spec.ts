@@ -12,7 +12,7 @@ const action = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function deps(overrides: { action?: any; leadRun?: any; contentRun?: any } = {}) {
+function deps(overrides: { action?: any; leadRun?: any; contentRun?: any; communityRun?: any } = {}) {
   const prisma = {
     strategyAction: {
       findFirst: jest.fn().mockResolvedValue(overrides.action === undefined ? action() : overrides.action),
@@ -27,8 +27,12 @@ function deps(overrides: { action?: any; leadRun?: any; contentRun?: any } = {})
     kind: 'CONTENT' as const,
     run: jest.fn().mockResolvedValue(overrides.contentRun ?? { resultRef: 'post:post1' }),
   };
-  const svc = new StrategyOrchestrator(prisma as any, leadHunt as any, content as any);
-  return { svc, prisma, leadHunt, content };
+  const communityEngage = {
+    kind: 'COMMUNITY_ENGAGE' as const,
+    run: jest.fn().mockResolvedValue(overrides.communityRun ?? { resultRef: 'community:post1' }),
+  };
+  const svc = new StrategyOrchestrator(prisma as any, leadHunt as any, content as any, communityEngage as any);
+  return { svc, prisma, leadHunt, content, communityEngage };
 }
 
 describe('StrategyOrchestrator', () => {
@@ -52,6 +56,21 @@ describe('StrategyOrchestrator', () => {
     await svc.execute('ws1', 'a1');
     expect(leadHunt.run).toHaveBeenCalledWith('ws1', { icpDescription: 'salons' });
     expect(content.run).not.toHaveBeenCalled();
+  });
+
+  it('routes COMMUNITY_ENGAGE actions to the community-engage executor (DONE + community ref)', async () => {
+    const { svc, prisma, communityEngage, content, leadHunt } = deps({
+      action: action({ kind: 'COMMUNITY_ENGAGE', payload: { channelKey: 'reddit', community: 'r/Metin2', title: 'meme' } }),
+    });
+    const r = await svc.execute('ws1', 'a1');
+    expect(communityEngage.run).toHaveBeenCalledWith('ws1', { channelKey: 'reddit', community: 'r/Metin2', title: 'meme' });
+    expect(content.run).not.toHaveBeenCalled();
+    expect(leadHunt.run).not.toHaveBeenCalled();
+    expect(prisma.strategyAction.update).toHaveBeenNthCalledWith(2, {
+      where: { id: 'a1' },
+      data: { status: 'DONE', resultRef: 'community:post1' },
+    });
+    expect(r).toEqual({ status: 'DONE', resultRef: 'community:post1' });
   });
 
   it('stores a null resultRef when the executor returns none', async () => {

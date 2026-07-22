@@ -504,6 +504,7 @@ import { StrategySynthesisService } from './strategy/synthesis/strategy-synthesi
 import { StrategyOrchestrator } from './strategy/orchestrator/strategy-orchestrator.service';
 import { LeadHuntExecutor } from './strategy/executors/lead-hunt.executor';
 import { ContentExecutor } from './strategy/executors/content.executor';
+import { CommunityEngageExecutor } from './strategy/executors/community-engage.executor';
 import { StrategyController } from './strategy/strategy.controller';
 import { StrategyIntakeController } from './strategy/strategy-intake.controller';
 
@@ -1033,6 +1034,7 @@ import { StrategyIntakeController } from './strategy/strategy-intake.controller'
     StrategyOrchestrator,
     LeadHuntExecutor,
     ContentExecutor,
+    CommunityEngageExecutor,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
