@@ -18,6 +18,10 @@ vi.mock('../../../features/marketing/api/strategy.service', () => ({
   approveAction: vi.fn(),
   dismissAction: vi.fn(),
   setStrategyAutonomy: vi.fn(),
+  listCommunityChannels: vi.fn(),
+  connectDiscord: vi.fn(),
+  getRedditAuthorizeUrl: vi.fn(),
+  disconnectCommunityChannel: vi.fn(),
 }));
 
 function renderPage() {
@@ -49,7 +53,10 @@ const STRATEGY = {
 };
 
 describe('StrategyConsolePage', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (svc.listCommunityChannels as any).mockResolvedValue([]);
+  });
 
   it('shows the onboarding CTA when no strategy exists', async () => {
     (svc.getStrategy as any).mockResolvedValue(null);
@@ -69,5 +76,27 @@ describe('StrategyConsolePage', () => {
     expect(screen.getByText('INSTAGRAM')).toBeInTheDocument();
     expect(await screen.findByText('Launch a weekly Reel series')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+  });
+
+  it('renders the community channels card with connect affordances when none connected', async () => {
+    (svc.getStrategy as any).mockResolvedValue(STRATEGY);
+    (svc.listStrategyActions as any).mockResolvedValue([]);
+    (svc.listCommunityChannels as any).mockResolvedValue([]);
+    renderPage();
+    expect(await screen.findByText('Community channels')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /connect reddit/i })).toBeInTheDocument();
+    // Discord webhook input is shown when not connected.
+    expect(screen.getByLabelText(/discord webhook url/i)).toBeInTheDocument();
+  });
+
+  it('shows the connected reddit handle + a disconnect button when connected', async () => {
+    (svc.getStrategy as any).mockResolvedValue(STRATEGY);
+    (svc.listStrategyActions as any).mockResolvedValue([]);
+    (svc.listCommunityChannels as any).mockResolvedValue([
+      { provider: 'REDDIT', status: 'CONNECTED', meta: { username: 'acme' } },
+    ]);
+    renderPage();
+    expect(await screen.findByText('u/acme')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /disconnect/i }).length).toBeGreaterThan(0);
   });
 });

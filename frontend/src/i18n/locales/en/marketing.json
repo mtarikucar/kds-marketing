@@ -2759,7 +2759,25 @@
       "actionFailed": "Something went wrong",
       "emptyTitle": "No strategy yet",
       "emptyDesc": "Let the AI strategist analyze your brand and draft a full marketing strategy with an action plan.",
-      "startOnboarding": "Build my strategy"
+      "startOnboarding": "Build my strategy",
+      "channels": {
+        "title": "Community channels",
+        "desc": "Connect Discord and Reddit to post into communities you own or manage.",
+        "connected": "Connected",
+        "connect": "Connect",
+        "disconnect": "Disconnect",
+        "discordWebhook": "Webhook connected",
+        "discordWebhookLabel": "Discord webhook URL",
+        "discordHelp": "Paste your own Discord server's webhook URL (Server Settings → Integrations → Webhooks).",
+        "redditHelp": "Connect your Reddit account to post to a subreddit you own or moderate.",
+        "connectReddit": "Connect Reddit",
+        "tos": "Only post to communities you own or are authorized to post in.",
+        "discordConnected": "Discord connected",
+        "redditConnected": "Reddit connected",
+        "redditError": "Could not connect Reddit. Please try again.",
+        "disconnected": "Channel disconnected",
+        "connectFailed": "Could not connect the channel"
+      }
     }
   },
   "studio": {

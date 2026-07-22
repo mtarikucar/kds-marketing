@@ -130,3 +130,36 @@ export const dismissAction = (id: string) =>
 
 export const setStrategyAutonomy = (level: AutonomyLevel) =>
   marketingApi.post<MarketingStrategy>('/strategy/autonomy', { level }).then((r) => r.data);
+
+// ── Community channels (Discord webhook + Reddit OAuth) ──────────────────────────
+export type CommunityProvider = 'DISCORD' | 'REDDIT';
+
+export interface CommunityChannelMeta {
+  username?: string;
+  channelName?: string;
+  subreddit?: string;
+}
+
+export interface CommunityChannel {
+  provider: CommunityProvider;
+  status: string;
+  meta?: CommunityChannelMeta;
+}
+
+/** Connected community channels for the workspace. */
+export const listCommunityChannels = () =>
+  marketingApi.get<CommunityChannel[]>('/strategy/channels').then((r) => r.data);
+
+/** Connect a Discord community by its server webhook URL (validated server-side). */
+export const connectDiscord = (payload: { webhookUrl: string; channelName?: string }) =>
+  marketingApi
+    .post<CommunityChannel>('/strategy/channels/discord', payload)
+    .then((r) => r.data);
+
+/** Kick off Reddit OAuth — open the returned `url` to reach the consent screen. */
+export const getRedditAuthorizeUrl = () =>
+  marketingApi.get<{ url: string }>('/strategy/channels/reddit/authorize').then((r) => r.data);
+
+/** Disconnect a connected community channel. */
+export const disconnectCommunityChannel = (provider: CommunityProvider) =>
+  marketingApi.delete<void>(`/strategy/channels/${provider}`).then((r) => r.data);

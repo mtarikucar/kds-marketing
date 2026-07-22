@@ -3613,7 +3613,25 @@
       "actionFailed": "Bir şeyler ters gitti",
       "emptyTitle": "Henüz strateji yok",
       "emptyDesc": "Yapay zeka stratejisti markanı analiz edip eylem planıyla birlikte tam bir pazarlama stratejisi hazırlasın.",
-      "startOnboarding": "Stratejimi oluştur"
+      "startOnboarding": "Stratejimi oluştur",
+      "channels": {
+        "title": "Topluluk Kanalları",
+        "desc": "Sahibi veya yöneticisi olduğunuz topluluklara göndermek için Discord ve Reddit'i bağlayın.",
+        "connected": "Bağlı",
+        "connect": "Bağla",
+        "disconnect": "Bağlantıyı kes",
+        "discordWebhook": "Webhook bağlı",
+        "discordWebhookLabel": "Discord webhook URL'i",
+        "discordHelp": "Kendi Discord sunucunuzun webhook URL'ini yapıştırın (Sunucu Ayarları → Entegrasyonlar → Webhooks).",
+        "redditHelp": "Kendi/yetkili subreddit'inize gönderim için Reddit hesabınızı bağlayın.",
+        "connectReddit": "Reddit'i bağla",
+        "tos": "Yalnızca sahibi/yetkili olduğunuz topluluklara gönderim yapın.",
+        "discordConnected": "Discord bağlandı",
+        "redditConnected": "Reddit bağlandı",
+        "redditError": "Reddit bağlanamadı. Lütfen tekrar deneyin.",
+        "disconnected": "Kanal bağlantısı kesildi",
+        "connectFailed": "Kanal bağlanamadı"
+      }
     }
   },
   "studio": {

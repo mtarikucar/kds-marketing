@@ -1,8 +1,9 @@
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Compass, Sparkles, Check, X } from 'lucide-react';
+import { Compass, Sparkles, Check, X, Users, Trash2 } from 'lucide-react';
 import {
   Card,
   CardHeader,
@@ -16,6 +17,7 @@ import {
   Spinner,
   EmptyState,
   SegmentedControl,
+  Input,
 } from '@/components/ui';
 import {
   getStrategy,
@@ -23,9 +25,15 @@ import {
   approveAction,
   dismissAction,
   setStrategyAutonomy,
+  listCommunityChannels,
+  connectDiscord,
+  getRedditAuthorizeUrl,
+  disconnectCommunityChannel,
   type AutonomyLevel,
   type StrategyAction,
+  type CommunityProvider,
 } from '../../../features/marketing/api/strategy.service';
+import { navigateExternal } from '../../../lib/navigateExternal';
 
 const AUTONOMY_LEVELS: AutonomyLevel[] = ['SHADOW', 'ASSISTED', 'AUTONOMOUS'];
 
@@ -93,6 +101,69 @@ export default function StrategyConsolePage() {
       AUTONOMOUS: t('strategy.console.autonomy.autonomous', 'Autonomous'),
     })[level];
 
+  // ── Community channels (Discord webhook + Reddit OAuth) ─────────────────────
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [discordWebhook, setDiscordWebhook] = useState('');
+
+  const channelsQuery = useQuery({
+    queryKey: ['marketing', 'strategy', 'channels'],
+    queryFn: listCommunityChannels,
+  });
+
+  const invalidateChannels = () =>
+    queryClient.invalidateQueries({ queryKey: ['marketing', 'strategy', 'channels'] });
+
+  // Reddit OAuth callback returns to /studio/strategy?reddit=connected|error. Pick
+  // the param up once, toast + refetch on success (toast on error), then strip it
+  // from the URL so a refresh/back doesn't re-fire the toast.
+  useEffect(() => {
+    const reddit = searchParams.get('reddit');
+    if (reddit === 'connected') {
+      toast.success(t('strategy.console.channels.redditConnected', 'Reddit connected'));
+      invalidateChannels();
+    } else if (reddit === 'error') {
+      toast.error(t('strategy.console.channels.redditError', 'Could not connect Reddit. Please try again.'));
+    }
+    if (reddit) {
+      searchParams.delete('reddit');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const connectDiscordMut = useMutation({
+    mutationFn: () => connectDiscord({ webhookUrl: discordWebhook.trim() }),
+    onSuccess: () => {
+      toast.success(t('strategy.console.channels.discordConnected', 'Discord connected'));
+      setDiscordWebhook('');
+      invalidateChannels();
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('strategy.console.channels.connectFailed', 'Could not connect the channel')),
+  });
+
+  const disconnectMut = useMutation({
+    mutationFn: (provider: CommunityProvider) => disconnectCommunityChannel(provider),
+    onSuccess: () => {
+      toast.success(t('strategy.console.channels.disconnected', 'Channel disconnected'));
+      invalidateChannels();
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? t('strategy.console.actionFailed', 'Something went wrong')),
+  });
+
+  const connectReddit = async () => {
+    try {
+      const { url } = await getRedditAuthorizeUrl();
+      // Full-page redirect to Reddit's consent screen (defence-in-depth http(s) guard).
+      if (!navigateExternal(url)) {
+        toast.error(t('strategy.console.channels.connectFailed', 'Could not connect the channel'));
+      }
+    } catch {
+      toast.error(t('strategy.console.channels.connectFailed', 'Could not connect the channel'));
+    }
+  };
+
   // ── loading / empty ─────────────────────────────────────────────────────────
   if (strategyQuery.isLoading) {
     return (
@@ -125,6 +196,9 @@ export default function StrategyConsolePage() {
 
   const brief = strategy.brief ?? ({} as typeof strategy.brief);
   const actions = actionsQuery.data ?? [];
+  const channels = channelsQuery.data ?? [];
+  const discord = channels.find((c) => c.provider === 'DISCORD');
+  const reddit = channels.find((c) => c.provider === 'REDDIT');
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
@@ -307,6 +381,122 @@ export default function StrategyConsolePage() {
               );
             })
           )}
+        </CardContent>
+      </Card>
+
+      {/* Community channels — connect/manage Discord + Reddit */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            {t('strategy.console.channels.title', 'Community channels')}
+          </CardTitle>
+          <CardDescription>
+            {t(
+              'strategy.console.channels.desc',
+              'Connect Discord and Reddit to post into communities you own or manage.',
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Discord */}
+          <div className="space-y-2.5 rounded-lg border border-border p-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-foreground">Discord</span>
+              {discord && (
+                <Badge tone="success" size="sm">
+                  {t('strategy.console.channels.connected', 'Connected')}
+                </Badge>
+              )}
+            </div>
+            {discord ? (
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-caption text-muted-foreground">
+                  {discord.meta?.channelName ??
+                    t('strategy.console.channels.discordWebhook', 'Webhook connected')}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => disconnectMut.mutate('DISCORD')}
+                  loading={disconnectMut.isPending && disconnectMut.variables === 'DISCORD'}
+                >
+                  <Trash2 className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                  {t('strategy.console.channels.disconnect', 'Disconnect')}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Input
+                  value={discordWebhook}
+                  onChange={(e) => setDiscordWebhook(e.target.value)}
+                  placeholder="https://discord.com/api/webhooks/…"
+                  aria-label={t('strategy.console.channels.discordWebhookLabel', 'Discord webhook URL')}
+                />
+                <p className="text-micro text-muted-foreground">
+                  {t(
+                    'strategy.console.channels.discordHelp',
+                    "Paste your own Discord server's webhook URL (Server Settings → Integrations → Webhooks).",
+                  )}
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => connectDiscordMut.mutate()}
+                  disabled={!discordWebhook.trim() || connectDiscordMut.isPending}
+                  loading={connectDiscordMut.isPending}
+                >
+                  {t('strategy.console.channels.connect', 'Connect')}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Reddit */}
+          <div className="space-y-2.5 rounded-lg border border-border p-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-foreground">Reddit</span>
+              {reddit && (
+                <Badge tone="success" size="sm">
+                  {t('strategy.console.channels.connected', 'Connected')}
+                </Badge>
+              )}
+            </div>
+            {reddit ? (
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-caption text-muted-foreground">
+                  {reddit.meta?.username ? `u/${reddit.meta.username}` : 'Reddit'}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => disconnectMut.mutate('REDDIT')}
+                  loading={disconnectMut.isPending && disconnectMut.variables === 'REDDIT'}
+                >
+                  <Trash2 className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                  {t('strategy.console.channels.disconnect', 'Disconnect')}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-micro text-muted-foreground">
+                  {t(
+                    'strategy.console.channels.redditHelp',
+                    'Connect your Reddit account to post to a subreddit you own or moderate.',
+                  )}
+                </p>
+                <Button size="sm" onClick={() => void connectReddit()}>
+                  {t('strategy.console.channels.connectReddit', 'Connect Reddit')}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <p className="text-micro text-muted-foreground">
+            {t(
+              'strategy.console.channels.tos',
+              'Only post to communities you own or are authorized to post in.',
+            )}
+          </p>
         </CardContent>
       </Card>
     </div>

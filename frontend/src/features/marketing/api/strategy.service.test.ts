@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./marketingApi', () => ({
-  default: { get: vi.fn(), post: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 
 import marketingApi from './marketingApi';
@@ -14,11 +14,16 @@ import {
   approveAction,
   dismissAction,
   setStrategyAutonomy,
+  listCommunityChannels,
+  connectDiscord,
+  getRedditAuthorizeUrl,
+  disconnectCommunityChannel,
 } from './strategy.service';
 
 const api = marketingApi as unknown as {
   get: ReturnType<typeof vi.fn>;
   post: ReturnType<typeof vi.fn>;
+  delete: ReturnType<typeof vi.fn>;
 };
 
 describe('strategy.service', () => {
@@ -106,5 +111,32 @@ describe('strategy.service', () => {
     api.post.mockResolvedValue({ data: { id: 'st1', autonomyLevel: 'AUTONOMOUS' } });
     await setStrategyAutonomy('AUTONOMOUS');
     expect(api.post).toHaveBeenCalledWith('/strategy/autonomy', { level: 'AUTONOMOUS' });
+  });
+
+  it('listCommunityChannels GETs /strategy/channels and returns the rows', async () => {
+    const rows = [{ provider: 'REDDIT', status: 'CONNECTED', meta: { username: 'acme' } }];
+    api.get.mockResolvedValue({ data: rows });
+    expect(await listCommunityChannels()).toEqual(rows);
+    expect(api.get).toHaveBeenCalledWith('/strategy/channels');
+  });
+
+  it('connectDiscord POSTs the webhook URL to /strategy/channels/discord', async () => {
+    api.post.mockResolvedValue({ data: { provider: 'DISCORD', status: 'CONNECTED' } });
+    await connectDiscord({ webhookUrl: 'https://discord.com/api/webhooks/1/x' });
+    expect(api.post).toHaveBeenCalledWith('/strategy/channels/discord', {
+      webhookUrl: 'https://discord.com/api/webhooks/1/x',
+    });
+  });
+
+  it('getRedditAuthorizeUrl GETs the authorize URL', async () => {
+    api.get.mockResolvedValue({ data: { url: 'https://reddit.com/oauth' } });
+    expect(await getRedditAuthorizeUrl()).toEqual({ url: 'https://reddit.com/oauth' });
+    expect(api.get).toHaveBeenCalledWith('/strategy/channels/reddit/authorize');
+  });
+
+  it('disconnectCommunityChannel DELETEs the provider route', async () => {
+    api.delete.mockResolvedValue({ data: undefined });
+    await disconnectCommunityChannel('REDDIT');
+    expect(api.delete).toHaveBeenCalledWith('/strategy/channels/REDDIT');
   });
 });
