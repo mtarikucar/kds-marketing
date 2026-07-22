@@ -650,6 +650,7 @@
     "percentRange": "Yüzde değeri 1 ile 100 arasında olmalı",
     "percentMax": "Yüzde 100'ü geçemez",
     "emailInvalid": "Geçerli bir e-posta gir",
+    "invalidUrl": "Geçerli bir http(s) adresi gir",
     "phoneInvalid": "Geçerli bir telefon numarası gir",
     "minLength": "En az {{count}} karakter",
     "maxLength": "En fazla {{count}} karakter",

@@ -393,6 +393,7 @@
     "percentRange": "Percent value must be between 1 and 100",
     "percentMax": "Cannot exceed 100%",
     "emailInvalid": "Please enter a valid email",
+    "invalidUrl": "Please enter a valid http(s) URL",
     "phoneInvalid": "Please enter a valid phone number",
     "minLength": "Minimum {{count}} characters",
     "maxLength": "Maximum {{count}} characters",

@@ -23,6 +23,18 @@ import { Callout } from '../../components/ui/Callout';
  * via `readReferralCookie`. No referral logic needed here.
  */
 
+/** Backend DTO is `@IsUrl()`, so a malformed URL 400s server-side as a generic
+ *  error. Validate an http(s) URL client-side, but only when non-empty (the
+ *  field is optional). */
+const isHttpUrl = (v: string) => {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const registerSchema = z.object({
   workspaceName: z.string().trim().min(1, 'required').max(120),
   productName: z.string().trim().min(1, 'required').max(120),
@@ -30,6 +42,7 @@ const registerSchema = z.object({
     .string()
     .trim()
     .max(255)
+    .refine((v) => !v || isHttpUrl(v), { message: 'invalidUrl' })
     .optional()
     .transform((v) => v || undefined),
   firstName: z.string().trim().min(1, 'required').max(100),
@@ -156,7 +169,10 @@ export default function RegisterWorkspacePage() {
 
                 <Field
                   label={t('register.productUrl', 'Product URL (optional)')}
-                  error={errors.productUrl?.message}
+                  error={
+                    errors.productUrl?.message &&
+                    t(`validation.${errors.productUrl.message}`, errors.productUrl.message)
+                  }
                 >
                   {({ id, describedBy, invalid }) => (
                     <Input
