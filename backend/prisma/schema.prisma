@@ -4623,3 +4623,24 @@ model StrategyAction {
   @@index([workspaceId, strategyId, status])
   @@map("strategy_actions")
 }
+
+/// A per-workspace connected community channel the COMMUNITY_ENGAGE executor
+/// posts to (OWNED channels only — ToS). One row per (workspace, provider).
+/// `sealedSecret` holds the sealed credential: for DISCORD the Incoming Webhook
+/// URL; for REDDIT the sealed JSON token bundle { access, refresh, expiresAt }.
+/// `meta` carries non-secret display context (Reddit username / default
+/// subreddit; Discord channel name). Secrets are AES-256-GCM sealed — never raw.
+model CommunityChannelConfig {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  provider     String // DISCORD | REDDIT
+  status       String   @default("ACTIVE") // ACTIVE | DISCONNECTED
+  sealedSecret String?  @db.Text // SEALED — webhook URL (Discord) or token bundle JSON (Reddit)
+  meta         Json? // non-secret display context (username, default subreddit, channel name)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([workspaceId, provider])
+  @@index([workspaceId])
+  @@map("community_channel_configs")
+}
