@@ -13,8 +13,9 @@ function deps(overrides: { strategy?: any; action?: any } = {}) {
       update: jest.fn().mockImplementation(async ({ where, data }: any) => ({ id: where.id, ...data })),
     },
   };
-  const svc = new StrategyService(prisma as any);
-  return { svc, prisma };
+  const orchestrator = { execute: jest.fn().mockResolvedValue({ status: 'DONE', resultRef: null }) };
+  const svc = new StrategyService(prisma as any, orchestrator as any);
+  return { svc, prisma, orchestrator };
 }
 
 const action = (over: Partial<Record<string, unknown>> = {}) => ({
@@ -73,22 +74,32 @@ describe('StrategyService', () => {
   });
 
   describe('approveAction', () => {
-    it('flips PROPOSED → APPROVED', async () => {
-      const { svc, prisma } = deps({ action: action({ status: 'PROPOSED' }) });
+    it('flips PROPOSED → APPROVED then dispatches the action to the orchestrator', async () => {
+      const { svc, prisma, orchestrator } = deps({ action: action({ status: 'PROPOSED' }) });
       const r = await svc.approveAction('ws1', 'a1');
       expect(prisma.strategyAction.update).toHaveBeenCalledWith({ where: { id: 'a1' }, data: { status: 'APPROVED' } });
+      expect(orchestrator.execute).toHaveBeenCalledWith('ws1', 'a1');
+      expect(r.status).toBe('APPROVED');
+    });
+
+    it('still resolves (approval stands) when the orchestrator dispatch throws', async () => {
+      const { svc, orchestrator } = deps({ action: action({ status: 'PROPOSED' }) });
+      orchestrator.execute.mockRejectedValueOnce(new Error('dispatch boom'));
+      const r = await svc.approveAction('ws1', 'a1');
       expect(r.status).toBe('APPROVED');
     });
 
     it('throws NotFound when the action is missing/other-workspace', async () => {
-      const { svc } = deps({ action: null });
+      const { svc, orchestrator } = deps({ action: null });
       await expect(svc.approveAction('ws1', 'nope')).rejects.toThrow(NotFoundException);
+      expect(orchestrator.execute).not.toHaveBeenCalled();
     });
 
-    it('throws BadRequest when the action is not PROPOSED', async () => {
-      const { svc, prisma } = deps({ action: action({ status: 'APPROVED' }) });
+    it('throws BadRequest when the action is not PROPOSED and does not dispatch', async () => {
+      const { svc, prisma, orchestrator } = deps({ action: action({ status: 'APPROVED' }) });
       await expect(svc.approveAction('ws1', 'a1')).rejects.toThrow(BadRequestException);
       expect(prisma.strategyAction.update).not.toHaveBeenCalled();
+      expect(orchestrator.execute).not.toHaveBeenCalled();
     });
   });
 

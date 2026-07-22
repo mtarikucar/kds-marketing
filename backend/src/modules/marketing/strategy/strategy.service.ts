@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { StrategyOrchestrator } from './orchestrator/strategy-orchestrator.service';
 
 /** The autonomy lanes a workspace can arm its strategy into. SHADOW = propose
  *  only, ASSISTED = approve-to-run (default), AUTONOMOUS = self-driving. */
@@ -19,7 +20,12 @@ const PRIORITY_RANK: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
  */
 @Injectable()
 export class StrategyService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(StrategyService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orchestrator: StrategyOrchestrator,
+  ) {}
 
   /** The workspace's single live strategy, or null if none has been synthesized. */
   getStrategy(workspaceId: string) {
@@ -39,17 +45,27 @@ export class StrategyService {
     );
   }
 
-  /** PROPOSED → APPROVED. NotFound if missing/other-workspace; BadRequest if the
-   *  action is not currently PROPOSED. */
+  /** PROPOSED → APPROVED, then (ASSISTED default) hand the action to the
+   *  orchestrator to execute now. NotFound if missing/other-workspace; BadRequest
+   *  if the action is not currently PROPOSED. Returns the APPROVED row; execution
+   *  proceeds decoupled — a dispatch/executor failure is recorded on the action
+   *  (status FAILED) by the orchestrator and never fails the approval itself. */
   async approveAction(workspaceId: string, actionId: string) {
     const action = await this.requireAction(workspaceId, actionId);
     if (action.status !== 'PROPOSED') {
       throw new BadRequestException(`action is ${action.status}, only PROPOSED actions can be approved`);
     }
-    return this.prisma.strategyAction.update({
+    const approved = await this.prisma.strategyAction.update({
       where: { id: action.id },
       data: { status: 'APPROVED' },
     });
+    // ASSISTED lane: approve → execute. The orchestrator swallows executor errors
+    // (marks the action FAILED), so a `.catch` here only guards an unexpected
+    // dispatch-time throw — the approval decision must stand regardless.
+    await this.orchestrator.execute(workspaceId, action.id).catch((e) => {
+      this.logger.error(`approve→execute dispatch failed for action ${action.id}: ${e?.message ?? e}`);
+    });
+    return approved;
   }
 
   /** → DISMISSED. NotFound if missing/other-workspace; BadRequest if the action

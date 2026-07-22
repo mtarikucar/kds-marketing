@@ -501,6 +501,9 @@ import { WalletService } from './wallet/wallet.service';
 import { StrategyService } from './strategy/strategy.service';
 import { StrategyIntakeService } from './strategy/intake/strategy-intake.service';
 import { StrategySynthesisService } from './strategy/synthesis/strategy-synthesis.service';
+import { StrategyOrchestrator } from './strategy/orchestrator/strategy-orchestrator.service';
+import { LeadHuntExecutor } from './strategy/executors/lead-hunt.executor';
+import { ContentExecutor } from './strategy/executors/content.executor';
 import { StrategyController } from './strategy/strategy.controller';
 import { StrategyIntakeController } from './strategy/strategy-intake.controller';
 
@@ -1024,6 +1027,12 @@ import { StrategyIntakeController } from './strategy/strategy-intake.controller'
     StrategyService,
     StrategyIntakeService,
     StrategySynthesisService,
+    // Strategy Engine — P2 executor wiring: the orchestrator dispatches an
+    // APPROVED action to the executor for its kind (LEAD_HUNT → research worker,
+    // CONTENT → content-AI + social planner).
+    StrategyOrchestrator,
+    LeadHuntExecutor,
+    ContentExecutor,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
