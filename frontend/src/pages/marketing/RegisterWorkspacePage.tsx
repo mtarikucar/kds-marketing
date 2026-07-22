@@ -5,10 +5,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import marketingApi from '../../features/marketing/api/marketingApi';
+import { fetchMemberships } from '../../features/marketing/api/membershipApi';
 import { passwordSchema } from '../../features/marketing/schemas';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Field } from '../../components/ui/Field';
 import { Input } from '../../components/ui/Input';
+import { Textarea } from '../../components/ui/Textarea';
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 
@@ -22,6 +24,18 @@ import { Callout } from '../../components/ui/Callout';
  * via `readReferralCookie`. No referral logic needed here.
  */
 
+/** Backend DTO is `@IsUrl()`, so a malformed URL 400s server-side as a generic
+ *  error. Validate an http(s) URL client-side, but only when non-empty (the
+ *  field is optional). */
+const isHttpUrl = (v: string) => {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const registerSchema = z.object({
   workspaceName: z.string().trim().min(1, 'required').max(120),
   productName: z.string().trim().min(1, 'required').max(120),
@@ -29,6 +43,13 @@ const registerSchema = z.object({
     .string()
     .trim()
     .max(255)
+    .refine((v) => !v || isHttpUrl(v), { message: 'invalidUrl' })
+    .optional()
+    .transform((v) => v || undefined),
+  productDescription: z
+    .string()
+    .trim()
+    .max(2000)
     .optional()
     .transform((v) => v || undefined),
   firstName: z.string().trim().min(1, 'required').max(100),
@@ -45,7 +66,7 @@ type RegisterValues = z.infer<typeof registerSchema>;
 export default function RegisterWorkspacePage() {
   const navigate = useNavigate();
   const { t, i18n } = useTranslation('marketing');
-  const { login, isAuthenticated } = useMarketingAuthStore();
+  const { login, setMemberships, isAuthenticated } = useMarketingAuthStore();
 
   const {
     register,
@@ -70,6 +91,15 @@ export default function RegisterWorkspacePage() {
         language: i18n.language?.split('-')[0],
       });
       login(data.user, data.accessToken, data.refreshToken);
+      // Best-effort membership hydration (parity with MarketingLoginPage): the
+      // register response carries no `memberships` — only GET /auth/profile does
+      // — so fetch it as a follow-up. A hiccup here must never block signup; the
+      // workspace switcher just stays empty until the next profile fetch.
+      try {
+        setMemberships(await fetchMemberships());
+      } catch {
+        // ignored — see comment above
+      }
       navigate('/dashboard?welcome=1');
     } catch (err: any) {
       setError('root', {
@@ -146,7 +176,10 @@ export default function RegisterWorkspacePage() {
 
                 <Field
                   label={t('register.productUrl', 'Product URL (optional)')}
-                  error={errors.productUrl?.message}
+                  error={
+                    errors.productUrl?.message &&
+                    t(`validation.${errors.productUrl.message}`, errors.productUrl.message)
+                  }
                 >
                   {({ id, describedBy, invalid }) => (
                     <Input
@@ -161,6 +194,30 @@ export default function RegisterWorkspacePage() {
                   )}
                 </Field>
               </div>
+
+              <Field
+                label={t('register.productDescription', 'What does your business do?')}
+                hint={t(
+                  'register.productDescriptionHint',
+                  'A sentence or two — the AI builds your strategy and content around this.',
+                )}
+                error={errors.productDescription?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Textarea
+                    id={id}
+                    rows={3}
+                    maxLength={2000}
+                    placeholder={t(
+                      'register.productDescriptionPlaceholder',
+                      'e.g. We run a cloud POS for independent cafes and small restaurant groups.',
+                    )}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    {...register('productDescription')}
+                  />
+                )}
+              </Field>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field

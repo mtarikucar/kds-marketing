@@ -43,6 +43,19 @@ describe('GettingStarted', () => {
     expect(await screen.findByText('Invite your team')).toBeInTheDocument();
   });
 
+  it('leads with the growth-strategy step, deep-linked to onboarding', async () => {
+    renderGS();
+    const strategyLink = await screen.findByText('Build your growth strategy');
+    expect(strategyLink).toBeInTheDocument();
+    // The step links to the Strategy onboarding flow.
+    expect(strategyLink.closest('a')).toHaveAttribute('href', '/onboarding/strategy');
+    // …and it's the FIRST step (the brain that drives the rest).
+    const titles = screen.getAllByText(
+      /Build your growth strategy|Create your first AI agent|Invite your team/,
+    );
+    expect(titles[0]).toHaveTextContent('Build your growth strategy');
+  });
+
   it('hides on dismiss and reappears on reopen', async () => {
     const user = userEvent.setup();
     renderGS();

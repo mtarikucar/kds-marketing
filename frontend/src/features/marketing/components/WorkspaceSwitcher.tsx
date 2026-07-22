@@ -64,10 +64,10 @@ export function WorkspaceSwitcher() {
         <button
           type="button"
           disabled={isSwitching}
-          className="flex items-center gap-2 rounded-lg border border-border bg-surface-muted px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface-muted px-2 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 sm:px-3"
         >
           <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="max-w-[10rem] truncate">
+          <span className="max-w-[6rem] truncate sm:max-w-[10rem]">
             {activeMembership?.workspaceName ?? 'Workspace'}
           </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />

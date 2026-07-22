@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { CheckCircle, ChevronRight, X } from 'lucide-react';
 import marketingApi from '../api/marketingApi';
 import { getBrandProfile } from '../api/brandBrain.service';
+import { getStrategy } from '../api/strategy.service';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useOnboardingStore } from '../../../store/onboardingStore';
 import {
@@ -34,6 +35,14 @@ export default function GettingStarted() {
   const dismissWs = useOnboardingStore((s) => s.dismiss);
   const active = isManager && !dismissed;
 
+  // Reuses the Strategy console's exact query key so the cache is shared.
+  // getStrategy already swallows a 404 into null, so a strategy-less workspace
+  // simply reads as not-done (no rejected query to special-case here).
+  const strategy = useQuery({
+    queryKey: ['marketing', 'strategy'],
+    queryFn: getStrategy,
+    enabled: active,
+  });
   const agents = useQuery<any[]>({
     queryKey: ['marketing', 'ai', 'agents'],
     queryFn: () => marketingApi.get('/ai/agents').then((r) => r.data),
@@ -74,6 +83,13 @@ export default function GettingStarted() {
   });
 
   const steps = [
+    // The strategy is the brain that drives lead/content/channel/ad work, so it
+    // leads the checklist.
+    {
+      id: 'strategy',
+      to: '/onboarding/strategy',
+      done: !!(strategy.data?.id || strategy.data?.archetype),
+    },
     { id: 'agent', to: '/inbox?tab=agents', done: (agents.data?.length ?? 0) > 0 },
     { id: 'knowledge', to: '/inbox?tab=knowledge', done: (docs.data?.length ?? 0) > 0 },
     { id: 'brand', to: '/branding?tab=brain', done: brandProfile.data?.status === 'ACTIVE' },

@@ -34,8 +34,14 @@ vi.mock('../../features/marketing/api/marketingApi', () => ({
 vi.mock('../../store/marketingAuthStore', () => ({
   useMarketingAuthStore: () => ({
     login: vi.fn(),
+    setMemberships: vi.fn(),
     isAuthenticated: false,
   }),
+}));
+
+// Stub membership hydration (register mirrors login's best-effort fetch).
+vi.mock('../../features/marketing/api/membershipApi', () => ({
+  fetchMemberships: vi.fn(() => Promise.resolve([])),
 }));
 
 import RegisterWorkspacePage from './RegisterWorkspacePage';
@@ -98,6 +104,71 @@ describe('RegisterWorkspacePage', () => {
         }),
       );
     });
+  });
+
+  async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText(/register.workspaceName/i), 'Acme Inc.');
+    await user.type(screen.getByLabelText(/register.productName/i), 'Acme POS');
+    await user.type(screen.getByLabelText(/register.firstName/i), 'Jane');
+    await user.type(screen.getByLabelText(/register.lastName/i), 'Doe');
+    await user.type(screen.getByLabelText(/login.emailLabel/i), 'jane@acme.com');
+    await user.type(screen.getByLabelText(/login.passwordLabel/i), 'Secure1Password');
+  }
+
+  it('allows an empty productUrl (optional)', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const user = userEvent.setup();
+    renderPage();
+    await fillRequired(user);
+    // productUrl left blank
+    await user.click(screen.getByRole('button', { name: /register.submit/i }));
+    await waitFor(() => expect(marketingApi.post).toHaveBeenCalled());
+  });
+
+  it('rejects a malformed productUrl client-side (no POST)', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const user = userEvent.setup();
+    renderPage();
+    await fillRequired(user);
+    await user.type(screen.getByLabelText(/register.productUrl/i), 'not a url');
+    await user.click(screen.getByRole('button', { name: /register.submit/i }));
+    await waitFor(() =>
+      expect(screen.getByText('validation.invalidUrl')).toBeInTheDocument(),
+    );
+    expect(marketingApi.post).not.toHaveBeenCalled();
+  });
+
+  it('accepts a valid productUrl', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const user = userEvent.setup();
+    renderPage();
+    await fillRequired(user);
+    await user.type(screen.getByLabelText(/register.productUrl/i), 'https://acme.com');
+    await user.click(screen.getByRole('button', { name: /register.submit/i }));
+    await waitFor(() =>
+      expect(marketingApi.post).toHaveBeenCalledWith(
+        '/auth/register-workspace',
+        expect.objectContaining({ productUrl: 'https://acme.com' }),
+      ),
+    );
+  });
+
+  it('sends productDescription when provided', async () => {
+    const { default: marketingApi } = await import('../../features/marketing/api/marketingApi');
+    const user = userEvent.setup();
+    renderPage();
+    await fillRequired(user);
+    await user.type(
+      screen.getByLabelText(/register.productDescription/i),
+      'We run a cloud POS for cafes.',
+    );
+    await user.click(screen.getByRole('button', { name: /register.submit/i }));
+    await waitFor(() =>
+      expect(marketingApi.post).toHaveBeenCalledWith(
+        '/auth/register-workspace',
+        expect.objectContaining({ productDescription: 'We run a cloud POS for cafes.' }),
+      ),
+    );
   });
 
   it('shows a login link', () => {

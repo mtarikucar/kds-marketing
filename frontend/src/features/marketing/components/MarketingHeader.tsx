@@ -322,13 +322,13 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
 
   return (
     <>
-      <header className="bg-surface border-b border-border px-6 py-3 flex items-center justify-between">
-        <div className="flex min-w-0 items-center gap-2">
+      <header className="bg-surface border-b border-border px-3 py-3 sm:px-6 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1 sm:gap-2">
           {onMenuClick && (
             <IconButton
               aria-label={t('nav.openMenu', 'Open menu')}
               variant="ghost"
-              className="lg:hidden"
+              className="lg:hidden shrink-0"
               onClick={onMenuClick}
             >
               <Menu className="h-5 w-5" />
@@ -337,10 +337,14 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
           {/* Renders nothing for the (overwhelming majority of) users who
               belong to a single workspace. */}
           <WorkspaceSwitcher />
-          <Breadcrumbs />
+          {/* Breadcrumbs are redundant on mobile (the page has its own H1) and
+              cost horizontal room the header can't spare — hide below md. */}
+          <div className="hidden min-w-0 md:flex">
+            <Breadcrumbs />
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           {/* Global search — opens the command palette (Cmd/Ctrl+K). */}
           <button
             type="button"
@@ -383,8 +387,13 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <LanguageSwitcher />
-          <ThemeToggle />
+          {/* Theme + language are secondary controls — on mobile they live in
+              the drawer (MarketingSidebar footer) instead, to keep the bar from
+              overflowing. Shown inline from sm up. */}
+          <div className="hidden items-center gap-2 sm:flex">
+            <LanguageSwitcher />
+            <ThemeToggle />
+          </div>
 
           {/* Notification Bell */}
           <Popover open={showNotifications} onOpenChange={setShowNotifications}>

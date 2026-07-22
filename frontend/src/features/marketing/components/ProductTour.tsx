@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LucideIcon } from 'lucide-react';
 import { Command, PanelLeft, Plus, Blocks } from 'lucide-react';
@@ -27,31 +26,20 @@ const STEPS: { key: string; icon: LucideIcon }[] = [
  * A short, centered product tour that teaches the console's key affordances
  * (command palette, focused nav, quick create, module catalog). Deliberately a
  * centered stepper — not element-anchored popovers — so it's robust regardless
- * of layout/viewport. Auto-starts once per workspace for managers (but never on
- * the fresh-register moment, which the welcome dialog owns), and can be relaunched
- * from the "Take a tour" menu entry.
+ * of layout/viewport. It does NOT auto-start — on first signup the WelcomeDialog
+ * is the single first-touch surface — and is launched only on demand from the
+ * "Take a tour" menu entry (which calls the store's setOpen(true)). Finishing or
+ * skipping latches `dismissed` per workspace, which the menu relaunch ignores.
  */
 export default function ProductTour() {
   const { t } = useTranslation('marketing');
-  const location = useLocation();
   const user = useMarketingAuthStore((s) => s.user);
-  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
   const ws = user?.workspaceId ?? 'unknown';
 
   const open = useTourStore((s) => s.open);
-  const setOpen = useTourStore((s) => s.setOpen);
   const dismiss = useTourStore((s) => s.dismiss);
-  const dismissed = useTourStore((s) => !!s.dismissed[ws]);
 
   const [step, setStep] = useState(0);
-
-  useEffect(() => {
-    if (isManager && !dismissed && !location.search.includes('welcome')) {
-      setOpen(true);
-    }
-    // Run-once auto-start on shell mount; guarded by the persisted dismissed flag.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const finish = () => {
     dismiss(ws);

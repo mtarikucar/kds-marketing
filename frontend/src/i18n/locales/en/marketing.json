@@ -393,6 +393,7 @@
     "percentRange": "Percent value must be between 1 and 100",
     "percentMax": "Cannot exceed 100%",
     "emailInvalid": "Please enter a valid email",
+    "invalidUrl": "Please enter a valid http(s) URL",
     "phoneInvalid": "Please enter a valid phone number",
     "minLength": "Minimum {{count}} characters",
     "maxLength": "Maximum {{count}} characters",
@@ -1249,6 +1250,9 @@
     "workspaceName": "Company / workspace name",
     "productName": "What do you sell?",
     "productUrl": "Product URL (optional)",
+    "productDescription": "What does your business do?",
+    "productDescriptionHint": "A sentence or two — the AI builds your strategy and content around this.",
+    "productDescriptionPlaceholder": "e.g. We run a cloud POS for independent cafes and small restaurant groups.",
     "firstName": "First name",
     "lastName": "Last name",
     "passwordHint": "Min 8 characters, at least one letter and one digit.",
@@ -1963,6 +1967,10 @@
     "reopen": "Show setup guide",
     "reopened": "Setup guide reopened",
     "steps": {
+      "strategy": {
+        "title": "Build your growth strategy",
+        "desc": "Let the AI map your channels, audience and content plan."
+      },
       "agent": {
         "title": "Create your first AI agent",
         "desc": "Define how your AI greets and answers customers."

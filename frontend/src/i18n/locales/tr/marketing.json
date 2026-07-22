@@ -650,6 +650,7 @@
     "percentRange": "Yüzde değeri 1 ile 100 arasında olmalı",
     "percentMax": "Yüzde 100'ü geçemez",
     "emailInvalid": "Geçerli bir e-posta gir",
+    "invalidUrl": "Geçerli bir http(s) adresi gir",
     "phoneInvalid": "Geçerli bir telefon numarası gir",
     "minLength": "En az {{count}} karakter",
     "maxLength": "En fazla {{count}} karakter",
@@ -1505,6 +1506,9 @@
     "workspaceName": "Şirket / çalışma alanı adı",
     "productName": "Ne satıyorsunuz?",
     "productUrl": "Ürün adresi (opsiyonel)",
+    "productDescription": "İşletmeniz ne yapıyor?",
+    "productDescriptionHint": "Bir-iki cümle — AI stratejinizi ve içeriğinizi buna göre kurar.",
+    "productDescriptionPlaceholder": "örn. Bağımsız kafeler ve küçük restoran gruplarına bulut POS sunuyoruz.",
     "firstName": "Ad",
     "lastName": "Soyad",
     "passwordHint": "En az 8 karakter; en az bir harf ve bir rakam.",
@@ -2269,6 +2273,10 @@
     "reopen": "Kurulum rehberini göster",
     "reopened": "Kurulum rehberi yeniden açıldı",
     "steps": {
+      "strategy": {
+        "title": "Büyüme stratejini oluştur",
+        "desc": "AI kanallarını, kitleni ve içerik planını çıkarsın."
+      },
       "agent": {
         "title": "İlk AI temsilcini oluştur",
         "desc": "AI'ın müşterileri nasıl karşılayıp yanıtlayacağını tanımla."
