@@ -129,9 +129,9 @@ describe('navigation — merged destinations have exactly one home (clean cut)',
   });
 
   it('keeps the tree lean: at most 12 top-level hubs and no hub over 6 children', () => {
-    expect(NAV_HUBS.length).toBeLessThanOrEqual(16); // incl. settings + agency-gated
+    expect(NAV_HUBS.length).toBeLessThanOrEqual(17); // incl. settings + agency-gated + Strategy (Task 9)
     const mainHubs = NAV_HUBS.filter((h) => (h.area ?? 'main') === 'main');
-    expect(mainHubs.length).toBeLessThanOrEqual(15);
+    expect(mainHubs.length).toBeLessThanOrEqual(16);
     for (const h of mainHubs) {
       expect((h.children?.length ?? 0)).toBeLessThanOrEqual(6);
     }

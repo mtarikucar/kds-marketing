@@ -40,6 +40,15 @@ export const AI_CREDIT_COSTS = {
   // crawl + GBP + social + uploads) into a structured brand draft. Firecrawl/Apify
   // money is metered separately via the RESEARCH SpendLedger channel.
   'brand.analyze': { credits: 5, tier: 'default' as AiModelTier },
+  // Strategy Engine — one adaptive-interview turn (a bounded onboarding tool-loop
+  // that asks only the gaps + strategic intent). Cheap per-turn; the loop's hard
+  // turn cap bounds total spend.
+  'strategy.interview': { credits: 2, tier: 'default' as AiModelTier },
+  // Strategy Engine — one full synthesis: a multi-step Claude tool-loop over
+  // firecrawl/apify research that classifies the archetype and produces the
+  // validated brief + ActionPlan. Firecrawl/apify money is metered separately via
+  // the RESEARCH SpendLedger channel; this reserve is the per-run credit ceiling.
+  'strategy.synthesize': { credits: 8, tier: 'default' as AiModelTier },
 } as const;
 
 export type AiAction = keyof typeof AI_CREDIT_COSTS;

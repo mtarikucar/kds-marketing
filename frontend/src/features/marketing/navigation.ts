@@ -43,6 +43,7 @@ import {
   Scale,
   Settings,
   Link2,
+  Compass,
 } from 'lucide-react';
 
 /**
@@ -207,6 +208,12 @@ export const NAV_HUBS: NavHub[] = [
     // CORE tier: the product's flagship surface. Managers only (real spend).
     id: 'studio', labelKey: 'nav.studio', label: 'Growth Studio', icon: Sparkles,
     path: '/studio', managerOnly: true, tier: 'core',
+  },
+  {
+    // AI Strategy Engine (Task 9): the always-on strategist console. First-run
+    // onboarding lives at /onboarding/strategy (reached via the console's CTA).
+    id: 'strategy', labelKey: 'nav.strategy', label: 'Strategy', icon: Compass,
+    path: '/studio/strategy', managerOnly: true, tier: 'core',
   },
   {
     // Single-page hub: Ads / Performance / Analytics are tabs inside /reports.

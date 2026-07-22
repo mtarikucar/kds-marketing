@@ -33,6 +33,8 @@ const DocumentsHubPage         = lazy(() => import('./pages/marketing/documents/
 // Ads / Performance / Analytics are TABS inside ReportsPage now.
 const ReportsPage              = lazy(() => import('./pages/marketing/ReportsPage'));
 const GrowthStudioPage         = lazy(() => import('./pages/marketing/studio/GrowthStudioPage'));
+const StrategyConsolePage      = lazy(() => import('./pages/marketing/strategy/StrategyConsolePage'));
+const StrategyOnboarding       = lazy(() => import('./pages/marketing/strategy/StrategyOnboarding'));
 const HelpPage                 = lazy(() => import('./pages/marketing/help'));
 const CompaniesPage            = lazy(() => import('./pages/marketing/companies'));
 const EmailTemplatesPage       = lazy(() => import('./pages/marketing/emailTemplates'));
@@ -194,6 +196,10 @@ export default function App() {
           {/* Growth Studio is Autopilot-first: /studio IS the autopilot console;
               the manual tools live behind ?view=tools&tab=… */}
           <Route path="/studio"         element={<S><GrowthStudioPage /></S>} />
+          {/* AI Strategy Engine (Task 9): the console + its first-run onboarding
+              wizard. Both live under the standard marketing auth guard. */}
+          <Route path="/studio/strategy"   element={<S><StrategyConsolePage /></S>} />
+          <Route path="/onboarding/strategy" element={<S><StrategyOnboarding /></S>} />
           <Route path="/budget"         element={<Navigate to="/studio" replace />} />
           <Route path="/trends"         element={<Navigate to="/studio?view=tools&tab=trends" replace />} />
           <Route path="/content-calendar" element={<Navigate to="/studio?view=tools&tab=calendar" replace />} />

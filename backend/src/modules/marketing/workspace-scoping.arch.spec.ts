@@ -218,6 +218,10 @@ const OWNED_DELEGATES = [
   // Brand Brain (Task 12): one async brand-extraction run per invocation —
   // startAnalysis's create carries a literal workspaceId.
   'brandAnalysisRun',
+  // Strategy Engine (P5): per-workspace connected community channels
+  // (Discord webhook / Reddit OAuth), sealed. One row per (workspaceId, provider);
+  // every findMany/deleteMany/upsert carries a literal workspaceId.
+  'communityChannelConfig',
 ] as const;
 
 /**
@@ -480,6 +484,8 @@ const ALLOWED_GLOBAL: Record<string, string> = {
     'same workspaceId-scoped where object as the paired findMany; heuristic cannot see through the where variable',
   'services/marketing-research.service.ts:researchProfile.create':
     'row created with { workspaceId } via a ResearchProfileUncheckedCreateInput data variable; heuristic cannot see through the data variable',
+  'strategy/executors/lead-hunt.executor.ts:researchProfile.create':
+    'LEAD_HUNT executor materializes the action payload as a ResearchProfile with { workspaceId } via a ResearchProfileUncheckedCreateInput data variable; heuristic cannot see through the data variable',
   'ai/agent-profile.service.ts:agentProfile.create':
     'row created via a data var from toData(workspaceId, dto) (fast path + advisory-lock tx); heuristic cannot see through the data variable',
   'ai/knowledge.service.ts:knowledgeDoc.create':

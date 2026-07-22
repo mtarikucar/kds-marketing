@@ -21,6 +21,8 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'review.reply_draft',
       'social.publish.x',
       'social.publish.x_link',
+      'strategy.interview',
+      'strategy.synthesize',
       'voice.analysis',
       'voice.copilot',
       'voice.turn',
@@ -51,6 +53,14 @@ describe('ai-credit-costs — cost table tripwire', () => {
     expect(creditCost('social.publish.x')).toBe(2);
     expect(creditCost('social.publish.x_link')).toBe(20);
     expect(creditCost('social.publish.x_link')).toBeGreaterThan(creditCost('social.publish.x'));
+  });
+
+  it('prices the strategy-engine AI steps (interview cheap, synthesis heavier)', () => {
+    expect(creditCost('strategy.interview')).toBe(2);
+    expect(creditCost('strategy.synthesize')).toBe(8);
+    expect(tierFor('strategy.interview')).toBe('default');
+    expect(tierFor('strategy.synthesize')).toBe('default');
+    expect(creditCost('strategy.synthesize')).toBeGreaterThan(creditCost('strategy.interview'));
   });
 
   it('classification runs on the cheap light tier; ask runs deeper at 2 credits', () => {

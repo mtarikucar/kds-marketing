@@ -494,6 +494,25 @@ import { CouponsService } from './coupons/coupons.service';
 import { MarketingWalletController } from './controllers/marketing-wallet.controller';
 import { WalletService } from './wallet/wallet.service';
 
+// Strategy Engine — the archetype-adaptive MarketingStrategy brain (hybrid
+// onboarding → synthesis → console). Registered flat (like every other feature
+// in this module) so the controllers' guards + the services' AI/research/brand
+// deps all resolve in this single injector.
+import { StrategyService } from './strategy/strategy.service';
+import { StrategyIntakeService } from './strategy/intake/strategy-intake.service';
+import { StrategySynthesisService } from './strategy/synthesis/strategy-synthesis.service';
+import { StrategyOrchestrator } from './strategy/orchestrator/strategy-orchestrator.service';
+import { LeadHuntExecutor } from './strategy/executors/lead-hunt.executor';
+import { ContentExecutor } from './strategy/executors/content.executor';
+import { CommunityEngageExecutor } from './strategy/executors/community-engage.executor';
+import { AdCampaignExecutor } from './strategy/executors/ad-campaign.executor';
+import { StrategyFeedbackService } from './strategy/feedback/strategy-feedback.service';
+import { StrategyFeedbackCron } from './strategy/feedback/strategy-feedback.cron';
+import { StrategyController } from './strategy/strategy.controller';
+import { StrategyIntakeController } from './strategy/strategy-intake.controller';
+import { CommunityChannelService } from './strategy/channels/community-channel.service';
+import { CommunityChannelController } from './strategy/channels/community-channel.controller';
+
 @Module({
   imports: [
     // Entitlements (lead quota, seat/profile limits, feature gates) +
@@ -671,6 +690,11 @@ import { WalletService } from './wallet/wallet.service';
     SocialCampaignsController,
     LinkedinAdsOAuthController,
     GoogleAdsOAuthController,
+    // Strategy Engine — onboarding + console surfaces.
+    StrategyIntakeController,
+    StrategyController,
+    // Strategy Engine — per-workspace community channel connect (Discord/Reddit).
+    CommunityChannelController,
   ],
   providers: [
     // Services
@@ -1006,6 +1030,27 @@ import { WalletService } from './wallet/wallet.service';
     // Ad reporting — one-click LinkedIn-for-Business (ads) OAuth provisioning.
     LinkedinAdsOAuthService,
     GoogleAdsOAuthService,
+    // Strategy Engine — read/decision service + hybrid-onboarding intake + the
+    // strategist synthesis brain (all consume AI/research/brand providers above).
+    StrategyService,
+    StrategyIntakeService,
+    StrategySynthesisService,
+    // Strategy Engine — P2 executor wiring: the orchestrator dispatches an
+    // APPROVED action to the executor for its kind (LEAD_HUNT → research worker,
+    // CONTENT → content-AI + social planner).
+    StrategyOrchestrator,
+    LeadHuntExecutor,
+    ContentExecutor,
+    CommunityEngageExecutor,
+    // Strategy Engine — P4: ad-campaign executor (spend-safe PAUSED shell) +
+    // the living feedback loop (daily @Cron folds execution outcomes into a
+    // version-bumping re-synthesis). Autonomy lanes live in the orchestrator.
+    AdCampaignExecutor,
+    // Strategy Engine — per-workspace community channel connections (sealed
+    // Discord webhook / Reddit OAuth) the COMMUNITY_ENGAGE executor posts through.
+    CommunityChannelService,
+    StrategyFeedbackService,
+    StrategyFeedbackCron,
     // Guards
     MarketingGuard,
     MarketingRolesGuard,
