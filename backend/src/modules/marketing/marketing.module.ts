@@ -510,6 +510,8 @@ import { StrategyFeedbackService } from './strategy/feedback/strategy-feedback.s
 import { StrategyFeedbackCron } from './strategy/feedback/strategy-feedback.cron';
 import { StrategyController } from './strategy/strategy.controller';
 import { StrategyIntakeController } from './strategy/strategy-intake.controller';
+import { CommunityChannelService } from './strategy/channels/community-channel.service';
+import { CommunityChannelController } from './strategy/channels/community-channel.controller';
 
 @Module({
   imports: [
@@ -691,6 +693,8 @@ import { StrategyIntakeController } from './strategy/strategy-intake.controller'
     // Strategy Engine — onboarding + console surfaces.
     StrategyIntakeController,
     StrategyController,
+    // Strategy Engine — per-workspace community channel connect (Discord/Reddit).
+    CommunityChannelController,
   ],
   providers: [
     // Services
@@ -1042,6 +1046,9 @@ import { StrategyIntakeController } from './strategy/strategy-intake.controller'
     // the living feedback loop (daily @Cron folds execution outcomes into a
     // version-bumping re-synthesis). Autonomy lanes live in the orchestrator.
     AdCampaignExecutor,
+    // Strategy Engine — per-workspace community channel connections (sealed
+    // Discord webhook / Reddit OAuth) the COMMUNITY_ENGAGE executor posts through.
+    CommunityChannelService,
     StrategyFeedbackService,
     StrategyFeedbackCron,
     // Guards
