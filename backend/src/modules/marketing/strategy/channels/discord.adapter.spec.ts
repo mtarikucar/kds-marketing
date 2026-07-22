@@ -13,22 +13,38 @@ describe('discord.adapter', () => {
     jest.restoreAllMocks();
   });
 
+  const svc = (webhook: string | null) => ({ getDiscordWebhook: jest.fn(async () => webhook) }) as any;
+
   describe('isDiscordConfigured / resolveDiscordWebhookUrl', () => {
-    it('is false / null when no webhook env is set (safe default → stage a draft)', async () => {
+    it('is false / null when no per-workspace connection and no env (safe default → draft)', async () => {
+      delete process.env.DISCORD_WEBHOOK_URL;
+      await expect(resolveDiscordWebhookUrl('ws1', svc(null))).resolves.toBeNull();
+      await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(false);
+    });
+
+    it('uses the per-workspace sealed webhook from the service (per-workspace wins over env)', async () => {
+      process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/999/global';
+      const s = svc(OWNED_WEBHOOK);
+      await expect(resolveDiscordWebhookUrl('ws1', s)).resolves.toBe(OWNED_WEBHOOK);
+      await expect(isDiscordConfigured('ws1', s)).resolves.toBe(true);
+      expect(s.getDiscordWebhook).toHaveBeenCalledWith('ws1');
+    });
+
+    it('falls back to the global env webhook when the workspace has not connected', async () => {
+      process.env.DISCORD_WEBHOOK_URL = OWNED_WEBHOOK;
+      await expect(resolveDiscordWebhookUrl('ws1', svc(null))).resolves.toBe(OWNED_WEBHOOK);
+      await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(true);
+    });
+
+    it('is inert when no service is supplied and no env is set', async () => {
       delete process.env.DISCORD_WEBHOOK_URL;
       await expect(resolveDiscordWebhookUrl('ws1')).resolves.toBeNull();
       await expect(isDiscordConfigured('ws1')).resolves.toBe(false);
     });
 
-    it('is true / the URL when the global webhook env is set', async () => {
-      process.env.DISCORD_WEBHOOK_URL = OWNED_WEBHOOK;
-      await expect(resolveDiscordWebhookUrl('ws1')).resolves.toBe(OWNED_WEBHOOK);
-      await expect(isDiscordConfigured('ws1')).resolves.toBe(true);
-    });
-
     it('treats a blank/whitespace env as not-configured', async () => {
       process.env.DISCORD_WEBHOOK_URL = '   ';
-      await expect(isDiscordConfigured('ws1')).resolves.toBe(false);
+      await expect(isDiscordConfigured('ws1', svc(null))).resolves.toBe(false);
     });
   });
 

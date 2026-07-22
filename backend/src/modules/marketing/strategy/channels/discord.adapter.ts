@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import type { PrismaService } from '../../../../prisma/prisma.service';
+import type { CommunityChannelService } from './community-channel.service';
 
 /**
  * Discord community channel adapter — publishes ONE native message to a Discord
@@ -26,28 +26,27 @@ export interface ChannelPostResult {
  * Resolve the Incoming Webhook URL this workspace posts its OWNED-server community
  * content to, or null when none is configured (→ stage a draft).
  *
- * Storage decision: there is no per-workspace Discord webhook column in the schema
- * yet, and adding one is a separate migration outside this change's scope. For now
- * we read a single global webhook from env `DISCORD_WEBHOOK_URL`. The
- * `(workspaceId, prisma)` signature is deliberately kept so a future per-workspace
- * lookup (a `ChannelSecret` row / workspace-settings JSON) can slot in here without
- * touching any caller.
- *
- * ENV to add (deploy.yml — do NOT edit it here, documented only): `DISCORD_WEBHOOK_URL`
- * — a Discord Incoming Webhook URL for the OWNED server, e.g.
- * `https://discord.com/api/webhooks/<id>/<token>`.
+ * Per-workspace wins: reads the sealed webhook the workspace connected via
+ * CommunityChannelService. The global env `DISCORD_WEBHOOK_URL` remains only as a
+ * last-resort fallback (single-tenant/dev), so a workspace that never connected is
+ * still inert unless an operator sets the global var.
  */
 export async function resolveDiscordWebhookUrl(
-  _workspaceId: string,
-  _prisma?: PrismaService,
+  workspaceId: string,
+  svc?: CommunityChannelService,
 ): Promise<string | null> {
+  const perWorkspace = svc ? await svc.getDiscordWebhook(workspaceId) : null;
+  if (perWorkspace) return perWorkspace;
   const url = process.env.DISCORD_WEBHOOK_URL?.trim();
   return url ? url : null;
 }
 
 /** True when this workspace has a Discord webhook to post to (else stage a draft). */
-export async function isDiscordConfigured(workspaceId: string, prisma?: PrismaService): Promise<boolean> {
-  return !!(await resolveDiscordWebhookUrl(workspaceId, prisma));
+export async function isDiscordConfigured(
+  workspaceId: string,
+  svc?: CommunityChannelService,
+): Promise<boolean> {
+  return !!(await resolveDiscordWebhookUrl(workspaceId, svc));
 }
 
 /**
