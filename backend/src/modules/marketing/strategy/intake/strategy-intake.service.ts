@@ -186,7 +186,7 @@ export class StrategyIntakeService {
     const cost = creditCost('strategy.interview');
     await this.credits.reserve(workspaceId, cost);
     try {
-      const auto = (session.autoAnalysis ?? null) as StrategyAutoAnalysis | null;
+      const auto = (session.autoAnalysis ?? null) as unknown as StrategyAutoAnalysis | null;
       const deltas = auto?.suggestedArchetype ? archetypeMeta(auto.suggestedArchetype).interviewDeltas : [];
       const turn = await this.interviewTurn(messages, deltas);
       if (turn.toolUse) messages.push({ role: 'assistant', content: [turn.toolUse] });
