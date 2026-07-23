@@ -1062,8 +1062,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
   exports: [
     MarketingAuthService,
     MarketingUsersService,
-    // InternalApiModule's research-jobs surface shares the quota-clipped
-    // ingest path (one implementation of the clipping invariant).
+    // InternalApiModule's research-jobs surface — job list and ingest path.
+    ResearchJobService,
     MarketingLeadsIngestService,
     // InternalApiModule's lead-scoring surface delegates writes through this
     // service so the controller never touches marketing-owned tables directly.
