@@ -70,16 +70,19 @@ export interface StrategyAction {
 }
 
 // ── Intake (adaptive Q&A) ───────────────────────────────────────────────────────
-export interface IntakeSocials {
-  facebook?: string;
-  instagram?: string;
-  linkedin?: string;
-  x?: string;
+/** The three networks the intake auto-analysis supports (Brand Brain source
+ *  adapters). Must match the backend StartIntakeDto (strategy-intake.controller). */
+export type IntakeSocialNetwork = 'INSTAGRAM' | 'FACEBOOK' | 'LINKEDIN';
+
+export interface IntakeSocial {
+  network: IntakeSocialNetwork;
+  /** handle or profile URL, ≤200 chars (backend cap). */
+  handle: string;
 }
 
 export interface StartIntakePayload {
   url: string;
-  socials?: IntakeSocials;
+  socials?: IntakeSocial[];
   oneLiner?: string;
 }
 

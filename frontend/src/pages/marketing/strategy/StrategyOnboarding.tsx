@@ -41,13 +41,12 @@ export default function StrategyOnboarding() {
 
   const [step, setStep] = useState<Step>('intake');
 
-  // intake form
+  // intake form — only the three networks the backend auto-analysis supports.
   const [url, setUrl] = useState('');
   const [oneLiner, setOneLiner] = useState('');
   const [facebook, setFacebook] = useState('');
   const [instagram, setInstagram] = useState('');
   const [linkedin, setLinkedin] = useState('');
-  const [x, setX] = useState('');
 
   // adaptive Q&A
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -111,16 +110,17 @@ export default function StrategyOnboarding() {
   });
 
   const submitIntake = () => {
-    const socials: NonNullable<StartIntakePayload['socials']> = {};
-    if (facebook.trim()) socials.facebook = facebook.trim();
-    if (instagram.trim()) socials.instagram = instagram.trim();
-    if (linkedin.trim()) socials.linkedin = linkedin.trim();
-    if (x.trim()) socials.x = x.trim();
+    // Backend expects an array of { network, handle } (handle ≤200 chars), NOT
+    // a keyed object — and only these three networks.
+    const socials: NonNullable<StartIntakePayload['socials']> = [];
+    if (instagram.trim()) socials.push({ network: 'INSTAGRAM', handle: instagram.trim().slice(0, 200) });
+    if (facebook.trim()) socials.push({ network: 'FACEBOOK', handle: facebook.trim().slice(0, 200) });
+    if (linkedin.trim()) socials.push({ network: 'LINKEDIN', handle: linkedin.trim().slice(0, 200) });
     setStep('analyzing');
     start.mutate({
       url: url.trim(),
-      oneLiner: oneLiner.trim() || undefined,
-      socials: Object.keys(socials).length ? socials : undefined,
+      oneLiner: oneLiner.trim().slice(0, 500) || undefined,
+      socials: socials.length ? socials : undefined,
     });
   };
 
@@ -163,6 +163,7 @@ export default function StrategyOnboarding() {
                 <Textarea
                   id={id}
                   rows={2}
+                  maxLength={500}
                   placeholder={t('strategy.onboarding.oneLinerPlaceholder', 'e.g. We help dental clinics fill their calendars with local patients.')}
                   value={oneLiner}
                   onChange={(e) => setOneLiner(e.target.value)}
@@ -181,9 +182,6 @@ export default function StrategyOnboarding() {
                 </Field>
                 <Field label="LinkedIn">
                   {({ id }) => <Input id={id} placeholder="linkedin.com/company/brand" value={linkedin} onChange={(e) => setLinkedin(e.target.value)} />}
-                </Field>
-                <Field label="X">
-                  {({ id }) => <Input id={id} placeholder="@brand" value={x} onChange={(e) => setX(e.target.value)} />}
                 </Field>
               </div>
             </div>
