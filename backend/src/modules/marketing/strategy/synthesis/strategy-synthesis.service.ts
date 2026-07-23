@@ -137,8 +137,14 @@ export class StrategySynthesisService {
    *   previous plan's execution actually produced.
    */
   async synthesize(workspaceId: string, sessionId: string, extraContext?: string): Promise<StrategySynthesisResult> {
-    if (!this.sources.isEnabled()) return { strategyId: null, actionCount: 0, skipped: 'sources-not-configured' };
+    // AI is the ONLY hard requirement. Research sources (firecrawl/apify) merely
+    // ENHANCE the synthesis with live market research — without them the strategist
+    // still produces a strategy from the intake auto-analysis + interview answers.
+    // (Gating on sources here is what left prod unable to create ANY strategy when
+    // firecrawl/apify keys weren't wired — the interview ran, but finish always
+    // "skipped".)
     if (!this.anthropic.isEnabled()) return { strategyId: null, actionCount: 0, skipped: 'ai-not-configured' };
+    const researchEnabled = this.sources.isEnabled();
 
     const session = await this.prisma.strategyIntakeSession.findFirst({ where: { id: sessionId, workspaceId } });
     if (!session) throw new NotFoundException('intake session not found');
@@ -151,8 +157,12 @@ export class StrategySynthesisService {
         try {
           const ctx: ResearchToolCtx = { workspaceId, runId, geo: {}, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
-          const tools = [...RESEARCH_TOOLS, SUBMIT_STRATEGY_TOOL];
-          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: this.buildBrief(session, extraContext) }];
+          // Only offer the research tools when a source is actually configured —
+          // otherwise the model would burn turns on tools that return nothing.
+          const tools = researchEnabled ? [...RESEARCH_TOOLS, SUBMIT_STRATEGY_TOOL] : [SUBMIT_STRATEGY_TOOL];
+          const messages: Anthropic.MessageParam[] = [
+            { role: 'user', content: this.buildBrief(session, extraContext, researchEnabled) },
+          ];
 
           let submission: { archetype?: unknown; brief?: unknown; actions?: unknown } | null = null;
           let toolCalls = 0;
@@ -271,14 +281,21 @@ export class StrategySynthesisService {
     return out;
   }
 
-  private buildBrief(session: { autoAnalysis: unknown; transcript: unknown }, extraContext?: string): string {
+  private buildBrief(
+    session: { autoAnalysis: unknown; transcript: unknown },
+    extraContext?: string,
+    researchEnabled = true,
+  ): string {
     const qa = extractQa(session.transcript);
+    const closing = researchEnabled
+      ? 'Research the market/audience/competitors with the tools, then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.'
+      : 'Research tools are unavailable in this workspace — synthesize directly from the auto-analysis and interview answers above (use your own market knowledge to fill gaps), then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.';
     return [
       `AUTO-ANALYSIS: ${JSON.stringify(session.autoAnalysis ?? {})}`,
       this.priorsLine(session.autoAnalysis),
       qa ? `INTERVIEW (operator answers):\n${qa}` : '',
       extraContext ? extraContext.trim() : '',
-      'Research the market/audience/competitors with the tools, then call submit_strategy with the archetype, a COMPLETE brief, and a prioritized ActionPlan.',
+      closing,
     ]
       .filter(Boolean)
       .join('\n');
