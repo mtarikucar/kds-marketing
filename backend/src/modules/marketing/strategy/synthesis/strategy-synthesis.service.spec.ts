@@ -50,10 +50,22 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
 }
 
 describe('StrategySynthesisService', () => {
-  it('skips when no source providers are configured', async () => {
-    const { svc, credits } = deps({ enabled: false });
-    expect(await svc.synthesize('ws1', 'sess1')).toEqual({ strategyId: null, actionCount: 0, skipped: 'sources-not-configured' });
-    expect(credits.reserve).not.toHaveBeenCalled();
+  it('still synthesizes a strategy when research sources are unconfigured (AI-only)', async () => {
+    // firecrawl/apify off — the strategist must NOT be offered research tools, but
+    // it MUST still produce a strategy from the intake auto-analysis + interview.
+    const { svc, complete, credits, prisma } = deps({
+      enabled: false,
+      completions: [
+        completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_COMMUNITY_NICHE', brief: GOOD_BRIEF, actions: GOOD_ACTIONS })]),
+      ],
+    });
+    const r = await svc.synthesize('ws1', 'sess1');
+    expect(r).toEqual({ strategyId: 'strat1', actionCount: 2 });
+    expect(credits.reserve).toHaveBeenCalledWith('ws1', 8);
+    expect(prisma.marketingStrategy.upsert).toHaveBeenCalled();
+    // No research tools offered when sources are off — only submit_strategy.
+    const toolNames = (complete.mock.calls[0][0].tools as Array<{ name: string }>).map((t) => t.name);
+    expect(toolNames).toEqual(['submit_strategy']);
   });
 
   it('skips when AI is not configured', async () => {
