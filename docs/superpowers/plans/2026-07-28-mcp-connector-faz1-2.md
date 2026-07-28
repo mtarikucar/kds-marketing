@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expose Jeeta as a remote MCP server at `POST /mcp` so Claude Code can authenticate with an existing `mk_live_…` API key and drive a curated, audited, scope-checked tool surface.
+**Goal:** Expose Jeeta as a remote MCP server at `POST /api/mcp` so Claude Code can authenticate with an existing `mk_live_…` API key and drive a curated, audited, scope-checked tool surface.
 
 **Architecture:** A new `McpModule` mounts the MCP Streamable-HTTP handler inside the existing NestJS app. `requireBearerAuth` verifies the bearer token via a custom `OAuthTokenVerifier` backed by `ApiKeysService`, producing an `AuthInfo`. A per-request `McpServerFactory` turns that `AuthInfo` into an `McpToolContext` and registers tools whose handlers all funnel through **one** invoker, which wraps every call in `AgentRunService.track()` (guaranteeing an audit row) and then delegates to the **existing, unmodified** `McpBrokerService` for allow-list, scope, approval-gating and `ToolCallLog` writes. Faz 2 adds a per-workspace write mode and expands the tool catalogue.
 
@@ -39,7 +39,7 @@
 | `backend/src/modules/marketing/mcp/mcp-scopes.ts` | **Create.** Pure functions: expand legacy `read`/`write` into the dot vocabulary; no I/O. |
 | `backend/src/modules/marketing/mcp/mcp-invoker.service.ts` | **Create.** The single call path: `AuthInfo` → `McpToolContext`, wraps `AgentRunService.track()`, delegates to broker. Guarantees an audit row exists. |
 | `backend/src/modules/marketing/mcp/mcp-server.factory.ts` | **Create.** Per-request `McpServer`; registers every tool from the registry, each handler calling the invoker. |
-| `backend/src/modules/marketing/mcp/mcp.controller.ts` | **Create.** `POST /mcp`; runs bearer auth, hands the request to the MCP handler. |
+| `backend/src/modules/marketing/mcp/mcp.controller.ts` | **Create.** `POST /api/mcp`; runs bearer auth, hands the request to the MCP handler. |
 | `backend/src/modules/marketing/mcp/mcp.module.ts` | **Create.** Wires the above; imports what the tools need. |
 | `backend/src/modules/marketing/mcp/tools/*.tools.ts` | **Create.** One file per vertical; each exports a `register…Tools(registry, deps)` function. |
 | `backend/src/modules/marketing/mcp/mcp-tool-registry.ts` | **Unchanged.** |
@@ -819,9 +819,16 @@ git commit -m "feat(mcp): build a scope-filtered MCP server per request"
 
 **Interfaces:**
 - Consumes: `McpServerFactoryService.build`, `McpTokenVerifierService.verifyAccessToken`.
-- Produces: `POST /mcp` speaking MCP Streamable HTTP; 401 with a `WWW-Authenticate` challenge when the bearer token is absent or invalid.
+- Produces: `POST /api/mcp` speaking MCP Streamable HTTP; 401 with a `WWW-Authenticate` challenge when the bearer token is absent or invalid.
 
-**Critical:** `createMcpHandler` performs **no** token verification — its docs state `authInfo` is "strictly pass-through". Auth must happen in `requireBearerAuth` before the handler runs, and the verified `AuthInfo` must be passed explicitly into `handler.fetch`.
+**Critical:** `createMcpHandler` performs **no** token verification — its docs state `authInfo` is "strictly pass-through". Auth must happen before the handler runs, and the verified `AuthInfo` must be passed explicitly into `handler.fetch`.
+
+**Two facts about this app's HTTP wiring, verified in `backend/src/app.config.ts`:**
+
+1. **There is a global `api` prefix** (`app.setGlobalPrefix('api')`, app.config.ts:101). `@Controller('mcp')` therefore serves **`POST /api/mcp`**, not `/mcp`. Every URL in this task — the smoke-test command, the docs, and the RFC 9728 canonical resource URI in Faz 3 — must use `/api/mcp`.
+2. **JSON body parsing is already on.** `main.ts` passes `bodyParser: false` to `NestFactory.create`, but `app.config.ts:66` then applies `bodyParser.json({ limit: '200kb' })` globally, so `req.body` is a parsed object by the time the controller runs. Do **not** add a raw-body exemption for this route — the raw-body overrides at app.config.ts:45-55 exist for signature-verifying webhooks, which MCP is not. The 200kb limit is comfortably above the broker's 32KB argument cap.
+
+The global `ValidationPipe` (app.config.ts:136) needs no exemption either: the handler takes `@Req()`/`@Res()` and declares no body DTO, so there is nothing for it to validate.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -987,7 +994,7 @@ If `PrismaModule`'s path differs, find it: `find src -name 'prisma.module.ts'`.
 # terminal 1
 cd backend && npm run start:dev
 # terminal 2 — replace with a real key from the workspace's API-keys screen
-claude mcp add --transport http jeeta http://localhost:3000/mcp \
+claude mcp add --transport http jeeta http://localhost:3000/api/mcp \
   --header "Authorization: Bearer mk_live_YOUR_KEY"
 claude mcp list
 ```
@@ -1663,7 +1670,7 @@ git commit -m "feat(mcp): add social, ads, scheduling and workspace tools"
 
 - [ ] **Step 1: Write the guide**
 
-Cover: what the endpoint is (`POST /mcp`), how to mint an API key, the exact `claude mcp add` command, the full tool catalogue table (name / scopes / risk / gated), how approval-gated tools behave, how to switch a workspace to `AUTONOMOUS`, and where the audit trail lives (`agent_runs` + `tool_call_logs`).
+Cover: what the endpoint is (`POST /api/mcp`), how to mint an API key, the exact `claude mcp add` command, the full tool catalogue table (name / scopes / risk / gated), how approval-gated tools behave, how to switch a workspace to `AUTONOMOUS`, and where the audit trail lives (`agent_runs` + `tool_call_logs`).
 
 - [ ] **Step 2: Verify the commands in the guide actually work**
 
