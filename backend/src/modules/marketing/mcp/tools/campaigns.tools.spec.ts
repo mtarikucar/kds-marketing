@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerCampaignsTools } from './campaigns.tools';
 
@@ -125,6 +126,29 @@ describe('campaigns MCP tools', () => {
       expect(resume).toHaveBeenCalledWith('ws1', 'camp1');
       expect(launch).not.toHaveBeenCalled();
       expect(out).toEqual({ message: 'Campaign resumed' });
+    });
+
+    it('an unrecognised status is rejected, not silently ignored', async () => {
+      const registry = new McpToolRegistry();
+      const { pause, cancel, launch, resume, get } = deps().campaigns;
+      registerCampaignsTools(registry, { campaigns: { ...deps().campaigns, pause, cancel, launch, resume, get } as any });
+      await expect(
+        registry
+          .get('jeeta.set_campaign_status')!
+          .handler(
+            { workspaceId: 'ws1', grantedScopes: ['campaigns.send'] },
+            // Not one of the enum's three values — Zod validation is a
+            // separate, pre-existing concern (not enforced on this handler
+            // path); the handler's own dispatch must still refuse it rather
+            // than falling through as a silent no-op.
+            { campaignId: 'camp1', status: 'DELETED' },
+          ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(pause).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(launch).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
     });
   });
 });
