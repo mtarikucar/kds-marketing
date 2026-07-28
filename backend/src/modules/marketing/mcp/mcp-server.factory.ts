@@ -22,7 +22,17 @@ export class McpServerFactoryService {
     const server = new McpServer({ name: 'jeeta', version: '1.0.0' });
 
     for (const meta of this.registry.list(authInfo.scopes ?? [])) {
-      server.registerTool(meta.name, { description: meta.description }, this.handlerFor(authInfo, meta.name));
+      // inputSchema is REQUIRED here, not cosmetic: the SDK's registerTool picks
+      // the handler's calling convention off its presence. Without it, the
+      // callback is invoked as `(ctx)` instead of `(args, ctx)` — the caller's
+      // real arguments are dropped and `ctx` (which carries the bearer
+      // authInfo) is what our handler treats as `args`, which would then get
+      // written into the ToolCallLog audit row. Do not remove this.
+      server.registerTool(
+        meta.name,
+        { description: meta.description, inputSchema: meta.inputSchema },
+        this.handlerFor(authInfo, meta.name),
+      );
     }
 
     return server;

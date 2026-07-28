@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { ZodTypeAny } from 'zod';
 
 export type ToolRisk = 'READ' | 'WRITE' | 'SPEND';
 
@@ -24,6 +25,14 @@ export interface McpTool {
   requiresApproval: boolean;
   /** The kind used for the ApprovalRequest when gated. */
   approvalKind?: 'BUDGET_REALLOCATION' | 'PUBLISH' | 'SEND' | 'AD_SPEND' | 'TARGET_CHANGE' | 'CHANNEL_LAUNCH';
+  /**
+   * REQUIRED. The MCP SDK's `registerTool` dispatches the callback with
+   * `(ctx)` instead of `(args, ctx)` when no `inputSchema` is given — see
+   * `McpServerFactoryService.build()` for why that is unsafe here, not just
+   * wrong. Every tool must declare its arguments, even a tool that takes none
+   * (use `z.object({})`).
+   */
+  inputSchema: ZodTypeAny;
   handler: (ctx: McpToolContext, args: Record<string, unknown>) => Promise<unknown>;
 }
 

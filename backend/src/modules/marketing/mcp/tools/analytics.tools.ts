@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { AnalyticsService, DateRange } from '../../analytics/analytics.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
@@ -18,6 +19,10 @@ export function registerAnalyticsTools(registry: McpToolRegistry, deps: Analytic
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
+    inputSchema: z.object({
+      from: z.string().optional().describe('Inclusive start date, ISO 8601 (YYYY-MM-DD).'),
+      to: z.string().optional().describe('Inclusive end date, ISO 8601 (YYYY-MM-DD).'),
+    }),
     handler: async (ctx, args) => {
       const range: DateRange = {
         from: typeof args.from === 'string' ? args.from : undefined,
