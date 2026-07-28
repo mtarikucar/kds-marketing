@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BillingModule } from '../billing/billing.module';
+import { EntitlementsService } from '../billing/entitlements.service';
 import { NetgsmModule } from '../netgsm/netgsm.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -260,6 +261,10 @@ import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerInboxTools } from './mcp/tools/inbox.tools';
+import { registerSocialTools } from './mcp/tools/social.tools';
+import { registerAdsTools } from './mcp/tools/ads.tools';
+import { registerSchedulingTools } from './mcp/tools/scheduling.tools';
+import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
@@ -1111,11 +1116,21 @@ export class MarketingModule {
     leads: MarketingLeadsService,
     conversations: ConversationsService,
     campaigns: CampaignsService,
+    social: SocialPlannerService,
+    adAccounts: AdAccountService,
+    budgets: BudgetManagementService,
+    ads: AdManagementService,
+    bookings: BookingService,
+    entitlements: EntitlementsService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
     registerLeadsTools(registry, { leads });
     registerInboxTools(registry, { conversations });
     registerCampaignsTools(registry, { campaigns });
+    registerSocialTools(registry, { social });
+    registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
+    registerSchedulingTools(registry, { bookings });
+    registerWorkspaceTools(registry, { entitlements });
   }
 }
