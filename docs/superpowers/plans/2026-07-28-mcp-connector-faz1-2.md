@@ -1566,10 +1566,11 @@ git commit -m "feat(mcp): add inbox and campaign tools with approval gating"
 | `jeeta.get_ad_performance` | `['reports.read']` | READ | false | — |
 | `jeeta.get_budget` | `['reports.read']` | READ | false | — |
 | `jeeta.reallocate_budget` | `['settings.manage']` | SPEND | **true** | `BUDGET_REALLOCATION` |
-| `jeeta.list_appointments` | `['tasks.read']` | READ | false | — |
-| `jeeta.get_availability` | `['tasks.read']` | READ | false | — |
-| `jeeta.create_appointment` | `['tasks.write']` | WRITE | false | — |
+| `jeeta.list_bookings` | `['tasks.read']` | READ | false | — |
+| `jeeta.get_booking_availability` | `['tasks.read']` | READ | false | — |
 | `jeeta.get_workspace_info` | `['reports.read']` | READ | false | — |
+
+⚠️ **Corrected against the real codebase.** This plan originally listed an "appointments" vertical (`jeeta.list_appointments` / `get_availability` / `create_appointment`). There is no `Appointment` model and no `prisma.appointment` usage — the domain is **bookings** (`BookingCalendar`, `Booking`, `BookingBlackout`), served by `BookingService` in `sites/booking.service.ts` (`listBookings`, `listMemberAvailability`, `publicCalendar`, `list` for calendars). The two read tools are renamed accordingly. **`create_appointment` is dropped**: booking creation is a customer-facing flow, and wiring an MCP tool into it was not part of any validated requirement. Do not invent a server-side creation path to satisfy the old table.
 
 `jeeta.draft_social_post` is deliberately ungated: creating a **draft** has no external side effect. Only `publish` reaches an audience, and only it is gated.
 
