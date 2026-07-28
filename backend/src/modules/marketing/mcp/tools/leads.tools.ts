@@ -4,14 +4,26 @@ import { MarketingLeadsService } from '../../services/marketing-leads.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 /**
- * `MarketingLeadsService.findAll` applies row-level visibility from a user
- * principal, but an API-key MCP session has no user. Until Faz 3 (OAuth, which
- * IS user-bound) we call as an explicit, named service principal rather than
- * silently borrowing an owner identity. Tenancy is still enforced — every query
- * is workspace-scoped — but assignee-level filtering is intentionally bypassed
- * for API-key callers. Narrow this the moment a real user id is available.
+ * `MarketingLeadsService.findAll` takes a (userId, userRole) principal, but an
+ * API-key MCP session has no user. Rather than silently borrow an identity, we
+ * call with an explicit, named placeholder — and name it for exactly what it
+ * grants, no more:
+ *
+ * - Inside `findAll`, `userRole` is checked only for `=== 'REP'`; every other
+ *   value (MANAGER, OWNER, ...) falls through the same branch and behaves
+ *   identically. So `'MANAGER'` here is not an authority grant — it is just
+ *   "not REP". Using `'REP'` would be actively wrong: it pins visibility to
+ *   `assignedToId === MCP_NON_REP_PRINCIPAL.userId`, a synthetic id that owns
+ *   no leads, so the tool would silently return zero rows.
+ * - The synthetic `userId` is read-only for this call path: it only ever
+ *   reaches `where.assignedToId` in a read query. It never reaches anything
+ *   that writes, assigns, or attributes a lead.
+ * - Tenant isolation does not depend on this principal — `findAll` scopes by
+ *   `workspaceId` unconditionally, and no role value widens that.
+ *
+ * Faz 3 (OAuth, which IS user-bound) should replace this with the real caller.
  */
-export const MCP_SERVICE_PRINCIPAL = { userId: 'mcp-service-principal', role: 'OWNER' } as const;
+export const MCP_NON_REP_PRINCIPAL = { userId: 'mcp-service-principal', role: 'MANAGER' } as const;
 
 export interface LeadsToolDeps {
   leads: MarketingLeadsService;
@@ -48,9 +60,12 @@ export function registerLeadsTools(registry: McpToolRegistry, deps: LeadsToolDep
     handler: async (ctx, args) =>
       deps.leads.findAll(
         ctx.workspaceId,
+        // `inputSchema` above is hand-kept in sync with `LeadFilterDto` field
+        // for field; this cast trusts that correspondence rather than
+        // checking it structurally. Edit both sides together.
         args as unknown as LeadFilterDto,
-        ctx.userId ?? MCP_SERVICE_PRINCIPAL.userId,
-        MCP_SERVICE_PRINCIPAL.role,
+        ctx.userId ?? MCP_NON_REP_PRINCIPAL.userId,
+        MCP_NON_REP_PRINCIPAL.role,
       ),
   });
 }
