@@ -13,9 +13,7 @@ export const MCP_READ_SCOPES = [
 
 export const MCP_WRITE_SCOPES = [
   'leads.write',
-  'contacts.write',
   'tasks.write',
-  'campaigns.send',
 ] as const;
 
 /**
@@ -23,6 +21,14 @@ export const MCP_WRITE_SCOPES = [
  * `read`/`write` scopes (see ApiKeysService). Expand those into the granular
  * vocabulary so existing keys keep working, and pass granular scopes through
  * untouched.
+ *
+ * `contacts.write` and `campaigns.send` are deliberately EXCLUDED from the
+ * legacy `write` expansion: over the REST API a coarse `write` key can only
+ * touch leads/tags/segments, but those two scopes authorise
+ * `jeeta.send_message`, `jeeta.publish_social_post` and
+ * `jeeta.set_campaign_status` — reaching real customers and audiences. The
+ * design spec (§5.3) promises `write -> *:write`, not `*:send`, so a key must
+ * carry those scopes explicitly/granularly to use the tools that need them.
  */
 export function expandScopes(raw: string[]): string[] {
   const out = new Set<string>();

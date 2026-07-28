@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry, McpTool } from './mcp-tool-registry';
 
@@ -15,6 +16,7 @@ const spendTool = (handler: jest.Mock): McpTool => ({
   risk: 'SPEND',
   requiresApproval: true,
   approvalKind: 'BUDGET_REALLOCATION',
+  inputSchema: z.object({ amount: z.number().optional() }),
   handler,
 });
 

@@ -50,6 +50,21 @@ export class McpToolRegistry {
   private readonly tools = new Map<string, McpTool>();
 
   register(tool: McpTool): void {
+    if (!tool.inputSchema) {
+      // See the McpTool.inputSchema doc comment: without a schema the MCP
+      // SDK's registerTool calls the handler as `(ctx)` instead of
+      // `(args, ctx)`, silently dropping the caller's real arguments and
+      // passing ServerContext — which carries the bearer token — in their
+      // place, where it then lands in the ToolCallLog.args audit column.
+      // Spec files are excluded from type-checking, so this must be a
+      // runtime guard, not just the TypeScript `inputSchema: ZodTypeAny`
+      // requirement.
+      throw new Error(
+        `McpTool "${tool.name}" is missing inputSchema: registering it without one causes the MCP SDK to invoke ` +
+          'the handler with ServerContext (bearer token included) in place of the caller\'s arguments, which then ' +
+          'gets written into the ToolCallLog audit column. Declare inputSchema (use z.object({}) for no-arg tools).',
+      );
+    }
     this.tools.set(tool.name, tool);
   }
 

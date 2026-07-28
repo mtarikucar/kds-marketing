@@ -23,8 +23,14 @@ describe('social MCP tools', () => {
     const draft = registry.get('jeeta.draft_social_post')!;
     expect(draft.risk).toBe('WRITE');
     expect(draft.requiresApproval).toBe(false);
-    expect(draft.scopes).toEqual(['campaigns.read']);
+    expect(draft.scopes).toEqual(['campaigns.send']);
     expect(draft.inputSchema).toBeDefined();
+  });
+
+  it('hides draft_social_post from a caller without campaigns.send', () => {
+    const registry = new McpToolRegistry();
+    registerSocialTools(registry, deps());
+    expect(registry.list(['campaigns.read']).map((t) => t.name)).not.toContain('jeeta.draft_social_post');
   });
 
   it('gates jeeta.publish_social_post behind PUBLISH approval', () => {
@@ -77,7 +83,7 @@ describe('social MCP tools', () => {
     const out = await registry
       .get('jeeta.draft_social_post')!
       .handler(
-        { workspaceId: 'ws1', grantedScopes: ['campaigns.read'] },
+        { workspaceId: 'ws1', grantedScopes: ['campaigns.send'] },
         { content: 'hello world', mediaUrls: ['https://x/img.png'], targetAccountIds: ['acc1'] },
       );
     expect(createPost).toHaveBeenCalledWith('ws1', {

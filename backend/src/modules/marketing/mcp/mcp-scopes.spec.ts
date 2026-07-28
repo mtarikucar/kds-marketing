@@ -13,6 +13,16 @@ describe('expandScopes', () => {
     expect(out).toContain('leads.read');
   });
 
+  it('does not grant send/publish authority from legacy "write"', () => {
+    const out = expandScopes(['write']);
+    expect(out).not.toContain('campaigns.send');
+    expect(out).not.toContain('contacts.write');
+  });
+
+  it('passes an explicitly granular campaigns.send through untouched', () => {
+    expect(expandScopes(['campaigns.send'])).toEqual(['campaigns.send']);
+  });
+
   it('passes granular scopes through untouched', () => {
     expect(expandScopes(['reports.read'])).toEqual(['reports.read']);
   });

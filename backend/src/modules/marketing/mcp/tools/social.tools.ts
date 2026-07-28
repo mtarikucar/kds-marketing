@@ -16,10 +16,14 @@ const POST_STATUSES = ['DRAFT', 'SCHEDULED', 'PUBLISHING', 'PUBLISHED', 'FAILED'
  * SCHEDULED (matching the tool's name) with an optional override so a caller
  * can still ask for drafts/published/failed. `jeeta.draft_social_post`
  * creates a DRAFT row with no external side effect, so it is deliberately
- * ungated. `jeeta.publish_social_post` calls `publishNow`, which reaches a
- * real audience, so it is registered `requiresApproval: true` /
- * `approvalKind: 'PUBLISH'` — the broker enqueues a human approval instead of
- * running the handler inline unless the workspace's writeMode is AUTONOMOUS.
+ * ungated (no approval), but it is still a write: the REST equivalent
+ * (`SocialPlannerController.createPost`) is gated `@RequirePermission('campaigns.send')`,
+ * so the MCP tool mirrors that rather than the weaker `campaigns.read` — a
+ * read-only key must not be able to create rows. `jeeta.publish_social_post`
+ * calls `publishNow`, which reaches a real audience, so it is registered
+ * `requiresApproval: true` / `approvalKind: 'PUBLISH'` — the broker enqueues a
+ * human approval instead of running the handler inline unless the
+ * workspace's writeMode is AUTONOMOUS.
  */
 export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolDeps): void {
   registry.register({
@@ -45,8 +49,8 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
   registry.register({
     name: 'jeeta.draft_social_post',
     description:
-      'Create a DRAFT social post (content + optional media/target accounts). This has no external side effect — nothing is posted until jeeta.publish_social_post (or the scheduler) runs it. Ungated.',
-    scopes: ['campaigns.read'],
+      'Create a DRAFT social post (content + optional media/target accounts). This has no external side effect — nothing is posted until jeeta.publish_social_post (or the scheduler) runs it. Ungated (no approval), but still requires write authority.',
+    scopes: ['campaigns.send'],
     risk: 'WRITE',
     requiresApproval: false,
     inputSchema: z.object({

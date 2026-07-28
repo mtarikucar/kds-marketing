@@ -1,4 +1,5 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { z } from 'zod';
 import { McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry, McpTool } from './mcp-tool-registry';
 
@@ -18,6 +19,7 @@ const readTool = (handler: jest.Mock): McpTool => ({
   scopes: ['reports.read'],
   risk: 'READ',
   requiresApproval: false,
+  inputSchema: z.object({}),
   handler,
 });
 
@@ -28,6 +30,7 @@ const spendTool = (handler: jest.Mock): McpTool => ({
   risk: 'SPEND',
   requiresApproval: true,
   approvalKind: 'BUDGET_REALLOCATION',
+  inputSchema: z.object({ amount: z.number().optional() }),
   handler,
 });
 

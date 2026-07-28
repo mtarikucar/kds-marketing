@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { z } from 'zod';
 import { McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry, McpTool } from './mcp-tool-registry';
 
@@ -15,6 +16,7 @@ const tool = (handler: jest.Mock): McpTool => ({
   scopes: ['reports.read'],
   risk: 'READ',
   requiresApproval: false,
+  inputSchema: z.object({}),
   handler,
 });
 
