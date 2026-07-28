@@ -13,7 +13,11 @@ const authInfo = (workspaceId: string | undefined, scopes: string[] = ['reports.
 function deps() {
   const invoke = jest.fn().mockResolvedValue({ status: 'OK', result: { ok: 1 } });
   const track = jest.fn(async (_ws: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => fn('run-1'));
-  const invoker = new McpInvokerService({ invoke } as any, { track } as any);
+  const invoker = new McpInvokerService(
+    { invoke } as any,
+    { track } as any,
+    { workspace: { findUnique: jest.fn().mockResolvedValue({ mcpWriteMode: 'APPROVAL' }) } } as any,
+  );
   return { invoker, invoke, track };
 }
 

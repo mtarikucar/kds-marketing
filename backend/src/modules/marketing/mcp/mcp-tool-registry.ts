@@ -13,6 +13,8 @@ export interface McpToolContext {
    * call without `agentRunId` is refused rather than executed unlogged.
    */
   requireAudit?: boolean;
+  /** Per-workspace MCP write policy. Unset behaves as 'APPROVAL'. */
+  writeMode?: 'APPROVAL' | 'AUTONOMOUS';
 }
 
 export interface McpTool {

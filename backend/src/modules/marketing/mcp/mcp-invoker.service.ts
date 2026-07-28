@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import { AgentRunService } from '../agents/agent-run.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 import { InvokeResult, McpBrokerService } from './mcp-broker.service';
 
 /**
@@ -16,6 +17,7 @@ export class McpInvokerService {
   constructor(
     private readonly broker: McpBrokerService,
     private readonly runs: AgentRunService,
+    private readonly prisma: PrismaService,
   ) {}
 
   contextFrom(authInfo: AuthInfo): { workspaceId: string; grantedScopes: string[] } {
@@ -26,10 +28,19 @@ export class McpInvokerService {
     return { workspaceId, grantedScopes: authInfo.scopes ?? [] };
   }
 
+  private async writeModeFor(workspaceId: string): Promise<'APPROVAL' | 'AUTONOMOUS'> {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { mcpWriteMode: true },
+    });
+    return ws?.mcpWriteMode === 'AUTONOMOUS' ? 'AUTONOMOUS' : 'APPROVAL';
+  }
+
   async invoke(authInfo: AuthInfo, toolName: string, args: Record<string, unknown>): Promise<InvokeResult> {
     const { workspaceId, grantedScopes } = this.contextFrom(authInfo);
+    const writeMode = await this.writeModeFor(workspaceId);
     return this.runs.track(workspaceId, { agent: 'mcp', goal: toolName, input: args }, (agentRunId) =>
-      this.broker.invoke({ workspaceId, grantedScopes, agentRunId, requireAudit: true }, toolName, args),
+      this.broker.invoke({ workspaceId, grantedScopes, agentRunId, requireAudit: true, writeMode }, toolName, args),
     );
   }
 }
