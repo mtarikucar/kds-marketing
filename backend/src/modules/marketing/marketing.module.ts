@@ -257,6 +257,8 @@ import { McpServerFactoryService } from './mcp/mcp-server.factory';
 import { McpTokenVerifierService } from './mcp/mcp-token-verifier.service';
 import { McpController } from './mcp/mcp.controller';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
+import { registerBrandTools } from './mcp/tools/brand.tools';
+import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1100,7 +1102,14 @@ export class MarketingModule {
   // construction, against the shared McpToolRegistry (see mcp-server.factory
   // for why the registry itself stays deny-by-default: nothing is callable
   // unless registered here).
-  constructor(registry: McpToolRegistry, analytics: AnalyticsService) {
+  constructor(
+    registry: McpToolRegistry,
+    analytics: AnalyticsService,
+    brand: BrandBrainService,
+    leads: MarketingLeadsService,
+  ) {
     registerAnalyticsTools(registry, { analytics });
+    registerBrandTools(registry, { brand });
+    registerLeadsTools(registry, { leads });
   }
 }
