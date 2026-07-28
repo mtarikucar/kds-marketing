@@ -252,6 +252,11 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
+import { McpInvokerService } from './mcp/mcp-invoker.service';
+import { McpServerFactoryService } from './mcp/mcp-server.factory';
+import { McpTokenVerifierService } from './mcp/mcp-token-verifier.service';
+import { McpController } from './mcp/mcp.controller';
+import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -695,6 +700,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     StrategyController,
     // Strategy Engine — per-workspace community channel connect (Discord/Reddit).
     CommunityChannelController,
+    // MCP connector (Faz 1-2) — POST /api/mcp streamable-HTTP endpoint.
+    McpController,
   ],
   providers: [
     // Services
@@ -911,6 +918,11 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     VideoPipelineService,
     McpToolRegistry,
     McpBrokerService,
+    // MCP connector (Faz 1-2) — the bearer-token verifier, the per-request
+    // scope-filtered McpServer factory, and the audited tool invoker behind it.
+    McpInvokerService,
+    McpServerFactoryService,
+    McpTokenVerifierService,
     AdWriteCapabilityService,
     VideoPersonaService,
     UnifiedCalendarService,
@@ -1083,4 +1095,12 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     BrandAnalysisService,
   ],
 })
-export class MarketingModule {}
+export class MarketingModule {
+  // MCP connector (Faz 1-2) — tools are registered once, at module
+  // construction, against the shared McpToolRegistry (see mcp-server.factory
+  // for why the registry itself stays deny-by-default: nothing is callable
+  // unless registered here).
+  constructor(registry: McpToolRegistry, analytics: AnalyticsService) {
+    registerAnalyticsTools(registry, { analytics });
+  }
+}
