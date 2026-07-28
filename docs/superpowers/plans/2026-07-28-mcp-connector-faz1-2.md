@@ -869,6 +869,7 @@ Expected: FAIL — `Cannot find module './mcp.controller'`
 ```ts
 // backend/src/modules/marketing/mcp/mcp.controller.ts
 import { Controller, Post, Req, Res } from '@nestjs/common';
+import { Readable } from 'node:stream';
 import type { Request, Response } from 'express';
 import { createMcpHandler, type McpHttpHandler } from '@modelcontextprotocol/server';
 import { McpServerFactoryService } from './mcp-server.factory';
@@ -913,7 +914,17 @@ export class McpController {
     const response = await this.handler.fetch(this.toFetchRequest(req), { authInfo });
     res.status(response.status);
     response.headers.forEach((value, key) => res.setHeader(key, value));
-    res.end(Buffer.from(await response.arrayBuffer()));
+
+    // Pipe, never buffer. The handler answers with text/event-stream, and an
+    // open subscription stream never ends — `await response.arrayBuffer()`
+    // would never resolve, pinning the socket and the per-request server for
+    // as long as the caller cares to hold it. Buffering also swallows
+    // mid-call progress on ordinary tool calls.
+    if (!response.body) {
+      res.end();
+      return;
+    }
+    Readable.fromWeb(response.body as never).pipe(res);
   }
 
   private challenge(res: Response, description: string): void {
