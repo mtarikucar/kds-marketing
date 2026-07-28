@@ -71,6 +71,10 @@ model Workspace {
   /// it guards every access with assertAgencyOwns (parent-ownership check).
   parentWorkspaceId String?
 
+  /// MCP write policy: APPROVAL (default — risky tools queue for a human) or
+  /// AUTONOMOUS (risky tools execute inline; audit logging still mandatory).
+  mcpWriteMode String @default("APPROVAL")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
