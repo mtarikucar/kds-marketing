@@ -34,6 +34,10 @@ export class McpBrokerService {
     const tool = this.registry.get(toolName);
     if (!tool) throw new NotFoundException(`unknown tool: ${toolName}`); // deny-by-default
 
+    if (ctx.requireAudit && !ctx.agentRunId) {
+      throw new ForbiddenException('audit context required: no agentRunId');
+    }
+
     this.assertScopes(tool, ctx);
     this.assertArgsSize(args);
 
