@@ -40,7 +40,7 @@
 | `backend/src/modules/marketing/mcp/mcp-invoker.service.ts` | **Create.** The single call path: `AuthInfo` → `McpToolContext`, wraps `AgentRunService.track()`, delegates to broker. Guarantees an audit row exists. |
 | `backend/src/modules/marketing/mcp/mcp-server.factory.ts` | **Create.** Per-request `McpServer`; registers every tool from the registry, each handler calling the invoker. |
 | `backend/src/modules/marketing/mcp/mcp.controller.ts` | **Create.** `POST /api/mcp`; runs bearer auth, hands the request to the MCP handler. |
-| `backend/src/modules/marketing/mcp/mcp.module.ts` | **Create.** Wires the above; imports what the tools need. |
+| `backend/src/modules/marketing/marketing.module.ts` | **Modify (Task 7).** Registers `McpController` and the new MCP providers. **No separate `mcp.module.ts`** — the broker, registry, `AgentRunService` and friends already live here, and re-providing a `@Cron`-bearing service in a second module breaks boot. |
 | `backend/src/modules/marketing/mcp/tools/*.tools.ts` | **Create.** One file per vertical; each exports a `register…Tools(registry, deps)` function. |
 | `backend/src/modules/marketing/mcp/mcp-tool-registry.ts` | **Unchanged.** |
 | `backend/src/modules/marketing/mcp/mcp-broker.service.ts` | **Modify (Task 4, Task 9 only).** Audit guard + write-mode branch. |
@@ -934,47 +934,25 @@ export class McpController {
 type Request_ = globalThis.Request;
 ```
 
-- [ ] **Step 4: Write the module**
+- [ ] **Step 4: Wire into `MarketingModule` — do NOT create a separate module**
+
+⚠️ **This replaces the "create `mcp.module.ts`" instruction in the File Structure table.** `McpToolRegistry`, `McpBrokerService`, `AgentRunService`, `ApprovalRequestService`, `ApiKeysService` and `AnalyticsService` are **already providers of `MarketingModule`** (`marketing.module.ts:888` and nearby). A second module that re-provides them would create second instances — and `AgentRunService` carries `@Cron(CronExpression.EVERY_10_MINUTES, { name: 'agent-run-reaper' })`, so a duplicate instance means `@nestjs/schedule` registering two crons under one name. That fails at boot.
+
+`MarketingModule` also does not export those services, so the import-and-export route would mean surgery on a long export list for no benefit.
+
+So: in `backend/src/modules/marketing/marketing.module.ts`
+
+1. Add `McpController` to the `controllers` array.
+2. Add the three new providers — `McpInvokerService`, `McpServerFactoryService`, `McpTokenVerifierService` — to the existing `providers` array, beside `McpToolRegistry` and `McpBrokerService`.
+3. Register the tools once at module construction, using the module's existing constructor if it has one, or adding one:
 
 ```ts
-// backend/src/modules/marketing/mcp/mcp.module.ts
-import { Module } from '@nestjs/common';
-import { PrismaModule } from '../../../prisma/prisma.module';
-import { McpController } from './mcp.controller';
-import { McpServerFactoryService } from './mcp-server.factory';
-import { McpTokenVerifierService } from './mcp-token-verifier.service';
-import { McpInvokerService } from './mcp-invoker.service';
-import { McpBrokerService } from './mcp-broker.service';
-import { McpToolRegistry } from './mcp-tool-registry';
-import { AgentRunService } from '../agents/agent-run.service';
-import { ApprovalRequestService } from '../agents/approval-request.service';
-import { ApiKeysService } from '../services/api-keys.service';
-import { AnalyticsService } from '../analytics/analytics.service';
-import { registerAnalyticsTools } from './tools/analytics.tools';
-
-@Module({
-  imports: [PrismaModule],
-  controllers: [McpController],
-  providers: [
-    McpToolRegistry,
-    McpBrokerService,
-    McpInvokerService,
-    McpServerFactoryService,
-    McpTokenVerifierService,
-    AgentRunService,
-    ApprovalRequestService,
-    ApiKeysService,
-    AnalyticsService,
-  ],
-})
-export class McpModule {
   constructor(registry: McpToolRegistry, analytics: AnalyticsService) {
     registerAnalyticsTools(registry, { analytics });
   }
-}
 ```
 
-Then add `McpModule` to the `imports` array in `backend/src/app.module.ts`.
+Do not touch `app.module.ts` — `MarketingModule` is already imported there.
 
 - [ ] **Step 5: Run the tests**
 
