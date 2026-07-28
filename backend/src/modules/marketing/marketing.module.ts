@@ -259,6 +259,8 @@ import { McpController } from './mcp/mcp.controller';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
+import { registerInboxTools } from './mcp/tools/inbox.tools';
+import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1107,9 +1109,13 @@ export class MarketingModule {
     analytics: AnalyticsService,
     brand: BrandBrainService,
     leads: MarketingLeadsService,
+    conversations: ConversationsService,
+    campaigns: CampaignsService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
     registerLeadsTools(registry, { leads });
+    registerInboxTools(registry, { conversations });
+    registerCampaignsTools(registry, { campaigns });
   }
 }

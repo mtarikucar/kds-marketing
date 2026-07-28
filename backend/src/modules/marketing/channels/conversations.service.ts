@@ -76,6 +76,40 @@ export class ConversationsService {
 
   /** Agent reply — a human takeover, so the AI is paused for this thread. */
   async reply(workspaceId: string, conversationId: string, text: string, agentUserId: string) {
+    return this.sendTakeoverReply(workspaceId, conversationId, text, {
+      authorType: 'AGENT',
+      authorId: agentUserId,
+    });
+  }
+
+  /**
+   * Reply sent by Claude through the MCP connector (`jeeta.send_message`).
+   * An API-key MCP session carries no human user — inventing a synthetic
+   * agent id to pass through `reply()` would misattribute a real
+   * customer-facing message to a person who never wrote it. This message
+   * genuinely IS AI-authored, so it is persisted that way: `authorType:
+   * 'AI'`, `authorId: null` (nullable on `Message`, and 'AI' is already a
+   * value this codebase writes — see `conversation-ai-engine.service.ts`).
+   *
+   * Phase 3 (OAuth) will carry a real authenticated user through MCP and can
+   * attribute these replies to that person via `reply()` instead.
+   */
+  async replyAsAi(workspaceId: string, conversationId: string, text: string) {
+    return this.sendTakeoverReply(workspaceId, conversationId, text, {
+      authorType: 'AI',
+      authorId: null,
+    });
+  }
+
+  /** Shared takeover-reply plumbing for `reply()`/`replyAsAi()`: pause the AI
+   *  engine for this thread (a reply from outside it is always a takeover,
+   *  human or MCP-agent) and send with the given author attribution. */
+  private async sendTakeoverReply(
+    workspaceId: string,
+    conversationId: string,
+    text: string,
+    author: { authorType: 'AGENT' | 'AI'; authorId: string | null },
+  ) {
     const convo = await this.prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId },
       select: { id: true },
@@ -89,8 +123,8 @@ export class ConversationsService {
       workspaceId,
       conversationId,
       text,
-      authorType: 'AGENT',
-      authorId: agentUserId,
+      authorType: author.authorType,
+      authorId: author.authorId,
     });
   }
 
