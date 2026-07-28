@@ -1,3 +1,13 @@
 -- Manual rollback for 20260728111645_workspace_mcp_write_mode (Prisma migrate
 -- is forward-only; run by hand to revert). Drops exactly what the up added.
+--
+-- CAVEAT: Prisma never sees this file run, so its row in _prisma_migrations
+-- still says finished afterwards. A later `npx prisma migrate deploy` will
+-- report "No pending migrations to apply" and will NOT restore the column.
+-- `prisma migrate resolve --rolled-back` will NOT fix this either — it
+-- errors P3012 because it only applies to migrations Prisma recorded as
+-- failed, not ones that finished cleanly and were reverted out-of-band.
+-- To genuinely re-apply: delete this migration's row first, then deploy —
+--   DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20260728111645_workspace_mcp_write_mode';
+--   npx prisma migrate deploy
 ALTER TABLE "workspaces" DROP COLUMN IF EXISTS "mcpWriteMode";
