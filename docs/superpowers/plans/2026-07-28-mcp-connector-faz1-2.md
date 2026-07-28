@@ -15,6 +15,16 @@
 - **Scope strings use the existing dot vocabulary** from `marketing/roles/permissions.ts` — `leads.read`, `leads.write`, `leads.manage`, `campaigns.read`, `campaigns.send`, `contacts.read`, `contacts.write`, `reports.read`, `tasks.read`, `tasks.write`, `settings.manage`, `automations.manage`, `billing.manage`, `users.manage`, `courses.manage`, `role.*`. **Never invent colon-style scopes** (`leads:write`) — the design spec's §5.3 used colons; the codebase uses dots and the codebase wins.
 - **Tool names are dot-prefixed with `jeeta.`** — e.g. `jeeta.get_campaign_performance` — matching the names already used in `mcp-broker.service.spec.ts`.
 - **`AuthInfo.expiresAt` must always be populated.** The SDK's bearer-auth helper *rejects tokens whose `expiresAt` is unset*. `mk_live_…` keys never expire, so the verifier must synthesise a sliding value.
+- **Every tool MUST declare an `inputSchema`, and the factory MUST pass it to `registerTool`.** This is not a nicety — it is a correctness and security requirement. The SDK's `createToolExecutor` (`@modelcontextprotocol/server@2.0.0`, `dist/mcp-*.mjs`) reads:
+
+  ```js
+  function createToolExecutor(inputSchema, handler) {
+    if (inputSchema) return async (args, ctx) => callback$1(args, ctx);
+    return async (_args, ctx) => callback(ctx);   // no schema → WRONG ARITY
+  }
+  ```
+
+  With no `inputSchema` the handler's first parameter is the SDK's `ServerContext`, not the caller's arguments. Two consequences: every tool call silently loses its real arguments, **and** `ServerContext` carries `http.authInfo` — the caller's bearer token — which would flow into `broker.invoke(…, args)` → `recordTool` → the `ToolCallLog.args` JSON column, writing a live credential into the audit database. Schemas are Zod (`zod@4.4.3`, already a production dependency; the SDK accepts Standard Schema).
 - **Every migration ships an `up` + a `down.sql`** and the up→down→up round-trip must be verified (project convention; global rule).
 - **No AI/Claude attribution in commit messages.** Plain conventional commits.
 - Run backend tests with `npm test -- <path>` from `backend/`.
@@ -567,7 +577,8 @@ Expected: FAIL — `Cannot find module './analytics.tools'`
 
 ```ts
 // backend/src/modules/marketing/mcp/tools/analytics.tools.ts
-import { AnalyticsService } from '../../analytics/analytics.service';
+import { z } from 'zod';
+import { AnalyticsService, type DateRange } from '../../analytics/analytics.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 export interface AnalyticsToolDeps {
@@ -587,8 +598,16 @@ export function registerAnalyticsTools(registry: McpToolRegistry, deps: Analytic
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
-    handler: async (ctx, args) =>
-      deps.analytics.funnel(ctx.workspaceId, { from: args.from as string, to: args.to as string } as never),
+    inputSchema: z.object({
+      from: z.string().optional().describe('Inclusive start date, ISO 8601 (YYYY-MM-DD).'),
+      to: z.string().optional().describe('Inclusive end date, ISO 8601 (YYYY-MM-DD).'),
+    }),
+    handler: async (ctx, args) => {
+      const range: DateRange = {};
+      if (typeof args.from === 'string') range.from = args.from;
+      if (typeof args.to === 'string') range.to = args.to;
+      return deps.analytics.funnel(ctx.workspaceId, range);
+    },
   });
 }
 ```
@@ -725,7 +744,14 @@ export class McpServerFactoryService {
     const server = new McpServer({ name: 'jeeta', version: '1.0.0' });
 
     for (const meta of this.registry.list(authInfo.scopes ?? [])) {
-      server.registerTool(meta.name, { description: meta.description }, this.handlerFor(authInfo, meta.name));
+      // inputSchema is REQUIRED — omitting it makes the SDK call the handler as
+      // (ctx) instead of (args, ctx), silently dropping the caller's arguments
+      // and passing ServerContext (which carries the bearer token) in their place.
+      server.registerTool(
+        meta.name,
+        { description: meta.description, inputSchema: meta.inputSchema },
+        this.handlerFor(authInfo, meta.name),
+      );
     }
 
     return server;
@@ -995,7 +1021,7 @@ git commit -m "feat(mcp): expose MCP streamable-http endpoint with bearer auth"
 
 **Interfaces:**
 - Consumes: `BrandBrainService.search(workspaceId: string, opts: SearchOptions): Promise<Citation[]>`; `MarketingLeadsService.findAll(workspaceId: string, filter: LeadFilterDto, userId: string, userRole: string)`.
-- Produces: `registerBrandTools(registry, { brand: BrandBrainService })` → `jeeta.search_brand_knowledge`; `registerLeadsTools(registry, { leads: MarketingLeadsService })` → `jeeta.search_leads`.
+- Produces: `registerBrandTools(registry, { brand: BrandBrainService })` → `jeeta.search_brand_knowledge`; `registerLeadsTools(registry, { leads: MarketingLeadsService })` → `jeeta.search_leads`. Both tools declare a Zod `inputSchema` (mandatory — see Global Constraints).
 
 **⚠️ Principal problem — read this before writing `leads.tools.ts`.** `MarketingLeadsService.findAll` takes `userId` and `userRole` and uses them for row-level visibility (assignee scoping). An API-key-authenticated MCP call has **no user**. Do not paper over this by passing `'OWNER'` inline — that is a silent privilege escalation. Instead define the service principal explicitly in one place, with a comment stating the trade-off, so Faz 3 (OAuth, which *is* user-bound) can replace it with the real user.
 
@@ -1395,7 +1421,7 @@ git commit -m "feat(mcp): honour per-workspace write mode in the broker"
   `grep -rnE "^  (async )?[a-z][A-Za-z]*\(" src/modules/marketing/inbox/*.service.ts src/modules/marketing/campaigns/*.service.ts`
 - Produces: `registerInboxTools`, `registerCampaignsTools`.
 
-**Catalogue for this task** — every tool is registered with exactly these values:
+**Catalogue for this task** — every tool is registered with exactly these values, **plus a Zod `inputSchema` describing its arguments** (mandatory — see Global Constraints; omitting it breaks handler arity and leaks the bearer token into the audit log):
 
 | Tool name | scopes | risk | requiresApproval | approvalKind |
 |---|---|---|---|---|
@@ -1534,7 +1560,7 @@ git commit -m "feat(mcp): add inbox and campaign tools with approval gating"
   `grep -rnE "^  (async )?[a-z][A-Za-z]*\(" src/modules/marketing/social-planner/*.service.ts src/modules/marketing/ads/*.service.ts src/modules/marketing/budget/*.service.ts src/modules/marketing/scheduling/*.service.ts`
 - Produces: `registerSocialTools`, `registerAdsTools`, `registerSchedulingTools`, `registerWorkspaceTools`.
 
-**Catalogue for this task:**
+**Catalogue for this task** — each tool also declares a Zod `inputSchema` for its arguments (mandatory — see Global Constraints):
 
 | Tool name | scopes | risk | requiresApproval | approvalKind |
 |---|---|---|---|---|
