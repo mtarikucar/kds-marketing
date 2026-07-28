@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { rangeEndInclusive } from '../services/report-date-range.util';
 
-interface DateRange {
+export interface DateRange {
   from?: string;
   to?: string;
 }
