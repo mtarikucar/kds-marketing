@@ -7,6 +7,11 @@ export interface McpToolContext {
   userId?: string;
   grantedScopes: string[];
   agentRunId?: string;
+  /**
+   * Set by callers that MUST be auditable (the MCP transport). When true, a
+   * call without `agentRunId` is refused rather than executed unlogged.
+   */
+  requireAudit?: boolean;
 }
 
 export interface McpTool {
