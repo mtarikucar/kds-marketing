@@ -90,6 +90,9 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     risk: 'WRITE',
     requiresApproval: true,
     approvalKind: 'PUBLISH',
+    // Dedupe key: see McpBrokerService.invoke()'s supersede sweep.
+    resourceType: 'social_post',
+    resourceIdFrom: (args) => (typeof args.postId === 'string' ? args.postId : undefined),
     inputSchema: z.object({
       postId: z.string().min(1).describe('Social post id (draft or scheduled) to publish now.'),
     }),

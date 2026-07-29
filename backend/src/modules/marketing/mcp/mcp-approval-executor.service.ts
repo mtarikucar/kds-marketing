@@ -42,10 +42,22 @@ function isMcpPayload(payload: unknown): payload is McpApprovalPayload {
  * `BudgetExecutorService`) is a different, execute-then-mark contract for an
  * idempotent internal-plan commit and is untouched by this service.
  *
- * On tool success the claim is finished (APPLYING -> APPLIED). On tool
+ * On tool success the claim is finished (APPLYING -> APPLIED). On a tool
  * failure the claim is reverted (APPLYING -> APPROVED) so an operator can
  * retry, and the original error propagates untouched — never swallowed, and
  * the row is never left stranded in APPLYING.
+ *
+ * That revert is only safe BEFORE `broker.invoke()` has resolved. Once it
+ * has, the tool's real-world side effect (the send/publish/spend) has
+ * already happened — a failure from that point on (concretely: `runs.track`'s
+ * own post-execution `agent_runs` UPDATE inside `finish()`, which runs AFTER
+ * `fn()` and can itself throw on a DB failover or an unserialisable tool
+ * result) is a bookkeeping/audit failure, not an action failure. Reverting
+ * such a failure would show "Approved — not applied yet" with a live Apply
+ * button that RE-SENDS a message that already went out. So a flag set the
+ * instant `broker.invoke()` resolves (see `toolRan` below) decides which way
+ * a later failure goes: finish the claim, never revert it, once the tool has
+ * genuinely run.
  */
 @Injectable()
 export class McpApprovalExecutorService {
@@ -103,13 +115,20 @@ export class McpApprovalExecutorService {
     }, APPLYING_HEARTBEAT_MS);
 
     try {
+      // Set the instant broker.invoke() resolves with a genuine OK — from
+      // that point on the tool has run and this claim must never be
+      // reverted again (see the class docblock). `toolResult` carries the
+      // outcome out of the track() closure so the bookkeeping-failure branch
+      // below can still report it.
+      let toolRan = false;
+      let toolResult: unknown;
       let invoked: InvokeResult;
       try {
         invoked = await this.runs.track(
           workspaceId,
           { agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },
-          (agentRunId) =>
-            this.broker.invoke(
+          async (agentRunId) => {
+            const result = await this.broker.invoke(
               {
                 workspaceId,
                 userId,
@@ -120,12 +139,35 @@ export class McpApprovalExecutorService {
               },
               toolName,
               args,
-            ),
+            );
+            if (result.status === 'OK') {
+              toolRan = true;
+              toolResult = result.result;
+            }
+            return result;
+          },
         );
       } catch (err) {
-        // The tool failed — release the claim so the request goes back to
-        // APPROVED (retryable) instead of being stranded in APPLYING, and
-        // surface the original error untouched.
+        if (toolRan) {
+          // The tool call itself already succeeded (broker.invoke resolved
+          // OK above) — this is runs.track's OWN post-execution finish()
+          // write throwing, a bookkeeping/audit failure after the real side
+          // effect already landed. Finish the claim (never revert once the
+          // tool has run) so a confused retry can't re-run something that
+          // already happened; the bookkeeping failure is real and is
+          // surfaced through the server log — a channel separate from the
+          // approval's status — instead of the "revert to APPROVED" path the
+          // UI reads as "the action did not happen".
+          this.logger.error(
+            `approval ${approvalId} (${toolName}): tool call succeeded but post-execution run bookkeeping failed; ` +
+              `finishing the claim (APPLYING -> APPLIED), never reverting: ${(err as Error)?.message ?? err}`,
+          );
+          await this.approvals.finishApply(workspaceId, approvalId);
+          return { status: 'APPLIED', result: toolResult };
+        }
+        // The tool never completed — release the claim so the request goes
+        // back to APPROVED (retryable) instead of being stranded in
+        // APPLYING, and surface the original error untouched.
         await this.approvals.revertApply(workspaceId, approvalId);
         throw err;
       }

@@ -77,6 +77,14 @@ export function registerAdsTools(registry: McpToolRegistry, deps: AdsToolDeps): 
     risk: 'SPEND',
     requiresApproval: true,
     approvalKind: 'BUDGET_REALLOCATION',
+    // Dedupe key: the ad account + entity together identify the live budget
+    // being changed (entityId alone is not guaranteed unique across ad
+    // accounts) — see McpBrokerService.invoke()'s supersede sweep.
+    resourceType: 'ad_entity',
+    resourceIdFrom: (args) =>
+      typeof args.adAccountId === 'string' && typeof args.entityId === 'string'
+        ? `${args.adAccountId}:${args.entityId}`
+        : undefined,
     inputSchema: z.object({
       adAccountId: z.string().min(1).describe('The connected ad account id (not the campaign id) that owns the entity.'),
       entityId: z.string().min(1).describe('Campaign or ad set id to change the daily budget for.'),

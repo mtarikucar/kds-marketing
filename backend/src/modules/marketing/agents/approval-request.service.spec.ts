@@ -112,8 +112,40 @@ describe('ApprovalRequestService', () => {
       const svc = new ApprovalRequestService(prisma);
       await svc.claimForApply('ws1', 'a1');
       const call = updateMany.mock.calls[0][0];
-      expect(call.where).toEqual({ id: 'a1', workspaceId: 'ws1', status: 'APPROVED' });
+      expect(call.where).toEqual({
+        id: 'a1',
+        workspaceId: 'ws1',
+        status: 'APPROVED',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+      });
       expect(call.data).toEqual({ status: 'APPLYING' });
+    });
+
+    it('claimForApply rejects (and flips to EXPIRED) an APPROVED request past its own expiresAt', async () => {
+      // approve() already refuses to APPROVE a stale PENDING request, but
+      // approve and apply are two separate calls (see the class docblock) —
+      // this covers the row that WAS approved in time and then sat un-applied
+      // long enough to cross expiresAt before Apply was ever clicked.
+      const { prisma, updateMany } = makePrisma({
+        id: 'a1',
+        workspaceId: 'ws1',
+        status: 'APPROVED',
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      updateMany.mockResolvedValueOnce({ count: 0 }); // the expiresAt predicate excludes it
+      const svc = new ApprovalRequestService(prisma);
+      await expect(svc.claimForApply('ws1', 'a1')).rejects.toThrow(/expired/);
+      // The follow-up guarded flip to EXPIRED only ever targets a still-APPROVED row.
+      const flip = updateMany.mock.calls[1][0];
+      expect(flip.where).toEqual({ id: 'a1', workspaceId: 'ws1', status: 'APPROVED' });
+      expect(flip.data).toEqual({ status: 'EXPIRED' });
+    });
+
+    it('claimForApply claims a still-live APPROVED request with no expiresAt (unaffected)', async () => {
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPROVED', expiresAt: null });
+      const svc = new ApprovalRequestService(prisma);
+      await svc.claimForApply('ws1', 'a1');
+      expect(updateMany).toHaveBeenCalledTimes(1); // no follow-up expiry flip needed
     });
 
     it('claimForApply rejects a non-APPROVED request without executing anything (0 rows claimed)', async () => {

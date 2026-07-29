@@ -152,6 +152,46 @@ describe('McpApprovalExecutorService', () => {
     );
   });
 
+  // H1 — reproduced by execution, not theorised: AgentRunService.track()
+  // awaits its own post-execution `agent_runs` UPDATE (finish()) AFTER fn()
+  // has already run the tool. The `runs.track` mock above (`fn => fn('run-1')`)
+  // can never exercise that failure mode — it only ever calls fn() and
+  // returns, never throws afterward. This test uses a mock that mirrors the
+  // REAL AgentRunService.track shape: call fn(runId), and if it resolves,
+  // throw (simulating finish() itself throwing) — and asserts the request
+  // must NOT go back to APPROVED (which would let an operator re-click Apply
+  // and re-send whatever the tool already sent).
+  it('H1: a post-execution bookkeeping failure after the tool already ran finishes the claim (never reverts it)', async () => {
+    const { svc, broker, approvals, runs } = make({ approval: mcpApproval() });
+    runs.track.mockImplementation(async (_ws: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => {
+      await fn('run-1'); // the tool call succeeds inside fn()
+      throw new Error('agent_runs UPDATE failed (simulated DB failover)'); // finish() throws AFTER
+    });
+
+    const out = await svc.apply(WS, APPROVAL, USER);
+
+    expect(broker.invoke).toHaveBeenCalledTimes(1); // the tool ran exactly once
+    expect(approvals.revertApply).not.toHaveBeenCalled(); // MUST NOT go back to APPROVED
+    expect(approvals.finishApply).toHaveBeenCalledWith(WS, APPROVAL); // finished instead
+    expect(out).toEqual({ status: 'APPLIED', result: { moved: 100 } });
+  });
+
+  it('H1: a bookkeeping failure BEFORE the tool ran (broker.invoke itself throws) still reverts, same as any tool failure', async () => {
+    const { svc, broker, approvals, runs } = make({ approval: mcpApproval() });
+    broker.invoke.mockRejectedValue(new Error('provider rejected the write'));
+    runs.track.mockImplementation(async (_ws: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => {
+      try {
+        return await fn('run-1');
+      } catch (err) {
+        throw err; // mirrors AgentRunService.track's real catch-and-rethrow
+      }
+    });
+
+    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toThrow('provider rejected the write');
+    expect(approvals.revertApply).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(approvals.finishApply).not.toHaveBeenCalled();
+  });
+
   it('on tool failure, reverts the claim (APPLYING -> APPROVED, not stranded) and surfaces the error', async () => {
     const { svc, broker, approvals } = make({ approval: mcpApproval() });
     broker.invoke.mockRejectedValue(new Error('provider rejected the write'));

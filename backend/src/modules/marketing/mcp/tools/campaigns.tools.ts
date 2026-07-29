@@ -46,6 +46,9 @@ export function registerCampaignsTools(registry: McpToolRegistry, deps: Campaign
     risk: 'WRITE',
     requiresApproval: true,
     approvalKind: 'PUBLISH',
+    // Dedupe key: see McpBrokerService.invoke()'s supersede sweep.
+    resourceType: 'campaign',
+    resourceIdFrom: (args) => (typeof args.campaignId === 'string' ? args.campaignId : undefined),
     inputSchema: z.object({
       campaignId: z.string().min(1).describe('Campaign id to transition.'),
       status: z

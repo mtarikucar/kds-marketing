@@ -49,4 +49,37 @@ describe('McpInvokerService', () => {
     await expect(invoker.invoke(authInfo(undefined), 'jeeta.get_funnel', {})).rejects.toThrow(/workspace/i);
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  // H1 (ungated path): mirrors mcp-approval-executor.service.spec.ts's
+  // regression test. The plain `fn => fn('run-1')` mock above can never
+  // exercise AgentRunService.track's real shape — call fn(), THEN await its
+  // own finish() write, which can itself throw. Without the fix, that throw
+  // propagates out of invoke() and McpServerFactoryService.handlerFor turns
+  // ANY thrown error into `isError: true`, inviting the calling model to
+  // retry a call whose side effect (send/publish/spend) already landed.
+  it('H1: a post-execution bookkeeping failure after the broker call already succeeded returns the real result, not an error', async () => {
+    const { invoker, invoke, track } = deps();
+    invoke.mockResolvedValue({ status: 'OK', result: { sent: true } });
+    track.mockImplementation(async (_ws: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => {
+      await fn('run-1'); // the tool call succeeds inside fn()
+      throw new Error('agent_runs UPDATE failed (simulated DB failover)'); // finish() throws AFTER
+    });
+
+    await expect(invoker.invoke(authInfo('ws1'), 'jeeta.send_message', { conversationId: 'c1', body: 'hi' })).resolves.toEqual({
+      status: 'OK',
+      result: { sent: true },
+    });
+    expect(invoke).toHaveBeenCalledTimes(1); // the tool ran exactly once — no retry-shaped double call
+  });
+
+  it('H1: a bookkeeping failure BEFORE the broker call resolves OK (e.g. PENDING_APPROVAL) still propagates as an error', async () => {
+    const { invoker, invoke, track } = deps();
+    invoke.mockResolvedValue({ status: 'PENDING_APPROVAL', approvalId: 'appr-1' }); // nothing executed
+    track.mockImplementation(async (_ws: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => {
+      await fn('run-1');
+      throw new Error('agent_runs UPDATE failed');
+    });
+
+    await expect(invoker.invoke(authInfo('ws1'), 'jeeta.reallocate_budget', {})).rejects.toThrow('agent_runs UPDATE failed');
+  });
 });

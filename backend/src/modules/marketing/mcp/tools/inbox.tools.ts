@@ -62,6 +62,12 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
     risk: 'WRITE',
     requiresApproval: true,
     approvalKind: 'SEND',
+    // Dedupe key for the broker's supersede sweep: a user re-asking, or a
+    // transport retry, produces a second `jeeta.send_message` call for the
+    // SAME conversation before the first is decided. Without this, both land
+    // as separate PENDING cards and approving each sends the customer twice.
+    resourceType: 'conversation',
+    resourceIdFrom: (args) => (typeof args.conversationId === 'string' ? args.conversationId : undefined),
     inputSchema: z.object({
       conversationId: z.string().min(1).describe('Conversation id to reply in.'),
       body: z.string().min(1).describe('Message text to send to the customer.'),

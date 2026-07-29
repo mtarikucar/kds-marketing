@@ -128,6 +128,25 @@ export class ApprovalRequestService {
     });
   }
 
+  /**
+   * Expires any still-PENDING request for the same (kind, resourceType,
+   * resourceId) — called by `McpBrokerService.invoke()` right before it
+   * enqueues a fresh one, mirroring `BudgetAutopilotService.propose()`'s
+   * supersede sweep for BUDGET_REALLOCATION (the same shape, generalised to
+   * every approval-gated MCP tool). Without this, a user re-asking the agent
+   * (or a transport retry) produces N visually-identical PENDING cards for
+   * the same underlying target; approving each fires the side effect N
+   * times. Scoped to PENDING only — an already-decided row (APPROVED,
+   * APPLYING, APPLIED, REJECTED) is never touched, so this can never expire
+   * a request a human has already acted on out from under them.
+   */
+  async supersedePending(workspaceId: string, kind: ApprovalKind, resourceType: string, resourceId: string): Promise<void> {
+    await this.prisma.approvalRequest.updateMany({
+      where: { workspaceId, kind, status: 'PENDING', resourceType, resourceId },
+      data: { status: 'EXPIRED' },
+    });
+  }
+
   enqueue(workspaceId: string, input: EnqueueInput) {
     return this.prisma.approvalRequest.create({
       data: {
@@ -199,14 +218,33 @@ export class ApprovalRequestService {
    * execute; the loser is rejected here, before touching anything.
    * Pair with `finishApply` (success) or `revertApply` (failure) — never
    * leave a request stranded in APPLYING.
+   *
+   * Also guards `expiresAt`: `decide()` already refuses to APPROVE a
+   * still-PENDING request past its deadline, but approve and apply are two
+   * separate calls (see the class docblock) — a request can be legitimately
+   * APPROVED and then sit un-applied long enough to cross its own
+   * `expiresAt` before Apply is ever clicked. The claim predicate excludes
+   * those, so an expired request can be approved but never actually applied.
    */
   async claimForApply(workspaceId: string, id: string) {
+    const now = new Date();
     const claim = await this.prisma.approvalRequest.updateMany({
-      where: { id, workspaceId, status: 'APPROVED' },
+      where: { id, workspaceId, status: 'APPROVED', OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
       data: { status: 'APPLYING' },
     });
     if (claim.count === 0) {
       const fresh = await this.owned(workspaceId, id); // 404 for missing/cross-workspace
+      if (fresh.status === 'APPROVED' && fresh.expiresAt && fresh.expiresAt.getTime() < now.getTime()) {
+        // Flip it to EXPIRED here too (guarded, APPROVED-only) so the queue
+        // stops showing a live Apply affordance for a request that can never
+        // be applied again, instead of leaving it APPROVED-looking-actionable
+        // forever.
+        await this.prisma.approvalRequest.updateMany({
+          where: { id, workspaceId, status: 'APPROVED' },
+          data: { status: 'EXPIRED' },
+        });
+        throw new BadRequestException('request has expired');
+      }
       throw new BadRequestException(`cannot apply a ${fresh.status} request`);
     }
     return this.owned(workspaceId, id);

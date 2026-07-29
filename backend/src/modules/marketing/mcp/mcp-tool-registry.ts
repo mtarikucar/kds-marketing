@@ -34,6 +34,19 @@ export interface McpTool {
   /** The kind used for the ApprovalRequest when gated. */
   approvalKind?: 'BUDGET_REALLOCATION' | 'PUBLISH' | 'SEND' | 'AD_SPEND' | 'TARGET_CHANGE' | 'CHANNEL_LAUNCH';
   /**
+   * Only meaningful when `requiresApproval` is true. `resourceType` is a
+   * fixed label for what this tool acts on (e.g. `'conversation'`,
+   * `'social_post'`); `resourceIdFrom` pulls the stable identifier of the
+   * SPECIFIC target out of the caller's own args (e.g. `conversationId`).
+   * Together they let `McpBrokerService.invoke()` recognise "this is the same
+   * target as an already-pending request" and supersede the stale duplicate
+   * instead of leaving two visually-identical approval cards live — see
+   * `BudgetAutopilotService.propose()`'s supersede sweep, which this mirrors.
+   * Omit both on a tool with no natural single-resource target.
+   */
+  resourceType?: string;
+  resourceIdFrom?: (args: Record<string, unknown>) => string | undefined;
+  /**
    * REQUIRED. The MCP SDK's `registerTool` dispatches the callback with
    * `(ctx)` instead of `(args, ctx)` when no `inputSchema` is given — see
    * `McpServerFactoryService.build()` for why that is unsafe here, not just
