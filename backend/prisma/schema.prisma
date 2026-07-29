@@ -4723,7 +4723,10 @@ model McpOAuthToken {
   resource    String
   expiresAt   DateTime
   revokedAt   DateTime?
-  /// The token this one rotated from (refresh chain root has null).
+  /// What this token was derived from: the refresh token it rotated from, or —
+  /// for the first pair of a grant — the `McpOAuthCode.id` it was exchanged
+  /// for. Rooting the family at the code is what makes "revoke everything
+  /// derived from this code" a single downward walk when a code is replayed.
   parentId    String?
   createdAt   DateTime  @default(now())
 
