@@ -194,6 +194,28 @@ So the work is:
 
 ---
 
+## Task 8: Reclaim stranded APPLYING approvals
+
+**Files:**
+- Modify: `backend/src/modules/marketing/agents/approval-request.service.ts`
+- Test: alongside
+
+Task 2's claim-first state machine can leave a row in `APPLYING` if the revert itself throws or the process dies between claiming and finishing. Nothing reclaims it, so an approved action silently never happens and cannot be retried.
+
+**The repo already solved this exact class of problem** — `AgentRunService.reapStaleRuns()` (`agents/agent-run.service.ts`) sweeps rows stranded in `RUNNING` on a 10-minute cron, with a staleness threshold and a warn log. Read it and mirror it rather than inventing a different shape.
+
+Reclaim direction matters: a stranded `APPLYING` row should go back to **`APPROVED`**, not to `APPLIED`. The tool may or may not have run; returning it to the queue lets a human decide, whereas marking it applied would silently swallow an action that never happened. Say so in a comment, because the opposite choice looks equally plausible to a future reader.
+
+Pick a threshold longer than any plausible tool round-trip and justify it in the report.
+
+- [ ] **Step 1: Write the failing test** — a row stuck in `APPLYING` past the threshold is returned to `APPROVED`; a fresh `APPLYING` row is left alone; `APPLIED` and `REJECTED` rows are never touched.
+- [ ] **Step 2: Run test, confirm it fails**
+- [ ] **Step 3: Implement, mirroring `reapStaleRuns`**
+- [ ] **Step 4: Run the mcp and budget suites**
+- [ ] **Step 5: Commit**
+
+---
+
 ## Out of scope, tracked separately
 
 - A dedicated approvals route, separate from the budget page.
