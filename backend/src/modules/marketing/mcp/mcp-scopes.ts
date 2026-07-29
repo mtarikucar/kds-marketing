@@ -17,6 +17,35 @@ export const MCP_WRITE_SCOPES = [
 ] as const;
 
 /**
+ * The COMPLETE granular vocabulary an MCP caller can hold — the union of the
+ * two legacy-expansion sets above plus the scopes only a granular grant can
+ * carry (`campaigns.write`/`campaigns.send`/`contacts.write`/`settings.manage`
+ * are deliberately outside the legacy `write` expansion; see the note below).
+ *
+ * This is what the OAuth authorization server publishes as `scopes_supported`
+ * (RFC 9728 / RFC 8414) and what a consent screen offers. Extending this list
+ * is how a new tool's scope becomes requestable — `mcp-oauth`'s metadata spec
+ * fails if a tool ever declares a scope that is missing here, since such a
+ * tool would be unreachable over OAuth.
+ *
+ * Every entry is a real permission from `marketing/roles/permissions.ts`; MCP
+ * introduces no vocabulary of its own.
+ */
+export const MCP_ALL_SCOPES = [
+  'leads.read',
+  'leads.write',
+  'contacts.read',
+  'contacts.write',
+  'campaigns.read',
+  'campaigns.write',
+  'campaigns.send',
+  'reports.read',
+  'tasks.read',
+  'tasks.write',
+  'settings.manage',
+] as const;
+
+/**
  * API keys minted before the MCP surface existed carry only the coarse
  * `read`/`write` scopes (see ApiKeysService). Expand those into the granular
  * vocabulary so existing keys keep working, and pass granular scopes through

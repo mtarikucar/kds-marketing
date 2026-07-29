@@ -6,6 +6,7 @@ import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 import { customDomainHostMiddleware } from './modules/marketing/custom-domains/custom-domain.middleware';
 import { CustomDomainsService } from './modules/marketing/custom-domains/custom-domains.service';
 import { SitesService } from './modules/marketing/sites/sites.service';
+import { MCP_OAUTH_WELL_KNOWN_EXCLUSIONS } from './modules/mcp-oauth/mcp-oauth.config';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { setupSwagger } from './swagger';
@@ -98,7 +99,14 @@ export function configureApp(app: NestExpressApplication): void {
   // SAME global prefix as the monorepo backend, so every existing route
   // (/api/marketing/..., /api/internal/...) is unchanged and the marketing
   // frontend works as-is.
-  app.setGlobalPrefix('api');
+  //
+  // ONE exception: RFC 9728 and RFC 8414 both place OAuth discovery documents
+  // at the ROOT of the origin (`https://host/.well-known/...`). Under the
+  // prefix they would answer only at `/api/.well-known/...`, which no OAuth
+  // client ever requests — Claude.ai would see a 404 and conclude the server
+  // has no OAuth at all. Excluding them is what makes the MCP connector
+  // discoverable; `mcp-oauth-well-known.routing.spec.ts` locks it.
+  app.setGlobalPrefix('api', { exclude: [...MCP_OAUTH_WELL_KNOWN_EXCLUSIONS] });
 
   const isProd = process.env.NODE_ENV === 'production';
   const allowedOrigins = process.env.CORS_ORIGIN

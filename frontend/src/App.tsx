@@ -85,6 +85,10 @@ const WebhooksPage             = lazy(() => import('./pages/marketing/settings/w
 const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
 // Settings→Connections is the Integrations TAB of the Account Center now.
 const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
+// MCP OAuth consent (Faz 3) — the SPA route `GET /api/mcp-oauth/authorize`
+// 302s the browser to. Path is fixed by MCP_OAUTH_CONSENT_PAGE_PATH on the
+// backend; changing it here alone silently breaks the connector flow.
+const McpConsentPage           = lazy(() => import('./pages/marketing/oauth/McpConsentPage'));
 const RolesPage                = lazy(() => import('./pages/marketing/settings/roles'));
 const CompliancePage           = lazy(() => import('./pages/marketing/settings/compliance'));
 // AI Studio + UGC Personas live in Growth Studio's Create tab; Brand Kit and
@@ -174,6 +178,12 @@ export default function App() {
 
       {/* Marketing realm — guarded by MarketingProtectedRoute (auth check). */}
       <Route element={<MarketingProtectedRoute />}>
+        {/* MCP OAuth consent — auth-guarded (so an unauthenticated arrival gets
+            the login screen and is returned here via ?next=) but deliberately
+            OUTSIDE MarketingLayout: it is a full-screen decision, not a page of
+            the app, and the surrounding nav would invite navigating away
+            mid-authorization, leaving the connector waiting forever. */}
+        <Route path="/oauth/consent" element={<S><McpConsentPage /></S>} />
         <Route element={<MarketingLayout />}>
           <Route path="/dashboard" element={<S><MarketingDashboardPage /></S>} />
           <Route path="/inbox"     element={<S><InboxPage /></S>} />

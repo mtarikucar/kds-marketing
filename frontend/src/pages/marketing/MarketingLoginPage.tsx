@@ -1,4 +1,4 @@
-import { useNavigate, Navigate, Link } from 'react-router-dom';
+import { useNavigate, Navigate, Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -19,8 +19,27 @@ const loginSchema = z.object({
 });
 type LoginValues = z.infer<typeof loginSchema>;
 
+/**
+ * Where to land after a successful login. `?next=` is set by
+ * `MarketingProtectedRoute` when it bounces an unauthenticated deep link
+ * (notably the MCP OAuth consent screen, whose whole authorization request
+ * lives in its query string).
+ *
+ * Only a SITE-RELATIVE path is honoured. `//evil.example` and `/\evil.example`
+ * are both browser-legal protocol-relative URLs — accepting either would turn
+ * the login page into an open redirect that a phishing link could point at a
+ * credential-harvesting clone right after a real sign-in.
+ */
+function safeNext(raw: string | null): string | null {
+  if (!raw || !raw.startsWith('/')) return null;
+  if (raw.startsWith('//') || raw.startsWith('/\\')) return null;
+  return raw;
+}
+
 export default function MarketingLoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const next = safeNext(searchParams.get('next')) ?? '/dashboard';
   const { t } = useTranslation('marketing');
   const { login, setMemberships, isAuthenticated } = useMarketingAuthStore();
 
@@ -37,7 +56,7 @@ export default function MarketingLoginPage() {
   // the same order; an already-authenticated visitor is then redirected before
   // any form renders.
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={next} replace />;
   }
 
   const onSubmit = async (values: LoginValues) => {
@@ -53,7 +72,7 @@ export default function MarketingLoginPage() {
       } catch {
         // ignored — see comment above
       }
-      navigate('/dashboard');
+      navigate(next);
     } catch (err: any) {
       setError('root', { message: loginErrorMessage(err, t) });
     }

@@ -24,12 +24,14 @@ for the engineer who built it.
   `mcp-tool-registry`. What has **not** been exercised is a live provider
   send: the test workspace used a WEBCHAT channel, so no message left the
   system to a real phone or inbox.
-- **Which clients can connect.** Auth is a static `Authorization: Bearer
-  mk_live_…` header, so any client that lets you set a header works —
-  Claude Code does (`claude mcp add --header`). The claude.ai **custom
-  connector** UI expects an OAuth server at the endpoint, which is Faz 3 and
-  is not built, so account-level connection from the web app is not available
-  yet.
+- **Which clients can connect.** Two auth paths now exist, and the endpoint
+  takes either on the same route:
+  - a static `Authorization: Bearer mk_live_…` header — any client that lets
+    you set one, e.g. Claude Code (`claude mcp add --header`). This document
+    covers that path.
+  - **OAuth 2.1** (Faz 3), which is what claude.ai's and Claude Desktop's
+    **custom connector** UI expects — user-bound, PKCE, consent screen. See
+    [mcp-oauth-connector.md](./mcp-oauth-connector.md).
 - **The write surface is live.** A gated tool call that gets approved and then
   applied genuinely sends the message / changes the campaign / publishes the
   post / moves the budget — there is no dry-run mode. Read
@@ -557,7 +559,13 @@ one.
 
 ## Known, deliberate properties
 
-### Lead search sees the whole workspace
+### Lead search sees the whole workspace (API-key sessions only)
+
+**This applies to the API-key path only.** On an OAuth session
+([mcp-oauth-connector.md](./mcp-oauth-connector.md)) the caller IS a user, so
+`findAll` runs with their real id and the role they currently hold in that
+workspace — a REP sees exactly the leads they see in the app. The rest of this
+section describes the API-key path, where there is no user to narrow by.
 
 `jeeta.search_leads` calls `MarketingLeadsService.findAll` with a synthetic
 principal (`MCP_NON_REP_PRINCIPAL` in
@@ -578,9 +586,10 @@ been actively wrong: it would filter to `assignedToId === 'mcp-service-principal
 an id that owns no real leads, so the tool would have silently returned zero
 results for every workspace. This was reviewed and signed off during
 implementation (see `.superpowers/sdd/2026-07-28-mcp-connector-faz1-2/progress.md`,
-Task 8) as the correct behavior for the current API-key-only auth model. A
-future OAuth-based connector (user-bound, not workspace-key-bound) is the
-natural place to add per-user narrowing back in.
+Task 8) as the correct behavior for an API-key session. Faz 3's OAuth path
+(user-bound, not workspace-key-bound) is where per-user narrowing came back —
+it is live, and it is another reason to prefer OAuth where the client supports
+it.
 
 ### MCP replies are AI-authored
 

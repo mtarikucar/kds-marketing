@@ -3751,5 +3751,30 @@
       "ticari": "Ticari (TİCARİ)",
       "bilgilendirme": "Bilgilendirme (BİLGİLENDİRME)"
     }
+  },
+  "mcpConsent": {
+    "title": "Erişim izni",
+    "subtitle": "çalışma alanınızda işlem yapmak için izin istiyor. İzin vermeden önce neler yapabileceğini gözden geçirin.",
+    "unknownClient": "Bir uygulama",
+    "permissionsTitle": "Şunları yapabilecek:",
+    "workspaceTitle": "Şu çalışma alanında:",
+    "cappedByRole": "Üstü çizili izinler, bu çalışma alanındaki rolünüzde bulunmayan izinlerdir; verilmeyecekler.",
+    "noWorkspaces": "Hiçbir çalışma alanında aktif üyeliğiniz yok, bu yüzden erişim verebileceğiniz bir alan bulunmuyor.",
+    "allow": "İzin ver",
+    "deny": "Reddet",
+    "revokeHint": "Bu erişimi dilediğiniz zaman çalışma alanı ayarlarınızdan geri alabilirsiniz.",
+    "scopes": {
+      "leads_read": "Lead'lerini okuma",
+      "leads_write": "Lead oluşturma ve güncelleme",
+      "contacts_read": "Kişilerini okuma",
+      "contacts_write": "Kişi oluşturma ve güncelleme",
+      "campaigns_read": "Kampanyalarını okuma",
+      "campaigns_write": "Kampanya oluşturma ve güncelleme",
+      "campaigns_send": "Kitlene kampanya ve mesaj gönderme",
+      "reports_read": "Rapor ve analizlerini okuma",
+      "tasks_read": "Görevlerini okuma",
+      "tasks_write": "Görev oluşturma ve güncelleme",
+      "settings_manage": "Çalışma alanı ayarlarını yönetme"
+    }
   }
 }

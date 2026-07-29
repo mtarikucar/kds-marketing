@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect, afterEach } from 'vitest';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import MarketingProtectedRoute from './MarketingProtectedRoute';
 import { useMarketingAuthStore, type MarketingUser } from '../../../store/marketingAuthStore';
 
@@ -14,6 +14,12 @@ const baseUser: MarketingUser = {
 };
 
 const initialState = useMarketingAuthStore.getState();
+
+/** Renders the query string of wherever the router landed. */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="search">{location.search}</div>;
+}
 
 function renderGuarded() {
   return render(
@@ -75,6 +81,31 @@ describe('MarketingProtectedRoute — orphaned session', () => {
 
     expect(screen.getByText('Login page')).toBeInTheDocument();
     expect(screen.queryByText('Dashboard content')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The MCP OAuth consent screen carries its ENTIRE authorization request in
+   * the query string, so bouncing it to a bare `/login` would strip the
+   * request and leave the user on a dead end they cannot recover from.
+   */
+  it('carries the attempted deep link (path + query) into ?next= so login can return there', () => {
+    useMarketingAuthStore.setState({ ...initialState, isAuthenticated: false });
+
+    render(
+      <MemoryRouter initialEntries={['/oauth/consent?client_id=https%3A%2F%2Fclaude.ai&state=s1']}>
+        <Routes>
+          <Route element={<MarketingProtectedRoute />}>
+            <Route path="/oauth/consent" element={<div>Consent</div>} />
+          </Route>
+          <Route path="/login" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const search = screen.getByTestId('search').textContent ?? '';
+    expect(new URLSearchParams(search).get('next')).toBe(
+      '/oauth/consent?client_id=https%3A%2F%2Fclaude.ai&state=s1',
+    );
   });
 
   it('logs out and redirects when the access token it decodes is expired, even if isAuthenticated was left stale true', () => {
