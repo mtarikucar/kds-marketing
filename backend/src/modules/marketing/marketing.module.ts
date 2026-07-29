@@ -254,6 +254,7 @@ import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
 import { McpInvokerService } from './mcp/mcp-invoker.service';
+import { McpApprovalExecutorService } from './mcp/mcp-approval-executor.service';
 import { McpServerFactoryService } from './mcp/mcp-server.factory';
 import { McpTokenVerifierService } from './mcp/mcp-token-verifier.service';
 import { McpController } from './mcp/mcp.controller';
@@ -932,6 +933,11 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     McpInvokerService,
     McpServerFactoryService,
     McpTokenVerifierService,
+    // MCP write-surface activation (Faz 2.5, Task 2) — executes an APPROVED
+    // MCP-tool approval for real. No separate mcp.module.ts: AgentRunService
+    // carries a named @Cron and a second provider instance would register it
+    // twice and break boot, so this stays in the one MarketingModule.
+    McpApprovalExecutorService,
     AdWriteCapabilityService,
     VideoPersonaService,
     UnifiedCalendarService,
