@@ -12,6 +12,20 @@ export interface InvokeResult {
 const MAX_ARGS_BYTES = 32 * 1024;
 
 /**
+ * TTL for an MCP-originated approval request (M1). Deliberately much shorter
+ * than the Budget Autopilot lane's 72h (`PROPOSAL_TTL_MS` in
+ * budget-autopilot.service.ts): a reallocation proposal goes stale because
+ * the performance numbers behind it age; a queued `send_message`/
+ * `publish_social_post`/campaign-launch goes stale because the CONVERSATION
+ * or MOMENT it was written for does — a customer's question may already be
+ * answered, a campaign's news already old, hours (not days) later. 24h
+ * covers one full business day/night cycle (a request opened at close of
+ * business is still approvable the next morning) while guaranteeing nothing
+ * can be approved or applied "weeks later" against a stale context.
+ */
+const MCP_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
  * The safe MCP broker (Faz 6) — the single choke point between an external agent
  * and Jeeta's internals. Enforces, in order: deny-by-default allow-list →
  * per-tenant scope (least privilege) → approval-gating for high-risk
@@ -34,16 +48,37 @@ export class McpBrokerService {
     const tool = this.registry.get(toolName);
     if (!tool) throw new NotFoundException(`unknown tool: ${toolName}`); // deny-by-default
 
+    if (ctx.requireAudit && !ctx.agentRunId) {
+      throw new ForbiddenException('audit context required: no agentRunId');
+    }
+
     this.assertScopes(tool, ctx);
     this.assertArgsSize(args);
 
     // High-risk ops never execute inline — they enqueue a human approval.
-    if (tool.requiresApproval) {
+    if (tool.requiresApproval && ctx.writeMode !== 'AUTONOMOUS' && !ctx.approvedBy) {
+      const kind = tool.approvalKind ?? 'AD_SPEND';
+      const resourceType = tool.resourceType;
+      const resourceId = tool.resourceIdFrom?.(args);
+      if (resourceType && resourceId) {
+        // A re-ask (the same agent turn retried, or a user re-asking the same
+        // thing) must not leave two live cards for the same target — expire
+        // the stale duplicate before enqueueing the fresh one (H2; mirrors
+        // BudgetAutopilotService.propose()'s supersede sweep for
+        // BUDGET_REALLOCATION).
+        await this.approvals.supersedePending(ctx.workspaceId, kind, resourceType, resourceId);
+      }
       const req = await this.approvals.enqueue(ctx.workspaceId, {
-        kind: tool.approvalKind ?? 'AD_SPEND',
+        kind,
         summary: `MCP agent requested "${tool.name}"`,
         payload: { tool: tool.name, args },
         requestedByRunId: ctx.agentRunId,
+        resourceType,
+        resourceId,
+        // M1: without an expiry, decide()'s expiry guard is dead for this
+        // lane and a request approved weeks later still fires. See
+        // MCP_APPROVAL_TTL_MS above for why 24h.
+        expiresAt: new Date(Date.now() + MCP_APPROVAL_TTL_MS),
       });
       return { status: 'PENDING_APPROVAL', approvalId: req.id };
     }

@@ -28,6 +28,8 @@ import {
   listPendingApprovals,
   approveRequest,
   applyReallocation,
+  applyRequest,
+  isMcpApprovalPayload,
   rejectRequest,
   getWalletState,
   listBudgetActivity,
@@ -516,27 +518,56 @@ function ApprovalsTab() {
     qc.invalidateQueries({ queryKey: ['budget-activity'] });
     qc.invalidateQueries({ queryKey: ['autopilot-runs'] });
   };
-  // Approving a budget reallocation immediately applies it: the approval IS
-  // the authorization. For reallocations the apply endpoint records the
-  // decision AND applies it in ONE call, with every precondition checked
-  // before the decision — so a failed apply (kill-switch on, paused budget)
-  // leaves the request PENDING and visible in the queue. The old two-step
-  // (approve → apply) stranded such requests APPROVED-unapplied and invisible,
-  // while toasting "decision not recorded" for a decision that WAS recorded.
-  // apply() pushes live ONLY where an ad platform is credential-write-capable.
+  // Three lanes, discriminated by PAYLOAD shape (never `kind` alone — an MCP
+  // `jeeta.reallocate_budget` call shares the BUDGET_REALLOCATION kind with
+  // the Budget Autopilot's own proposal loop, but carries a `{ tool, args }`
+  // payload the reallocation executor can't read):
+  //  1. MCP-originated (payload has `{ tool, args }`) — approve alone never
+  //     touches the outside world; a human gate that only records a decision
+  //     isn't a gate. So this calls approve, THEN POST /approvals/:id/apply,
+  //     which runs the tool for real (send/publish/spend) through the broker.
+  //     approve and apply are two separate network calls, so a row can arrive
+  //     here already APPROVED (a previous apply failed, or the tab closed
+  //     between the two) — skip re-approving in that case (decide() would
+  //     reject re-deciding an already-decided request) and retry apply alone.
+  //  2. Budget Autopilot reallocation (kind BUDGET_REALLOCATION, non-MCP
+  //     payload) — apply() records the decision AND applies it in ONE call,
+  //     with every precondition checked before the decision — so a failed
+  //     apply (kill-switch on, paused budget) leaves the request PENDING and
+  //     visible in the queue instead of stranded APPROVED-unapplied. It also
+  //     accepts an already-APPROVED row (a retry) and just applies it.
+  //  3. Everything else — approve only (no apply route exists/needed today).
   const approve = useMutation({
-    mutationFn: async (r: { id: string; kind: string }) => {
-      if (r.kind === 'BUDGET_REALLOCATION') return applyReallocation(r.id);
+    mutationFn: async (r: { id: string; kind: string; payload?: unknown; status?: string }) => {
+      if (isMcpApprovalPayload(r.payload)) {
+        if (r.status !== 'APPROVED') {
+          await approveRequest(r.id);
+        }
+        try {
+          return { lane: 'mcp' as const, applied: await applyRequest(r.id) };
+        } catch (e) {
+          // The decision (approveRequest above, if it ran this call) is
+          // recorded — only apply failed. Tag the error so onError says so
+          // instead of the generic (and here false) "could not record your
+          // decision"; the row stays APPROVED-unapplied and retryable.
+          throw Object.assign(e instanceof Error ? e : new Error(String(e)), { approvedNotApplied: true });
+        }
+      }
+      if (r.kind === 'BUDGET_REALLOCATION') {
+        return { lane: 'reallocation' as const, applied: await applyReallocation(r.id) };
+      }
       await approveRequest(r.id);
-      return null;
+      return { lane: 'plain' as const, applied: null };
     },
-    onSuccess: (applied) => {
-      if (applied) {
+    onSuccess: (outcome) => {
+      if (outcome.lane === 'reallocation') {
         toast.success(
-          applied.status === 'APPLIED'
+          outcome.applied.status === 'APPLIED'
             ? t('budget.appliedLive', { defaultValue: 'Approved & pushed live to the ad platform' })
             : t('budget.appliedPlan', { defaultValue: 'Approved & committed to the plan (connect an ad platform to push it live)' }),
         );
+      } else if (outcome.lane === 'mcp') {
+        toast.success(t('budget.mcpApplied', { defaultValue: 'Approved & applied' }));
       } else {
         toast.success(t('budget.approved', 'Approved'));
       }
@@ -545,9 +576,15 @@ function ApprovalsTab() {
     },
     onError: (e: any) => {
       setConfirmItem(null);
-      // Surface the server's reason (e.g. "Budget is not active") — the request
-      // is still PENDING in that case, so the manager can fix and retry.
-      toast.error(e?.response?.data?.message ?? t('budget.decisionError', 'Could not record your decision'));
+      toast.error(
+        e?.approvedNotApplied
+          ? t('budget.mcpApplyError', {
+              defaultValue: 'Approved — but applying it failed. The decision was recorded; retry Apply to finish it.',
+            })
+          : // Surface the server's reason (e.g. "Budget is not active") — the
+            // request is still PENDING in that case, so the manager can fix and retry.
+            (e?.response?.data?.message ?? t('budget.decisionError', 'Could not record your decision')),
+      );
       invalidate();
     },
   });
@@ -564,31 +601,73 @@ function ApprovalsTab() {
           <EmptyState icon={<Check className="h-5 w-5" />} title={t('budget.noApprovals.title', 'Nothing waiting')} description={t('budget.noApprovals.desc', 'Autopilot proposals and other high-risk actions land here for your sign-off.')} />
         ) : (
           <div className="space-y-2">
-            {q.data.map((r) => (
-              <Card key={r.id}>
-                <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3.5">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge tone="info">{t(`budget.kind.${r.kind}`, r.kind)}</Badge>
-                      <span className="text-xs text-muted-foreground">{fmtDateTime(r.createdAt)}</span>
+            {q.data.map((r) => {
+              const mcpPayload = isMcpApprovalPayload(r.payload) ? r.payload : null;
+              // Only a genuine Budget Autopilot proposal takes the confirm-dialog
+              // + applyReallocation path — an MCP jeeta.reallocate_budget request
+              // shares the kind but not the payload shape, so it's routed as MCP.
+              const isAutopilotReallocation = !mcpPayload && r.kind === 'BUDGET_REALLOCATION';
+              // listPendingApprovals now also returns APPROVED-but-not-yet-APPLIED
+              // rows (the decision was made, the apply/execute step hasn't run or
+              // failed and can be retried) — those get an Apply affordance, never
+              // Approve/Reject again: re-approving an already-decided request 400s,
+              // and reject() only ever claims a still-PENDING row.
+              const approvedUnapplied = r.status === 'APPROVED';
+              return (
+                <Card key={r.id}>
+                  <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Badge tone="info">{t(`budget.kind.${r.kind}`, r.kind)}</Badge>
+                        {approvedUnapplied && (
+                          <Badge tone="warning">{t('budget.approvedUnapplied', 'Approved — not applied yet')}</Badge>
+                        )}
+                        <span className="text-xs text-muted-foreground">{fmtDateTime(r.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 truncate text-sm">{r.summary}</p>
+                      {/* The human gate is only real if the operator can see what
+                          they're approving before they click — a customer-facing
+                          send/publish/spend call's actual tool + arguments, not
+                          just the generic summary sentence. */}
+                      {mcpPayload && (
+                        <div className="mt-2 max-w-md rounded-md border border-border bg-muted/30 p-2 text-xs">
+                          <p className="font-mono font-medium text-foreground">{mcpPayload.tool}</p>
+                          <dl className="mt-1 space-y-0.5">
+                            {Object.entries(mcpPayload.args).map(([key, value]) => (
+                              <div key={key} className="flex gap-1.5">
+                                <dt className="shrink-0 text-muted-foreground">{key}:</dt>
+                                <dd className="break-all text-foreground">
+                                  {typeof value === 'string' ? value : JSON.stringify(value)}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </div>
+                      )}
                     </div>
-                    <p className="mt-1 truncate text-sm">{r.summary}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
-                      <X className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.reject', 'Reject')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => (r.kind === 'BUDGET_REALLOCATION' ? setConfirmItem({ id: r.id, kind: r.kind }) : approve.mutate({ id: r.id, kind: r.kind }))}
-                      disabled={approve.isPending}
-                    >
-                      <Check className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.approve', 'Approve')}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    <div className="flex items-center gap-2">
+                      {!approvedUnapplied && (
+                        <Button variant="secondary" size="sm" onClick={() => reject.mutate(r.id)} disabled={reject.isPending}>
+                          <X className="mr-1 h-4 w-4" aria-hidden="true" />{t('budget.reject', 'Reject')}
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          isAutopilotReallocation
+                            ? setConfirmItem({ id: r.id, kind: r.kind })
+                            : approve.mutate({ id: r.id, kind: r.kind, payload: r.payload, status: r.status })
+                        }
+                        disabled={approve.isPending}
+                      >
+                        <Check className="mr-1 h-4 w-4" aria-hidden="true" />
+                        {approvedUnapplied ? t('budget.apply', 'Apply') : t('budget.approve', 'Approve')}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </QueryStateBoundary>

@@ -902,6 +902,35 @@ export class MarketingAuthService {
     });
   }
 
+  /**
+   * MCP write-surface activation — the switch that lets a workspace opt out
+   * of the human approval gate. OWNER-only + audited at the controller; this
+   * is the sole write path to `Workspace.mcpWriteMode` (nothing else in the
+   * codebase can set it, which is why AUTONOMOUS was unreachable before this).
+   * The DTO's `@IsIn` already rejected anything outside APPROVAL|AUTONOMOUS
+   * before this is ever called.
+   */
+  async setMcpWriteMode(workspaceId: string, mode: 'APPROVAL' | 'AUTONOMOUS') {
+    const workspace = await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { mcpWriteMode: mode },
+      select: { mcpWriteMode: true },
+    });
+    return { mcpWriteMode: workspace.mcpWriteMode };
+  }
+
+  /** Read-back so an operator can confirm the current mode rather than guessing. */
+  async getMcpWriteMode(workspaceId: string) {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { mcpWriteMode: true },
+    });
+    if (!workspace) {
+      throw new BadRequestException('Workspace not found');
+    }
+    return { mcpWriteMode: workspace.mcpWriteMode };
+  }
+
   async changePassword(
     userId: string,
     currentPassword: string,

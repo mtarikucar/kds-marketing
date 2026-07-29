@@ -16,23 +16,33 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('../../../features/marketing/api/growthBudget.service', () => ({
-  listGrowthBudgets: vi.fn(),
-  getGrowthBudget: vi.fn(),
-  setBudgetKillSwitch: vi.fn(),
-  setBudgetStatus: vi.fn(),
-  setAutonomyLevel: vi.fn(),
-  proposeBudget: vi.fn(),
-  listAutopilotRuns: vi.fn().mockResolvedValue([]),
-  listPendingApprovals: vi.fn().mockResolvedValue([]),
-  approveRequest: vi.fn(),
-  rejectRequest: vi.fn(),
-  applyReallocation: vi.fn(),
-  getWalletState: vi.fn(),
-  listBudgetActivity: vi.fn(),
-  quickStart: vi.fn(),
-  walletTopup: vi.fn(),
-}));
+vi.mock('../../../features/marketing/api/growthBudget.service', async () => {
+  // isMcpApprovalPayload is a real (unmocked) pure function the page relies on
+  // to discriminate MCP-originated approvals from Budget Autopilot ones —
+  // keep the real implementation, only stub the network calls.
+  const actual = await vi.importActual<typeof import('../../../features/marketing/api/growthBudget.service')>(
+    '../../../features/marketing/api/growthBudget.service',
+  );
+  return {
+    ...actual,
+    listGrowthBudgets: vi.fn(),
+    getGrowthBudget: vi.fn(),
+    setBudgetKillSwitch: vi.fn(),
+    setBudgetStatus: vi.fn(),
+    setAutonomyLevel: vi.fn(),
+    proposeBudget: vi.fn(),
+    listAutopilotRuns: vi.fn().mockResolvedValue([]),
+    listPendingApprovals: vi.fn().mockResolvedValue([]),
+    approveRequest: vi.fn(),
+    rejectRequest: vi.fn(),
+    applyReallocation: vi.fn(),
+    applyRequest: vi.fn(),
+    getWalletState: vi.fn(),
+    listBudgetActivity: vi.fn(),
+    quickStart: vi.fn(),
+    walletTopup: vi.fn(),
+  };
+});
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -66,6 +76,33 @@ const activity: svc.ActivityItem[] = [
     },
   },
 ];
+
+const mcpApproval: svc.ApprovalRequest = {
+  id: 'ap-mcp-1',
+  kind: 'SEND',
+  status: 'PENDING',
+  summary: 'MCP agent requested "jeeta.send_message"',
+  payload: { tool: 'jeeta.send_message', args: { to: '+905551234567', body: 'Your order has shipped!' } },
+  resourceType: null,
+  resourceId: null,
+  createdAt: '2026-07-20T10:00:00.000Z',
+};
+
+const reallocationApproval: svc.ApprovalRequest = {
+  id: 'ap-realloc-1',
+  kind: 'BUDGET_REALLOCATION',
+  status: 'PENDING',
+  summary: 'Reallocate 2 channel(s) within budget pool 1000',
+  payload: { budgetId: 'b1', runId: 'run1', after: [{ channel: 'META', budget: 500 }] },
+  resourceType: 'growth_budget',
+  resourceId: 'b1',
+  createdAt: '2026-07-20T10:00:00.000Z',
+};
+
+// A previous apply attempt failed after approve succeeded (or the tab closed
+// between the two calls) — the backend now keeps this visible as APPROVED
+// instead of dropping it from the PENDING-only queue.
+const mcpApprovalApprovedUnapplied: svc.ApprovalRequest = { ...mcpApproval, id: 'ap-mcp-2', status: 'APPROVED' };
 
 describe('BudgetAutopilotPage', () => {
   beforeEach(() => {
@@ -180,5 +217,137 @@ describe('BudgetAutopilotPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(svc.setBudgetStatus).toHaveBeenCalledWith('b1', 'PAUSED'));
+  });
+
+  describe('Approvals — MCP vs. Budget Reallocation routing', () => {
+    it('renders the MCP tool name and its arguments so the operator sees what they are approving', async () => {
+      const user = userEvent.setup();
+      (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+      (svc.getGrowthBudget as any).mockResolvedValue(budget);
+      (svc.listPendingApprovals as any).mockResolvedValue([mcpApproval]);
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+      await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+
+      expect(await screen.findByText('jeeta.send_message')).toBeInTheDocument();
+      expect(screen.getByText('+905551234567')).toBeInTheDocument();
+      expect(screen.getByText('Your order has shipped!')).toBeInTheDocument();
+    });
+
+    it('an MCP-originated approval triggers approve, then apply', async () => {
+      const user = userEvent.setup();
+      (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+      (svc.getGrowthBudget as any).mockResolvedValue(budget);
+      (svc.listPendingApprovals as any).mockResolvedValue([mcpApproval]);
+      (svc.approveRequest as any).mockResolvedValue({});
+      (svc.applyRequest as any).mockResolvedValue({ status: 'APPLIED', result: { sent: true } });
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+      await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+      await screen.findByText('jeeta.send_message');
+
+      await user.click(screen.getByRole('button', { name: 'Approve' }));
+
+      await waitFor(() => expect(svc.applyRequest).toHaveBeenCalledWith('ap-mcp-1'));
+      expect(svc.approveRequest).toHaveBeenCalledWith('ap-mcp-1');
+      expect(svc.applyReallocation).not.toHaveBeenCalled();
+      // approve must happen before apply — apply-without-approve is the exact
+      // gap this task closes.
+      const approveOrder = (svc.approveRequest as any).mock.invocationCallOrder[0];
+      const applyOrder = (svc.applyRequest as any).mock.invocationCallOrder[0];
+      expect(approveOrder).toBeLessThan(applyOrder);
+    });
+
+    it('a BUDGET_REALLOCATION from the Budget Autopilot still goes through applyReallocation, and only that', async () => {
+      const user = userEvent.setup();
+      (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+      (svc.getGrowthBudget as any).mockResolvedValue(budget);
+      (svc.listPendingApprovals as any).mockResolvedValue([reallocationApproval]);
+      (svc.applyReallocation as any).mockResolvedValue({ status: 'APPLIED', applied: 1, skipped: 0 });
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+      await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+      await screen.findByText('Reallocate 2 channel(s) within budget pool 1000');
+
+      await user.click(screen.getByRole('button', { name: 'Approve' }));
+      // BUDGET_REALLOCATION confirms before pushing live.
+      await user.click(await screen.findByRole('button', { name: 'Approve & push live' }));
+
+      await waitFor(() => expect(svc.applyReallocation).toHaveBeenCalledWith('ap-realloc-1'));
+      expect(svc.approveRequest).not.toHaveBeenCalled();
+      expect(svc.applyRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Approvals — APPROVED-but-unapplied retry (fix round 1)', () => {
+    it('renders an APPROVED-unapplied row with an Apply affordance, not Approve/Reject, and applying it does not re-approve', async () => {
+      const user = userEvent.setup();
+      (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+      (svc.getGrowthBudget as any).mockResolvedValue(budget);
+      (svc.listPendingApprovals as any).mockResolvedValue([mcpApprovalApprovedUnapplied]);
+      (svc.applyRequest as any).mockResolvedValue({ status: 'APPLIED', result: { sent: true } });
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+      await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+      await screen.findByText('jeeta.send_message');
+
+      expect(screen.getByText('Approved — not applied yet')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+      await waitFor(() => expect(svc.applyRequest).toHaveBeenCalledWith('ap-mcp-2'));
+      expect(svc.approveRequest).not.toHaveBeenCalled();
+    });
+
+    it('tells the operator the decision was recorded (and applying failed) when apply throws after approve succeeds', async () => {
+      const user = userEvent.setup();
+      const { toast } = await import('sonner');
+      (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+      (svc.getGrowthBudget as any).mockResolvedValue(budget);
+      (svc.listPendingApprovals as any).mockResolvedValue([mcpApproval]);
+      (svc.approveRequest as any).mockResolvedValue({});
+      (svc.applyRequest as any).mockRejectedValue({ response: { data: { message: 'tool call failed' } } });
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+      await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+      await screen.findByText('jeeta.send_message');
+
+      await user.click(screen.getByRole('button', { name: 'Approve' }));
+
+      await waitFor(() => expect(svc.applyRequest).toHaveBeenCalledWith('ap-mcp-1'));
+      expect(svc.approveRequest).toHaveBeenCalledWith('ap-mcp-1');
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          'Approved — but applying it failed. The decision was recorded; retry Apply to finish it.',
+        ),
+      );
+      // Never the generic (and here false) message — the decision WAS recorded.
+      expect(toast.error).not.toHaveBeenCalledWith('Could not record your decision');
+    });
+
+    it('an APPROVED-unapplied BUDGET_REALLOCATION still routes through applyReallocation via the same confirm dialog', async () => {
+      const user = userEvent.setup();
+      const approvedRealloc = { ...reallocationApproval, status: 'APPROVED' };
+      (svc.listGrowthBudgets as any).mockResolvedValue([budget]);
+      (svc.getGrowthBudget as any).mockResolvedValue(budget);
+      (svc.listPendingApprovals as any).mockResolvedValue([approvedRealloc]);
+      (svc.applyReallocation as any).mockResolvedValue({ status: 'APPLIED', applied: 1, skipped: 0 });
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Approvals' })).toBeInTheDocument());
+      await user.click(screen.getByRole('tab', { name: 'Approvals' }));
+      await screen.findByText('Reallocate 2 channel(s) within budget pool 1000');
+
+      expect(screen.getByText('Approved — not applied yet')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      await user.click(await screen.findByRole('button', { name: 'Approve & push live' }));
+
+      await waitFor(() => expect(svc.applyReallocation).toHaveBeenCalledWith('ap-realloc-1'));
+      expect(svc.approveRequest).not.toHaveBeenCalled();
+      expect(svc.applyRequest).not.toHaveBeenCalled();
+    });
   });
 });

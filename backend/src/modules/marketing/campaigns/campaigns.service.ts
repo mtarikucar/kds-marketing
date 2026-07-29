@@ -67,6 +67,35 @@ export class CampaignsService {
     return { ...c, variants };
   }
 
+  /**
+   * Read-only performance snapshot for one campaign — deliberately narrower
+   * than `get()` (no variants, no body/audienceFilter draft fields). The
+   * counters live in `Campaign.stats`, kept fresh by three independent
+   * writers: `campaign-sender.service.ts` (sent/failed/skipped/delivered),
+   * `campaign-tracking.service.ts` (opened/clicked/unsubscribed) and
+   * `campaign-sms-stats.service.ts` (NetGSM per-status SMS rollup under
+   * `stats.sms`). Neither of those two files exposes a per-campaign read —
+   * they only ever write into this same JSON blob — so this scoped select
+   * is the one true "how did this campaign perform" source.
+   */
+  async performance(workspaceId: string, id: string) {
+    const c = await this.prisma.campaign.findFirst({
+      where: { id, workspaceId },
+      select: {
+        id: true,
+        name: true,
+        channel: true,
+        status: true,
+        stats: true,
+        scheduledAt: true,
+        startedAt: true,
+        completedAt: true,
+      },
+    });
+    if (!c) throw new NotFoundException('Campaign not found');
+    return c;
+  }
+
   async getVariants(workspaceId: string, campaignId: string) {
     return this.prisma.campaignVariant.findMany({ where: { workspaceId, campaignId }, orderBy: { key: 'asc' } });
   }

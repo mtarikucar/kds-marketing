@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { CampaignsService, CAMPAIGN_BATCH_KIND, CAMPAIGN_LAUNCH_KIND, CAMPAIGN_AB_DECIDE_KIND } from './campaigns.service';
 
@@ -72,6 +72,47 @@ describe('CampaignsService', () => {
       expect(w.city).toBeUndefined();
       expect(w.region).toBeUndefined();
       expect(w.businessType).toBe('CAFE');
+    });
+  });
+
+  describe('performance', () => {
+    it('reads the narrow stats-relevant select, workspace-scoped, and returns it as-is', async () => {
+      const row = {
+        id: 'camp1',
+        name: 'Summer blast',
+        channel: 'SMS',
+        status: 'SENDING',
+        stats: { recipients: 10, sent: 8, failed: 1, skipped: 1, opened: 3, clicked: 1, unsubscribed: 0 },
+        scheduledAt: null,
+        startedAt: new Date('2026-07-01'),
+        completedAt: null,
+      };
+      prisma.campaign.findFirst.mockResolvedValue(row);
+
+      const out = await svc.performance(WS, 'camp1');
+
+      expect(prisma.campaign.findFirst).toHaveBeenCalledWith({
+        where: { id: 'camp1', workspaceId: WS },
+        select: {
+          id: true,
+          name: true,
+          channel: true,
+          status: true,
+          stats: true,
+          scheduledAt: true,
+          startedAt: true,
+          completedAt: true,
+        },
+      });
+      // Must actually surface `stats` (the whole point of this read) rather
+      // than a select that silently drops it.
+      expect(out.stats).toEqual(row.stats);
+      expect(out).toEqual(row);
+    });
+
+    it('throws NotFoundException for a campaign outside the workspace', async () => {
+      prisma.campaign.findFirst.mockResolvedValue(null);
+      await expect(svc.performance(WS, 'camp1')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 

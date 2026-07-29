@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BillingModule } from '../billing/billing.module';
+import { EntitlementsService } from '../billing/entitlements.service';
 import { NetgsmModule } from '../netgsm/netgsm.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -252,6 +253,20 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
+import { McpInvokerService } from './mcp/mcp-invoker.service';
+import { McpApprovalExecutorService } from './mcp/mcp-approval-executor.service';
+import { McpServerFactoryService } from './mcp/mcp-server.factory';
+import { McpTokenVerifierService } from './mcp/mcp-token-verifier.service';
+import { McpController } from './mcp/mcp.controller';
+import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
+import { registerBrandTools } from './mcp/tools/brand.tools';
+import { registerLeadsTools } from './mcp/tools/leads.tools';
+import { registerInboxTools } from './mcp/tools/inbox.tools';
+import { registerSocialTools } from './mcp/tools/social.tools';
+import { registerAdsTools } from './mcp/tools/ads.tools';
+import { registerSchedulingTools } from './mcp/tools/scheduling.tools';
+import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
+import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -695,6 +710,8 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     StrategyController,
     // Strategy Engine — per-workspace community channel connect (Discord/Reddit).
     CommunityChannelController,
+    // MCP connector (Faz 1-2) — POST /api/mcp streamable-HTTP endpoint.
+    McpController,
   ],
   providers: [
     // Services
@@ -911,6 +928,16 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     VideoPipelineService,
     McpToolRegistry,
     McpBrokerService,
+    // MCP connector (Faz 1-2) — the bearer-token verifier, the per-request
+    // scope-filtered McpServer factory, and the audited tool invoker behind it.
+    McpInvokerService,
+    McpServerFactoryService,
+    McpTokenVerifierService,
+    // MCP write-surface activation (Faz 2.5, Task 2) — executes an APPROVED
+    // MCP-tool approval for real. No separate mcp.module.ts: AgentRunService
+    // carries a named @Cron and a second provider instance would register it
+    // twice and break boot, so this stays in the one MarketingModule.
+    McpApprovalExecutorService,
     AdWriteCapabilityService,
     VideoPersonaService,
     UnifiedCalendarService,
@@ -1083,4 +1110,33 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     BrandAnalysisService,
   ],
 })
-export class MarketingModule {}
+export class MarketingModule {
+  // MCP connector (Faz 1-2) — tools are registered once, at module
+  // construction, against the shared McpToolRegistry (see mcp-server.factory
+  // for why the registry itself stays deny-by-default: nothing is callable
+  // unless registered here).
+  constructor(
+    registry: McpToolRegistry,
+    analytics: AnalyticsService,
+    brand: BrandBrainService,
+    leads: MarketingLeadsService,
+    conversations: ConversationsService,
+    campaigns: CampaignsService,
+    social: SocialPlannerService,
+    adAccounts: AdAccountService,
+    budgets: BudgetManagementService,
+    ads: AdManagementService,
+    bookings: BookingService,
+    entitlements: EntitlementsService,
+  ) {
+    registerAnalyticsTools(registry, { analytics });
+    registerBrandTools(registry, { brand });
+    registerLeadsTools(registry, { leads });
+    registerInboxTools(registry, { conversations });
+    registerCampaignsTools(registry, { campaigns });
+    registerSocialTools(registry, { social });
+    registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
+    registerSchedulingTools(registry, { bookings });
+    registerWorkspaceTools(registry, { entitlements });
+  }
+}

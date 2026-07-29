@@ -237,3 +237,39 @@ export const approveRequest = (id: string) =>
 
 export const rejectRequest = (id: string) =>
   marketingApi.post(`/approvals/${id}/reject`).then((r) => r.data);
+
+/** The `{ tool, args }` shape `McpBrokerService.invoke()` enqueues for every
+ *  MCP write tool (SEND/PUBLISH/AD_SPEND/TARGET_CHANGE/CHANNEL_LAUNCH, and
+ *  `jeeta.reallocate_budget` which — confusingly — shares the
+ *  `BUDGET_REALLOCATION` kind with the Budget Autopilot's own proposal loop).
+ *  `kind` alone can't tell the two BUDGET_REALLOCATION sources apart; the
+ *  payload shape can. Mirrors the backend's `isMcpPayload` in
+ *  mcp-approval-executor.service.ts — keep both in sync. */
+export interface McpApprovalPayload {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+export function isMcpApprovalPayload(payload: unknown): payload is McpApprovalPayload {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const p = payload as Record<string, unknown>;
+  return (
+    typeof p.tool === 'string' &&
+    p.tool.length > 0 &&
+    typeof p.args === 'object' &&
+    p.args !== null &&
+    !Array.isArray(p.args)
+  );
+}
+
+export interface ApplyMcpResult {
+  status: 'APPLIED';
+  result: unknown;
+}
+
+/** Apply an APPROVED MCP tool-call request (`POST /approvals/:id/apply`):
+ *  claims it and runs the tool for real through the broker. This is the
+ *  human gate's second half — approve alone never touches the outside world,
+ *  a customer message/spend change/publish only happens after this call. */
+export const applyRequest = (id: string) =>
+  marketingApi.post<ApplyMcpResult>(`/approvals/${id}/apply`).then((r) => r.data);

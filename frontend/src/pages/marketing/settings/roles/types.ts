@@ -47,6 +47,11 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
     description: 'Create and update contacts, tags and fields.',
   },
   'campaigns.read': { group: 'Campaigns', label: 'View campaigns', description: 'See campaigns.' },
+  'campaigns.write': {
+    group: 'Campaigns',
+    label: 'Draft campaigns',
+    description: 'Create and edit campaign content (e.g. draft a social post) without sending it.',
+  },
   'campaigns.send': {
     group: 'Campaigns',
     label: 'Send campaigns',
