@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ApprovalRequestService } from '../agents/approval-request.service';
 import { AgentRunService } from '../agents/agent-run.service';
-import { McpBrokerService } from './mcp-broker.service';
+import { InvokeResult, McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry } from './mcp-tool-registry';
 
 interface McpApprovalPayload {
@@ -32,12 +32,20 @@ function isMcpPayload(payload: unknown): payload is McpApprovalPayload {
  * enqueued by `McpBrokerService.invoke()` (payload `{ tool, args }`) sits
  * APPROVED-but-inert until this runs it for real.
  *
- * Ordering is money-safety critical: the tool executes FIRST, and only a
- * successful execution is followed by `markApplied`. `markApplied`'s atomic
- * `APPROVED -> APPLIED` claim (not a read-then-write check here) is what
- * prevents double execution — see its doc comment in approval-request.service.
- * If the tool throws, the request is left APPROVED so an operator can retry;
- * the error is never swallowed.
+ * Money-safety: an MCP tool call is not itself idempotent (send a message,
+ * publish a post, push a spend change), so this does NOT execute-then-mark.
+ * It claims the request (APPROVED -> APPLYING) via
+ * `ApprovalRequestService.claimForApply` BEFORE invoking the tool — that
+ * atomic claim is what makes two concurrent `apply()` calls at-most-once:
+ * the loser is rejected at the claim, before touching the broker, instead of
+ * after a duplicate send has already gone out. `markApplied` (used by
+ * `BudgetExecutorService`) is a different, execute-then-mark contract for an
+ * idempotent internal-plan commit and is untouched by this service.
+ *
+ * On tool success the claim is finished (APPLYING -> APPLIED). On tool
+ * failure the claim is reverted (APPLYING -> APPROVED) so an operator can
+ * retry, and the original error propagates untouched — never swallowed, and
+ * the row is never left stranded in APPLYING.
  */
 @Injectable()
 export class McpApprovalExecutorService {
@@ -57,9 +65,11 @@ export class McpApprovalExecutorService {
     if (!isMcpPayload(payload)) {
       throw new BadRequestException('Approval request is not an MCP tool invocation');
     }
-    if (approval.status !== 'APPROVED') {
-      throw new BadRequestException(`Request is ${approval.status}, not APPROVED`);
-    }
+
+    // Atomic claim BEFORE executing anything: rejects a request that is not
+    // APPROVED, and rejects a second concurrent caller racing this one (it
+    // will see APPLYING, not APPROVED, and claim zero rows).
+    await this.approvals.claimForApply(workspaceId, approvalId);
 
     const { tool: toolName, args } = payload;
     // Scopes: the approving human (settings.manage) has already authorised
@@ -69,26 +79,42 @@ export class McpApprovalExecutorService {
     // this execution runs under.
     const grantedScopes = this.registry.get(toolName)?.scopes ?? [];
 
-    const invoked = await this.runs.track(
-      workspaceId,
-      { agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },
-      (agentRunId) =>
-        this.broker.invoke(
-          {
-            workspaceId,
-            userId,
-            grantedScopes,
-            agentRunId,
-            requireAudit: true,
-            approvedBy: { approvalId, userId },
-          },
-          toolName,
-          args,
-        ),
-    );
+    let invoked: InvokeResult;
+    try {
+      invoked = await this.runs.track(
+        workspaceId,
+        { agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },
+        (agentRunId) =>
+          this.broker.invoke(
+            {
+              workspaceId,
+              userId,
+              grantedScopes,
+              agentRunId,
+              requireAudit: true,
+              approvedBy: { approvalId, userId },
+            },
+            toolName,
+            args,
+          ),
+      );
+    } catch (err) {
+      // The tool failed — release the claim so the request goes back to
+      // APPROVED (retryable) instead of being stranded in APPLYING, and
+      // surface the original error untouched.
+      await this.approvals.revertApply(workspaceId, approvalId);
+      throw err;
+    }
 
-    // Tool ran successfully — only now claim the decision as applied.
-    await this.approvals.markApplied(workspaceId, approvalId);
+    if (invoked.status !== 'OK') {
+      // Unreachable today — approvedBy always makes the broker execute
+      // inline rather than re-enqueue — but never report APPLIED for
+      // anything short of a real OK.
+      await this.approvals.revertApply(workspaceId, approvalId);
+      throw new BadRequestException(`tool call did not complete (status: ${invoked.status})`);
+    }
+
+    await this.approvals.finishApply(workspaceId, approvalId);
 
     return { status: 'APPLIED', result: invoked.result };
   }

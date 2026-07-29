@@ -4483,7 +4483,7 @@ model ApprovalRequest {
   id               String    @id @default(uuid())
   workspaceId      String
   kind             String // BUDGET_REALLOCATION | PUBLISH | SEND | AD_SPEND | TARGET_CHANGE | CHANNEL_LAUNCH
-  status           String    @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED | APPLIED
+  status           String    @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED | APPLYING | APPLIED
   summary          String    @db.Text
   payload          Json
   requestedByRunId String?

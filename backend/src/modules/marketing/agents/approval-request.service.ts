@@ -79,6 +79,51 @@ export class ApprovalRequestService {
     return this.owned(workspaceId, id);
   }
 
+  /**
+   * Claim-first execution guard (APPROVED -> APPLYING), for executors whose
+   * side effect is NOT itself idempotent/atomic (an MCP tool call: send a
+   * message, publish a post, push a spend change). `markApplied` above
+   * guards double-MARKING — it is called AFTER the side effect runs, so two
+   * concurrent callers can both pass an APPROVED read, both run the side
+   * effect, and only the loser fails at markApplied, after its send already
+   * happened. Claiming APPLYING BEFORE the side effect runs closes that
+   * window: only the caller that wins this atomic updateMany may proceed to
+   * execute; the loser is rejected here, before touching anything.
+   * Pair with `finishApply` (success) or `revertApply` (failure) — never
+   * leave a request stranded in APPLYING.
+   */
+  async claimForApply(workspaceId: string, id: string) {
+    const claim = await this.prisma.approvalRequest.updateMany({
+      where: { id, workspaceId, status: 'APPROVED' },
+      data: { status: 'APPLYING' },
+    });
+    if (claim.count === 0) {
+      const fresh = await this.owned(workspaceId, id); // 404 for missing/cross-workspace
+      throw new BadRequestException(`cannot apply a ${fresh.status} request`);
+    }
+    return this.owned(workspaceId, id);
+  }
+
+  /** Completes a `claimForApply` claim after the side effect succeeded (APPLYING -> APPLIED). */
+  async finishApply(workspaceId: string, id: string) {
+    const claim = await this.prisma.approvalRequest.updateMany({
+      where: { id, workspaceId, status: 'APPLYING' },
+      data: { status: 'APPLIED', appliedAt: new Date() },
+    });
+    if (claim.count === 0) {
+      throw new BadRequestException('request is not in an APPLYING state');
+    }
+    return this.owned(workspaceId, id);
+  }
+
+  /** Releases a `claimForApply` claim after the side effect failed (APPLYING -> APPROVED), so an operator can retry. */
+  async revertApply(workspaceId: string, id: string): Promise<void> {
+    await this.prisma.approvalRequest.updateMany({
+      where: { id, workspaceId, status: 'APPLYING' },
+      data: { status: 'APPROVED' },
+    });
+  }
+
   private async decide(workspaceId: string, id: string, userId: string, status: 'APPROVED' | 'REJECTED') {
     const req = await this.owned(workspaceId, id);
     if (req.expiresAt && req.expiresAt.getTime() < Date.now()) {

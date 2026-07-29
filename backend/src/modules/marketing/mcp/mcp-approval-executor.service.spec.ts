@@ -1,13 +1,15 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { McpApprovalExecutorService } from './mcp-approval-executor.service';
+import { ApprovalRequestService } from '../agents/approval-request.service';
 
 /**
  * This executor is the "approve → EXECUTE" capstone for MCP write tools
  * (mirrors BudgetExecutorService for the reallocation lane). Coverage here
  * mirrors the money-safety posture: never execute a non-MCP payload (a
  * budget-autopilot approval must keep flowing through BudgetExecutorService),
- * never execute anything but an APPROVED request, and never mark applied
- * unless the tool actually ran.
+ * never execute anything but an APPROVED request, never let two concurrent
+ * callers both reach the broker, and never mark applied unless the tool
+ * actually ran (and revert the claim, not strand it, when it doesn't).
  */
 describe('McpApprovalExecutorService', () => {
   const WS = 'ws1';
@@ -19,7 +21,11 @@ describe('McpApprovalExecutorService', () => {
     const prisma = {
       approvalRequest: { findFirst: jest.fn().mockResolvedValue(overrides.approval ?? null) },
     };
-    const approvals = { markApplied: jest.fn().mockResolvedValue({ id: APPROVAL, status: 'APPLIED' }) };
+    const approvals = {
+      claimForApply: jest.fn().mockResolvedValue({ id: APPROVAL, status: 'APPLYING' }),
+      finishApply: jest.fn().mockResolvedValue({ id: APPROVAL, status: 'APPLIED' }),
+      revertApply: jest.fn().mockResolvedValue(undefined),
+    };
     const broker = { invoke: jest.fn().mockResolvedValue({ status: 'OK', result: { moved: 100 } }) };
     const runs = {
       track: jest.fn((_workspaceId: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => fn('run-1')),
@@ -37,46 +43,73 @@ describe('McpApprovalExecutorService', () => {
     payload,
   });
 
-  it('404s when the approval is missing or belongs to another workspace', async () => {
+  it('404s when the approval is missing', async () => {
     const { svc } = make({ approval: null });
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('scopes the lookup to the caller workspace (tenant isolation, not just existence)', async () => {
+    const { svc, prisma } = make({ approval: null });
+    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(NotFoundException);
+    // A where-clause missing `workspaceId` (the cross-tenant bug) would still
+    // satisfy a mock that unconditionally returns null, so assert the exact
+    // shape queried rather than only the outcome.
+    expect(prisma.approvalRequest.findFirst).toHaveBeenCalledWith({ where: { id: APPROVAL, workspaceId: WS } });
+  });
+
   it('rejects a non-MCP payload (e.g. a budget-autopilot reallocation)', async () => {
-    const { svc, broker } = make({ approval: mcpApproval('APPROVED', { budgetId: 'b1', runId: 'r1', after: [] }) });
+    const { svc, broker, approvals } = make({ approval: mcpApproval('APPROVED', { budgetId: 'b1', runId: 'r1', after: [] }) });
+    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
+    expect(approvals.claimForApply).not.toHaveBeenCalled();
+    expect(broker.invoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects a PENDING request without reaching the broker', async () => {
+    const { svc, broker, approvals } = make({ approval: mcpApproval('PENDING') });
+    approvals.claimForApply.mockRejectedValue(new BadRequestException('cannot apply a PENDING request'));
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
     expect(broker.invoke).not.toHaveBeenCalled();
   });
 
-  it('rejects a PENDING request', async () => {
-    const { svc, broker } = make({ approval: mcpApproval('PENDING') });
+  it('rejects a REJECTED request without reaching the broker', async () => {
+    const { svc, broker, approvals } = make({ approval: mcpApproval('REJECTED') });
+    approvals.claimForApply.mockRejectedValue(new BadRequestException('cannot apply a REJECTED request'));
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
     expect(broker.invoke).not.toHaveBeenCalled();
   });
 
-  it('rejects a REJECTED request', async () => {
-    const { svc, broker } = make({ approval: mcpApproval('REJECTED') });
+  it('rejects an already-APPLIED request without reaching the broker', async () => {
+    const { svc, broker, approvals } = make({ approval: mcpApproval('APPLIED') });
+    approvals.claimForApply.mockRejectedValue(new BadRequestException('cannot apply a APPLIED request'));
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
     expect(broker.invoke).not.toHaveBeenCalled();
   });
 
-  it('rejects an already-APPLIED request', async () => {
-    const { svc, broker } = make({ approval: mcpApproval('APPLIED') });
+  it('rejects an EXPIRED request without reaching the broker', async () => {
+    const { svc, broker, approvals } = make({ approval: mcpApproval('EXPIRED') });
+    approvals.claimForApply.mockRejectedValue(new BadRequestException('cannot apply a EXPIRED request'));
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
     expect(broker.invoke).not.toHaveBeenCalled();
   });
 
-  it('rejects an EXPIRED request', async () => {
-    const { svc, broker } = make({ approval: mcpApproval('EXPIRED') });
+  it('claims BEFORE invoking the broker, and a losing concurrent claim never reaches the broker', async () => {
+    // Simulates the loser of a real concurrent race: claimForApply's atomic
+    // updateMany already reported zero rows claimed (another caller holds
+    // APPLYING), so this call must never touch the tool.
+    const { svc, broker, approvals } = make({ approval: mcpApproval() });
+    approvals.claimForApply.mockRejectedValue(new BadRequestException('cannot apply a APPLYING request'));
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
     expect(broker.invoke).not.toHaveBeenCalled();
+    expect(approvals.finishApply).not.toHaveBeenCalled();
   });
 
-  it('executes the tool and marks the request applied on success', async () => {
+  it('executes the tool and finishes the claim (APPLYING -> APPLIED) on success', async () => {
     const { svc, broker, approvals } = make({ approval: mcpApproval() });
     const out = await svc.apply(WS, APPROVAL, USER);
+    expect(approvals.claimForApply).toHaveBeenCalledWith(WS, APPROVAL);
     expect(broker.invoke).toHaveBeenCalled();
-    expect(approvals.markApplied).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(approvals.finishApply).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(approvals.revertApply).not.toHaveBeenCalled();
     expect(out).toEqual({ status: 'APPLIED', result: { moved: 100 } });
   });
 
@@ -95,6 +128,18 @@ describe('McpApprovalExecutorService', () => {
     );
   });
 
+  it('opens the AgentRun under agent "mcp" with a goal naming the tool and the approval', async () => {
+    const { svc, runs } = make({ approval: mcpApproval() });
+    await svc.apply(WS, APPROVAL, USER);
+    expect(runs.track).toHaveBeenCalledWith(
+      WS,
+      expect.objectContaining({ agent: 'mcp', goal: expect.stringContaining(TOOL) }),
+      expect.any(Function),
+    );
+    const [, input] = runs.track.mock.calls[0];
+    expect((input as { goal: string }).goal).toContain(APPROVAL);
+  });
+
   it('grants the scopes the tool itself declares (the human already authorised this specific call)', async () => {
     const { svc, broker, registry } = make({ approval: mcpApproval() });
     registry.get.mockReturnValue({ name: TOOL, scopes: ['settings.manage', 'ads.write'] });
@@ -106,10 +151,64 @@ describe('McpApprovalExecutorService', () => {
     );
   });
 
-  it('does not mark applied when the tool execution fails, and surfaces the error', async () => {
+  it('on tool failure, reverts the claim (APPLYING -> APPROVED, not stranded) and surfaces the error', async () => {
     const { svc, broker, approvals } = make({ approval: mcpApproval() });
     broker.invoke.mockRejectedValue(new Error('provider rejected the write'));
     await expect(svc.apply(WS, APPROVAL, USER)).rejects.toThrow('provider rejected the write');
-    expect(approvals.markApplied).not.toHaveBeenCalled();
+    expect(approvals.revertApply).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(approvals.finishApply).not.toHaveBeenCalled();
+  });
+
+  it('reverts the claim and refuses to report APPLIED if the broker somehow does not return OK', async () => {
+    const { svc, approvals, broker } = make({ approval: mcpApproval() });
+    broker.invoke.mockResolvedValue({ status: 'PENDING_APPROVAL', approvalId: 'appr-2' });
+    await expect(svc.apply(WS, APPROVAL, USER)).rejects.toBeInstanceOf(BadRequestException);
+    expect(approvals.revertApply).toHaveBeenCalledWith(WS, APPROVAL);
+    expect(approvals.finishApply).not.toHaveBeenCalled();
+  });
+
+  it('genuinely prevents double execution under real concurrency (real ApprovalRequestService + in-memory claim state)', async () => {
+    // No mocked approvals here — a real ApprovalRequestService wired to a
+    // fake prisma that enforces the same conditional-updateMany semantics a
+    // real DB would (an UPDATE ... WHERE status = 'APPROVED' only ever wins
+    // once). This is the actual regression scenario Important-1 called out:
+    // execute-then-claim lets both concurrent callers reach the broker;
+    // claim-then-execute must let only one.
+    let status = 'APPROVED';
+    const prisma = {
+      approvalRequest: {
+        findFirst: jest.fn(async ({ where }: any) =>
+          where.id === APPROVAL && where.workspaceId === WS
+            ? { id: APPROVAL, workspaceId: WS, status, payload: { tool: TOOL, args: { amount: 100 } } }
+            : null,
+        ),
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          if (where.status && where.status !== status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        }),
+      },
+    };
+    const approvals = new ApprovalRequestService(prisma as any);
+    let brokerCalls = 0;
+    const broker = {
+      invoke: jest.fn(async () => {
+        brokerCalls += 1;
+        return { status: 'OK', result: { moved: 100 } };
+      }),
+    };
+    const runs = { track: jest.fn((_ws: string, _input: unknown, fn: (runId: string) => Promise<unknown>) => fn('run-1')) };
+    const registry = { get: jest.fn().mockReturnValue({ name: TOOL, scopes: [] }) };
+    const svc = new McpApprovalExecutorService(prisma as any, approvals as any, broker as any, runs as any, registry as any);
+
+    const results = await Promise.allSettled([svc.apply(WS, APPROVAL, USER), svc.apply(WS, APPROVAL, USER)]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(BadRequestException);
+    expect(brokerCalls).toBe(1); // the tool ran exactly once, not twice
+    expect(status).toBe('APPLIED');
   });
 });
