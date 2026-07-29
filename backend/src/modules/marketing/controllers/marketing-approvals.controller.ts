@@ -10,6 +10,7 @@ import { MarketingUserPayload } from '../types';
 import { Audit } from '../../audit/audit.decorator';
 import { ApprovalRequestService } from '../agents/approval-request.service';
 import { AgentRunService } from '../agents/agent-run.service';
+import { McpApprovalExecutorService } from '../mcp/mcp-approval-executor.service';
 
 /**
  * The human-in-the-loop surface for the multi-agent + Budget Autopilot stack:
@@ -23,6 +24,7 @@ export class MarketingApprovalsController {
   constructor(
     private readonly approvals: ApprovalRequestService,
     private readonly runs: AgentRunService,
+    private readonly mcpExecutor: McpApprovalExecutorService,
   ) {}
 
   @Get()
@@ -45,6 +47,18 @@ export class MarketingApprovalsController {
   @Audit({ action: 'approval.reject', resourceType: 'approval_request', resourceIdParam: 'id' })
   reject(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
     return this.approvals.reject(a.workspaceId, id, a.id);
+  }
+
+  // Apply an APPROVED MCP tool-call request: claims it (APPROVED -> APPLYING)
+  // and runs it for real through McpBrokerService (mirrors budget's
+  // reallocations/:approvalId/apply). Nothing an agent proposed touches the
+  // outside world until a human hits this route.
+  @Post(':id/apply')
+  @MarketingRoles('MANAGER')
+  @RequirePermission('settings.manage')
+  @Audit({ action: 'mcp.approval.apply', resourceType: 'approval_request', resourceIdParam: 'id' })
+  apply(@CurrentMarketingUser() a: MarketingUserPayload, @Param('id') id: string) {
+    return this.mcpExecutor.apply(a.workspaceId, id, a.id);
   }
 
   @Get('agent-runs')
