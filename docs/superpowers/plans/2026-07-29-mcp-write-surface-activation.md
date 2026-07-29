@@ -168,8 +168,34 @@ Derive every claim from the code, not from this plan.
 
 ---
 
+## Task 7: Make MCP approvals actionable in the UI
+
+**Files:**
+- Modify: `frontend/src/features/marketing/api/growthBudget.service.ts`
+- Modify: `frontend/src/pages/marketing/budget/BudgetAutopilotPage.tsx`
+- Tests: alongside each
+
+**This task is much smaller than it first appears.** The generic listing already exists: `BudgetAutopilotPage` calls `listPendingApprovals()` with no filter, so MCP approvals (`SEND`, `PUBLISH`, `BUDGET_REALLOCATION`) **already appear in that list today**. It branches on `r.kind` and currently sends `BUDGET_REALLOCATION` through `applyReallocation(id)` while every other kind gets `approveRequest(id)` alone — approve with no apply, which is precisely the gap Tasks 2-3 close on the backend.
+
+So the work is:
+
+1. Add `applyRequest(id)` to the API client, hitting the `POST /approvals/:id/apply` route from Task 3.
+2. In the page's approve mutation, route MCP-originated kinds through approve-then-apply rather than approve alone. Determine "MCP-originated" from data the backend already returns — do not hardcode a kind list that will drift as tools are added. Inspect what `ApprovalRequest.payload` carries for an MCP request (the broker enqueues `{ tool, args }`) and prefer that over `kind`, which is shared with the budget autopilot.
+3. Show the operator what they are approving: an MCP request's summary currently reads `MCP agent requested "<tool>"`. Surface the tool name and its arguments so nobody approves a customer message without seeing its text.
+4. Keep `BUDGET_REALLOCATION` on its existing `applyReallocation` path — that flow is unchanged and must not regress.
+
+**Discoverability is a real limitation, not a bug to fix here:** the queue lives on a budget-branded page. Note it in the docs; a dedicated approvals route is a separate decision.
+
+- [ ] **Step 1: Write the failing tests** — an MCP-kind approval triggers approve then apply; a `BUDGET_REALLOCATION` still goes through `applyReallocation` and only that; the row renders the tool name and arguments.
+- [ ] **Step 2: Run tests, confirm they fail**
+- [ ] **Step 3: Implement**
+- [ ] **Step 4: Run the frontend suite**
+- [ ] **Step 5: Commit**
+
+---
+
 ## Out of scope, tracked separately
 
-- **A generic approvals inbox in the frontend.** Today the only approvals UI is `BudgetAutopilotPage`, which is budget-specific; the API is generic but nothing surfaces MCP approvals to a human. Without it, applying an MCP approval is an API-only operation. This is real work and is a separate decision.
+- A dedicated approvals route, separate from the budget page.
 - `subscriptions/listen` holds a socket for no benefit until a Faz 4 event bus exists.
 - The design spec's §4 `originValidation` / `hostHeaderValidation` never shipped.
