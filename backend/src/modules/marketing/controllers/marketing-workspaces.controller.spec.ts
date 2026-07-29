@@ -167,14 +167,18 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
      *  same shape MarketingGuard leaves after verifying a JWT, without
      *  needing a real token/JwtService/PrismaService in this isolated module. */
     class FakeMarketingGuard implements CanActivate {
-      constructor(private readonly user: { id: string; workspaceId: string; role: string; email: string; customRoleId: null }) {}
+      constructor(private readonly user: { id: string; workspaceId: string; role: string; email: string; customRoleId: string | null }) {}
       canActivate(context: ExecutionContext): boolean {
         context.switchToHttp().getRequest().marketingUser = this.user;
         return true;
       }
     }
 
-    async function buildApp(role: string, authService: Record<string, jest.Mock>): Promise<INestApplication> {
+    async function buildApp(
+      role: string,
+      authService: Record<string, jest.Mock>,
+      opts: { customRoleId?: string | null; prisma?: Record<string, unknown> } = {},
+    ): Promise<INestApplication> {
       const moduleRef = await Test.createTestingModule({
         controllers: [MarketingWorkspacesController],
         providers: [
@@ -183,10 +187,12 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
           MarketingRolesGuard,
           PermissionsGuard,
           RolesService,
-          // RolesService's only dependency; PermissionsGuard never reaches
-          // it for the MANAGER-refused case (MarketingRolesGuard throws
-          // first), so an inert mock is enough to satisfy DI.
-          { provide: PrismaService, useValue: {} },
+          // RolesService's only dependency. Inert for the plain-role cases
+          // (PermissionsGuard never reaches it there — MarketingRolesGuard
+          // throws first for MANAGER, and a legacy OWNER holds every
+          // permission unconditionally); the custom-role case below drives
+          // it for real via `customRole.findFirst`.
+          { provide: PrismaService, useValue: opts.prisma ?? {} },
         ],
       })
         .overrideGuard(MarketingGuard)
@@ -196,7 +202,7 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
             workspaceId: 'ws-1',
             role,
             email: 'actor@test.local',
-            customRoleId: null,
+            customRoleId: opts.customRoleId ?? null,
           }),
         )
         .compile();
@@ -231,6 +237,47 @@ describe('MarketingWorkspacesController — mcp-write-mode', () => {
 
         expect(res.status).toBe(200);
         expect(authService.setMcpWriteMode).toHaveBeenCalledWith('ws-1', 'AUTONOMOUS');
+      } finally {
+        await app.close();
+      }
+    });
+
+    /**
+     * Fix round 2: `MarketingRolesGuard` alone is not the whole story.
+     * `RolesService.resolvePermissions` (roles.service.ts:188-200) checks
+     * `user.customRoleId` FIRST — it does NOT fall through legacy-role
+     * permissions when a custom role is present, even for OWNER rank:
+     *   if (user.customRoleId) { ...read the custom role's permissions... }
+     *   return LEGACY_ROLE_PERMISSIONS[user.role] ?? [];
+     * So a custom role genuinely CAN strip `settings.manage` from an
+     * OWNER-rank user — `MarketingRolesGuard` passes them (rank 3), and
+     * `PermissionsGuard` is the ONLY thing left to stop them. This test
+     * drives that exact seam: a real `PermissionsGuard` + real
+     * `RolesService`, with `PrismaService.customRole.findFirst` stubbed to
+     * return a custom role whose `permissions` excludes `settings.manage`.
+     */
+    it('PATCH ... as OWNER-rank with a custom role that excludes settings.manage is refused with 403 (PermissionsGuard, not just rank)', async () => {
+      const authService = { setMcpWriteMode: jest.fn().mockResolvedValue({ mcpWriteMode: 'AUTONOMOUS' }) };
+      const prisma = {
+        customRole: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'cr-restricted',
+            workspaceId: 'ws-1',
+            permissions: ['leads.read'], // deliberately NOT settings.manage
+          }),
+        },
+      };
+      const app = await buildApp('OWNER', authService, { customRoleId: 'cr-restricted', prisma });
+      try {
+        const res = await request(app.getHttpServer())
+          .patch('/marketing/workspaces/mcp-write-mode')
+          .send({ mode: 'AUTONOMOUS' });
+
+        expect(res.status).toBe(403);
+        expect(prisma.customRole.findFirst).toHaveBeenCalledWith({
+          where: { id: 'cr-restricted', workspaceId: 'ws-1' },
+        });
+        expect(authService.setMcpWriteMode).not.toHaveBeenCalled();
       } finally {
         await app.close();
       }
