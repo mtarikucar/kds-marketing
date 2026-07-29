@@ -168,21 +168,61 @@ describe('ApprovalRequestService', () => {
       await expect(svc.claimForApply('ws1', 'a-other')).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('finishApply claims APPLYING→APPLIED atomically, with appliedAt', async () => {
+    it('finishApply claims →APPLIED atomically, with appliedAt', async () => {
       const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPLYING', expiresAt: null });
       const svc = new ApprovalRequestService(prisma);
       await svc.finishApply('ws1', 'a1');
       const call = updateMany.mock.calls[0][0];
-      expect(call.where).toEqual({ id: 'a1', workspaceId: 'ws1', status: 'APPLYING' });
+      expect(call.where).toEqual({ id: 'a1', workspaceId: 'ws1', status: { in: ['APPLYING', 'APPROVED'] } });
       expect(call.data).toMatchObject({ status: 'APPLIED' });
       expect(call.data.appliedAt).toBeInstanceOf(Date);
     });
 
-    it('finishApply rejects when the row is not APPLYING (nothing to finish)', async () => {
+    // Issue #152: reapStaleApplying can pre-empt a live execution whose
+    // heartbeat was silenced past STALE_APPLYING_MS and put the row back to
+    // APPROVED while its tool call is still running. finishApply is only ever
+    // called once the tool HAS run, so it must still land APPLIED — leaving
+    // the row APPROVED shows a live Apply button that re-sends.
+    it('finishApply still lands APPLIED when the reaper already returned the row to APPROVED', async () => {
       const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPROVED', expiresAt: null });
+      const svc = new ApprovalRequestService(prisma);
+      await svc.finishApply('ws1', 'a1');
+      expect(updateMany.mock.calls[0][0].where.status).toEqual({ in: ['APPLYING', 'APPROVED'] });
+      expect(updateMany.mock.calls[0][0].data).toMatchObject({ status: 'APPLIED' });
+    });
+
+    it('finishApply is idempotent — a row already APPLIED is a success, not an error', async () => {
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPLIED', expiresAt: null });
+      updateMany.mockResolvedValue({ count: 0 });
+      const svc = new ApprovalRequestService(prisma);
+      await expect(svc.finishApply('ws1', 'a1')).resolves.toMatchObject({ status: 'APPLIED' });
+    });
+
+    it('finishApply retries a transient write failure instead of stranding the row', async () => {
+      // The strand this repairs is the one it would otherwise create: a failed
+      // terminal write leaves the row APPLYING, and the reaper hands it back
+      // as re-appliable 60s later — for an action that already happened.
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPLYING', expiresAt: null });
+      updateMany.mockRejectedValueOnce(new Error('connection terminated')).mockResolvedValue({ count: 1 });
+      const svc = new ApprovalRequestService(prisma);
+      await expect(svc.finishApply('ws1', 'a1')).resolves.toBeTruthy();
+      expect(updateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('finishApply gives up after its bounded retries and rethrows the underlying fault', async () => {
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPLYING', expiresAt: null });
+      updateMany.mockRejectedValue(new Error('db down'));
+      const svc = new ApprovalRequestService(prisma);
+      await expect(svc.finishApply('ws1', 'a1')).rejects.toThrow(/db down/);
+      expect(updateMany).toHaveBeenCalledTimes(3); // initial + 2 backoff attempts
+    });
+
+    it('finishApply rejects a state no executed action should be in, and does not retry it', async () => {
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'REJECTED', expiresAt: null });
       updateMany.mockResolvedValue({ count: 0 });
       const svc = new ApprovalRequestService(prisma);
       await expect(svc.finishApply('ws1', 'a1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(updateMany).toHaveBeenCalledTimes(1); // a contract violation is not a transient fault
     });
 
     it('revertApply claims APPLYING→APPROVED atomically (releases the claim for retry)', async () => {

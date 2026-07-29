@@ -92,7 +92,14 @@ export class ApprovalRequestService {
    *  customer-facing action (send/publish/reallocate) as done when it may
    *  never have happened — worse than a duplicate apply, which claimForApply
    *  already makes at-most-once-safe, this would be a silent no-op mistaken
-   *  for success. */
+   *  for success.
+   *
+   *  Reclaiming a row whose execution is in fact still alive is not final:
+   *  `finishApply` accepts APPROVED as well as APPLYING, so when that
+   *  execution completes it still records APPLIED and takes the request back
+   *  out of the appliable queue. This sweep can therefore be wrong for a
+   *  while, but not permanently — see issue #152 for the window that leaves
+   *  (an operator clicking Apply before the live call finishes). */
   @Cron(CronExpression.EVERY_10_MINUTES, { name: 'approval-applying-reaper' })
   async reapStaleApplying(): Promise<void> {
     try {
@@ -250,16 +257,60 @@ export class ApprovalRequestService {
     return this.owned(workspaceId, id);
   }
 
-  /** Completes a `claimForApply` claim after the side effect succeeded (APPLYING -> APPLIED). */
+  /** Backoff schedule for the terminal write in `finishApply`. Two attempts
+   *  after the first, ~500ms worst case — enough to ride out a failover blip
+   *  without holding the operator's request open. */
+  private static readonly FINISH_RETRY_DELAYS_MS = [100, 400];
+
+  /**
+   * Completes a `claimForApply` claim after the side effect succeeded
+   * (-> APPLIED). Every caller is post-execution: by the time this runs, the
+   * send/publish/spend has already reached the outside world. That single
+   * fact drives all three of its unusual properties.
+   *
+   * **Accepts APPROVED, not just APPLYING.** `reapStaleApplying` can pre-empt
+   * a live execution whose heartbeat went silent past STALE_APPLYING_MS — an
+   * event-loop stall or a DB outage long enough to drop four ticks — and put
+   * the row back to APPROVED while its tool call is still running. Insisting
+   * on APPLYING there would fail the finish and leave the row in the human
+   * queue, where the Apply affordance RE-SENDS what already went out.
+   *
+   * **Retries a failed write.** The strand this repairs is the same one it
+   * would otherwise create: a transient failure of this very statement leaves
+   * the row APPLYING, and the reaper hands it back as re-appliable 60s later.
+   *
+   * **Idempotent.** A row already APPLIED is a success, not an error.
+   *
+   * The widened predicate is safe precisely because of that contract — this
+   * is never called speculatively, only once a tool has genuinely run. A row
+   * in any other state (REJECTED, EXPIRED, PENDING) means the caller violated
+   * it, and that still throws.
+   */
   async finishApply(workspaceId: string, id: string) {
-    const claim = await this.prisma.approvalRequest.updateMany({
-      where: { id, workspaceId, status: 'APPLYING' },
-      data: { status: 'APPLIED', appliedAt: new Date() },
-    });
-    if (claim.count === 0) {
-      throw new BadRequestException('request is not in an APPLYING state');
+    let lastError: unknown;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const claim = await this.prisma.approvalRequest.updateMany({
+          where: { id, workspaceId, status: { in: ['APPLYING', 'APPROVED'] } },
+          data: { status: 'APPLIED', appliedAt: new Date() },
+        });
+        if (claim.count > 0) return this.owned(workspaceId, id);
+        // Nothing matched: either this already landed (idempotent success), or
+        // the row is somewhere no executed action should ever have left it.
+        const current = await this.owned(workspaceId, id);
+        if (current.status === 'APPLIED') return current;
+        throw new BadRequestException(`request cannot be finished from status ${current.status}`);
+      } catch (e) {
+        // A contract violation is not a transient fault — never retry it.
+        if (e instanceof BadRequestException || e instanceof NotFoundException) throw e;
+        lastError = e;
+        const delay = ApprovalRequestService.FINISH_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) break;
+        this.logger.warn(`finishApply attempt ${attempt + 1} failed for ${id}, retrying: ${(e as Error)?.message ?? e}`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
-    return this.owned(workspaceId, id);
+    throw lastError;
   }
 
   /** Releases a `claimForApply` claim after the side effect failed (APPLYING -> APPROVED), so an operator can retry. */

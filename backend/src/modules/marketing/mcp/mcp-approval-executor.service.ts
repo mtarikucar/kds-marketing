@@ -160,10 +160,9 @@ export class McpApprovalExecutorService {
           // UI reads as "the action did not happen".
           this.logger.error(
             `approval ${approvalId} (${toolName}): tool call succeeded but post-execution run bookkeeping failed; ` +
-              `finishing the claim (APPLYING -> APPLIED), never reverting: ${(err as Error)?.message ?? err}`,
+              `finishing the claim (-> APPLIED), never reverting: ${(err as Error)?.message ?? err}`,
           );
-          await this.approvals.finishApply(workspaceId, approvalId);
-          return { status: 'APPLIED', result: toolResult };
+          return this.settleApplied(workspaceId, approvalId, toolName, toolResult);
         }
         // The tool never completed — release the claim so the request goes
         // back to APPROVED (retryable) instead of being stranded in
@@ -180,11 +179,46 @@ export class McpApprovalExecutorService {
         throw new BadRequestException(`tool call did not complete (status: ${invoked.status})`);
       }
 
-      await this.approvals.finishApply(workspaceId, approvalId);
-
-      return { status: 'APPLIED', result: invoked.result };
+      return this.settleApplied(workspaceId, approvalId, toolName, invoked.result);
     } finally {
       clearInterval(heartbeat);
     }
+  }
+
+  /**
+   * Records a claim as APPLIED once the tool has genuinely run, and reports
+   * APPLIED to the caller whether or not that record could be written.
+   *
+   * `finishApply` already retries a transient failure. If it still cannot
+   * commit, the choice left is which lie to tell: report the action as failed
+   * (it wasn't — the customer got the message) or report it as applied while
+   * the row says otherwise. Only the first one gets a customer contacted
+   * twice, because "failed" invites the operator to click Apply again. So the
+   * caller is told the truth about the ACTION, and the bookkeeping failure is
+   * raised on the log — a channel that reaches operators without offering
+   * them a button that re-sends.
+   *
+   * The row is then left in whatever state the failure left it. That is not
+   * silent: `reapStaleApplying` returns a stranded APPLYING row to APPROVED,
+   * where it stays visible in the approvals queue rather than disappearing.
+   * Narrowed, not eliminated — an operator who clicks Apply on it before
+   * anyone reads the log can still re-send. Closing that last window needs a
+   * durable execution record the reaper can consult, which is issue #152.
+   */
+  private async settleApplied(
+    workspaceId: string,
+    approvalId: string,
+    toolName: string,
+    result: unknown,
+  ): Promise<{ status: 'APPLIED'; result: unknown }> {
+    try {
+      await this.approvals.finishApply(workspaceId, approvalId);
+    } catch (e) {
+      this.logger.error(
+        `approval ${approvalId} (${toolName}): the tool RAN but the claim could not be recorded APPLIED — ` +
+          `do not re-apply this request; verify the action landed before any retry: ${(e as Error)?.message ?? e}`,
+      );
+    }
+    return { status: 'APPLIED', result };
   }
 }

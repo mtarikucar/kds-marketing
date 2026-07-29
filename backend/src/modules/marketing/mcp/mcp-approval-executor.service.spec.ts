@@ -176,6 +176,22 @@ describe('McpApprovalExecutorService', () => {
     expect(out).toEqual({ status: 'APPLIED', result: { moved: 100 } });
   });
 
+  // Issue #152, the last hop of the same chain: finishApply is itself a DB
+  // write. If it fails after the tool ran, propagating that error tells the
+  // operator the ACTION failed — and the honest-looking retry re-sends. The
+  // caller must be told the truth about the action; the bookkeeping failure
+  // goes to the log, a channel with no Apply button on it.
+  it('reports APPLIED even when recording the claim fails, because the tool already ran', async () => {
+    const { svc, broker, approvals } = make({ approval: mcpApproval() });
+    approvals.finishApply.mockRejectedValue(new Error('db down (simulated, past all retries)'));
+
+    const out = await svc.apply(WS, APPROVAL, USER);
+
+    expect(out).toEqual({ status: 'APPLIED', result: { moved: 100 } });
+    expect(broker.invoke).toHaveBeenCalledTimes(1); // ran exactly once
+    expect(approvals.revertApply).not.toHaveBeenCalled(); // never back into the appliable queue
+  });
+
   it('H1: a bookkeeping failure BEFORE the tool ran (broker.invoke itself throws) still reverts, same as any tool failure', async () => {
     const { svc, broker, approvals, runs } = make({ approval: mcpApproval() });
     broker.invoke.mockRejectedValue(new Error('provider rejected the write'));
@@ -224,7 +240,17 @@ describe('McpApprovalExecutorService', () => {
             : null,
         ),
         updateMany: jest.fn(async ({ where, data }: any) => {
-          if (where.status && where.status !== status) return { count: 0 };
+          // Models both predicate shapes a real UPDATE ... WHERE takes:
+          // `status = 'APPROVED'` (claimForApply) and
+          // `status IN ('APPLYING','APPROVED')` (finishApply).
+          const pred = where.status;
+          const matches =
+            pred === undefined
+              ? true
+              : Array.isArray(pred?.in)
+                ? pred.in.includes(status)
+                : pred === status;
+          if (!matches) return { count: 0 };
           status = data.status;
           return { count: 1 };
         }),

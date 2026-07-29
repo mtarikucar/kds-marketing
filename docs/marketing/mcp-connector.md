@@ -335,9 +335,20 @@ what actually runs the tool:
    tool runs under its own registered scope (least privilege), not the
    original API key's scopes — the human who approved it, via `settings.manage`,
    is the authority for this specific execution.
-3. On success, the row moves `APPLYING` → `APPLIED` (`appliedAt` set). On
-   failure, the row moves back `APPLYING` → `APPROVED` so an operator can
-   retry, and the original error is re-thrown untouched — never swallowed.
+3. On success, the row moves → `APPLIED` (`appliedAt` set). On failure —
+   meaning the tool never ran — the row moves back `APPLYING` → `APPROVED` so
+   an operator can retry, and the original error is re-thrown untouched, never
+   swallowed.
+
+   Once the tool HAS run, that direction is closed for good: the request is
+   recorded `APPLIED` and the caller is told `APPLIED`, whatever happens next.
+   `finishApply` retries a failed write, and accepts `APPROVED` as well as
+   `APPLYING` so an execution the reaper pre-empted (below) still lands
+   `APPLIED` when it finishes. If the record still cannot be written, the
+   failure is raised on the **server log** and the response is still
+   `APPLIED` — because the alternative, reporting the action as failed,
+   invites an operator to click Apply again and re-send a message the
+   customer already received.
 
 So an approved `jeeta.send_message` genuinely sends the message,
 `jeeta.set_campaign_status` genuinely transitions the campaign,
@@ -362,6 +373,14 @@ died is exactly the unknown a stranded row represents; an operator decides
 whether to retry. A genuinely slow multi-account or carousel publish (these
 can legitimately run 15+ minutes) is never falsely reclaimed, because it keeps
 heartbeating the whole time.
+
+If the sweep does reclaim a row whose call was still alive — a heartbeat
+silenced past 60s by an event-loop stall or a database blip — the mistake is
+not permanent: that execution's `finishApply` still records `APPLIED` when it
+returns, pulling the request back out of the queue. What remains is a window,
+not a wrong resting state: an operator who clicks Apply during it re-sends.
+Closing it needs a durable execution record the reaper can consult, tracked as
+issue #152.
 
 **Where to act on this today:** the API above, or the Growth Autopilot page's
 **Approvals** tab (`frontend/src/pages/marketing/budget/BudgetAutopilotPage.tsx`
