@@ -26,6 +26,17 @@ describe('ApprovalRequestService', () => {
     });
   });
 
+  // Task 7 fix round 1: an APPROVED-but-unapplied MCP request must stay
+  // visible so an operator can retry apply — a PENDING-only filter made it
+  // vanish the instant approve() succeeded and apply() had not run yet.
+  it('listPending includes both PENDING and APPROVED (not REJECTED/EXPIRED/APPLYING/APPLIED)', async () => {
+    const { prisma } = makePrisma();
+    const svc = new ApprovalRequestService(prisma);
+    await svc.listPending('ws1');
+    const call = prisma.approvalRequest.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ workspaceId: 'ws1', status: { in: ['PENDING', 'APPROVED'] } });
+  });
+
   it('approves a pending request via an ATOMIC conditional claim (single winner)', async () => {
     const { prisma, updateMany } = makePrisma();
     const svc = new ApprovalRequestService(prisma);

@@ -46,9 +46,20 @@ export class ApprovalRequestService {
     });
   }
 
+  /**
+   * The operator queue: PENDING (awaiting a decision) AND APPROVED-but-not-yet-
+   * APPLIED (decided, but the execute step hasn't finished). The latter matters
+   * because approve and apply are two separate calls for MCP-originated
+   * requests (McpApprovalExecutorService.apply) — if apply fails or the tab
+   * closes between the two, the row must stay visible with a retry affordance
+   * instead of vanishing. A PENDING-only filter here previously stranded such
+   * a request APPROVED-unapplied and invisible, with no way for an operator to
+   * ever find and retry it. APPLYING/APPLIED/REJECTED/EXPIRED are terminal or
+   * mid-flight-and-owned-by-the-in-progress-caller, so they stay out.
+   */
   listPending(workspaceId: string, take = 100) {
     return this.prisma.approvalRequest.findMany({
-      where: { workspaceId, status: 'PENDING' },
+      where: { workspaceId, status: { in: ['PENDING', 'APPROVED'] } },
       orderBy: { createdAt: 'asc' },
       take: Math.min(Math.max(take, 1), 200),
     });
