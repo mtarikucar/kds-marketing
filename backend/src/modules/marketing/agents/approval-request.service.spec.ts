@@ -183,4 +183,71 @@ describe('ApprovalRequestService', () => {
       expect(status).toBe('APPLYING');
     });
   });
+
+  // reapStaleApplying: crash recovery for the claim-first guard above — if
+  // revertApply itself throws, or the process dies between claimForApply and
+  // finishApply/revertApply, a row is stranded in APPLYING forever. This
+  // simulates the real Postgres predicate (status + updatedAt comparison)
+  // in-memory rather than asserting on call args, so "a fresh row is left
+  // alone" is a genuine behavioural check, not a vacuous one.
+  describe('reapStaleApplying', () => {
+    function makeRows(rows: Array<{ id: string; status: string; updatedAt: Date }>) {
+      const state = new Map(rows.map((r) => [r.id, { ...r }]));
+      const updateMany = jest.fn(async ({ where, data }: any) => {
+        let count = 0;
+        for (const row of state.values()) {
+          if (where.status && row.status !== where.status) continue;
+          if (where.updatedAt?.lt && !(row.updatedAt.getTime() < where.updatedAt.lt.getTime())) continue;
+          Object.assign(row, data);
+          count++;
+        }
+        return { count };
+      });
+      const prisma = { approvalRequest: { updateMany } } as any;
+      return { prisma, state, updateMany };
+    }
+
+    const longAgo = new Date(Date.now() - 60 * 60 * 1000); // 1h ago — well past any plausible threshold
+    const justNow = new Date(); // freshly claimed
+
+    it('reclaims a row stuck in APPLYING past the threshold back to APPROVED', async () => {
+      const { prisma, state } = makeRows([{ id: 'a1', status: 'APPLYING', updatedAt: longAgo }]);
+      const svc = new ApprovalRequestService(prisma);
+
+      await svc.reapStaleApplying();
+
+      expect(state.get('a1')!.status).toBe('APPROVED');
+    });
+
+    it('leaves a freshly-claimed APPLYING row alone', async () => {
+      const { prisma, state } = makeRows([{ id: 'a1', status: 'APPLYING', updatedAt: justNow }]);
+      const svc = new ApprovalRequestService(prisma);
+
+      await svc.reapStaleApplying();
+
+      expect(state.get('a1')!.status).toBe('APPLYING');
+    });
+
+    it('never touches APPLIED, REJECTED or PENDING rows, however old', async () => {
+      const { prisma, state } = makeRows([
+        { id: 'applied', status: 'APPLIED', updatedAt: longAgo },
+        { id: 'rejected', status: 'REJECTED', updatedAt: longAgo },
+        { id: 'pending', status: 'PENDING', updatedAt: longAgo },
+      ]);
+      const svc = new ApprovalRequestService(prisma);
+
+      await svc.reapStaleApplying();
+
+      expect(state.get('applied')!.status).toBe('APPLIED');
+      expect(state.get('rejected')!.status).toBe('REJECTED');
+      expect(state.get('pending')!.status).toBe('PENDING');
+    });
+
+    it('swallows errors (best-effort) instead of throwing, mirroring AgentRunService.reapStaleRuns', async () => {
+      const prisma = { approvalRequest: { updateMany: jest.fn().mockRejectedValueOnce(new Error('db down')) } } as any;
+      const svc = new ApprovalRequestService(prisma);
+
+      await expect(svc.reapStaleApplying()).resolves.toBeUndefined();
+    });
+  });
 });

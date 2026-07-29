@@ -1,6 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+
+/** An APPLYING row older than this was stranded by a crash/thrown-revert mid
+ *  claimForApply/revertApply (mcp-approval-executor.service.ts) — the widest
+ *  single external call any registered MCP tool makes today tops out at
+ *  120s (network-adapters.ts upload timeouts), and claimForApply brackets
+ *  exactly one such call, not a multi-step run. 5 minutes is a >2x margin
+ *  over that, while still surfacing a stranded row within one or two ticks
+ *  of the 10-minute sweep below. */
+const STALE_APPLYING_MS = 5 * 60 * 1000;
 
 export type ApprovalKind =
   | 'BUDGET_REALLOCATION'
@@ -29,7 +39,40 @@ export interface EnqueueInput {
  */
 @Injectable()
 export class ApprovalRequestService {
+  private readonly logger = new Logger(ApprovalRequestService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Crash recovery for the claim-first apply guard (claimForApply /
+   *  finishApply / revertApply): if revertApply itself throws, or the
+   *  process dies between claimForApply and finishApply/revertApply, a row
+   *  is stranded in APPLYING with nothing left to move it out. Sweep it
+   *  back to APPROVED, mirroring AgentRunService.reapStaleRuns().
+   *
+   *  Reclaim to APPROVED, deliberately not APPLIED. Whether the underlying
+   *  MCP tool call actually completed is exactly the unknown a stranded row
+   *  represents — the process could have died before the call, during it, or
+   *  after it succeeded but before finishApply committed. APPROVED puts the
+   *  request back in the human queue (listPending returns PENDING ∪
+   *  APPROVED, and the UI renders an Apply affordance for it — see Task 7)
+   *  where an operator decides whether to retry, instead of guessing.
+   *  Reclaiming to APPLIED would risk silently recording an approved
+   *  customer-facing action (send/publish/reallocate) as done when it may
+   *  never have happened — worse than a duplicate apply, which claimForApply
+   *  already makes at-most-once-safe, this would be a silent no-op mistaken
+   *  for success. */
+  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'approval-applying-reaper' })
+  async reapStaleApplying(): Promise<void> {
+    try {
+      const res = await this.prisma.approvalRequest.updateMany({
+        where: { status: 'APPLYING', updatedAt: { lt: new Date(Date.now() - STALE_APPLYING_MS) } },
+        data: { status: 'APPROVED' },
+      });
+      if (res.count > 0) this.logger.warn(`approval reaper: reclaimed ${res.count} stale APPLYING request(s) to APPROVED`);
+    } catch (e) {
+      this.logger.error(`approval reaper failed: ${(e as Error)?.message ?? e}`);
+    }
+  }
 
   enqueue(workspaceId: string, input: EnqueueInput) {
     return this.prisma.approvalRequest.create({
