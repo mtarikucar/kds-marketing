@@ -17,6 +17,17 @@ export const MCP_OAUTH_AUTHORIZE_PATH = '/api/mcp-oauth/authorize';
 export const MCP_OAUTH_TOKEN_PATH = '/api/mcp-oauth/token';
 
 /**
+ * The SPA route that renders the consent screen (Faz 3 Task 7). The authorize
+ * endpoint hands the browser here rather than rendering HTML itself: the page
+ * sits behind the app's existing login guard, which is what turns "arrived not
+ * signed in" into a login prompt and a return trip — this module never has to
+ * know how authentication works.
+ *
+ * NOT under the `api` prefix: it is a frontend route, served by the SPA.
+ */
+export const MCP_OAUTH_CONSENT_PAGE_PATH = '/oauth/consent';
+
+/**
  * RFC 9728 §3: the protected-resource metadata URL is built by inserting
  * `/.well-known/oauth-protected-resource` between the host component and the
  * PATH component of the resource identifier — i.e. the resource's path is a
@@ -72,4 +83,28 @@ export function mcpOAuthIssuer(publicBaseUrl: string | undefined): string {
 /** The canonical MCP resource URI (the RFC 8707 audience of every token). */
 export function mcpCanonicalResource(publicBaseUrl: string | undefined): string {
   return `${mcpOAuthIssuer(publicBaseUrl)}${MCP_RESOURCE_PATH}`;
+}
+
+/**
+ * Does an RFC 8707 `resource` value name OUR MCP endpoint?
+ *
+ * This one predicate is the audience check, used in three places: the authorize
+ * endpoint (refuse to mint a code for someone else's resource server), the
+ * token endpoint (the code carries the audience forward) and the MCP transport
+ * (refuse a token minted for a different audience). One implementation so a
+ * token can never be accepted by a check laxer than the one that issued it.
+ *
+ * Comparison is exact except for a trailing slash — `https://h/api/mcp` and
+ * `https://h/api/mcp/` are the same endpoint, and RFC 8707 §2 says the value
+ * SHOULD be the resource's canonical URI without a fragment. Nothing else is
+ * normalised: accepting a prefix (`/api/mcp-evil`) or a case-folded host would
+ * be exactly the confusion the check exists to prevent.
+ */
+export function isCanonicalMcpResource(
+  value: string | undefined | null,
+  publicBaseUrl: string | undefined,
+): boolean {
+  if (typeof value !== 'string' || !value) return false;
+  const canonical = mcpCanonicalResource(publicBaseUrl);
+  return value.replace(/\/+$/, '') === canonical.replace(/\/+$/, '');
 }
