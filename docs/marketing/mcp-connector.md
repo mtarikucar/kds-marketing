@@ -89,11 +89,14 @@ Note the path: **`/api/mcp`**, not `/mcp`. `app.setGlobalPrefix('api')` in
 After adding, check two things:
 
 1. **The tool list appears.** Ask Claude what Jeeta tools it has, or run
-   whatever your client uses to list a server's tools. You should see a
-   subset of (or all of, if the key has both `read` and `write`) the 18 tools
-   in the [catalogue](#tool-catalogue) below. `McpServerFactoryService.build`
-   filters the registry by the key's granted scopes per request, so a
-   read-only key legitimately shows fewer tools, not an error.
+   whatever your client uses to list a server's tools. You should see the
+   tools among the 18 in the [catalogue](#tool-catalogue) below whose scope
+   the key's granted scopes cover — for a legacy `read` or `write` key
+   (see [Scopes](#scopes) for why the two are equivalent here) that's the 13
+   read-only tools, not all 18; the 5 write-risk tools need a granular scope
+   minted explicitly. `McpServerFactoryService.build` filters the registry by
+   the key's granted scopes per request, so a narrower key legitimately shows
+   fewer tools, not an error.
 2. **A matching audit row appears.** Call any read-only tool (e.g.
    `jeeta.get_workspace_info`), then check `agent_runs` and `tool_call_logs`
    for it — see [Audit trail](#audit-trail) for how.
@@ -153,10 +156,10 @@ checked against, on every request (no caching — see
 **This is deliberate and load-bearing, and it means less than it sounds
 like.** Of the 18 MCP tools, **none** require `leads.write` or `tasks.write` —
 so today, a key minted with only the legacy `write` shorthand reaches exactly
-the same set of MCP tools as a `read`-only key: every read tool, plus
-`jeeta.draft_social_post`. It reaches **none** of the four approval-gated
-write tools, because each of them requires a granular scope the legacy `write`
-expansion does not include:
+the same set of MCP tools as a `read`-only key: every read tool, and nothing
+more. It reaches **none** of the write-risk tools — the four approval-gated
+ones or `jeeta.draft_social_post` — because each of them requires a granular
+scope the legacy `write` expansion does not include:
 
 | Tool | Requires | In legacy `write`? |
 |---|---|---|
