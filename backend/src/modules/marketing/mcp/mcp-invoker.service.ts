@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import { AgentRunService } from '../agents/agent-run.service';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { MembershipService } from '../services/membership.service';
 import { InvokeResult, McpBrokerService } from './mcp-broker.service';
 
 /**
@@ -32,14 +33,39 @@ export class McpInvokerService {
     private readonly broker: McpBrokerService,
     private readonly runs: AgentRunService,
     private readonly prisma: PrismaService,
+    private readonly memberships: MembershipService,
   ) {}
 
-  contextFrom(authInfo: AuthInfo): { workspaceId: string; grantedScopes: string[] } {
-    const workspaceId = (authInfo.extra as { workspaceId?: string } | undefined)?.workspaceId;
+  contextFrom(authInfo: AuthInfo): {
+    workspaceId: string;
+    userId?: string;
+    grantedScopes: string[];
+  } {
+    const extra = authInfo.extra as { workspaceId?: string; userId?: string } | undefined;
+    const workspaceId = extra?.workspaceId;
     if (!workspaceId) {
       throw new ForbiddenException('token is not bound to a workspace');
     }
-    return { workspaceId, grantedScopes: authInfo.scopes ?? [] };
+    // `userId` is present only on the OAuth path (Faz 3) — an API key belongs
+    // to a workspace, not a person, and must stay that way.
+    return { workspaceId, userId: extra?.userId, grantedScopes: authInfo.scopes ?? [] };
+  }
+
+  /**
+   * Faz 3 Task 8 — the real caller's role in THIS workspace.
+   *
+   * Resolved on every call rather than carried in the token: consent may have
+   * happened weeks ago, and a demotion (MANAGER → REP) or a removal since then
+   * has to bite immediately. The removal case is a REFUSAL, not a fallback to
+   * the anonymous principal: an ex-member's connector must stop working
+   * without anyone having to hunt down the tokens they were issued.
+   */
+  private async roleFor(userId: string, workspaceId: string): Promise<string> {
+    const membership = await this.memberships.getActiveMembership(userId, workspaceId);
+    if (!membership) {
+      throw new ForbiddenException('the authorizing user is no longer an active member of this workspace');
+    }
+    return membership.role;
   }
 
   private async writeModeFor(workspaceId: string): Promise<'APPROVAL' | 'AUTONOMOUS'> {
@@ -51,7 +77,8 @@ export class McpInvokerService {
   }
 
   async invoke(authInfo: AuthInfo, toolName: string, args: Record<string, unknown>): Promise<InvokeResult> {
-    const { workspaceId, grantedScopes } = this.contextFrom(authInfo);
+    const { workspaceId, userId, grantedScopes } = this.contextFrom(authInfo);
+    const userRole = userId ? await this.roleFor(userId, workspaceId) : undefined;
     const writeMode = await this.writeModeFor(workspaceId);
     // Set only once the broker call resolves with a genuine OK — a
     // PENDING_APPROVAL result means nothing executed, so a later bookkeeping
@@ -62,7 +89,7 @@ export class McpInvokerService {
     try {
       return await this.runs.track(workspaceId, { agent: 'mcp', goal: toolName, input: args }, async (agentRunId) => {
         const result = await this.broker.invoke(
-          { workspaceId, grantedScopes, agentRunId, requireAudit: true, writeMode },
+          { workspaceId, userId, userRole, grantedScopes, agentRunId, requireAudit: true, writeMode },
           toolName,
           args,
         );

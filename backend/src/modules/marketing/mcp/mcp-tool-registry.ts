@@ -5,7 +5,20 @@ export type ToolRisk = 'READ' | 'WRITE' | 'SPEND';
 
 export interface McpToolContext {
   workspaceId: string;
+  /**
+   * The human behind the call, when there IS one. Present on an OAuth session
+   * (the user who consented) and on an approved execution (the approver);
+   * absent on an API-key session, which belongs to a workspace, not a person.
+   */
   userId?: string;
+  /**
+   * The role `userId` holds in THIS workspace, resolved from their ACTIVE
+   * membership at call time — not read off the token, so a demotion or removal
+   * since consent takes effect on the very next call. Only meaningful
+   * alongside `userId`; tools that apply row-level visibility fall back to
+   * their declared service principal when both are absent.
+   */
+  userRole?: string;
   grantedScopes: string[];
   agentRunId?: string;
   /**

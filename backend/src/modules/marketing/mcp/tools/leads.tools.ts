@@ -4,9 +4,18 @@ import { MarketingLeadsService } from '../../services/marketing-leads.service';
 import { McpToolRegistry } from '../mcp-tool-registry';
 
 /**
- * `MarketingLeadsService.findAll` takes a (userId, userRole) principal, but an
- * API-key MCP session has no user. Rather than silently borrow an identity, we
- * call with an explicit, named placeholder — and name it for exactly what it
+ * `MarketingLeadsService.findAll` takes a (userId, userRole) principal.
+ *
+ * Faz 3 SOLVED the user-bound half: an OAuth session names the human who
+ * consented, and `McpInvokerService` resolves the role they hold in this
+ * workspace from their ACTIVE membership on every call. So a REP who connects
+ * Claude sees, through the tool, exactly the leads they see in the UI — their
+ * own — and a demotion or removal since consent takes effect on the next call
+ * (removal is refused outright, in the invoker).
+ *
+ * What remains is the API-KEY session, which has no user by construction: the
+ * key belongs to a workspace. Rather than silently borrow an identity, that
+ * path calls with an explicit, named placeholder — named for exactly what it
  * grants, no more:
  *
  * - Inside `findAll`, `userRole` is checked only for `=== 'REP'`; every other
@@ -20,8 +29,6 @@ import { McpToolRegistry } from '../mcp-tool-registry';
  *   that writes, assigns, or attributes a lead.
  * - Tenant isolation does not depend on this principal — `findAll` scopes by
  *   `workspaceId` unconditionally, and no role value widens that.
- *
- * Faz 3 (OAuth, which IS user-bound) should replace this with the real caller.
  */
 export const MCP_NON_REP_PRINCIPAL = { userId: 'mcp-service-principal', role: 'MANAGER' } as const;
 
@@ -65,7 +72,12 @@ export function registerLeadsTools(registry: McpToolRegistry, deps: LeadsToolDep
         // checking it structurally. Edit both sides together.
         args as unknown as LeadFilterDto,
         ctx.userId ?? MCP_NON_REP_PRINCIPAL.userId,
-        MCP_NON_REP_PRINCIPAL.role,
+        // Paired with `userId` deliberately: a real user must be judged by
+        // their REAL role (a REP's `findAll` narrows to their own rows), and
+        // the placeholder id must keep the placeholder's "not REP" role or it
+        // would match no leads at all. Taking `ctx.userRole` while falling
+        // back to the synthetic id would silently return zero rows.
+        ctx.userId && ctx.userRole ? ctx.userRole : MCP_NON_REP_PRINCIPAL.role,
       ),
   });
 }
