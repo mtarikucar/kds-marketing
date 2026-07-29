@@ -54,9 +54,14 @@ export class MarketingWorkspacesController {
    * floor, so `@MarketingRoles('OWNER', 'MANAGER')` would ALSO restrict to
    * OWNER-only while reading as if MANAGER were admitted too. Listing just
    * 'OWNER' says exactly what it means.
+   *
+   * `@Audit`-logged too (fix round 1): a read of this security posture is
+   * itself worth a trail — otherwise nobody can later tell who checked
+   * whether the approval gate was on before something autonomous happened.
    */
   @Get('mcp-write-mode')
   @MarketingRoles('OWNER')
+  @Audit({ action: 'workspace.mcp_write_mode.read', resourceType: 'workspace' })
   getMcpWriteMode(@CurrentMarketingUser() user: MarketingUserPayload) {
     return this.authService.getMcpWriteMode(user.workspaceId);
   }
