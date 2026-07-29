@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { ZodTypeAny } from 'zod';
+import { ZodObject, type ZodTypeAny } from 'zod';
 
 export type ToolRisk = 'READ' | 'WRITE' | 'SPEND';
 
@@ -84,7 +84,19 @@ export class McpToolRegistry {
           'gets written into the ToolCallLog audit column. Declare inputSchema (use z.object({}) for no-arg tools).',
       );
     }
-    this.tools.set(tool.name, tool);
+    // Reject unknown arguments instead of dropping them. Zod objects are
+    // permissive by default: an argument the schema does not declare is
+    // stripped and the call proceeds as if it had never been passed. On a
+    // model-facing surface that failure is silent and wrong in the worst
+    // direction — `search_leads({query: "Acme"})` (the caller meant `search`)
+    // parses to `{}` and returns the whole unfiltered list, which reads to the
+    // agent as "these are the Acme leads". Strict turns that into a visible
+    // error the model can correct on the next call. Applied centrally so a
+    // tool author cannot forget it; required fields already covered the
+    // write tools, so this closes the gap on optional filters.
+    const schema = tool.inputSchema;
+    const strict = schema instanceof ZodObject ? schema.strict() : schema;
+    this.tools.set(tool.name, { ...tool, inputSchema: strict });
   }
 
   get(name: string): McpTool | undefined {
