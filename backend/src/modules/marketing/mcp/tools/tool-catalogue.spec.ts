@@ -54,6 +54,7 @@ const ALL_SCOPES = [
   'contacts.read',
   'contacts.write',
   'campaigns.read',
+  'campaigns.write',
   'campaigns.send',
   'reports.read',
   'tasks.read',

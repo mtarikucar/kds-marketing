@@ -24,6 +24,14 @@ const POST_STATUSES = ['DRAFT', 'SCHEDULED', 'PUBLISHING', 'PUBLISHED', 'FAILED'
  * `requiresApproval: true` / `approvalKind: 'PUBLISH'` — the broker enqueues a
  * human approval instead of running the handler inline unless the
  * workspace's writeMode is AUTONOMOUS.
+ *
+ * `jeeta.draft_social_post` is scoped `campaigns.write`, not `campaigns.send`:
+ * a caller that may only prepare content should not be forced to also carry
+ * the authority that publishes it to a real audience. This is narrower than
+ * the REST equivalent (`SocialPlannerController.createPost`), which is still
+ * gated `@RequirePermission('campaigns.send')` — that REST gate is untouched
+ * here; only the MCP tool's own scope requirement moved to the new granular
+ * `campaigns.write` permission (see `roles/permissions.ts`).
  */
 export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolDeps): void {
   registry.register({
@@ -50,7 +58,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.draft_social_post',
     description:
       'Create a DRAFT social post (content + optional media/target accounts). This has no external side effect — nothing is posted until jeeta.publish_social_post (or the scheduler) runs it. Ungated (no approval), but still requires write authority.',
-    scopes: ['campaigns.send'],
+    scopes: ['campaigns.write'],
     risk: 'WRITE',
     requiresApproval: false,
     inputSchema: z.object({

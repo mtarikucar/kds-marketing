@@ -71,4 +71,20 @@ describe('ads MCP tools', () => {
     registerAdsTools(registry, deps());
     expect(registry.list(['reports.read']).map((t) => t.name)).not.toContain('jeeta.reallocate_budget');
   });
+
+  it('a key minted with settings.manage reaches jeeta.reallocate_budget (Gap 1)', () => {
+    const registry = new McpToolRegistry();
+    registerAdsTools(registry, deps());
+    expect(registry.list(['settings.manage']).map((t) => t.name)).toContain('jeeta.reallocate_budget');
+  });
+
+  it('legacy "read"/"write" (expanded) still do not reach reallocate_budget', () => {
+    const registry = new McpToolRegistry();
+    registerAdsTools(registry, deps());
+    // MCP_READ_SCOPES/MCP_WRITE_SCOPES (mcp-scopes.ts) never include settings.manage.
+    const legacyReadExpanded = ['leads.read', 'contacts.read', 'campaigns.read', 'reports.read', 'tasks.read'];
+    const legacyWriteExpanded = [...legacyReadExpanded, 'leads.write', 'tasks.write'];
+    expect(registry.list(legacyReadExpanded).map((t) => t.name)).not.toContain('jeeta.reallocate_budget');
+    expect(registry.list(legacyWriteExpanded).map((t) => t.name)).not.toContain('jeeta.reallocate_budget');
+  });
 });

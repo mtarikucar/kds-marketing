@@ -19,6 +19,24 @@ describe('expandScopes', () => {
     expect(out).not.toContain('contacts.write');
   });
 
+  it('does not grant campaigns.write from legacy "write" either — new granular scopes stay opt-in, never acquired by default', () => {
+    const out = expandScopes(['write']);
+    expect(out).not.toContain('campaigns.write');
+  });
+
+  it('does not grant settings.manage from legacy "read" or "write"', () => {
+    expect(expandScopes(['read'])).not.toContain('settings.manage');
+    expect(expandScopes(['write'])).not.toContain('settings.manage');
+  });
+
+  it('passes an explicitly granular campaigns.write through untouched', () => {
+    expect(expandScopes(['campaigns.write'])).toEqual(['campaigns.write']);
+  });
+
+  it('passes an explicitly granular settings.manage through untouched', () => {
+    expect(expandScopes(['settings.manage'])).toEqual(['settings.manage']);
+  });
+
   it('passes an explicitly granular campaigns.send through untouched', () => {
     expect(expandScopes(['campaigns.send'])).toEqual(['campaigns.send']);
   });

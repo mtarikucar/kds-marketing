@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -16,15 +16,24 @@ import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Label } from '@/components/ui/Label';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { usePermissionCatalog } from '../roles/hooks';
+import { permissionMeta } from '../roles/types';
 
 // ── Schema ───────────────────────────────────────────────────────────────────
-// Mirrors the backend CreateApiKeyDto: name (≤80) + ≥1 scope from read/write.
+// Mirrors the backend CreateApiKeyDto (api-key.dto.ts): name (≤80) + ≥1 scope.
+// 'read'/'write' are legacy shorthands `expandScopes` (mcp-scopes.ts) expands
+// into a fixed read/write bundle. The granular options below come from the
+// SAME live catalog the Roles & permissions editor uses (GET /roles/catalog
+// -> roles/permissions.ts) — without a granular scope selectable here, a
+// tool gated on one (e.g. jeeta.reallocate_budget needs settings.manage) was
+// only reachable by hand-crafting the POST body, never through this dialog.
 
-const SCOPES = ['read', 'write'] as const;
+const LEGACY_SCOPES = ['read', 'write'] as const;
 
 export const apiKeySchema = z.object({
   name: z.string().min(1, 'required').max(80, 'tooLong'),
-  scopes: z.array(z.enum(SCOPES)).min(1, 'pickScope'),
+  scopes: z.array(z.string()).min(1, 'pickScope'),
 });
 
 export type ApiKeyFormValues = z.infer<typeof apiKeySchema>;
@@ -43,6 +52,8 @@ export function CreateApiKeyDialog({
   isPending,
 }: CreateApiKeyDialogProps) {
   const { t } = useTranslation('marketing');
+  const { data: catalog, isLoading: catalogLoading } = usePermissionCatalog();
+  const granularScopes = useMemo(() => catalog ?? [], [catalog]);
 
   const form = useForm<ApiKeyFormValues>({
     resolver: zodResolver(apiKeySchema),
@@ -53,6 +64,18 @@ export function CreateApiKeyDialog({
   useEffect(() => {
     if (open) form.reset({ name: '', scopes: ['read', 'write'] });
   }, [open, form]);
+
+  // Group the granular catalog by display group, same layout as RoleFormDialog.
+  const grouped = useMemo(() => {
+    const out = new Map<string, string[]>();
+    for (const key of granularScopes) {
+      const g = permissionMeta(key).group;
+      const arr = out.get(g) ?? [];
+      arr.push(key);
+      out.set(g, arr);
+    }
+    return Array.from(out.entries());
+  }, [granularScopes]);
 
   const fieldErr = (msg?: string) =>
     msg ? t([`validation.${msg}`, msg], { defaultValue: msg }) : undefined;
@@ -103,32 +126,87 @@ export function CreateApiKeyDialog({
               <Controller
                 control={form.control}
                 name="scopes"
-                render={({ field }) => (
-                  <div className="flex flex-col gap-2">
-                    {SCOPES.map((scope) => {
-                      const checked = field.value?.includes(scope) ?? false;
-                      return (
-                        <div key={scope} className="flex items-center gap-2">
-                          <Checkbox
-                            id={`scope-${scope}`}
-                            checked={checked}
-                            onCheckedChange={(v) => {
-                              const next = v === true
-                                ? [...(field.value ?? []), scope]
-                                : (field.value ?? []).filter((s) => s !== scope);
-                              field.onChange(next);
-                            }}
-                          />
-                          <Label htmlFor={`scope-${scope}`} className="cursor-pointer">
-                            {t(`apiKeys.scope.${scope}`, {
-                              defaultValue: scope === 'read' ? 'Read' : 'Write',
-                            })}
-                          </Label>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                render={({ field }) => {
+                  const selected = new Set(field.value ?? []);
+                  const toggle = (scope: string, on: boolean) => {
+                    const next = new Set(selected);
+                    if (on) next.add(scope);
+                    else next.delete(scope);
+                    field.onChange(Array.from(next));
+                  };
+                  return (
+                    <div className="space-y-4">
+                      {/* Legacy read/write shorthands */}
+                      <div className="flex flex-col gap-2">
+                        {LEGACY_SCOPES.map((scope) => (
+                          <div key={scope} className="flex items-center gap-2">
+                            <Checkbox
+                              id={`scope-${scope}`}
+                              checked={selected.has(scope)}
+                              onCheckedChange={(v) => toggle(scope, v === true)}
+                            />
+                            <Label htmlFor={`scope-${scope}`} className="cursor-pointer">
+                              {t(`apiKeys.scope.${scope}`, {
+                                defaultValue: scope === 'read' ? 'Read' : 'Write',
+                              })}
+                            </Label>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Granular scopes — the live permission catalog */}
+                      <div>
+                        <p className="mb-1.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                          {t('apiKeys.granularScopes', { defaultValue: 'Granular scopes' })}
+                        </p>
+                        <p className="mb-2 text-caption text-muted-foreground">
+                          {t('apiKeys.granularScopesHint', {
+                            defaultValue:
+                              'Grant exactly the authority a specific tool or endpoint needs, instead of the broad read/write bundle above.',
+                          })}
+                        </p>
+                        {catalogLoading ? (
+                          <div className="space-y-2">
+                            {Array.from({ length: 3 }).map((_, i) => (
+                              <Skeleton key={i} className="h-7 w-full" />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="max-h-[16rem] space-y-3 overflow-y-auto rounded-lg border border-border p-3">
+                            {grouped.map(([group, keys]) => (
+                              <div key={group}>
+                                <p className="mb-1 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                                  {t(`roles.groups.${group}`, { defaultValue: group })}
+                                </p>
+                                <div className="space-y-1">
+                                  {keys.map((key) => {
+                                    const meta = permissionMeta(key);
+                                    return (
+                                      <div key={key} className="flex items-center gap-2">
+                                        <Checkbox
+                                          id={`scope-${key}`}
+                                          checked={selected.has(key)}
+                                          onCheckedChange={(v) => toggle(key, v === true)}
+                                          aria-label={meta.label}
+                                        />
+                                        <Label htmlFor={`scope-${key}`} className="cursor-pointer">
+                                          {t(`roles.perm.${key}.label`, { defaultValue: meta.label })}
+                                          <code className="ml-1.5 text-micro text-muted-foreground">
+                                            {key}
+                                          </code>
+                                        </Label>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }}
               />
             )}
           </Field>

@@ -11,6 +11,15 @@ export const PERMISSIONS = [
   'contacts.read',
   'contacts.write',
   'campaigns.read',
+  // Author/draft campaign content (e.g. a social post) without the authority
+  // to make it reach an audience — that stays on 'campaigns.send'. Held by
+  // OWNER/MANAGER (both already hold 'campaigns.send', a strict superset of
+  // authority) but withheld from REP, mirroring REP's existing exclusion from
+  // 'campaigns.send': REP's set stays CRM-scoped (leads/tasks/contacts) plus
+  // read-only campaign visibility. A workspace that wants a "REP who may
+  // draft" persona can grant it via a custom role (Epic F) now that the
+  // granular scope exists — it is not a legacy-role default.
+  'campaigns.write',
   'campaigns.send',
   'reports.read',
   'courses.manage',

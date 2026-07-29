@@ -23,14 +23,35 @@ describe('social MCP tools', () => {
     const draft = registry.get('jeeta.draft_social_post')!;
     expect(draft.risk).toBe('WRITE');
     expect(draft.requiresApproval).toBe(false);
-    expect(draft.scopes).toEqual(['campaigns.send']);
+    expect(draft.scopes).toEqual(['campaigns.write']);
     expect(draft.inputSchema).toBeDefined();
   });
 
-  it('hides draft_social_post from a caller without campaigns.send', () => {
+  it('hides draft_social_post from a caller without campaigns.write', () => {
     const registry = new McpToolRegistry();
     registerSocialTools(registry, deps());
     expect(registry.list(['campaigns.read']).map((t) => t.name)).not.toContain('jeeta.draft_social_post');
+  });
+
+  it('grants draft_social_post to a caller with campaigns.write but withholds publish_social_post (draft without publish authority)', () => {
+    const registry = new McpToolRegistry();
+    registerSocialTools(registry, deps());
+    const names = registry.list(['campaigns.read', 'campaigns.write']).map((t) => t.name);
+    expect(names).toContain('jeeta.draft_social_post');
+    expect(names).not.toContain('jeeta.publish_social_post');
+  });
+
+  it('legacy "read"/"write" (expanded) reach neither draft_social_post nor publish_social_post', () => {
+    const registry = new McpToolRegistry();
+    registerSocialTools(registry, deps());
+    // MCP_READ_SCOPES/MCP_WRITE_SCOPES (mcp-scopes.ts) never include campaigns.write/campaigns.send.
+    const legacyReadExpanded = ['leads.read', 'contacts.read', 'campaigns.read', 'reports.read', 'tasks.read'];
+    const legacyWriteExpanded = [...legacyReadExpanded, 'leads.write', 'tasks.write'];
+    for (const scopes of [legacyReadExpanded, legacyWriteExpanded]) {
+      const names = registry.list(scopes).map((t) => t.name);
+      expect(names).not.toContain('jeeta.draft_social_post');
+      expect(names).not.toContain('jeeta.publish_social_post');
+    }
   });
 
   it('gates jeeta.publish_social_post behind PUBLISH approval', () => {
@@ -83,7 +104,7 @@ describe('social MCP tools', () => {
     const out = await registry
       .get('jeeta.draft_social_post')!
       .handler(
-        { workspaceId: 'ws1', grantedScopes: ['campaigns.send'] },
+        { workspaceId: 'ws1', grantedScopes: ['campaigns.write'] },
         { content: 'hello world', mediaUrls: ['https://x/img.png'], targetAccountIds: ['acc1'] },
       );
     expect(createPost).toHaveBeenCalledWith('ws1', {
