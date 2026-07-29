@@ -39,6 +39,11 @@ FROM nginx:alpine AS production
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Fail the BUILD on an invalid nginx config. The deploy health-gate only probes
+# the API (:3211) and never this container, so a syntax error here would
+# otherwise sail through CI and take the panel down silently at swap time.
+RUN nginx -t
+
 EXPOSE 80
 
 CMD ["nginx", "-g", "daemon off;"]
