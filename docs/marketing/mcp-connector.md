@@ -189,6 +189,14 @@ and asserted by name in
 means the tool never runs inline in `APPROVAL` mode — see
 [Approval-gated tools](#approval-gated-tools).
 
+**Argument names are exact.** Every tool's schema is registered strict
+(`McpToolRegistry.register`), so an argument the tool does not declare is an
+error — `Unrecognized key: "query"` — rather than something quietly ignored.
+This matters most on optional filters: dropping one silently would widen the
+result set, and a search that answers with everything looks to an agent like a
+search that matched everything. Read the parameter names off `tools/list`,
+which advertises `additionalProperties: false` for the same reason.
+
 ### Analytics
 
 | Tool | What it does | Scope | Risk | Gated |
