@@ -4648,3 +4648,87 @@ model CommunityChannelConfig {
   @@index([workspaceId])
   @@map("community_channel_configs")
 }
+
+// ---------------------------------------------------------------------------
+// MCP Faz 3 — OAuth 2.1 authorization server (docs/superpowers/plans/
+// 2026-07-29-mcp-oauth-faz3.md). Additive: nothing here relates to the existing
+// ApiKey path, which keeps working untouched.
+// ---------------------------------------------------------------------------
+
+/// CIMD (Client ID Metadata Document) cache. The MCP spec replaced Dynamic
+/// Client Registration with CIMD: the client presents an HTTPS URL as its
+/// `client_id`, we fetch that document (SSRF-safely) and validate it. One row
+/// per known client URL; `expiresAt` comes from the response's HTTP cache
+/// headers (`Cache-Control: max-age`), falling back to a 1h default, and the
+/// document is not re-fetched before it lapses.
+model McpOAuthClient {
+  id         String @id @default(uuid())
+  /// The HTTPS URL the client presented as its `client_id`.
+  clientId   String @unique
+  /// `client_name` from the document. NULLABLE: CIMD marks it optional, and a
+  /// fabricated placeholder would end up on the consent screen.
+  clientName String?
+  /// The document's `redirect_uris` array, verbatim.
+  redirectUris Json
+  /// The rest of the fetched document (logo_uri, client_uri, scope, …).
+  metadata     Json?
+  fetchedAt    DateTime @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("mcp_oauth_clients")
+}
+
+/// One issued authorization code — single-use and short-lived. Follows the
+/// ApiKey "hash at rest" convention: `codeHash` is the SHA-256 of the code, the
+/// raw code is never stored. `consumedAt` makes it single-use (a second
+/// redemption must revoke everything derived from it). `resource` is the RFC
+/// 8707 audience the resulting token is bound to; `codeChallenge` is the
+/// mandatory PKCE challenge (S256 only).
+model McpOAuthCode {
+  id                  String    @id @default(uuid())
+  codeHash            String    @unique
+  /// The CIMD client URL this code was issued to.
+  clientId            String
+  workspaceId         String
+  userId              String
+  redirectUri         String
+  scopes              String[]
+  /// RFC 8707 audience — must resolve to our canonical MCP resource URI.
+  resource            String
+  codeChallenge       String
+  codeChallengeMethod String    @default("S256") // S256 only — `plain` is refused
+  expiresAt           DateTime
+  consumedAt          DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([workspaceId])
+  @@map("mcp_oauth_codes")
+}
+
+/// An issued access or refresh token. Hashed at rest (same convention as
+/// ApiKey.keyHash / McpOAuthCode.codeHash). Refresh tokens ROTATE: each new
+/// refresh points at the one it replaced via `parentId`, so replaying a revoked
+/// refresh can walk the chain and revoke the whole family.
+model McpOAuthToken {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  type        String // ACCESS | REFRESH
+  clientId    String
+  workspaceId String
+  userId      String
+  scopes      String[]
+  /// RFC 8707 audience the token is bound to.
+  resource    String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  /// The token this one rotated from (refresh chain root has null).
+  parentId    String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, type])
+  /// Chain revocation walks children by parentId — without this it table-scans.
+  @@index([parentId])
+  @@map("mcp_oauth_tokens")
+}
