@@ -126,4 +126,112 @@ describe('Internal service contracts (e2e)', () => {
       );
     });
   });
+
+  /**
+   * The external research routine's surface. Unlike the referral/events routes
+   * this one is CROSS-WORKSPACE — a single token reads every active tenant's
+   * work-list and can write leads into any of them — so these tests pin the
+   * realm boundary at the wire: the route must be guarded by
+   * RESEARCH_ROUTINE_TOKEN specifically, and no sibling service credential (nor
+   * the sibling header name) may open it. The behavioural contract of the
+   * handlers themselves lives in `internal-research.controller.spec.ts`.
+   */
+  describe('/api/internal/research/*', () => {
+    const RESEARCH_TOKEN = TEST_ENV.RESEARCH_ROUTINE_TOKEN;
+    const jobsUrl = '/api/internal/research/jobs';
+    const leadsUrl = '/api/internal/research/jobs/ws-1/leads';
+    const validLead = {
+      externalRef: 'instagram:@biz1',
+      businessName: 'Biz One',
+      businessType: 'CAFE',
+      painPoint: 'slow service',
+      evidence: 'reviews mention waits',
+      pitch: 'faster tickets',
+    };
+
+    describe('GET /jobs', () => {
+      it('401s without a research token', async () => {
+        const res = await request(app.getHttpServer()).get(jobsUrl);
+        expect(res.status).toBe(401);
+      });
+
+      it('401s with a wrong research token', async () => {
+        const res = await request(app.getHttpServer())
+          .get(jobsUrl)
+          .set('x-research-token', 'wrong-token');
+        expect(res.status).toBe(401);
+      });
+
+      it('401s when presented the INTERNAL_SERVICE_TOKEN (separate principal)', async () => {
+        const res = await request(app.getHttpServer())
+          .get(jobsUrl)
+          .set('x-research-token', TOKEN);
+        expect(res.status).toBe(401);
+      });
+
+      it('401s when the token is sent under the sibling header name', async () => {
+        const res = await request(app.getHttpServer())
+          .get(jobsUrl)
+          .set('x-internal-token', RESEARCH_TOKEN);
+        expect(res.status).toBe(401);
+      });
+
+      it('answers the { generatedAt, jobs } envelope with a valid token', async () => {
+        const res = await request(app.getHttpServer())
+          .get(jobsUrl)
+          .set('x-research-token', RESEARCH_TOKEN);
+        expect(res.status).toBe(200);
+        expect(res.body.jobs).toEqual([]); // no ACTIVE workspaces in the mock DB
+        expect(typeof res.body.generatedAt).toBe('string');
+      });
+    });
+
+    describe('POST /jobs/:workspaceId/leads', () => {
+      beforeEach(() => (ctx.prisma.lead.create as jest.Mock).mockClear());
+
+      it('401s without a research token — and never reaches the DB', async () => {
+        const res = await request(app.getHttpServer())
+          .post(leadsUrl)
+          .send({ profileId: 'prof-1', leads: [validLead] });
+        expect(res.status).toBe(401);
+        expect(ctx.prisma.lead.create).not.toHaveBeenCalled();
+      });
+
+      it('400s a body missing profileId even with a valid token', async () => {
+        const res = await request(app.getHttpServer())
+          .post(leadsUrl)
+          .set('x-research-token', RESEARCH_TOKEN)
+          .send({ leads: [validLead] });
+        expect(res.status).toBe(400);
+      });
+
+      it('400s a candidate whose externalRef is off-pattern', async () => {
+        const res = await request(app.getHttpServer())
+          .post(leadsUrl)
+          .set('x-research-token', RESEARCH_TOKEN)
+          .send({
+            profileId: 'prof-1',
+            leads: [{ ...validLead, externalRef: 'whatever' }],
+          });
+        expect(res.status).toBe(400);
+      });
+
+      it('400s an unknown property (forbidNonWhitelisted — no mass assignment)', async () => {
+        const res = await request(app.getHttpServer())
+          .post(leadsUrl)
+          .set('x-research-token', RESEARCH_TOKEN)
+          .send({ profileId: 'prof-1', leads: [validLead], workspaceId: 'ws-2' });
+        expect(res.status).toBe(400);
+      });
+
+      it('404s an unknown workspace and writes nothing', async () => {
+        const res = await request(app.getHttpServer())
+          .post(leadsUrl)
+          .set('x-research-token', RESEARCH_TOKEN)
+          .send({ profileId: 'prof-1', leads: [validLead] });
+        expect(res.status).toBe(404);
+        expect(ctx.prisma.lead.create).not.toHaveBeenCalled();
+      });
+    });
+  });
 });
