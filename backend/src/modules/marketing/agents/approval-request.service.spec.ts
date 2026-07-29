@@ -186,13 +186,17 @@ describe('ApprovalRequestService', () => {
 
   // reapStaleApplying: crash recovery for the claim-first guard above — if
   // revertApply itself throws, or the process dies between claimForApply and
-  // finishApply/revertApply, a row is stranded in APPLYING forever. This
-  // simulates the real Postgres predicate (status + updatedAt comparison)
-  // in-memory rather than asserting on call args, so "a fresh row is left
-  // alone" is a genuine behavioural check, not a vacuous one.
+  // finishApply/revertApply, a row is stranded in APPLYING forever. Staleness
+  // is judged purely by `updatedAt` (the heartbeat clock — see touchApplying
+  // below), never by `createdAt`/how long the row has been APPLYING, because
+  // a legitimately long-running publish (multi-account, IG carousel) keeps
+  // refreshing `updatedAt` and must never be reclaimed out from under itself.
+  // This simulates the real Postgres predicate (status + updatedAt
+  // comparison) in-memory rather than asserting on call args, so "a fresh
+  // row is left alone" is a genuine behavioural check, not a vacuous one.
   describe('reapStaleApplying', () => {
-    function makeRows(rows: Array<{ id: string; status: string; updatedAt: Date }>) {
-      const state = new Map(rows.map((r) => [r.id, { ...r }]));
+    function makeRows(rows: Array<{ id: string; status: string; updatedAt: Date; createdAt?: Date }>) {
+      const state = new Map(rows.map((r) => [r.id, { createdAt: r.updatedAt, ...r }]));
       const updateMany = jest.fn(async ({ where, data }: any) => {
         let count = 0;
         for (const row of state.values()) {
@@ -208,7 +212,7 @@ describe('ApprovalRequestService', () => {
     }
 
     const longAgo = new Date(Date.now() - 60 * 60 * 1000); // 1h ago — well past any plausible threshold
-    const justNow = new Date(); // freshly claimed
+    const justNow = new Date(); // heartbeat freshly touched
 
     it('reclaims a row stuck in APPLYING past the threshold back to APPROVED', async () => {
       const { prisma, state } = makeRows([{ id: 'a1', status: 'APPLYING', updatedAt: longAgo }]);
@@ -221,6 +225,20 @@ describe('ApprovalRequestService', () => {
 
     it('leaves a freshly-claimed APPLYING row alone', async () => {
       const { prisma, state } = makeRows([{ id: 'a1', status: 'APPLYING', updatedAt: justNow }]);
+      const svc = new ApprovalRequestService(prisma);
+
+      await svc.reapStaleApplying();
+
+      expect(state.get('a1')!.status).toBe('APPLYING');
+    });
+
+    // Fix round 1: a fixed APPLYING duration is not a valid staleness signal
+    // — a multi-account/carousel publish can legitimately still be running
+    // well past any plausible fixed threshold. touchApplying's heartbeat
+    // keeps `updatedAt` fresh independent of `createdAt`/original claim
+    // time, so a row claimed long ago but still heartbeating must survive.
+    it('never reclaims a row whose heartbeat is fresh, even when it was claimed long ago', async () => {
+      const { prisma, state } = makeRows([{ id: 'a1', status: 'APPLYING', createdAt: longAgo, updatedAt: justNow }]);
       const svc = new ApprovalRequestService(prisma);
 
       await svc.reapStaleApplying();
@@ -248,6 +266,30 @@ describe('ApprovalRequestService', () => {
       const svc = new ApprovalRequestService(prisma);
 
       await expect(svc.reapStaleApplying()).resolves.toBeUndefined();
+    });
+  });
+
+  // touchApplying: the heartbeat write itself (McpApprovalExecutorService
+  // calls this on a timer while broker.invoke() is in flight — see
+  // mcp-approval-executor.service.spec.ts for the timer lifecycle).
+  describe('touchApplying', () => {
+    it('re-stamps updatedAt on a row that is still APPLYING (conditional, matches reapStaleApplying\'s predicate)', async () => {
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPLYING', expiresAt: null });
+      const svc = new ApprovalRequestService(prisma);
+
+      await svc.touchApplying('ws1', 'a1');
+
+      const call = updateMany.mock.calls[0][0];
+      expect(call.where).toEqual({ id: 'a1', workspaceId: 'ws1', status: 'APPLYING' });
+      expect(call.data.updatedAt).toBeInstanceOf(Date);
+    });
+
+    it('is a harmless no-op once the row has already left APPLYING (finishApply/revertApply already ran)', async () => {
+      const { prisma, updateMany } = makePrisma({ id: 'a1', workspaceId: 'ws1', status: 'APPLIED', expiresAt: null });
+      updateMany.mockResolvedValue({ count: 0 }); // the APPLYING predicate no longer matches
+      const svc = new ApprovalRequestService(prisma);
+
+      await expect(svc.touchApplying('ws1', 'a1')).resolves.toBeUndefined();
     });
   });
 });

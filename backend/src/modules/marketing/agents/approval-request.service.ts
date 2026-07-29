@@ -3,14 +3,39 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 
-/** An APPLYING row older than this was stranded by a crash/thrown-revert mid
- *  claimForApply/revertApply (mcp-approval-executor.service.ts) — the widest
- *  single external call any registered MCP tool makes today tops out at
- *  120s (network-adapters.ts upload timeouts), and claimForApply brackets
- *  exactly one such call, not a multi-step run. 5 minutes is a >2x margin
- *  over that, while still surfacing a stranded row within one or two ticks
- *  of the 10-minute sweep below. */
-const STALE_APPLYING_MS = 5 * 60 * 1000;
+/**
+ * Fix-round-1 correction: an earlier version of this file justified
+ * STALE_APPLYING_MS against "the widest single external call" (120s). That
+ * is wrong — claimForApply brackets the whole broker.invoke(), and
+ * jeeta.publish_social_post fans out across target accounts *sequentially*
+ * (SocialPlannerService.publishDuePost). Real numbers: one Facebook Reel
+ * alone chains ~170s (20s + 120s + 30s, network-adapters.ts:369-420), and
+ * igWaitContainerReady polls up to 30x3s = 90s per container, called up to
+ * 11 times for a 10-child Instagram carousel (network-adapters.ts:130-145,
+ * 295-313) — call it 15+ minutes for one legitimately-still-running publish.
+ * No fixed duration threshold can tell "long but alive" apart from "the
+ * process died" — a bigger number just makes the false-reclaim rarer, not
+ * impossible, and a false reclaim here means a duplicate publish/send once
+ * the operator clicks the Apply affordance Task 7 added.
+ *
+ * So liveness is proven, not inferred from elapsed time: while
+ * broker.invoke() is in flight, McpApprovalExecutorService.apply() calls
+ * touchApplying() below on this cadence to re-stamp `updatedAt`. A row is
+ * presumed dead only once its heartbeat has gone silent — decoupled from
+ * how long the call itself is allowed to run.
+ */
+export const APPLYING_HEARTBEAT_MS = 15 * 1000;
+
+/** A row is reclaimed once its heartbeat has been silent for this long.
+ *  4x the heartbeat interval (60s): tolerates one missed/delayed tick from
+ *  event-loop jitter, a GC pause, or a single transient heartbeat-write
+ *  failure (touchApplying is best-effort and never aborts the call it
+ *  belongs to — see mcp-approval-executor.service.ts), without waiting
+ *  anywhere near as long as a legitimately slow multi-account/carousel
+ *  publish would take to finish. This number now bounds "how fast do we
+ *  notice death," not "how long can a call take" — the two are no longer
+ *  the same question. */
+const STALE_APPLYING_MS = 4 * APPLYING_HEARTBEAT_MS;
 
 export type ApprovalKind =
   | 'BUDGET_REALLOCATION'
@@ -47,7 +72,14 @@ export class ApprovalRequestService {
    *  finishApply / revertApply): if revertApply itself throws, or the
    *  process dies between claimForApply and finishApply/revertApply, a row
    *  is stranded in APPLYING with nothing left to move it out. Sweep it
-   *  back to APPROVED, mirroring AgentRunService.reapStaleRuns().
+   *  back to APPROVED, mirroring AgentRunService.reapStaleRuns() in cron
+   *  shape and error posture (best-effort, never throws, warns only when it
+   *  actually reclaims something).
+   *
+   *  Staleness is judged by the heartbeat, not by how long the row has been
+   *  APPLYING (see APPLYING_HEARTBEAT_MS/STALE_APPLYING_MS above) — a row
+   *  whose tool call is still genuinely running keeps its `updatedAt` fresh
+   *  via touchApplying() and is never touched here, however long it runs.
    *
    *  Reclaim to APPROVED, deliberately not APPLIED. Whether the underlying
    *  MCP tool call actually completed is exactly the unknown a stranded row
@@ -72,6 +104,28 @@ export class ApprovalRequestService {
     } catch (e) {
       this.logger.error(`approval reaper failed: ${(e as Error)?.message ?? e}`);
     }
+  }
+
+  /**
+   * Heartbeat for a row currently held via claimForApply: called on
+   * APPLYING_HEARTBEAT_MS cadence by McpApprovalExecutorService while
+   * broker.invoke() is in flight, so reapStaleApplying can tell "still
+   * executing" apart from "the process died mid-execution" without caring
+   * how long the call takes.
+   *
+   * Reuses `updatedAt` rather than a dedicated column: while a row is
+   * APPLYING, nothing else writes to it except finishApply/revertApply
+   * (both of which move it out of APPLYING, so there is no writer left to
+   * collide with) — so there is no ambiguity to resolve and no migration
+   * needed. Conditioned on status still being APPLYING so a heartbeat that
+   * fires after finishApply/revertApply already ran is a harmless no-op (0
+   * rows matched) instead of resurrecting a terminal state.
+   */
+  async touchApplying(workspaceId: string, id: string): Promise<void> {
+    await this.prisma.approvalRequest.updateMany({
+      where: { id, workspaceId, status: 'APPLYING' },
+      data: { updatedAt: new Date() },
+    });
   }
 
   enqueue(workspaceId: string, input: EnqueueInput) {

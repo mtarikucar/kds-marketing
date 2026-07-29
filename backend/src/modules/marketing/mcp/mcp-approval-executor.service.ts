@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { ApprovalRequestService } from '../agents/approval-request.service';
+import { APPLYING_HEARTBEAT_MS, ApprovalRequestService } from '../agents/approval-request.service';
 import { AgentRunService } from '../agents/agent-run.service';
 import { InvokeResult, McpBrokerService } from './mcp-broker.service';
 import { McpToolRegistry } from './mcp-tool-registry';
@@ -49,6 +49,8 @@ function isMcpPayload(payload: unknown): payload is McpApprovalPayload {
  */
 @Injectable()
 export class McpApprovalExecutorService {
+  private readonly logger = new Logger(McpApprovalExecutorService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly approvals: ApprovalRequestService,
@@ -79,43 +81,68 @@ export class McpApprovalExecutorService {
     // this execution runs under.
     const grantedScopes = this.registry.get(toolName)?.scopes ?? [];
 
-    let invoked: InvokeResult;
+    // Heartbeat while the tool call is in flight (see
+    // ApprovalRequestService.touchApplying/reapStaleApplying): a
+    // multi-account or carousel publish can legitimately chain past any
+    // fixed duration, so reapStaleApplying tells "still executing" apart
+    // from "the process died" by liveness, not elapsed time. touchApplying
+    // itself is best-effort and conditioned on status='APPLYING', so a
+    // failed or late-arriving tick can never resurrect a row this method
+    // has already moved out of APPLYING.
+    //
+    // The `finally` below guarantees this timer is cleared on every exit
+    // path — success, a thrown tool error, a non-OK status, or even a throw
+    // from finishApply/revertApply themselves — so it can never keep
+    // beating past the execution it belongs to. A heartbeat that outlived
+    // its call would recreate this bug from the other direction: a
+    // genuinely-dead row kept looking alive forever.
+    const heartbeat = setInterval(() => {
+      this.approvals.touchApplying(workspaceId, approvalId).catch((e) => {
+        this.logger.warn(`heartbeat write failed for approval ${approvalId}: ${(e as Error)?.message ?? e}`);
+      });
+    }, APPLYING_HEARTBEAT_MS);
+
     try {
-      invoked = await this.runs.track(
-        workspaceId,
-        { agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },
-        (agentRunId) =>
-          this.broker.invoke(
-            {
-              workspaceId,
-              userId,
-              grantedScopes,
-              agentRunId,
-              requireAudit: true,
-              approvedBy: { approvalId, userId },
-            },
-            toolName,
-            args,
-          ),
-      );
-    } catch (err) {
-      // The tool failed — release the claim so the request goes back to
-      // APPROVED (retryable) instead of being stranded in APPLYING, and
-      // surface the original error untouched.
-      await this.approvals.revertApply(workspaceId, approvalId);
-      throw err;
+      let invoked: InvokeResult;
+      try {
+        invoked = await this.runs.track(
+          workspaceId,
+          { agent: 'mcp', goal: `apply approval ${approvalId}: ${toolName}` },
+          (agentRunId) =>
+            this.broker.invoke(
+              {
+                workspaceId,
+                userId,
+                grantedScopes,
+                agentRunId,
+                requireAudit: true,
+                approvedBy: { approvalId, userId },
+              },
+              toolName,
+              args,
+            ),
+        );
+      } catch (err) {
+        // The tool failed — release the claim so the request goes back to
+        // APPROVED (retryable) instead of being stranded in APPLYING, and
+        // surface the original error untouched.
+        await this.approvals.revertApply(workspaceId, approvalId);
+        throw err;
+      }
+
+      if (invoked.status !== 'OK') {
+        // Unreachable today — approvedBy always makes the broker execute
+        // inline rather than re-enqueue — but never report APPLIED for
+        // anything short of a real OK.
+        await this.approvals.revertApply(workspaceId, approvalId);
+        throw new BadRequestException(`tool call did not complete (status: ${invoked.status})`);
+      }
+
+      await this.approvals.finishApply(workspaceId, approvalId);
+
+      return { status: 'APPLIED', result: invoked.result };
+    } finally {
+      clearInterval(heartbeat);
     }
-
-    if (invoked.status !== 'OK') {
-      // Unreachable today — approvedBy always makes the broker execute
-      // inline rather than re-enqueue — but never report APPLIED for
-      // anything short of a real OK.
-      await this.approvals.revertApply(workspaceId, approvalId);
-      throw new BadRequestException(`tool call did not complete (status: ${invoked.status})`);
-    }
-
-    await this.approvals.finishApply(workspaceId, approvalId);
-
-    return { status: 'APPLIED', result: invoked.result };
   }
 }

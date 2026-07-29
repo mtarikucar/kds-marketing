@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { McpApprovalExecutorService } from './mcp-approval-executor.service';
-import { ApprovalRequestService } from '../agents/approval-request.service';
+import { APPLYING_HEARTBEAT_MS, ApprovalRequestService } from '../agents/approval-request.service';
 
 /**
  * This executor is the "approve → EXECUTE" capstone for MCP write tools
@@ -25,6 +25,7 @@ describe('McpApprovalExecutorService', () => {
       claimForApply: jest.fn().mockResolvedValue({ id: APPROVAL, status: 'APPLYING' }),
       finishApply: jest.fn().mockResolvedValue({ id: APPROVAL, status: 'APPLIED' }),
       revertApply: jest.fn().mockResolvedValue(undefined),
+      touchApplying: jest.fn().mockResolvedValue(undefined),
     };
     const broker = { invoke: jest.fn().mockResolvedValue({ status: 'OK', result: { moved: 100 } }) };
     const runs = {
@@ -210,5 +211,99 @@ describe('McpApprovalExecutorService', () => {
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(BadRequestException);
     expect(brokerCalls).toBe(1); // the tool ran exactly once, not twice
     expect(status).toBe('APPLIED');
+  });
+
+  // Fix round 1: a fixed APPLYING duration is not a valid staleness signal —
+  // a multi-account/carousel publish can legitimately run well past any
+  // fixed threshold. Liveness is proven with a heartbeat instead (touchApplying
+  // on APPLYING_HEARTBEAT_MS cadence). These tests pin the timer's lifecycle:
+  // it must run only while broker.invoke() is actually in flight, and must
+  // stop on every exit path — never outlive the call it belongs to.
+  describe('heartbeat while the tool call is in flight', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('touches the claim on APPLYING_HEARTBEAT_MS cadence, and stops once the tool succeeds', async () => {
+      jest.useFakeTimers();
+      const { svc, broker, approvals } = make({ approval: mcpApproval() });
+      let resolveInvoke!: (v: unknown) => void;
+      broker.invoke.mockReturnValue(new Promise((resolve) => { resolveInvoke = resolve; }));
+
+      const applyPromise = svc.apply(WS, APPROVAL, USER);
+
+      expect(approvals.touchApplying).not.toHaveBeenCalled(); // nothing before the first tick
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(1);
+      expect(approvals.touchApplying).toHaveBeenCalledWith(WS, APPROVAL);
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(2);
+
+      resolveInvoke({ status: 'OK', result: { ok: true } });
+      await expect(applyPromise).resolves.toEqual({ status: 'APPLIED', result: { ok: true } });
+
+      // No further ticks after the call finished — the timer must not
+      // outlive the execution it belongs to.
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS * 5);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops the heartbeat when the tool call throws (and still reverts the claim)', async () => {
+      jest.useFakeTimers();
+      const { svc, broker, approvals } = make({ approval: mcpApproval() });
+      let rejectInvoke!: (e: unknown) => void;
+      broker.invoke.mockReturnValue(new Promise((_resolve, reject) => { rejectInvoke = reject; }));
+
+      const applyPromise = svc.apply(WS, APPROVAL, USER);
+      applyPromise.catch(() => {}); // observed below; avoids an unhandled-rejection warning during timer advances
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(1);
+
+      rejectInvoke(new Error('provider rejected the write'));
+      await expect(applyPromise).rejects.toThrow('provider rejected the write');
+      expect(approvals.revertApply).toHaveBeenCalledWith(WS, APPROVAL);
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS * 5);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(1); // no ticks after the throw
+    });
+
+    it('stops the heartbeat when the tool returns a non-OK status (and still reverts the claim)', async () => {
+      jest.useFakeTimers();
+      const { svc, broker, approvals } = make({ approval: mcpApproval() });
+      let resolveInvoke!: (v: unknown) => void;
+      broker.invoke.mockReturnValue(new Promise((resolve) => { resolveInvoke = resolve; }));
+
+      const applyPromise = svc.apply(WS, APPROVAL, USER);
+      applyPromise.catch(() => {});
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(1);
+
+      resolveInvoke({ status: 'PENDING_APPROVAL', approvalId: 'appr-2' });
+      await expect(applyPromise).rejects.toBeInstanceOf(BadRequestException);
+      expect(approvals.revertApply).toHaveBeenCalledWith(WS, APPROVAL);
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS * 5);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(1); // no ticks after the non-OK exit
+    });
+
+    it('a heartbeat write failure is swallowed (best-effort) and never aborts the in-flight call', async () => {
+      jest.useFakeTimers();
+      const { svc, broker, approvals } = make({ approval: mcpApproval() });
+      approvals.touchApplying.mockRejectedValue(new Error('db blip'));
+      let resolveInvoke!: (v: unknown) => void;
+      broker.invoke.mockReturnValue(new Promise((resolve) => { resolveInvoke = resolve; }));
+
+      const applyPromise = svc.apply(WS, APPROVAL, USER);
+
+      await jest.advanceTimersByTimeAsync(APPLYING_HEARTBEAT_MS);
+      expect(approvals.touchApplying).toHaveBeenCalledTimes(1);
+
+      resolveInvoke({ status: 'OK', result: { ok: true } });
+      await expect(applyPromise).resolves.toEqual({ status: 'APPLIED', result: { ok: true } });
+    });
   });
 });
