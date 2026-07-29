@@ -12,19 +12,24 @@ for the engineer who built it.
 
 ## Status — read this before you start
 
-- **No one has run a live end-to-end smoke test yet.** Nobody has connected a
-  real Claude client to a running Jeeta server with a real `mk_live_…` key,
-  watched a tool call queue for approval, and watched a human approve **and**
-  apply it. Every claim below about request/response shape and about the
-  approve → apply → execute path comes from reading the source and from the
-  unit/integration test suite (`backend/src/modules/marketing/mcp/**/*.spec.ts`
-  plus `agents/approval-request.service.spec.ts`,
-  `controllers/marketing-approvals.controller.spec.ts` and
-  `controllers/marketing-workspaces.controller.spec.ts` — 27 suites / 176 tests,
-  all passing as of this writing) — not from an observed live run. Do the
-  steps in [Connect a client](#2-connect-a-client) yourself, and separately
-  exercise the approval queue end to end (queue a write, approve it, apply
-  it), before trusting this in production.
+- **The end-to-end path has been run live** (2026-07-29), against the app on a
+  real Postgres with a real `mk_live_…` key: auth challenges, scope-filtered
+  `tools/list`, all 18 tools invoked, a gated call queuing without a side
+  effect, a human approving **and** applying it for real, a re-apply refused,
+  a failed apply reverting instead of stranding, `AUTONOMOUS` running inline,
+  a `REP` refused on the write-mode routes, cross-tenant invisibility, the
+  migration round trip, and a handshake from the actual
+  `@modelcontextprotocol/client` SDK. Two defects were found that way and
+  fixed — see the git history for `mcp-approval-executor` and
+  `mcp-tool-registry`. What has **not** been exercised is a live provider
+  send: the test workspace used a WEBCHAT channel, so no message left the
+  system to a real phone or inbox.
+- **Which clients can connect.** Auth is a static `Authorization: Bearer
+  mk_live_…` header, so any client that lets you set a header works —
+  Claude Code does (`claude mcp add --header`). The claude.ai **custom
+  connector** UI expects an OAuth server at the endpoint, which is Faz 3 and
+  is not built, so account-level connection from the web app is not available
+  yet.
 - **The write surface is live.** A gated tool call that gets approved and then
   applied genuinely sends the message / changes the campaign / publishes the
   post / moves the budget — there is no dry-run mode. Read
@@ -78,6 +83,11 @@ the write-risk tools need a granular scope minted explicitly.
 ## 2. Connect a client
 
 ```bash
+# Production
+claude mcp add --transport http jeeta https://jeetagrowth.com/api/mcp \
+  --header "Authorization: Bearer mk_live_XXXXXXXXXXXXXXXXXXXXXXXX"
+
+# Local development
 claude mcp add --transport http jeeta http://localhost:3000/api/mcp \
   --header "Authorization: Bearer mk_live_XXXXXXXXXXXXXXXXXXXXXXXX"
 ```
