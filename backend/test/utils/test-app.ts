@@ -33,6 +33,10 @@ export const TEST_ENV = {
   MARKETING_JWT_REFRESH_SECRET: 'e2e-marketing-refresh-secret-1111111111111111',
   PLATFORM_JWT_SECRET: 'e2e-platform-operator-secret-2222222222222222',
   INTERNAL_SERVICE_TOKEN: 'e2e-internal-service-token-3333333333',
+  // Own principal for the external research routine (/api/internal/research/*).
+  // Same length as INTERNAL_SERVICE_TOKEN on purpose, so a spec that presents the
+  // WRONG one is rejected by the compare rather than by the cheap length guard.
+  RESEARCH_ROUTINE_TOKEN: 'e2e-research-routine-token-4444444444',
   CORE_SERVICE_URL: 'http://core.test.local:3000',
   // Keep the AI surfaces inert and quiet during e2e.
   AI_DISABLED: '1',
