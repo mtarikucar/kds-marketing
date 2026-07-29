@@ -13,16 +13,24 @@ for the engineer who built it.
 ## Status — read this before you start
 
 - **No one has run a live end-to-end smoke test yet.** Nobody has connected a
-  real Claude client to a running Jeeta server with a real `mk_live_…` key and
-  watched a tool call complete. Every claim below about request/response shape
-  comes from reading the source and from the unit/integration test suite
-  (`backend/src/modules/marketing/mcp/**/*.spec.ts`, 18 suites / 84 tests, all
-  passing as of this writing) — not from an observed live run. Do the steps in
-  [Connect a client](#2-connect-a-client) yourself and check the two things
-  listed there before trusting this in production.
-- **Approving a queued request does not yet execute it.** See
-  [Approval-gated tools](#approval-gated-tools) — this is a real, verified gap
-  in the current code, not a hypothetical.
+  real Claude client to a running Jeeta server with a real `mk_live_…` key,
+  watched a tool call queue for approval, and watched a human approve **and**
+  apply it. Every claim below about request/response shape and about the
+  approve → apply → execute path comes from reading the source and from the
+  unit/integration test suite (`backend/src/modules/marketing/mcp/**/*.spec.ts`
+  plus `agents/approval-request.service.spec.ts`,
+  `controllers/marketing-approvals.controller.spec.ts` and
+  `controllers/marketing-workspaces.controller.spec.ts` — 27 suites / 176 tests,
+  all passing as of this writing) — not from an observed live run. Do the
+  steps in [Connect a client](#2-connect-a-client) yourself, and separately
+  exercise the approval queue end to end (queue a write, approve it, apply
+  it), before trusting this in production.
+- **The write surface is live.** A gated tool call that gets approved and then
+  applied genuinely sends the message / changes the campaign / publishes the
+  post / moves the budget — there is no dry-run mode. Read
+  [Approval-gated tools](#approval-gated-tools) and
+  [Write mode: APPROVAL vs AUTONOMOUS](#write-mode-approval-vs-autonomous)
+  before minting a key with write scopes for a production workspace.
 
 ## Prerequisites
 
@@ -40,10 +48,13 @@ uses (`backend/src/modules/marketing/services/api-keys.service.ts`) — there is
 no separate MCP credential type.
 
 **Via the app:** Settings → API Keys (`/settings/api-keys`). Name the key,
-check **Read** and/or **Write**, create it, and copy the secret — it is shown
-**exactly once**; only its SHA-256 hash is stored server-side
-(`ApiKeysService.create`), so if you lose it you have to revoke and mint a new
-one.
+then pick scopes in the create dialog (`CreateApiKeyDialog.tsx`): the two
+legacy **Read**/**Write** shorthand checkboxes, plus a **Granular scopes**
+section listing the live permission catalog (`GET /api/marketing/roles/catalog`
+→ `roles/permissions.ts`) as individual checkboxes — the same list a custom
+role is built from. Create it and copy the secret — it is shown **exactly
+once**; only its SHA-256 hash is stored server-side (`ApiKeysService.create`),
+so if you lose it you have to revoke and mint a new one.
 
 **Via the API**, with a valid OWNER/MANAGER marketing session token:
 
@@ -57,10 +68,12 @@ curl -sX POST http://localhost:3000/api/marketing/api-keys \
 Response includes `"key": "mk_live_…"` once. This is the bearer token the MCP
 client uses — a different credential from the session JWT above.
 
-`scopes` accepts **only** `"read"` and/or `"write"` today (enforced by
-`CreateApiKeyDto`'s `@IsIn(['read', 'write'])`, and mirrored in the Settings UI
-— see [Scopes](#scopes) for what those expand to, and why that currently makes
-one tool unreachable).
+`scopes` accepts the legacy `"read"`/`"write"` shorthands **and** any granular
+permission string from `PERMISSIONS` (`roles/permissions.ts` — e.g.
+`"settings.manage"`, `"campaigns.write"`, `"contacts.write"`), enforced by
+`CreateApiKeyDto`'s `@IsIn(['read', 'write', ...PERMISSIONS])`. See
+[Scopes](#scopes) for exactly what the shorthands expand to and why most of
+the write-risk tools need a granular scope minted explicitly.
 
 ## 2. Connect a client
 
@@ -116,30 +129,54 @@ your environment and should be corrected before relying on it.
 
 MCP does not introduce its own permission vocabulary — it reuses the
 dot-style permissions already defined in
-`backend/src/modules/marketing/roles/permissions.ts`
-(`leads.read`, `contacts.write`, `campaigns.send`, `settings.manage`, etc.).
+`backend/src/modules/marketing/roles/permissions.ts` (`PERMISSIONS`:
+`leads.read`, `leads.write`, `leads.manage`, `tasks.read`, `tasks.write`,
+`contacts.read`, `contacts.write`, `campaigns.read`, `campaigns.write`,
+`campaigns.send`, `reports.read`, `courses.manage`, `automations.manage`,
+`users.manage`, `billing.manage`, `settings.manage`) — the same catalog the
+human role/permission system uses, not a parallel MCP-only list.
 
-Because API keys predate the MCP surface, they still carry only the coarse
-`read` / `write` scopes shown in the Settings UI. `expandScopes()`
-(`backend/src/modules/marketing/mcp/mcp-scopes.ts`) turns those into the
-granular set an MCP tool actually checks:
+An API key's `scopes` array can now hold **either** the legacy `read`/`write`
+shorthands **or** any of those granular permission strings directly, or a mix
+of both (`CreateApiKeyDto`'s `@IsIn(['read', 'write', ...PERMISSIONS])`).
+`expandScopes()` (`backend/src/modules/marketing/mcp/mcp-scopes.ts`) is what
+turns a key's raw `scopes` into the granted set an MCP tool call is actually
+checked against, on every request (no caching — see
+[Endpoint reference](#endpoint-reference)):
 
 | Raw key scope | Expands to |
 |---|---|
 | `read` | `leads.read`, `contacts.read`, `campaigns.read`, `reports.read`, `tasks.read` |
-| `write` | everything `read` grants, **plus** `leads.write`, `contacts.write`, `tasks.write`, `campaigns.send` |
+| `write` | everything `read` grants, **plus** `leads.write`, `tasks.write` — **nothing else** |
+| any granular string (e.g. `settings.manage`, `campaigns.write`, `contacts.write`, `campaigns.send`) | passed through untouched |
 
-**`settings.manage` is not part of either expansion.** It's the scope
-`jeeta.reallocate_budget` requires (real ad spend), and today neither the
-Settings UI (`CreateApiKeyDialog.tsx`, hard-coded to `['read', 'write']`) nor
-the `POST /api/marketing/api-keys` endpoint (`CreateApiKeyDto` validates
-`@IsIn(['read', 'write'])`) can mint a key that carries it. `ApiKeysService.create`
-itself accepts an arbitrary `scopes` array — it's only the controller/UI that
-narrow it — so granting `settings.manage` to an MCP key currently requires
-calling that service directly (e.g. a one-off script or a direct database
-insert), not the normal key-management flow. Until that's wired up,
-`jeeta.reallocate_budget` is effectively unreachable through the standard
-setup.
+**This is deliberate and load-bearing, and it means less than it sounds
+like.** Of the 18 MCP tools, **none** require `leads.write` or `tasks.write` —
+so today, a key minted with only the legacy `write` shorthand reaches exactly
+the same set of MCP tools as a `read`-only key: every read tool, plus
+`jeeta.draft_social_post`. It reaches **none** of the four approval-gated
+write tools, because each of them requires a granular scope the legacy `write`
+expansion does not include:
+
+| Tool | Requires | In legacy `write`? |
+|---|---|---|
+| `jeeta.send_message` | `contacts.write` | No |
+| `jeeta.set_campaign_status` | `campaigns.send` | No |
+| `jeeta.publish_social_post` | `campaigns.send` | No |
+| `jeeta.reallocate_budget` | `settings.manage` | No |
+| `jeeta.draft_social_post` | `campaigns.write` | No (ungated, but still needs the granular scope minted explicitly) |
+
+This split is intentional (`mcp-scopes.ts` doc comment, `mcp-scopes.spec.ts`):
+over the REST API a coarse `write` key only ever touched leads, and MCP
+shouldn't silently widen that into "can message customers / publish content /
+spend ad budget" just because a key predates the granular vocabulary. To reach
+any of the tools above, mint a key (or add scopes to an existing one) that
+carries the specific granular permission — via the Settings UI's **Granular
+scopes** checklist, or by passing the string directly in the API's `scopes`
+array (e.g. `{"scopes": ["read", "settings.manage"]}` for a key that can call
+`jeeta.reallocate_budget`). `jeeta.reallocate_budget` in particular is now
+reachable through the standard key-management flow — it no longer requires
+calling `ApiKeysService` directly or writing to the database.
 
 ## Tool catalogue
 
@@ -194,13 +231,14 @@ message is attributed.
 | Tool | What it does | Scope | Risk | Gated |
 |---|---|---|---|---|
 | `jeeta.list_scheduled_posts` | List social posts, newest first; defaults to `SCHEDULED`, `status` overrides | `campaigns.read` | READ | No |
-| `jeeta.draft_social_post` | Create a `DRAFT` post (content + media + target accounts) — no external side effect until published | `campaigns.read` | WRITE | No |
+| `jeeta.draft_social_post` | Create a `DRAFT` post (content + media + target accounts) — no external side effect until published | `campaigns.write` | WRITE | No |
 | `jeeta.publish_social_post` | Publish a draft/scheduled post immediately to every attached account — reaches a real audience | `campaigns.send` | WRITE | **Yes** (`PUBLISH`) |
 
 `jeeta.draft_social_post` is a WRITE-risk tool that is deliberately *not*
-gated (it only creates an internal draft row), and its scope is
-`campaigns.read` rather than a write scope — both are intentional per the
-code comments, not oversights.
+gated (it only creates an internal draft row), and its scope is `campaigns.write`
+rather than `campaigns.send` — a caller allowed to prepare content is not
+automatically trusted to publish it. Both are intentional per the code
+comments (`social.tools.ts`), not oversights.
 
 ### Ads
 
@@ -209,6 +247,12 @@ code comments, not oversights.
 | `jeeta.get_ad_performance` | Aggregated spend/impressions/clicks/leads/revenue over a date range, totals + by-day + by-provider | `reports.read` | READ | No |
 | `jeeta.get_budget` | Get (by id) or list the workspace's Growth Autopilot budget(s): amount, target ROAS/CAC, channel allocations | `reports.read` | READ | No |
 | `jeeta.reallocate_budget` | Change a campaign/ad set's live daily budget on a connected ad account — spends real money | `settings.manage` | SPEND | **Yes** (`BUDGET_REALLOCATION`) |
+
+`jeeta.reallocate_budget` shares its `BUDGET_REALLOCATION` approval `kind`
+with the Growth Autopilot's own reallocation proposals — the two are told
+apart by payload shape (MCP's `{ tool, args }` vs. Autopilot's
+`{ budgetId, after: [...] }`) wherever they meet; see
+[Approval-gated tools](#approval-gated-tools).
 
 ### Scheduling
 
@@ -244,32 +288,93 @@ model is not an error — it's a successful result whose text says explicitly:
 (`McpServerFactoryService.handlerFor` — worded this way on purpose, so the
 model doesn't report the action as done.)
 
-A human with **OWNER/MANAGER** reviews the queue and decides:
+A human with **OWNER/MANAGER** reviews the queue and, for each request, makes
+**two** separate calls — decide, then execute:
 
 ```bash
-# List pending requests (reports.read is enough to view)
+# List requests still needing attention: PENDING (undecided) AND
+# APPROVED-but-not-yet-applied (decided, execution still outstanding).
+# reports.read is enough to view.
 GET /api/marketing/approvals
 
-# Approve or reject one (settings.manage + MANAGER role required)
+# Decide (settings.manage + MANAGER role required). Only a PENDING row can
+# be decided; re-deciding an already-decided row 400s.
 POST /api/marketing/approvals/:id/approve
 POST /api/marketing/approvals/:id/reject
+
+# Execute an APPROVED request for real (settings.manage + MANAGER role
+# required) — runs the original MCP tool call through the same broker a live
+# request goes through.
+POST /api/marketing/approvals/:id/apply
 ```
 
 (`backend/src/modules/marketing/controllers/marketing-approvals.controller.ts`)
 
-**Known gap: approving does not execute the action.** `approve()` only flips
-the row's `status` to `APPROVED` and records who decided and when
-(`ApprovalRequestService.decide`). Nothing then re-runs the original MCP tool
-call. The only code that consumes an `APPROVED` `BUDGET_REALLOCATION` request
-is `BudgetExecutorService.apply()` — but it expects a Growth-Autopilot-shaped
-payload (`{ budgetId, after: [...] }`) and would reject an MCP-issued one
-(`{ tool: 'jeeta.reallocate_budget', args: {...} }`) with "Approval payload
-has no allocations." `SEND` and `PUBLISH` kinds have no executor at all. So
-today, approving a queued `jeeta.send_message` / `jeeta.set_campaign_status` /
-`jeeta.publish_social_post` / `jeeta.reallocate_budget` request records the
-decision but does not send the message, change the campaign, publish the
-post, or move the budget. Treat the approval queue as a **review/decision
-log**, not yet a **do-it-now** button, until an executor is built for it.
+**Approving alone still does not act — apply does.** `approve()`
+(`ApprovalRequestService.decide`) only flips `status` from `PENDING` to
+`APPROVED` and records who decided and when; it does not touch the customer,
+the campaign, the post, or the ad account. `POST …/:id/apply`
+(`MarketingApprovalsController.apply` → `McpApprovalExecutorService.apply`) is
+what actually runs the tool:
+
+1. It atomically claims the row (`APPROVED` → `APPLYING`, via
+   `ApprovalRequestService.claimForApply`) *before* touching anything else —
+   this is what makes two concurrent apply attempts on the same request
+   at-most-once-safe: the loser is rejected at the claim (400 `cannot apply a
+   APPLYING request`), never after a duplicate send has already gone out.
+2. It re-invokes the original tool (`jeeta.send_message`,
+   `jeeta.set_campaign_status`, `jeeta.publish_social_post` or
+   `jeeta.reallocate_budget`) through `McpBrokerService.invoke`, with
+   `ctx.approvedBy = { approvalId, userId }` set — that flag is what makes the
+   broker run the handler inline this time even though the workspace is still
+   in `APPROVAL` mode (`tool.requiresApproval && writeMode !== 'AUTONOMOUS' &&
+   !approvedBy` is the enqueue condition; `approvedBy` short-circuits it). The
+   tool runs under its own registered scope (least privilege), not the
+   original API key's scopes — the human who approved it, via `settings.manage`,
+   is the authority for this specific execution.
+3. On success, the row moves `APPLYING` → `APPLIED` (`appliedAt` set). On
+   failure, the row moves back `APPLYING` → `APPROVED` so an operator can
+   retry, and the original error is re-thrown untouched — never swallowed.
+
+So an approved `jeeta.send_message` genuinely sends the message,
+`jeeta.set_campaign_status` genuinely transitions the campaign,
+`jeeta.publish_social_post` genuinely publishes, and `jeeta.reallocate_budget`
+genuinely pushes the live budget change — but only after **both** calls, not
+after approve alone.
+
+**Full lifecycle:** `PENDING` → (`approve`) → `APPROVED` → (`apply`, claims) →
+`APPLYING` → (tool succeeds) → `APPLIED`, or `APPLYING` → (tool throws) → back
+to `APPROVED` (retryable). `PENDING` → (`reject`) → `REJECTED`. A `PENDING`
+row past its `expiresAt` flips to `EXPIRED` the next time anyone tries to
+decide it, instead of being decided.
+
+**A crash mid-`apply` is reclaimed, not left stranded.** While a tool call is
+in flight, `McpApprovalExecutorService` re-stamps the row's `updatedAt` every
+15s (`APPLYING_HEARTBEAT_MS`, `ApprovalRequestService.touchApplying`). A
+`@Cron(EVERY_10_MINUTES)` job (`ApprovalRequestService.reapStaleApplying`)
+sweeps any row still `APPLYING` whose heartbeat has gone silent for over 60s
+(`STALE_APPLYING_MS`, 4× the heartbeat interval) back to `APPROVED` — never to
+`APPLIED`, because whether the call actually completed before the process
+died is exactly the unknown a stranded row represents; an operator decides
+whether to retry. A genuinely slow multi-account or carousel publish (these
+can legitimately run 15+ minutes) is never falsely reclaimed, because it keeps
+heartbeating the whole time.
+
+**Where to act on this today:** the API above, or the Growth Autopilot page's
+**Approvals** tab (`frontend/src/pages/marketing/budget/BudgetAutopilotPage.tsx`
+→ `ApprovalsTab`) — this is the *only* frontend surface for the approval
+queue; there is no dedicated MCP-approvals inbox (tracked separately, not part
+of this activation). It calls the same generic `/approvals` endpoints, renders
+the MCP tool name and its arguments (not just the generic summary sentence) so
+a reviewer can see the actual text/target/amount before approving, and shows a
+row whose `status` is already `APPROVED` with an **"Approved — not applied
+yet"** badge and a single **Apply** button (never Approve/Reject again — those
+would 400 on an already-decided row). Two caveats: that tab only renders when
+a Growth Budget has been provisioned for the workspace, and only while that
+budget's own autonomy switch is **not** armed (`ASSISTED`, not `AUTONOMOUS` —
+a separate, per-budget concept from `Workspace.mcpWriteMode` below, which
+happens to share the UI). Without a Growth Budget, or with one armed, the
+queue is API-only.
 
 ## Write mode: APPROVAL vs AUTONOMOUS
 
@@ -279,36 +384,60 @@ every call (`McpInvokerService.writeModeFor`) — no caching, so a mode change
 takes effect on the very next tool call, and any value other than the literal
 string `'AUTONOMOUS'` behaves as `APPROVAL` (fail-safe default).
 
-**What changes:** in `AUTONOMOUS` mode, the four gated tools listed above run
-their handler **inline**, immediately, instead of enqueuing an approval —
-`jeeta.send_message` sends the message right away, `jeeta.reallocate_budget`
-pushes the live budget change right away, etc.
+**What changes:** in `AUTONOMOUS` mode, the four gated tools run their handler
+**inline, immediately, with no human in the loop** — `jeeta.send_message`
+sends the message right away, `jeeta.set_campaign_status` transitions the
+campaign right away, `jeeta.publish_social_post` publishes right away,
+`jeeta.reallocate_budget` pushes the live budget change right away. Nothing
+is queued and there is nothing to approve or apply — the model's tool call
+*is* the action. Read [Approval-gated tools](#approval-gated-tools) first so
+you know exactly what those four tools can do before turning this on for a
+workspace.
 
-**What does not change:** every call — gated or not, in either mode — still
-opens an `agent_runs` row first (see [Audit trail](#audit-trail)); the 32 KB
-argument cap and scope check still apply; and a gated tool that runs inline in
-`AUTONOMOUS` mode still writes its `tool_call_logs` row afterward, exactly as
-an ungated tool does (verified by
-`mcp-broker.writemode.spec.ts`: "still writes the audit log in AUTONOMOUS
-mode"). The one thing that's different between the two modes for a gated tool
-is precisely whether the handler runs before or only after a human clicks
-approve (and, per the gap above, "after a human approves" doesn't currently
-happen automatically either).
+**What does not change:** every call — gated or not, in either mode, whether
+it runs inline or via a later `apply` — still opens an `agent_runs` row first
+(see [Audit trail](#audit-trail)); the 32 KB argument cap and scope check
+still apply; and a gated tool that runs inline in `AUTONOMOUS` mode still
+writes its `tool_call_logs` row afterward, exactly as an ungated tool does
+(verified by `mcp-broker.writemode.spec.ts`: "still writes the audit log in
+AUTONOMOUS mode"). Switching modes also does not touch any request already
+sitting in the approval queue — a `PENDING` or `APPROVED` row from before the
+switch still needs a human to approve/apply it (or reject it); flipping to
+`AUTONOMOUS` only changes how *new* gated tool calls are handled going
+forward.
 
-**There is currently no application surface (REST endpoint or UI) to flip
-this switch.** It has to be set directly in the database:
+**Who can flip it, and how:**
 
-```sql
-UPDATE workspaces SET "mcpWriteMode" = 'AUTONOMOUS' WHERE id = '<workspace-id>';
--- revert:
-UPDATE workspaces SET "mcpWriteMode" = 'APPROVAL' WHERE id = '<workspace-id>';
+```bash
+# Read the current mode (OWNER only)
+GET /api/marketing/workspaces/mcp-write-mode
+
+# Set it (OWNER only, and settings.manage — both required)
+PATCH /api/marketing/workspaces/mcp-write-mode
+Content-Type: application/json
+{"mode": "AUTONOMOUS"}   # or "APPROVAL" to revert
 ```
 
-Given the executor gap above, switching a workspace to `AUTONOMOUS` is the
-only way today to actually have `jeeta.send_message` / `jeeta.set_campaign_status`
-/ `jeeta.publish_social_post` / `jeeta.reallocate_budget` do anything at all
-— in `APPROVAL` mode they currently dead-end at the approval queue. Don't flip
-this switch without understanding that trade-off.
+(`MarketingWorkspacesController.getMcpWriteMode` /
+`.setMcpWriteMode` → `MarketingAuthService`, guarded
+`@MarketingRoles('OWNER')` — a single, never-co-listed role, since this
+codebase's hierarchical role guard treats a co-listed lower role as
+inclusive-down, not additive — plus `@RequirePermission('settings.manage')`
+on the write route.) Any value other than the literal strings `APPROVAL` or
+`AUTONOMOUS` in the request body is rejected with a 400 before it reaches the
+workspace (`SetMcpWriteModeDto`'s `@IsIn(['APPROVAL', 'AUTONOMOUS'])`). The
+workspace acted on is always the caller's own, taken from the authenticated
+session — never from the request body or a path param, so no OWNER can flip
+another workspace's gate. Both the read and the write are `@Audit`-logged
+(`workspace.mcp_write_mode.read` / `.update`), so there is a durable record of
+who checked or changed this setting and when.
+
+There is still no UI toggle for this switch — only the two REST routes above.
+Because it is the single most safety-sensitive setting this connector has (it
+removes the human from every future send/publish/spend the AI decides to
+make), treat it accordingly: confirm you understand the four gated tools'
+behavior in [Approval-gated tools](#approval-gated-tools) before setting a
+production workspace to `AUTONOMOUS`.
 
 ## Audit trail
 
@@ -322,9 +451,33 @@ A **separate** `tool_call_logs` row (`tool`, `args`, `result`, `ok`,
 `error`, `latencyMs`) is written by `McpBrokerService` — but only when the
 tool's handler actually executes. For an ungated tool, or a gated tool
 running in `AUTONOMOUS` mode, that's every time. For a gated tool queued for
-approval in `APPROVAL` mode, the handler never runs, so **no
-`tool_call_logs` row is written for that call** — only the `agent_runs` row
-(whose `output` will show `{"status":"PENDING_APPROVAL","approvalId":"…"}`).
+approval in `APPROVAL` mode, the handler never runs at *that* point, so **no
+`tool_call_logs` row is written for the original call** — only the
+`agent_runs` row (whose `output` shows
+`{"status":"PENDING_APPROVAL","approvalId":"…"}`).
+
+**An approval-applied call is written to the audit trail as a distinct,
+second run — this is how you tell it apart from one that ran autonomously or
+inline.** When a human hits `POST /approvals/:id/apply`,
+`McpApprovalExecutorService.apply` opens its **own** `agent_runs` row via
+`AgentRunService.track()`, with `goal` set to `` apply approval <approvalId>: <toolName> ``
+— not the bare tool name. Compare that to the `goal` on every other MCP call
+(`McpInvokerService.invoke` sets `goal: toolName`, nothing more, whether the
+call ran inline immediately, ran inline because the workspace is
+`AUTONOMOUS`, or was the original enqueue of a now-approved request). So:
+
+- A bare `goal` (e.g. `jeeta.send_message`) with a `tool_call_logs` row under
+  it → ran inline, either because the tool isn't gated or because the
+  workspace was `AUTONOMOUS` at that moment.
+- A bare `goal` with **no** `tool_call_logs` row and an
+  `output` of `{"status":"PENDING_APPROVAL",...}` → the original enqueue of a
+  gated call in `APPROVAL` mode; nothing executed yet.
+- A `goal` starting with `apply approval …: ` → a human approved this
+  specific `approvalId` and then applied it; the tool ran for real under this
+  run, and its `tool_call_logs` row is nested under *this* run, not the
+  original enqueue run. There is no formal foreign key between the two
+  `agent_runs` rows — the link is the `approvalId` embedded in the second
+  run's `goal` string (and in `approval_requests.id` itself).
 
 **To inspect it as an operator:**
 
@@ -355,7 +508,12 @@ ORDER BY "createdAt";
 A crash-recovery cron (`AgentRunService.reapStaleRuns`, every 10 minutes)
 marks any `agent_runs` row stuck `RUNNING` for over an hour as `FAILED` — so a
 run left permanently `RUNNING` in this table means the process died mid-call,
-not that the call is still in flight.
+not that the call is still in flight. A separate cron
+(`ApprovalRequestService.reapStaleApplying`, also every 10 minutes) does the
+equivalent job for `approval_requests`: see
+[Approval-gated tools](#approval-gated-tools) for how it uses a heartbeat,
+not elapsed time, to tell a crashed `apply` apart from a legitimately slow
+one.
 
 ## Known, deliberate properties
 
@@ -400,8 +558,13 @@ answer the thread.
 
 - **`403 Forbidden`, `missing scope(s): …`** — the key's expanded scopes
   don't cover everything the tool requires. See [Scopes](#scopes); most
-  commonly this is `jeeta.reallocate_budget` needing `settings.manage`, which
-  no key minted through the normal flow currently carries.
+  commonly this is a key minted with only the legacy `write` shorthand trying
+  to call `jeeta.send_message`, `jeeta.set_campaign_status`,
+  `jeeta.publish_social_post`, `jeeta.draft_social_post`, or
+  `jeeta.reallocate_budget` — `write` does not expand into any of the
+  `contacts.write` / `campaigns.send` / `campaigns.write` / `settings.manage`
+  scopes those tools need. Mint (or add to) a key with the specific granular
+  scope instead.
 - **A tool call comes back with `isError: true` and a message** instead of a
   thrown request failure — this is intentional
   (`McpServerFactoryService.handlerFor`): a scope refusal, an oversized
@@ -412,3 +575,19 @@ answer the thread.
   server only advertises tools the key's granted scopes fully satisfy
   (`McpToolRegistry.list`), so a caller can't even see the existence of a
   tool it can't call.
+- **`POST /approvals/:id/apply` returns `400 cannot apply a <STATUS> request`**
+  — `apply` only accepts a row currently `APPROVED`. `PENDING` means nobody
+  has approved it yet (approve first); `APPLIED`/`REJECTED`/`EXPIRED` are
+  terminal; `APPLYING` means another `apply` call is already in flight for
+  this request right now (wait for it, or for the reaper to reclaim it if it
+  crashed — see [Approval-gated tools](#approval-gated-tools)).
+- **`POST /approvals/:id/apply` returns `400 Approval request is not an MCP
+  tool invocation`** — this route only executes requests whose `payload` is
+  the `{ tool, args }` shape `McpBrokerService.invoke` enqueues. A Growth
+  Autopilot reallocation proposal (payload `{ budgetId, after: [...] }`) uses
+  a different route: `POST /budget/reallocations/:approvalId/apply`.
+- **A queued request never gets applied** — approve and apply are two
+  separate calls; approving alone does nothing outward-facing. Check
+  `GET /api/marketing/approvals` (or the Growth Autopilot page's Approvals
+  tab) for a row still sitting `APPROVED` and apply it, or retry apply if it
+  previously failed.
