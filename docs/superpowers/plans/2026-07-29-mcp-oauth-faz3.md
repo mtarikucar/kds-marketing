@@ -36,7 +36,7 @@ Faz 1–2.5 (tamamlandı): `docs/superpowers/plans/2026-07-28-mcp-connector-faz1
 - Modify: `backend/prisma/schema.prisma`
 - Create: `backend/prisma/migrations/20260729120000_mcp_oauth/migration.sql` + `down.sql`
 
-- [ ] **Step 1: Şemaya üç modeli ekle (additive)**
+- [x] **Step 1: Şemaya üç modeli ekle (additive)**
 
 `McpOAuthClient` — CIMD cache: `id`, `clientId` (@unique, HTTPS URL), `clientName`, `redirectUris` (Json), `metadata` (Json?), `fetchedAt`, `expiresAt` (HTTP cache header'ından), timestamps. `@@map("mcp_oauth_clients")`.
 
@@ -44,9 +44,9 @@ Faz 1–2.5 (tamamlandı): `docs/superpowers/plans/2026-07-28-mcp-connector-faz1
 
 `McpOAuthToken` — access + refresh: `id`, `tokenHash` (@unique), `type` (`ACCESS`|`REFRESH`), `clientId`, `workspaceId`, `userId`, `scopes` (String[]), `resource`, `expiresAt`, `revokedAt` (DateTime?), `parentId` (String?, refresh rotasyonu için), `createdAt`. `@@index([workspaceId, type])`.
 
-- [ ] **Step 2: Migration'ı elle yaz (up idempotent `IF NOT EXISTS`, down yalnız eklenen tabloları düşürür)** — proje konvansiyonu (§7: round-trip up→down→up doğrulanır).
-- [ ] **Step 3: `npx prisma generate`; `npx tsc --noEmit` → 0 hata.**
-- [ ] **Step 4: Commit** — `feat(mcp-oauth): data model for the OAuth authorization server`
+- [x] **Step 2: Migration'ı elle yaz (up idempotent `IF NOT EXISTS`, down yalnız eklenen tabloları düşürür)** — proje konvansiyonu (§7: round-trip up→down→up doğrulanır).
+- [x] **Step 3: `npx prisma generate`; `npx tsc --noEmit` → 0 hata.**
+- [x] **Step 4: Commit** — `feat(mcp-oauth): data model for the OAuth authorization server`
 
 ## Task 2: Metadata endpoint'leri (RFC 9728 + RFC 8414)
 
@@ -54,68 +54,89 @@ Faz 1–2.5 (tamamlandı): `docs/superpowers/plans/2026-07-28-mcp-connector-faz1
 - Create: `backend/src/modules/mcp-oauth/mcp-oauth-metadata.controller.ts` (+ `.spec.ts`)
 - Modify: `backend/src/app.config.ts` (globalPrefix exclude)
 
-- [ ] **Step 1: Testi önce yaz** — (a) protected-resource metadata `resource` alanı `https://<host>/api/mcp` döner, `authorization_servers` bizi gösterir, `scopes_supported` granüler listedir; (b) authorization-server metadata `issuer`, `authorization_endpoint`, `token_endpoint`, `code_challenge_methods_supported: ['S256']`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` içerir; (c) her iki yol da **kökte** servis edilir (`/api/` önekiyle DEĞİL).
-- [ ] **Step 2: Controller'ı yaz** — `/.well-known/oauth-protected-resource/api/mcp` ve `/.well-known/oauth-authorization-server`. Host'u `PUBLIC_BASE_URL`'den türet (repo deseni).
-- [ ] **Step 3: `setGlobalPrefix('api', { exclude: [...] })`** ile well-known route'larını hariç tut; mevcut route'ların bozulmadığını doğrula.
-- [ ] **Step 4: Test yeşil + commit** — `feat(mcp-oauth): RFC 9728/8414 metadata endpoints at the root`
+- [x] **Step 1: Testi önce yaz** — (a) protected-resource metadata `resource` alanı `https://<host>/api/mcp` döner, `authorization_servers` bizi gösterir, `scopes_supported` granüler listedir; (b) authorization-server metadata `issuer`, `authorization_endpoint`, `token_endpoint`, `code_challenge_methods_supported: ['S256']`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` içerir; (c) her iki yol da **kökte** servis edilir (`/api/` önekiyle DEĞİL).
+- [x] **Step 2: Controller'ı yaz** — `/.well-known/oauth-protected-resource/api/mcp` ve `/.well-known/oauth-authorization-server`. Host'u `PUBLIC_BASE_URL`'den türet (repo deseni).
+- [x] **Step 3: `setGlobalPrefix('api', { exclude: [...] })`** ile well-known route'larını hariç tut; mevcut route'ların bozulmadığını doğrula.
+- [x] **Step 4: Test yeşil + commit** — `feat(mcp-oauth): RFC 9728/8414 metadata endpoints at the root`
 
 ## Task 3: CIMD — Client ID Metadata Documents
 
 **Files:** Create `backend/src/modules/mcp-oauth/cimd-client.service.ts` (+ `.spec.ts`)
 
-- [ ] **Step 1: Test önce** — (a) `client_id` HTTPS URL değilse red; (b) çekilen dokümandaki `client_id` istenen URL ile **birebir** eşleşmiyorsa red; (c) `redirect_uris` içermiyorsa red; (d) başarılı çekim cache'lenir, `expiresAt` dolmadan tekrar fetch yapılmaz; (e) fetch `safeFetch` ile yapılır (mock'la doğrula) — SSRF korumalı.
-- [ ] **Step 2: `resolveClient(clientId)` implementasyonu** — cache oku → yoksa/expired ise `safeFetch` → doğrula → `McpOAuthClient` upsert. HTTP cache header'larına (`Cache-Control: max-age`) saygı göster, yoksa makul varsayılan (örn. 1 saat).
-- [ ] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): CIMD client resolution with SSRF-safe fetch + cache`
+- [x] **Step 1: Test önce** — (a) `client_id` HTTPS URL değilse red; (b) çekilen dokümandaki `client_id` istenen URL ile **birebir** eşleşmiyorsa red; (c) `redirect_uris` içermiyorsa red; (d) başarılı çekim cache'lenir, `expiresAt` dolmadan tekrar fetch yapılmaz; (e) fetch `safeFetch` ile yapılır (mock'la doğrula) — SSRF korumalı.
+- [x] **Step 2: `resolveClient(clientId)` implementasyonu** — cache oku → yoksa/expired ise `safeFetch` → doğrula → `McpOAuthClient` upsert. HTTP cache header'larına (`Cache-Control: max-age`) saygı göster, yoksa makul varsayılan (örn. 1 saat).
+- [x] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): CIMD client resolution with SSRF-safe fetch + cache`
 
 ## Task 4: `/oauth/authorize` — PKCE + consent
 
 **Files:** Create `backend/src/modules/mcp-oauth/mcp-oauth-authorize.controller.ts`, `mcp-oauth-code.service.ts` (+ spec'ler)
 
-- [ ] **Step 1: Test önce** — (a) `code_challenge` yoksa veya `code_challenge_method != S256` ise **red** (PKCE zorunlu); (b) `redirect_uri` CIMD'deki listede yoksa red; (c) `resource` parametresi bizim canonical URI'ye işaret etmiyorsa red (RFC 8707); (d) geçerli istek consent için gereken bilgiyi döner (client adı, scope listesi, workspace seçenekleri); (e) onaylanan istek tek kullanımlık code üretir, **hash'li** saklar, redirect'e `code` + `state` + **`iss`** (RFC 9207) ekler.
-- [ ] **Step 2: Implementasyon** — GET `/api/mcp-oauth/authorize` (giriş yapılmamışsa mevcut login'e yönlendirir, dönüşte devam eder) → consent verisi; POST `/api/mcp-oauth/authorize/consent` (JWT korumalı) → code üretir. Kullanıcının o workspace'e üyeliği + scope'ları verme yetkisi **doğrulanır** (yetkisi olmayan scope verilemez).
-- [ ] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): authorize endpoint with mandatory PKCE + consent`
+- [x] **Step 1: Test önce** — (a) `code_challenge` yoksa veya `code_challenge_method != S256` ise **red** (PKCE zorunlu); (b) `redirect_uri` CIMD'deki listede yoksa red; (c) `resource` parametresi bizim canonical URI'ye işaret etmiyorsa red (RFC 8707); (d) geçerli istek consent için gereken bilgiyi döner (client adı, scope listesi, workspace seçenekleri); (e) onaylanan istek tek kullanımlık code üretir, **hash'li** saklar, redirect'e `code` + `state` + **`iss`** (RFC 9207) ekler.
+- [x] **Step 2: Implementasyon** — GET `/api/mcp-oauth/authorize` (giriş yapılmamışsa mevcut login'e yönlendirir, dönüşte devam eder) → consent verisi; POST `/api/mcp-oauth/authorize/consent` (JWT korumalı) → code üretir. Kullanıcının o workspace'e üyeliği + scope'ları verme yetkisi **doğrulanır** (yetkisi olmayan scope verilemez).
+- [x] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): authorize endpoint with mandatory PKCE + consent`
 
 ## Task 5: `/oauth/token` — code + refresh grant
 
 **Files:** Create `backend/src/modules/mcp-oauth/mcp-oauth-token.controller.ts`, `mcp-oauth-token.service.ts` (+ spec'ler)
 
-- [ ] **Step 1: Test önce** — (a) `code_verifier` challenge ile eşleşmiyorsa red; (b) code **tek kullanımlık** (ikinci kullanım red + o code'dan türeyen token'lar iptal); (c) süresi geçmiş code red; (d) `redirect_uri` code'daki ile eşleşmeli; (e) başarılı değişim access + refresh döner, ikisi de hash'li saklanır, `resource` (audience) token'a bağlanır; (f) refresh grant **rotasyonlu** (eski refresh iptal, `parentId` zinciri); (g) iptal edilmiş refresh'in yeniden kullanımı tüm zinciri iptal eder.
-- [ ] **Step 2: Implementasyon** — POST `/api/mcp-oauth/token`, `grant_type` ∈ `authorization_code` | `refresh_token`. Access TTL kısa (örn. 1 saat), refresh uzun (örn. 30 gün).
-- [ ] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): token endpoint (authorization_code + rotating refresh)`
+- [x] **Step 1: Test önce** — (a) `code_verifier` challenge ile eşleşmiyorsa red; (b) code **tek kullanımlık** (ikinci kullanım red + o code'dan türeyen token'lar iptal); (c) süresi geçmiş code red; (d) `redirect_uri` code'daki ile eşleşmeli; (e) başarılı değişim access + refresh döner, ikisi de hash'li saklanır, `resource` (audience) token'a bağlanır; (f) refresh grant **rotasyonlu** (eski refresh iptal, `parentId` zinciri); (g) iptal edilmiş refresh'in yeniden kullanımı tüm zinciri iptal eder.
+- [x] **Step 2: Implementasyon** — POST `/api/mcp-oauth/token`, `grant_type` ∈ `authorization_code` | `refresh_token`. Access TTL kısa (örn. 1 saat), refresh uzun (örn. 30 gün).
+- [x] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): token endpoint (authorization_code + rotating refresh)`
 
 ## Task 6: Token doğrulama + MCP transport entegrasyonu
 
 **Files:** Modify `backend/src/modules/marketing/mcp/mcp-token-verifier.service.ts` (+ spec), `mcp.controller.ts` (+ spec)
 
-- [ ] **Step 1: Test önce** — (a) `mk_live_…` → mevcut API-key yolu (regresyon: eski davranış bozulmaz); (b) OAuth access token → `AuthInfo`'ya çözülür, `extra` içinde **`userId`** taşır; (c) süresi geçmiş/iptal edilmiş token 401; (d) **audience uyuşmazlığı** (token'ın `resource`'u bize işaret etmiyor) 401; (e) 401 yanıtı `WWW-Authenticate: Bearer resource_metadata="…"` challenge'ı taşır; (f) yetersiz scope 403 + `error="insufficient_scope"`.
-- [ ] **Step 2: Implementasyon** — verifier'da iki yol; controller'da RFC 6750 challenge'ları. **Broker'a dokunma.**
-- [ ] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): accept OAuth tokens on the MCP transport with audience + scope challenges`
+- [x] **Step 1: Test önce** — (a) `mk_live_…` → mevcut API-key yolu (regresyon: eski davranış bozulmaz); (b) OAuth access token → `AuthInfo`'ya çözülür, `extra` içinde **`userId`** taşır; (c) süresi geçmiş/iptal edilmiş token 401; (d) **audience uyuşmazlığı** (token'ın `resource`'u bize işaret etmiyor) 401; (e) 401 yanıtı `WWW-Authenticate: Bearer resource_metadata="…"` challenge'ı taşır; (f) yetersiz scope 403 + `error="insufficient_scope"`.
+- [x] **Step 2: Implementasyon** — verifier'da iki yol; controller'da RFC 6750 challenge'ları. **Broker'a dokunma.**
+- [x] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): accept OAuth tokens on the MCP transport with audience + scope challenges`
 
 ## Task 7: Consent ekranı (frontend)
 
 **Files:** Create `frontend/src/pages/marketing/oauth/McpConsentPage.tsx` (+ test), route kaydı `App.tsx`, i18n `en`+`tr`
 
-- [ ] **Step 1: Test önce** — sayfa client adını, istenen scope'ları ve workspace seçicisini gösterir; "İzin ver" consent POST'unu doğru gövdeyle çağırır; "Reddet" redirect'e `error=access_denied` ile döner.
-- [ ] **Step 2: Implementasyon** — mevcut auth guard'ının arkasında; scope'ları insan-okur etiketlerle listeler (örn. `leads.read` → "Lead'lerini okuma"). Repo'nun i18n + UI kit desenini izle.
-- [ ] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): consent screen`
+- [x] **Step 1: Test önce** — sayfa client adını, istenen scope'ları ve workspace seçicisini gösterir; "İzin ver" consent POST'unu doğru gövdeyle çağırır; "Reddet" redirect'e `error=access_denied` ile döner.
+- [x] **Step 2: Implementasyon** — mevcut auth guard'ının arkasında; scope'ları insan-okur etiketlerle listeler (örn. `leads.read` → "Lead'lerini okuma"). Repo'nun i18n + UI kit desenini izle.
+- [x] **Step 3: Test yeşil + commit** — `feat(mcp-oauth): consent screen`
 
 ## Task 8: Gerçek kullanıcı principal'ı (devredilen borç)
 
 **Files:** Modify `backend/src/modules/marketing/mcp/tools/leads.tools.ts` (+ spec), gerekiyorsa `mcp-server.factory.ts` (context'e `userId` taşı)
 
-- [ ] **Step 1: Test önce** — OAuth oturumunda `findAll` **gerçek** `userId`/rol ile çağrılır (satır-seviyesi görünürlük uygulanır); API-key oturumunda mevcut açıkça-adlandırılmış servis principal'ı korunur (regresyon).
-- [ ] **Step 2: Implementasyon** — `McpToolContext`'e `userId` ekle; leads tool'u varsa gerçek kullanıcıyı kullansın. Yorumu güncelle (artık "Faz 3 çözecek" değil, "Faz 3 çözdü").
-- [ ] **Step 3: Test yeşil + commit** — `fix(mcp): use the real OAuth user for row-level lead visibility`
+- [x] **Step 1: Test önce** — OAuth oturumunda `findAll` **gerçek** `userId`/rol ile çağrılır (satır-seviyesi görünürlük uygulanır); API-key oturumunda mevcut açıkça-adlandırılmış servis principal'ı korunur (regresyon).
+- [x] **Step 2: Implementasyon** — `McpToolContext`'e `userId` ekle; leads tool'u varsa gerçek kullanıcıyı kullansın. Yorumu güncelle (artık "Faz 3 çözecek" değil, "Faz 3 çözdü").
+- [x] **Step 3: Test yeşil + commit** — `fix(mcp): use the real OAuth user for row-level lead visibility`
 
 ## Task 9: Modül kaydı, e2e ve dokümantasyon
 
-- [ ] **Step 1:** `McpOAuthModule`'ü `app.module.ts`'e bağla (Faz 1-2'de MCP marketing modülüne **flat** kayıtlıydı — DI kırılmasın diye o deseni doğrula).
-- [ ] **Step 2: e2e testi** — metadata şekli, PKCE zorunluluğu, yanlış audience reddi, CIMD `client_id ≠ URL` reddi (tasarım §10).
-- [ ] **Step 3:** `npx jest mcp` tamamı yeşil; `npx tsc --noEmit` 0; `npx jest authz.e2e` (DI boot) yeşil.
-- [ ] **Step 4: Dokümantasyon** — `docs/` altına connector kurulum notu: Claude.ai/Desktop'a `https://jeetagrowth.com/api/mcp` eklerken akışın nasıl işlediği + smoke-test komutları.
-- [ ] **Step 5: Commit** — `docs(mcp-oauth): Faz 3 wiring, e2e coverage and connector setup guide`
+- [x] **Step 1:** `McpOAuthModule`'ü `app.module.ts`'e bağla (Faz 1-2'de MCP marketing modülüne **flat** kayıtlıydı — DI kırılmasın diye o deseni doğrula).
+- [x] **Step 2: e2e testi** — metadata şekli, PKCE zorunluluğu, yanlış audience reddi, CIMD `client_id ≠ URL` reddi (tasarım §10).
+- [x] **Step 3:** `npx jest mcp` tamamı yeşil; `npx tsc --noEmit` 0; `npx jest authz.e2e` (DI boot) yeşil.
+- [x] **Step 4: Dokümantasyon** — `docs/` altına connector kurulum notu: Claude.ai/Desktop'a `https://jeetagrowth.com/api/mcp` eklerken akışın nasıl işlediği + smoke-test komutları.
+- [x] **Step 5: Commit** — `docs(mcp-oauth): Faz 3 wiring, e2e coverage and connector setup guide`
 
 ---
+
+## Durum — 2026-07-29
+
+Task 1-9 **tamam**; hepsi `feat/mcp-oauth-faz3` üzerinde commit'li.
+
+Uygulama sırasında planın ötesine geçen üç karar:
+
+1. **Modül döngüsü (Task 9).** `McpOAuthModule` → `MarketingModule` tek yönlü;
+   ters yön yok (verifier `McpOAuthTokenService`'i **dosya** import'uyla alır,
+   servis `MarketingModule` içinde flat kayıtlı ve export ediliyor). Guard'lar
+   sınıf referansıyla **controller'ın modülünde** kurulduğu için `MarketingGuard`
+   export etmek yetmez — `MarketingModule` artık `JwtModule`'ü export ediyor.
+   Faz 1-2'nin çift-`@Cron` tuzağı korunuyor: hiçbir provider yeniden
+   tanımlanmıyor. Boot `authz.e2e` ile kanıtlı.
+2. **Login dönüş yolu (Task 7).** Consent isteğinin TAMAMI query string'de
+   yaşıyor; `MarketingProtectedRoute` artık `?next=` taşıyor ve login oraya
+   dönüyor (yalnız site-içi path — `//evil.example` açık yönlendirme olurdu).
+3. **CIMD hata zarfı (Task 9 e2e ile ortaya çıktı).** `CimdError` bir
+   `BadRequestException`; işlenmeden bırakılınca gövdedeki `error` alanı
+   `"Bad Request"` oluyordu — RFC 6749 §5.2 istemcisinin okuduğu alan. Artık
+   `validate()` onu `OAuthHttpException`'a çeviriyor.
 
 ## Kapsam dışı (tasarım §12 ile aynı)
 

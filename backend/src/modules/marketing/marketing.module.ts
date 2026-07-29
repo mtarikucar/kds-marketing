@@ -1116,6 +1116,25 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // Brand Brain — async brand-extraction run (Task 12): Task 13's
     // controller/apply consume startAnalysis/getRun.
     BrandAnalysisService,
+    // MCP OAuth (Faz 3, Task 9) — McpOAuthModule imports THIS module for the
+    // four things its authorization server needs from marketing. The direction
+    // is one-way on purpose: McpOAuthModule → MarketingModule, never back (the
+    // verifier's use of McpOAuthTokenService is a plain file import of a
+    // provider declared HERE, not a module import). Exporting the single
+    // instance also keeps the Faz 1-2 rule intact — a second module that
+    // re-declares a provider gets its own copy, which is how AgentRunService's
+    // named @Cron once got registered twice and broke boot.
+    RolesService,
+    McpOAuthTokenService,
+    // The consent endpoints sit behind `@UseGuards(MarketingGuard)`. Nest
+    // instantiates a guard referenced BY CLASS in the module hosting the
+    // controller, not in the module that exports it — so exporting the guard
+    // itself would not help; what McpOAuthModule needs is the JwtService this
+    // module configures with MARKETING_JWT_SECRET. Exporting JwtModule hands
+    // that configured instance to importers (today: InternalApiModule, which
+    // injects no JwtService, and McpOAuthModule). The guard it builds there is
+    // a second, stateless copy — no shared state, nothing scheduled.
+    JwtModule,
   ],
 })
 export class MarketingModule {

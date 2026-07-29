@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MembershipService } from '../marketing/services/membership.service';
 import { RolesService } from '../marketing/roles/roles.service';
 import { MCP_ALL_SCOPES } from '../marketing/mcp/mcp-scopes';
-import { CimdClientService, ResolvedCimdClient } from './cimd-client.service';
+import { CimdClientService, CimdError, ResolvedCimdClient } from './cimd-client.service';
 import { isCanonicalMcpResource, mcpOAuthIssuer } from './mcp-oauth.config';
 import { newSecret, sha256Hex } from './mcp-oauth.crypto';
 import { OAuthHttpException } from './mcp-oauth.errors';
@@ -114,7 +114,21 @@ export class McpOAuthCodeService {
     }
     // Resolving through CIMD is what makes `redirect_uris` authoritative: the
     // list comes from a document the client itself published at that URL.
-    const client = await this.cimd.resolveClient(clientId);
+    //
+    // A CimdError is a BadRequestException, so leaving it alone would still be
+    // a 400 — but with Nest's default body, whose `error` is the HTTP reason
+    // phrase ("Bad Request"), not an RFC 6749 code. An OAuth client reads
+    // `error` to decide what to do next and would see garbage. Re-render it
+    // with the code the CIMD layer already determined.
+    let client: ResolvedCimdClient;
+    try {
+      client = await this.cimd.resolveClient(clientId);
+    } catch (err) {
+      if (err instanceof CimdError) {
+        throw new OAuthHttpException(err.oauthError, cimdMessage(err));
+      }
+      throw err;
+    }
 
     const redirectUri = str(raw.redirect_uri);
     // Exact string match, deliberately. Prefix matching is the classic redirect
@@ -305,4 +319,19 @@ export class McpOAuthCodeService {
 /** Query/body values arrive as `unknown`; keep only non-empty strings. */
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The human-readable half of a CimdError. `HttpException.message` is the plain
+ * string for these, but read it out of the response body too so a future
+ * `BadRequestException(['a','b'])` shape cannot turn `error_description` into
+ * `[object Object]`.
+ */
+function cimdMessage(err: CimdError): string {
+  const body = err.getResponse();
+  if (typeof body === 'string') return body;
+  const message = (body as { message?: unknown })?.message;
+  if (typeof message === 'string') return message;
+  if (Array.isArray(message) && typeof message[0] === 'string') return message[0];
+  return err.message;
 }

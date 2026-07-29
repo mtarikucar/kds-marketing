@@ -11,6 +11,7 @@ import { RedisThrottlerStorage } from './common/throttler/redis-throttler-storag
 import { PrincipalThrottlerGuard } from './common/throttler/principal-throttler.guard';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { MarketingModule } from './modules/marketing/marketing.module';
+import { McpOAuthModule } from './modules/mcp-oauth/mcp-oauth.module';
 import { PlatformModule } from './modules/platform/platform.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { ProvisioningClientModule } from './core-client/provisioning-client.module';
@@ -64,6 +65,10 @@ import { RoutinesModule } from './modules/routines/routines.module';
     // Packages → entitlements → checkout/settlement (PayTR/Stripe/manual).
     BillingModule,
     MarketingModule,
+    // MCP OAuth 2.1 authorization server (Faz 3): discovery metadata at the
+    // ROOT (excluded from the `api` prefix), /api/mcp-oauth/authorize and
+    // /api/mcp-oauth/token. Imports MarketingModule; nothing imports it back.
+    McpOAuthModule,
     // Platform (superadmin) realm: operator auth + workspace administration.
     PlatformModule,
     InternalApiModule,

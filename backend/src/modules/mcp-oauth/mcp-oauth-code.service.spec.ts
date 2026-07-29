@@ -174,6 +174,30 @@ describe('McpOAuthCodeService', () => {
         state: 'st-1',
       });
     });
+
+    /**
+     * A CimdError is a BadRequestException, so an unhandled one is still a 400
+     * — but Nest renders its `error` member as the HTTP reason phrase ("Bad
+     * Request"), and RFC 6749 §5.2 clients read exactly that member to decide
+     * how to recover. Surfaced by the Task 9 e2e; locked here.
+     */
+    it('re-renders a CIMD rejection as an RFC 6749 error envelope, not "Bad Request"', async () => {
+      const { svc, cimd } = make();
+      const { CimdError } = await import('./cimd-client.service');
+      cimd.resolveClient.mockRejectedValue(
+        new CimdError('invalid_client', 'client_id metadata document does not claim the URL it was fetched from'),
+      );
+
+      await expect(svc.validate(query())).rejects.toMatchObject({
+        oauthError: 'invalid_client',
+      });
+      await expect(svc.validate(query())).rejects.toBeInstanceOf(OAuthHttpException);
+      const err = await svc.validate(query()).catch((e) => e);
+      expect(err.getResponse()).toEqual({
+        error: 'invalid_client',
+        error_description: expect.stringMatching(/does not claim the URL/i),
+      });
+    });
   });
 
   describe('consentData — what the consent screen renders', () => {
