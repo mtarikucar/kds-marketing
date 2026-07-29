@@ -42,16 +42,24 @@ vi.mock('../../store/marketingAuthStore', () => ({
 
 import MarketingLoginPage from './MarketingLoginPage';
 
-function renderPage() {
+function renderPage(entry = '/login') {
   return render(
-    <MemoryRouter initialEntries={['/login']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/login" element={<MarketingLoginPage />} />
         <Route path="/dashboard" element={<div>Dashboard</div>} />
         <Route path="/register" element={<div>Register</div>} />
+        <Route path="/oauth/consent" element={<div>Consent screen</div>} />
       </Routes>
     </MemoryRouter>,
   );
+}
+
+async function signIn() {
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText(/login.emailLabel/i), 'test@example.com');
+  await user.type(screen.getByLabelText(/login.passwordLabel/i), 'password123');
+  await user.click(screen.getByRole('button', { name: /login.submit/i }));
 }
 
 describe('MarketingLoginPage', () => {
@@ -85,6 +93,23 @@ describe('MarketingLoginPage', () => {
         password: 'password123',
       });
     });
+  });
+
+  /**
+   * The MCP OAuth consent screen bounces here with `?next=` when the browser
+   * arrives without a session; without this the authorization request (which
+   * lives entirely in that query string) is lost and the connector flow dies.
+   */
+  it('returns to ?next= after a successful login, query string intact', async () => {
+    renderPage('/login?next=%2Foauth%2Fconsent%3Fclient_id%3Dhttps%253A%252F%252Fclaude.ai');
+    await signIn();
+    await waitFor(() => expect(screen.getByText('Consent screen')).toBeInTheDocument());
+  });
+
+  it('ignores an off-site ?next= (protocol-relative open redirect) and lands on the dashboard', async () => {
+    renderPage('/login?next=%2F%2Fevil.example%2Fharvest');
+    await signIn();
+    await waitFor(() => expect(screen.getByText('Dashboard')).toBeInTheDocument());
   });
 
   it('shows a register link', () => {

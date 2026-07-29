@@ -2897,5 +2897,30 @@
       "ticari": "Commercial (TİCARİ)",
       "bilgilendirme": "Informational (BİLGİLENDİRME)"
     }
+  },
+  "mcpConsent": {
+    "title": "Authorize access",
+    "subtitle": "is asking to act inside your workspace. Review what it will be able to do before you allow it.",
+    "unknownClient": "An application",
+    "permissionsTitle": "It will be able to:",
+    "workspaceTitle": "In this workspace:",
+    "cappedByRole": "Crossed-out permissions are ones your role in this workspace does not have, so they will not be granted.",
+    "noWorkspaces": "You are not an active member of any workspace, so there is nothing you can grant access to.",
+    "allow": "Allow",
+    "deny": "Deny",
+    "revokeHint": "You can revoke this access at any time from your workspace settings.",
+    "scopes": {
+      "leads_read": "Read your leads",
+      "leads_write": "Create and update your leads",
+      "contacts_read": "Read your contacts",
+      "contacts_write": "Create and update your contacts",
+      "campaigns_read": "Read your campaigns",
+      "campaigns_write": "Create and update your campaigns",
+      "campaigns_send": "Send campaigns and messages to your audience",
+      "reports_read": "Read your reports and analytics",
+      "tasks_read": "Read your tasks",
+      "tasks_write": "Create and update your tasks",
+      "settings_manage": "Manage your workspace settings"
+    }
   }
 }

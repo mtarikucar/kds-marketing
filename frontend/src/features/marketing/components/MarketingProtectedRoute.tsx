@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { hasMarketingRole, type MarketingRole } from '../types';
 
@@ -18,6 +18,7 @@ export default function MarketingProtectedRoute({
   requiredRole,
 }: MarketingProtectedRouteProps = {}) {
   const { isAuthenticated, accessToken, user, logout } = useMarketingAuthStore();
+  const location = useLocation();
 
   useEffect(() => {
     if (accessToken) {
@@ -33,7 +34,13 @@ export default function MarketingProtectedRoute({
   }, [accessToken, logout]);
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Carry the attempted location so login can hand the user back to it.
+    // Deep links matter everywhere, but the MCP OAuth consent screen makes it
+    // load-bearing: the authorization request lives ENTIRELY in that query
+    // string, so dropping it turns "sign in to approve Claude" into a dead end
+    // the user cannot recover from without restarting the flow in the client.
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
 
   if (requiredRole && !hasMarketingRole(user?.role, requiredRole)) {
