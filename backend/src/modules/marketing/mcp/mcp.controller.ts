@@ -1,9 +1,21 @@
 import { Controller, OnModuleDestroy, Post, Req, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import { Readable } from 'node:stream';
-import { createMcpHandler, OAuthError, type AuthInfo, type McpHttpHandler } from '@modelcontextprotocol/server';
+import {
+  createMcpHandler,
+  OAuthError,
+  OAuthErrorCode,
+  type AuthInfo,
+  type McpHttpHandler,
+} from '@modelcontextprotocol/server';
+import {
+  PROTECTED_RESOURCE_METADATA_PATH,
+  mcpOAuthIssuer,
+} from '../../mcp-oauth/mcp-oauth.config';
 import { McpServerFactoryService } from './mcp-server.factory';
 import { McpTokenVerifierService } from './mcp-token-verifier.service';
+import { MCP_ALL_SCOPES } from './mcp-scopes';
 
 /**
  * The MCP Streamable-HTTP endpoint. Served at POST /api/mcp (the global
@@ -12,6 +24,12 @@ import { McpTokenVerifierService } from './mcp-token-verifier.service';
  * `createMcpHandler` verifies nothing — `authInfo` is strictly pass-through —
  * so the bearer token is verified HERE and the resulting AuthInfo is handed to
  * the handler explicitly.
+ *
+ * Every rejection carries an RFC 6750 challenge with the RFC 9728
+ * `resource_metadata` pointer. That 401 is where OAuth discovery BEGINS: a
+ * client that has never seen this server learns from it where the
+ * protected-resource metadata lives, and from there which authorization server
+ * to talk to. Without the pointer the connector flow cannot start at all.
  */
 @Controller('mcp')
 export class McpController implements OnModuleDestroy {
@@ -20,6 +38,7 @@ export class McpController implements OnModuleDestroy {
   constructor(
     private readonly factory: McpServerFactoryService,
     private readonly verifier: McpTokenVerifierService,
+    private readonly config: ConfigService,
   ) {
     this.handler = createMcpHandler((ctx) => this.factory.build(ctx));
   }
@@ -56,6 +75,10 @@ export class McpController implements OnModuleDestroy {
       // that was never the problem would hide the actual failure.
       if (!(err instanceof OAuthError)) {
         throw err;
+      }
+      if (err.code === OAuthErrorCode.InsufficientScope) {
+        this.insufficientScope(res, err.message);
+        return;
       }
       this.invalidToken(res, err.message);
       return;
@@ -96,14 +119,64 @@ export class McpController implements OnModuleDestroy {
 
   /** RFC 6750 §3.1: no credential at all — a bare challenge, no `error`. */
   private missingCredential(res: Response): void {
-    res.setHeader('WWW-Authenticate', 'Bearer realm="jeeta-mcp"');
+    res.setHeader('WWW-Authenticate', this.challenge());
     res.status(401).json({ error: 'unauthorized', error_description: 'missing bearer token' });
   }
 
   /** RFC 6750 §3.1: a credential WAS supplied, and it is invalid or revoked. */
   private invalidToken(res: Response, description: string): void {
-    res.setHeader('WWW-Authenticate', `Bearer realm="jeeta-mcp", error="invalid_token", error_description="${description}"`);
+    res.setHeader(
+      'WWW-Authenticate',
+      this.challenge({ error: 'invalid_token', error_description: description }),
+    );
     res.status(401).json({ error: 'invalid_token', error_description: description });
+  }
+
+  /**
+   * RFC 6750 §3.1: the credential is VALID but authorises nothing here. 403,
+   * not 401 — re-authenticating would produce the same token. The `scope`
+   * parameter tells the client what to ask for on the step-up, which is the
+   * only way it can recover on its own.
+   */
+  private insufficientScope(res: Response, description: string): void {
+    res.setHeader(
+      'WWW-Authenticate',
+      this.challenge({
+        error: 'insufficient_scope',
+        error_description: description,
+        scope: MCP_ALL_SCOPES.join(' '),
+      }),
+    );
+    res.status(403).json({ error: 'insufficient_scope', error_description: description });
+  }
+
+  /**
+   * Build the challenge, always ending with the RFC 9728 `resource_metadata`
+   * pointer when the deployment knows its own public URL.
+   *
+   * A missing PUBLIC_BASE_URL degrades the hint rather than the response: a
+   * misconfiguration must not turn an auth failure into a 500, and a challenge
+   * without the pointer is still a valid RFC 6750 challenge.
+   */
+  private challenge(params: Record<string, string> = {}): string {
+    const all: Record<string, string> = { realm: 'jeeta-mcp', ...params };
+    const metadataUrl = this.resourceMetadataUrl();
+    if (metadataUrl) all.resource_metadata = metadataUrl;
+    return `Bearer ${Object.entries(all)
+      // Quoted-string values per RFC 7235 §2.1. Double quotes are stripped
+      // rather than escaped: they cannot legally appear unescaped inside a
+      // quoted-string, and an unbalanced one would split the header.
+      .map(([k, v]) => `${k}="${v.replace(/"/g, '')}"`)
+      .join(', ')}`;
+  }
+
+  private resourceMetadataUrl(): string | null {
+    try {
+      const issuer = mcpOAuthIssuer(this.config.get<string>('PUBLIC_BASE_URL'));
+      return `${issuer}${PROTECTED_RESOURCE_METADATA_PATH}`;
+    } catch {
+      return null;
+    }
   }
 
   private toFetchRequest(req: Request): Request_ {

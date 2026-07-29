@@ -257,6 +257,7 @@ import { McpInvokerService } from './mcp/mcp-invoker.service';
 import { McpApprovalExecutorService } from './mcp/mcp-approval-executor.service';
 import { McpServerFactoryService } from './mcp/mcp-server.factory';
 import { McpTokenVerifierService } from './mcp/mcp-token-verifier.service';
+import { McpOAuthTokenService } from '../mcp-oauth/mcp-oauth-token.service';
 import { McpController } from './mcp/mcp.controller';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
@@ -933,6 +934,13 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     McpInvokerService,
     McpServerFactoryService,
     McpTokenVerifierService,
+    // MCP OAuth (Faz 3, Task 6) — the verifier's second path resolves OAuth
+    // access tokens through this service. Registered flat, next to the verifier
+    // that consumes it: it depends only on PrismaService + ConfigService, so a
+    // flat provider avoids a MarketingModule <-> McpOAuthModule import cycle
+    // (Faz 3's authorization-server half needs MarketingGuard from here).
+    // Task 9 wires the rest of the mcp-oauth module.
+    McpOAuthTokenService,
     // MCP write-surface activation (Faz 2.5, Task 2) — executes an APPROVED
     // MCP-tool approval for real. No separate mcp.module.ts: AgentRunService
     // carries a named @Cron and a second provider instance would register it
