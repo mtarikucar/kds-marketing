@@ -15,6 +15,12 @@ export interface McpToolContext {
   requireAudit?: boolean;
   /** Per-workspace MCP write policy. Unset behaves as 'APPROVAL'. */
   writeMode?: 'APPROVAL' | 'AUTONOMOUS';
+  /**
+   * Set only by the approval executor once a human has approved a pending
+   * request. Records who authorised the call so an approved execution stays
+   * distinguishable from an AUTONOMOUS one in the audit trail.
+   */
+  approvedBy?: { approvalId: string; userId: string };
 }
 
 export interface McpTool {

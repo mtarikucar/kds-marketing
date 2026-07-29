@@ -42,7 +42,7 @@ export class McpBrokerService {
     this.assertArgsSize(args);
 
     // High-risk ops never execute inline — they enqueue a human approval.
-    if (tool.requiresApproval && ctx.writeMode !== 'AUTONOMOUS') {
+    if (tool.requiresApproval && ctx.writeMode !== 'AUTONOMOUS' && !ctx.approvedBy) {
       const req = await this.approvals.enqueue(ctx.workspaceId, {
         kind: tool.approvalKind ?? 'AD_SPEND',
         summary: `MCP agent requested "${tool.name}"`,
