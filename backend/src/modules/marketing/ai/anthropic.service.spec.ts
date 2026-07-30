@@ -1,15 +1,27 @@
-const mockCreate = jest.fn();
-const mockStream = jest.fn();
-const mockCtor = jest.fn().mockImplementation(() => ({
-  messages: { create: mockCreate, stream: mockStream },
-}));
+// The factory must be SELF-CONTAINED: `import` bindings are hoisted above
+// module-scope `const`s, so ./anthropic.service (which touches the SDK at
+// require time) would read a still-uninitialised outer variable. The doubles
+// are therefore created inside the factory and re-exposed on the ctor.
+jest.mock('@anthropic-ai/sdk', () => {
+  const create = jest.fn();
+  const stream = jest.fn();
+  const ctor: any = jest.fn().mockImplementation(() => ({
+    messages: { create, stream },
+  }));
+  ctor.__create = create;
+  ctor.__stream = stream;
+  return { __esModule: true, default: ctor };
+});
 
-jest.mock('@anthropic-ai/sdk', () => ({
-  __esModule: true,
-  default: mockCtor,
-}));
-
+import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicService } from './anthropic.service';
+
+const mockCtor = Anthropic as unknown as jest.Mock & {
+  __create: jest.Mock;
+  __stream: jest.Mock;
+};
+const mockCreate = mockCtor.__create;
+const mockStream = mockCtor.__stream;
 
 /**
  * The single runtime LLM entry point. The hard rules it must enforce on the

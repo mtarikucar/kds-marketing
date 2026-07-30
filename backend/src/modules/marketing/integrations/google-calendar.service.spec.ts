@@ -4,8 +4,17 @@ import {
   mockPrismaClient,
   MockPrismaClient,
 } from '../../../common/test/prisma-mock.service';
-import * as safeFetchModule from '../../../common/util/safe-fetch';
+import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Only safeFetch is faked — the rest of the module stays real.
+jest.mock('../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+const safeFetchMock = safeFetch as unknown as jest.Mock;
 
 /**
  * Env-gated Google Calendar 2-way sync — Google APIs MOCKED (no live creds).
@@ -73,7 +82,7 @@ function freshConn(over: Record<string, unknown> = {}) {
 describe('Google Calendar integration (mocked Google)', () => {
   let prisma: MockPrismaClient;
   let svc: GoogleCalendarService;
-  let safeFetchSpy: jest.SpyInstance;
+  let safeFetchSpy: jest.Mock;
 
   beforeAll(() => {
     process.env.MARKETING_SECRET_KEY = MASTER_KEY;
@@ -88,11 +97,12 @@ describe('Google Calendar integration (mocked Google)', () => {
     process.env.GOOGLE_OAUTH_REDIRECT_URI = 'https://app.example.com';
     prisma = mockPrismaClient();
     svc = new GoogleCalendarService(prisma as never);
-    safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
+    safeFetchSpy = safeFetchMock;
+    safeFetchSpy.mockReset();
   });
 
   afterEach(() => {
-    safeFetchSpy.mockRestore();
+    safeFetchSpy.mockReset();
     delete process.env.GOOGLE_OAUTH_CLIENT_ID;
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
     delete process.env.GOOGLE_OAUTH_REDIRECT_URI;
@@ -324,7 +334,7 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
   let google: GoogleCalendarService;
   let sync: GoogleCalendarSyncService;
   let bus: { on: jest.Mock; off: jest.Mock };
-  let safeFetchSpy: jest.SpyInstance;
+  let safeFetchSpy: jest.Mock;
 
   beforeAll(() => {
     process.env.MARKETING_SECRET_KEY = MASTER_KEY;
@@ -348,14 +358,15 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
       { registerHandler: jest.fn() } as never,
       { available: () => false, createConfiguredSpace: jest.fn() } as never,
     );
-    safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
+    safeFetchSpy = safeFetchMock;
+    safeFetchSpy.mockReset();
     // Make getFreshAccessToken trivial: stub it to return a constant.
     jest
       .spyOn(google, 'getFreshAccessToken')
       .mockResolvedValue('access-token-live');
   });
   afterEach(() => {
-    safeFetchSpy.mockRestore();
+    safeFetchSpy.mockReset();
     jest.restoreAllMocks();
     delete process.env.GOOGLE_OAUTH_CLIENT_ID;
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
@@ -764,7 +775,7 @@ describe('GoogleCalendarSyncService (mocked Google)', () => {
 async function sealViaCallback(
   svc: GoogleCalendarService,
   prisma: MockPrismaClient,
-  safeFetchSpy: jest.SpyInstance,
+  safeFetchSpy: jest.Mock,
   tokens: { access_token: string; refresh_token: string; expires_in: number },
 ) {
   const { state } = svc.getAuthUrl(WS_A, USER);

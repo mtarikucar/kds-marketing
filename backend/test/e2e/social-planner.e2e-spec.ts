@@ -7,8 +7,25 @@ import {
   signMarketingToken,
   mockMarketingUser,
 } from '../utils/test-app';
-import * as secretBox from '../../src/common/crypto/secret-box.helper';
+import { isSecretBoxConfigured } from '../../src/common/crypto/secret-box.helper';
 import * as networkAdapters from '../../src/modules/marketing/social-planner/network-adapters';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// The fake CALLS THROUGH to the real implementation by default (installed
+// below), so only the one test that stubs it sees a different answer — the rest
+// of this e2e boots against the real secret box.
+jest.mock('../../src/common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../src/common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: jest.fn(),
+}));
+const actualSecretBox = jest.requireActual<typeof import('../../src/common/crypto/secret-box.helper')>(
+  '../../src/common/crypto/secret-box.helper',
+);
+const isSecretBoxConfiguredMock = isSecretBoxConfigured as unknown as jest.Mock;
+beforeEach(() => {
+  isSecretBoxConfiguredMock.mockReset().mockImplementation(actualSecretBox.isSecretBoxConfigured);
+});
 
 describe('Social Planner (e2e)', () => {
   let ctx: TestApp;
@@ -117,7 +134,7 @@ describe('Social Planner (e2e)', () => {
   it('POST /accounts returns 400 (clean error) when MARKETING_SECRET_KEY is unset', async () => {
     const saved = process.env.MARKETING_SECRET_KEY;
     delete process.env.MARKETING_SECRET_KEY;
-    jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(false);
+    isSecretBoxConfiguredMock.mockReturnValue(false);
 
     const a = auth('OWNER');
     const res = await request(app.getHttpServer())
@@ -134,6 +151,7 @@ describe('Social Planner (e2e)', () => {
     expect(res.body.message).toMatch(/MARKETING_SECRET_KEY/i);
 
     jest.restoreAllMocks();
+    isSecretBoxConfiguredMock.mockReset();
     process.env.MARKETING_SECRET_KEY = saved;
   });
 

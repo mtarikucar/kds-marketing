@@ -1,10 +1,52 @@
 import { BadRequestException } from '@nestjs/common';
 import { TiktokBusinessOAuthService } from './tiktok-business-oauth.service';
-import * as stateUtil from '../social-planner/oauth/social-oauth-state.util';
-import * as secretBox from '../../../common/crypto/secret-box.helper';
-import * as config from './tiktok-business-oauth.config';
-import * as safeFetchModule from '../../../common/util/safe-fetch';
-import * as tiktokUtil from '../channels/tiktok-business.util';
+import { signState, verifyState } from '../social-planner/oauth/social-oauth-state.util';
+import { isSecretBoxConfigured, sealSecret, openSecret } from '../../../common/crypto/secret-box.helper';
+import { isTiktokBusinessConfigured, buildTiktokBusinessAuthorizeUrl } from './tiktok-business-oauth.config';
+import { safeFetch } from '../../../common/util/safe-fetch';
+import { tiktokBusinessFetch } from '../channels/tiktok-business.util';
+
+// Module mocks (not jest.spyOn on the namespace objects): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Everything not listed here stays the real implementation.
+jest.mock('../social-planner/oauth/social-oauth-state.util', () => ({
+  ...jest.requireActual('../social-planner/oauth/social-oauth-state.util'),
+  signState: jest.fn(),
+  verifyState: jest.fn(),
+}));
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: jest.fn(),
+  sealSecret: jest.fn(),
+  openSecret: jest.fn(),
+}));
+jest.mock('./tiktok-business-oauth.config', () => ({
+  ...jest.requireActual('./tiktok-business-oauth.config'),
+  isTiktokBusinessConfigured: jest.fn(),
+  buildTiktokBusinessAuthorizeUrl: jest.fn(),
+}));
+jest.mock('../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+jest.mock('../channels/tiktok-business.util', () => ({
+  ...jest.requireActual('../channels/tiktok-business.util'),
+  tiktokBusinessFetch: jest.fn(),
+}));
+
+const signStateMock = signState as unknown as jest.Mock;
+const verifyStateMock = verifyState as unknown as jest.Mock;
+const isSecretBoxConfiguredMock = isSecretBoxConfigured as unknown as jest.Mock;
+const sealSecretMock = sealSecret as unknown as jest.Mock;
+const openSecretMock = openSecret as unknown as jest.Mock;
+const isTiktokBusinessConfiguredMock = isTiktokBusinessConfigured as unknown as jest.Mock;
+const buildTiktokBusinessAuthorizeUrlMock = buildTiktokBusinessAuthorizeUrl as unknown as jest.Mock;
+const safeFetchMock = safeFetch as unknown as jest.Mock;
+const tiktokBusinessFetchMock = tiktokBusinessFetch as unknown as jest.Mock;
+const allMocks = [
+  signStateMock, verifyStateMock, isSecretBoxConfiguredMock, sealSecretMock, openSecretMock,
+  isTiktokBusinessConfiguredMock, buildTiktokBusinessAuthorizeUrlMock, safeFetchMock, tiktokBusinessFetchMock,
+];
 
 const WS = 'ws-test-1';
 const PENDING_ID = 'pending-uuid-1';
@@ -43,29 +85,30 @@ describe('TiktokBusinessOAuthService', () => {
     channels = makeChannels();
     svc = new TiktokBusinessOAuthService(prisma as any, adAccounts as any, channels as any);
     jest.restoreAllMocks();
+    allMocks.forEach((m) => m.mockReset());
     // Default: everything configured
-    jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
-    jest.spyOn(config, 'isTiktokBusinessConfigured').mockReturnValue(true);
+    isSecretBoxConfiguredMock.mockReturnValue(true);
+    isTiktokBusinessConfiguredMock.mockReturnValue(true);
   });
 
   // ── start ─────────────────────────────────────────────────────────────────
 
   describe('start', () => {
     it('throws BadRequest when secret box is not configured', async () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(false);
+      isSecretBoxConfiguredMock.mockReturnValue(false);
       await expect(svc.start(WS)).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('throws BadRequest when TikTok Business is not configured', async () => {
-      jest.spyOn(config, 'isTiktokBusinessConfigured').mockReturnValue(false);
+      isTiktokBusinessConfiguredMock.mockReturnValue(false);
       await expect(svc.start(WS)).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('returns authorizeUrl built from state that encodes the workspaceId', async () => {
-      jest.spyOn(stateUtil, 'signState').mockReturnValue('signed-state-token');
-      jest.spyOn(config, 'buildTiktokBusinessAuthorizeUrl').mockReturnValue('https://tiktok.com/auth?state=signed-state-token');
+      signStateMock.mockReturnValue('signed-state-token');
+      buildTiktokBusinessAuthorizeUrlMock.mockReturnValue('https://tiktok.com/auth?state=signed-state-token');
       const result = await svc.start(WS);
-      expect(stateUtil.signState).toHaveBeenCalledWith({ workspaceId: WS, network: 'TIKTOK_BUSINESS' });
+      expect(signStateMock).toHaveBeenCalledWith({ workspaceId: WS, network: 'TIKTOK_BUSINESS' });
       expect(result).toEqual({ authorizeUrl: 'https://tiktok.com/auth?state=signed-state-token' });
     });
   });
@@ -77,7 +120,7 @@ describe('TiktokBusinessOAuthService', () => {
     const code = 'auth-code-123';
 
     beforeEach(() => {
-      jest.spyOn(stateUtil, 'verifyState').mockReturnValue({
+      verifyStateMock.mockReturnValue({
         workspaceId: WS,
         network: 'TIKTOK_BUSINESS',
         nonce: 'abc',
@@ -86,12 +129,12 @@ describe('TiktokBusinessOAuthService', () => {
     });
 
     it('throws BadRequest when state is null/invalid', async () => {
-      jest.spyOn(stateUtil, 'verifyState').mockReturnValue(null);
+      verifyStateMock.mockReturnValue(null);
       await expect(svc.handleCallback(code, 'bad-state')).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('throws BadRequest when network is wrong', async () => {
-      jest.spyOn(stateUtil, 'verifyState').mockReturnValue({
+      verifyStateMock.mockReturnValue({
         workspaceId: WS,
         network: 'FACEBOOK',
         nonce: 'abc',
@@ -114,19 +157,19 @@ describe('TiktokBusinessOAuthService', () => {
           },
         }),
       } as any;
-      jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue(mockResponse);
+      safeFetchMock.mockResolvedValue(mockResponse);
 
       // Mock advertiser info fetch
-      jest.spyOn(tiktokUtil, 'tiktokBusinessFetch')
+      tiktokBusinessFetchMock
         .mockResolvedValueOnce({ ok: true, data: { list: [{ name: 'Adv One', currency: 'USD' }] } })
         .mockResolvedValueOnce({ ok: true, data: { list: [{ name: 'Adv Two', currency: 'EUR' }] } });
 
-      jest.spyOn(secretBox, 'sealSecret').mockReturnValue('v1:sealed');
+      sealSecretMock.mockReturnValue('v1:sealed');
       prisma.pendingSocialConnection.create.mockResolvedValue({ id: PENDING_ID });
 
       const result = await svc.handleCallback(code, validState);
 
-      expect(safeFetchModule.safeFetch).toHaveBeenCalledWith(
+      expect(safeFetchMock).toHaveBeenCalledWith(
         expect.stringContaining('oauth2/access_token'),
         expect.objectContaining({ method: 'POST' }),
       );
@@ -150,9 +193,9 @@ describe('TiktokBusinessOAuthService', () => {
           },
         }),
       } as any;
-      jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue(mockResponse);
-      jest.spyOn(tiktokUtil, 'tiktokBusinessFetch').mockResolvedValue({ ok: false, error: { message: 'fail' } as any });
-      jest.spyOn(secretBox, 'sealSecret').mockReturnValue('v1:sealed');
+      safeFetchMock.mockResolvedValue(mockResponse);
+      tiktokBusinessFetchMock.mockResolvedValue({ ok: false, error: { message: 'fail' } as any });
+      sealSecretMock.mockReturnValue('v1:sealed');
       prisma.pendingSocialConnection.create.mockResolvedValue({ id: PENDING_ID });
 
       const result = await svc.handleCallback(code, validState);
@@ -176,18 +219,18 @@ describe('TiktokBusinessOAuthService', () => {
           },
         }),
       } as any;
-      jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue(mockResponse);
-      jest.spyOn(tiktokUtil, 'tiktokBusinessFetch').mockResolvedValue({
+      safeFetchMock.mockResolvedValue(mockResponse);
+      tiktokBusinessFetchMock.mockResolvedValue({
         ok: true,
         data: { list: [{ name: 'A', currency: 'USD' }] },
       });
-      jest.spyOn(secretBox, 'sealSecret').mockImplementation((s) => `sealed:${s}`);
+      sealSecretMock.mockImplementation((s) => `sealed:${s}`);
       prisma.pendingSocialConnection.create.mockResolvedValue({ id: PENDING_ID });
 
       await svc.handleCallback(code, validState);
 
       // The payload sealed must include messaging:true
-      const sealArg = (secretBox.sealSecret as jest.Mock).mock.calls[0][0];
+      const sealArg = sealSecretMock.mock.calls[0][0];
       const payload = JSON.parse(sealArg);
       expect(payload.messaging).toBe(true);
     });
@@ -212,7 +255,7 @@ describe('TiktokBusinessOAuthService', () => {
         payload: 'sealed-payload',
         expiresAt: new Date(Date.now() + 600_000),
       });
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue(JSON.stringify(payloadObj));
+      openSecretMock.mockReturnValue(JSON.stringify(payloadObj));
 
       const result = await svc.listPending(WS, PENDING_ID);
       expect(result).toEqual({
@@ -255,7 +298,7 @@ describe('TiktokBusinessOAuthService', () => {
         payload: 'sealed',
         expiresAt: new Date(Date.now() + 600_000),
       });
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue(JSON.stringify(payloadObj));
+      openSecretMock.mockReturnValue(JSON.stringify(payloadObj));
       adAccounts.connect.mockResolvedValue({ id: 'acc1' });
       channels.create.mockResolvedValue({ id: 'ch1' });
       prisma.pendingSocialConnection.delete.mockResolvedValue({});
@@ -307,7 +350,7 @@ describe('TiktokBusinessOAuthService', () => {
     });
 
     it('skips DM channel (no error) when enableMessaging:true but payload.messaging is false', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue(
+      openSecretMock.mockReturnValue(
         JSON.stringify({ ...payloadObj, messaging: false }),
       );
       const result = await svc.confirm(WS, PENDING_ID, { selected: ['adv_1'], enableMessaging: true });

@@ -1,7 +1,32 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SocialPlannerService, SOCIAL_PUBLISH_KIND } from './social-planner.service';
-import * as networkAdapters from './network-adapters';
-import * as secretBox from '../../../common/crypto/secret-box.helper';
+import { publishToNetwork } from './network-adapters';
+import { isSecretBoxConfigured, sealSecret } from '../../../common/crypto/secret-box.helper';
+
+// Module mocks (not jest.spyOn on the namespace objects): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// The secret-box fakes CALL THROUGH to the real implementation by default so
+// the tests that never stubbed them (previously: unspied) are unchanged.
+jest.mock('./network-adapters', () => ({
+  ...jest.requireActual('./network-adapters'),
+  publishToNetwork: jest.fn(),
+}));
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: jest.fn(),
+  sealSecret: jest.fn(),
+}));
+const actualSecretBox = jest.requireActual<typeof import('../../../common/crypto/secret-box.helper')>(
+  '../../../common/crypto/secret-box.helper',
+);
+const publishToNetworkMock = publishToNetwork as unknown as jest.Mock;
+const isSecretBoxConfiguredMock = isSecretBoxConfigured as unknown as jest.Mock;
+const sealSecretMock = sealSecret as unknown as jest.Mock;
+beforeEach(() => {
+  publishToNetworkMock.mockReset();
+  isSecretBoxConfiguredMock.mockReset().mockImplementation(actualSecretBox.isSecretBoxConfigured);
+  sealSecretMock.mockReset().mockImplementation(actualSecretBox.sealSecret);
+});
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -206,8 +231,7 @@ describe('SocialPlannerService', () => {
   });
 
   it('publishDuePost forwards post.options.linkedin to publishToNetwork opts', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'ext-li' });
 
     const liTarget = makeTarget({
@@ -232,14 +256,13 @@ describe('SocialPlannerService', () => {
       expect.objectContaining({ linkedin: { visibility: 'CONNECTIONS' } }),
     );
 
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   // ── publishDuePost ─────────────────────────────────────────────────────────
 
   it('publishDuePost fans out to all PENDING targets and records externalPostId on success', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'ext-123' });
 
     const postWithTargets = {
@@ -264,11 +287,11 @@ describe('SocialPlannerService', () => {
       }),
     );
 
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost: a crash-retry with targets already PUBLISHED (post stuck PUBLISHING) marks it PUBLISHED, not FAILED', async () => {
-    const mockPublish = jest.spyOn(networkAdapters, 'publishToNetwork').mockResolvedValue({ ok: true, externalPostId: 'x' });
+    const mockPublish = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'x' });
     // The 15-min reaper re-ran the handler after a crash that published every
     // target but died before the post status update: targets already PUBLISHED,
     // post still PUBLISHING, nothing PENDING left. A this-run-only count would
@@ -292,12 +315,11 @@ describe('SocialPlannerService', () => {
         data: expect.objectContaining({ status: 'PUBLISHED', publishedAt: expect.any(Date) }),
       }),
     );
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost marks a target FAILED with a clean error when network creds are unset', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockImplementation(async (account) => {
         if (account.network === 'FACEBOOK') {
           return { ok: false, error: 'Facebook not configured: set META_APP_ID and META_APP_SECRET' };
@@ -339,12 +361,11 @@ describe('SocialPlannerService', () => {
       }),
     );
 
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost marks post FAILED when ALL targets fail', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: false, error: 'network error' });
 
     const postWithTargets = { ...makePost({ status: 'SCHEDULED' }), targets: [makeTarget()] };
@@ -360,7 +381,7 @@ describe('SocialPlannerService', () => {
       }),
     );
 
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   // ── X (Twitter) credit metering ───────────────────────────────────────────
@@ -378,8 +399,7 @@ describe('SocialPlannerService', () => {
   }
 
   it('publishDuePost reserves exactly 2 credits for a plain-text TWITTER post', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'tw-1' });
     prisma.socialPost.findFirst.mockResolvedValue(twitterPost('Just a plain tweet'));
     prisma.socialPost.update.mockResolvedValue({});
@@ -390,12 +410,11 @@ describe('SocialPlannerService', () => {
     expect(credits.reserve).toHaveBeenCalledTimes(1);
     expect(credits.reserve).toHaveBeenCalledWith('ws-a', 2);
     expect(credits.refund).not.toHaveBeenCalled();
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost reserves 20 credits for a TWITTER post containing a URL', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'tw-2' });
     prisma.socialPost.findFirst.mockResolvedValue(twitterPost('check https://example.com now'));
     prisma.socialPost.update.mockResolvedValue({});
@@ -405,12 +424,11 @@ describe('SocialPlannerService', () => {
 
     expect(credits.reserve).toHaveBeenCalledWith('ws-a', 20);
     expect(credits.refund).not.toHaveBeenCalled();
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost refunds the reserved credits when the TWITTER publish fails', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: false, error: 'twitter api 500' });
     prisma.socialPost.findFirst.mockResolvedValue(twitterPost('a failing tweet'));
     prisma.socialPost.update.mockResolvedValue({});
@@ -426,13 +444,12 @@ describe('SocialPlannerService', () => {
         data: expect.objectContaining({ status: 'FAILED' }),
       }),
     );
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost refunds the reserved credits exactly once when the TWITTER publish THROWS, and re-throws', async () => {
     const boom = new Error('twitter adapter exploded');
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockRejectedValue(boom);
     prisma.socialPost.findFirst.mockResolvedValue(twitterPost('a throwing tweet'));
     prisma.socialPost.update.mockResolvedValue({});
@@ -446,12 +463,11 @@ describe('SocialPlannerService', () => {
     // returned-{ok:false} refund branch (no double-refund).
     expect(credits.refund).toHaveBeenCalledTimes(1);
     expect(credits.refund).toHaveBeenCalledWith('ws-a', 2);
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost does NOT reserve/refund credits for non-Twitter targets', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'ext' });
     const postWithTargets = {
       ...makePost({ status: 'SCHEDULED' }),
@@ -469,12 +485,11 @@ describe('SocialPlannerService', () => {
 
     expect(credits.reserve).not.toHaveBeenCalled();
     expect(credits.refund).not.toHaveBeenCalled();
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   it('publishDuePost marks the TWITTER target FAILED (not a crash) when credits are exhausted, and still publishes other targets', async () => {
-    const mockPublish = jest
-      .spyOn(networkAdapters, 'publishToNetwork')
+    const mockPublish = publishToNetworkMock
       .mockResolvedValue({ ok: true, externalPostId: 'ext-fb' });
     credits.reserve.mockRejectedValue(
       new ForbiddenException({ code: 'AI_CREDITS_EXHAUSTED', message: 'Monthly AI credit limit reached (100)' }),
@@ -523,7 +538,7 @@ describe('SocialPlannerService', () => {
     expect(prisma.socialPost.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'PUBLISHED' }) }),
     );
-    mockPublish.mockRestore();
+    mockPublish.mockReset();
   });
 
   // ── cross-workspace isolation ─────────────────────────────────────────────
@@ -542,8 +557,8 @@ describe('SocialPlannerService', () => {
   // ── token sealing/masking ─────────────────────────────────────────────────
 
   it('connectAccount seals the token and the returned row masks it', async () => {
-    jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
-    const sealSpy = jest.spyOn(secretBox, 'sealSecret').mockReturnValue('v1:sealed');
+    isSecretBoxConfiguredMock.mockReturnValue(true);
+    const sealSpy = sealSecretMock.mockReturnValue('v1:sealed');
 
     prisma.socialAccount.upsert.mockResolvedValue(makeAccount({ accessToken: 'v1:sealed' }));
 
@@ -560,12 +575,12 @@ describe('SocialPlannerService', () => {
     // It should be masked
     expect(result.accessToken).toMatch(/^••••/);
 
-    sealSpy.mockRestore();
-    (secretBox.isSecretBoxConfigured as jest.Mock).mockRestore?.();
+    sealSpy.mockReset();
+    isSecretBoxConfiguredMock.mockReset();
   });
 
   it('connectAccount throws BadRequest when MARKETING_SECRET_KEY is not configured', async () => {
-    jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(false);
+    isSecretBoxConfiguredMock.mockReturnValue(false);
 
     await expect(
       svc.connectAccount('ws-a', {
@@ -576,6 +591,6 @@ describe('SocialPlannerService', () => {
       }),
     ).rejects.toThrow(BadRequestException);
 
-    (secretBox.isSecretBoxConfigured as jest.Mock).mockRestore?.();
+    isSecretBoxConfiguredMock.mockReset();
   });
 });

@@ -1,10 +1,18 @@
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { metaGraphFetch } from '../../../common/util/meta-graph.util';
-import * as secretBox from '../../../common/crypto/secret-box.helper';
+import { openSecret } from '../../../common/crypto/secret-box.helper';
 import { fetchSourceReviews, ReviewSourceRow } from './review-clients';
 
 jest.mock('../../../common/util/safe-fetch', () => ({ safeFetch: jest.fn() }));
 jest.mock('../../../common/util/meta-graph.util', () => ({ metaGraphFetch: jest.fn() }));
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Only openSecret is faked — sealing/HMAC helpers stay real.
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  openSecret: jest.fn(),
+}));
+const openSecretMock = openSecret as unknown as jest.Mock;
 
 /**
  * A provider fetch must DISTINGUISH a hard failure (401/5xx/network) from a
@@ -15,11 +23,12 @@ jest.mock('../../../common/util/meta-graph.util', () => ({ metaGraphFetch: jest.
 describe('review-clients — hard provider failures throw (so the sweep stamps lastError)', () => {
   const OLD = { ...process.env };
   beforeEach(() => {
-    jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain-token');
+    openSecretMock.mockReturnValue('plain-token');
   });
   afterEach(() => {
     process.env = { ...OLD };
     jest.restoreAllMocks();
+    openSecretMock.mockReset();
     (safeFetch as jest.Mock).mockReset();
     (metaGraphFetch as jest.Mock).mockReset();
   });
