@@ -22,6 +22,16 @@ export class UpdateWorkspaceStatusDto {
   status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED';
 }
 
+/**
+ * Operator-only package grant. The code is validated against the live Package
+ * catalog in the service (unknown → 400 listing the valid codes) rather than a
+ * hard-coded @IsIn, so adding a package to seed-packages.ts is enough.
+ */
+export class AssignWorkspacePackageDto {
+  @IsString() @MinLength(2) @MaxLength(40)
+  packageCode: string;
+}
+
 export class UpdateWorkspaceAdminDto {
   @IsOptional() @IsString() @MaxLength(120)
   name?: string;

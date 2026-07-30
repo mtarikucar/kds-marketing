@@ -93,14 +93,17 @@ export async function assignPackageToWorkspace(
   });
   if (!workspace) throw new WorkspaceNotFoundError(workspaceId);
 
-  const pkg = await prisma.package.findUnique({ where: { code: packageCode } });
+  // Catalog codes are upper-case (seed-packages.ts); be forgiving about how
+  // the operator typed it rather than 400-ing on " operator ".
+  const code = (packageCode ?? '').trim().toUpperCase();
+  const pkg = await prisma.package.findUnique({ where: { code } });
   if (!pkg) {
     const all = await prisma.package.findMany({
       select: { code: true },
       orderBy: { sortOrder: 'asc' },
     });
     throw new UnknownPackageCodeError(
-      packageCode,
+      code,
       all.map((p) => p.code),
     );
   }

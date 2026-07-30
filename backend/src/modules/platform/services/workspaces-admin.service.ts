@@ -2,6 +2,13 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { UpdateWorkspaceAdminDto } from '../dto/platform.dto';
+import { EntitlementsService } from '../../billing/entitlements.service';
+import {
+  assignPackageToWorkspace,
+  PackageAssignmentResult,
+  UnknownPackageCodeError,
+  WorkspaceNotFoundError,
+} from '../../billing/package-assignment';
 
 /**
  * Operator-facing workspace administration. This is the one surface that
@@ -11,7 +18,10 @@ import { UpdateWorkspaceAdminDto } from '../dto/platform.dto';
  */
 @Injectable()
 export class WorkspacesAdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private entitlements: EntitlementsService,
+  ) {}
 
   async list(filter: { status?: string; search?: string }) {
     const where: Prisma.WorkspaceWhereInput = {};
@@ -109,6 +119,38 @@ export class WorkspacesAdminService {
     }
 
     return updated;
+  }
+
+  /**
+   * Put a workspace on a package WITHOUT a payment — the operator-side twin of
+   * PSP settlement. Shares `assignPackageToWorkspace` with the deploy-time
+   * seed (prisma/seed-operator-workspace.ts) so both write byte-identical
+   * subscription rows; this method only adds the HTTP error mapping and the
+   * entitlement-cache invalidation.
+   *
+   * This is the only surface that can hand out the internal OPERATOR package,
+   * and it lives behind PlatformGuard on purpose — no customer-facing route
+   * may ever reach it (OPERATOR is isPublic:false and unmetered).
+   */
+  async assignPackage(
+    id: string,
+    packageCode: string,
+  ): Promise<PackageAssignmentResult> {
+    try {
+      const result = await assignPackageToWorkspace(this.prisma, id, packageCode);
+      // The effective-entitlement cache holds for 30s; a grant the operator
+      // just made must be visible on the very next request.
+      this.entitlements.invalidate(id);
+      return result;
+    } catch (e) {
+      if (e instanceof WorkspaceNotFoundError) {
+        throw new NotFoundException('Workspace not found');
+      }
+      if (e instanceof UnknownPackageCodeError) {
+        throw new BadRequestException(e.message);
+      }
+      throw e;
+    }
   }
 
   async update(id: string, dto: UpdateWorkspaceAdminDto) {

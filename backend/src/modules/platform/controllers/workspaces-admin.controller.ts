@@ -10,6 +10,7 @@ import {
 import { PlatformGuard } from '../guards/platform.guard';
 import { WorkspacesAdminService } from '../services/workspaces-admin.service';
 import {
+  AssignWorkspacePackageDto,
   UpdateWorkspaceAdminDto,
   UpdateWorkspaceStatusDto,
 } from '../dto/platform.dto';
@@ -39,6 +40,23 @@ export class WorkspacesAdminController {
   })
   updateStatus(@Param('id') id: string, @Body() dto: UpdateWorkspaceStatusDto) {
     return this.workspaces.updateStatus(id, dto.status);
+  }
+
+  // Grant a package without a payment (internal OPERATOR plan, comped
+  // customer, manual bank-transfer rescue). Money-adjacent and platform-only,
+  // so it is audited exactly like the status flip above.
+  @Patch(':id/subscription')
+  @Audit({
+    action: 'workspace.subscription.assign',
+    resourceType: 'workspace',
+    resourceIdParam: 'id',
+    captureBody: ['packageCode'],
+  })
+  assignSubscription(
+    @Param('id') id: string,
+    @Body() dto: AssignWorkspacePackageDto,
+  ) {
+    return this.workspaces.assignPackage(id, dto.packageCode);
   }
 
   @Patch(':id')
