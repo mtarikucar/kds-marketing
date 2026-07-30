@@ -88,7 +88,39 @@ export class WorkspacesAdminService {
       select: { id: true, email: true, firstName: true, lastName: true, lastLogin: true },
     });
 
-    return { ...workspace, owner, counts: { users, leads, openLeads, wonLeads }, locationCount };
+    // Current package/subscription, so the console can show what a workspace is
+    // on before an operator changes it. WorkspaceSubscription→Package is a soft
+    // ref (no Prisma relation), hydrated in a second query like the payments
+    // queue does. Null when the workspace has never been subscribed.
+    const subscription = await this.prisma.workspaceSubscription.findUnique({
+      where: { workspaceId: id },
+      select: {
+        status: true,
+        billingCycle: true,
+        currency: true,
+        currentPeriodEnd: true,
+        cancelAtPeriodEnd: true,
+        trialEndsAt: true,
+        provider: true,
+        packageId: true,
+      },
+    });
+    const pkg = subscription
+      ? await this.prisma.package.findUnique({
+          where: { id: subscription.packageId },
+          select: { code: true, name: true, isPublic: true },
+        })
+      : null;
+
+    return {
+      ...workspace,
+      owner,
+      counts: { users, leads, openLeads, wonLeads },
+      locationCount,
+      subscription: subscription
+        ? { ...subscription, package: pkg }
+        : null,
+    };
   }
 
   async updateStatus(id: string, status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED') {

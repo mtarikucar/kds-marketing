@@ -5,6 +5,7 @@ import { RoutinesModule } from '../routines/routines.module';
 import { PlatformAuthController } from './controllers/platform-auth.controller';
 import { WorkspacesAdminController } from './controllers/workspaces-admin.controller';
 import { PaymentsAdminController } from './controllers/payments-admin.controller';
+import { PackagesAdminController } from './controllers/packages-admin.controller';
 import { RoutineAdminController } from './controllers/routine-admin.controller';
 import { PlatformAuthService } from './services/platform-auth.service';
 import { WorkspacesAdminService } from './services/workspaces-admin.service';
@@ -25,6 +26,7 @@ import { PlatformGuard } from './guards/platform.guard';
     PlatformAuthController,
     WorkspacesAdminController,
     PaymentsAdminController,
+    PackagesAdminController,
     RoutineAdminController,
   ],
   providers: [PlatformAuthService, WorkspacesAdminService, PlatformGuard],
