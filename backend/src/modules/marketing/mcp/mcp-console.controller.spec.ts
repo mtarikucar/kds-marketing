@@ -36,6 +36,13 @@ function svcMock(over: Record<string, jest.Mock> = {}) {
     revokeOAuthClient: jest.fn().mockResolvedValue({ clientId: 'c', revoked: 0 }),
     listSessions: jest.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 25 }),
     getSession: jest.fn().mockResolvedValue({ id: 'run-1', toolCalls: [], approvals: [] }),
+    overview: jest.fn().mockResolvedValue({
+      mcpWriteMode: 'APPROVAL',
+      canToggle: false,
+      mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
+      liveConnectionCount: 0,
+      pendingApprovalCount: 0,
+    }),
     ...over,
   } as unknown as McpConsoleService & Record<string, jest.Mock>;
 }
@@ -257,5 +264,51 @@ describe('McpConsoleController — sessions', () => {
     expect(methodMeta(REQUIRE_PERMISSION_KEY, 'sessions')).toBeUndefined();
     expect(methodMeta(REQUIRE_PERMISSION_KEY, 'session')).toBeUndefined();
     expect(methodMeta(REQUIRE_PERMISSION_KEY, 'connections')).toBeUndefined();
+    expect(methodMeta(REQUIRE_PERMISSION_KEY, 'overview')).toBeUndefined();
+  });
+});
+
+describe('McpConsoleController — overview', () => {
+  it('passes the caller\'s workspace AND role/customRole so canToggle can be resolved', async () => {
+    const svc = svcMock();
+    const ctrl = new McpConsoleController(svc);
+
+    await ctrl.overview({ workspaceId: 'ws-a', role: 'OWNER', customRoleId: 'cr-1' } as never);
+
+    expect(svc.overview).toHaveBeenCalledWith('ws-a', { role: 'OWNER', customRoleId: 'cr-1' });
+  });
+
+  it('normalises a missing customRoleId to null', async () => {
+    const svc = svcMock();
+    const ctrl = new McpConsoleController(svc);
+
+    await ctrl.overview({ workspaceId: 'ws-a', role: 'MANAGER' } as never);
+
+    expect(svc.overview).toHaveBeenCalledWith('ws-a', { role: 'MANAGER', customRoleId: null });
+  });
+
+  it('is readable by a MANAGER — who is told canToggle:false rather than 403d off the page', async () => {
+    const svc = svcMock();
+    const app = await buildApp('MANAGER', svc);
+    try {
+      const res = await request(app.getHttpServer()).get('/marketing/mcp-console/overview');
+      expect(res.status).toBe(200);
+      expect(res.body.canToggle).toBe(false);
+      expect(svc.overview).toHaveBeenCalledWith('ws-a', { role: 'MANAGER', customRoleId: null });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('is still closed to a REP', async () => {
+    const svc = svcMock();
+    const app = await buildApp('REP', svc);
+    try {
+      const res = await request(app.getHttpServer()).get('/marketing/mcp-console/overview');
+      expect(res.status).toBe(403);
+      expect(svc.overview).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
   });
 });

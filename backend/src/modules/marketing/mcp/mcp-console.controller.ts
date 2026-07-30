@@ -31,6 +31,23 @@ export class McpConsoleController {
   constructor(private readonly svc: McpConsoleService) {}
 
   /**
+   * The console header: current write mode, whether THIS caller may flip it,
+   * the endpoint address, and the live/pending counts.
+   *
+   * Readable by MANAGER on purpose. The write-mode TOGGLE stays OWNER-only on
+   * `MarketingWorkspacesController` (not duplicated here) — a MANAGER is told
+   * `canToggle: false` and shown the mode read-only, which is what lets the
+   * page render an honest switch instead of one the PATCH would 403.
+   */
+  @Get('overview')
+  overview(@CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.svc.overview(user.workspaceId, {
+      role: user.role,
+      customRoleId: user.customRoleId ?? null,
+    });
+  }
+
+  /**
    * MCP session list — one `AgentRun(agent: 'mcp')` per row, newest first.
    *
    * `page`/`pageSize` are forwarded RAW: the cap and the NaN coercion live in

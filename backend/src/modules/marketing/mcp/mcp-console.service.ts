@@ -4,6 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ApiKeysService } from '../services/api-keys.service';
 import { RolesService } from '../roles/roles.service';
 import { safeLimit, safePage } from '../common/paging';
+import { mcpCanonicalResource } from '../../mcp-oauth/mcp-oauth.config';
 
 /**
  * Faz 4 — the read model behind the connector management console.
@@ -118,6 +119,23 @@ export interface McpSessionDetail extends Omit<McpSessionSummary, 'toolCallCount
   queuedForApproval: boolean;
   toolCalls: McpToolCallAudit[];
   approvals: McpApprovalSummary[];
+}
+
+export interface McpConsoleOverview {
+  mcpWriteMode: 'APPROVAL' | 'AUTONOMOUS';
+  /** Whether THIS caller may flip the mode. See `canToggleWriteMode`. */
+  canToggle: boolean;
+  /** The canonical MCP resource URI to paste into a client, or null when the
+   *  deployment has no PUBLIC_BASE_URL configured. */
+  mcpEndpoint: string | null;
+  liveConnectionCount: number;
+  pendingApprovalCount: number;
+}
+
+/** The bits of the caller `canToggle` depends on. */
+export interface McpConsoleActor {
+  role: string;
+  customRoleId?: string | null;
 }
 
 @Injectable()
@@ -395,6 +413,106 @@ export class McpConsoleService {
       })),
       approvals,
     };
+  }
+
+  /**
+   * The header of the console page.
+   *
+   * The write-mode TOGGLE is not here — it already lives on
+   * `MarketingWorkspacesController` (`GET`/`PATCH marketing/workspaces/
+   * mcp-write-mode`, OWNER-only) and is not duplicated. This is only what the
+   * UI needs to render that toggle HONESTLY: the current mode, whether this
+   * caller may actually change it, where the endpoint is, and the two counts
+   * that tell an operator whether anything is live or waiting on them.
+   */
+  async overview(workspaceId: string, actor: McpConsoleActor): Promise<McpConsoleOverview> {
+    const [workspace, connections, pendingApprovalCount, canToggle] = await Promise.all([
+      this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { mcpWriteMode: true },
+      }),
+      this.listConnections(workspaceId),
+      this.pendingMcpApprovalCount(workspaceId),
+      this.canToggleWriteMode(workspaceId, actor),
+    ]);
+
+    return {
+      // Anything other than the explicit opt-out reads as the gated default —
+      // same fail-safe direction McpInvokerService.writeModeFor() uses.
+      mcpWriteMode: workspace?.mcpWriteMode === 'AUTONOMOUS' ? 'AUTONOMOUS' : 'APPROVAL',
+      canToggle,
+      mcpEndpoint: this.mcpEndpoint(),
+      liveConnectionCount: connections.oauth.length + connections.apiKeys.length,
+      pendingApprovalCount,
+    };
+  }
+
+  /**
+   * Mirrors BOTH gates on `MarketingWorkspacesController.setMcpWriteMode`:
+   * `@MarketingRoles('OWNER')` and `@RequirePermission('settings.manage')`.
+   *
+   * The rank check has to come FIRST and cannot be replaced by the permission
+   * alone: a legacy MANAGER holds `settings.manage`, so a permission-only
+   * check would promise a toggle that `MarketingRolesGuard` then refuses. And
+   * the permission check cannot be dropped either: `RolesService` lets a
+   * CUSTOM role override the legacy mapping, so an OWNER-rank user can
+   * genuinely have `settings.manage` stripped.
+   *
+   * Only OWNER carries the top rank in `MarketingRolesGuard.ROLE_RANK`, which
+   * is why the equality test below is equivalent to that guard's
+   * `userRank >= max(required)` for this single-role requirement.
+   */
+  private async canToggleWriteMode(workspaceId: string, actor: McpConsoleActor): Promise<boolean> {
+    if (actor.role !== 'OWNER') return false;
+    return this.roles.hasPermission(
+      { workspaceId, role: actor.role, customRoleId: actor.customRoleId ?? null },
+      MCP_WRITE_MODE_PERMISSION,
+    );
+  }
+
+  /**
+   * PENDING approvals that an MCP tool call raised.
+   *
+   * `ApprovalRequest` has no relation to `AgentRun`, only a loose
+   * `requestedByRunId`, and the Budget Autopilot stamps that column too — so
+   * "came from MCP" is resolved in a second, bounded query against
+   * `agent: 'mcp'`. Both queries are workspace-scoped, and the second only
+   * runs when the first found something.
+   */
+  private async pendingMcpApprovalCount(workspaceId: string): Promise<number> {
+    const pending = await this.prisma.approvalRequest.findMany({
+      where: { workspaceId, status: 'PENDING', requestedByRunId: { not: null } },
+      select: { requestedByRunId: true },
+    });
+    const runIds = [
+      ...new Set(pending.map((p) => p.requestedByRunId).filter((v): v is string => !!v)),
+    ];
+    if (runIds.length === 0) return 0;
+
+    const mcpRuns = await this.prisma.agentRun.findMany({
+      where: { workspaceId, agent: MCP_AGENT, id: { in: runIds } },
+      select: { id: true },
+    });
+    const isMcpRun = new Set(mcpRuns.map((r) => r.id));
+    // Counts REQUESTS, not runs: one run can supersede/enqueue more than one.
+    return pending.filter((p) => p.requestedByRunId && isMcpRun.has(p.requestedByRunId)).length;
+  }
+
+  /**
+   * The endpoint an operator pastes into Claude — the same canonical resource
+   * URI every token is bound to, so the console cannot advertise an address
+   * the audience check would then reject.
+   *
+   * A missing `PUBLIC_BASE_URL` degrades to null rather than propagating
+   * `mcpOAuthIssuer`'s 503: a misconfiguration must not take the whole console
+   * page down.
+   */
+  private mcpEndpoint(): string | null {
+    try {
+      return mcpCanonicalResource(this.config.get<string>('PUBLIC_BASE_URL'));
+    } catch {
+      return null;
+    }
   }
 
   /** How many approval requests each of these runs enqueued (bounded by page). */

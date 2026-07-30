@@ -547,3 +547,167 @@ describe('McpConsoleService — getSession', () => {
     expect(res.approvals).toEqual([]);
   });
 });
+
+/**
+ * Faz 4 Task 3 — the write-mode read model. The TOGGLE already lives on
+ * MarketingWorkspacesController; `canToggle` exists so the console renders it
+ * honestly instead of offering a switch the real endpoint would 403.
+ */
+describe('McpConsoleService — overview', () => {
+  const owner = { role: 'OWNER', customRoleId: null };
+
+  it('reports the current write mode, the endpoint and the live counts', async () => {
+    const { svc, prisma, apiKeys } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({ mcpWriteMode: 'AUTONOMOUS' });
+    prisma.mcpOAuthToken.findMany.mockResolvedValue([liveToken()]);
+    prisma.mcpOAuthToken.findFirst.mockResolvedValue({ createdAt: new Date('2026-07-01T00:00:00Z') });
+    apiKeys.list.mockResolvedValue([
+      { id: 'k1', name: 'cc', prefix: 'mk_live_a', scopes: [], status: 'ACTIVE', lastUsedAt: null, createdAt: new Date(), revokedAt: null },
+      { id: 'k2', name: 'dead', prefix: 'mk_live_b', scopes: [], status: 'REVOKED', lastUsedAt: null, createdAt: new Date(), revokedAt: new Date() },
+    ]);
+
+    const res = await svc.overview('ws-a', owner);
+
+    expect(res).toEqual({
+      mcpWriteMode: 'AUTONOMOUS',
+      canToggle: true,
+      mcpEndpoint: 'https://app.jeetagrowth.com/api/mcp',
+      liveConnectionCount: 2, // 1 live OAuth client + 1 ACTIVE api key
+      pendingApprovalCount: 0,
+    });
+    expect(prisma.workspace.findUnique.mock.calls[0][0].where).toEqual({ id: 'ws-a' });
+  });
+
+  it('falls back to APPROVAL for an unset/unknown stored mode', async () => {
+    const { svc, prisma } = deps();
+    prisma.workspace.findUnique.mockResolvedValue({ mcpWriteMode: null });
+
+    await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({ mcpWriteMode: 'APPROVAL' });
+  });
+
+  it('degrades mcpEndpoint to null when PUBLIC_BASE_URL is unset instead of 503ing the console', async () => {
+    const { svc, config } = deps();
+    config.get.mockReturnValue(undefined);
+
+    await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({ mcpEndpoint: null });
+  });
+
+  describe('canToggle mirrors the setMcpWriteMode gate', () => {
+    it('is true for an OWNER holding settings.manage', async () => {
+      const { svc, roles } = deps();
+      roles.hasPermission.mockResolvedValue(true);
+
+      await expect(svc.overview('ws-a', { role: 'OWNER', customRoleId: null })).resolves.toMatchObject({
+        canToggle: true,
+      });
+      expect(roles.hasPermission).toHaveBeenCalledWith(
+        { workspaceId: 'ws-a', role: 'OWNER', customRoleId: null },
+        'settings.manage',
+      );
+    });
+
+    it('is false for a MANAGER even though MANAGER holds settings.manage', async () => {
+      const { svc, roles } = deps();
+      // The real endpoint is @MarketingRoles('OWNER'): the permission alone
+      // would let a legacy MANAGER through, so the rank check must come first.
+      roles.hasPermission.mockResolvedValue(true);
+
+      await expect(svc.overview('ws-a', { role: 'MANAGER', customRoleId: null })).resolves.toMatchObject({
+        canToggle: false,
+      });
+      expect(roles.hasPermission).not.toHaveBeenCalled();
+    });
+
+    it('is false for a REP', async () => {
+      const { svc } = deps();
+      await expect(svc.overview('ws-a', { role: 'REP', customRoleId: null })).resolves.toMatchObject({
+        canToggle: false,
+      });
+    });
+
+    it('is false for an OWNER-rank user whose custom role strips settings.manage', async () => {
+      const { svc, roles } = deps();
+      roles.hasPermission.mockResolvedValue(false);
+
+      await expect(
+        svc.overview('ws-a', { role: 'OWNER', customRoleId: 'cr-restricted' }),
+      ).resolves.toMatchObject({ canToggle: false });
+      expect(roles.hasPermission).toHaveBeenCalledWith(
+        { workspaceId: 'ws-a', role: 'OWNER', customRoleId: 'cr-restricted' },
+        'settings.manage',
+      );
+    });
+  });
+
+  describe('pendingApprovalCount', () => {
+    it('counts only PENDING requests raised by an MCP run of THIS workspace', async () => {
+      const { svc, prisma } = deps();
+      prisma.approvalRequest.findMany.mockResolvedValue([
+        { requestedByRunId: 'run-mcp' },
+        { requestedByRunId: 'run-autopilot' },
+      ]);
+      // Only run-mcp is an agent:'mcp' run.
+      prisma.agentRun.findMany.mockResolvedValue([{ id: 'run-mcp' }]);
+
+      const res = await svc.overview('ws-a', owner);
+
+      expect(res.pendingApprovalCount).toBe(1);
+      expect(prisma.approvalRequest.findMany.mock.calls[0][0].where).toEqual({
+        workspaceId: 'ws-a',
+        status: 'PENDING',
+        requestedByRunId: { not: null },
+      });
+      expect(prisma.agentRun.findMany.mock.calls[0][0].where).toEqual({
+        workspaceId: 'ws-a',
+        agent: 'mcp',
+        id: { in: ['run-mcp', 'run-autopilot'] },
+      });
+    });
+
+    it('counts every PENDING request of the same MCP run', async () => {
+      const { svc, prisma } = deps();
+      prisma.approvalRequest.findMany.mockResolvedValue([
+        { requestedByRunId: 'run-mcp' },
+        { requestedByRunId: 'run-mcp' },
+      ]);
+      prisma.agentRun.findMany.mockResolvedValue([{ id: 'run-mcp' }]);
+
+      await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({ pendingApprovalCount: 2 });
+    });
+
+    it('is 0 — with no second query — when nothing is pending', async () => {
+      const { svc, prisma } = deps();
+      prisma.approvalRequest.findMany.mockResolvedValue([]);
+
+      const res = await svc.overview('ws-a', owner);
+
+      expect(res.pendingApprovalCount).toBe(0);
+      expect(prisma.agentRun.findMany).not.toHaveBeenCalled();
+    });
+
+    it('is 0 when every pending request came from a non-MCP run', async () => {
+      const { svc, prisma } = deps();
+      prisma.approvalRequest.findMany.mockResolvedValue([{ requestedByRunId: 'run-autopilot' }]);
+      prisma.agentRun.findMany.mockResolvedValue([]); // no matching agent:'mcp' run
+
+      await expect(svc.overview('ws-a', owner)).resolves.toMatchObject({ pendingApprovalCount: 0 });
+    });
+  });
+
+  it('keeps every overview read inside the caller workspace', async () => {
+    const { svc, prisma } = deps();
+    prisma.mcpOAuthToken.findMany.mockResolvedValue([liveToken()]);
+    prisma.approvalRequest.findMany.mockResolvedValue([{ requestedByRunId: 'run-mcp' }]);
+    prisma.agentRun.findMany.mockResolvedValue([{ id: 'run-mcp' }]);
+
+    await svc.overview('ws-a', owner);
+
+    for (const where of allWheres(prisma)) {
+      // The workspace row itself is keyed by id, and the CIMD document cache
+      // has no tenant column (see the connections tests).
+      if (where.id === 'ws-a') continue;
+      if ('clientId' in where && !('workspaceId' in where) && typeof where.clientId === 'object') continue;
+      expect(where.workspaceId).toBe('ws-a');
+    }
+  });
+});
