@@ -55,6 +55,12 @@ PLATFORM_OPERATOR_EMAIL=... PLATFORM_OPERATOR_PASSWORD=... \
   docker compose exec backend npx ts-node prisma/seed-platform-operator.ts
 ```
 
+Both seeds — plus `prisma/seed-operator-workspace.ts`, which puts the
+platform-owner workspace on the internal OPERATOR package when
+`OPERATOR_WORKSPACE_ID` is set — also run automatically on every boot from the
+compose command; each no-ops when its env vars are unset. See
+`docs/marketing/platform-package-assignment.md`.
+
 Smoke: register a workspace via `/register`, confirm TRIAL quota 3 in
 Research settings, buy STARTER via bank transfer, approve it in
 `/platform/payments`, watch the quota jump to 10.

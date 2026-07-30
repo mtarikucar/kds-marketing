@@ -58,9 +58,13 @@ services:
       redis:
         condition: service_healthy
     # migrate (fatal) → seed the package catalog (idempotent upsert; non-fatal so
-    # a seed hiccup can't block startup) → start. Keeps the packages table in sync
-    # with prisma/seed-packages.ts (feature/limit keys) on every deploy.
-    command: sh -c "npx prisma migrate deploy && (node dist-seed/seed-packages.js || echo 'package seed failed (non-fatal), continuing') && node dist/main"
+    # a seed hiccup can't block startup) → grant the platform-owner workspace the
+    # internal OPERATOR package (no-op unless OPERATOR_WORKSPACE_ID is set; must
+    # run AFTER the catalog seed so the OPERATOR package row exists) → seed/rotate
+    # the superadmin login (no-op unless PLATFORM_OPERATOR_EMAIL+PASSWORD are set)
+    # → start. Keeps the packages table in sync with prisma/seed-packages.ts on
+    # every deploy. Every seed is idempotent AND non-fatal: none can block boot.
+    command: sh -c "npx prisma migrate deploy && (node dist-seed/seed-packages.js || echo 'package seed failed (non-fatal), continuing') && (node dist-seed/prisma/seed-operator-workspace.js || echo 'operator workspace seed failed (non-fatal), continuing') && (node dist-seed/prisma/seed-platform-operator.js || echo 'platform operator seed failed (non-fatal), continuing') && node dist/main"
     env_file:
       - .env.production
     ports:

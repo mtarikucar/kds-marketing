@@ -8,31 +8,50 @@
  *
  * Upserts on email: existing operator gets the new password/name (and a
  * tokenVersion bump so old sessions die); a fresh database gets its first
- * operator. Deliberately NOT part of `prisma db seed` — creating superadmins
- * should be an explicit ops action.
+ * operator.
+ *
+ * Env contract (mirrors seed-operator-workspace.ts): BOTH vars unset = NO-OP,
+ * exit 0 — the deploy runs this on every boot and an environment that doesn't
+ * want a seeded superadmin must not see a failure. Exactly one of the two set,
+ * or a too-short password, is a misconfiguration → error + exit 1.
  */
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
-const prisma = new PrismaClient();
+export type OperatorSeedOutcome = 'skipped' | 'ready';
 
-async function main() {
-  const email = process.env.PLATFORM_OPERATOR_EMAIL;
-  const password = process.env.PLATFORM_OPERATOR_PASSWORD;
-  const name = process.env.PLATFORM_OPERATOR_NAME ?? 'Platform Operator';
+type OperatorSeedClient = Pick<PrismaClient, 'platformOperator'>;
 
-  if (!email || !password) {
-    console.error(
-      'PLATFORM_OPERATOR_EMAIL and PLATFORM_OPERATOR_PASSWORD are required.',
+interface SeedLogger {
+  log: (message: string) => void;
+  error: (message: string) => void;
+}
+
+export async function seedPlatformOperator(
+  prisma: OperatorSeedClient,
+  env: Record<string, string | undefined> = process.env,
+  logger: SeedLogger = console,
+): Promise<OperatorSeedOutcome> {
+  const email = (env.PLATFORM_OPERATOR_EMAIL ?? '').trim();
+  const password = env.PLATFORM_OPERATOR_PASSWORD ?? '';
+  const name = env.PLATFORM_OPERATOR_NAME ?? 'Platform Operator';
+
+  if (!email && !password) {
+    logger.log(
+      'PLATFORM_OPERATOR_EMAIL/PASSWORD not set — skipping the platform operator seed.',
     );
-    process.exit(1);
+    return 'skipped';
+  }
+  if (!email || !password) {
+    throw new Error(
+      'PLATFORM_OPERATOR_EMAIL and PLATFORM_OPERATOR_PASSWORD must be set together.',
+    );
   }
   if (password.length < 12) {
-    console.error('Operator password must be at least 12 characters.');
-    process.exit(1);
+    throw new Error('Operator password must be at least 12 characters.');
   }
 
-  const costRaw = process.env.BCRYPT_COST;
+  const costRaw = env.BCRYPT_COST;
   const parsed = costRaw ? parseInt(costRaw, 10) : NaN;
   const cost =
     Number.isFinite(parsed) && parsed >= 10 && parsed <= 15 ? parsed : 12;
@@ -52,12 +71,22 @@ async function main() {
     select: { id: true, email: true, name: true },
   });
 
-  console.log(`Platform operator ready: ${operator.email} (${operator.id})`);
+  logger.log(`Platform operator ready: ${operator.email} (${operator.id})`);
+  return 'ready';
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
+async function main() {
+  const prisma = new PrismaClient();
+  try {
+    await seedPlatformOperator(prisma);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e instanceof Error ? e.message : e);
     process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+  });
+}

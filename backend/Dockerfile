@@ -25,6 +25,15 @@ RUN npx tsc prisma/seed-packages.ts --outDir dist-seed \
       --module commonjs --target ES2021 --esModuleInterop \
       --skipLibCheck --moduleResolution node
 
+# Same treatment for the two env-driven bootstrap seeds. They import shared
+# logic from src/, so they need --rootDir . (which nests the output under
+# dist-seed/prisma/ — hence the different paths in the container command).
+# Both no-op when their env vars are unset, so running them is always safe.
+RUN npx tsc prisma/seed-operator-workspace.ts prisma/seed-platform-operator.ts \
+      --outDir dist-seed --rootDir . \
+      --module commonjs --target ES2021 --esModuleInterop \
+      --skipLibCheck --moduleResolution node
+
 EXPOSE 3000
 
 CMD ["npm", "run", "start:dev"]
