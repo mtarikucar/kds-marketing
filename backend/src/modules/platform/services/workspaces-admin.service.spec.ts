@@ -108,6 +108,60 @@ describe('WorkspacesAdminService.updateStatus — suspension takes effect immedi
   });
 });
 
+describe('WorkspacesAdminService.findOne — current subscription', () => {
+  /** findOne fans out over counts/owner; give the deep mock what it needs. */
+  function makeReadSvc() {
+    const ctx = makeSvc();
+    ctx.prisma.workspace.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      name: 'Acme',
+      kind: 'STANDALONE',
+    });
+    ctx.prisma.marketingUser.count = jest.fn().mockResolvedValue(0);
+    ctx.prisma.marketingUser.findFirst = jest.fn().mockResolvedValue(null);
+    ctx.prisma.lead = { count: jest.fn().mockResolvedValue(0) };
+    return ctx;
+  }
+
+  it('hydrates the package behind the soft packageId ref', async () => {
+    const { prisma, svc } = makeReadSvc();
+    prisma.workspaceSubscription.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      billingCycle: 'MONTHLY',
+      currency: 'USD',
+      currentPeriodEnd: new Date('2999-12-31T00:00:00.000Z'),
+      cancelAtPeriodEnd: false,
+      trialEndsAt: null,
+      provider: 'manual',
+      packageId: 'pkg-op',
+    });
+
+    const res: any = await svc.findOne('ws-1');
+
+    expect(prisma.package.findUnique).toHaveBeenCalledWith({
+      where: { id: 'pkg-op' },
+      select: { code: true, name: true, isPublic: true },
+    });
+    expect(res.subscription).toEqual(
+      expect.objectContaining({
+        status: 'ACTIVE',
+        provider: 'manual',
+        package: expect.objectContaining({ code: 'OPERATOR' }),
+      }),
+    );
+  });
+
+  it('returns subscription:null (and skips the package lookup) when never subscribed', async () => {
+    const { prisma, svc } = makeReadSvc();
+    prisma.workspaceSubscription.findUnique.mockResolvedValue(null);
+
+    const res: any = await svc.findOne('ws-1');
+
+    expect(res.subscription).toBeNull();
+    expect(prisma.package.findUnique).not.toHaveBeenCalled();
+  });
+});
+
 describe('WorkspacesAdminService.assignPackage — operator package grant', () => {
   it('upserts the subscription and returns the effective grant', async () => {
     const { prisma, entitlements, svc } = makeSvc();
