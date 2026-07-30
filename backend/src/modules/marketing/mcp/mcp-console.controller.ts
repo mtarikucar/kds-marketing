@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { MarketingGuard } from '../guards/marketing.guard';
 import { MarketingRolesGuard } from '../guards/marketing-roles.guard';
 import { PermissionsGuard } from '../roles/permissions.guard';
@@ -29,6 +29,28 @@ import { McpConsoleService } from './mcp-console.service';
 @MarketingRoles('MANAGER')
 export class McpConsoleController {
   constructor(private readonly svc: McpConsoleService) {}
+
+  /**
+   * MCP session list — one `AgentRun(agent: 'mcp')` per row, newest first.
+   *
+   * `page`/`pageSize` are forwarded RAW: the cap and the NaN coercion live in
+   * the service (`safePage`/`safeLimit`), so the public-API path and any other
+   * caller get the same ceiling rather than one enforced only at this edge.
+   */
+  @Get('sessions')
+  sessions(
+    @CurrentMarketingUser() user: MarketingUserPayload,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.svc.listSessions(user.workspaceId, page, pageSize);
+  }
+
+  /** One session with its tool-call audit rows (payload blobs summarised only). */
+  @Get('sessions/:id')
+  session(@Param('id') id: string, @CurrentMarketingUser() user: MarketingUserPayload) {
+    return this.svc.getSession(user.workspaceId, id);
+  }
 
   /** Connected Claude.ai/Desktop connectors + the workspace's live MCP API keys. */
   @Get('connections')

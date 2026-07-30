@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { CanActivate, ExecutionContext, INestApplication } from '@nestjs/common';
+import { CanActivate, ExecutionContext, INestApplication, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { McpConsoleController } from './mcp-console.controller';
@@ -30,10 +30,12 @@ function methodMeta(key: string, method: string): any {
   );
 }
 
-function svcMock(over: Partial<Record<keyof McpConsoleService, jest.Mock>> = {}) {
+function svcMock(over: Record<string, jest.Mock> = {}) {
   return {
     listConnections: jest.fn().mockResolvedValue({ oauth: [], apiKeys: [] }),
     revokeOAuthClient: jest.fn().mockResolvedValue({ clientId: 'c', revoked: 0 }),
+    listSessions: jest.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 25 }),
+    getSession: jest.fn().mockResolvedValue({ id: 'run-1', toolCalls: [], approvals: [] }),
     ...over,
   } as unknown as McpConsoleService & Record<string, jest.Mock>;
 }
@@ -184,5 +186,76 @@ describe('McpConsoleController — connections', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('McpConsoleController — sessions', () => {
+  it('forwards page/pageSize as given — the CAP lives in the service, not the edge', async () => {
+    const svc = svcMock();
+    const ctrl = new McpConsoleController(svc);
+
+    await ctrl.sessions({ workspaceId: 'ws-a' } as never, '3', '100000');
+
+    expect(svc.listSessions).toHaveBeenCalledWith('ws-a', '3', '100000');
+  });
+
+  it('reads one session within the caller\'s own workspace', async () => {
+    const svc = svcMock();
+    const ctrl = new McpConsoleController(svc);
+
+    await ctrl.session('run-1', { workspaceId: 'ws-a' } as never);
+
+    expect(svc.getSession).toHaveBeenCalledWith('ws-a', 'run-1');
+  });
+
+  it("GET sessions/:id for another workspace's run surfaces the service 404 through HTTP", async () => {
+    const svc = svcMock({
+      getSession: jest.fn().mockRejectedValue(new NotFoundException('MCP session not found')),
+    });
+    const app = await buildApp('MANAGER', svc);
+    try {
+      const res = await request(app.getHttpServer()).get('/marketing/mcp-console/sessions/run-in-ws-b');
+      expect(res.status).toBe(404);
+      expect(svc.getSession).toHaveBeenCalledWith('ws-a', 'run-in-ws-b');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('GET sessions is refused for a REP by the REAL guard stack', async () => {
+    const svc = svcMock();
+    const app = await buildApp('REP', svc);
+    try {
+      const res = await request(app.getHttpServer()).get('/marketing/mcp-console/sessions');
+      expect(res.status).toBe(403);
+      expect(svc.listSessions).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('GET sessions/:id does not shadow the literal routes declared before it', async () => {
+    const svc = svcMock();
+    const app = await buildApp('MANAGER', svc);
+    try {
+      const res = await request(app.getHttpServer()).get('/marketing/mcp-console/connections');
+      expect(res.status).toBe(200);
+      expect(svc.getSession).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('leaves the session reads unaudited-by-mutation but keeps them behind the class role gate', () => {
+    // Reads are not @Audit-logged (they would flood the trail); the class-level
+    // @MarketingRoles('MANAGER') is what confines them.
+    expect(methodMeta(AUDIT_METADATA, 'sessions')).toBeUndefined();
+    expect(methodMeta(MARKETING_ROLES_KEY, 'sessions')).toBeUndefined();
+  });
+
+  it('keeps the reads free of @RequirePermission — revoke is the only gated action', () => {
+    expect(methodMeta(REQUIRE_PERMISSION_KEY, 'sessions')).toBeUndefined();
+    expect(methodMeta(REQUIRE_PERMISSION_KEY, 'session')).toBeUndefined();
+    expect(methodMeta(REQUIRE_PERMISSION_KEY, 'connections')).toBeUndefined();
   });
 });

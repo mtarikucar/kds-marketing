@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ApiKeysService } from '../services/api-keys.service';
 import { RolesService } from '../roles/roles.service';
+import { safeLimit, safePage } from '../common/paging';
 
 /**
  * Faz 4 — the read model behind the connector management console.
@@ -29,6 +30,17 @@ const MCP_AGENT = 'mcp';
  * must not claim a toggle the real endpoint would refuse.
  */
 const MCP_WRITE_MODE_PERMISSION = 'settings.manage';
+
+/** Session-list paging (repo convention: `{ items, total, page, pageSize }`). */
+export const MCP_SESSIONS_DEFAULT_PAGE_SIZE = 25;
+export const MCP_SESSIONS_MAX_PAGE_SIZE = 100;
+
+/**
+ * Ceiling on tool-call rows returned for ONE session. Today an MCP AgentRun
+ * wraps a single tool call, so this is pure defence in depth against a future
+ * multi-call session turning a detail read into an unbounded response.
+ */
+export const MCP_SESSION_TOOL_CALL_LIMIT = 200;
 
 export interface McpOAuthConnection {
   kind: 'OAUTH';
@@ -59,6 +71,53 @@ export interface McpApiKeyConnection {
 export interface McpConnections {
   oauth: McpOAuthConnection[];
   apiKeys: McpApiKeyConnection[];
+}
+
+export interface McpSessionSummary {
+  id: string;
+  status: string;
+  /** What the run recorded. Today `McpInvokerService` stores the TOOL NAME
+   *  here (one run per tool call); it is passed through verbatim rather than
+   *  reformatted, so the console can never claim more than was logged. */
+  goal: string | null;
+  startedAt: Date;
+  finishedAt: Date | null;
+  error: string | null;
+  toolCallCount: number;
+  /** Approval requests this run enqueued. A run with 0 tool calls and >0
+   *  approvals did NOT do nothing — it hit the human gate. */
+  approvalCount: number;
+}
+
+export interface McpToolCallAudit {
+  id: string;
+  tool: string;
+  at: Date;
+  ok: boolean;
+  error: string | null;
+  latencyMs: number | null;
+  /** Size of the recorded argument blob, in bytes. */
+  argsBytes: number;
+  /** Top-level argument NAMES only — never their values. */
+  argsKeys: string[];
+  /** Size of the recorded result blob, in bytes. */
+  resultBytes: number;
+}
+
+export interface McpApprovalSummary {
+  id: string;
+  kind: string;
+  status: string;
+  summary: string;
+  createdAt: Date;
+  decidedAt: Date | null;
+  expiresAt: Date | null;
+}
+
+export interface McpSessionDetail extends Omit<McpSessionSummary, 'toolCallCount' | 'approvalCount'> {
+  queuedForApproval: boolean;
+  toolCalls: McpToolCallAudit[];
+  approvals: McpApprovalSummary[];
 }
 
 @Injectable()
@@ -193,6 +252,188 @@ export class McpConsoleService {
     });
     return { clientId: id, revoked: res.count };
   }
+
+  /**
+   * The workspace's MCP sessions, newest first.
+   *
+   * `agent: 'mcp'` is pinned into BOTH the page query and the total: the
+   * `agent_runs` table is shared with every other agent (researcher,
+   * strategist, the Budget Autopilot), and a total that counted those would
+   * make the console show pages that do not exist.
+   *
+   * Paging goes through the repo's `safePage`/`safeLimit` helpers, so the page
+   * size is capped SERVER-SIDE and garbage input degrades to the first page
+   * instead of handing Prisma a NaN `skip`.
+   */
+  async listSessions(workspaceId: string, page?: unknown, pageSize?: unknown) {
+    const p = safePage(page);
+    const size = safeLimit(pageSize, MCP_SESSIONS_DEFAULT_PAGE_SIZE, MCP_SESSIONS_MAX_PAGE_SIZE);
+    const where = { workspaceId, agent: MCP_AGENT };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.agentRun.findMany({
+        where,
+        orderBy: { startedAt: 'desc' },
+        skip: (p - 1) * size,
+        take: size,
+        select: {
+          id: true,
+          status: true,
+          goal: true,
+          startedAt: true,
+          finishedAt: true,
+          error: true,
+          _count: { select: { toolCalls: true } },
+        },
+      }),
+      this.prisma.agentRun.count({ where }),
+    ]);
+
+    const approvals = await this.approvalCountsByRun(
+      workspaceId,
+      rows.map((r) => r.id),
+    );
+
+    const items: McpSessionSummary[] = rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      goal: r.goal,
+      startedAt: r.startedAt,
+      finishedAt: r.finishedAt,
+      error: r.error,
+      toolCallCount: r._count.toolCalls,
+      approvalCount: approvals.get(r.id) ?? 0,
+    }));
+
+    return { items, total, page: p, pageSize: size };
+  }
+
+  /**
+   * One session with its audit rows.
+   *
+   * The lookup is a workspace-scoped `findFirst` that ALSO requires
+   * `agent: 'mcp'`, so another tenant's session — and this tenant's non-MCP
+   * runs — are both a 404 rather than a partial disclosure.
+   */
+  async getSession(workspaceId: string, id: string): Promise<McpSessionDetail> {
+    const run = await this.prisma.agentRun.findFirst({
+      where: { id, workspaceId, agent: MCP_AGENT },
+      select: {
+        id: true,
+        status: true,
+        goal: true,
+        startedAt: true,
+        finishedAt: true,
+        error: true,
+      },
+    });
+    if (!run) throw new NotFoundException('MCP session not found');
+
+    const [calls, approvals] = await Promise.all([
+      this.prisma.toolCallLog.findMany({
+        // `runId` alone would be enough (the run was just proven to be ours),
+        // but `workspaceId` is carried on the log row too and pinning it keeps
+        // the tenant filter uniform across every read in this service.
+        where: { runId: id, workspaceId },
+        orderBy: { createdAt: 'asc' },
+        take: MCP_SESSION_TOOL_CALL_LIMIT,
+        select: {
+          id: true,
+          tool: true,
+          ok: true,
+          error: true,
+          latencyMs: true,
+          createdAt: true,
+          args: true,
+          result: true,
+        },
+      }),
+      // A tool that hit the approval gate NEVER produced a ToolCallLog row
+      // (the broker returns PENDING_APPROVAL before it logs), so "did this go
+      // to the approval queue?" can only be answered from the requests this
+      // run enqueued. `payload` is deliberately not selected: for an
+      // MCP-originated request it is `{ tool, args }`, i.e. exactly the data
+      // the tool-call blobs below are stripped of.
+      this.prisma.approvalRequest.findMany({
+        where: { workspaceId, requestedByRunId: id },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          kind: true,
+          status: true,
+          summary: true,
+          createdAt: true,
+          decidedAt: true,
+          expiresAt: true,
+        },
+      }),
+    ]);
+
+    return {
+      ...run,
+      queuedForApproval: approvals.length > 0,
+      toolCalls: calls.map((c) => ({
+        id: c.id,
+        tool: c.tool,
+        at: c.createdAt,
+        ok: c.ok,
+        error: c.error,
+        latencyMs: c.latencyMs,
+        // BLOB POLICY — decided here, deliberately: `args` and `result` are
+        // whole tool payloads and routinely hold customer PII (a lead's
+        // email/phone, a message body). This view returns their SIZE plus the
+        // top-level argument KEY NAMES, and nothing else. A "first N
+        // characters" preview was rejected: the head of a result is precisely
+        // where the first customer record sits, so a preview would leak the
+        // very thing the truncation exists to contain. The full payloads stay
+        // in `tool_call_logs` for a forensic read behind a stronger gate; the
+        // console gets enough to answer "which tool, when, did it work, how
+        // much data moved".
+        argsBytes: jsonByteLength(c.args),
+        argsKeys: topLevelKeys(c.args),
+        resultBytes: jsonByteLength(c.result),
+      })),
+      approvals,
+    };
+  }
+
+  /** How many approval requests each of these runs enqueued (bounded by page). */
+  private async approvalCountsByRun(
+    workspaceId: string,
+    runIds: string[],
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (runIds.length === 0) return counts;
+    const rows = await this.prisma.approvalRequest.findMany({
+      where: { workspaceId, requestedByRunId: { in: runIds } },
+      select: { requestedByRunId: true },
+    });
+    for (const r of rows) {
+      if (!r.requestedByRunId) continue;
+      counts.set(r.requestedByRunId, (counts.get(r.requestedByRunId) ?? 0) + 1);
+    }
+    return counts;
+  }
+}
+
+/** Serialized size of a recorded blob, in bytes. 0 for null/undefined. */
+function jsonByteLength(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? '');
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Top-level key names of a recorded argument object — a schema fact, not
+ * customer data. Anything that is not a plain object (an array, a scalar) has
+ * no key names worth reporting and yields [].
+ */
+function topLevelKeys(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.keys(value as Record<string, unknown>).sort();
 }
 
 /** Pull a string field out of a cached CIMD document's free-form metadata. */

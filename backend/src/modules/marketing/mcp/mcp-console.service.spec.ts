@@ -283,3 +283,267 @@ describe('McpConsoleService — revokeOAuthClient', () => {
     expect(prisma.mcpOAuthToken.updateMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Faz 4 Task 2 — the session + audit view over AgentRun/ToolCallLog.
+ *
+ * `McpInvokerService` opens ONE AgentRun per MCP tool call with
+ * `agent: 'mcp'`; runs from every other agent (researcher, strategist, the
+ * Budget Autopilot, …) share those tables and must never leak in here.
+ */
+const run = (over: Record<string, unknown> = {}) => ({
+  id: 'run-1',
+  status: 'DONE',
+  goal: 'jeeta.search_leads',
+  startedAt: new Date('2026-07-25T10:00:00Z'),
+  finishedAt: new Date('2026-07-25T10:00:02Z'),
+  error: null,
+  _count: { toolCalls: 1 },
+  ...over,
+});
+
+describe('McpConsoleService — listSessions', () => {
+  it('returns the workspace\'s MCP runs newest-first with a tool-call count', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findMany.mockResolvedValue([run()]);
+    prisma.agentRun.count.mockResolvedValue(1);
+
+    const res = await svc.listSessions('ws-a', 1, 25);
+
+    expect(prisma.agentRun.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { workspaceId: 'ws-a', agent: 'mcp' },
+        orderBy: { startedAt: 'desc' },
+        skip: 0,
+        take: 25,
+      }),
+    );
+    expect(res).toEqual({
+      items: [
+        {
+          id: 'run-1',
+          status: 'DONE',
+          goal: 'jeeta.search_leads',
+          startedAt: new Date('2026-07-25T10:00:00Z'),
+          finishedAt: new Date('2026-07-25T10:00:02Z'),
+          error: null,
+          toolCallCount: 1,
+          approvalCount: 0,
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 25,
+    });
+  });
+
+  it("excludes non-MCP AgentRuns — the filter pins agent: 'mcp' on BOTH the page and the total", async () => {
+    const { svc, prisma } = deps();
+
+    await svc.listSessions('ws-a');
+
+    expect(prisma.agentRun.findMany.mock.calls[0][0].where).toEqual({ workspaceId: 'ws-a', agent: 'mcp' });
+    expect(prisma.agentRun.count.mock.calls[0][0].where).toEqual({ workspaceId: 'ws-a', agent: 'mcp' });
+  });
+
+  it('caps the page size server-side — a caller cannot ask for 100000 rows', async () => {
+    const { svc, prisma } = deps();
+
+    const res = await svc.listSessions('ws-a', 1, 100_000);
+
+    expect(prisma.agentRun.findMany.mock.calls[0][0].take).toBe(100);
+    expect(res.pageSize).toBe(100);
+  });
+
+  it('coerces garbage paging input instead of handing Prisma a NaN skip', async () => {
+    const { svc, prisma } = deps();
+
+    const res = await svc.listSessions('ws-a', 'abc', 'xyz');
+
+    expect(res.page).toBe(1);
+    expect(res.pageSize).toBe(25);
+    expect(prisma.agentRun.findMany.mock.calls[0][0].skip).toBe(0);
+  });
+
+  it('offsets by page', async () => {
+    const { svc, prisma } = deps();
+
+    await svc.listSessions('ws-a', 3, 10);
+
+    expect(prisma.agentRun.findMany.mock.calls[0][0].skip).toBe(20);
+  });
+
+  it('marks a run whose tool went to the approval queue (0 tool calls is not 0 activity)', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findMany.mockResolvedValue([run({ id: 'run-9', _count: { toolCalls: 0 } })]);
+    prisma.agentRun.count.mockResolvedValue(1);
+    prisma.approvalRequest.findMany.mockResolvedValue([{ requestedByRunId: 'run-9' }]);
+
+    const res = await svc.listSessions('ws-a');
+
+    expect(res.items[0]).toMatchObject({ toolCallCount: 0, approvalCount: 1 });
+    // The approval lookup is workspace-scoped AND restricted to this page.
+    expect(prisma.approvalRequest.findMany.mock.calls[0][0].where).toEqual({
+      workspaceId: 'ws-a',
+      requestedByRunId: { in: ['run-9'] },
+    });
+  });
+
+  it('skips the approval lookup entirely on an empty page', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findMany.mockResolvedValue([]);
+
+    await svc.listSessions('ws-a');
+
+    expect(prisma.approvalRequest.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('McpConsoleService — getSession', () => {
+  const call = (over: Record<string, unknown> = {}) => ({
+    id: 'tc-1',
+    tool: 'jeeta.search_leads',
+    ok: true,
+    error: null,
+    latencyMs: 42,
+    createdAt: new Date('2026-07-25T10:00:01Z'),
+    args: { query: 'ada@lovelace.example', limit: 10 },
+    result: { items: [{ email: 'ada@lovelace.example', phone: '+905551112233' }] },
+    ...over,
+  });
+
+  it('404s a session that belongs to another workspace', async () => {
+    const { svc, prisma } = deps();
+    // ws-b's run does not match a ws-a-scoped findFirst.
+    prisma.agentRun.findFirst.mockResolvedValue(null);
+
+    await expect(svc.getSession('ws-a', 'run-in-ws-b')).rejects.toMatchObject({ status: 404 });
+    expect(prisma.agentRun.findFirst.mock.calls[0][0].where).toEqual({
+      id: 'run-in-ws-b',
+      workspaceId: 'ws-a',
+      agent: 'mcp',
+    });
+    expect(prisma.toolCallLog.findMany).not.toHaveBeenCalled();
+  });
+
+  it('404s a non-MCP AgentRun of this workspace too', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue(null);
+
+    await expect(svc.getSession('ws-a', 'strategist-run')).rejects.toMatchObject({ status: 404 });
+    expect(prisma.agentRun.findFirst.mock.calls[0][0].where.agent).toBe('mcp');
+  });
+
+  it('returns only the requested run\'s tool calls, scoped to the workspace', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({
+      id: 'run-1',
+      status: 'DONE',
+      goal: 'jeeta.search_leads',
+      startedAt: new Date('2026-07-25T10:00:00Z'),
+      finishedAt: new Date('2026-07-25T10:00:02Z'),
+      error: null,
+    });
+    prisma.toolCallLog.findMany.mockResolvedValue([call()]);
+
+    const res = await svc.getSession('ws-a', 'run-1');
+
+    expect(prisma.toolCallLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { runId: 'run-1', workspaceId: 'ws-a' },
+        orderBy: { createdAt: 'asc' },
+      }),
+    );
+    expect(res.id).toBe('run-1');
+    expect(res.toolCalls).toHaveLength(1);
+    expect(res.toolCalls[0]).toMatchObject({
+      id: 'tc-1',
+      tool: 'jeeta.search_leads',
+      ok: true,
+      latencyMs: 42,
+      at: new Date('2026-07-25T10:00:01Z'),
+    });
+  });
+
+  it('caps the number of tool-call rows returned for one session', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({ id: 'run-1', status: 'DONE', goal: 'x', startedAt: new Date(), finishedAt: null, error: null });
+
+    await svc.getSession('ws-a', 'run-1');
+
+    expect(prisma.toolCallLog.findMany.mock.calls[0][0].take).toBe(200);
+  });
+
+  it('never returns the raw args/result blobs — only a size and the arg KEY NAMES', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({ id: 'run-1', status: 'DONE', goal: 'x', startedAt: new Date(), finishedAt: null, error: null });
+    prisma.toolCallLog.findMany.mockResolvedValue([call()]);
+
+    const res = await svc.getSession('ws-a', 'run-1');
+
+    expect(res.toolCalls[0]).toMatchObject({
+      argsKeys: ['limit', 'query'],
+      argsBytes: Buffer.byteLength(JSON.stringify({ query: 'ada@lovelace.example', limit: 10 })),
+      resultBytes: Buffer.byteLength(JSON.stringify({ items: [{ email: 'ada@lovelace.example', phone: '+905551112233' }] })),
+    });
+    // The customer data inside those blobs never crosses the wire.
+    const serialized = JSON.stringify(res);
+    expect(serialized).not.toContain('ada@lovelace.example');
+    expect(serialized).not.toContain('905551112233');
+    expect(res.toolCalls[0]).not.toHaveProperty('args');
+    expect(res.toolCalls[0]).not.toHaveProperty('result');
+    expect(res.toolCalls[0]).not.toHaveProperty('argsPreview');
+    expect(res.toolCalls[0]).not.toHaveProperty('resultPreview');
+  });
+
+  it('reports zero bytes and no keys for a null args/result', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({ id: 'run-1', status: 'DONE', goal: 'x', startedAt: new Date(), finishedAt: null, error: null });
+    prisma.toolCallLog.findMany.mockResolvedValue([call({ args: null, result: null })]);
+
+    const res = await svc.getSession('ws-a', 'run-1');
+
+    expect(res.toolCalls[0]).toMatchObject({ argsBytes: 0, argsKeys: [], resultBytes: 0 });
+  });
+
+  it('reports a size but no keys for a non-object args payload', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({ id: 'run-1', status: 'DONE', goal: 'x', startedAt: new Date(), finishedAt: null, error: null });
+    prisma.toolCallLog.findMany.mockResolvedValue([call({ args: ['a', 'b'], result: 'plain' })]);
+
+    const res = await svc.getSession('ws-a', 'run-1');
+
+    expect(res.toolCalls[0]).toMatchObject({ argsKeys: [], argsBytes: 9, resultBytes: 7 });
+  });
+
+  it('surfaces the linked approval requests without their payload', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({ id: 'run-1', status: 'DONE', goal: 'x', startedAt: new Date(), finishedAt: null, error: null });
+    prisma.approvalRequest.findMany.mockResolvedValue([
+      { id: 'appr-1', kind: 'SEND', status: 'PENDING', summary: 'MCP agent requested "jeeta.send_message"', createdAt: new Date(), decidedAt: null, expiresAt: new Date() },
+    ]);
+
+    const res = await svc.getSession('ws-a', 'run-1');
+
+    expect(res.queuedForApproval).toBe(true);
+    expect(res.approvals).toHaveLength(1);
+    expect(prisma.approvalRequest.findMany.mock.calls[0][0].where).toEqual({
+      workspaceId: 'ws-a',
+      requestedByRunId: 'run-1',
+    });
+    // `payload` is `{ tool, args }` for an MCP request — the same data the
+    // tool-call blobs above are stripped of.
+    expect(prisma.approvalRequest.findMany.mock.calls[0][0].select).not.toHaveProperty('payload');
+    expect(JSON.stringify(res)).not.toContain('"payload"');
+  });
+
+  it('reports queuedForApproval false when nothing was enqueued', async () => {
+    const { svc, prisma } = deps();
+    prisma.agentRun.findFirst.mockResolvedValue({ id: 'run-1', status: 'DONE', goal: 'x', startedAt: new Date(), finishedAt: null, error: null });
+
+    const res = await svc.getSession('ws-a', 'run-1');
+
+    expect(res.queuedForApproval).toBe(false);
+    expect(res.approvals).toEqual([]);
+  });
+});
