@@ -1,8 +1,16 @@
-import * as safeFetchModule from '../../../../common/util/safe-fetch';
+import { safeFetch } from '../../../../common/util/safe-fetch';
 import {
   GoogleMeetSpacesService,
   parseMeetSpaceConfig,
 } from './google-meet-spaces.service';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+jest.mock('../../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+const safeFetchMock = safeFetch as unknown as jest.Mock;
 
 function makeSvc(over: { configured?: boolean; advanced?: boolean } = {}) {
   const google = {
@@ -21,7 +29,10 @@ const CONN = {
 } as any;
 
 describe('GoogleMeetSpacesService', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+    safeFetchMock.mockReset();
+  });
 
   it('available() requires configured + the advanced scope', () => {
     expect(makeSvc({ configured: true, advanced: true }).s.available(CONN)).toBe(true);
@@ -36,13 +47,13 @@ describe('GoogleMeetSpacesService', () => {
 
   it('creates a space with recording/transcript config and returns its uri', async () => {
     const { s } = makeSvc();
-    jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue({
+    safeFetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ meetingUri: 'https://meet.google.com/xyz', meetingCode: 'xyz' }),
     } as any);
     const res = await s.createConfiguredSpace(CONN, { recording: true, transcript: true });
     expect(res).toEqual({ meetingUri: 'https://meet.google.com/xyz', meetingCode: 'xyz' });
-    const call = (safeFetchModule.safeFetch as jest.Mock).mock.calls[0];
+    const call = safeFetchMock.mock.calls[0];
     const body = JSON.parse(call[1].body);
     expect(body.config.artifactConfig.recordingConfig.autoRecordingGeneration).toBe('ON');
     expect(body.config.artifactConfig.transcriptionConfig.autoTranscriptionGeneration).toBe('ON');
@@ -50,7 +61,7 @@ describe('GoogleMeetSpacesService', () => {
 
   it('returns null on a non-ok Meet API response', async () => {
     const { s } = makeSvc();
-    jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue({
+    safeFetchMock.mockResolvedValue({
       ok: false, status: 403, text: async () => '',
     } as any);
     expect(await s.createConfiguredSpace(CONN, { recording: true })).toBeNull();

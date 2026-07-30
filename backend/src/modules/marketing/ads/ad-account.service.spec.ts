@@ -1,14 +1,77 @@
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { AdAccountService } from './ad-account.service';
-import * as metaClient from './meta-ads.client';
-import * as tiktokClient from './tiktok-ads.client';
-import * as linkedinClient from './linkedin-ads.client';
-import * as adsTypes from './ads.types';
-import * as secretBox from '../../../common/crypto/secret-box.helper';
+import { pullMetaInsights } from './meta-ads.client';
+import { pullTiktokInsights } from './tiktok-ads.client';
+import { pullLinkedinInsights } from './linkedin-ads.client';
+import { isMetaAdsConfigured, isTiktokAdsConfigured, isLinkedinAdsConfigured } from './ads.types';
+import { isSecretBoxConfigured, sealSecret, openSecret } from '../../../common/crypto/secret-box.helper';
 import { pullMetaBreakdowns } from './meta-ads-breakdown.client';
 
 jest.mock('./meta-ads-breakdown.client', () => ({ pullMetaBreakdowns: jest.fn().mockResolvedValue([]) }));
 const mockBreakdownPull = pullMetaBreakdowns as jest.Mock;
+
+// Module mocks (not jest.spyOn on the namespace objects): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Each fake CALLS THROUGH to the real implementation by default (installed in
+// the beforeEach below) so tests that never stub one keep the previous
+// bare-`jest.spyOn` behaviour; anything not listed here is untouched.
+jest.mock('./meta-ads.client', () => ({
+  ...jest.requireActual('./meta-ads.client'),
+  pullMetaInsights: jest.fn(),
+}));
+jest.mock('./tiktok-ads.client', () => ({
+  ...jest.requireActual('./tiktok-ads.client'),
+  pullTiktokInsights: jest.fn(),
+}));
+jest.mock('./linkedin-ads.client', () => ({
+  ...jest.requireActual('./linkedin-ads.client'),
+  pullLinkedinInsights: jest.fn(),
+}));
+jest.mock('./ads.types', () => ({
+  ...jest.requireActual('./ads.types'),
+  isMetaAdsConfigured: jest.fn(),
+  isTiktokAdsConfigured: jest.fn(),
+  isLinkedinAdsConfigured: jest.fn(),
+}));
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: jest.fn(),
+  sealSecret: jest.fn(),
+  openSecret: jest.fn(),
+}));
+
+const actualMetaClient = jest.requireActual<typeof import('./meta-ads.client')>('./meta-ads.client');
+const actualTiktokClient = jest.requireActual<typeof import('./tiktok-ads.client')>('./tiktok-ads.client');
+const actualLinkedinClient = jest.requireActual<typeof import('./linkedin-ads.client')>('./linkedin-ads.client');
+const actualAdsTypes = jest.requireActual<typeof import('./ads.types')>('./ads.types');
+const actualSecretBox = jest.requireActual<typeof import('../../../common/crypto/secret-box.helper')>(
+  '../../../common/crypto/secret-box.helper',
+);
+
+const pullMetaInsightsMock = pullMetaInsights as unknown as jest.Mock;
+const pullTiktokInsightsMock = pullTiktokInsights as unknown as jest.Mock;
+const pullLinkedinInsightsMock = pullLinkedinInsights as unknown as jest.Mock;
+const isMetaAdsConfiguredMock = isMetaAdsConfigured as unknown as jest.Mock;
+const isTiktokAdsConfiguredMock = isTiktokAdsConfigured as unknown as jest.Mock;
+const isLinkedinAdsConfiguredMock = isLinkedinAdsConfigured as unknown as jest.Mock;
+const isSecretBoxConfiguredMock = isSecretBoxConfigured as unknown as jest.Mock;
+const sealSecretMock = sealSecret as unknown as jest.Mock;
+const openSecretMock = openSecret as unknown as jest.Mock;
+
+const defaultImpls: Array<[jest.Mock, (...a: any[]) => any]> = [
+  [pullMetaInsightsMock, actualMetaClient.pullMetaInsights],
+  [pullTiktokInsightsMock, actualTiktokClient.pullTiktokInsights],
+  [pullLinkedinInsightsMock, actualLinkedinClient.pullLinkedinInsights],
+  [isMetaAdsConfiguredMock, actualAdsTypes.isMetaAdsConfigured],
+  [isTiktokAdsConfiguredMock, actualAdsTypes.isTiktokAdsConfigured],
+  [isLinkedinAdsConfiguredMock, actualAdsTypes.isLinkedinAdsConfigured],
+  [isSecretBoxConfiguredMock, actualSecretBox.isSecretBoxConfigured],
+  [sealSecretMock, actualSecretBox.sealSecret],
+  [openSecretMock, actualSecretBox.openSecret],
+];
+beforeEach(() => {
+  defaultImpls.forEach(([m, impl]) => m.mockReset().mockImplementation(impl));
+});
 
 const WS = 'ws-1';
 
@@ -42,9 +105,9 @@ describe('AdAccountService', () => {
     svc = new AdAccountService(prisma as any);
     jest.restoreAllMocks();
     // Both providers enabled by default; individual tests override to test the gate.
-    jest.spyOn(adsTypes, 'isMetaAdsConfigured').mockReturnValue(true);
-    jest.spyOn(adsTypes, 'isTiktokAdsConfigured').mockReturnValue(true);
-    jest.spyOn(adsTypes, 'isLinkedinAdsConfigured').mockReturnValue(true);
+    isMetaAdsConfiguredMock.mockReturnValue(true);
+    isTiktokAdsConfiguredMock.mockReturnValue(true);
+    isLinkedinAdsConfiguredMock.mockReturnValue(true);
     // Safe defaults so awaited writes (and markError's `.catch`) resolve.
     prisma.adAccount.update.mockResolvedValue({});
     prisma.adAccount.upsert.mockResolvedValue({});
@@ -96,8 +159,8 @@ describe('AdAccountService', () => {
     });
 
     it('rejects connecting a provider whose app is not configured on the platform', async () => {
-      jest.spyOn(adsTypes, 'isMetaAdsConfigured').mockReturnValue(false);
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
+      isMetaAdsConfiguredMock.mockReturnValue(false);
+      isSecretBoxConfiguredMock.mockReturnValue(true);
       await expect(
         svc.connect(WS, { provider: 'META', externalAdId: 'act_1', accessToken: 't' } as any),
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -105,15 +168,15 @@ describe('AdAccountService', () => {
     });
 
     it('rejects when secret storage is not configured', async () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(false);
+      isSecretBoxConfiguredMock.mockReturnValue(false);
       await expect(
         svc.connect(WS, { provider: 'META', externalAdId: 'act_1', accessToken: 't' } as any),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('seals the token and upserts with an inline workspaceId (never echoes the token)', async () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
-      const sealSpy = jest.spyOn(secretBox, 'sealSecret').mockReturnValue('v1:sealed');
+      isSecretBoxConfiguredMock.mockReturnValue(true);
+      const sealSpy = sealSecretMock.mockReturnValue('v1:sealed');
       prisma.adAccount.upsert.mockResolvedValue({ id: 'a1', provider: 'META' });
 
       await svc.connect(WS, {
@@ -139,8 +202,8 @@ describe('AdAccountService', () => {
     });
 
     it('seals + upserts a LINKEDIN ad account', async () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
-      jest.spyOn(secretBox, 'sealSecret').mockReturnValue('v1:sealed');
+      isSecretBoxConfiguredMock.mockReturnValue(true);
+      sealSecretMock.mockReturnValue('v1:sealed');
       prisma.adAccount.upsert.mockResolvedValue({ id: 'a1', provider: 'LINKEDIN' });
       await svc.connect(WS, {
         provider: 'LINKEDIN',
@@ -236,9 +299,9 @@ describe('AdAccountService', () => {
     };
 
     it('short-circuits (markError, no decrypt/HTTP) when the provider is not configured', async () => {
-      jest.spyOn(adsTypes, 'isMetaAdsConfigured').mockReturnValue(false);
-      const openSpy = jest.spyOn(secretBox, 'openSecret');
-      const metaSpy = jest.spyOn(metaClient, 'pullMetaInsights');
+      isMetaAdsConfiguredMock.mockReturnValue(false);
+      const openSpy = openSecretMock;
+      const metaSpy = pullMetaInsightsMock;
       const written = await svc.pullAccount(account, '2026-06-01', '2026-06-03');
       expect(written).toBe(0);
       expect(openSpy).not.toHaveBeenCalled();
@@ -248,8 +311,8 @@ describe('AdAccountService', () => {
     });
 
     it('records lastError (not throwing) when a metric DB write fails, stamping lastPulledAt', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockResolvedValue([
         { date: '2026-06-01', campaignId: 'c1', spend: 1, impressions: 1, clicks: 1, leads: 0 },
       ]);
       prisma.adMetric.upsert.mockRejectedValue(new Error('deadlock detected'));
@@ -262,10 +325,10 @@ describe('AdAccountService', () => {
     });
 
     it('marks lastError and writes nothing when the token cannot be decrypted', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockImplementation(() => {
+      openSecretMock.mockImplementation(() => {
         throw new Error('bad key');
       });
-      const metaSpy = jest.spyOn(metaClient, 'pullMetaInsights');
+      const metaSpy = pullMetaInsightsMock;
       const written = await svc.pullAccount(account, '2026-06-01', '2026-06-03');
       expect(written).toBe(0);
       expect(metaSpy).not.toHaveBeenCalled();
@@ -276,8 +339,8 @@ describe('AdAccountService', () => {
     });
 
     it('records lastError (not throwing) when the provider client fails', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockRejectedValue(new Error('Meta ads 400: bad token'));
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockRejectedValue(new Error('Meta ads 400: bad token'));
       const written = await svc.pullAccount(account, '2026-06-01', '2026-06-03');
       expect(written).toBe(0);
       const upd = prisma.adAccount.update.mock.calls[0][0] as any;
@@ -286,10 +349,10 @@ describe('AdAccountService', () => {
     });
 
     it('marks TOKEN_EXPIRED + reauth_required on a Meta auth error', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      openSecretMock.mockReturnValue('plain');
       const err: any = new Error('Meta ads 401: invalid OAuth token');
       err.isAuthError = true; // set by meta-ads.client from the helper's classification
-      jest.spyOn(metaClient, 'pullMetaInsights').mockRejectedValue(err);
+      pullMetaInsightsMock.mockRejectedValue(err);
       const written = await svc.pullAccount(account, '2026-06-01', '2026-06-03');
       expect(written).toBe(0);
       const upd = prisma.adAccount.update.mock.calls[0][0] as any;
@@ -299,8 +362,8 @@ describe('AdAccountService', () => {
     });
 
     it('does NOT mark TOKEN_EXPIRED for a non-auth provider error', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockRejectedValue(new Error('Meta ads 500: server error'));
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockRejectedValue(new Error('Meta ads 500: server error'));
       await svc.pullAccount(account, '2026-06-01', '2026-06-03');
       const upd = prisma.adAccount.update.mock.calls[0][0] as any;
       expect(upd.data.status).toBeUndefined();
@@ -308,8 +371,8 @@ describe('AdAccountService', () => {
     });
 
     it('a successful pull resets status to ACTIVE (recovery from reauth)', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockResolvedValue([
         { date: '2026-06-01', campaignId: 'c1', spend: 1, impressions: 1, clicks: 1, leads: 0 },
       ]);
       await svc.pullAccount(account, '2026-06-01', '2026-06-03');
@@ -319,8 +382,8 @@ describe('AdAccountService', () => {
     });
 
     it('idempotently upserts each row with an inline workspaceId, then clears lastError', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockResolvedValue([
         { date: '2026-06-01', campaignId: 'c1', spend: 10, impressions: 100, clicks: 5, leads: 1, raw: { x: 1 } },
         { date: '2026-06-02', campaignId: '', spend: 2, impressions: 9, clicks: 0, leads: 0 },
       ]);
@@ -345,8 +408,8 @@ describe('AdAccountService', () => {
     });
 
     it('writes provider conversionValue ALWAYS and backfills revenue only while it is 0 (CRM wins)', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockResolvedValue([
         { date: '2026-06-01', campaignId: 'c1', spend: 10, impressions: 100, clicks: 5, leads: 1, conversionValue: 25.5 },
       ]);
 
@@ -372,8 +435,8 @@ describe('AdAccountService', () => {
     });
 
     it('skips the revenue backfill when the provider reports no purchase value', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockResolvedValue([
         { date: '2026-06-01', campaignId: 'c1', spend: 10, impressions: 100, clicks: 5, leads: 1, conversionValue: 0 },
       ]);
       await svc.pullAccount(account, '2026-06-01', '2026-06-03');
@@ -383,8 +446,8 @@ describe('AdAccountService', () => {
     });
 
     it('leaves conversionValue untouched for a provider row that does not carry it (no CRM clobber)', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullTiktokInsightsMock.mockResolvedValue([
         { date: '2026-06-01', campaignId: 'c9', spend: 8, impressions: 500, clicks: 25, leads: 4 },
       ]);
       await svc.pullAccount({ ...account, provider: 'TIKTOK', externalAdId: 'adv_9' }, '2026-06-01', '2026-06-03');
@@ -394,16 +457,16 @@ describe('AdAccountService', () => {
     });
 
     it('dispatches to the TikTok client for a TikTok account', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      const ttSpy = jest.spyOn(tiktokClient, 'pullTiktokInsights').mockResolvedValue([]);
+      openSecretMock.mockReturnValue('plain');
+      const ttSpy = pullTiktokInsightsMock.mockResolvedValue([]);
       prisma.adAccount.update.mockResolvedValue({});
       await svc.pullAccount({ ...account, provider: 'TIKTOK', externalAdId: 'adv_9' }, '2026-06-01', '2026-06-03');
       expect(ttSpy).toHaveBeenCalledWith('plain', 'adv_9', '2026-06-01', '2026-06-03');
     });
 
     it('dispatches to the LinkedIn client for a LinkedIn account', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      const liSpy = jest.spyOn(linkedinClient, 'pullLinkedinInsights').mockResolvedValue([]);
+      openSecretMock.mockReturnValue('plain');
+      const liSpy = pullLinkedinInsightsMock.mockResolvedValue([]);
       prisma.adAccount.update.mockResolvedValue({});
       await svc.pullAccount(
         { ...account, provider: 'LINKEDIN', externalAdId: '512345' },
@@ -414,10 +477,10 @@ describe('AdAccountService', () => {
     });
 
     it('marks TOKEN_EXPIRED on a LinkedIn auth error', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
+      openSecretMock.mockReturnValue('plain');
       const err: any = new Error('LinkedIn ads 401: invalid token');
       err.isAuthError = true;
-      jest.spyOn(linkedinClient, 'pullLinkedinInsights').mockRejectedValue(err);
+      pullLinkedinInsightsMock.mockRejectedValue(err);
       const written = await svc.pullAccount(
         { ...account, provider: 'LINKEDIN', externalAdId: '512345' },
         '2026-06-01',
@@ -430,8 +493,8 @@ describe('AdAccountService', () => {
     });
 
     it('skips rows with an unparseable date', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(metaClient, 'pullMetaInsights').mockResolvedValue([
+      openSecretMock.mockReturnValue('plain');
+      pullMetaInsightsMock.mockResolvedValue([
         { date: 'not-a-date', campaignId: '', spend: 1, impressions: 1, clicks: 1, leads: 0 },
       ]);
       prisma.adAccount.update.mockResolvedValue({});
@@ -442,8 +505,8 @@ describe('AdAccountService', () => {
     });
 
     it('sets status=TOKEN_EXPIRED (not just lastError) when TikTok throws an auth-signal error', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockRejectedValue(
+      openSecretMock.mockReturnValue('plain');
+      pullTiktokInsightsMock.mockRejectedValue(
         new Error('access_token is invalid or expired (code: 40105)'),
       );
       const tiktokAccount = { ...account, provider: 'TIKTOK', externalAdId: 'adv_9' };
@@ -456,8 +519,8 @@ describe('AdAccountService', () => {
     });
 
     it('does NOT set TOKEN_EXPIRED for a non-auth TikTok error (keeps regular lastError)', async () => {
-      jest.spyOn(secretBox, 'openSecret').mockReturnValue('plain');
-      jest.spyOn(tiktokClient, 'pullTiktokInsights').mockRejectedValue(
+      openSecretMock.mockReturnValue('plain');
+      pullTiktokInsightsMock.mockRejectedValue(
         new Error('Rate limit exceeded'),
       );
       const tiktokAccount = { ...account, provider: 'TIKTOK', externalAdId: 'adv_9' };
@@ -479,7 +542,7 @@ describe('AdAccountService', () => {
 
   describe('status', () => {
     it('reports provider + secret-box configuration flags', () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
+      isSecretBoxConfiguredMock.mockReturnValue(true);
       const s = svc.status();
       expect(s).toHaveProperty('META');
       expect(s).toHaveProperty('TIKTOK');
@@ -487,7 +550,7 @@ describe('AdAccountService', () => {
     });
 
     it('reports LINKEDIN configuration in status', () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
+      isSecretBoxConfiguredMock.mockReturnValue(true);
       expect(svc.status()).toHaveProperty('LINKEDIN');
     });
   });

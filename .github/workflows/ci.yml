@@ -6,7 +6,25 @@ on:
   pull_request:
 
 jobs:
-  backend:
+  # The backend gate used to be ONE serial job of ~68 min, almost all of it the
+  # unit suite under ts-jest. Two changes fixed that:
+  #
+  #  1. jest now transpiles with @swc/jest instead of ts-jest. ts-jest was
+  #     already running with `diagnostics: false` (transpile-only), so NO type
+  #     checking was lost — `tsc --noEmit` in backend-checks is, and always was,
+  #     the only type gate. Measured locally: full unit suite 55 min -> 83 s.
+  #  2. the job was split in three, so wall-clock is the slowest leg instead of
+  #     the sum of all of them.
+  #
+  # Sharding the unit suite was tried and deliberately dropped: at ~83 s the
+  # per-shard `npm ci` + `prisma generate` setup costs more than the split saves.
+  # If the suite ever grows back past ~10 min, add
+  # `strategy: matrix: shard: [1,2,3,4]` + `npm test -- --shard=${{ matrix.shard }}/4`.
+  #
+  #   backend-checks  — migration parity, tsc (the type gate), build
+  #   backend-unit    — the unit suite
+  #   backend-e2e     — boots the real app, must stay in-band
+  backend-checks:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,12 +47,44 @@ jobs:
             --to-schema-datamodel prisma/schema.prisma \
             --shadow-database-url postgresql://postgres:ci@localhost:5432/shadow \
             --exit-code
+      # The ONLY type gate: jest transpiles with @swc/jest (no type checking),
+      # exactly as ts-jest did before with `diagnostics: false`.
       - run: npx tsc --noEmit
-      - run: npm test
-      # End-to-end suite boots the real app with a mocked Prisma seam, so it
-      # needs no database — runs in-band right after the unit suite.
-      - run: npm run test:e2e
       - run: npm run build
+
+  backend-unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm test
+
+  backend-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      # Boots the real app with a mocked Prisma seam, so it needs no database.
+      # Stays --runInBand: the suites share process-level app state.
+      - run: npm run test:e2e
 
   # Opt-in real-database lane: provisions Postgres + Redis service containers and
   # runs the lead-lifecycle flow (ingest → assign → convert → commission) plus the

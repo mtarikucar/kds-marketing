@@ -1,7 +1,16 @@
 import { OutlookCalendarService } from './outlook-calendar.service';
 import { mockPrismaClient, MockPrismaClient } from '../../../common/test/prisma-mock.service';
-import * as safeFetchModule from '../../../common/util/safe-fetch';
+import { safeFetch } from '../../../common/util/safe-fetch';
 import { openSecret } from '../../../common/crypto/secret-box.helper';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Only safeFetch is faked — the rest of the module stays real.
+jest.mock('../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+const safeFetchMock = safeFetch as unknown as jest.Mock;
 
 /**
  * Env-gated Outlook/O365 Calendar OAuth (Microsoft MOCKED, no live creds).
@@ -28,7 +37,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe('Outlook Calendar integration (mocked Microsoft)', () => {
   let prisma: MockPrismaClient;
   let svc: OutlookCalendarService;
-  let safeFetchSpy: jest.SpyInstance;
+  const safeFetchSpy = safeFetchMock;
 
   beforeAll(() => { process.env.MARKETING_SECRET_KEY = MASTER_KEY; });
   afterAll(() => { delete process.env.MARKETING_SECRET_KEY; });
@@ -39,10 +48,10 @@ describe('Outlook Calendar integration (mocked Microsoft)', () => {
     process.env.MS_OAUTH_REDIRECT_URI = 'https://app.example.com';
     prisma = mockPrismaClient();
     svc = new OutlookCalendarService(prisma as never);
-    safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
+    safeFetchSpy.mockReset();
   });
   afterEach(() => {
-    safeFetchSpy.mockRestore();
+    safeFetchSpy.mockReset();
     delete process.env.MS_OAUTH_CLIENT_ID;
     delete process.env.MS_OAUTH_CLIENT_SECRET;
     delete process.env.MS_OAUTH_REDIRECT_URI;

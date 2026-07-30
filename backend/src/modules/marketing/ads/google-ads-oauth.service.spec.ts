@@ -1,10 +1,52 @@
 import { BadRequestException } from '@nestjs/common';
 import { GoogleAdsOAuthService } from './google-ads-oauth.service';
-import * as stateUtil from '../social-planner/oauth/social-oauth-state.util';
-import * as secretBox from '../../../common/crypto/secret-box.helper';
-import * as config from './google-ads-oauth.config';
-import * as safeFetchModule from '../../../common/util/safe-fetch';
-import * as util from './google-ads.util';
+import { signState, verifyState } from '../social-planner/oauth/social-oauth-state.util';
+import { isSecretBoxConfigured, sealSecret, openSecret } from '../../../common/crypto/secret-box.helper';
+import { isGoogleAdsConfigured, buildGoogleAdsAuthorizeUrl } from './google-ads-oauth.config';
+import { safeFetch } from '../../../common/util/safe-fetch';
+import { googleAdsFetch } from './google-ads.util';
+
+// Module mocks (not jest.spyOn on the namespace objects): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Everything not listed here stays the real implementation.
+jest.mock('../social-planner/oauth/social-oauth-state.util', () => ({
+  ...jest.requireActual('../social-planner/oauth/social-oauth-state.util'),
+  signState: jest.fn(),
+  verifyState: jest.fn(),
+}));
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: jest.fn(),
+  sealSecret: jest.fn(),
+  openSecret: jest.fn(),
+}));
+jest.mock('./google-ads-oauth.config', () => ({
+  ...jest.requireActual('./google-ads-oauth.config'),
+  isGoogleAdsConfigured: jest.fn(),
+  buildGoogleAdsAuthorizeUrl: jest.fn(),
+}));
+jest.mock('../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+jest.mock('./google-ads.util', () => ({
+  ...jest.requireActual('./google-ads.util'),
+  googleAdsFetch: jest.fn(),
+}));
+
+const signStateMock = signState as unknown as jest.Mock;
+const verifyStateMock = verifyState as unknown as jest.Mock;
+const isSecretBoxConfiguredMock = isSecretBoxConfigured as unknown as jest.Mock;
+const sealSecretMock = sealSecret as unknown as jest.Mock;
+const openSecretMock = openSecret as unknown as jest.Mock;
+const isGoogleAdsConfiguredMock = isGoogleAdsConfigured as unknown as jest.Mock;
+const buildGoogleAdsAuthorizeUrlMock = buildGoogleAdsAuthorizeUrl as unknown as jest.Mock;
+const safeFetchMock = safeFetch as unknown as jest.Mock;
+const googleAdsFetchMock = googleAdsFetch as unknown as jest.Mock;
+const allMocks = [
+  signStateMock, verifyStateMock, isSecretBoxConfiguredMock, sealSecretMock, openSecretMock,
+  isGoogleAdsConfiguredMock, buildGoogleAdsAuthorizeUrlMock, safeFetchMock, googleAdsFetchMock,
+];
 
 const WS = 'ws-g-1';
 const NETWORK = 'google-ads';
@@ -25,42 +67,43 @@ describe('GoogleAdsOAuthService', () => {
     adAccounts = { connect: jest.fn() };
     svc = new GoogleAdsOAuthService(prisma as any, adAccounts as any);
     jest.restoreAllMocks();
-    jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(true);
-    jest.spyOn(config, 'isGoogleAdsConfigured').mockReturnValue(true);
-    jest.spyOn(secretBox, 'sealSecret').mockImplementation((s: string) => `sealed:${s}`);
-    jest.spyOn(secretBox, 'openSecret').mockImplementation((s: string) => s.replace(/^sealed:/, ''));
+    allMocks.forEach((m) => m.mockReset());
+    isSecretBoxConfiguredMock.mockReturnValue(true);
+    isGoogleAdsConfiguredMock.mockReturnValue(true);
+    sealSecretMock.mockImplementation((s: string) => `sealed:${s}`);
+    openSecretMock.mockImplementation((s: string) => s.replace(/^sealed:/, ''));
   });
 
   describe('start', () => {
     it('throws when secret box is not configured', async () => {
-      jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(false);
+      isSecretBoxConfiguredMock.mockReturnValue(false);
       await expect(svc.start(WS)).rejects.toBeInstanceOf(BadRequestException);
     });
     it('throws when the Google ads app is not configured', async () => {
-      jest.spyOn(config, 'isGoogleAdsConfigured').mockReturnValue(false);
+      isGoogleAdsConfiguredMock.mockReturnValue(false);
       await expect(svc.start(WS)).rejects.toBeInstanceOf(BadRequestException);
     });
     it('returns an authorize URL bound to the workspace', async () => {
-      jest.spyOn(stateUtil, 'signState').mockReturnValue('STATE');
-      jest.spyOn(config, 'buildGoogleAdsAuthorizeUrl').mockReturnValue('https://accounts.google.com/o/oauth2/v2/auth?state=STATE');
+      signStateMock.mockReturnValue('STATE');
+      buildGoogleAdsAuthorizeUrlMock.mockReturnValue('https://accounts.google.com/o/oauth2/v2/auth?state=STATE');
       const out = await svc.start(WS);
       expect(out.authorizeUrl).toContain('state=STATE');
-      expect((stateUtil.signState as jest.Mock).mock.calls[0][0]).toEqual({ workspaceId: WS, network: NETWORK });
+      expect(signStateMock.mock.calls[0][0]).toEqual({ workspaceId: WS, network: NETWORK });
     });
   });
 
   describe('handleCallback', () => {
     it('rejects an invalid/expired state', async () => {
-      jest.spyOn(stateUtil, 'verifyState').mockReturnValue(null as any);
+      verifyStateMock.mockReturnValue(null as any);
       await expect(svc.handleCallback('code', 'bad')).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('exchanges the code, lists customers, and seals a pending row', async () => {
-      jest.spyOn(stateUtil, 'verifyState').mockReturnValue({ workspaceId: WS, network: NETWORK } as any);
-      jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue({
+      verifyStateMock.mockReturnValue({ workspaceId: WS, network: NETWORK } as any);
+      safeFetchMock.mockResolvedValue({
         json: async () => ({ access_token: 'AT', refresh_token: 'RT' }),
       } as any);
-      const gf = jest.spyOn(util, 'googleAdsFetch');
+      const gf = googleAdsFetchMock;
       // 1st call: listAccessibleCustomers
       gf.mockResolvedValueOnce({ ok: true, status: 200, data: { resourceNames: ['customers/123-456-7890'] }, error: null } as any);
       // 2nd call: per-customer descriptive query
@@ -76,8 +119,8 @@ describe('GoogleAdsOAuthService', () => {
     });
 
     it('throws when the exchange returns no refresh token', async () => {
-      jest.spyOn(stateUtil, 'verifyState').mockReturnValue({ workspaceId: WS, network: NETWORK } as any);
-      jest.spyOn(safeFetchModule, 'safeFetch').mockResolvedValue({ json: async () => ({ access_token: 'AT' }) } as any);
+      verifyStateMock.mockReturnValue({ workspaceId: WS, network: NETWORK } as any);
+      safeFetchMock.mockResolvedValue({ json: async () => ({ access_token: 'AT' }) } as any);
       await expect(svc.handleCallback('code', 'state')).rejects.toBeInstanceOf(BadRequestException);
     });
   });

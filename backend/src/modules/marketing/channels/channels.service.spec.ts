@@ -1,6 +1,26 @@
 import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ChannelsService } from './channels.service';
-import * as secretBox from '../../../common/crypto/secret-box.helper';
+import { isSecretBoxConfigured } from '../../../common/crypto/secret-box.helper';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Only isSecretBoxConfigured is faked, and it CALLS THROUGH to the real
+// implementation by default so the suites that never stub it keep the previous
+// (unspied) behaviour.
+jest.mock('../../../common/crypto/secret-box.helper', () => ({
+  ...jest.requireActual('../../../common/crypto/secret-box.helper'),
+  isSecretBoxConfigured: jest.fn(),
+}));
+const actualSecretBox = jest.requireActual<typeof import('../../../common/crypto/secret-box.helper')>(
+  '../../../common/crypto/secret-box.helper',
+);
+const isSecretBoxConfiguredMock = isSecretBoxConfigured as unknown as jest.Mock;
+beforeEach(() => {
+  isSecretBoxConfiguredMock.mockImplementation(actualSecretBox.isSecretBoxConfigured);
+});
+afterEach(() => {
+  isSecretBoxConfiguredMock.mockReset();
+});
 
 /** Entitled to all three — matches every real plan block that grants `sms`
  *  alongside `campaigns` (no regression); the one plan block with `sms` but
@@ -29,7 +49,7 @@ describe('ChannelsService — mask()', () => {
     // A 32-byte base64 key so netgsmMoCallbackUrl can mint tokens without throwing
     process.env.MARKETING_SECRET_KEY = Buffer.alloc(32).toString('base64');
     // Make secret-box helpers safe for tests that don't set up keys
-    jest.spyOn(secretBox, 'isSecretBoxConfigured').mockReturnValue(false);
+    isSecretBoxConfiguredMock.mockReturnValue(false);
   });
 
   afterEach(() => {

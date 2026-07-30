@@ -1,12 +1,37 @@
 {
-  "moduleFileExtensions": ["js", "json", "ts"],
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
+    "^.+\\.(t|j)s$": [
+      "@swc/jest",
+      {
+        "jsc": {
+          "target": "es2021",
+          "parser": {
+            "syntax": "typescript",
+            "decorators": true
+          },
+          "transform": {
+            "legacyDecorator": true,
+            "decoratorMetadata": true
+          }
+        },
+        "module": {
+          "type": "commonjs"
+        },
+        "sourceMaps": true
+      }
+    ]
   },
-  "transformIgnorePatterns": ["node_modules/(?!(uuid)/)"],
+  "transformIgnorePatterns": [
+    "node_modules/(?!(uuid)/)"
+  ],
   "maxWorkers": 1,
   "workerIdleMemoryLimit": "512MB",
   "testTimeout": 30000

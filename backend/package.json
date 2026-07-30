@@ -59,6 +59,8 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
+    "@swc/core": "^1.15.47",
+    "@swc/jest": "^0.2.39",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
@@ -88,9 +90,23 @@
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": [
-        "ts-jest",
+        "@swc/jest",
         {
-          "diagnostics": false
+          "jsc": {
+            "target": "es2021",
+            "parser": {
+              "syntax": "typescript",
+              "decorators": true
+            },
+            "transform": {
+              "legacyDecorator": true,
+              "decoratorMetadata": true
+            }
+          },
+          "module": {
+            "type": "commonjs"
+          },
+          "sourceMaps": true
         }
       ]
     },

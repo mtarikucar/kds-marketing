@@ -4,7 +4,16 @@ import {
   mockPrismaClient,
   MockPrismaClient,
 } from '../../../common/test/prisma-mock.service';
-import * as safeFetchModule from '../../../common/util/safe-fetch';
+import { safeFetch } from '../../../common/util/safe-fetch';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Only safeFetch is faked — the rest of the module stays real.
+jest.mock('../../../common/util/safe-fetch', () => ({
+  ...jest.requireActual('../../../common/util/safe-fetch'),
+  safeFetch: jest.fn(),
+}));
+const safeFetchMock = safeFetch as unknown as jest.Mock;
 
 /**
  * Outlook/O365 (Microsoft Graph) 2-way sync — Graph MOCKED (no live creds).
@@ -67,7 +76,7 @@ describe('OutlookCalendarSyncService (mocked Graph)', () => {
   let outlook: OutlookCalendarService;
   let sync: OutlookCalendarSyncService;
   let bus: { on: jest.Mock; off: jest.Mock };
-  let safeFetchSpy: jest.SpyInstance;
+  let safeFetchSpy: jest.Mock;
 
   beforeAll(() => {
     process.env.MARKETING_SECRET_KEY = MASTER_KEY;
@@ -88,11 +97,12 @@ describe('OutlookCalendarSyncService (mocked Graph)', () => {
       outlook,
       { resolve: jest.fn().mockResolvedValue(null) } as never,
     );
-    safeFetchSpy = jest.spyOn(safeFetchModule, 'safeFetch');
+    safeFetchSpy = safeFetchMock;
+    safeFetchSpy.mockReset();
     jest.spyOn(outlook, 'getFreshAccessToken').mockResolvedValue('access-token-live');
   });
   afterEach(() => {
-    safeFetchSpy.mockRestore();
+    safeFetchSpy.mockReset();
     jest.restoreAllMocks();
     delete process.env.MS_OAUTH_CLIENT_ID;
     delete process.env.MS_OAUTH_CLIENT_SECRET;

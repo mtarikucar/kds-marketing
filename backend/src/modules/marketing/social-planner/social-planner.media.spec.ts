@@ -1,9 +1,18 @@
 import { BadRequestException } from '@nestjs/common';
-import * as networkAdapters from './network-adapters';
+import { publishToNetwork } from './network-adapters';
 import {
   SocialPlannerService,
   SOCIAL_MEDIA_CLEANUP_KIND,
 } from './social-planner.service';
+
+// Module mock (not jest.spyOn on the namespace object): ESM->CJS emitters that
+// define exports as non-configurable getters make namespace spying impossible.
+// Only publishToNetwork is faked — the rest of the adapter module stays real.
+jest.mock('./network-adapters', () => ({
+  ...jest.requireActual('./network-adapters'),
+  publishToNetwork: jest.fn(),
+}));
+const publishToNetworkMock = publishToNetwork as unknown as jest.Mock;
 
 describe('SocialPlannerService — media + per-target format', () => {
   let prisma: any;
@@ -22,6 +31,7 @@ describe('SocialPlannerService — media + per-target format', () => {
     r2 = { isConfigured: jest.fn().mockReturnValue(true), upload: jest.fn(), deleteKeys: jest.fn().mockResolvedValue(undefined) };
     const credits = { reserve: jest.fn().mockResolvedValue(undefined), refund: jest.fn().mockResolvedValue(undefined) };
     svc = new SocialPlannerService(prisma, scheduledJobs, runner, r2, credits as any);
+    publishToNetworkMock.mockReset();
   });
 
   it('uploadMedia rejects when R2 is not configured', async () => {
@@ -39,7 +49,7 @@ describe('SocialPlannerService — media + per-target format', () => {
   });
 
   it('publishDuePost passes the per-target format + mime to the adapter', async () => {
-    const spy = jest.spyOn(networkAdapters, 'publishToNetwork').mockResolvedValue({ ok: true, externalPostId: 'X1' });
+    const spy = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'X1' });
     prisma.socialPost.findFirst.mockResolvedValue({
       id: 'p1',
       status: 'SCHEDULED',
@@ -61,11 +71,11 @@ describe('SocialPlannerService — media + per-target format', () => {
     expect(scheduledJobs.schedule).toHaveBeenCalledWith(
       expect.objectContaining({ kind: SOCIAL_MEDIA_CLEANUP_KIND, dedupKey: 'social-media-cleanup-p1' }),
     );
-    spy.mockRestore();
+    spy.mockReset();
   });
 
   it('publishDuePost does NOT schedule cleanup when media has no R2 keys (pasted URLs)', async () => {
-    const spy = jest.spyOn(networkAdapters, 'publishToNetwork').mockResolvedValue({ ok: true, externalPostId: 'X1' });
+    const spy = publishToNetworkMock.mockResolvedValue({ ok: true, externalPostId: 'X1' });
     prisma.socialPost.findFirst.mockResolvedValue({
       id: 'p2',
       status: 'SCHEDULED',
@@ -77,7 +87,7 @@ describe('SocialPlannerService — media + per-target format', () => {
 
     await svc.publishDuePost('p2', 'ws');
     expect(scheduledJobs.schedule).not.toHaveBeenCalled();
-    spy.mockRestore();
+    spy.mockReset();
   });
 
   it('cleanupPostMedia deletes R2 keys and marks mediaDeletedAt', async () => {
