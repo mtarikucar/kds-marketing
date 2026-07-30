@@ -327,6 +327,7 @@
     "telephony": "Phone (Netsantral)",
     "voiceAiSettings": "Voice AI",
     "apiKeys": "API Keys",
+    "mcpConsole": "Claude connector",
     "webhooks": "Webhooks",
     "inboundWebhooks": "Inbound webhooks",
     "compliance": "Compliance",
@@ -386,6 +387,7 @@
     "copy": "Copy",
     "copyFailed": "Could not copy",
     "done": "Done",
+    "retry": "Retry",
     "saving": "Saving…"
   },
   "validation": {
@@ -2896,6 +2898,102 @@
       "iysType": "Message type",
       "ticari": "Commercial (TİCARİ)",
       "bilgilendirme": "Informational (BİLGİLENDİRME)"
+    }
+  },
+  "mcpConsole": {
+    "title": "Claude connector",
+    "subtitle": "Connect Claude to this workspace over MCP, control whether it needs your approval to act, and audit everything it did.",
+    "loadFailed": "Could not load the connector console.",
+    "copyEndpoint": "Copy connector address",
+    "copyFailed": "Could not copy — select the address and copy it manually.",
+    "noEndpointTitle": "No public address",
+    "noEndpoint": "This deployment has no public base URL configured, so there is no address to hand to a client yet.",
+    "overview": {
+      "title": "Connector endpoint",
+      "desc": "Paste this address into Claude (Settings → Connectors) to link it to this workspace."
+    },
+    "stat": {
+      "live": "Live connections",
+      "pending": "Waiting for your approval",
+      "pendingHint": "Open the approval queue",
+      "mode": "Write mode"
+    },
+    "mode": {
+      "APPROVAL": "Needs approval",
+      "AUTONOMOUS": "Autonomous"
+    },
+    "writeMode": {
+      "title": "Write mode",
+      "desc": "Decides whether Claude may act on its own or has to ask you first. Reads are always allowed; this only governs writes — sending messages, publishing content and moving ad budget.",
+      "switchLabel": "Let Claude act without approval",
+      "stateApproval": "APPROVAL — every write Claude attempts is queued for a human to approve.",
+      "stateAutonomous": "AUTONOMOUS — no human gate. Claude sends, publishes and spends on its own.",
+      "lockedTitle": "Read-only for you",
+      "locked": "Only a workspace owner with the \"manage settings\" permission can change the write mode. You can see the current setting but not change it.",
+      "confirmTitle": "Remove the human approval gate?",
+      "confirmDesc": "In AUTONOMOUS mode Claude no longer asks anyone: it can message your customers, publish posts and move real ad budget the moment a connected client tells it to. Nothing will be queued for approval. You can switch back at any time.",
+      "confirmCta": "Yes, go autonomous",
+      "autonomousToast": "Autonomous — Claude can now send, publish and spend without asking.",
+      "approvalToast": "Approval required — every write Claude attempts now waits for a human.",
+      "error": "Could not change the write mode."
+    },
+    "connections": {
+      "title": "Connections",
+      "desc": "Everything that can currently reach this workspace over MCP — Claude apps that you authorised, plus the API keys used by Claude Code.",
+      "loadFailed": "Could not load the connections.",
+      "oauthTitle": "Authorised Claude apps",
+      "oauthEmpty": "No Claude app is connected",
+      "oauthEmptyHint": "Add the connector address above in Claude and approve the consent screen — the app will appear here.",
+      "unknownClient": "Unnamed client",
+      "connectedAt": "Connected",
+      "lastActivity": "Last activity",
+      "liveTokens": "Live tokens",
+      "revoke": "Revoke",
+      "revokeTitle": "Disconnect this client?",
+      "revokeDesc": "Every token this app holds for this workspace is revoked immediately, and it loses access until someone authorises it again. Its audit trail is kept.",
+      "revokeSuccess": "Disconnected — {{count}} token(s) revoked.",
+      "revokeFailed": "Could not disconnect that client.",
+      "keysTitle": "API keys with MCP access",
+      "keysHint": "Listed here for visibility only — create and revoke keys on the API keys page.",
+      "manageKeys": "Manage API keys",
+      "keysEmpty": "No active API keys.",
+      "keyLastUsed": "Last used {{when}}",
+      "keyNeverUsed": "Never used"
+    },
+    "sessions": {
+      "title": "Sessions & audit",
+      "desc": "Every call a connected client made, newest first. Open a row to see its tool calls and any approval it raised.",
+      "empty": "No MCP activity yet",
+      "emptyHint": "Once a connected client calls a tool, the call shows up here with its full audit trail.",
+      "noGoal": "—",
+      "running": "Running",
+      "col": {
+        "status": "Status",
+        "goal": "Tool / goal",
+        "toolCalls": "Tool calls",
+        "approvals": "Approvals",
+        "started": "Started",
+        "took": "Took"
+      }
+    },
+    "detail": {
+      "title": "Session detail",
+      "privacy": "Tool arguments and results are never stored in this view — only their size and the names of the top-level arguments are shown.",
+      "loadFailed": "Could not load this session.",
+      "finished": "Finished",
+      "errorTitle": "Session error",
+      "gatedTitle": "Hit the human gate",
+      "gated": "This call was stopped and queued for approval, so it produced no tool-call row of its own.",
+      "toolCalls": "Tool calls",
+      "noToolCalls": "No tool call was recorded for this session.",
+      "ok": "OK",
+      "failed": "Failed",
+      "sizes": "Arguments {{args}} · result {{result}}",
+      "argKeys": "Argument names (values not stored):",
+      "approvals": "Approval requests",
+      "noApprovals": "This session asked for no approval.",
+      "decided": "decided",
+      "expires": "expires"
     }
   },
   "mcpConsent": {

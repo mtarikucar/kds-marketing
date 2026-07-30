@@ -44,6 +44,7 @@ import {
   Settings,
   Link2,
   Compass,
+  Bot,
 } from 'lucide-react';
 
 /**
@@ -288,6 +289,10 @@ export const NAV_HUBS: NavHub[] = [
       { path: '/settings/custom-domains', labelKey: 'nav.customDomains', label: 'Custom Domains', icon: Globe, managerOnly: true, feature: 'customDomains' },
       // Developer & security
       { path: '/settings/api-keys', labelKey: 'nav.apiKeys', label: 'API Keys', icon: KeyRound, managerOnly: true },
+      // MCP connector console (Faz 4). `managerOnly` mirrors McpConsoleController's
+      // class-level @MarketingRoles('MANAGER') — not ownerOnly: a MANAGER reads the
+      // whole page, and only the write-mode switch inside self-disables for them.
+      { path: '/settings/mcp-console', labelKey: 'nav.mcpConsole', label: 'Claude connector', icon: Bot, managerOnly: true },
       { path: '/settings/webhooks', labelKey: 'nav.webhooks', label: 'Webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/inbound-webhooks', labelKey: 'nav.inboundWebhooks', label: 'Inbound webhooks', icon: Webhook, managerOnly: true },
       { path: '/settings/compliance', labelKey: 'nav.compliance', label: 'Compliance', icon: Scale, managerOnly: true },

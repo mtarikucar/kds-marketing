@@ -83,6 +83,9 @@ const ApiKeysPage              = lazy(() => import('./pages/marketing/settings/a
 const ModulesPage              = lazy(() => import('./pages/marketing/settings/modules'));
 const WebhooksPage             = lazy(() => import('./pages/marketing/settings/webhooks'));
 const InboundWebhooksPage      = lazy(() => import('./pages/marketing/settings/inboundWebhooks'));
+// MCP connector console (Faz 4) — the operator mirror of the MCP surface:
+// endpoint address, write mode, connected clients, session audit.
+const McpConsolePage           = lazy(() => import('./pages/marketing/settings/mcpConsole'));
 // Settings→Connections is the Integrations TAB of the Account Center now.
 const TwoFactorPage            = lazy(() => import('./pages/marketing/settings/twoFactor'));
 // MCP OAuth consent (Faz 3) — the SPA route `GET /api/mcp-oauth/authorize`
@@ -272,6 +275,9 @@ export default function App() {
             <Route path="/settings/modules"     element={<S><ModulesPage /></S>} />
             <Route path="/settings/webhooks"    element={<S><WebhooksPage /></S>} />
             <Route path="/settings/inbound-webhooks" element={<S><InboundWebhooksPage /></S>} />
+            {/* MCP connector console (Faz 4) — MANAGER-readable; the write-mode
+                switch inside self-disables from overview.canToggle (OWNER-only). */}
+            <Route path="/settings/mcp-console" element={<S><McpConsolePage /></S>} />
             {/* Backend calendar-OAuth callbacks 302 to /settings/connections?gcal=… —
                 params must survive into the Account Center's Integrations tab. */}
             <Route path="/settings/connections" element={<RedirectMergingParams to="/accounts" set={{ tab: 'integrations' }} />} />

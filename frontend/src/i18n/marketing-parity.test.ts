@@ -25,3 +25,19 @@ describe('marketing i18n — AI Studio / Brand Kit', () => {
     expect(want.filter((k) => !have.has(k))).toEqual([]);
   });
 });
+
+describe('marketing i18n — MCP connector console (Faz 4)', () => {
+  it('en defines the mcpConsole namespace and its nav entry', () => {
+    expect((en as Json).mcpConsole).toBeTruthy();
+    expect(flat(en as Json)).toEqual(expect.arrayContaining(['nav.mcpConsole']));
+  });
+
+  it('tr mirrors every mcpConsole key in en (and vice versa)', () => {
+    const enKeys = flat(en as Json).filter((k) => /^(mcpConsole\.|nav\.mcpConsole$)/.test(k));
+    const trKeys = flat(tr as Json).filter((k) => /^(mcpConsole\.|nav\.mcpConsole$)/.test(k));
+    const trSet = new Set(trKeys);
+    const enSet = new Set(enKeys);
+    expect(enKeys.filter((k) => !trSet.has(k))).toEqual([]);
+    expect(trKeys.filter((k) => !enSet.has(k))).toEqual([]);
+  });
+});

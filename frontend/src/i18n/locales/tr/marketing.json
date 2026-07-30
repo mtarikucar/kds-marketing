@@ -574,6 +574,7 @@
     "telephony": "Telefon (Netsantral)",
     "voiceAiSettings": "Sesli AI",
     "apiKeys": "API Anahtarları",
+    "mcpConsole": "Claude bağlantısı",
     "webhooks": "Webhook'lar",
     "inboundWebhooks": "Gelen Webhook'lar",
     "compliance": "Uyumluluk",
@@ -3750,6 +3751,102 @@
       "iysType": "Mesaj türü",
       "ticari": "Ticari (TİCARİ)",
       "bilgilendirme": "Bilgilendirme (BİLGİLENDİRME)"
+    }
+  },
+  "mcpConsole": {
+    "title": "Claude bağlantısı",
+    "subtitle": "Claude'u MCP üzerinden bu çalışma alanına bağlayın, işlem yapmak için onayınıza ihtiyaç duyup duymayacağını belirleyin ve yaptığı her şeyi denetleyin.",
+    "loadFailed": "Bağlantı konsolu yüklenemedi.",
+    "copyEndpoint": "Bağlantı adresini kopyala",
+    "copyFailed": "Kopyalanamadı — adresi seçip elle kopyalayın.",
+    "noEndpointTitle": "Genel adres yok",
+    "noEndpoint": "Bu kurulumda genel bir temel adres (public base URL) tanımlı değil; bu yüzden istemciye verilecek bir adres henüz yok.",
+    "overview": {
+      "title": "Bağlantı adresi",
+      "desc": "Bu adresi Claude'a (Ayarlar → Bağlayıcılar) yapıştırarak bu çalışma alanına bağlayın."
+    },
+    "stat": {
+      "live": "Etkin bağlantı",
+      "pending": "Onayınızı bekleyen",
+      "pendingHint": "Onay kuyruğunu aç",
+      "mode": "Yazma modu"
+    },
+    "mode": {
+      "APPROVAL": "Onay gerekiyor",
+      "AUTONOMOUS": "Otonom"
+    },
+    "writeMode": {
+      "title": "Yazma modu",
+      "desc": "Claude'un kendi başına işlem yapıp yapamayacağını belirler. Okuma her zaman serbesttir; bu ayar yalnızca yazma işlemlerini kapsar — mesaj göndermek, içerik yayınlamak ve reklam bütçesi kaydırmak.",
+      "switchLabel": "Claude onay almadan işlem yapabilsin",
+      "stateApproval": "ONAY — Claude'un denediği her yazma işlemi bir kişinin onayı için kuyruğa alınır.",
+      "stateAutonomous": "OTONOM — insan onayı yok. Claude kendi başına mesaj gönderir, içerik yayınlar ve bütçe harcar.",
+      "lockedTitle": "Sizde salt okunur",
+      "locked": "Yazma modunu yalnızca \"ayarları yönet\" yetkisine sahip bir çalışma alanı sahibi değiştirebilir. Mevcut ayarı görebilir ama değiştiremezsiniz.",
+      "confirmTitle": "İnsan onayı adımı kaldırılsın mı?",
+      "confirmDesc": "OTONOM modda Claude kimseye sormaz: bağlı bir istemci söylediği anda müşterilerinize mesaj gönderebilir, gönderi yayınlayabilir ve gerçek reklam bütçesini kaydırabilir. Hiçbir şey onaya düşmez. Dilediğiniz zaman geri alabilirsiniz.",
+      "confirmCta": "Evet, otonom moda geç",
+      "autonomousToast": "Otonom — Claude artık sormadan mesaj gönderebilir, yayın yapabilir ve harcama yapabilir.",
+      "approvalToast": "Onay zorunlu — Claude'un denediği her yazma işlemi artık bir kişiyi bekler.",
+      "error": "Yazma modu değiştirilemedi."
+    },
+    "connections": {
+      "title": "Bağlantılar",
+      "desc": "Şu anda bu çalışma alanına MCP üzerinden erişebilen her şey — yetkilendirdiğiniz Claude uygulamaları ve Claude Code'un kullandığı API anahtarları.",
+      "loadFailed": "Bağlantılar yüklenemedi.",
+      "oauthTitle": "Yetkilendirilmiş Claude uygulamaları",
+      "oauthEmpty": "Bağlı bir Claude uygulaması yok",
+      "oauthEmptyHint": "Yukarıdaki bağlantı adresini Claude'a ekleyip izin ekranını onaylayın — uygulama burada görünecek.",
+      "unknownClient": "İsimsiz istemci",
+      "connectedAt": "Bağlandı",
+      "lastActivity": "Son etkinlik",
+      "liveTokens": "Etkin token",
+      "revoke": "İptal et",
+      "revokeTitle": "Bu istemcinin bağlantısı kesilsin mi?",
+      "revokeDesc": "Bu uygulamanın bu çalışma alanı için tuttuğu tüm token'lar anında iptal edilir ve biri yeniden yetkilendirene kadar erişimi kalmaz. Denetim kaydı korunur.",
+      "revokeSuccess": "Bağlantı kesildi — {{count}} token iptal edildi.",
+      "revokeFailed": "Bu istemcinin bağlantısı kesilemedi.",
+      "keysTitle": "MCP erişimi olan API anahtarları",
+      "keysHint": "Burada yalnızca görünürlük için listelenir — anahtar oluşturma ve iptali API anahtarları sayfasında yapılır.",
+      "manageKeys": "API anahtarlarını yönet",
+      "keysEmpty": "Etkin API anahtarı yok.",
+      "keyLastUsed": "Son kullanım {{when}}",
+      "keyNeverUsed": "Hiç kullanılmadı"
+    },
+    "sessions": {
+      "title": "Oturumlar ve denetim",
+      "desc": "Bağlı bir istemcinin yaptığı her çağrı, en yeniden başlayarak. Araç çağrılarını ve varsa oluşturduğu onay talebini görmek için satıra tıklayın.",
+      "empty": "Henüz MCP etkinliği yok",
+      "emptyHint": "Bağlı bir istemci bir araç çağırdığında, çağrı tüm denetim kaydıyla burada görünür.",
+      "noGoal": "—",
+      "running": "Sürüyor",
+      "col": {
+        "status": "Durum",
+        "goal": "Araç / hedef",
+        "toolCalls": "Araç çağrısı",
+        "approvals": "Onay",
+        "started": "Başlangıç",
+        "took": "Süre"
+      }
+    },
+    "detail": {
+      "title": "Oturum detayı",
+      "privacy": "Araç girdileri ve sonuçları bu görünümde hiç tutulmaz — yalnızca boyutları ve üst düzey girdi adları gösterilir.",
+      "loadFailed": "Bu oturum yüklenemedi.",
+      "finished": "Bitiş",
+      "errorTitle": "Oturum hatası",
+      "gatedTitle": "İnsan onayına takıldı",
+      "gated": "Bu çağrı durdurulup onaya alındı; bu yüzden kendine ait bir araç çağrısı kaydı oluşmadı.",
+      "toolCalls": "Araç çağrıları",
+      "noToolCalls": "Bu oturum için araç çağrısı kaydedilmedi.",
+      "ok": "Başarılı",
+      "failed": "Başarısız",
+      "sizes": "Girdiler {{args}} · sonuç {{result}}",
+      "argKeys": "Girdi adları (değerler tutulmaz):",
+      "approvals": "Onay talepleri",
+      "noApprovals": "Bu oturum hiç onay istemedi.",
+      "decided": "karara bağlandı",
+      "expires": "sona eriyor"
     }
   },
   "mcpConsent": {

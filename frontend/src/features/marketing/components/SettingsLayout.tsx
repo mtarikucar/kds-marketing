@@ -36,6 +36,7 @@ const SETTINGS_GROUPS: { key: string; label: string; paths: string[] }[] = [
     label: 'Developer & security',
     paths: [
       '/settings/api-keys',
+      '/settings/mcp-console',
       '/settings/webhooks',
       '/settings/inbound-webhooks',
       '/settings/compliance',
