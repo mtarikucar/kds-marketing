@@ -259,6 +259,8 @@ import { McpServerFactoryService } from './mcp/mcp-server.factory';
 import { McpTokenVerifierService } from './mcp/mcp-token-verifier.service';
 import { McpOAuthTokenService } from '../mcp-oauth/mcp-oauth-token.service';
 import { McpController } from './mcp/mcp.controller';
+import { McpConsoleController } from './mcp/mcp-console.controller';
+import { McpConsoleService } from './mcp/mcp-console.service';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
@@ -713,6 +715,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     CommunityChannelController,
     // MCP connector (Faz 1-2) — POST /api/mcp streamable-HTTP endpoint.
     McpController,
+    // MCP connector (Faz 4) — the connector management console: connected
+    // clients, the session/audit view, and the write-mode read model the UI
+    // renders the (OWNER-only) toggle from.
+    McpConsoleController,
   ],
   providers: [
     // Services
@@ -946,6 +952,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // carries a named @Cron and a second provider instance would register it
     // twice and break boot, so this stays in the one MarketingModule.
     McpApprovalExecutorService,
+    // MCP connector (Faz 4) — the console's read model. Read-only over the
+    // Faz 1-3 tables (tokens, CIMD cache, AgentRun/ToolCallLog, approvals)
+    // plus one revoke; it holds no policy of its own.
+    McpConsoleService,
     AdWriteCapabilityService,
     VideoPersonaService,
     UnifiedCalendarService,
