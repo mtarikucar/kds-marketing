@@ -51,6 +51,10 @@ export function registerSchedulingTools(registry: McpToolRegistry, deps: Schedul
     description:
       'List available slot start times (ISO 8601) for a booking calendar within a date range, honouring its hours, buffers, min-notice/max-advance policy, existing bookings and blackouts. Read-only.',
     domain: 'scheduling',
+    // Deferred in D4 (spec §3): a slot grid is only actionable once a booking
+    // can be CREATED, which is D5's work. `jeeta.list_bookings` stays the
+    // domain's advertised read until then.
+    defer: true,
     scopes: ['tasks.read'],
     risk: 'READ',
     requiresApproval: false,

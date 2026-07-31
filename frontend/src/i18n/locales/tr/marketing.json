@@ -3863,6 +3863,7 @@
     "scopes": {
       "leads_read": "Lead'lerini okuma",
       "leads_write": "Lead oluşturma ve güncelleme",
+      "leads_manage": "Lead atama, dönüştürme ve silme",
       "contacts_read": "Kişilerini okuma",
       "contacts_write": "Kişi oluşturma ve güncelleme",
       "campaigns_read": "Kampanyalarını okuma",
@@ -3871,6 +3872,7 @@
       "reports_read": "Rapor ve analizlerini okuma",
       "tasks_read": "Görevlerini okuma",
       "tasks_write": "Görev oluşturma ve güncelleme",
+      "automations_manage": "Pazarlama otomasyonlarını oluşturma, devreye alma ve çalıştırma",
       "settings_manage": "Çalışma alanı ayarlarını yönetme"
     }
   }

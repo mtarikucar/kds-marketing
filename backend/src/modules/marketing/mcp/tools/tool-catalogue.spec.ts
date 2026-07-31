@@ -20,6 +20,9 @@ import { registerVoiceTools } from './voice.tools';
 import { registerCampaignWriteTools } from './campaigns-write.tools';
 import { registerConversationWriteTools } from './conversations-write.tools';
 import { registerDiscoveryTools } from './discovery.tools';
+import { registerStrategyTools } from './strategy.tools';
+import { registerWorkflowTools } from './workflows.tools';
+import { registerResearchTools } from './research.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -31,7 +34,10 @@ import { registerDiscoveryTools } from './discovery.tools';
  */
 function registerFullCatalogue(registry: McpToolRegistry): void {
   registerAnalyticsTools(registry, { analytics: { funnel: jest.fn() } as any });
-  registerBrandTools(registry, { brand: { search: jest.fn() } as any });
+  registerBrandTools(registry, {
+    brand: { search: jest.fn() } as any,
+    profiles: { get: jest.fn(), upsert: jest.fn() } as any,
+  });
   registerLeadsTools(registry, { leads: { findAll: jest.fn() } as any });
   registerLeadsWriteTools(registry, {
     leads: { create: jest.fn(), update: jest.fn(), updateStatus: jest.fn(), assign: jest.fn() } as any,
@@ -123,6 +129,28 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
+  // Faz 5 D4 — brain & automation.
+  registerStrategyTools(registry, {
+    strategy: {
+      getStrategy: jest.fn(),
+      listActions: jest.fn(),
+      approveAction: jest.fn(),
+      dismissAction: jest.fn(),
+      setAutonomy: jest.fn(),
+    } as any,
+    feedback: { refresh: jest.fn() } as any,
+  });
+  registerWorkflowTools(registry, {
+    workflows: { list: jest.fn(), get: jest.fn(), create: jest.fn(), setStatus: jest.fn() } as any,
+    leadBulk: { bulkEnroll: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerResearchTools(registry, {
+    research: { list: jest.fn(), create: jest.fn(), usage: jest.fn() } as any,
+    runner: { enqueueNow: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
   registerDiscoveryTools(registry, { registry });
 }
 
@@ -138,6 +166,7 @@ const ALL_SCOPES = [
   'campaigns.write',
   'campaigns.send',
   'reports.read',
+  'automations.manage',
   'settings.manage',
 ];
 
@@ -268,8 +297,66 @@ describe('MCP tool catalogue', () => {
         'jeeta.assign_conversation',
         'jeeta.close_conversation',
         'jeeta.add_conversation_note',
+        // Faz 5 D4 — brain & automation.
+        'jeeta.get_strategy',
+        'jeeta.list_strategy_actions',
+        'jeeta.approve_strategy_action',
+        'jeeta.dismiss_strategy_action',
+        'jeeta.synthesize_strategy',
+        'jeeta.set_strategy_autonomy',
+        'jeeta.list_workflows',
+        'jeeta.get_workflow',
+        'jeeta.create_workflow',
+        'jeeta.set_workflow_enabled',
+        'jeeta.trigger_workflow',
+        'jeeta.list_research_profiles',
+        'jeeta.create_research_profile',
+        'jeeta.run_research',
+        'jeeta.get_brand_profile',
+        'jeeta.update_brand_profile',
       ].sort(),
     );
-    expect(names).toHaveLength(57);
+    expect(names).toHaveLength(73);
+  });
+
+  /**
+   * D4 added 16 tools to a catalogue that was already 44/45 of the way to the
+   * advertised ceiling. The way that was paid for is the mechanism spec §3
+   * mandates — "a wave that pushes past it must defer something, not raise the
+   * number" — so five previously-advertised tools were deferred rather than the
+   * ceiling being nudged. Pinned by NAME so a future wave that wants the room
+   * back has to make the same trade explicitly instead of quietly re-listing
+   * them and pushing the surface over the edge.
+   */
+  it('paid for D4 by deferring five previously-advertised tools, not by raising the ceiling', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    const advertised = new Set(registry.listAdvertised(ALL_SCOPES).map((t) => t.name));
+    for (const name of [
+      'jeeta.get_booking_availability',
+      'jeeta.list_calls',
+      'jeeta.update_social_post',
+      'jeeta.list_social_campaigns',
+      'jeeta.assign_conversation',
+    ]) {
+      expect(registry.get(name)!.defer).toBe(true);
+      expect(advertised.has(name)).toBe(false);
+    }
+  });
+
+  /**
+   * Progressive disclosure only works if a model that has NOT loaded the whole
+   * catalogue can still reach every domain. Each domain must therefore keep at
+   * least one advertised tool — including D4's three new ones, whose primary
+   * reads are the only advertised members of their group.
+   */
+  it('keeps at least one advertised tool in every domain in use', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    const advertisedDomains = new Set(registry.listAdvertised(ALL_SCOPES).map((t) => t.domain));
+    for (const tool of registry.list(ALL_SCOPES)) {
+      expect(advertisedDomains).toContain(tool.domain);
+    }
+    for (const d of ['strategy', 'workflows', 'research']) expect(advertisedDomains).toContain(d);
   });
 });

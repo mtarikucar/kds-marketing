@@ -50,6 +50,14 @@ export const MCP_ALL_SCOPES = [
   'reports.read',
   'tasks.read',
   'tasks.write',
+  // Faz 5 D4 — the workflow (automation) lane. `MarketingWorkflowsController`
+  // gates every workflow mutation `@RequirePermission('automations.manage')`,
+  // so the MCP tools demand the same permission rather than borrowing
+  // `settings.manage`. Held by OWNER/MANAGER only (see
+  // `LEGACY_ROLE_PERMISSIONS`), and deliberately OUTSIDE the legacy `write`
+  // expansion below: arming an automation that emails/SMSes every future
+  // matching lead was never within a coarse `write` key's authority.
+  'automations.manage',
   'settings.manage',
 ] as const;
 

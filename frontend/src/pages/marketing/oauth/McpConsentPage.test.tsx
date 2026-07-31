@@ -118,6 +118,28 @@ describe('McpConsentPage', () => {
     expect(screen.queryByText('leads.read')).not.toBeInTheDocument();
   });
 
+  /**
+   * A scope the user cannot read is one they cannot meaningfully refuse. The
+   * page falls back to the raw id rather than hiding an unknown scope, which is
+   * the right failure mode but is still a bad consent screen — so every scope
+   * the backend can actually ask for needs a label here. `automations.manage`
+   * (MCP Faz 5 D4: create, arm and run automations) and `leads.manage` (D1)
+   * were both requestable before they were readable.
+   */
+  it.each([
+    ['automations.manage', 'Create, arm and run your marketing automations'],
+    ['leads.manage', 'Assign, convert and delete your leads'],
+  ])('renders %s in human language', async (scope, label) => {
+    (svc.getMcpConsentData as any).mockResolvedValue({
+      ...CONSENT,
+      requestedScopes: [scope],
+      workspaces: CONSENT.workspaces.map((w) => ({ ...w, grantableScopes: [scope] })),
+    });
+    renderPage();
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.queryByText(scope)).not.toBeInTheDocument();
+  });
+
   it('offers only the workspaces the API returned, defaulting to the active one', async () => {
     renderPage();
     await screen.findByText('Acme Clinic');

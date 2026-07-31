@@ -52,7 +52,19 @@ export type ApprovalKind =
   // DB column is a free-text String.
   | 'MEDIA_SPEND'
   // Faz 5 D2 — a permanent removal (design spec §4's new DESTRUCTIVE class).
-  | 'DESTRUCTIVE';
+  | 'DESTRUCTIVE'
+  // Faz 5 D4 — an autonomous AGENT RUN whose cost is AI credits PLUS live
+  // third-party scraping money (firecrawl/apify): prospect research
+  // (`research.qualify`) and strategy synthesis (`strategy.synthesize`).
+  // Deliberately not `MEDIA_SPEND`, which means "fal.ai generated an asset" —
+  // same additive-kind reasoning as that comment above.
+  | 'AI_SPEND'
+  // Faz 5 D4 — approving ONE item of the Strategy Engine's ActionPlan, which
+  // EXECUTES it immediately (see mcp/tools/strategy.tools.ts). Not
+  // `CHANNEL_LAUNCH`: the same verb can start a paid research run, stage
+  // content, provision a paused ad shell OR post live to a community, so the
+  // card must name the strategy action rather than guess a channel.
+  | 'STRATEGY_ACTION';
 
 export interface EnqueueInput {
   kind: ApprovalKind;

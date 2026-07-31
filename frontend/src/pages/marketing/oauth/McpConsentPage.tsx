@@ -61,6 +61,7 @@ function scopeKey(scope: string): string {
 const SCOPE_FALLBACKS: Record<string, string> = {
   'leads.read': 'Read your leads',
   'leads.write': 'Create and update your leads',
+  'leads.manage': 'Assign, convert and delete your leads',
   'contacts.read': 'Read your contacts',
   'contacts.write': 'Create and update your contacts',
   'campaigns.read': 'Read your campaigns',
@@ -69,6 +70,7 @@ const SCOPE_FALLBACKS: Record<string, string> = {
   'reports.read': 'Read your reports and analytics',
   'tasks.read': 'Read your tasks',
   'tasks.write': 'Create and update your tasks',
+  'automations.manage': 'Create, arm and run your marketing automations',
   'settings.manage': 'Manage your workspace settings',
 };
 
