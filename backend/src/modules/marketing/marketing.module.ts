@@ -268,6 +268,7 @@ import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
 import { registerTasksTools } from './mcp/tools/tasks.tools';
 import { registerContactsTools } from './mcp/tools/contacts.tools';
+import { registerPipelineTools } from './mcp/tools/pipeline.tools';
 import { registerInboxTools } from './mcp/tools/inbox.tools';
 import { registerSocialTools } from './mcp/tools/social.tools';
 import { registerAdsTools } from './mcp/tools/ads.tools';
@@ -1178,6 +1179,8 @@ export class MarketingModule {
     activities: MarketingActivitiesService,
     tasks: MarketingTasksService,
     companies: CompaniesService,
+    opportunities: OpportunitiesService,
+    pipelines: PipelinesService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
@@ -1185,6 +1188,7 @@ export class MarketingModule {
     registerLeadsWriteTools(registry, { leads, activities, principals });
     registerTasksTools(registry, { tasks, principals });
     registerContactsTools(registry, { leads, companies, principals });
+    registerPipelineTools(registry, { opportunities, pipelines, principals });
     registerInboxTools(registry, { conversations });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });

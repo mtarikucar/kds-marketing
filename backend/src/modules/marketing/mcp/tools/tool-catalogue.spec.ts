@@ -5,6 +5,7 @@ import { registerLeadsTools } from './leads.tools';
 import { registerLeadsWriteTools } from './leads-write.tools';
 import { registerTasksTools } from './tasks.tools';
 import { registerContactsTools } from './contacts.tools';
+import { registerPipelineTools } from './pipeline.tools';
 import { registerInboxTools } from './inbox.tools';
 import { registerCampaignsTools } from './campaigns.tools';
 import { registerSocialTools } from './social.tools';
@@ -36,6 +37,11 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerContactsTools(registry, {
     leads: { findAll: jest.fn(), create: jest.fn() } as any,
     companies: { list: jest.fn(), listContacts: jest.fn(), create: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+  });
+  registerPipelineTools(registry, {
+    opportunities: { list: jest.fn(), create: jest.fn(), move: jest.fn(), get: jest.fn() } as any,
+    pipelines: { list: jest.fn(), get: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
   });
   registerInboxTools(registry, {
@@ -133,8 +139,12 @@ describe('MCP tool catalogue', () => {
         'jeeta.create_contact',
         'jeeta.search_companies',
         'jeeta.create_company',
+        'jeeta.list_pipelines',
+        'jeeta.list_opportunities',
+        'jeeta.create_opportunity',
+        'jeeta.move_opportunity_stage',
       ].sort(),
     );
-    expect(names).toHaveLength(30);
+    expect(names).toHaveLength(34);
   });
 });
