@@ -4,6 +4,7 @@ import { registerBrandTools } from './brand.tools';
 import { registerLeadsTools } from './leads.tools';
 import { registerLeadsWriteTools } from './leads-write.tools';
 import { registerTasksTools } from './tasks.tools';
+import { registerContactsTools } from './contacts.tools';
 import { registerInboxTools } from './inbox.tools';
 import { registerCampaignsTools } from './campaigns.tools';
 import { registerSocialTools } from './social.tools';
@@ -30,6 +31,11 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   });
   registerTasksTools(registry, {
     tasks: { findAll: jest.fn(), create: jest.fn(), complete: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+  });
+  registerContactsTools(registry, {
+    leads: { findAll: jest.fn(), create: jest.fn() } as any,
+    companies: { list: jest.fn(), listContacts: jest.fn(), create: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
   });
   registerInboxTools(registry, {
@@ -123,8 +129,12 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_tasks',
         'jeeta.create_task',
         'jeeta.complete_task',
+        'jeeta.search_contacts',
+        'jeeta.create_contact',
+        'jeeta.search_companies',
+        'jeeta.create_company',
       ].sort(),
     );
-    expect(names).toHaveLength(26);
+    expect(names).toHaveLength(30);
   });
 });
