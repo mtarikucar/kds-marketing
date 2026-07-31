@@ -1222,7 +1222,7 @@ export class MarketingModule {
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
-    registerSchedulingTools(registry, { bookings });
+    registerSchedulingTools(registry, { bookings, entitlements });
     registerWorkspaceTools(registry, { entitlements });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
