@@ -56,6 +56,14 @@ export function registerAdsTools(registry: McpToolRegistry, deps: AdsToolDeps): 
     description:
       'Get the workspace\'s Growth Autopilot budget (total amount, target ROAS/CAC, channel allocations) by id, or list every budget when no id is given. Read-only.',
     domain: 'ads',
+    // Deferred in D5 (spec §3) — the other half of the two advertised slots
+    // that paid for the commerce/courses/reviews domains. A Growth Autopilot
+    // budget is opt-in provisioning: for every workspace without one this tool
+    // returns an empty list, and it was occupying context in every session to
+    // do it. `jeeta.get_ad_performance` stays the ads domain's advertised read,
+    // and `jeeta.reallocate_budget` (which needs an id from here) is itself a
+    // gated, deliberate action a model reaches for by name.
+    defer: true,
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,

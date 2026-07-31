@@ -78,6 +78,12 @@ export function registerConversationWriteTools(
     description:
       'Close a conversation as handled, or reopen a closed one. Internal triage — the customer sees nothing and can still reply, which reopens the thread on its own.',
     domain: 'inbox',
+    // Deferred in D5 (spec §3) — one half of the two advertised slots that
+    // paid for the commerce/courses/reviews domains. This completes the
+    // deferral of the inbox-triage trio (assign + note went in D4): the inbox
+    // keeps list/read/send advertised, which are the verbs an agent needs per
+    // turn, and closing a thread is reached by name through jeeta.find_tools.
+    defer: true,
     scopes: ['contacts.write'],
     risk: 'WRITE',
     requiresApproval: false,
