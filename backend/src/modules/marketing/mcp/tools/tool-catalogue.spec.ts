@@ -3,6 +3,7 @@ import { registerAnalyticsTools } from './analytics.tools';
 import { registerBrandTools } from './brand.tools';
 import { registerLeadsTools } from './leads.tools';
 import { registerLeadsWriteTools } from './leads-write.tools';
+import { registerTasksTools } from './tasks.tools';
 import { registerInboxTools } from './inbox.tools';
 import { registerCampaignsTools } from './campaigns.tools';
 import { registerSocialTools } from './social.tools';
@@ -25,6 +26,10 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerLeadsWriteTools(registry, {
     leads: { create: jest.fn(), update: jest.fn(), updateStatus: jest.fn(), assign: jest.fn() } as any,
     activities: { create: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+  });
+  registerTasksTools(registry, {
+    tasks: { findAll: jest.fn(), create: jest.fn(), complete: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
   });
   registerInboxTools(registry, {
@@ -67,7 +72,6 @@ const ALL_SCOPES = [
   'campaigns.write',
   'campaigns.send',
   'reports.read',
-  'tasks.read',
   'settings.manage',
 ];
 
@@ -116,8 +120,11 @@ describe('MCP tool catalogue', () => {
         'jeeta.set_lead_status',
         'jeeta.add_lead_note',
         'jeeta.assign_lead',
+        'jeeta.list_tasks',
+        'jeeta.create_task',
+        'jeeta.complete_task',
       ].sort(),
     );
-    expect(names).toHaveLength(23);
+    expect(names).toHaveLength(26);
   });
 });

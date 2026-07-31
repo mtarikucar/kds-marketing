@@ -266,6 +266,7 @@ import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
 import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
+import { registerTasksTools } from './mcp/tools/tasks.tools';
 import { registerInboxTools } from './mcp/tools/inbox.tools';
 import { registerSocialTools } from './mcp/tools/social.tools';
 import { registerAdsTools } from './mcp/tools/ads.tools';
@@ -1174,11 +1175,13 @@ export class MarketingModule {
     // Faz 5 D1 — the CRM write lane.
     principals: McpPrincipalService,
     activities: MarketingActivitiesService,
+    tasks: MarketingTasksService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
     registerLeadsTools(registry, { leads });
     registerLeadsWriteTools(registry, { leads, activities, principals });
+    registerTasksTools(registry, { tasks, principals });
     registerInboxTools(registry, { conversations });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });
