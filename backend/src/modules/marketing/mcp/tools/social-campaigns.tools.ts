@@ -62,6 +62,7 @@ export function registerSocialCampaignTools(
     name: 'jeeta.list_social_campaigns',
     description:
       'List the AI social campaigns in this workspace (name, goal, automation/planning mode, cadence, status and pipeline stats), newest first. Read-only.',
+    domain: 'social',
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -76,6 +77,9 @@ export function registerSocialCampaignTools(
     name: 'jeeta.create_social_campaign',
     description:
       'Create an AI social campaign as a DRAFT: a brief, a publishing cadence, the accounts to post to and which media kinds to generate. Nothing is planned, generated or published until someone activates the campaign in the panel — activation is deliberately not available to agents.',
+    domain: 'social',
+    // Deferred (spec §3): A large one-off setup call, not a per-turn action.
+    defer: true,
     scopes: ['campaigns.write'],
     risk: 'WRITE',
     requiresApproval: false,

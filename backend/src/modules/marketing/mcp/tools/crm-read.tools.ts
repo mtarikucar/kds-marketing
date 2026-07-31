@@ -31,6 +31,9 @@ export function registerCrmReadTools(registry: McpToolRegistry, deps: CrmReadToo
     name: 'jeeta.list_segments',
     description:
       'List the saved contact segments (audience definitions) in this workspace, newest first. Read-only.',
+    domain: 'contacts',
+    // Deferred (spec §3): A niche lookup used when building an audience, not on a normal turn.
+    defer: true,
     scopes: ['contacts.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -42,6 +45,9 @@ export function registerCrmReadTools(registry: McpToolRegistry, deps: CrmReadToo
     name: 'jeeta.list_tags',
     description:
       'List the lead/contact tags defined in this workspace, each with how many records carry it. Read-only.',
+    domain: 'contacts',
+    // Deferred (spec §3): A niche lookup used when building an audience, not on a normal turn.
+    defer: true,
     scopes: ['contacts.read'],
     risk: 'READ',
     requiresApproval: false,

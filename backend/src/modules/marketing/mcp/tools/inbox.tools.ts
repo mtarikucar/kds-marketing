@@ -17,6 +17,7 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
   registry.register({
     name: 'jeeta.list_conversations',
     description: 'List conversations in the shared inbox, newest first. Read-only.',
+    domain: 'inbox',
     scopes: ['contacts.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -45,6 +46,7 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
     name: 'jeeta.read_conversation',
     description:
       'Read the full message history of one conversation by id, along with the linked lead and channel summary. Read-only.',
+    domain: 'inbox',
     scopes: ['contacts.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -58,6 +60,7 @@ export function registerInboxTools(registry: McpToolRegistry, deps: InboxToolDep
     name: 'jeeta.send_message',
     description:
       'Send a reply in a conversation. This reaches a real customer, so in APPROVAL mode it is queued for a human instead of sending immediately.',
+    domain: 'inbox',
     scopes: ['contacts.write'],
     risk: 'WRITE',
     requiresApproval: true,

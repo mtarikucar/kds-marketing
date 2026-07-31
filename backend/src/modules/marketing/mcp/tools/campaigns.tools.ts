@@ -18,6 +18,7 @@ export function registerCampaignsTools(registry: McpToolRegistry, deps: Campaign
   registry.register({
     name: 'jeeta.list_campaigns',
     description: 'List campaigns in this workspace with their channel, status and last-known stats. Read-only.',
+    domain: 'campaigns',
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -29,6 +30,7 @@ export function registerCampaignsTools(registry: McpToolRegistry, deps: Campaign
     name: 'jeeta.get_campaign_performance',
     description:
       'Get the performance snapshot (recipients, sent/failed/skipped, opened/clicked/unsubscribed, and SMS delivery rollup) for one campaign by id. Read-only.',
+    domain: 'campaigns',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -42,6 +44,7 @@ export function registerCampaignsTools(registry: McpToolRegistry, deps: Campaign
     name: 'jeeta.set_campaign_status',
     description:
       'Change a campaign\'s status: SENDING launches a draft/scheduled campaign (or resumes a paused one), PAUSED pauses a sending campaign, CANCELLED cancels a scheduled (not-yet-sending) campaign. This reaches real customers, so in APPROVAL mode it is queued for a human instead of executing immediately.',
+    domain: 'campaigns',
     scopes: ['campaigns.send'],
     risk: 'WRITE',
     requiresApproval: true,

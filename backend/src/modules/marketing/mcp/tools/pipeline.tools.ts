@@ -50,6 +50,9 @@ export function registerPipelineTools(registry: McpToolRegistry, deps: PipelineT
     name: 'jeeta.list_pipelines',
     description:
       'List this workspace\'s deal pipelines with their ordered stages (id, name, probability, won/lost flags). Use it to find the stage id jeeta.move_opportunity_stage needs. Read-only.',
+    domain: 'pipeline',
+    // Deferred (spec §3): Structural lookup — jeeta.list_opportunities is the primary pipeline read.
+    defer: true,
     scopes: ['leads.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -61,6 +64,7 @@ export function registerPipelineTools(registry: McpToolRegistry, deps: PipelineT
     name: 'jeeta.list_opportunities',
     description:
       'List deals/opportunities in this workspace — filter by pipeline, stage, status, owner, related lead or name. Read-only.',
+    domain: 'pipeline',
     scopes: ['leads.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -84,6 +88,7 @@ export function registerPipelineTools(registry: McpToolRegistry, deps: PipelineT
     name: 'jeeta.create_opportunity',
     description:
       'Create a deal/opportunity. Defaults to the workspace default pipeline and its first stage when pipelineId/stageId are omitted. Optionally attach it to a lead.',
+    domain: 'pipeline',
     scopes: ['leads.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -112,6 +117,7 @@ export function registerPipelineTools(registry: McpToolRegistry, deps: PipelineT
     name: 'jeeta.move_opportunity_stage',
     description:
       "Move a deal to another stage of its own pipeline, by stage id or by stage name. Landing on a won or lost stage closes the deal and fires the matching automations. Call jeeta.list_pipelines first if you do not know the stages.",
+    domain: 'pipeline',
     scopes: ['leads.write'],
     risk: 'WRITE',
     requiresApproval: false,

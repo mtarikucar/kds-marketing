@@ -30,6 +30,7 @@ export function registerAdsTools(registry: McpToolRegistry, deps: AdsToolDeps): 
     name: 'jeeta.get_ad_performance',
     description:
       'Get aggregated ad performance (spend, impressions, clicks, leads, revenue) for this workspace over a date range, totals + by-day + by-provider. Read-only.',
+    domain: 'ads',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -54,6 +55,7 @@ export function registerAdsTools(registry: McpToolRegistry, deps: AdsToolDeps): 
     name: 'jeeta.get_budget',
     description:
       'Get the workspace\'s Growth Autopilot budget (total amount, target ROAS/CAC, channel allocations) by id, or list every budget when no id is given. Read-only.',
+    domain: 'ads',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -73,6 +75,7 @@ export function registerAdsTools(registry: McpToolRegistry, deps: AdsToolDeps): 
     name: 'jeeta.reallocate_budget',
     description:
       'Change the live daily budget of one campaign or ad set on a connected ad account. This spends real money, so in APPROVAL mode it is queued for a human instead of applying immediately.',
+    domain: 'ads',
     scopes: ['settings.manage'],
     risk: 'SPEND',
     requiresApproval: true,

@@ -34,6 +34,7 @@ export function registerLeadsTools(registry: McpToolRegistry, deps: LeadsToolDep
     name: 'jeeta.search_leads',
     description:
       'Search leads in this workspace by free text, status, source, city/region, priority, assignment or date range. Returns a paginated list. Read-only.',
+    domain: 'leads',
     scopes: ['leads.read'],
     risk: 'READ',
     requiresApproval: false,

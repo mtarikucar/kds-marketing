@@ -18,6 +18,7 @@ export function registerWorkspaceTools(registry: McpToolRegistry, deps: Workspac
     name: 'jeeta.get_workspace_info',
     description:
       'Get this workspace\'s effective plan info: package, subscription status, quotas/limits and which features are enabled. Read-only.',
+    domain: 'workspace',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,

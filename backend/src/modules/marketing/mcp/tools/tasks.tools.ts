@@ -45,6 +45,7 @@ export function registerTasksTools(registry: McpToolRegistry, deps: TasksToolDep
     name: 'jeeta.list_tasks',
     description:
       'List follow-up tasks in this workspace — filter by status, type, priority, assignee, related lead or due-date range. Read-only.',
+    domain: 'tasks',
     scopes: ['tasks.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -79,6 +80,7 @@ export function registerTasksTools(registry: McpToolRegistry, deps: TasksToolDep
     name: 'jeeta.create_task',
     description:
       'Create a follow-up task (call, visit, demo, meeting...) with a due date, optionally attached to a lead. The assignee is notified.',
+    domain: 'tasks',
     scopes: ['tasks.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -116,6 +118,7 @@ export function registerTasksTools(registry: McpToolRegistry, deps: TasksToolDep
     name: 'jeeta.complete_task',
     description:
       'Mark a follow-up task as done. Re-completing an already-completed task is a no-op and preserves the original completion time.',
+    domain: 'tasks',
     scopes: ['tasks.write'],
     risk: 'WRITE',
     requiresApproval: false,

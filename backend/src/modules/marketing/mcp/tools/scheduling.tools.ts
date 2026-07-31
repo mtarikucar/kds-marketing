@@ -24,6 +24,7 @@ export function registerSchedulingTools(registry: McpToolRegistry, deps: Schedul
     name: 'jeeta.list_bookings',
     description:
       'List bookings (real appointments, excluding external busy blocks) in this workspace, optionally filtered by calendar, status or time range. Read-only.',
+    domain: 'scheduling',
     scopes: ['tasks.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -49,6 +50,7 @@ export function registerSchedulingTools(registry: McpToolRegistry, deps: Schedul
     name: 'jeeta.get_booking_availability',
     description:
       'List available slot start times (ISO 8601) for a booking calendar within a date range, honouring its hours, buffers, min-notice/max-advance policy, existing bookings and blackouts. Read-only.',
+    domain: 'scheduling',
     scopes: ['tasks.read'],
     risk: 'READ',
     requiresApproval: false,
