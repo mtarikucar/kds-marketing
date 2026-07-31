@@ -3010,6 +3010,7 @@
     "scopes": {
       "leads_read": "Read your leads",
       "leads_write": "Create and update your leads",
+      "leads_manage": "Assign, convert and delete your leads",
       "contacts_read": "Read your contacts",
       "contacts_write": "Create and update your contacts",
       "campaigns_read": "Read your campaigns",
@@ -3018,6 +3019,7 @@
       "reports_read": "Read your reports and analytics",
       "tasks_read": "Read your tasks",
       "tasks_write": "Create and update your tasks",
+      "automations_manage": "Create, arm and run your marketing automations",
       "settings_manage": "Manage your workspace settings"
     }
   }
