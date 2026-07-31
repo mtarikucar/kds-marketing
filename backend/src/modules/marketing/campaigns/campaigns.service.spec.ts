@@ -47,6 +47,25 @@ describe('CampaignsService', () => {
       expect(w.OR).toEqual([{ whatsapp: { not: null } }, { phone: { not: null } }]);
     });
 
+    /**
+     * `id` was added to the whitelist so a ONE-RECIPIENT campaign is
+     * expressible — that is what makes the MCP `jeeta.send_email` tool a
+     * compliant send rather than a raw SMTP call. It must NARROW the audience
+     * and weaken nothing: the opt-out, deliverability and tombstone guards all
+     * still have to be on the resulting where.
+     */
+    it('id narrows to a single lead without loosening any guard', () => {
+      const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [{ field: 'id', op: 'eq', value: 'lead-9' }]);
+      expect(w.id).toBe('lead-9');
+      expect(w.workspaceId).toBe(WS);
+      expect(w.emailOptOut).toBe(false);
+      expect(w.email).toEqual({ not: null });
+      expect(w.emailBouncedAt).toBeNull();
+      expect(w.emailVerifiedStatus).toEqual({ not: 'INVALID' });
+      expect(w.deletedAt).toBeNull();
+      expect(w.mergedIntoId).toBeNull();
+    });
+
     it('maps whitelisted filters and ignores unknown fields', () => {
       const w: any = svc.buildAudienceWhere(WS, 'EMAIL', [
         { field: 'lead.status', op: 'eq', value: 'NEW' },

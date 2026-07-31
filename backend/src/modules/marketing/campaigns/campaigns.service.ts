@@ -27,6 +27,17 @@ const SCHEDULE_TOLERANCE_MS = 30_000;
 // Prisma path injection).
 const LEAD_FILTER_FIELDS = new Set([
   'status', 'city', 'region', 'businessType', 'priority', 'source', 'businessName',
+  // `id` makes a ONE-RECIPIENT campaign expressible, which is what turns
+  // "email this one lead" into a compliant operation instead of a raw SMTP
+  // call: it still goes through launch() + CampaignSenderService, so it still
+  // gets the send-time opt-out recheck, the deliverability filter, the
+  // mandatory unsubscribe footer and the tracking/stats every other campaign
+  // gets. Used by the MCP `jeeta.send_email` tool (mcp/tools/email.tools.ts);
+  // `EmailService.sendPlainEmail` was deliberately NOT wrapped because it
+  // enforces none of that. Safe to allow: the filter loop only ever ANDs onto
+  // a `where` that already pins workspaceId plus the opt-out/reachability
+  // guards, and `id` can only ever NARROW that set.
+  'id',
 ]);
 
 interface AudienceFilter {

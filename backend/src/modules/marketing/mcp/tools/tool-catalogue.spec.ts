@@ -15,6 +15,10 @@ import { registerSchedulingTools } from './scheduling.tools';
 import { registerWorkspaceTools } from './workspace.tools';
 import { registerContentTools } from './content.tools';
 import { registerSocialCampaignTools } from './social-campaigns.tools';
+import { registerEmailTools } from './email.tools';
+import { registerVoiceTools } from './voice.tools';
+import { registerCampaignWriteTools } from './campaigns-write.tools';
+import { registerConversationWriteTools } from './conversations-write.tools';
 import { registerDiscoveryTools } from './discovery.tools';
 
 /**
@@ -98,6 +102,27 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
+  registerEmailTools(registry, {
+    templates: { list: jest.fn() } as any,
+    campaigns: { create: jest.fn(), launch: jest.fn(), remove: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerVoiceTools(registry, {
+    calls: { startCall: jest.fn(), list: jest.fn() } as any,
+    leads: { findOne: jest.fn() } as any,
+    campaigns: { create: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerCampaignWriteTools(registry, {
+    campaigns: { create: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerConversationWriteTools(registry, {
+    conversations: { assign: jest.fn(), close: jest.fn(), addNote: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
   registerDiscoveryTools(registry, { registry });
 }
 
@@ -119,7 +144,7 @@ const ALL_SCOPES = [
 /**
  * Spec §3 threshold: past 60 tools, listing them all at once measurably
  * degrades accuracy. D3 brought progressive disclosure online BEFORE the
- * catalogue crossed it (48 tools at the time of writing) rather than after,
+ * catalogue crossed it (57 tools at the time of writing) rather than after,
  * because the mechanism is what makes D4/D5 landable at all.
  *
  * The cap that matters is therefore no longer the TOTAL — that is free to grow
@@ -232,10 +257,19 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_generated_media',
         'jeeta.list_social_campaigns',
         'jeeta.create_social_campaign',
-        // Faz 5 D3 — progressive disclosure.
+        // Faz 5 D3 — communications + progressive disclosure.
         'jeeta.find_tools',
+        'jeeta.list_email_templates',
+        'jeeta.send_email',
+        'jeeta.create_campaign',
+        'jeeta.create_voice_campaign',
+        'jeeta.click_to_dial',
+        'jeeta.list_calls',
+        'jeeta.assign_conversation',
+        'jeeta.close_conversation',
+        'jeeta.add_conversation_note',
       ].sort(),
     );
-    expect(names).toHaveLength(48);
+    expect(names).toHaveLength(57);
   });
 });
