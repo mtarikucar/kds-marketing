@@ -41,7 +41,15 @@ export type ToolDomain =
   | 'content'
   | 'ads'
   | 'scheduling'
-  | 'workspace';
+  | 'workspace'
+  // Faz 5 D4 — the brain & automation wave. Three new domains rather than
+  // folding them into existing ones: a model asking "what is our strategy?",
+  // "what automations are running?" or "how do we find new prospects?" is
+  // asking three different questions, and `jeeta.find_tools` matches on the
+  // domain word itself.
+  | 'strategy'
+  | 'workflows'
+  | 'research';
 
 export const TOOL_DOMAINS: readonly ToolDomain[] = [
   'analytics',
@@ -59,6 +67,9 @@ export const TOOL_DOMAINS: readonly ToolDomain[] = [
   'ads',
   'scheduling',
   'workspace',
+  'strategy',
+  'workflows',
+  'research',
 ] as const;
 
 const DOMAIN_SET: ReadonlySet<string> = new Set<string>(TOOL_DOMAINS);
@@ -126,7 +137,12 @@ export interface McpTool {
     | 'TARGET_CHANGE'
     | 'CHANNEL_LAUNCH'
     | 'MEDIA_SPEND'
-    | 'DESTRUCTIVE';
+    | 'DESTRUCTIVE'
+    // Faz 5 D4 — see `ApprovalKind` in agents/approval-request.service.ts for
+    // what each means. This union mirrors that one; a kind added there must be
+    // added here too or no tool can declare it.
+    | 'AI_SPEND'
+    | 'STRATEGY_ACTION';
   /**
    * Only meaningful when `requiresApproval` is true. `resourceType` is a
    * fixed label for what this tool acts on (e.g. `'conversation'`,
