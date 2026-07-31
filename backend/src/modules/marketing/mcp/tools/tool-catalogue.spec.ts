@@ -13,6 +13,8 @@ import { registerSocialTools } from './social.tools';
 import { registerAdsTools } from './ads.tools';
 import { registerSchedulingTools } from './scheduling.tools';
 import { registerWorkspaceTools } from './workspace.tools';
+import { registerContentTools } from './content.tools';
+import { registerSocialCampaignTools } from './social-campaigns.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -84,6 +86,17 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     bookings: { listBookings: jest.fn(), availability: jest.fn() } as any,
   });
   registerWorkspaceTools(registry, { entitlements: { getEffective: jest.fn() } as any });
+  registerContentTools(registry, {
+    calendar: { range: jest.fn() } as any,
+    media: { requestGeneration: jest.fn(), listAssets: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerSocialCampaignTools(registry, {
+    socialCampaigns: { list: jest.fn(), create: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
 }
 
 const ALL_SCOPES = [
@@ -165,8 +178,14 @@ describe('MCP tool catalogue', () => {
         'jeeta.update_social_post',
         'jeeta.schedule_social_post',
         'jeeta.delete_social_post',
+        'jeeta.get_content_calendar',
+        'jeeta.generate_image',
+        'jeeta.generate_video',
+        'jeeta.list_generated_media',
+        'jeeta.list_social_campaigns',
+        'jeeta.create_social_campaign',
       ].sort(),
     );
-    expect(names).toHaveLength(41);
+    expect(names).toHaveLength(47);
   });
 });

@@ -276,6 +276,8 @@ import { registerAdsTools } from './mcp/tools/ads.tools';
 import { registerSchedulingTools } from './mcp/tools/scheduling.tools';
 import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
+import { registerContentTools } from './mcp/tools/content.tools';
+import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1184,6 +1186,10 @@ export class MarketingModule {
     pipelines: PipelinesService,
     segments: SegmentsService,
     tags: TagsService,
+    // Faz 5 D2 — content & social automation.
+    calendar: UnifiedCalendarService,
+    mediaGen: MediaGenService,
+    socialCampaigns: SocialCampaignsService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
@@ -1199,5 +1205,7 @@ export class MarketingModule {
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
     registerSchedulingTools(registry, { bookings });
     registerWorkspaceTools(registry, { entitlements });
+    registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
+    registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
   }
 }
