@@ -92,6 +92,7 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
     name: 'jeeta.get_content_calendar',
     description:
       'Get the unified content calendar for a date range: every scheduled/published social post plus planned AI social-campaign items, time-ordered. Defaults to the last 7 and next 60 days; the range may not exceed 180 days. Read-only.',
+    domain: 'content',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -115,6 +116,7 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
     name: 'jeeta.generate_image',
     description:
       'Generate an image with AI (fal.ai) for use in social content. This SPENDS the workspace\'s AI credits, so it always requires a human approval — in every write mode, including autonomous. Returns an assetId; poll jeeta.list_generated_media until its status is READY to get the URL.',
+    domain: 'content',
     scopes: ['campaigns.send'],
     risk: 'SPEND',
     requiresApproval: true,
@@ -157,6 +159,9 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
     name: 'jeeta.generate_video',
     description:
       `Generate a short video with AI (fal.ai) for use in social content, up to ${MAX_VIDEO_SEC} seconds. This SPENDS the workspace's AI credits (video is the most expensive action in the product), so it always requires a human approval — in every write mode, including autonomous. Returns an assetId; poll jeeta.list_generated_media until its status is READY.`,
+    domain: 'content',
+    // Deferred (spec §3): Expensive and rare next to jeeta.generate_image.
+    defer: true,
     scopes: ['campaigns.send'],
     risk: 'SPEND',
     requiresApproval: true,
@@ -207,6 +212,9 @@ export function registerContentTools(registry: McpToolRegistry, deps: ContentToo
     name: 'jeeta.list_generated_media',
     description:
       'List AI-generated images/videos in this workspace, newest first, with their status and (once READY) their public URL. Use it to poll a generation started with jeeta.generate_image/jeeta.generate_video, then pass the URL to jeeta.draft_social_post. Read-only.',
+    domain: 'content',
+    // Deferred (spec §3): Asset-library browse; jeeta.generate_image is the primary media entry point.
+    defer: true,
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,

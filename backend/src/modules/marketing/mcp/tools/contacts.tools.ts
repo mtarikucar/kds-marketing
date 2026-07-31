@@ -49,6 +49,7 @@ export function registerContactsTools(registry: McpToolRegistry, deps: ContactsT
     name: 'jeeta.search_contacts',
     description:
       'Find people (contacts) in this workspace by name, phone or email — or list everyone attached to a given company by passing companyId. Read-only.',
+    domain: 'contacts',
     scopes: ['contacts.read', 'leads.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -84,6 +85,7 @@ export function registerContactsTools(registry: McpToolRegistry, deps: ContactsT
     name: 'jeeta.create_contact',
     description:
       'Add a person to an existing company (B2B account). Refuses with a conflict when an open record already exists for the same email. To create a prospect that is not tied to a company, use jeeta.create_lead instead.',
+    domain: 'contacts',
     scopes: ['contacts.write', 'leads.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -121,6 +123,9 @@ export function registerContactsTools(registry: McpToolRegistry, deps: ContactsT
     name: 'jeeta.search_companies',
     description:
       'List or search the B2B accounts (companies) in this workspace, each with its contact count. Archived companies are hidden unless includeArchived is set. Read-only.',
+    domain: 'contacts',
+    // Deferred (spec §3): Companies are the secondary CRM entity; leads/contacts carry the daily traffic.
+    defer: true,
     scopes: ['contacts.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -139,6 +144,9 @@ export function registerContactsTools(registry: McpToolRegistry, deps: ContactsT
     name: 'jeeta.create_company',
     description:
       'Create a B2B account (company) in this workspace. Contacts and opportunities can then be attached to it.',
+    domain: 'contacts',
+    // Deferred (spec §3): Companies are the secondary CRM entity; leads/contacts carry the daily traffic.
+    defer: true,
     scopes: ['contacts.write'],
     risk: 'WRITE',
     requiresApproval: false,

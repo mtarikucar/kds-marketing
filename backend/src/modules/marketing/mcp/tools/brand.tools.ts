@@ -16,6 +16,7 @@ export function registerBrandTools(registry: McpToolRegistry, deps: BrandToolDep
     name: 'jeeta.search_brand_knowledge',
     description:
       'Search the workspace brand profile (tone of voice, positioning, products, policies) and return cited passages. Call this before writing any customer-facing copy.',
+    domain: 'brand',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,

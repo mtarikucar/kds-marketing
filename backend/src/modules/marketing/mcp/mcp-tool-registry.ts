@@ -15,6 +15,54 @@ import { ZodObject, type ZodTypeAny } from 'zod';
  */
 export type ToolRisk = 'READ' | 'WRITE' | 'SPEND' | 'DESTRUCTIVE';
 
+/**
+ * The domain a tool belongs to (design spec §3: *"Tool'lar alan (domain) bazlı
+ * gruplanır"*). This is the grouping key progressive disclosure works on: the
+ * advertised surface keeps every domain's primary read and its common writes,
+ * and `jeeta.find_tools` searches name + description + DOMAIN so a model that
+ * knows only "something about calls" can find the deferred voice tools.
+ *
+ * Declared as a closed union (not a free string) so a typo becomes a compile
+ * error instead of a domain nobody can search for, and pinned again at runtime
+ * by `TOOL_DOMAINS` below because spec files are excluded from type-checking.
+ */
+export type ToolDomain =
+  | 'analytics'
+  | 'brand'
+  | 'leads'
+  | 'contacts'
+  | 'tasks'
+  | 'pipeline'
+  | 'inbox'
+  | 'campaigns'
+  | 'email'
+  | 'voice'
+  | 'social'
+  | 'content'
+  | 'ads'
+  | 'scheduling'
+  | 'workspace';
+
+export const TOOL_DOMAINS: readonly ToolDomain[] = [
+  'analytics',
+  'brand',
+  'leads',
+  'contacts',
+  'tasks',
+  'pipeline',
+  'inbox',
+  'campaigns',
+  'email',
+  'voice',
+  'social',
+  'content',
+  'ads',
+  'scheduling',
+  'workspace',
+] as const;
+
+const DOMAIN_SET: ReadonlySet<string> = new Set<string>(TOOL_DOMAINS);
+
 export interface McpToolContext {
   workspaceId: string;
   /**
@@ -51,6 +99,19 @@ export interface McpToolContext {
 export interface McpTool {
   name: string;
   description: string;
+  /**
+   * REQUIRED. The tool's domain — see `ToolDomain`. Enforced at runtime by
+   * `register()` so a new tool cannot join the catalogue undiscoverable.
+   */
+  domain: ToolDomain;
+  /**
+   * When true this tool is NOT advertised in `tools/list`; it stays fully
+   * registered and callable, and `jeeta.find_tools` is how a model discovers
+   * it. Reserve this for niche/one-off tools — every domain's primary read and
+   * its common writes must stay advertised, or the surface stops being usable
+   * without a search on every turn. Defaults to false.
+   */
+  defer?: boolean;
   /** Scopes the caller must ALL hold (deny-by-default). */
   scopes: string[];
   risk: ToolRisk;
@@ -117,6 +178,18 @@ export class McpToolRegistry {
           'gets written into the ToolCallLog audit column. Declare inputSchema (use z.object({}) for no-arg tools).',
       );
     }
+    if (!tool.domain || !DOMAIN_SET.has(tool.domain)) {
+      // The progressive-disclosure tripwire (spec §3). A tool with no domain
+      // is invisible to `jeeta.find_tools`'s domain match and cannot be
+      // classified into the advertised core — if it were ALSO deferred it
+      // would be unreachable in practice. Runtime guard, not just the
+      // TypeScript `domain: ToolDomain` requirement, because spec files are
+      // excluded from type-checking.
+      throw new Error(
+        `McpTool "${tool.name}" has an invalid domain (${String(tool.domain)}): every tool must declare one of ` +
+          `${TOOL_DOMAINS.join(', ')} so progressive disclosure can group it and jeeta.find_tools can surface it.`,
+      );
+    }
     // Reject unknown arguments instead of dropping them. Zod objects are
     // permissive by default: an argument the schema does not declare is
     // stripped and the call proceeds as if it had never been passed. On a
@@ -136,12 +209,53 @@ export class McpToolRegistry {
     return this.tools.get(name);
   }
 
-  /** List tools the caller is allowed to see (scope-visible), sans handlers. */
+  /**
+   * The FULL scope-visible catalogue, sans handlers — every tool the caller
+   * may call, deferred ones included. This is the set the transport registers
+   * with the MCP SDK (so a deferred tool is callable the moment a model has
+   * learned its name), and the set `jeeta.find_tools` searches.
+   */
   list(grantedScopes: string[]): Array<Omit<McpTool, 'handler'>> {
     const granted = new Set(grantedScopes);
     return [...this.tools.values()]
       .filter((t) => t.scopes.every((s) => granted.has(s)))
       .map(({ handler, ...meta }) => meta);
+  }
+
+  /**
+   * The ADVERTISED subset — what `tools/list` returns (spec §3). Deferred
+   * tools are omitted here and only here: they remain registered, scope-checked
+   * and callable, they are just not pushed into every model's context up front.
+   */
+  listAdvertised(grantedScopes: string[]): Array<Omit<McpTool, 'handler'>> {
+    return this.list(grantedScopes).filter((t) => !t.defer);
+  }
+
+  /**
+   * Free-text search over the scope-visible catalogue — the discovery half of
+   * progressive disclosure. Matches name, description AND domain, so both
+   * "call a customer" (description) and "voice" (domain) find
+   * `jeeta.click_to_dial`. An empty query returns everything the caller may
+   * see, which is the honest answer to "what can you do?".
+   */
+  search(grantedScopes: string[], query: string): Array<Omit<McpTool, 'handler'>> {
+    const terms = String(query ?? '')
+      .toLowerCase()
+      .split(/[^a-z0-9_.]+/i)
+      .filter(Boolean);
+    const all = this.list(grantedScopes);
+    if (!terms.length) return all;
+    const scored = all
+      .map((tool) => {
+        const haystack = `${tool.name} ${tool.domain} ${tool.description}`.toLowerCase();
+        // Rank by how many of the caller's terms hit, so the best matches come
+        // first when a model asks a multi-word question. Zero hits drops out.
+        const hits = terms.filter((t) => haystack.includes(t)).length;
+        return { tool, hits };
+      })
+      .filter((s) => s.hits > 0);
+    scored.sort((a, b) => b.hits - a.hits || a.tool.name.localeCompare(b.tool.name));
+    return scored.map((s) => s.tool);
   }
 
   has(name: string): boolean {

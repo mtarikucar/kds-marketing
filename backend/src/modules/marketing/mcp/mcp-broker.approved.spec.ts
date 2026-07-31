@@ -14,6 +14,7 @@ const spendTool = (handler: jest.Mock): McpTool => ({
   name: 'jeeta.reallocate_budget',
   description: 'move budget',
   scopes: ['settings.manage'],
+  domain: 'workspace',
   risk: 'SPEND',
   requiresApproval: true,
   approvalKind: 'BUDGET_REALLOCATION',

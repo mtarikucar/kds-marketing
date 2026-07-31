@@ -278,6 +278,11 @@ import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
+import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
+import { registerEmailTools } from './mcp/tools/email.tools';
+import { registerVoiceTools } from './mcp/tools/voice.tools';
+import { registerCampaignWriteTools } from './mcp/tools/campaigns-write.tools';
+import { registerConversationWriteTools } from './mcp/tools/conversations-write.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1190,6 +1195,9 @@ export class MarketingModule {
     calendar: UnifiedCalendarService,
     mediaGen: MediaGenService,
     socialCampaigns: SocialCampaignsService,
+    // Faz 5 D3 — communications.
+    emailTemplates: EmailTemplatesService,
+    salesCalls: SalesCallService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
@@ -1207,5 +1215,12 @@ export class MarketingModule {
     registerWorkspaceTools(registry, { entitlements });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
+    registerCampaignWriteTools(registry, { campaigns, entitlements });
+    registerEmailTools(registry, { templates: emailTemplates, campaigns, entitlements });
+    registerVoiceTools(registry, { calls: salesCalls, leads, campaigns, principals, entitlements });
+    registerConversationWriteTools(registry, { conversations, principals, entitlements });
+    // Registered LAST: `jeeta.find_tools` searches the catalogue, so everything
+    // it must be able to find has to already be in the registry it closes over.
+    registerDiscoveryTools(registry, { registry });
   }
 }

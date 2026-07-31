@@ -129,6 +129,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.list_social_accounts',
     description:
       'List the social accounts connected to this workspace (network, handle/display name, account type, and whether the connection is healthy). Use this first to discover the account ids to target when drafting or scheduling a post. Never returns tokens. Read-only.',
+    domain: 'social',
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -152,6 +153,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.list_scheduled_posts',
     description:
       'List social posts in this workspace, newest first. Defaults to SCHEDULED (upcoming) posts; pass status to see drafts, publishing, published or failed posts, or status="ANY" for all of them. Optional from/to narrow to a scheduled-time window. Read-only.',
+    domain: 'social',
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -205,6 +207,9 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.get_social_post',
     description:
       'Get one social post with its content, media, status and per-account publish targets. Read-only.',
+    domain: 'social',
+    // Deferred (spec §3): One-post detail read; jeeta.list_scheduled_posts is the primary social read.
+    defer: true,
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -218,6 +223,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.draft_social_post',
     description:
       'Create a DRAFT social post (content + optional media/target accounts). This has no external side effect — nothing is posted until jeeta.schedule_social_post or jeeta.publish_social_post runs it. Ungated (no approval), but still requires write authority.',
+    domain: 'social',
     scopes: ['campaigns.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -246,6 +252,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.update_social_post',
     description:
       'Edit a DRAFT social post: its copy, media or target accounts. Only DRAFT posts can be edited — a scheduled or published post is refused. Fields you omit are left untouched. Ungated (no approval).',
+    domain: 'social',
     scopes: ['campaigns.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -278,6 +285,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.schedule_social_post',
     description:
       'Schedule a draft post to publish automatically at a future time, to every attached target account. This reaches a real audience with no further human step, so it is queued for approval exactly like publishing now.',
+    domain: 'social',
     scopes: ['campaigns.send'],
     risk: 'WRITE',
     requiresApproval: true,
@@ -315,6 +323,7 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.publish_social_post',
     description:
       'Publish a draft or scheduled social post immediately, to every attached target account. This reaches a real audience, so in APPROVAL mode it is queued for a human instead of publishing immediately.',
+    domain: 'social',
     scopes: ['campaigns.send'],
     risk: 'WRITE',
     requiresApproval: true,
@@ -332,6 +341,9 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     name: 'jeeta.delete_social_post',
     description:
       'Permanently delete a social post and its publish targets. There is no undo and no trash — this always requires a human approval, in every write mode, including autonomous.',
+    domain: 'social',
+    // Deferred (spec §3): Destructive one-off, deliberately not in every model's default context.
+    defer: true,
     scopes: ['campaigns.write'],
     risk: 'DESTRUCTIVE',
     requiresApproval: true,

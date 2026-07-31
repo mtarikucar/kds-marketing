@@ -1,4 +1,4 @@
-import { McpToolRegistry } from '../mcp-tool-registry';
+import { McpToolRegistry, TOOL_DOMAINS } from '../mcp-tool-registry';
 import { registerAnalyticsTools } from './analytics.tools';
 import { registerBrandTools } from './brand.tools';
 import { registerLeadsTools } from './leads.tools';
@@ -15,6 +15,11 @@ import { registerSchedulingTools } from './scheduling.tools';
 import { registerWorkspaceTools } from './workspace.tools';
 import { registerContentTools } from './content.tools';
 import { registerSocialCampaignTools } from './social-campaigns.tools';
+import { registerEmailTools } from './email.tools';
+import { registerVoiceTools } from './voice.tools';
+import { registerCampaignWriteTools } from './campaigns-write.tools';
+import { registerConversationWriteTools } from './conversations-write.tools';
+import { registerDiscoveryTools } from './discovery.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -97,6 +102,28 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
+  registerEmailTools(registry, {
+    templates: { list: jest.fn() } as any,
+    campaigns: { create: jest.fn(), launch: jest.fn(), remove: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerVoiceTools(registry, {
+    calls: { startCall: jest.fn(), list: jest.fn() } as any,
+    leads: { findOne: jest.fn() } as any,
+    campaigns: { create: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerCampaignWriteTools(registry, {
+    campaigns: { create: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerConversationWriteTools(registry, {
+    conversations: { assign: jest.fn(), close: jest.fn(), addNote: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerDiscoveryTools(registry, { registry });
 }
 
 const ALL_SCOPES = [
@@ -115,18 +142,64 @@ const ALL_SCOPES = [
 ];
 
 /**
- * Spec §3 threshold: below 60 tools the whole catalogue is listed directly;
- * past 60, progressive disclosure (domain grouping + `jeeta.find_tools`) has to
- * come online because listing ~140 tools at once measurably degrades accuracy.
- * Pinned as an assertion so the wave that crosses the line cannot land quietly.
+ * Spec §3 threshold: past 60 tools, listing them all at once measurably
+ * degrades accuracy. D3 brought progressive disclosure online BEFORE the
+ * catalogue crossed it (57 tools at the time of writing) rather than after,
+ * because the mechanism is what makes D4/D5 landable at all.
+ *
+ * The cap that matters is therefore no longer the TOTAL — that is free to grow
+ * — but the ADVERTISED set: what every model actually loads on every session.
+ * 45 is the working ceiling; a wave that pushes past it must defer something,
+ * not raise the number.
  */
-const PROGRESSIVE_DISCLOSURE_THRESHOLD = 60;
+const ADVERTISED_CEILING = 45;
 
 describe('MCP tool catalogue', () => {
-  it('stays under the progressive-disclosure threshold (spec §3)', () => {
+  it('keeps the ADVERTISED surface under the ceiling, whatever the total (spec §3)', () => {
     const registry = new McpToolRegistry();
     registerFullCatalogue(registry);
-    expect(registry.list(ALL_SCOPES).length).toBeLessThanOrEqual(PROGRESSIVE_DISCLOSURE_THRESHOLD);
+    const advertised = registry.listAdvertised(ALL_SCOPES);
+    const total = registry.list(ALL_SCOPES);
+    expect(advertised.length).toBeLessThanOrEqual(ADVERTISED_CEILING);
+    // The whole point of deferral: the total is allowed to exceed what we are
+    // willing to advertise. If these two are ever equal, nothing is deferred
+    // and progressive disclosure has silently been turned off.
+    expect(advertised.length).toBeLessThan(total.length);
+  });
+
+  /**
+   * The tripwire the registry's runtime guard cannot provide on its own: it
+   * proves the guard is exercised by the REAL catalogue, so a future tool that
+   * somehow reaches the registry without a domain (or with a bogus one) fails
+   * here too, and that every domain in use is one `jeeta.find_tools` offers.
+   */
+  it('gives every catalogued tool a domain from the declared vocabulary', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    for (const tool of registry.list(ALL_SCOPES)) {
+      expect(TOOL_DOMAINS).toContain(tool.domain);
+    }
+  });
+
+  it('never defers the discovery tool itself (it is the only way back to the rest)', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    expect(registry.listAdvertised(ALL_SCOPES).map((t) => t.name)).toContain('jeeta.find_tools');
+  });
+
+  it('can find every deferred tool through jeeta.find_tools by its own name', async () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    const deferred = registry.list(ALL_SCOPES).filter((t) => t.defer);
+    expect(deferred.length).toBeGreaterThan(0);
+    const find = registry.get('jeeta.find_tools')!;
+    for (const tool of deferred) {
+      const res = (await find.handler({ workspaceId: 'ws1', grantedScopes: ALL_SCOPES }, {
+        query: tool.name,
+      })) as { tools: Array<{ name: string; listed: boolean }> };
+      expect(res.tools.map((t) => t.name)).toContain(tool.name);
+      expect(res.tools.find((t) => t.name === tool.name)!.listed).toBe(false);
+    }
   });
 
   it('registers exactly the catalogued tools (Faz 1-2 + Faz 5 D1)', () => {
@@ -184,8 +257,19 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_generated_media',
         'jeeta.list_social_campaigns',
         'jeeta.create_social_campaign',
+        // Faz 5 D3 — communications + progressive disclosure.
+        'jeeta.find_tools',
+        'jeeta.list_email_templates',
+        'jeeta.send_email',
+        'jeeta.create_campaign',
+        'jeeta.create_voice_campaign',
+        'jeeta.click_to_dial',
+        'jeeta.list_calls',
+        'jeeta.assign_conversation',
+        'jeeta.close_conversation',
+        'jeeta.add_conversation_note',
       ].sort(),
     );
-    expect(names).toHaveLength(47);
+    expect(names).toHaveLength(57);
   });
 });

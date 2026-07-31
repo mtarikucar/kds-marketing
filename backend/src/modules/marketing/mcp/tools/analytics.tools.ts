@@ -16,6 +16,7 @@ export function registerAnalyticsTools(registry: McpToolRegistry, deps: Analytic
     name: 'jeeta.get_funnel',
     description:
       'Get the lead funnel for a date range: counts per stage from first touch to won. Use for "how is the pipeline doing" questions.',
+    domain: 'analytics',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,

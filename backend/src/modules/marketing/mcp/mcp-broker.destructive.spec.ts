@@ -42,6 +42,7 @@ function deps() {
 const toolWith = (risk: ToolRisk, handler: jest.Mock, extra: Partial<McpTool> = {}): McpTool => ({
   name: 'jeeta.some_tool',
   description: 'a tool',
+  domain: 'workspace',
   scopes: ['campaigns.write'],
   risk,
   requiresApproval: true,

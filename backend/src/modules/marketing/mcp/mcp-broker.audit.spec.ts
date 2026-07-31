@@ -14,6 +14,7 @@ const tool = (handler: jest.Mock): McpTool => ({
   name: 'jeeta.get_funnel',
   description: 'read funnel',
   scopes: ['reports.read'],
+  domain: 'workspace',
   risk: 'READ',
   requiresApproval: false,
   inputSchema: z.object({}),

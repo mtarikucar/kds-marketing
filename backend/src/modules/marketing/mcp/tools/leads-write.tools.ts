@@ -99,6 +99,7 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
     name: 'jeeta.create_lead',
     description:
       'Create a new lead (prospective customer) in this workspace. Refuses with a conflict when an open lead already exists for the same email. Ownership follows the workspace rules: an explicit assignee, otherwise the auto-assignment strategy, otherwise the unassigned pool.',
+    domain: 'leads',
     scopes: ['leads.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -132,6 +133,7 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
     name: 'jeeta.update_lead',
     description:
       'Update the details of an existing lead (contact info, address, notes, priority, follow-up date, custom fields). Use jeeta.set_lead_status to move it through the pipeline and jeeta.assign_lead to change its owner.',
+    domain: 'leads',
     scopes: ['leads.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -166,6 +168,7 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
     name: 'jeeta.set_lead_status',
     description:
       'Move a lead to another pipeline stage. Only transitions the workspace allows from the current stage are accepted. WON is not settable here — a lead becomes WON through conversion, which also provisions the customer and the commission.',
+    domain: 'leads',
     scopes: ['leads.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -191,6 +194,7 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
     name: 'jeeta.add_lead_note',
     description:
       "Add an entry to a lead's activity timeline — a note, or a logged call/visit/meeting/email with its outcome. This is how an agent records what it learned or did about a customer.",
+    domain: 'leads',
     scopes: ['leads.write'],
     risk: 'WRITE',
     requiresApproval: false,
@@ -225,6 +229,9 @@ export function registerLeadsWriteTools(registry: McpToolRegistry, deps: LeadsWr
     // Manager-tier: mirrors PATCH /marketing/leads/:id/assign, which is gated
     // `@RequirePermission('leads.manage')`. Reassigning another rep's book of
     // business is exactly the authority REP does not hold.
+    domain: 'leads',
+    // Deferred (spec §3): Manager-tier reassignment — rare next to the everyday lead writes.
+    defer: true,
     scopes: ['leads.manage'],
     risk: 'WRITE',
     requiresApproval: false,
