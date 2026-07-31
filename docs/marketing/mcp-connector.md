@@ -3,9 +3,14 @@
 Jeeta exposes a curated set of workspace tools over the [Model Context
 Protocol](https://modelcontextprotocol.io) (Streamable HTTP transport), so an
 external agent — e.g. Claude with the `claude mcp` CLI — can read workspace
-data (leads, conversations, campaigns, ad performance, bookings, …) and, with
-a human in the loop by default, take actions (reply to a customer, launch a
-campaign, publish a social post, move ad budget).
+data (leads, conversations, campaigns, ad performance, bookings, products,
+invoices, reviews, …) and, with a human in the loop by default, take actions
+(reply to a customer, launch a campaign, publish a social post, move ad budget,
+text an invoice, book an appointment).
+
+**The catalogue is 84 tools across 21 domains, of which 45 are advertised up
+front.** The rest are reachable through `jeeta.find_tools` — see
+[Tool catalogue](#tool-catalogue).
 
 This guide is for the person setting the connector up for a workspace, not
 for the engineer who built it.
@@ -14,7 +19,8 @@ for the engineer who built it.
 
 - **The end-to-end path has been run live** (2026-07-29), against the app on a
   real Postgres with a real `mk_live_…` key: auth challenges, scope-filtered
-  `tools/list`, all 18 tools invoked, a gated call queuing without a side
+  `tools/list`, all 18 tools of the then-catalogue invoked, a gated call
+  queuing without a side
   effect, a human approving **and** applying it for real, a re-apply refused,
   a failed apply reverting instead of stranding, `AUTONOMOUS` running inline,
   a `REP` refused on the write-mode routes, cross-tenant invisibility, the
@@ -23,7 +29,9 @@ for the engineer who built it.
   fixed — see the git history for `mcp-approval-executor` and
   `mcp-tool-registry`. What has **not** been exercised is a live provider
   send: the test workspace used a WEBCHAT channel, so no message left the
-  system to a real phone or inbox.
+  system to a real phone or inbox. The catalogue has since grown from 18 tools
+  to 84 across five waves (Faz 5 D1–D5); the waves are covered by unit and
+  isolation specs, not by a repeat of that live run.
 - **Which clients can connect.** Two auth paths now exist, and the endpoint
   takes either on the same route:
   - a static `Authorization: Bearer mk_live_…` header — any client that lets
@@ -101,14 +109,14 @@ Note the path: **`/api/mcp`**, not `/mcp`. `app.setGlobalPrefix('api')` in
 After adding, check two things:
 
 1. **The tool list appears.** Ask Claude what Jeeta tools it has, or run
-   whatever your client uses to list a server's tools. You should see the
-   tools among the 18 in the [catalogue](#tool-catalogue) below whose scope
-   the key's granted scopes cover — for a legacy `read` or `write` key
-   (see [Scopes](#scopes) for why the two are equivalent here) that's the 13
-   read-only tools, not all 18; the 5 write-risk tools need a granular scope
-   minted explicitly. `McpServerFactoryService.build` filters the registry by
-   the key's granted scopes per request, so a narrower key legitimately shows
-   fewer tools, not an error.
+   whatever your client uses to list a server's tools. You will see the
+   **advertised** subset of the [catalogue](#tool-catalogue) whose scopes the
+   key covers — at most 45 of the 84, and fewer for a narrow key.
+   `McpServerFactoryService.build` filters the registry by the key's granted
+   scopes per request, so a narrower key legitimately shows fewer tools, not an
+   error. A tool you do not see is not necessarily unavailable: ask the model to
+   call `jeeta.find_tools` and search for it (see
+   [Progressive disclosure](#progressive-disclosure)).
 2. **A matching audit row appears.** Call any read-only tool (e.g.
    `jeeta.get_workspace_info`), then check `agent_runs` and `tool_call_logs`
    for it — see [Audit trail](#audit-trail) for how.
@@ -151,55 +159,60 @@ dot-style permissions already defined in
 `users.manage`, `billing.manage`, `settings.manage`) — the same catalog the
 human role/permission system uses, not a parallel MCP-only list.
 
-An API key's `scopes` array can now hold **either** the legacy `read`/`write`
+The subset a tool may actually demand is `MCP_ALL_SCOPES`
+(`backend/src/modules/marketing/mcp/mcp-scopes.ts`), which is also what the
+OAuth authorization server publishes as `scopes_supported` and what the consent
+screen offers. `users.manage` and `billing.manage` are deliberately absent: no
+tool may ever require them (see [What is never a tool](#what-is-never-a-tool)).
+`mcp-oauth-metadata.controller.spec.ts` fails if any tool declares a scope
+missing from that list, since such a tool would be unreachable over OAuth.
+
+An API key's `scopes` array can hold **either** the legacy `read`/`write`
 shorthands **or** any of those granular permission strings directly, or a mix
 of both (`CreateApiKeyDto`'s `@IsIn(['read', 'write', ...PERMISSIONS])`).
-`expandScopes()` (`backend/src/modules/marketing/mcp/mcp-scopes.ts`) is what
-turns a key's raw `scopes` into the granted set an MCP tool call is actually
-checked against, on every request (no caching — see
+`expandScopes()` is what turns a key's raw `scopes` into the granted set an MCP
+tool call is checked against, on every request (no caching — see
 [Endpoint reference](#endpoint-reference)):
 
 | Raw key scope | Expands to |
 |---|---|
 | `read` | `leads.read`, `contacts.read`, `campaigns.read`, `reports.read`, `tasks.read` |
 | `write` | everything `read` grants, **plus** `leads.write`, `tasks.write` — **nothing else** |
-| any granular string (e.g. `settings.manage`, `campaigns.write`, `contacts.write`, `campaigns.send`) | passed through untouched |
+| any granular string (e.g. `settings.manage`, `campaigns.send`, `contacts.write`, `courses.manage`, `automations.manage`) | passed through untouched |
 
-**This is deliberate and load-bearing, and it means less than it sounds
-like.** Of the 18 MCP tools, **none** require `leads.write` or `tasks.write` —
-so today, a key minted with only the legacy `write` shorthand reaches exactly
-the same set of MCP tools as a `read`-only key: every read tool, and nothing
-more. It reaches **none** of the write-risk tools — the four approval-gated
-ones or `jeeta.draft_social_post` — because each of them requires a granular
-scope the legacy `write` expansion does not include:
+**What the legacy shorthands do and do not buy.** The rule
+(`mcp-scopes.ts`, `mcp-scopes.spec.ts`) is that a manager-tier or send-tier
+permission is never acquired by a coarse legacy key: `contacts.write`,
+`campaigns.write`, `campaigns.send`, `leads.manage`, `courses.manage`,
+`automations.manage` and `settings.manage` must all be minted explicitly. Over
+REST a coarse `write` key only ever touched leads/tasks, and MCP does not
+silently widen that into "can message customers / publish content / spend ad
+budget / arm automations".
 
-| Tool | Requires | In legacy `write`? |
-|---|---|---|
-| `jeeta.send_message` | `contacts.write` | No |
-| `jeeta.set_campaign_status` | `campaigns.send` | No |
-| `jeeta.publish_social_post` | `campaigns.send` | No |
-| `jeeta.reallocate_budget` | `settings.manage` | No |
-| `jeeta.draft_social_post` | `campaigns.write` | No (ungated, but still needs the granular scope minted explicitly) |
+That said, **a legacy `write` key is no longer equivalent to a `read` key** — a
+claim earlier versions of this document made, true when the catalogue was 18
+tools and none needed `leads.write`. Faz 5 changed that. A `write` key now
+reaches, among others, `jeeta.create_lead`, `jeeta.update_lead`,
+`jeeta.set_lead_status`, `jeeta.add_lead_note`, `jeeta.create_task`,
+`jeeta.complete_task`, `jeeta.create_opportunity`,
+`jeeta.move_opportunity_stage`, `jeeta.create_estimate` — and
+**`jeeta.click_to_dial`**, which requires only `leads.write` and places a real
+outbound phone call to a lead (approval-gated, but reachable). Treat a `write`
+key as a CRM-write credential that can also dial, and prefer granular scopes.
 
-This split is intentional (`mcp-scopes.ts` doc comment, `mcp-scopes.spec.ts`):
-over the REST API a coarse `write` key only ever touched leads, and MCP
-shouldn't silently widen that into "can message customers / publish content /
-spend ad budget" just because a key predates the granular vocabulary. To reach
-any of the tools above, mint a key (or add scopes to an existing one) that
-carries the specific granular permission — via the Settings UI's **Granular
-scopes** checklist, or by passing the string directly in the API's `scopes`
-array (e.g. `{"scopes": ["read", "settings.manage"]}` for a key that can call
-`jeeta.reallocate_budget`). `jeeta.reallocate_budget` in particular is now
-reachable through the standard key-management flow — it no longer requires
-calling `ApiKeysService` directly or writing to the database.
+To reach anything else — messaging customers, publishing, spending, automations,
+invoicing, courses, reviews — mint a key (or add scopes to an existing one)
+carrying the specific granular permission, via the Settings UI's **Granular
+scopes** checklist or by passing the string in the API's `scopes` array (e.g.
+`{"scopes": ["read", "settings.manage"]}`).
 
 ## Tool catalogue
 
-18 tools, registered in `backend/src/modules/marketing/mcp/tools/*.tools.ts`
-and asserted by name in
-`backend/src/modules/marketing/mcp/tools/tool-catalogue.spec.ts`. "Gated"
-means the tool never runs inline in `APPROVAL` mode — see
-[Approval-gated tools](#approval-gated-tools).
+**84 tools in 21 domains, 45 of them advertised.** They are registered in
+`backend/src/modules/marketing/mcp/tools/*.tools.ts`, wired in
+`marketing.module.ts`, and asserted by name and count in
+`backend/src/modules/marketing/mcp/tools/tool-catalogue.spec.ts` — a dropped
+registration fails CI rather than silently shrinking the surface.
 
 **Argument names are exact.** Every tool's schema is registered strict
 (`McpToolRegistry.register`), so an argument the tool does not declare is an
@@ -209,95 +222,297 @@ result set, and a search that answers with everything looks to an agent like a
 search that matched everything. Read the parameter names off `tools/list`,
 which advertises `additionalProperties: false` for the same reason.
 
-### Analytics
+**No tool takes a `workspaceId` argument.** The workspace comes from the
+session, never from the caller. Each wave's `dN-isolation.spec.ts` drives every
+one of its tools with a foreign workspace id planted in every free-text field
+and asserts it reaches no service call.
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.get_funnel` | Lead funnel counts per stage for a date range | `reports.read` | READ | No |
+### Progressive disclosure
 
-### Brand
+Past roughly 60 tools, listing everything at once measurably degrades a model's
+accuracy, so `tools/list` returns only the **advertised** subset — every
+domain's primary read plus its common writes — and everything else is
+**deferred**: still registered, still scope-checked, still callable by name,
+just not pushed into every session's context.
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.search_brand_knowledge` | Free-text search over the workspace's Brand Brain (tone, positioning, products, policies), cited passages | `reports.read` | READ | No |
+`jeeta.find_tools` is the way back to the rest. It takes a free-text `query`
+and/or a `domain`, searches name + description + domain over exactly the tools
+the caller's scopes already permit, and returns each match with its **JSON input
+schema**, so a model can call a tool it has just discovered on the very next
+turn. It requires no scopes (it can only reveal what the caller could already
+call) and is never itself deferred.
 
-### Leads
+Deferral is an advertising decision, never a permission one. The ceiling on the
+advertised set is **45**, pinned in `tool-catalogue.spec.ts`; a wave that wants
+more must defer something, not raise the number. D4 paid for itself by deferring
+five previously-advertised tools, D5 by deferring two more
+(`jeeta.close_conversation`, `jeeta.get_budget`). The catalogue now sits exactly
+at the ceiling.
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.search_leads` | Paginated lead search: text, status, source, city/region, priority, assignment, date range | `leads.read` | READ | No |
+### Risk and approval classes
 
-See [Lead search sees the whole workspace](#lead-search-sees-the-whole-workspace) —
-this one does not narrow results by assignee the way a human REP's view does.
+Every tool declares a `risk` and whether it `requiresApproval`. The vocabulary
+(`mcp-tool-registry.ts`) is four values, and what they MEAN is enforced in one
+place — `ALWAYS_APPROVED_RISKS` in `mcp-broker.service.ts`:
 
-### Inbox
+| Risk | Meaning | In `APPROVAL` mode | In `AUTONOMOUS` mode |
+|---|---|---|---|
+| `READ` | reads workspace data | runs inline | runs inline |
+| `WRITE` | changes workspace data | runs inline unless `requiresApproval` | runs inline |
+| `SPEND` | **real money leaves the workspace** (ad budget, fal.ai generation, AI credits + live scraping) | **queued** | **queued — autonomy cannot bypass it** |
+| `DESTRUCTIVE` | **a row is permanently removed**; there is no undo table | **queued** | **queued — autonomy cannot bypass it** |
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.list_conversations` | List shared-inbox conversations, newest first | `contacts.read` | READ | No |
-| `jeeta.read_conversation` | Full message history of one conversation + linked lead/channel | `contacts.read` | READ | No |
-| `jeeta.send_message` | Reply in a conversation — reaches a real customer | `contacts.write` | WRITE | **Yes** (`SEND`) |
+`SPEND` and `DESTRUCTIVE` are gated in **every** write mode. This is a
+risk-CLASS rule, not a per-tool flag, so a tool author cannot forget it, and
+`mcp-broker.destructive.spec.ts` pins both directions.
 
-See [MCP replies are AI-authored](#mcp-replies-are-ai-authored) for how a sent
-message is attributed.
+The design spec's `SEND` and `PUBLISH` rows are not separate risk values: they
+behave exactly like `WRITE` at the gate (risky, but runnable unattended in
+`AUTONOMOUS`) and are distinguished for the human reviewing the queue by the
+tool's `approvalKind`. The kinds in use are `SEND`, `PUBLISH`,
+`BUDGET_REALLOCATION`, `MEDIA_SPEND`, `AI_SPEND`, `TARGET_CHANGE`,
+`CHANNEL_LAUNCH`, `STRATEGY_ACTION` and `DESTRUCTIVE`.
 
-### Campaigns
+**Read this before turning on `AUTONOMOUS`:** 19 tools are approval-gated, but
+only the 8 that are `SPEND`/`DESTRUCTIVE` stay gated in autonomous mode. The
+other 11 — including `jeeta.send_message`, `jeeta.send_email`,
+`jeeta.click_to_dial`, `jeeta.publish_social_post`, `jeeta.schedule_social_post`,
+`jeeta.set_campaign_status`, `jeeta.send_invoice`, `jeeta.create_booking` and
+`jeeta.reply_to_review` — run immediately, reaching real customers and real
+audiences with nobody in the loop. See
+[Write mode](#write-mode-approval-vs-autonomous).
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.list_campaigns` | List campaigns with channel, status, last-known stats | `campaigns.read` | READ | No |
-| `jeeta.get_campaign_performance` | Recipients, sent/failed/skipped, opened/clicked/unsubscribed, SMS rollup for one campaign | `reports.read` | READ | No |
-| `jeeta.set_campaign_status` | Transition a campaign: `SENDING` (launch or resume), `PAUSED`, `CANCELLED` — reaches real customers | `campaigns.send` | WRITE | **Yes** (`PUBLISH`) |
+### The catalogue
 
-### Social
+"Listed" = advertised in `tools/list`; the rest need `jeeta.find_tools`.
+"Gated" names the `approvalKind` when the tool is approval-gated; **bold** means
+`SPEND`/`DESTRUCTIVE`, i.e. gated in every mode including autonomous.
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.list_scheduled_posts` | List social posts, newest first; defaults to `SCHEDULED`, `status` overrides | `campaigns.read` | READ | No |
-| `jeeta.draft_social_post` | Create a `DRAFT` post (content + media + target accounts) — no external side effect until published | `campaigns.write` | WRITE | No |
-| `jeeta.publish_social_post` | Publish a draft/scheduled post immediately to every attached account — reaches a real audience | `campaigns.send` | WRITE | **Yes** (`PUBLISH`) |
+#### Analytics · Brand · Workspace
 
-`jeeta.draft_social_post` is a WRITE-risk tool that is deliberately *not*
-gated (it only creates an internal draft row), and its scope is `campaigns.write`
-rather than `campaigns.send` — a caller allowed to prepare content is not
-automatically trusted to publish it. Both are intentional per the code
-comments (`social.tools.ts`), not oversights.
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.get_funnel` | Lead funnel counts per stage for a date range | `reports.read` | READ | — | yes |
+| `jeeta.search_brand_knowledge` | Free-text search over the Brand Brain (tone, positioning, products, policies), cited passages | `reports.read` | READ | — | yes |
+| `jeeta.get_brand_profile` | The workspace's brand profile (name, voice guide, audience) | `reports.read` | READ | — | no |
+| `jeeta.update_brand_profile` | Rewrite the brand profile every piece of AI copy is written from | `settings.manage` | WRITE | — | no |
+| `jeeta.get_workspace_info` | Effective plan: package, subscription status, quotas/limits, enabled features | `reports.read` | READ | — | yes |
+| `jeeta.find_tools` | Search the FULL catalogue, deferred tools included, with their input schemas | *(none)* | READ | — | yes |
 
-### Ads
+#### Leads · Contacts · Tasks · Pipeline
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.get_ad_performance` | Aggregated spend/impressions/clicks/leads/revenue over a date range, totals + by-day + by-provider | `reports.read` | READ | No |
-| `jeeta.get_budget` | Get (by id) or list the workspace's Growth Autopilot budget(s): amount, target ROAS/CAC, channel allocations | `reports.read` | READ | No |
-| `jeeta.reallocate_budget` | Change a campaign/ad set's live daily budget on a connected ad account — spends real money | `settings.manage` | SPEND | **Yes** (`BUDGET_REALLOCATION`) |
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.search_leads` | Paginated lead search: text, status, source, city/region, priority, assignment, dates | `leads.read` | READ | — | yes |
+| `jeeta.create_lead` | Create a lead | `leads.write` | WRITE | — | yes |
+| `jeeta.update_lead` | Update a lead's fields | `leads.write` | WRITE | — | yes |
+| `jeeta.set_lead_status` | Move a lead's stage, with a timeline entry | `leads.write` | WRITE | — | yes |
+| `jeeta.add_lead_note` | Add a note to a lead's timeline | `leads.write` | WRITE | — | yes |
+| `jeeta.assign_lead` | Reassign a lead to another rep (manager-tier) | `leads.manage` | WRITE | — | no |
+| `jeeta.search_contacts` | Search contacts | `contacts.read` + `leads.read` | READ | — | yes |
+| `jeeta.create_contact` | Create a contact | `contacts.write` + `leads.write` | WRITE | — | yes |
+| `jeeta.search_companies` | Search companies | `contacts.read` | READ | — | no |
+| `jeeta.create_company` | Create a company | `contacts.write` | WRITE | — | no |
+| `jeeta.list_segments` | List audience segments | `contacts.read` | READ | — | no |
+| `jeeta.list_tags` | List tags | `contacts.read` | READ | — | no |
+| `jeeta.list_tasks` | List tasks | `tasks.read` | READ | — | yes |
+| `jeeta.create_task` | Create a task and assign it | `tasks.write` | WRITE | — | yes |
+| `jeeta.complete_task` | Mark a task done | `tasks.write` | WRITE | — | yes |
+| `jeeta.list_pipelines` | List pipelines and their stages | `leads.read` | READ | — | no |
+| `jeeta.list_opportunities` | List deals on a pipeline | `leads.read` | READ | — | yes |
+| `jeeta.create_opportunity` | Create a deal | `leads.write` | WRITE | — | yes |
+| `jeeta.move_opportunity_stage` | Advance a deal | `leads.write` | WRITE | — | yes |
 
-`jeeta.reallocate_budget` shares its `BUDGET_REALLOCATION` approval `kind`
-with the Growth Autopilot's own reallocation proposals — the two are told
-apart by payload shape (MCP's `{ tool, args }` vs. Autopilot's
-`{ budgetId, after: [...] }`) wherever they meet; see
-[Approval-gated tools](#approval-gated-tools).
+#### Inbox
 
-### Scheduling
+Gated on the `conversationAi` package feature, matching the REST controller.
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.list_bookings` | List real bookings (not external busy blocks), filterable by calendar/status/time range | `tasks.read` | READ | No |
-| `jeeta.get_booking_availability` | List bookable slot starts for a calendar + date range, honouring hours/buffers/notice/blackouts | `tasks.read` | READ | No |
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_conversations` | List shared-inbox conversations, newest first | `contacts.read` | READ | — | yes |
+| `jeeta.read_conversation` | Full message history of one conversation + linked lead/channel | `contacts.read` | READ | — | yes |
+| `jeeta.send_message` | Reply in a conversation — **reaches a real customer** | `contacts.write` | WRITE | `SEND` | yes |
+| `jeeta.assign_conversation` | Route a thread to a teammate (internal) | `contacts.write` | WRITE | — | no |
+| `jeeta.close_conversation` | Close or reopen a thread (internal) | `contacts.write` | WRITE | — | no |
+| `jeeta.add_conversation_note` | Internal note on a thread; the customer never sees it | `contacts.write` | WRITE | — | no |
 
-There is no booking-creation tool — booking creation is a customer-facing
-flow, not one wired into server-side MCP.
+See [MCP replies are AI-authored](#mcp-replies-are-ai-authored).
 
-### Workspace
+#### Campaigns · Email · Voice
 
-| Tool | What it does | Scope | Risk | Gated |
-|---|---|---|---|---|
-| `jeeta.get_workspace_info` | Effective plan info: package, subscription status, quotas/limits, enabled features | `reports.read` | READ | No |
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_campaigns` | List campaigns with channel, status, last-known stats | `campaigns.read` | READ | — | yes |
+| `jeeta.get_campaign_performance` | Recipients, sent/failed/skipped, opens/clicks/unsubs for one campaign | `reports.read` | READ | — | yes |
+| `jeeta.create_campaign` | Compose an email/SMS campaign as a DRAFT | `campaigns.write` | WRITE | — | yes |
+| `jeeta.set_campaign_status` | Launch / pause / cancel — **reaches real customers** | `campaigns.send` | WRITE | `PUBLISH` | yes |
+| `jeeta.list_email_templates` | List saved email templates | `campaigns.read` | READ | — | yes |
+| `jeeta.send_email` | Email one lead — composed as a one-recipient campaign so opt-out, bounce suppression and the unsubscribe footer all apply | `campaigns.send` | WRITE | `SEND` | yes |
+| `jeeta.click_to_dial` | **Place a real outbound phone call** to a lead | `leads.write` | WRITE | `SEND` | yes |
+| `jeeta.list_calls` | Call history | `leads.read` | READ | — | no |
+| `jeeta.create_voice_campaign` | Compose a voice campaign (does not launch it) | `campaigns.write` | WRITE | — | no |
+
+Campaign tools gate on `campaigns`; voice on `voiceCampaigns`.
+
+#### Social · Content
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_social_accounts` | Connected social accounts and their ids | `campaigns.read` | READ | — | yes |
+| `jeeta.list_scheduled_posts` | List social posts; defaults to `SCHEDULED` | `campaigns.read` | READ | — | yes |
+| `jeeta.get_social_post` | One post with its media and target accounts | `campaigns.read` | READ | — | no |
+| `jeeta.draft_social_post` | Create a DRAFT post — no external side effect | `campaigns.write` | WRITE | — | yes |
+| `jeeta.update_social_post` | Edit a draft/scheduled post | `campaigns.write` | WRITE | — | no |
+| `jeeta.schedule_social_post` | Schedule a post to go out later — **reaches a real audience** | `campaigns.send` | WRITE | `PUBLISH` | yes |
+| `jeeta.publish_social_post` | Publish now to every attached account — **reaches a real audience** | `campaigns.send` | WRITE | `PUBLISH` | yes |
+| `jeeta.delete_social_post` | **Permanently delete** a post | `campaigns.write` | **DESTRUCTIVE** | **`DESTRUCTIVE`** | no |
+| `jeeta.list_social_campaigns` | List social campaigns | `campaigns.read` | READ | — | no |
+| `jeeta.create_social_campaign` | Create a social campaign | `campaigns.write` | WRITE | — | no |
+| `jeeta.get_content_calendar` | Everything scheduled in a date range across channels | `reports.read` | READ | — | yes |
+| `jeeta.generate_image` | AI image generation — **spends real money (fal.ai)** | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | yes |
+| `jeeta.generate_video` | AI video generation — **spends real money (fal.ai)** | `campaigns.send` | **SPEND** | **`MEDIA_SPEND`** | no |
+| `jeeta.list_generated_media` | Previously generated assets | `campaigns.read` | READ | — | no |
+
+Media generation gates on `mediaGen`; social campaigns on `socialCampaigns`.
+
+#### Ads
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.get_ad_performance` | Spend/impressions/clicks/leads/revenue over a range, totals + by-day + by-provider | `reports.read` | READ | — | yes |
+| `jeeta.get_budget` | Growth Autopilot budget(s): amount, target ROAS/CAC, channel allocations | `reports.read` | READ | — | no |
+| `jeeta.reallocate_budget` | Change a live daily budget on a connected ad account — **spends real money** | `settings.manage` | **SPEND** | **`BUDGET_REALLOCATION`** | yes |
+
+#### Strategy · Workflows · Research
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.get_strategy` | The workspace's marketing strategy brief | `reports.read` | READ | — | yes |
+| `jeeta.list_strategy_actions` | The Strategy Engine's proposed action plan | `reports.read` | READ | — | yes |
+| `jeeta.approve_strategy_action` | Approving **executes** the action (research spend, live post, AI credits, ad write) | `settings.manage` | **SPEND** | **`STRATEGY_ACTION`** | yes |
+| `jeeta.dismiss_strategy_action` | Drop a proposed action | `settings.manage` | WRITE | — | no |
+| `jeeta.synthesize_strategy` | Re-synthesise the strategy — **burns AI credits + live scraping money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
+| `jeeta.set_strategy_autonomy` | Change the strategy lane (cannot select `AUTONOMOUS`) | `settings.manage` | WRITE | `TARGET_CHANGE` | no |
+| `jeeta.list_workflows` | List automations and their status | `automations.manage` | READ | — | yes |
+| `jeeta.get_workflow` | One automation's trigger and steps | `automations.manage` | READ | — | no |
+| `jeeta.create_workflow` | Author an automation as a DRAFT (it does not run) | `automations.manage` | WRITE | — | no |
+| `jeeta.set_workflow_enabled` | **Arm** an automation — it starts acting on every future matching lead | `automations.manage` | WRITE | `CHANNEL_LAUNCH` | no |
+| `jeeta.trigger_workflow` | Run an armed automation over real leads now — **sends + AI spend** | `automations.manage` | **SPEND** | **`SEND`** | no |
+| `jeeta.list_research_profiles` | Prospect-research briefs + today's remaining lead allowance | `settings.manage` | READ | — | yes |
+| `jeeta.create_research_profile` | Create a research brief (costs nothing on its own) | `settings.manage` | WRITE | — | no |
+| `jeeta.run_research` | Run a brief now — **burns AI credits + live scraping money** | `settings.manage` | **SPEND** | **`AI_SPEND`** | no |
+
+Workflows gate on `workflows`; research on `research`.
+
+#### Scheduling
+
+Gated on the `funnels` package feature, matching the REST controller.
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_bookings` | Real bookings (not external busy blocks), by calendar/status/range | `tasks.read` | READ | — | yes |
+| `jeeta.get_booking_availability` | Bookable slot starts, honouring hours/buffers/notice/blackouts | `tasks.read` | READ | — | no |
+| `jeeta.create_booking` | Book a real appointment — **emails the attendee a confirmation + invite, mirrors it into the connected Google/Outlook calendar, creates a contact, takes a teammate's slot** | `settings.manage` | WRITE | `SEND` | no |
+
+Cancel and reschedule are deliberately not tools: both message the attendee
+again and act on a commitment a human already made.
+
+#### Commerce
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_products` | Product catalogue — prices are decimals in **major** units | `leads.read` | READ | — | yes |
+| `jeeta.create_product` | Add a catalogue item (sells nothing, charges nobody) | `leads.manage` | WRITE | — | no |
+| `jeeta.list_invoices` | Recent invoices to the workspace's own customers (totals in **minor** units) | `settings.manage` | READ | — | no |
+| `jeeta.create_estimate` | A DRAFT quote — nothing is sent; line prices are **minor** units | `leads.write` | WRITE | — | no |
+| `jeeta.send_invoice` | Text the customer their pay link over SMS/WhatsApp — **reaches a real person and asks for money** | `settings.manage` | WRITE | `SEND` | no |
+| `jeeta.list_order_forms` | Public checkout pages and their tokens | `leads.read` | READ | — | no |
+
+Invoicing tools gate on `invoicing`; products, estimates and order forms are
+not gated, because the REST controllers do not gate them either.
+
+`jeeta.send_invoice` wraps the **text-to-pay** path, not `InvoicesService.send`.
+The latter — what the panel's "Send / copy pay link" button calls — reaches
+nobody: it flips the status to `SENT` and hands back a URL for a human to paste,
+and there is no email-an-invoice code anywhere in the module. So "send" here
+means an SMS or WhatsApp message actually goes to the customer.
+
+Marking an invoice paid, voiding one, and debiting a customer's stored wallet
+are **not** tools — see [What is never a tool](#what-is-never-a-tool).
+
+#### Courses
+
+Gated on `memberships` — deliberately stricter than REST, which only hides the
+nav entry. It is a Settings > Modules toggle new workspaces start with off.
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_courses` | Courses with status, price and how lessons unlock | `courses.manage` | READ | — | yes |
+| `jeeta.enrol_lead` | Enrol a contact. **Internal record only** — no welcome email, no credentials, no charge; idempotent | `courses.manage` | WRITE | — | no |
+
+#### Reviews
+
+Gated on `reviews`, matching the REST controller.
+
+| Tool | What it does | Scope | Risk | Gated | Listed |
+|---|---|---|---|---|---|
+| `jeeta.list_reviews` | Recent reviews and review requests with their status | `settings.manage` | READ | — | yes |
+| `jeeta.reply_to_review` | Write the business's reply and mark the review replied | `settings.manage` | WRITE | `PUBLISH` | no |
+
+**`jeeta.reply_to_review` does not publish to Google or Facebook.**
+`ReviewsService.saveReply` writes `replyText` and flips `status` to `REPLIED`;
+there is no Google Business Profile reply call anywhere in the codebase (the
+review clients only ever GET, and the `business.manage` OAuth scope is requested
+but never used for a write). Someone still has to paste the text into the
+platform. It is approval-gated anyway, for two reasons: the words are the
+brand's public voice one copy-paste from publication, and the `REPLIED` flip
+takes the review out of the team's queue — a complaint marked answered that
+nobody answered is worse than an unanswered one.
+
+### What is never a tool
+
+Design spec §7, enforced by absence and re-asserted per wave:
+
+- **Deciding an approval.** No tool approves, rejects or applies an
+  `ApprovalRequest`. That is the human gate the whole queue exists for.
+  (`jeeta.approve_strategy_action` approves a *strategy proposal*, not an
+  approval request — and it is itself gated in every mode.)
+- **User and role management.** `users.manage` is not in `MCP_ALL_SCOPES`; no
+  tool can create users, change roles or grant permissions.
+- **Workspace creation and package assignment.** The tenant/billing boundary;
+  `billing.manage` is likewise absent from the MCP vocabulary.
+- **Minting API keys.** An agent that can mint credentials escapes every scope
+  it was given.
+- **Settling money.** No `mark_invoice_paid`, `void_invoice`, `pay_with_wallet`,
+  refund or `submit_order_form`. Recording a payment that never arrived,
+  cancelling a live receivable and debiting a stored balance all have accounting
+  consequences no audit log undoes — and only a human or a PSP callback can know
+  the money moved. `d5-isolation.spec.ts` pins that no such tool exists.
+- **Completing a lesson on a learner's behalf**, which fabricates a record of
+  learning and can mint a certificate in their name.
+- **Authoring courses**, **creating order forms**, **connecting a review
+  source** — setup a human finishes anyway, and a half-created one is worse than
+  none.
 
 ## Approval-gated tools
 
-Four tools are risky enough (`SEND` / `PUBLISH` / `SPEND`) to be registered
-`requiresApproval: true`: `jeeta.send_message`, `jeeta.set_campaign_status`,
-`jeeta.publish_social_post`, `jeeta.reallocate_budget`.
+**19 of the 84 tools are registered `requiresApproval: true`** — the ones that
+reach a customer, speak to an audience, spend money or delete something. See
+the Gated column in [the catalogue](#the-catalogue) for the full list; the
+short version is:
+
+- **reaches a named person:** `jeeta.send_message`, `jeeta.send_email`,
+  `jeeta.click_to_dial`, `jeeta.send_invoice`, `jeeta.create_booking`
+- **reaches an audience:** `jeeta.set_campaign_status`,
+  `jeeta.publish_social_post`, `jeeta.schedule_social_post`,
+  `jeeta.reply_to_review`
+- **spends real money (gated in EVERY mode):** `jeeta.reallocate_budget`,
+  `jeeta.generate_image`, `jeeta.generate_video`,
+  `jeeta.approve_strategy_action`, `jeeta.synthesize_strategy`,
+  `jeeta.run_research`, `jeeta.trigger_workflow`
+- **destroys a row (gated in EVERY mode):** `jeeta.delete_social_post`
+- **hands over authority:** `jeeta.set_workflow_enabled` (arms an automation),
+  `jeeta.set_strategy_autonomy`
 
 When one of these is called and the workspace is in the default `APPROVAL`
 write mode, `McpBrokerService.invoke` **never runs the tool's handler**. It
@@ -345,9 +560,8 @@ what actually runs the tool:
    this is what makes two concurrent apply attempts on the same request
    at-most-once-safe: the loser is rejected at the claim (400 `cannot apply a
    APPLYING request`), never after a duplicate send has already gone out.
-2. It re-invokes the original tool (`jeeta.send_message`,
-   `jeeta.set_campaign_status`, `jeeta.publish_social_post` or
-   `jeeta.reallocate_budget`) through `McpBrokerService.invoke`, with
+2. It re-invokes the original tool — whichever of the 19 gated ones it was —
+   through `McpBrokerService.invoke`, with
    `ctx.approvedBy = { approvalId, userId }` set — that flag is what makes the
    broker run the handler inline this time even though the workspace is still
    in `APPROVAL` mode (`tool.requiresApproval && writeMode !== 'AUTONOMOUS' &&
@@ -371,10 +585,11 @@ what actually runs the tool:
    customer already received.
 
 So an approved `jeeta.send_message` genuinely sends the message,
-`jeeta.set_campaign_status` genuinely transitions the campaign,
-`jeeta.publish_social_post` genuinely publishes, and `jeeta.reallocate_budget`
-genuinely pushes the live budget change — but only after **both** calls, not
-after approve alone.
+`jeeta.publish_social_post` genuinely publishes, `jeeta.reallocate_budget`
+genuinely pushes the live budget change, `jeeta.send_invoice` genuinely texts
+the customer, `jeeta.create_booking` genuinely takes the slot and emails the
+attendee, and `jeeta.delete_social_post` genuinely deletes — but only after
+**both** calls, not after approve alone.
 
 **Full lifecycle:** `PENDING` → (`approve`) → `APPROVED` → (`apply`, claims) →
 `APPLYING` → (tool succeeds) → `APPLIED`, or `APPLYING` → (tool throws) → back
@@ -426,15 +641,28 @@ every call (`McpInvokerService.writeModeFor`) — no caching, so a mode change
 takes effect on the very next tool call, and any value other than the literal
 string `'AUTONOMOUS'` behaves as `APPROVAL` (fail-safe default).
 
-**What changes:** in `AUTONOMOUS` mode, the four gated tools run their handler
-**inline, immediately, with no human in the loop** — `jeeta.send_message`
-sends the message right away, `jeeta.set_campaign_status` transitions the
-campaign right away, `jeeta.publish_social_post` publishes right away,
-`jeeta.reallocate_budget` pushes the live budget change right away. Nothing
-is queued and there is nothing to approve or apply — the model's tool call
-*is* the action. Read [Approval-gated tools](#approval-gated-tools) first so
-you know exactly what those four tools can do before turning this on for a
-workspace.
+**What changes:** in `AUTONOMOUS` mode, gated tools whose risk is `WRITE` run
+their handler **inline, immediately, with no human in the loop** —
+`jeeta.send_message` sends the message right away, `jeeta.send_email` emails
+the lead right away, `jeeta.click_to_dial` dials right away,
+`jeeta.publish_social_post` publishes right away, `jeeta.send_invoice` texts
+the customer the payment demand right away, `jeeta.create_booking` books the
+appointment and emails the attendee right away, `jeeta.reply_to_review` writes
+in the business's name right away. Nothing is queued and there is nothing to
+approve or apply — the model's tool call *is* the action.
+
+**What does NOT change, in any mode:** a tool whose risk is `SPEND` or
+`DESTRUCTIVE` is **always** queued for a human. `ALWAYS_APPROVED_RISKS` in
+`mcp-broker.service.ts` is unconditional on write mode, so autonomy cannot move
+an ad budget, run an AI generation, execute a strategy action, launch a research
+run, fire a workflow over real leads, or delete a post. `AUTONOMOUS` is a
+statement about SPEED ("stop making me approve every send"), not a power of
+attorney: money spent and rows deleted are the two things noticing an hour later
+does not undo. `mcp-broker.destructive.spec.ts` pins both directions.
+
+Read [Approval-gated tools](#approval-gated-tools) and the Gated column in
+[the catalogue](#the-catalogue) so you know exactly which 11 tools this frees
+before turning it on for a workspace.
 
 **What does not change:** every call — gated or not, in either mode, whether
 it runs inline or via a later `apply` — still opens an `agent_runs` row first
@@ -477,9 +705,10 @@ who checked or changed this setting and when.
 There is still no UI toggle for this switch — only the two REST routes above.
 Because it is the single most safety-sensitive setting this connector has (it
 removes the human from every future send/publish/spend the AI decides to
-make), treat it accordingly: confirm you understand the four gated tools'
-behavior in [Approval-gated tools](#approval-gated-tools) before setting a
-production workspace to `AUTONOMOUS`.
+make), treat it accordingly: confirm you understand what the 11
+non-`SPEND`/`DESTRUCTIVE` gated tools can do
+(see [Approval-gated tools](#approval-gated-tools)) before setting a production
+workspace to `AUTONOMOUS`.
 
 ## Audit trail
 
@@ -607,29 +836,40 @@ answer the thread.
 
 - **`403 Forbidden`, `missing scope(s): …`** — the key's expanded scopes
   don't cover everything the tool requires. See [Scopes](#scopes); most
-  commonly this is a key minted with only the legacy `write` shorthand trying
-  to call `jeeta.send_message`, `jeeta.set_campaign_status`,
-  `jeeta.publish_social_post`, `jeeta.draft_social_post`, or
-  `jeeta.reallocate_budget` — `write` does not expand into any of the
-  `contacts.write` / `campaigns.send` / `campaigns.write` / `settings.manage`
-  scopes those tools need. Mint (or add to) a key with the specific granular
-  scope instead.
+  commonly this is a key minted with only the legacy `read`/`write` shorthands
+  trying to reach a tool that needs `contacts.write`, `campaigns.write`,
+  `campaigns.send`, `leads.manage`, `courses.manage`, `automations.manage` or
+  `settings.manage` — none of which any legacy shorthand expands into. Mint (or
+  add to) a key with the specific granular scope instead.
 - **A tool call comes back with `isError: true` and a message** instead of a
   thrown request failure — this is intentional
   (`McpServerFactoryService.handlerFor`): a scope refusal, an oversized
   argument payload, or an unknown tool name is surfaced as a structured tool
   result so the model can read the reason and adjust, rather than the whole
   MCP request failing.
-- **A tool you expect isn't in the list** — check the key's scopes; the
-  server only advertises tools the key's granted scopes fully satisfy
-  (`McpToolRegistry.list`), so a caller can't even see the existence of a
-  tool it can't call.
+- **A tool you expect isn't in the list** — two possible reasons. It may be
+  **deferred**: only 45 of the 84 tools are advertised, and the rest are reached
+  by asking the model to call `jeeta.find_tools` (see
+  [Progressive disclosure](#progressive-disclosure)). Or the key's scopes may
+  not cover it — the server only advertises tools the granted scopes fully
+  satisfy (`McpToolRegistry.listAdvertised`), and `jeeta.find_tools` applies the
+  same filter, so a caller cannot even see the existence of a tool it can't
+  call.
 - **`POST /approvals/:id/apply` returns `400 cannot apply a <STATUS> request`**
   — `apply` only accepts a row currently `APPROVED`. `PENDING` means nobody
   has approved it yet (approve first); `APPLIED`/`REJECTED`/`EXPIRED` are
   terminal; `APPLYING` means another `apply` call is already in flight for
   this request right now (wait for it, or for the reaper to reclaim it if it
   crashed — see [Approval-gated tools](#approval-gated-tools)).
+- **A tool returns `403 FEATURE_NOT_IN_PACKAGE`** — the workspace's package (or
+  its Settings > Modules toggles) does not include the module that tool belongs
+  to. MCP makes the same entitlement check the REST controller makes
+  (`mcp-feature-gate.ts`), so this is not an MCP-specific refusal: `invoicing`,
+  `conversationAi`, `funnels`, `campaigns`, `workflows`, `research`, `mediaGen`,
+  `socialCampaigns`, `voiceCampaigns`, `reviews` and `memberships` all gate
+  tools. The error names the feature. (`memberships` and `research` are gated
+  more strictly over MCP than over REST — see
+  [Tool catalogue](#tool-catalogue).)
 - **`POST /approvals/:id/apply` returns `400 Approval request is not an MCP
   tool invocation`** — this route only executes requests whose `payload` is
   the `{ tool, args }` shape `McpBrokerService.invoke` enqueues. A Growth

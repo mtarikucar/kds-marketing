@@ -70,13 +70,29 @@ are capped three times, server-side:
 1. by what the client asked for,
 2. by your **active** membership in the chosen workspace,
 3. by the permissions your role actually holds there (a REP cannot consent
-   themselves into `campaigns.send`).
+   themselves into `campaigns.send`, `leads.manage`, `courses.manage`,
+   `automations.manage` or `settings.manage`).
+
+`users.manage` and `billing.manage` are not offerable at all: they are absent
+from `MCP_ALL_SCOPES`, because no tool may ever require them (see
+[What is never a tool](./mcp-connector.md#what-is-never-a-tool)). Every scope
+that IS offerable is rendered in a sentence on the consent screen rather than as
+a raw id — a permission you cannot read is one you cannot meaningfully refuse.
 
 ## 3. Check it works
 
-Ask Claude to list its Jeeta tools. You should see the subset of the
-[tool catalogue](./mcp-connector.md#tool-catalogue) your granted scopes cover —
-a narrower grant legitimately shows fewer tools, not an error.
+Ask Claude to list its Jeeta tools. You should see the **advertised** subset of
+the [tool catalogue](./mcp-connector.md#tool-catalogue) your granted scopes
+cover — a narrower grant legitimately shows fewer tools, not an error.
+
+The catalogue is 84 tools across 21 domains, but only 45 are advertised in
+`tools/list`: past ~60, listing everything at once degrades a model's accuracy.
+The rest are **deferred** — fully registered, scope-checked and callable, just
+not pushed into every session. If a tool you expect is missing, ask Claude to
+call `jeeta.find_tools` and search for it; that returns each match with its
+input schema so it can be called straight away. `jeeta.find_tools` applies the
+same scope filter, so it can never reveal a tool your grant does not cover. See
+[Progressive disclosure](./mcp-connector.md#progressive-disclosure).
 
 Then confirm the audit trail: `GET /api/marketing/approvals/agent-runs` (or the
 `agent_runs` table) should show a row with `agent = 'mcp'` for the call.
@@ -232,7 +248,9 @@ curl -s -X POST https://jeetagrowth.com/api/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
-# → the tools your granted scopes cover, and only those
+# → the ADVERTISED tools your granted scopes cover, and only those.
+#   Deferred tools are callable by name but not listed here — call
+#   jeeta.find_tools to discover them.
 ```
 
 Both use `Accept: application/json, text/event-stream` because the transport may
