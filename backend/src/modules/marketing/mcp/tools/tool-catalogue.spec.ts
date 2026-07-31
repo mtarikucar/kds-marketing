@@ -6,6 +6,7 @@ import { registerLeadsWriteTools } from './leads-write.tools';
 import { registerTasksTools } from './tasks.tools';
 import { registerContactsTools } from './contacts.tools';
 import { registerPipelineTools } from './pipeline.tools';
+import { registerCrmReadTools } from './crm-read.tools';
 import { registerInboxTools } from './inbox.tools';
 import { registerCampaignsTools } from './campaigns.tools';
 import { registerSocialTools } from './social.tools';
@@ -43,6 +44,10 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     opportunities: { list: jest.fn(), create: jest.fn(), move: jest.fn(), get: jest.fn() } as any,
     pipelines: { list: jest.fn(), get: jest.fn() } as any,
     principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+  });
+  registerCrmReadTools(registry, {
+    segments: { list: jest.fn() } as any,
+    tags: { list: jest.fn() } as any,
   });
   registerInboxTools(registry, {
     conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
@@ -143,8 +148,10 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_opportunities',
         'jeeta.create_opportunity',
         'jeeta.move_opportunity_stage',
+        'jeeta.list_segments',
+        'jeeta.list_tags',
       ].sort(),
     );
-    expect(names).toHaveLength(34);
+    expect(names).toHaveLength(36);
   });
 });
