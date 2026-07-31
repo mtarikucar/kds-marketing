@@ -1,7 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { ZodObject, type ZodTypeAny } from 'zod';
 
-export type ToolRisk = 'READ' | 'WRITE' | 'SPEND';
+/**
+ * The risk vocabulary from the Faz 5 design spec (§4). `READ`/`WRITE`/`SPEND`
+ * are the original three; `DESTRUCTIVE` arrived with D2's first delete tool.
+ *
+ * Only the classification is declared here — what it MEANS is enforced in one
+ * place, `McpBrokerService`'s `ALWAYS_APPROVED_RISKS`: `SPEND` and
+ * `DESTRUCTIVE` never execute inline, whatever the workspace's write mode.
+ * The spec's `SEND`/`PUBLISH` rows are not separate members: they behave
+ * exactly like `WRITE` at the gate (risky, but runnable unattended) and are
+ * already distinguished for the human in the approval queue by `approvalKind`,
+ * so adding them as risk values would be vocabulary without behaviour.
+ */
+export type ToolRisk = 'READ' | 'WRITE' | 'SPEND' | 'DESTRUCTIVE';
 
 export interface McpToolContext {
   workspaceId: string;
@@ -45,7 +57,15 @@ export interface McpTool {
   /** When true, invoking enqueues an approval instead of executing. */
   requiresApproval: boolean;
   /** The kind used for the ApprovalRequest when gated. */
-  approvalKind?: 'BUDGET_REALLOCATION' | 'PUBLISH' | 'SEND' | 'AD_SPEND' | 'TARGET_CHANGE' | 'CHANNEL_LAUNCH';
+  approvalKind?:
+    | 'BUDGET_REALLOCATION'
+    | 'PUBLISH'
+    | 'SEND'
+    | 'AD_SPEND'
+    | 'TARGET_CHANGE'
+    | 'CHANNEL_LAUNCH'
+    | 'MEDIA_SPEND'
+    | 'DESTRUCTIVE';
   /**
    * Only meaningful when `requiresApproval` is true. `resourceType` is a
    * fixed label for what this tool acts on (e.g. `'conversation'`,
