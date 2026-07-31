@@ -2,6 +2,7 @@ import { McpToolRegistry } from '../mcp-tool-registry';
 import { registerAnalyticsTools } from './analytics.tools';
 import { registerBrandTools } from './brand.tools';
 import { registerLeadsTools } from './leads.tools';
+import { registerLeadsWriteTools } from './leads-write.tools';
 import { registerInboxTools } from './inbox.tools';
 import { registerCampaignsTools } from './campaigns.tools';
 import { registerSocialTools } from './social.tools';
@@ -21,6 +22,11 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   registerAnalyticsTools(registry, { analytics: { funnel: jest.fn() } as any });
   registerBrandTools(registry, { brand: { search: jest.fn() } as any });
   registerLeadsTools(registry, { leads: { findAll: jest.fn() } as any });
+  registerLeadsWriteTools(registry, {
+    leads: { create: jest.fn(), update: jest.fn(), updateStatus: jest.fn(), assign: jest.fn() } as any,
+    activities: { create: jest.fn() } as any,
+    principals: { resolve: jest.fn(), assertActiveMember: jest.fn() } as any,
+  });
   registerInboxTools(registry, {
     conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
   });
@@ -51,6 +57,10 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
 
 const ALL_SCOPES = [
   'leads.read',
+  'leads.write',
+  'leads.manage',
+  'tasks.read',
+  'tasks.write',
   'contacts.read',
   'contacts.write',
   'campaigns.read',
@@ -61,8 +71,22 @@ const ALL_SCOPES = [
   'settings.manage',
 ];
 
+/**
+ * Spec §3 threshold: below 60 tools the whole catalogue is listed directly;
+ * past 60, progressive disclosure (domain grouping + `jeeta.find_tools`) has to
+ * come online because listing ~140 tools at once measurably degrades accuracy.
+ * Pinned as an assertion so the wave that crosses the line cannot land quietly.
+ */
+const PROGRESSIVE_DISCLOSURE_THRESHOLD = 60;
+
 describe('MCP tool catalogue', () => {
-  it('registers exactly the 18 catalogued tools (Faz 1-2)', () => {
+  it('stays under the progressive-disclosure threshold (spec §3)', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    expect(registry.list(ALL_SCOPES).length).toBeLessThanOrEqual(PROGRESSIVE_DISCLOSURE_THRESHOLD);
+  });
+
+  it('registers exactly the catalogued tools (Faz 1-2 + Faz 5 D1)', () => {
     const registry = new McpToolRegistry();
     registerFullCatalogue(registry);
     const names = registry.list(ALL_SCOPES).map((t) => t.name).sort();
@@ -86,8 +110,14 @@ describe('MCP tool catalogue', () => {
         'jeeta.list_bookings',
         'jeeta.get_booking_availability',
         'jeeta.get_workspace_info',
+        // Faz 5 D1 — CRM core (write).
+        'jeeta.create_lead',
+        'jeeta.update_lead',
+        'jeeta.set_lead_status',
+        'jeeta.add_lead_note',
+        'jeeta.assign_lead',
       ].sort(),
     );
-    expect(names).toHaveLength(18);
+    expect(names).toHaveLength(23);
   });
 });
