@@ -253,6 +253,7 @@ import { TrendRemixService } from './trends/trend-remix.service';
 import { VideoPipelineService } from './video/video-pipeline.service';
 import { McpToolRegistry } from './mcp/mcp-tool-registry';
 import { McpBrokerService } from './mcp/mcp-broker.service';
+import { McpPrincipalService } from './mcp/mcp-principal.service';
 import { McpInvokerService } from './mcp/mcp-invoker.service';
 import { McpApprovalExecutorService } from './mcp/mcp-approval-executor.service';
 import { McpServerFactoryService } from './mcp/mcp-server.factory';
@@ -264,6 +265,11 @@ import { McpConsoleService } from './mcp/mcp-console.service';
 import { registerAnalyticsTools } from './mcp/tools/analytics.tools';
 import { registerBrandTools } from './mcp/tools/brand.tools';
 import { registerLeadsTools } from './mcp/tools/leads.tools';
+import { registerLeadsWriteTools } from './mcp/tools/leads-write.tools';
+import { registerTasksTools } from './mcp/tools/tasks.tools';
+import { registerContactsTools } from './mcp/tools/contacts.tools';
+import { registerPipelineTools } from './mcp/tools/pipeline.tools';
+import { registerCrmReadTools } from './mcp/tools/crm-read.tools';
 import { registerInboxTools } from './mcp/tools/inbox.tools';
 import { registerSocialTools } from './mcp/tools/social.tools';
 import { registerAdsTools } from './mcp/tools/ads.tools';
@@ -935,6 +941,10 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     VideoPipelineService,
     McpToolRegistry,
     McpBrokerService,
+    // MCP Faz 5 D1 — resolves the REAL actor a tool WRITE is attributed to
+    // (the consenting human on OAuth, the workspace automation principal on an
+    // API key) and validates assignment targets. See mcp-principal.service.ts.
+    McpPrincipalService,
     // MCP connector (Faz 1-2) — the bearer-token verifier, the per-request
     // scope-filtered McpServer factory, and the audited tool invoker behind it.
     McpInvokerService,
@@ -1165,10 +1175,24 @@ export class MarketingModule {
     ads: AdManagementService,
     bookings: BookingService,
     entitlements: EntitlementsService,
+    // Faz 5 D1 — the CRM write lane.
+    principals: McpPrincipalService,
+    activities: MarketingActivitiesService,
+    tasks: MarketingTasksService,
+    companies: CompaniesService,
+    opportunities: OpportunitiesService,
+    pipelines: PipelinesService,
+    segments: SegmentsService,
+    tags: TagsService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand });
     registerLeadsTools(registry, { leads });
+    registerLeadsWriteTools(registry, { leads, activities, principals });
+    registerTasksTools(registry, { tasks, principals });
+    registerContactsTools(registry, { leads, companies, principals });
+    registerPipelineTools(registry, { opportunities, pipelines, principals });
+    registerCrmReadTools(registry, { segments, tags });
     registerInboxTools(registry, { conversations });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });

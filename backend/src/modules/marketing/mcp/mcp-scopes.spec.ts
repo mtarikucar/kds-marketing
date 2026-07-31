@@ -24,6 +24,15 @@ describe('expandScopes', () => {
     expect(out).not.toContain('campaigns.write');
   });
 
+  it('does not grant manager-tier leads.manage from legacy "read"/"write" — reassigning another rep\'s leads stays opt-in', () => {
+    expect(expandScopes(['read'])).not.toContain('leads.manage');
+    expect(expandScopes(['write'])).not.toContain('leads.manage');
+  });
+
+  it('passes an explicitly granular leads.manage through untouched', () => {
+    expect(expandScopes(['leads.manage'])).toEqual(['leads.manage']);
+  });
+
   it('does not grant settings.manage from legacy "read" or "write"', () => {
     expect(expandScopes(['read'])).not.toContain('settings.manage');
     expect(expandScopes(['write'])).not.toContain('settings.manage');

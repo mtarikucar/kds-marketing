@@ -34,6 +34,14 @@ export const MCP_WRITE_SCOPES = [
 export const MCP_ALL_SCOPES = [
   'leads.read',
   'leads.write',
+  // Manager-tier lead administration (assign/reassign, convert, delete). Faz 5
+  // D1 added `jeeta.assign_lead`, which mirrors `PATCH /marketing/leads/:id/assign`
+  // — gated `@RequirePermission('leads.manage')` over REST, so the tool demands
+  // the same. Deliberately OUTSIDE the legacy `write` expansion below: a coarse
+  // `write` key was never manager-tier, and reassigning another rep's book of
+  // business is exactly the authority REP is denied in
+  // `LEGACY_ROLE_PERMISSIONS`.
+  'leads.manage',
   'contacts.read',
   'contacts.write',
   'campaigns.read',
