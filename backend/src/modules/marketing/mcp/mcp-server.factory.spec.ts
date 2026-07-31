@@ -15,6 +15,7 @@ function deps() {
   registry.register({
     name: 'jeeta.get_funnel',
     description: 'funnel',
+    domain: 'analytics',
     scopes: ['reports.read'],
     risk: 'READ',
     requiresApproval: false,
@@ -47,6 +48,67 @@ describe('McpServerFactoryService', () => {
     expect(registry.list(['leads.read'])).toHaveLength(0);
     const server = factory.build({ era: 'modern', authInfo: authInfo(['leads.read']) } as any);
     expect(registeredToolNames(server)).toHaveLength(0);
+  });
+});
+
+describe('McpServerFactoryService progressive disclosure (spec §3)', () => {
+  function withDeferred() {
+    const { factory, registry, invoke } = deps();
+    registry.register({
+      name: 'jeeta.delete_thing',
+      description: 'a niche destructive one-off',
+      domain: 'social',
+      defer: true,
+      scopes: ['reports.read'],
+      risk: 'DESTRUCTIVE',
+      requiresApproval: true,
+      inputSchema: z.object({ id: z.string() }),
+      handler: jest.fn(),
+    });
+    return { factory, registry, invoke };
+  }
+
+  it('REGISTERS deferred tools with the SDK (they stay callable), but does not advertise them', () => {
+    const { factory } = withDeferred();
+    const server: any = factory.build({ era: 'modern', authInfo: authInfo(['reports.read']) } as any);
+
+    // Callable: the SDK knows the tool, so a tools/call by name dispatches.
+    expect(registeredToolNames(server).sort()).toEqual(['jeeta.delete_thing', 'jeeta.get_funnel']);
+    expect(server._registeredTools['jeeta.delete_thing'].enabled).toBe(true);
+
+    // Advertised: only the core survives into tools/list.
+    const listed = factory.advertisedTools(server, ['reports.read']).tools.map((t) => t.name);
+    expect(listed).toEqual(['jeeta.get_funnel']);
+  });
+
+  it('advertises the SDK\'s own JSON Schema for the tools it does list', () => {
+    const { factory } = withDeferred();
+    const server: any = factory.build({ era: 'modern', authInfo: authInfo(['reports.read']) } as any);
+    const [funnel] = factory.advertisedTools(server, ['reports.read']).tools;
+    expect(funnel.inputSchema).toEqual(server.toolInputSchemaJson('jeeta.get_funnel'));
+    expect((funnel.inputSchema as any).properties).toHaveProperty('from');
+  });
+
+  /**
+   * The override has to be the handler the transport actually dispatches, or
+   * the deferred tools would still be advertised by the SDK's stock handler.
+   */
+  it('installs the filtered handler as the server\'s real tools/list handler', () => {
+    const { factory } = withDeferred();
+    const server: any = factory.build({ era: 'modern', authInfo: authInfo(['reports.read']) } as any);
+    expect(server.server._requestHandlers.has('tools/list')).toBe(true);
+  });
+
+  /**
+   * A caller whose scopes match nothing must get a server with NO tool surface
+   * — the SDK never installed its tool handlers, so overriding `tools/list`
+   * there would throw ("Server does not support tools").
+   */
+  it('advertises nothing, and installs no handler, for a caller lacking every scope', () => {
+    const { factory } = withDeferred();
+    const server: any = factory.build({ era: 'modern', authInfo: authInfo(['leads.read']) } as any);
+    expect(registeredToolNames(server)).toHaveLength(0);
+    expect(server.server._requestHandlers.has('tools/list')).toBe(false);
   });
 });
 

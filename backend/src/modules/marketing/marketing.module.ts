@@ -278,6 +278,7 @@ import { registerWorkspaceTools } from './mcp/tools/workspace.tools';
 import { registerCampaignsTools } from './mcp/tools/campaigns.tools';
 import { registerContentTools } from './mcp/tools/content.tools';
 import { registerSocialCampaignTools } from './mcp/tools/social-campaigns.tools';
+import { registerDiscoveryTools } from './mcp/tools/discovery.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1207,5 +1208,8 @@ export class MarketingModule {
     registerWorkspaceTools(registry, { entitlements });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
+    // Registered LAST: `jeeta.find_tools` searches the catalogue, so everything
+    // it must be able to find has to already be in the registry it closes over.
+    registerDiscoveryTools(registry, { registry });
   }
 }
