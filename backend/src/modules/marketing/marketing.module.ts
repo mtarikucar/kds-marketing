@@ -1218,7 +1218,7 @@ export class MarketingModule {
     registerContactsTools(registry, { leads, companies, principals });
     registerPipelineTools(registry, { opportunities, pipelines, principals });
     registerCrmReadTools(registry, { segments, tags });
-    registerInboxTools(registry, { conversations });
+    registerInboxTools(registry, { conversations, entitlements });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
