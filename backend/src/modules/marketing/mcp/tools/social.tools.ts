@@ -253,6 +253,10 @@ export function registerSocialTools(registry: McpToolRegistry, deps: SocialToolD
     description:
       'Edit a DRAFT social post: its copy, media or target accounts. Only DRAFT posts can be edited — a scheduled or published post is refused. Fields you omit are left untouched. Ungated (no approval).',
     domain: 'social',
+    // Deferred in D4 (spec §3): social is the catalogue's widest domain and
+    // still advertises list/draft/schedule/publish plus the account list.
+    // Re-editing a draft is the rarest of that set.
+    defer: true,
     scopes: ['campaigns.write'],
     risk: 'WRITE',
     requiresApproval: false,

@@ -45,6 +45,10 @@ export function registerConversationWriteTools(
     description:
       'Assign a conversation to a teammate, or unassign it by omitting the user id. Internal triage — the customer sees nothing.',
     domain: 'inbox',
+    // Deferred in D4 (spec §3): inbox still advertises list/read/send plus
+    // `jeeta.close_conversation`; routing a thread to a named teammate is the
+    // rarest of the triage verbs for an agent working on its own.
+    defer: true,
     scopes: ['contacts.write'],
     risk: 'WRITE',
     requiresApproval: false,

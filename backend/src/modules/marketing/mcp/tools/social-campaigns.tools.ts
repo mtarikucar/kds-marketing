@@ -63,6 +63,10 @@ export function registerSocialCampaignTools(
     description:
       'List the AI social campaigns in this workspace (name, goal, automation/planning mode, cadence, status and pipeline stats), newest first. Read-only.',
     domain: 'social',
+    // Deferred in D4 (spec §3): the campaigns surface already advertises
+    // `jeeta.list_campaigns` and `jeeta.get_campaign_performance`; the AI
+    // social-campaign engine is a narrower sub-surface on top of them.
+    defer: true,
     scopes: ['campaigns.read'],
     risk: 'READ',
     requiresApproval: false,

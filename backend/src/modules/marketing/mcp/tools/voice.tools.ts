@@ -109,6 +109,10 @@ export function registerVoiceTools(registry: McpToolRegistry, deps: VoiceToolDep
     description:
       'List sales calls in this workspace (direction, number, status, duration, cost and recording availability), newest first. Read-only.',
     domain: 'voice',
+    // Deferred in D4 (spec §3): call HISTORY is a reporting read, not a
+    // per-turn action. `jeeta.click_to_dial` stays the domain's advertised
+    // representative.
+    defer: true,
     scopes: ['leads.read'],
     risk: 'READ',
     requiresApproval: false,

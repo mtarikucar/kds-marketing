@@ -283,6 +283,9 @@ import { registerEmailTools } from './mcp/tools/email.tools';
 import { registerVoiceTools } from './mcp/tools/voice.tools';
 import { registerCampaignWriteTools } from './mcp/tools/campaigns-write.tools';
 import { registerConversationWriteTools } from './mcp/tools/conversations-write.tools';
+import { registerStrategyTools } from './mcp/tools/strategy.tools';
+import { registerWorkflowTools } from './mcp/tools/workflows.tools';
+import { registerResearchTools } from './mcp/tools/research.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1198,9 +1201,17 @@ export class MarketingModule {
     // Faz 5 D3 — communications.
     emailTemplates: EmailTemplatesService,
     salesCalls: SalesCallService,
+    // Faz 5 D4 — brain & automation.
+    strategy: StrategyService,
+    strategyFeedback: StrategyFeedbackService,
+    workflows: WorkflowsService,
+    leadBulk: LeadBulkService,
+    marketingResearch: MarketingResearchService,
+    researchRunner: ResearchRunnerService,
+    brandProfiles: BrandProfileService,
   ) {
     registerAnalyticsTools(registry, { analytics });
-    registerBrandTools(registry, { brand });
+    registerBrandTools(registry, { brand, profiles: brandProfiles });
     registerLeadsTools(registry, { leads });
     registerLeadsWriteTools(registry, { leads, activities, principals });
     registerTasksTools(registry, { tasks, principals });
@@ -1219,6 +1230,10 @@ export class MarketingModule {
     registerEmailTools(registry, { templates: emailTemplates, campaigns, entitlements });
     registerVoiceTools(registry, { calls: salesCalls, leads, campaigns, principals, entitlements });
     registerConversationWriteTools(registry, { conversations, principals, entitlements });
+    // Faz 5 D4 — the brain & automation wave.
+    registerStrategyTools(registry, { strategy, feedback: strategyFeedback });
+    registerWorkflowTools(registry, { workflows, leadBulk, principals, entitlements });
+    registerResearchTools(registry, { research: marketingResearch, runner: researchRunner, entitlements });
     // Registered LAST: `jeeta.find_tools` searches the catalogue, so everything
     // it must be able to find has to already be in the registry it closes over.
     registerDiscoveryTools(registry, { registry });
