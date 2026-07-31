@@ -2,6 +2,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { createTestApp, closeTestApp, TestApp } from '../utils/test-app';
 import { sha256Hex } from '../../src/modules/mcp-oauth/mcp-oauth.crypto';
+import { McpToolRegistry } from '../../src/modules/marketing/mcp/mcp-tool-registry';
 import { safeFetch } from '../../src/common/util/safe-fetch';
 
 // The CIMD lookup is the one outbound call in this flow. Mocked at the
@@ -257,9 +258,25 @@ describe('MCP OAuth authorization server (e2e)', () => {
 
       expect(list.status).toBe(200);
       const names = (jsonRpcResult(list).tools as Array<{ name: string }>).map((t) => t.name);
-      // Scope-filtered: the token carries leads.read and nothing else, so the
-      // list is that tool alone — a caller cannot even SEE what it may not use.
-      expect(names).toEqual(['jeeta.search_leads']);
+      // Scope-filtered: the token carries leads.read and nothing else, so a
+      // caller cannot even SEE what it may not use.
+      //
+      // Asserted as the PROPERTY — every offered tool is satisfiable by the
+      // granted scopes — rather than as a frozen list. The catalogue grows every
+      // wave (Faz 5 D1 added leads.read-scoped pipeline tools), and a hardcoded
+      // list failed CI for a legitimate addition instead of a regression, which
+      // trains people to edit the assertion rather than read it.
+      const registry = app.get(McpToolRegistry);
+      expect(names).toContain('jeeta.search_leads');
+      expect(names.length).toBeGreaterThan(0);
+      for (const name of names) {
+        const tool = registry.get(name);
+        expect(tool).toBeDefined();
+        // every scope the tool demands must be one the token actually granted
+        expect(tool!.scopes.every((s) => s === 'leads.read')).toBe(true);
+      }
+      // and a tool needing a scope this token lacks is genuinely absent
+      expect(names).not.toContain('jeeta.list_conversations');
     });
 
     it('challenges an unauthenticated MCP call with the discovery pointer', async () => {
