@@ -71,6 +71,7 @@ const SCOPE_FALLBACKS: Record<string, string> = {
   'tasks.read': 'Read your tasks',
   'tasks.write': 'Create and update your tasks',
   'automations.manage': 'Create, arm and run your marketing automations',
+  'courses.manage': 'Manage your courses and enrol your contacts in them',
   'settings.manage': 'Manage your workspace settings',
 };
 

@@ -286,6 +286,10 @@ import { registerConversationWriteTools } from './mcp/tools/conversations-write.
 import { registerStrategyTools } from './mcp/tools/strategy.tools';
 import { registerWorkflowTools } from './mcp/tools/workflows.tools';
 import { registerResearchTools } from './mcp/tools/research.tools';
+// Faz 5 D5 — commerce & reputation, the final wave.
+import { registerCommerceTools } from './mcp/tools/commerce.tools';
+import { registerCourseTools } from './mcp/tools/courses.tools';
+import { registerReviewTools } from './mcp/tools/reviews.tools';
 import { AdWriteCapabilityService } from './ads/ad-write-capability.service';
 import { VideoPersonaService } from './video/video-persona.service';
 import { UnifiedCalendarService } from './trends/unified-calendar.service';
@@ -1209,6 +1213,15 @@ export class MarketingModule {
     marketingResearch: MarketingResearchService,
     researchRunner: ResearchRunnerService,
     brandProfiles: BrandProfileService,
+    // Faz 5 D5 — commerce & reputation.
+    products: ProductsService,
+    invoices: InvoicesService,
+    invoiceText: InvoiceTextService,
+    estimates: EstimatesService,
+    orderForms: OrderFormsService,
+    courses: CoursesService,
+    enrollments: EnrollmentService,
+    reviews: ReviewsService,
   ) {
     registerAnalyticsTools(registry, { analytics });
     registerBrandTools(registry, { brand, profiles: brandProfiles });
@@ -1218,11 +1231,11 @@ export class MarketingModule {
     registerContactsTools(registry, { leads, companies, principals });
     registerPipelineTools(registry, { opportunities, pipelines, principals });
     registerCrmReadTools(registry, { segments, tags });
-    registerInboxTools(registry, { conversations });
+    registerInboxTools(registry, { conversations, entitlements });
     registerCampaignsTools(registry, { campaigns });
     registerSocialTools(registry, { social });
     registerAdsTools(registry, { accounts: adAccounts, budgets, ads });
-    registerSchedulingTools(registry, { bookings });
+    registerSchedulingTools(registry, { bookings, entitlements });
     registerWorkspaceTools(registry, { entitlements });
     registerContentTools(registry, { calendar, media: mediaGen, principals, entitlements });
     registerSocialCampaignTools(registry, { socialCampaigns, principals, entitlements });
@@ -1234,6 +1247,17 @@ export class MarketingModule {
     registerStrategyTools(registry, { strategy, feedback: strategyFeedback });
     registerWorkflowTools(registry, { workflows, leadBulk, principals, entitlements });
     registerResearchTools(registry, { research: marketingResearch, runner: researchRunner, entitlements });
+    // Faz 5 D5 — commerce & reputation.
+    registerCommerceTools(registry, {
+      products,
+      invoices,
+      invoiceText,
+      estimates,
+      orderForms,
+      entitlements,
+    });
+    registerCourseTools(registry, { courses, enrollments, entitlements });
+    registerReviewTools(registry, { reviews, entitlements });
     // Registered LAST: `jeeta.find_tools` searches the catalogue, so everything
     // it must be able to find has to already be in the registry it closes over.
     registerDiscoveryTools(registry, { registry });

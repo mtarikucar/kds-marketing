@@ -23,6 +23,9 @@ import { registerDiscoveryTools } from './discovery.tools';
 import { registerStrategyTools } from './strategy.tools';
 import { registerWorkflowTools } from './workflows.tools';
 import { registerResearchTools } from './research.tools';
+import { registerCommerceTools } from './commerce.tools';
+import { registerCourseTools } from './courses.tools';
+import { registerReviewTools } from './reviews.tools';
 
 /**
  * Registers the FULL curated MCP tool catalogue (every register*Tools call
@@ -64,6 +67,7 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
   });
   registerInboxTools(registry, {
     conversations: { list: jest.fn(), thread: jest.fn(), replyAsAi: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
   });
   registerCampaignsTools(registry, {
     campaigns: {
@@ -94,7 +98,8 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     ads: { setDailyBudget: jest.fn() } as any,
   });
   registerSchedulingTools(registry, {
-    bookings: { listBookings: jest.fn(), availability: jest.fn() } as any,
+    bookings: { listBookings: jest.fn(), availability: jest.fn(), book: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
   });
   registerWorkspaceTools(registry, { entitlements: { getEffective: jest.fn() } as any });
   registerContentTools(registry, {
@@ -151,6 +156,24 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     runner: { enqueueNow: jest.fn() } as any,
     entitlements: { getEffective: jest.fn() } as any,
   });
+  // Faz 5 D5 — commerce & reputation.
+  registerCommerceTools(registry, {
+    products: { list: jest.fn(), create: jest.fn() } as any,
+    invoices: { list: jest.fn() } as any,
+    invoiceText: { sendByText: jest.fn() } as any,
+    estimates: { create: jest.fn() } as any,
+    orderForms: { list: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerCourseTools(registry, {
+    courses: { list: jest.fn() } as any,
+    enrollments: { enroll: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
+  registerReviewTools(registry, {
+    reviews: { list: jest.fn(), saveReply: jest.fn() } as any,
+    entitlements: { getEffective: jest.fn() } as any,
+  });
   registerDiscoveryTools(registry, { registry });
 }
 
@@ -167,6 +190,7 @@ const ALL_SCOPES = [
   'campaigns.send',
   'reports.read',
   'automations.manage',
+  'courses.manage',
   'settings.manage',
 ];
 
@@ -231,7 +255,7 @@ describe('MCP tool catalogue', () => {
     }
   });
 
-  it('registers exactly the catalogued tools (Faz 1-2 + Faz 5 D1)', () => {
+  it('registers exactly the catalogued tools (Faz 1-2 + Faz 5 D1-D5)', () => {
     const registry = new McpToolRegistry();
     registerFullCatalogue(registry);
     const names = registry.list(ALL_SCOPES).map((t) => t.name).sort();
@@ -314,9 +338,21 @@ describe('MCP tool catalogue', () => {
         'jeeta.run_research',
         'jeeta.get_brand_profile',
         'jeeta.update_brand_profile',
+        // Faz 5 D5 — commerce & reputation (the final wave).
+        'jeeta.list_products',
+        'jeeta.create_product',
+        'jeeta.list_invoices',
+        'jeeta.create_estimate',
+        'jeeta.send_invoice',
+        'jeeta.list_order_forms',
+        'jeeta.create_booking',
+        'jeeta.list_courses',
+        'jeeta.enrol_lead',
+        'jeeta.list_reviews',
+        'jeeta.reply_to_review',
       ].sort(),
     );
-    expect(names).toHaveLength(73);
+    expect(names).toHaveLength(84);
   });
 
   /**
@@ -358,5 +394,37 @@ describe('MCP tool catalogue', () => {
       expect(advertisedDomains).toContain(tool.domain);
     }
     for (const d of ['strategy', 'workflows', 'research']) expect(advertisedDomains).toContain(d);
+    for (const d of ['commerce', 'courses', 'reviews']) expect(advertisedDomains).toContain(d);
+  });
+
+  /**
+   * D5 is the final wave and it lands the surface EXACTLY on the ceiling: 84
+   * tools, 45 advertised. It added three domains, each of which needs one
+   * advertised member for the invariant above to hold, and paid for two of
+   * those three by deferring two previously-advertised tools — the mechanism
+   * spec §3 mandates and D4 established, not a nudge of the number. Net effect
+   * on what every model loads: +1.
+   *
+   * Pinned by name, like D4's trade, so a future wave that wants the room back
+   * has to make the swap explicitly.
+   */
+  it('paid for D5 by deferring two more previously-advertised tools', () => {
+    const registry = new McpToolRegistry();
+    registerFullCatalogue(registry);
+    const advertised = new Set(registry.listAdvertised(ALL_SCOPES).map((t) => t.name));
+    for (const name of [
+      // The last of the inbox-triage trio; assign/note went in D4. The inbox
+      // keeps list/read/send — the verbs that matter per turn.
+      'jeeta.close_conversation',
+      // Only meaningful to a workspace that has provisioned a Growth Autopilot
+      // budget; for everyone else it is an empty list in every session's
+      // context. `jeeta.get_ad_performance` stays the ads domain's listed read.
+      'jeeta.get_budget',
+    ]) {
+      expect(registry.get(name)!.defer).toBe(true);
+      expect(advertised.has(name)).toBe(false);
+    }
+    expect(registry.listAdvertised(ALL_SCOPES)).toHaveLength(45);
+    expect(registry.list(ALL_SCOPES)).toHaveLength(84);
   });
 });

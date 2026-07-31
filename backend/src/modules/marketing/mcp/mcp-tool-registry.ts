@@ -49,7 +49,17 @@ export type ToolDomain =
   // domain word itself.
   | 'strategy'
   | 'workflows'
-  | 'research';
+  | 'research'
+  // Faz 5 D5 — the commerce & reputation wave. `commerce` is one domain on
+  // purpose: products, estimates, invoices and order forms are the single
+  // question "what do we sell and how do we get paid for it", and every one of
+  // those tools reaches for the others' ids. `courses` and `reviews` are NOT
+  // folded into it — "what are we teaching our customers" and "what are people
+  // saying about us in public" are different questions, and the domain word is
+  // itself a `jeeta.find_tools` match term.
+  | 'commerce'
+  | 'courses'
+  | 'reviews';
 
 export const TOOL_DOMAINS: readonly ToolDomain[] = [
   'analytics',
@@ -70,6 +80,9 @@ export const TOOL_DOMAINS: readonly ToolDomain[] = [
   'strategy',
   'workflows',
   'research',
+  'commerce',
+  'courses',
+  'reviews',
 ] as const;
 
 const DOMAIN_SET: ReadonlySet<string> = new Set<string>(TOOL_DOMAINS);

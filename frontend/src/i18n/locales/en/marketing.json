@@ -3020,6 +3020,7 @@
       "tasks_read": "Read your tasks",
       "tasks_write": "Create and update your tasks",
       "automations_manage": "Create, arm and run your marketing automations",
+      "courses_manage": "Manage your courses and enrol your contacts in them",
       "settings_manage": "Manage your workspace settings"
     }
   }
