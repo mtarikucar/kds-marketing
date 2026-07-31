@@ -1,4 +1,4 @@
-import { expandScopes, MCP_READ_SCOPES, MCP_WRITE_SCOPES } from './mcp-scopes';
+import { expandScopes, MCP_ALL_SCOPES, MCP_READ_SCOPES, MCP_WRITE_SCOPES } from './mcp-scopes';
 
 describe('expandScopes', () => {
   it('expands legacy "read" into every read scope', () => {
@@ -61,5 +61,29 @@ describe('expandScopes', () => {
 
   it('returns an empty array for no input', () => {
     expect(expandScopes([])).toEqual([]);
+  });
+
+  /**
+   * Faz 5 D5 — the courses/memberships lane. `courses.manage` is a real
+   * permission from `roles/permissions.ts` (OWNER/MANAGER only), and like
+   * `leads.manage` and `automations.manage` before it, it must never be
+   * acquired by a legacy coarse key: enrolling someone into a paid course, or
+   * reading the whole course catalogue, was never within a `write` key's
+   * authority over REST.
+   */
+  it('does not grant manager-tier courses.manage from legacy "read"/"write"', () => {
+    expect(expandScopes(['read'])).not.toContain('courses.manage');
+    expect(expandScopes(['write'])).not.toContain('courses.manage');
+  });
+
+  it('passes an explicitly granular courses.manage through untouched', () => {
+    expect(expandScopes(['courses.manage'])).toEqual(['courses.manage']);
+  });
+
+  it('publishes courses.manage in the OAuth-requestable vocabulary', () => {
+    // MCP_ALL_SCOPES is what `scopes_supported` advertises and what a consent
+    // screen offers. A tool scope missing from it is a tool unreachable over
+    // OAuth — see mcp-oauth-metadata.controller.spec.ts.
+    expect(MCP_ALL_SCOPES).toContain('courses.manage');
   });
 });

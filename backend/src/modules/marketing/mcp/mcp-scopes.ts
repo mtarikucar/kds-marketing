@@ -58,6 +58,15 @@ export const MCP_ALL_SCOPES = [
   // expansion below: arming an automation that emails/SMSes every future
   // matching lead was never within a coarse `write` key's authority.
   'automations.manage',
+  // Faz 5 D5 — the courses/memberships lane. `CoursesController` is
+  // `@MarketingRoles('MANAGER')` with no finer permission, and
+  // `EnrollmentController` carries no permission at all; rather than borrow
+  // `settings.manage` (which would hand a courses integration the keys to the
+  // ad budget and the PSP config) the MCP tools demand the permission the
+  // product already defines for exactly this area. Held by OWNER/MANAGER only
+  // (see `LEGACY_ROLE_PERMISSIONS`), and deliberately OUTSIDE the legacy
+  // `write` expansion below.
+  'courses.manage',
   'settings.manage',
 ] as const;
 

@@ -123,12 +123,13 @@ describe('McpConsentPage', () => {
    * page falls back to the raw id rather than hiding an unknown scope, which is
    * the right failure mode but is still a bad consent screen — so every scope
    * the backend can actually ask for needs a label here. `automations.manage`
-   * (MCP Faz 5 D4: create, arm and run automations) and `leads.manage` (D1)
-   * were both requestable before they were readable.
+   * (MCP Faz 5 D4: create, arm and run automations), `leads.manage` (D1) and
+   * `courses.manage` (D5) were all requestable before they were readable.
    */
   it.each([
     ['automations.manage', 'Create, arm and run your marketing automations'],
     ['leads.manage', 'Assign, convert and delete your leads'],
+    ['courses.manage', 'Manage your courses and enrol your contacts in them'],
   ])('renders %s in human language', async (scope, label) => {
     (svc.getMcpConsentData as any).mockResolvedValue({
       ...CONSENT,

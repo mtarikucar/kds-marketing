@@ -3873,6 +3873,7 @@
       "tasks_read": "Görevlerini okuma",
       "tasks_write": "Görev oluşturma ve güncelleme",
       "automations_manage": "Pazarlama otomasyonlarını oluşturma, devreye alma ve çalıştırma",
+      "courses_manage": "Kurslarını yönetme ve kişilerini kurslara kaydetme",
       "settings_manage": "Çalışma alanı ayarlarını yönetme"
     }
   }

@@ -78,6 +78,17 @@ describe('McpToolRegistry progressive disclosure (spec §3)', () => {
     expect(() => registry.register(tool({ domain: 'telepathy' as never }))).toThrow(/domain/i);
   });
 
+  /**
+   * Faz 5 D5 — the commerce wave's three new domains. Spec files are excluded
+   * from type-checking, so the `ToolDomain` union alone would not catch a
+   * missing runtime entry in `TOOL_DOMAINS`; this pins both halves.
+   */
+  it.each(['commerce', 'courses', 'reviews'])('accepts the D5 domain %s', (domain) => {
+    const registry = new McpToolRegistry();
+    expect(() => registry.register(tool({ domain: domain as never }))).not.toThrow();
+    expect(registry.get('jeeta.example')!.domain).toBe(domain);
+  });
+
   it('omits deferred tools from the advertised list but keeps them callable', () => {
     const registry = new McpToolRegistry();
     registry.register(tool({ name: 'jeeta.core' }));
