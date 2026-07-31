@@ -43,7 +43,16 @@ export type ApprovalKind =
   | 'SEND'
   | 'AD_SPEND'
   | 'TARGET_CHANGE'
-  | 'CHANNEL_LAUNCH';
+  | 'CHANNEL_LAUNCH'
+  // Faz 5 D2 — real cash leaves the workspace for an AI media generation
+  // (fal.ai image/video). `AD_SPEND` already means "an ad platform's budget
+  // moved"; reusing it would label an image generation as ad spend in the
+  // approvals queue. The UI renders `t('budget.kind.<kind>', kind)` — i.e. it
+  // falls back to the raw string — so a new kind is purely additive, and the
+  // DB column is a free-text String.
+  | 'MEDIA_SPEND'
+  // Faz 5 D2 — a permanent removal (design spec §4's new DESTRUCTIVE class).
+  | 'DESTRUCTIVE';
 
 export interface EnqueueInput {
   kind: ApprovalKind;

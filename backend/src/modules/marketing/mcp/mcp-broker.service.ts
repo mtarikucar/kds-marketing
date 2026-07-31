@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { McpTool, McpToolContext, McpToolRegistry } from './mcp-tool-registry';
+import { McpTool, McpToolContext, McpToolRegistry, ToolRisk } from './mcp-tool-registry';
 import { ApprovalRequestService } from '../agents/approval-request.service';
 import { AgentRunService } from '../agents/agent-run.service';
 
@@ -24,6 +24,33 @@ const MAX_ARGS_BYTES = 32 * 1024;
  * can be approved or applied "weeks later" against a stale context.
  */
 const MCP_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Faz 5 D2 — the risk classes an AUTONOMOUS workspace may NOT run unattended
+ * (design spec §4: *"`SPEND` ve yeni `DESTRUCTIVE` sınıfı, `mcpWriteMode` ne
+ * olursa olsun onay kuyruğuna düşer — otonom mod bile bunları geçemez."*).
+ *
+ * `mcpWriteMode: AUTONOMOUS` is a statement about SPEED — "stop making me
+ * click approve on every send/publish" — not a blanket power of attorney. Two
+ * classes of action are not recoverable by noticing them afterwards:
+ *
+ * - `SPEND` — real money leaves the workspace (an ad budget change, a fal.ai
+ *   generation). Money spent by a wrong agent turn is not refundable by
+ *   reading the audit log an hour later.
+ * - `DESTRUCTIVE` — a row is permanently removed. There is no undo table.
+ *
+ * Everything else (`READ`/`WRITE`, and the `SEND`/`PUBLISH` approval kinds,
+ * which ride on `WRITE`) keeps the original bypass: risky, but a bad one is
+ * visible and correctable. Keeping this as a risk-CLASS rule rather than a
+ * per-tool opt-out is deliberate — a tool author cannot forget to set it, and
+ * `mcp-broker.destructive.spec.ts` pins both directions.
+ *
+ * The gate is unconditional on write mode, but NOT on `approvedBy`: once a
+ * human has approved a queued request, `McpApprovalExecutorService` re-enters
+ * the broker with `approvedBy` set and the tool runs. That is the whole point
+ * of the queue.
+ */
+const ALWAYS_APPROVED_RISKS: ReadonlySet<ToolRisk> = new Set<ToolRisk>(['SPEND', 'DESTRUCTIVE']);
 
 /**
  * The safe MCP broker (Faz 6) — the single choke point between an external agent
@@ -56,7 +83,11 @@ export class McpBrokerService {
     this.assertArgsSize(args);
 
     // High-risk ops never execute inline — they enqueue a human approval.
-    if (tool.requiresApproval && ctx.writeMode !== 'AUTONOMOUS' && !ctx.approvedBy) {
+    // AUTONOMOUS lifts that for the recoverable classes only; SPEND and
+    // DESTRUCTIVE are gated in EVERY mode (see ALWAYS_APPROVED_RISKS).
+    const autonomyMayBypass =
+      ctx.writeMode === 'AUTONOMOUS' && !ALWAYS_APPROVED_RISKS.has(tool.risk);
+    if (tool.requiresApproval && !autonomyMayBypass && !ctx.approvedBy) {
       const kind = tool.approvalKind ?? 'AD_SPEND';
       const resourceType = tool.resourceType;
       const resourceId = tool.resourceIdFrom?.(args);
