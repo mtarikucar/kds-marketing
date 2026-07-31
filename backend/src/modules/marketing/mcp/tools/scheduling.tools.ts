@@ -175,8 +175,22 @@ export function registerSchedulingTools(registry: McpToolRegistry, deps: Schedul
     }),
     handler: async (ctx, args) => {
       await assertFeature(deps.entitlements, ctx.workspaceId, 'funnels');
-      const { calendarId, ...slot } = args as Record<string, unknown>;
-      return deps.bookings.book(ctx.workspaceId, String(calendarId ?? ''), slot as never);
+      // Projected field by field rather than spread. `book()`'s dto type also
+      // accepts `landingUrl`/`referrerUrl`, which feed first-touch attribution
+      // — not fields an agent should be able to write, and not fields this
+      // schema declares. The MCP transport strict-parses, but the approval
+      // executor re-invokes with a STORED payload, so this is the layer that
+      // must not trust it.
+      return deps.bookings.book(ctx.workspaceId, String(args.calendarId ?? ''), {
+        start: String(args.start ?? ''),
+        name: String(args.name ?? ''),
+        ...(args.email !== undefined ? { email: String(args.email) } : {}),
+        ...(args.phone !== undefined ? { phone: String(args.phone) } : {}),
+        ...(args.notes !== undefined ? { notes: String(args.notes) } : {}),
+        ...(args.attendeeTimezone !== undefined
+          ? { attendeeTimezone: String(args.attendeeTimezone) }
+          : {}),
+      });
     },
   });
 }

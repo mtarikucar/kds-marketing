@@ -96,6 +96,33 @@ describe('commerce reads', () => {
     });
   });
 
+  /**
+   * The MCP transport strict-parses arguments, but the approval executor
+   * re-invokes a gated tool with a STORED payload and the broker itself does no
+   * parsing — so a handler that spreads raw args into a Prisma `create` is
+   * trusting the wrong layer. Both writes project field by field instead.
+   */
+  it('jeeta.create_product forwards only declared fields, never the raw argument object', async () => {
+    const { registry, deps } = build();
+    await registry.get('jeeta.create_product')!.handler(ctx, {
+      name: 'Starter',
+      price: 1250.5,
+      workspaceId: 'ws-other',
+      id: 'forced-id',
+    } as never);
+    expect(deps.products.create).toHaveBeenCalledWith(WS, { name: 'Starter', price: 1250.5 });
+  });
+
+  it('jeeta.create_estimate rebuilds each line, so no extra per-line key rides into the items JSON', async () => {
+    const { registry, deps } = build();
+    await registry.get('jeeta.create_estimate')!.handler(ctx, {
+      items: [{ description: 'Setup', qty: 1, unitPrice: 100, taxPct: 20, id: 'x' }],
+    } as never);
+    expect(deps.estimates.create).toHaveBeenCalledWith(WS, {
+      items: [{ description: 'Setup', qty: 1, unitPrice: 100 }],
+    });
+  });
+
   it('jeeta.list_invoices reads the workspace ledger', async () => {
     const { registry, deps } = build();
     await registry.get('jeeta.list_invoices')!.handler(ctx, {});

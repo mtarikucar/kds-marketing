@@ -127,6 +127,30 @@ describe('jeeta.create_booking', () => {
     });
   });
 
+  /**
+   * `BookingService.book`'s dto type also accepts `landingUrl`/`referrerUrl`,
+   * which feed first-touch marketing attribution — not something an agent
+   * should be able to write, and not something this schema declares. The
+   * transport strict-parses, but the approval executor re-invokes with a STORED
+   * payload, so the handler projects rather than spreads.
+   */
+  it('forwards only declared slot fields, never the raw argument object', async () => {
+    const registry = new McpToolRegistry();
+    const d = deps();
+    d.bookings.book.mockResolvedValue({ id: 'bk9' });
+    registerSchedulingTools(registry, d);
+    await registry.get('jeeta.create_booking')!.handler(ctx, {
+      ...args,
+      landingUrl: 'https://attacker.example/utm',
+      referrerUrl: 'https://attacker.example',
+    } as never);
+    expect(d.bookings.book).toHaveBeenCalledWith('ws1', 'cal1', {
+      start: args.start,
+      name: args.name,
+      email: args.email,
+    });
+  });
+
   it('requires a real slot start and an attendee name', () => {
     const registry = new McpToolRegistry();
     registerSchedulingTools(registry, deps());

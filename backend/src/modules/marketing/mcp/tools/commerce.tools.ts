@@ -133,7 +133,22 @@ export function registerCommerceTools(registry: McpToolRegistry, deps: CommerceT
       taxRate: z.number().min(0).max(100).optional().describe('VAT/tax percentage, e.g. 20 for 20%.'),
       active: z.boolean().optional().describe('Whether the product is sellable (default true).'),
     }),
-    handler: async (ctx, args) => deps.products.create(ctx.workspaceId, args as never),
+    // Projected field by field rather than spread: the raw `args` object is
+    // whatever the caller sent, and it lands in a Prisma `create`. The MCP
+    // transport strict-parses first, but the approval executor re-invokes with
+    // a STORED payload, so this is the layer that must not trust it.
+    handler: async (ctx, args) =>
+      deps.products.create(ctx.workspaceId, {
+        name: String(args.name ?? ''),
+        ...(args.description !== undefined ? { description: String(args.description) } : {}),
+        ...(args.sku !== undefined ? { sku: String(args.sku) } : {}),
+        ...(typeof args.price === 'number' ? { price: args.price } : {}),
+        ...(args.currency !== undefined ? { currency: String(args.currency) } : {}),
+        ...(args.billingType !== undefined ? { billingType: String(args.billingType) } : {}),
+        ...(args.interval !== undefined ? { interval: String(args.interval) } : {}),
+        ...(typeof args.taxRate === 'number' ? { taxRate: args.taxRate } : {}),
+        ...(typeof args.active === 'boolean' ? { active: args.active } : {}),
+      } as never),
   });
 
   registry.register({
@@ -198,7 +213,25 @@ export function registerCommerceTools(registry: McpToolRegistry, deps: CommerceT
         .optional()
         .describe('ISO 8601 date after which the quote expires and can no longer be accepted.'),
     }),
-    handler: async (ctx, args) => deps.estimates.create(ctx.workspaceId, args as never),
+    // Projected, not spread — see `jeeta.create_product`. Lines are rebuilt
+    // field by field too, so no extra per-line key (a client-supplied tax
+    // percentage, say) can ride into the items JSON the service snapshots.
+    handler: async (ctx, args) =>
+      deps.estimates.create(ctx.workspaceId, {
+        ...(args.leadId !== undefined ? { leadId: String(args.leadId) } : {}),
+        items: (Array.isArray(args.items) ? args.items : []).map((raw) => {
+          const line = raw as Record<string, unknown>;
+          return {
+            description: String(line.description ?? ''),
+            qty: Number(line.qty ?? 0),
+            unitPrice: Number(line.unitPrice ?? 0),
+            ...(line.taxRateId !== undefined ? { taxRateId: String(line.taxRateId) } : {}),
+          };
+        }),
+        ...(args.currency !== undefined ? { currency: String(args.currency) } : {}),
+        ...(args.notes !== undefined ? { notes: String(args.notes) } : {}),
+        ...(args.validUntil !== undefined ? { validUntil: String(args.validUntil) } : {}),
+      } as never),
   });
 
   registry.register({
