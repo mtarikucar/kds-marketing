@@ -64,7 +64,16 @@ function registerFullCatalogue(registry: McpToolRegistry): void {
     } as any,
   });
   registerSocialTools(registry, {
-    social: { listPosts: jest.fn(), createPost: jest.fn(), publishNow: jest.fn() } as any,
+    social: {
+      listPosts: jest.fn(),
+      createPost: jest.fn(),
+      publishNow: jest.fn(),
+      getPost: jest.fn(),
+      updatePost: jest.fn(),
+      deletePost: jest.fn(),
+      schedulePost: jest.fn(),
+      listAccounts: jest.fn(),
+    } as any,
   });
   registerAdsTools(registry, {
     accounts: { getMetrics: jest.fn() } as any,
@@ -150,8 +159,14 @@ describe('MCP tool catalogue', () => {
         'jeeta.move_opportunity_stage',
         'jeeta.list_segments',
         'jeeta.list_tags',
+        // Faz 5 D2 — content & social automation.
+        'jeeta.list_social_accounts',
+        'jeeta.get_social_post',
+        'jeeta.update_social_post',
+        'jeeta.schedule_social_post',
+        'jeeta.delete_social_post',
       ].sort(),
     );
-    expect(names).toHaveLength(36);
+    expect(names).toHaveLength(41);
   });
 });
