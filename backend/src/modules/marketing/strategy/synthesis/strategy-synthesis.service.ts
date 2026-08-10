@@ -153,7 +153,12 @@ export class StrategySynthesisService {
       workspaceId,
       { agent: 'strategy-synthesis', goal: 'Synthesize marketing strategy', input: { sessionId } },
       async (runId) => {
+        // Base only. The expensive part is the tool-loop below and it is
+        // charged PER TURN: a single flat per-run reserve priced one credit
+        // amount for anywhere between one and MAX_ITERS Opus calls at
+        // maxTokens 4000, so the credit ceiling was not a spend ceiling.
         await this.credits.reserve(workspaceId, creditCost('strategy.synthesize'));
+        let turnsCharged = 0;
         try {
           const ctx: ResearchToolCtx = { workspaceId, runId, geo: {}, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
@@ -169,12 +174,18 @@ export class StrategySynthesisService {
           const deadline = Date.now() + MAX_WALL_MS;
 
           for (let i = 0; i < MAX_ITERS && Date.now() < deadline && toolCalls < MAX_TOOL_CALLS; i++) {
+            // Charge before the call, not after: an exhausted workspace must
+            // stop spending Jeeta's money, not discover the limit afterwards.
+            // Letting this throw is deliberate — the caller gets a truthful
+            // AI_CREDITS_EXHAUSTED rather than "synthesis produced no strategy".
+            await this.credits.reserve(workspaceId, creditCost('strategy.turn'));
+            turnsCharged += 1;
             const res = await this.anthropic.complete({
               system: this.SYSTEM,
               messages,
               tools,
               maxTokens: 4000,
-              tier: tierFor('strategy.synthesize'),
+              tier: tierFor('strategy.turn'),
               cacheSystem: true,
             });
             if (!res.toolUses.length) break;
@@ -223,7 +234,14 @@ export class StrategySynthesisService {
           this.logger.log(`strategy synthesis ${runId}: ${archetype} + ${actionCount} actions (ws ${workspaceId})`);
           return { strategyId, actionCount };
         } catch (e) {
-          await this.credits.refund(workspaceId, creditCost('strategy.synthesize')).catch(() => undefined);
+          // Refund the base AND every turn actually charged — the run produced
+          // nothing usable, and the existing policy is not to bill for errors.
+          await this.credits
+            .refund(
+              workspaceId,
+              creditCost('strategy.synthesize') + turnsCharged * creditCost('strategy.turn'),
+            )
+            .catch(() => undefined);
           throw e;
         }
       },

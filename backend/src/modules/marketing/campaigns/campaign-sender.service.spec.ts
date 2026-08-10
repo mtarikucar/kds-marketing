@@ -9,6 +9,7 @@ describe('CampaignSenderService.batch', () => {
   const WS = 'ws-1';
   let prisma: any;
   let email: { sendPlainEmail: jest.Mock; sendCampaignEmail: jest.Mock };
+  let quota: { reserve: jest.Mock; refund: jest.Mock };
   let scheduledJobs: { schedule: jest.Mock };
   let conversationSpend: { settleCampaignSms: jest.Mock };
   let svc: CampaignSenderService;
@@ -49,7 +50,7 @@ describe('CampaignSenderService.batch', () => {
     scheduledJobs = { schedule: jest.fn() };
     const runner = { registerHandler: jest.fn() };
     const registry = { get: jest.fn(), resolveConfig: jest.fn() };
-    const quota = { reserve: jest.fn(), refund: jest.fn() };
+    quota = { reserve: jest.fn(), refund: jest.fn() };
     // Inert by default: no ESP transport → platform-default From (null).
     const sendingDomains = { resolveFrom: jest.fn().mockResolvedValue(null) };
     // Unused by this describe block's EMAIL-only fixtures (the SMS v2 batch
@@ -69,6 +70,38 @@ describe('CampaignSenderService.batch', () => {
     svc = new CampaignSenderService(
       prisma as any, config as any, email as any, scheduledJobs as any, runner as any, registry as any, quota as any, sendingDomains as any, smsV2 as any, conversationSpend as any, iysClient as any, budgeter as any, voicesmsSend as any,
     );
+  });
+
+  // Campaign email used to be the ONLY outbound channel with no meter: the
+  // EMAIL branch returned before the reserve, so `messagesMonthly` never saw
+  // it. The economics were inverted — SMS/WhatsApp bill to the CUSTOMER's own
+  // provider account and were metered; email leaves on JEETA's SMTP account
+  // and was unlimited.
+  it('meters every campaign email against the monthly message quota', async () => {
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(email.sendPlainEmail).toHaveBeenCalledTimes(1);
+    expect(quota.reserve).toHaveBeenCalledTimes(1);
+    expect(quota.reserve).toHaveBeenCalledWith(WS, 'EMAIL');
+    // A delivered message is not refunded.
+    expect(quota.refund).not.toHaveBeenCalled();
+  });
+
+  it('refunds the message quota when the email fails to send', async () => {
+    email.sendPlainEmail.mockResolvedValue(false);
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(quota.reserve).toHaveBeenCalledWith(WS, 'EMAIL');
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'EMAIL');
+  });
+
+  it('refunds the message quota when the transport throws', async () => {
+    email.sendPlainEmail.mockRejectedValue(new Error('smtp down'));
+
+    await (svc as any).batch({ payload: { workspaceId: WS, campaignId: 'c1' } });
+
+    expect(quota.refund).toHaveBeenCalledWith(WS, 'EMAIL');
   });
 
   it('skips opted-out recipients, sends the rest, and completes the campaign', async () => {

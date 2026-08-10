@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { StrategySynthesisService } from './strategy-synthesis.service';
+import { creditCost } from '../../ai/ai-credit-costs';
 
 const GOOD_BRIEF = {
   identity: { product: 'Private Metin2 server', voice: 'playful, nostalgic', positioning: 'The classic-era server', usp: 'Pre-2010 mechanics, no pay-to-win' },
@@ -61,7 +62,7 @@ describe('StrategySynthesisService', () => {
     });
     const r = await svc.synthesize('ws1', 'sess1');
     expect(r).toEqual({ strategyId: 'strat1', actionCount: 2 });
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', 8);
+    expect(credits.reserve).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
     expect(prisma.marketingStrategy.upsert).toHaveBeenCalled();
     // No research tools offered when sources are off — only submit_strategy.
     const toolNames = (complete.mock.calls[0][0].tools as Array<{ name: string }>).map((t) => t.name);
@@ -88,7 +89,7 @@ describe('StrategySynthesisService', () => {
     const r = await svc.synthesize('ws1', 'sess1');
 
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', 8);
+    expect(credits.reserve).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
     expect(spend.settle).toHaveBeenCalled(); // the research tool metered
 
     const upsert = prisma.marketingStrategy.upsert.mock.calls[0][0];
@@ -142,7 +143,7 @@ describe('StrategySynthesisService', () => {
     });
     const r = await svc.synthesize('ws1', 'sess1');
 
-    expect(credits.reserve).toHaveBeenCalledWith('ws1', 8);
+    expect(credits.reserve).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
     const upsert = prisma.marketingStrategy.upsert.mock.calls[0][0];
     expect(upsert.create.archetype).toBe('B2C_COMMUNITY_NICHE');
     // Communities are written into the brief's channels WITH the specific community in the rationale.
@@ -166,7 +167,12 @@ describe('StrategySynthesisService', () => {
       completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [] })])],
     });
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow(/invalid strategy brief/);
-    expect(credits.refund).toHaveBeenCalledWith('ws1', 8);
+    // One model call happened before the brief was rejected, so the refund is
+    // base + 1 turn. Refunding only the base would bill for a failed run.
+    expect(credits.refund).toHaveBeenCalledWith(
+      'ws1',
+      creditCost('strategy.synthesize') + creditCost('strategy.turn'),
+    );
     expect(prisma.marketingStrategy.upsert).not.toHaveBeenCalled();
   });
 
@@ -174,7 +180,11 @@ describe('StrategySynthesisService', () => {
     const { svc, credits, complete } = deps({ completions: [] });
     complete.mockRejectedValueOnce(new Error('anthropic down'));
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow('anthropic down');
-    expect(credits.refund).toHaveBeenCalledWith('ws1', 8);
+    // The turn was charged before the call that then threw — refund both.
+    expect(credits.refund).toHaveBeenCalledWith(
+      'ws1',
+      creditCost('strategy.synthesize') + creditCost('strategy.turn'),
+    );
   });
 
   it('caps the tool-loop and refunds when no strategy is ever submitted', async () => {
@@ -184,6 +194,15 @@ describe('StrategySynthesisService', () => {
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow(/no strategy/);
     expect(complete.mock.calls.length).toBeLessThanOrEqual(10); // MAX_ITERS
     expect(prisma.marketingStrategy.upsert).not.toHaveBeenCalled();
-    expect(credits.refund).toHaveBeenCalledWith('ws1', 8);
+    // THE regression this whole change exists for: a runaway loop must be
+    // charged per turn, not once. Ten Opus calls at maxTokens 4000 cost Jeeta
+    // ~$1.50; the old flat reserve charged 8 credits (~$0.08) for all of it.
+    const turns = complete.mock.calls.length;
+    expect(turns).toBeGreaterThan(1);
+    expect(credits.reserve).toHaveBeenCalledTimes(1 + turns);
+    expect(credits.refund).toHaveBeenCalledWith(
+      'ws1',
+      creditCost('strategy.synthesize') + turns * creditCost('strategy.turn'),
+    );
   });
 });

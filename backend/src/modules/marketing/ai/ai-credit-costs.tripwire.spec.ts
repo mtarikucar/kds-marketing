@@ -10,6 +10,7 @@ describe('ai-credit-costs — cost table tripwire', () => {
   it('pins the metered AI actions (a new action = a conscious cost decision)', () => {
     expect(Object.keys(AI_CREDIT_COSTS).sort()).toEqual([
       'ask_ai.question',
+      'ask_ai.turn',
       'brand.analyze',
       'content.compose',
       'conversation.followup',
@@ -18,11 +19,13 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'media.image.generate',
       'media.video.generate',
       'research.qualify',
+      'research.turn',
       'review.reply_draft',
       'social.publish.x',
       'social.publish.x_link',
       'strategy.interview',
       'strategy.synthesize',
+      'strategy.turn',
       'voice.analysis',
       'voice.copilot',
       'voice.turn',
@@ -57,17 +60,54 @@ describe('ai-credit-costs — cost table tripwire', () => {
 
   it('prices the strategy-engine AI steps (interview cheap, synthesis heavier)', () => {
     expect(creditCost('strategy.interview')).toBe(2);
-    expect(creditCost('strategy.synthesize')).toBe(8);
     expect(tierFor('strategy.interview')).toBe('default');
     expect(tierFor('strategy.synthesize')).toBe('default');
-    expect(creditCost('strategy.synthesize')).toBeGreaterThan(creditCost('strategy.interview'));
+    // A synthesis run costs its base PLUS at least one turn, so it stays
+    // strictly heavier than an interview turn even at the minimum.
+    expect(
+      creditCost('strategy.synthesize') + creditCost('strategy.turn'),
+    ).toBeGreaterThan(creditCost('strategy.interview'));
   });
 
-  it('classification runs on the cheap light tier; ask runs deeper at 2 credits', () => {
+  it('classification runs on the cheap light tier', () => {
     expect(tierFor('workflow.ai_classify')).toBe('light');
-    expect(creditCost('ask_ai.question')).toBe(2);
     expect(creditCost('conversation.reply')).toBe(1);
     expect(tierFor('conversation.reply')).toBe('conversation');
     expect(tierFor('conversation.followup')).toBe('conversation');
+  });
+
+  /**
+   * The reason `*.turn` exists. A multi-call agent loop used to reserve ONCE
+   * per run, so the same credit price bought one Opus call or ten — the credit
+   * ceiling bounded credits, not dollars, and the spread across actions
+   * reached ~550x. Each looping action must therefore carry a per-turn price,
+   * and that price must dominate its base: if a base ever grew larger than a
+   * turn, per-run charging would be creeping back in.
+   */
+  it('every looping action charges per turn, and the turn dominates the base', () => {
+    const LOOPS: Array<[Parameters<typeof creditCost>[0], Parameters<typeof creditCost>[0]]> = [
+      ['ask_ai.question', 'ask_ai.turn'],
+      ['research.qualify', 'research.turn'],
+      ['strategy.synthesize', 'strategy.turn'],
+    ];
+    for (const [base, turn] of LOOPS) {
+      expect(creditCost(turn)).toBeGreaterThan(0);
+      expect(creditCost(turn)).toBeGreaterThanOrEqual(creditCost(base));
+      expect(tierFor(turn)).toBe(tierFor(base));
+    }
+  });
+
+  /**
+   * Anchor check: 1 credit is meant to be ~$0.01 of vendor spend. These are
+   * the actions whose prices were derived from their maxTokens ceiling at
+   * Opus 4.8 rates; pinning them keeps a future edit from quietly restoring
+   * the under-pricing (funnel.draft in particular was 3 credits for ~$0.081).
+   */
+  it('prices single-call Opus actions from their token ceiling', () => {
+    expect(creditCost('funnel.draft')).toBe(9);
+    expect(creditCost('content.compose')).toBe(3);
+    expect(creditCost('workflow.ai_generate')).toBe(2);
+    expect(creditCost('review.reply_draft')).toBe(2);
+    expect(creditCost('brand.analyze')).toBe(15);
   });
 });

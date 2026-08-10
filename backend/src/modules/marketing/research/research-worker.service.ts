@@ -63,7 +63,12 @@ export class ResearchWorkerService {
       job.workspaceId,
       { agent: 'research', goal: `Prospect for "${job.profile.name}"`, input: { profileId: job.profile.id, geo: job.profile.geo } },
       async (runId) => {
+        // Base only. The tool-loop below is charged PER TURN: one flat
+        // per-run reserve priced a single credit amount for anywhere between
+        // one and MAX_ITERS Opus calls at maxTokens 4000, so a long run cost
+        // Jeeta roughly thirty times what it charged.
         await this.credits.reserve(job.workspaceId, creditCost('research.qualify'));
+        let turnsCharged = 0;
         try {
           const geo = (job.profile.geo as ResearchToolCtx['geo']) ?? {};
           const ctx: ResearchToolCtx = { workspaceId: job.workspaceId, runId, geo, budgetId: null };
@@ -76,12 +81,18 @@ export class ResearchWorkerService {
           const deadline = Date.now() + MAX_WALL_MS;
 
           for (let i = 0; i < MAX_ITERS && Date.now() < deadline && toolCalls < MAX_TOOL_CALLS; i++) {
+            // Charge before the call: an exhausted workspace must stop
+            // spending, not find out afterwards. This runs unattended from the
+            // nightly research cron, which is exactly where an unmetered loop
+            // does the most damage.
+            await this.credits.reserve(job.workspaceId, creditCost('research.turn'));
+            turnsCharged += 1;
             const res = await this.anthropic.complete({
               system: this.SYSTEM,
               messages,
               tools: RESEARCH_TOOLS,
               maxTokens: 4000,
-              tier: tierFor('research.qualify'),
+              tier: tierFor('research.turn'),
               cacheSystem: true,
             });
             if (!res.toolUses.length) break;
@@ -122,7 +133,14 @@ export class ResearchWorkerService {
           this.logger.log(`research run ${runId}: ${candidates.length} qualified, ${staged} staged, ${duplicates} dupes (ws ${job.workspaceId})`);
           return { runId, researched: candidates.length, staged, duplicates };
         } catch (e) {
-          await this.credits.refund(job.workspaceId, creditCost('research.qualify')).catch(() => undefined);
+          // Refund the base AND every turn charged — the run produced nothing
+          // usable and the existing policy is not to bill for errors.
+          await this.credits
+            .refund(
+              job.workspaceId,
+              creditCost('research.qualify') + turnsCharged * creditCost('research.turn'),
+            )
+            .catch(() => undefined);
           throw e;
         }
       },

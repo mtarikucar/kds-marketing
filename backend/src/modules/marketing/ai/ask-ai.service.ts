@@ -58,7 +58,11 @@ export class AskAiService {
     actor?: { id: string; role: string },
   ): Promise<{ answer: string }> {
     if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
+    // Base only — the loop below charges per turn. One flat reserve covered
+    // up to MAX_ITERS Opus calls whose tool results are sliced to 6.000 chars
+    // each, so context (and cost) grew every turn while the price did not.
     await this.credits.reserve(workspaceId, creditCost('ask_ai.question'));
+    let turnsCharged = 0;
     try {
       const system =
         'You are an analyst assistant inside a marketing CRM. Answer the user about THEIR data using the tools. ' +
@@ -67,7 +71,10 @@ export class AskAiService {
       const messages: Anthropic.MessageParam[] = [{ role: 'user', content: question.slice(0, 1500) }];
       let answer = '';
       for (let i = 0; i < MAX_ITERS; i++) {
-        const res = await this.anthropic.complete({ system, messages, tools: TOOLS, maxTokens: 800, tier: tierFor('ask_ai.question') });
+        // Charge before the call so an exhausted workspace stops spending.
+        await this.credits.reserve(workspaceId, creditCost('ask_ai.turn'));
+        turnsCharged += 1;
+        const res = await this.anthropic.complete({ system, messages, tools: TOOLS, maxTokens: 800, tier: tierFor('ask_ai.turn') });
         if (res.text) answer = res.text;
         if (!res.toolUses.length) break;
         const results: Anthropic.ToolResultBlockParam[] = [];
@@ -94,7 +101,11 @@ export class AskAiService {
       }
       return { answer: answer.trim() || 'I could not find an answer.' };
     } catch (e) {
-      await this.credits.refund(workspaceId, creditCost('ask_ai.question'));
+      // Refund the base AND every turn charged — no answer was produced.
+      await this.credits.refund(
+        workspaceId,
+        creditCost('ask_ai.question') + turnsCharged * creditCost('ask_ai.turn'),
+      );
       throw e;
     }
   }
