@@ -6,3 +6,6 @@ playwright-report/
 test-results/
 # Playwright browser binaries (installed via `npx playwright install`)
 /node_modules/.cache/ms-playwright/
+
+# E2E owner credentials minted by e2e/global-setup.ts (local, disposable)
+e2e/.auth/

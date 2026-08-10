@@ -1,0 +1,21 @@
+{
+  /*
+   * The main tsconfig only includes `src`, so nothing type-checks the E2E
+   * suite — and Playwright transpiles TS itself without type-checking, so a
+   * broken type there fails neither `npm run build` nor `npm run e2e`.
+   * `npm run typecheck:e2e` closes that gap.
+   */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}
