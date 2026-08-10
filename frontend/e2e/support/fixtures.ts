@@ -13,8 +13,8 @@
  * Isolation model:
  *   - ONE owner identity per run (globalSetup) — the register route is
  *     throttled at 3/60s with a 10-minute block.
- *   - ONE login per worker (worker-scoped `owner` fixture) — login is
- *     throttled at 5/60s, so `workers` is capped in playwright.config.ts.
+ *   - ONE login per run, captured by globalSetup and shared by every worker —
+ *     login is throttled 5/60s with a 5-minute block.
  *   - ONE fresh workspace per test (`workspace` fixture) — unthrottled, and
  *     the reason tests never see each other's data.
  */
@@ -48,7 +48,7 @@ interface Fixtures {
 }
 
 interface WorkerFixtures {
-  /** The run-wide owner identity, logged in once per worker. */
+  /** The run-wide owner identity, authenticated once in globalSetup. */
   owner: AuthSession;
 }
 
@@ -67,22 +67,23 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
         );
       }
       const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as OwnerState;
+
+      // Reuse the session globalSetup captured instead of logging in here.
+      // A login per worker spends the 5/60s budget, and the penalty for
+      // exceeding it is a FIVE MINUTE block — long enough to fail this run AND
+      // the next one, which is exactly what happened when the suite was run
+      // twice in quick succession. Access tokens last 8h, comfortably longer
+      // than any suite, and sharing one identity is safe because isolation
+      // comes from a per-test workspace, not a per-test user.
+      if (saved.session?.accessToken) {
+        await use(saved.session);
+        return;
+      }
+
+      // Fallback for a state file written before sessions were cached.
       const ctx = await newApiContext();
       try {
-        // Login is throttled 5/60s; a worker that starts inside a burst backs
-        // off rather than failing the whole shard.
-        let session: AuthSession | null = null;
-        let lastErr: unknown;
-        for (let attempt = 0; attempt < 4 && !session; attempt++) {
-          try {
-            session = await login(ctx, saved.email, saved.password);
-          } catch (e) {
-            lastErr = e;
-            await new Promise((r) => setTimeout(r, 15_000));
-          }
-        }
-        if (!session) throw lastErr;
-        await use(session);
+        await use(await login(ctx, saved.email, saved.password));
       } finally {
         await ctx.dispose();
       }

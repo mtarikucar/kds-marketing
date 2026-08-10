@@ -22,10 +22,16 @@ export interface PackageRow {
   priceYearlyUSD?: string | null;
 }
 
-// Keep in lockstep with the backend's FEATURE_KEYS (entitlements.service.ts):
-// public packages grant mediaGen/socialCampaigns/memberships/research too, so a
-// missing label prints the raw camelCase key on the pricing card. The test pins
-// full coverage so this can't silently drift.
+/**
+ * English fallbacks for every backend FEATURE_KEY (entitlements.service.ts).
+ * A missing entry prints the raw camelCase key on the pricing card, so the
+ * companion test pins full coverage against the backend vocabulary.
+ *
+ * These are FALLBACKS, not the rendered copy: each is looked up as
+ * `billing.feature.<key>` first, because the pricing card was showing English
+ * feature names inside an otherwise fully Turkish page — the labels lived only
+ * here, in no locale file.
+ */
 export const FEATURE_LABELS: Record<string, string> = {
   autoAssign: 'Auto lead assignment',
   telephony: 'Click-to-call',
@@ -34,6 +40,8 @@ export const FEATURE_LABELS: Record<string, string> = {
   advancedReports: 'Advanced reports',
   apiAccess: 'API access (ingest tokens)',
   conversationAi: 'Conversation AI (auto-reply)',
+  sms: 'SMS',
+  smsOtp: 'SMS one-time passwords',
   workflows: 'Workflow automation',
   campaigns: 'Email & SMS campaigns',
   funnels: 'Funnels, forms & booking',
@@ -44,6 +52,8 @@ export const FEATURE_LABELS: Record<string, string> = {
   invoicing: 'Customer invoicing',
   mediaGen: 'AI media generation',
   socialCampaigns: 'Social campaigns',
+  voiceCampaigns: 'Voice campaigns',
+  fax: 'Fax',
   memberships: 'Memberships & courses',
   research: 'AI lead research',
 };
@@ -80,6 +90,14 @@ export function PackageMatrix({
 }: Props) {
   const { t } = useTranslation('marketing');
 
+  const list = packages ?? [];
+  // The catalogue collapsed to one sellable plan (backend seed-packages.ts),
+  // so a three-column comparison grid would render one lonely card in the
+  // left third. Stay adaptive rather than hardcoding "one": the operator
+  // console can still publish a second package.
+  const single = list.length === 1;
+  const recommendedCode = list.length > 1 ? list[Math.floor(list.length / 2)]?.code : undefined;
+
   const price = (p: PackageRow): string | null => {
     const v =
       cycle === 'YEARLY'
@@ -111,23 +129,28 @@ export function PackageMatrix({
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {(packages ?? []).map((p) => {
+      <div className={single ? 'mx-auto w-full max-w-md' : 'grid grid-cols-1 gap-4 md:grid-cols-3'}>
+        {list.map((p) => {
           // Only "current" when BOTH the package AND the selected cycle match the
           // active subscription — otherwise the same plan on the other cycle
           // looked like the current plan and its button was disabled, so a monthly
           // subscriber could never switch to the yearly ("2 months free") version.
           const isCurrent =
             currentPackageCode === p.code && (!currentBillingCycle || currentBillingCycle === cycle);
-          const popular = p.code === 'GROWTH';
+          // Highlight the offer. This used to be `p.code === 'GROWTH'` — a
+          // hardcode that pointed at a now-retired tier, so with the single
+          // JEETA plan nothing was highlighted at all. There is no "most
+          // popular" among one option, so the badge only appears when there is
+          // something to compare against.
+          const highlighted = single || p.code === recommendedCode;
           return (
             <div
               key={p.code}
               className={`flex flex-col rounded-xl border bg-surface p-5 shadow-sm ${
-                popular ? 'border-primary ring-1 ring-primary' : 'border-border'
+                highlighted ? 'border-primary ring-1 ring-primary' : 'border-border'
               }`}
             >
-              {popular && (
+              {highlighted && !single && (
                 <Badge tone="primary" size="sm" className="mb-2 self-start">
                   {t('billing.popular', 'Most popular')}
                 </Badge>
@@ -165,7 +188,7 @@ export function PackageMatrix({
                   .map(([k]) => (
                     <li key={k} className="flex gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
-                      {FEATURE_LABELS[k] ?? k}
+                      {t(`billing.feature.${k}`, FEATURE_LABELS[k] ?? k)}
                     </li>
                   ))}
               </ul>

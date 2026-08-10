@@ -47,6 +47,23 @@ launcher forces these before Nest boots — do not remove them:
 | `PORT=3101` | Leaves the normal dev API on 3100 alone. |
 | `CORS_ORIGIN` | The backend allow-lists exact origins; a Vite that auto-increments off 5173 fails CORS **in the browser only**, which reads like an auth bug. The config pins `--strictPort` for the same reason. |
 
+## Gotcha: `backend/.env` breaks six unit tests
+
+A populated `backend/.env` makes jest fail 6 tests in 4 suites — `sms-otp`,
+`sales-call`, `review-sync` and `two-factor`. Those specs assert *unconfigured*
+behaviour ("fails closed when `MARKETING_SECRET_KEY` is missing", "is inert when
+no review provider is set"), and jest loads `.env`, so real credentials make the
+"unconfigured" branch unreachable.
+
+Nothing is wrong with the code. CI has no `.env` and is unaffected. To get a
+clean local run:
+
+```bash
+cd backend && mv .env .env.hidden && npx jest ; mv .env.hidden .env
+```
+
+(Verified: 522 suites / 5406 tests pass with `.env` moved aside.)
+
 ## How a test gets a session
 
 Three throttles shape the whole design, all measured against a live backend:

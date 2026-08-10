@@ -1624,7 +1624,32 @@
     "knowledgeDocs": "Bilgi belgeleri",
     "aiCreditsWord": "AI kredisi",
     "messagesWord": "mesaj",
-    "faxWord": "Faks"
+    "faxWord": "Faks",
+    "feature": {
+      "autoAssign": "Otomatik lead atama",
+      "telephony": "Tek tıkla arama",
+      "installations": "Saha kurulumları",
+      "commissions": "Prim takibi",
+      "advancedReports": "Gelişmiş raporlar",
+      "apiAccess": "API erişimi (veri aktarım anahtarları)",
+      "conversationAi": "Konuşma AI (otomatik yanıt)",
+      "sms": "SMS",
+      "smsOtp": "SMS tek kullanımlık şifre",
+      "workflows": "İş akışı otomasyonu",
+      "campaigns": "E-posta ve SMS kampanyaları",
+      "funnels": "Funnel, form ve randevu",
+      "reviews": "Yorum ve itibar yönetimi",
+      "askAi": "AI'ya sor",
+      "agentStudio": "AI Ajan Stüdyosu",
+      "voiceAi": "Sesli AI resepsiyonist",
+      "invoicing": "Müşteri faturalama",
+      "mediaGen": "AI görsel/video üretimi",
+      "socialCampaigns": "Sosyal medya kampanyaları",
+      "voiceCampaigns": "Sesli kampanyalar",
+      "fax": "Faks",
+      "memberships": "Üyelikler ve kurslar",
+      "research": "AI lead araştırması"
+    }
   },
   "commission": {
     "detailTitle": "Komisyon detayı",
@@ -3602,7 +3627,24 @@
       "voice": "Ton",
       "usp": "Fark yaratan özellik",
       "audience": "Hedef kitle",
-      "channels": "Kanallar",
+      "channels": {
+        "title": "Topluluk Kanalları",
+        "desc": "Sahibi veya yöneticisi olduğunuz topluluklara göndermek için Discord ve Reddit'i bağlayın.",
+        "connected": "Bağlı",
+        "connect": "Bağla",
+        "disconnect": "Bağlantıyı kes",
+        "discordWebhook": "Webhook bağlı",
+        "discordWebhookLabel": "Discord webhook URL'i",
+        "discordHelp": "Kendi Discord sunucunuzun webhook URL'ini yapıştırın (Sunucu Ayarları → Entegrasyonlar → Webhooks).",
+        "redditHelp": "Kendi/yetkili subreddit'inize gönderim için Reddit hesabınızı bağlayın.",
+        "connectReddit": "Reddit'i bağla",
+        "tos": "Yalnızca sahibi/yetkili olduğunuz topluluklara gönderim yapın.",
+        "discordConnected": "Discord bağlandı",
+        "redditConnected": "Reddit bağlandı",
+        "redditError": "Reddit bağlanamadı. Lütfen tekrar deneyin.",
+        "disconnected": "Kanal bağlantısı kesildi",
+        "connectFailed": "Kanal bağlanamadı"
+      },
       "channelsDesc": "Uyum puanına göre nereye odaklanmalı.",
       "pillars": "İçerik sütunları",
       "pillarTone": "Ton: {{tone}}",
@@ -3622,25 +3664,7 @@
       "actionFailed": "Bir şeyler ters gitti",
       "emptyTitle": "Henüz strateji yok",
       "emptyDesc": "Yapay zeka stratejisti markanı analiz edip eylem planıyla birlikte tam bir pazarlama stratejisi hazırlasın.",
-      "startOnboarding": "Stratejimi oluştur",
-      "channels": {
-        "title": "Topluluk Kanalları",
-        "desc": "Sahibi veya yöneticisi olduğunuz topluluklara göndermek için Discord ve Reddit'i bağlayın.",
-        "connected": "Bağlı",
-        "connect": "Bağla",
-        "disconnect": "Bağlantıyı kes",
-        "discordWebhook": "Webhook bağlı",
-        "discordWebhookLabel": "Discord webhook URL'i",
-        "discordHelp": "Kendi Discord sunucunuzun webhook URL'ini yapıştırın (Sunucu Ayarları → Entegrasyonlar → Webhooks).",
-        "redditHelp": "Kendi/yetkili subreddit'inize gönderim için Reddit hesabınızı bağlayın.",
-        "connectReddit": "Reddit'i bağla",
-        "tos": "Yalnızca sahibi/yetkili olduğunuz topluluklara gönderim yapın.",
-        "discordConnected": "Discord bağlandı",
-        "redditConnected": "Reddit bağlandı",
-        "redditError": "Reddit bağlanamadı. Lütfen tekrar deneyin.",
-        "disconnected": "Kanal bağlantısı kesildi",
-        "connectFailed": "Kanal bağlanamadı"
-      }
+      "startOnboarding": "Stratejimi oluştur"
     }
   },
   "studio": {
@@ -3875,6 +3899,13 @@
       "automations_manage": "Pazarlama otomasyonlarını oluşturma, devreye alma ve çalıştırma",
       "courses_manage": "Kurslarını yönetme ve kişilerini kurslara kaydetme",
       "settings_manage": "Çalışma alanı ayarlarını yönetme"
+    }
+  },
+  "gate": {
+    "upgrade": {
+      "title": "Aktif abonelik gerekiyor",
+      "body": "Aboneliğin şu an bunu kapsamıyor. Paketi etkinleştirince açılır.",
+      "cta": "Paketi gör"
     }
   }
 }

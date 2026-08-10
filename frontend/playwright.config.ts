@@ -18,14 +18,16 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
 
   /**
-   * Capped low ON PURPOSE. Login is throttled at 5/60s with a FIVE MINUTE
-   * block (marketing-auth.controller.ts:33) — and the block outlasts any
-   * in-suite backoff, so tripping it fails the whole run.
-   * Budget: 1 login per worker + 1 for the real-UI-login smoke test.
-   * 3 workers + 1 = 4 < 5. Raising `workers` requires a shared-session
-   * strategy first, not just a bigger number.
+   * Login is throttled 5/60s with a FIVE MINUTE block
+   * (marketing-auth.controller.ts:33), and that block outlasts any in-suite
+   * backoff. Workers used to authenticate individually, which put the budget
+   * one careless re-run away from locking the suite out — running it twice in
+   * a row did exactly that.
+   * globalSetup now authenticates ONCE and shares the session, so the whole
+   * run costs 2 logins (setup + the real-UI-login smoke test) regardless of
+   * worker count, and this number is free to track the machine.
    */
-  workers: process.env.CI ? 2 : 3,
+  workers: process.env.CI ? 2 : 4,
 
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'never' }]],
   timeout: 60_000,

@@ -145,9 +145,18 @@ describe('BillingSettlementService — idempotent settlement', () => {
 
       const upd = prisma.workspace.update.mock.calls[0][0];
       expect(upd.where).toEqual({ id: 'ws-1' });
-      // campaigns is newly entitled + default-ON → added; telephony already on;
-      // memberships is entitled but hidden-by-default → NOT auto-activated.
-      expect(upd.data.activatedModules).toEqual(['telephony', 'campaigns']);
+      // telephony was already on; campaigns and memberships are newly entitled
+      // and every toggleable module is now default-ON, so both are added.
+      //
+      // This asserts the ENTITLEMENT filter, not just the union: the package
+      // mock grants exactly three features, and DEFAULT_ACTIVATED_MODULES now
+      // contains all 21 toggleable keys. If the union ignored entitlement it
+      // would splice in all 21 and this equality would fail loudly.
+      expect(upd.data.activatedModules).toEqual([
+        'telephony',
+        'campaigns',
+        'memberships',
+      ]);
       expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
     });
 
