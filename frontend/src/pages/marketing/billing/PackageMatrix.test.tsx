@@ -95,7 +95,7 @@ describe('PackageMatrix with a single sellable package', () => {
   // never highlighted; and "Most popular" is a comparison claim that means
   // nothing when there is nothing to compare against.
   it('renders the one plan without a "most popular" badge', () => {
-    render(<PackageMatrix {...baseProps} packages={[PKG('JEETA', 'Jeeta')]} />);
+    render(<PackageMatrix {...baseProps} isPending={false} packages={[PKG('JEETA', 'Jeeta')]} />);
 
     expect(screen.getByRole('heading', { name: 'Jeeta' })).toBeInTheDocument();
     expect(screen.queryByText(/most popular/i)).not.toBeInTheDocument();
@@ -103,7 +103,7 @@ describe('PackageMatrix with a single sellable package', () => {
   });
 
   it('still badges a recommendation when more than one package is published', () => {
-    render(<PackageMatrix {...baseProps} />);
+    render(<PackageMatrix {...baseProps} isPending={false} />);
     expect(screen.getByText(/most popular/i)).toBeInTheDocument();
   });
 });

@@ -40,4 +40,38 @@ describe('AskAiPanel', () => {
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith('/ai/ask', { question: 'how many leads' });
   });
+
+  /**
+   * The backend returns 403 for TWO different situations — the feature is not
+   * entitled (FEATURE_NOT_IN_PACKAGE) and the monthly AI credits are spent
+   * (AI_CREDITS_EXHAUSTED) — and both used to render "not in your plan,
+   * upgrade". That told a paying customer to buy something they already own,
+   * and it got worse with the move to one plan plus low included credits,
+   * where running out of credits is the NORMAL case.
+   */
+  async function ask(user: ReturnType<typeof userEvent.setup>) {
+    render(<AskAiPanel />, { wrapper });
+    await user.click(screen.getByTitle('Ask AI'));
+    await user.type(screen.getByPlaceholderText(/ask a question/i), 'how many leads');
+    await user.keyboard('{Enter}');
+  }
+
+  it('tells an out-of-credits user to top up, not to upgrade', async () => {
+    post.mockRejectedValue({
+      response: { status: 403, data: { code: 'AI_CREDITS_EXHAUSTED' } },
+    });
+    await ask(userEvent.setup());
+
+    expect(await screen.findByText(/AI credits/i)).toBeInTheDocument();
+    expect(screen.queryByText(/not in your plan/i)).not.toBeInTheDocument();
+  });
+
+  it('still shows the upgrade hint when the feature genuinely is not entitled', async () => {
+    post.mockRejectedValue({
+      response: { status: 403, data: { code: 'FEATURE_NOT_IN_PACKAGE' } },
+    });
+    await ask(userEvent.setup());
+
+    expect(await screen.findByText(/not in your plan/i)).toBeInTheDocument();
+  });
 });

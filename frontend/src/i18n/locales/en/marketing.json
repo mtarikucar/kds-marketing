@@ -1800,7 +1800,8 @@
     "failed": "Something went wrong.",
     "ex1": "How many leads are in each status?",
     "ex2": "Which leads in Istanbul are still NEW?",
-    "ex3": "What's the status of my campaigns?"
+    "ex3": "What's the status of my campaigns?",
+    "creditsExhausted": "You have used this month’s AI credits. Add credits from Billing to keep asking."
   },
   "voice": {
     "title": "Voice AI",
@@ -2026,7 +2027,8 @@
         "title": "Publish a landing page",
         "desc": "Capture leads with an AI-drafted funnel page."
       }
-    }
+    },
+    "startHere": "Start here"
   },
   "needsAttention": {
     "title": "Needs attention",

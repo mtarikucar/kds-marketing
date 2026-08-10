@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Download, BookOpen } from 'lucide-react';
 import marketingApi from '../../features/marketing/api/marketingApi';
 import { GettingStarted, NeedsAttention } from '../../features/marketing/components';
+import { useOnboardingChecklist } from '../../features/marketing/hooks/useOnboardingChecklist';
 import { useMarketingAuthStore } from '../../store/marketingAuthStore';
 import {
   PageHeader,
@@ -24,6 +25,8 @@ export default function MarketingDashboardPage() {
   const { user } = useMarketingAuthStore();
   const { t } = useTranslation('marketing');
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
+  // Shared with GettingStarted (same query keys, so nothing is fetched twice).
+  const onboarding = useOnboardingChecklist();
 
   // One-time post-register welcome (register redirects to /dashboard?welcome=1).
   const [searchParams, setSearchParams] = useSearchParams();
@@ -146,16 +149,40 @@ export default function MarketingDashboardPage() {
         }
       />
 
-      {/* Role-aware "what do I do now?" anchor — the first thing every user sees. */}
-      <DashboardHero
-        stats={stats}
-        today={today}
-        isManager={isManager}
-        firstName={user?.firstName}
-      />
+      {/*
+        Order is deliberate and depends on state.
 
-      {/* First-run setup checklist (managers). */}
-      {isManager && <GettingStarted />}
+        While setup is outstanding the CHECKLIST leads. The hero's headline CTA
+        is "add your first lead", which is the wrong opening instruction for a
+        product whose premise is that the AI strategist decides what to do —
+        and it sat above the checklist, so the two competed and the louder,
+        less useful one won. A brand-new workspace should be told to build its
+        strategy first, not to start typing in leads by hand.
+
+        Once setup is complete the checklist disappears and the hero is the
+        anchor again, exactly as before.
+      */}
+      {onboarding.incomplete ? (
+        <>
+          <GettingStarted />
+          <DashboardHero
+            stats={stats}
+            today={today}
+            isManager={isManager}
+            firstName={user?.firstName}
+          />
+        </>
+      ) : (
+        <>
+          <DashboardHero
+            stats={stats}
+            today={today}
+            isManager={isManager}
+            firstName={user?.firstName}
+          />
+          {isManager && <GettingStarted />}
+        </>
+      )}
 
       {/* Actionable "what's waiting on you" — deep links, hidden when clean. */}
       <NeedsAttention
