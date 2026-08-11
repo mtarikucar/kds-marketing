@@ -77,6 +77,14 @@ const env = {
   // ── Determinism + cost: no live LLM spend during E2E ─────────────────────
   // Flip to 0 only for a spec that deliberately exercises a real AI path.
   AI_DISABLED: process.env.E2E_AI_DISABLED ?? '1',
+
+  // ── Headroom for a browser suite ─────────────────────────────────────────
+  // The production envelope is 300/60s, sized for one human. Forty browser
+  // tests each loading a console page that fans out to a dozen endpoints blow
+  // straight through it, and the 429s do not look like a rate limit — they
+  // look like broken auth, because the pages simply bounce to /login.
+  // Production and ordinary dev runs are untouched; only this launcher sets it.
+  THROTTLE_GLOBAL_LIMIT: process.env.E2E_THROTTLE_GLOBAL_LIMIT ?? '20000',
 };
 
 function run(cmd, args, opts = {}) {

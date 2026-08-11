@@ -820,7 +820,8 @@
       "confirmDesc": "{{count}} müşteri adayını \"{{name}}\" akışına eklemek otomatik mesajlar göndermeye başlayabilir.",
       "confirmButton": "Ekle",
       "label": "İş akışına ekle"
-    }
+    },
+    "emptyTitle": "Lead listen boş"
   },
   "leadDetail": {
     "back": "Lead'lere dön",

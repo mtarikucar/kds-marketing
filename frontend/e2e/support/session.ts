@@ -21,12 +21,27 @@ import type { Page } from '@playwright/test';
 import { AUTH_STORAGE_KEY } from './config';
 import type { AuthSession } from './api';
 
-/** The exact persisted shape zustand writes for `marketing-auth-storage`. */
+/**
+ * The persisted shape zustand writes for `marketing-auth-storage`, PLUS the
+ * access token.
+ *
+ * The app never writes `accessToken` (partialize omits it), but zustand's
+ * rehydrate merges whatever it finds in storage — so seeding it here is read
+ * back into the store and the app starts with a usable token.
+ *
+ * Why bother: without it, every page load begins with a 401 → the interceptor
+ * mints a token via POST /auth/refresh. That endpoint is throttled at 30/60s
+ * (marketing-auth.controller.ts REFRESH_THROTTLE), so a suite of ~40 browser
+ * tests spent its entire refresh budget on setup and later tests silently
+ * landed on /login — a failure that looks like broken auth and is really a
+ * rate limit. Seeding the access token removes the call entirely.
+ */
 export function persistedAuthState(session: AuthSession): string {
   return JSON.stringify({
     state: {
       user: session.user,
       isAuthenticated: true,
+      accessToken: session.accessToken,
       refreshToken: session.refreshToken,
       agencyReturn: null,
       memberships: [],

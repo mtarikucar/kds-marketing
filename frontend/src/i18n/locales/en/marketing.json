@@ -564,7 +564,8 @@
       "confirmDesc": "Enrolling {{count}} lead(s) into \"{{name}}\" may start sending automated messages.",
       "confirmButton": "Enroll",
       "label": "Enroll in workflow"
-    }
+    },
+    "emptyTitle": "No leads"
   },
   "leadDetail": {
     "back": "Back to leads",
