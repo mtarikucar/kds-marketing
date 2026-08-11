@@ -66,19 +66,41 @@ cd backend && mv .env .env.hidden && npx jest ; mv .env.hidden .env
 
 ## How a test gets a session
 
-Three throttles shape the whole design, all measured against a live backend:
+Four throttles shape the whole design, all measured against a live backend:
 
 | Route | Limit | Consequence |
 |---|---|---|
 | `register-workspace` | 3/60s, **10-min block** | One registration per RUN (`global-setup.ts`). Observed: `201, 429, 429, 429`. |
-| `login` | 5/60s, **5-min block** | One login per WORKER; `workers` is capped at 3 in `playwright.config.ts`. |
+| `login` | 5/60s, **5-min block** | ONE login per run, taken in `global-setup.ts` and shared by every worker. Authenticating per worker put the budget one careless re-run away from a 5-minute lockout — running the suite twice in a row did exactly that. |
+| `POST /auth/refresh` | 30/60s | Avoided entirely by seeding the access token (see below). |
+| global | 300/60s | Sized for one human. `THROTTLE_GLOBAL_LIMIT` raises it for the E2E stack only; production keeps 300. |
 | `POST /marketing/workspaces` | none | The per-test isolation primitive. |
 
 The session is injected into `sessionStorage` before the first navigation
 (`support/session.ts`). Playwright's `storageState` **cannot** be used: the
 auth store persists to sessionStorage for per-tab isolation, so the standard
-recipe yields a silently logged-out browser. Only the refresh token is seeded —
-the api client mints the access token on the first request.
+recipe yields a silently logged-out browser.
+
+Both tokens are seeded. The app itself never persists the access token, but
+zustand rehydrates whatever it finds in storage — and seeding it removes the
+401 → `POST /auth/refresh` that otherwise begins every page load. That endpoint
+is throttled at **30/60s**, so a suite of forty tests spent its whole refresh
+budget on setup and later tests silently landed on `/login`, which reads as
+broken auth rather than as a rate limit.
+
+## In CI
+
+`.github/workflows/ci.yml` → the `frontend-e2e` job runs the same suite on every
+push: postgres service → migrate → **seed packages** → build and start the
+compiled API → build the frontend → Playwright against `vite preview`.
+
+Two differences from local, both deliberate:
+- CI tests the **production build**, not the dev server. The dev bundle never
+  exercises the tsc gate, the chunking or the console-drop that ships.
+- `reuseExistingServer` is off, so CI can never test a stale server.
+
+On failure the job tails the API log and uploads `playwright-report/` and
+`test-results/` (screenshots, video, trace) for 7 days.
 
 ## Writing a test
 
