@@ -1649,7 +1649,9 @@
       "fax": "Faks",
       "memberships": "Üyelikler ve kurslar",
       "research": "AI lead araştırması"
-    }
+    },
+    "aiCreditsLow": "AI kredin azalıyor — bitmeden aşağıdan yükle.",
+    "aiCreditsOut": "AI kredin bitti — AI çalışmaya devam etsin diye aşağıdan yükle."
   },
   "commission": {
     "detailTitle": "Komisyon detayı",
@@ -2681,7 +2683,8 @@
     "empty": {
       "title": "Henüz gönderi yok",
       "hint": "İlk sosyal gönderinizi oluşturun.",
-      "connectFirst": "Bir sosyal hesap bağlayın, ardından ilk gönderinizi oluşturun."
+      "connectFirst": "Bir sosyal hesap bağlayın, ardından ilk gönderinizi oluşturun.",
+      "connectCta": "Hesap bağla"
     },
     "accounts": {
       "empty": "Bağlı hesap yok",

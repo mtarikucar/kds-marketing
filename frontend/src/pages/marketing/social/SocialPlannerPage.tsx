@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -338,10 +338,23 @@ export default function SocialPlannerPage() {
                 : t('social.empty.hint', { defaultValue: 'Compose your first social post.' })
             }
             action={
-              <Button onClick={openCreate} variant="outline" disabled={noAccounts}>
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                {t('social.newPost', { defaultValue: 'New post' })}
-              </Button>
+              // With no account connected, "New post" is disabled and the copy
+              // says to connect one — but there was nothing to click, and the
+              // Account Center is several menus away. A disabled button next to
+              // an instruction with no route to follow is a dead end.
+              noAccounts ? (
+                <Button asChild variant="primary">
+                  <Link to="/accounts">
+                    <Plus className="h-4 w-4" aria-hidden="true" />
+                    {t('social.empty.connectCta', { defaultValue: 'Connect an account' })}
+                  </Link>
+                </Button>
+              ) : (
+                <Button onClick={openCreate} variant="outline">
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  {t('social.newPost', { defaultValue: 'New post' })}
+                </Button>
+              )
             }
           />
         }

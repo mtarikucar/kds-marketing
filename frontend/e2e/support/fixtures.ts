@@ -32,6 +32,10 @@ import { seedSession } from './session';
 import { OWNER_STATE_FILE, APP_URL } from './config';
 import type { OwnerState } from '../global-setup';
 
+/** What every fixture workspace claims to sell — asserted by the wizard tests. */
+export const E2E_PRODUCT_URL = 'https://e2e-fixture.example.com';
+export const E2E_PRODUCT_DESCRIPTION = 'E2E fixture product, for assertions.';
+
 export interface WorkspaceContext {
   id: string;
   name: string;
@@ -101,7 +105,12 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
   workspace: async ({ owner, api }, use, testInfo) => {
     // Name carries the test title so a leftover row is traceable to its spec.
     const name = `E2E ${testInfo.title}`.slice(0, 110);
-    const { id } = await createWorkspace(api, owner.accessToken, name);
+    // Signup collects productUrl + productDescription, so a realistic workspace
+    // has them — and the strategy wizard is supposed to pre-fill from them.
+    const { id } = await createWorkspace(api, owner.accessToken, name, {
+      productUrl: E2E_PRODUCT_URL,
+      productDescription: E2E_PRODUCT_DESCRIPTION,
+    });
     // The JWT pins the active workspace in its `wsp` claim, so the session
     // must be re-minted for the new workspace or every request lands in the
     // owner's original one.

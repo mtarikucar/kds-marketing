@@ -120,6 +120,8 @@ import { TelephonyCallbackController } from './controllers/telephony-callback.co
 import { TelephonyCallbackService } from './services/telephony-callback.service';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
+import { OnboardingController } from './controllers/onboarding.controller';
+import { OnboardingService } from './services/onboarding.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -629,6 +631,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TelephonyCallbackController,
     TelephonyReportsController,
     NetgsmOnboardingController,
+    OnboardingController,
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
@@ -812,6 +815,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // TelephonyStreamController's GET /marketing/telephony/stream.
     TelephonyStreamService,
     NetgsmOnboardingService,
+    OnboardingService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,

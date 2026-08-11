@@ -88,10 +88,17 @@ export async function createWorkspace(
   ctx: APIRequestContext,
   accessToken: string,
   workspaceName: string,
+  product: { productUrl?: string; productDescription?: string } = {},
 ): Promise<{ id: string }> {
   const res = await ctx.post(apiUrl('/marketing/workspaces'), {
     headers: { Authorization: `Bearer ${accessToken}` },
-    data: { workspaceName, productName: workspaceName, language: 'tr', currency: 'TRY' },
+    data: {
+      workspaceName,
+      productName: workspaceName,
+      language: 'tr',
+      currency: 'TRY',
+      ...product,
+    },
   });
   const body = (await readJson(res)) as { id?: string; workspace?: { id: string } };
   const id = body.id ?? body.workspace?.id;

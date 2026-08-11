@@ -829,6 +829,10 @@ export class MarketingAuthService {
           kind: true,
           productName: true,
           productUrl: true,
+          // Collected at signup and promised to the AI ("we'll analyse this").
+          // Returned so the strategy wizard can PRE-FILL rather than asking the
+          // same two questions a second time. Non-secret, workspace-owned.
+          productDescription: true,
           defaultLanguage: true,
           defaultCurrency: true,
           settings: true,

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Sparkles, CheckCircle2 } from 'lucide-react';
 import {
@@ -24,6 +24,7 @@ import {
   finishIntake,
   type StartIntakePayload,
 } from '../../../features/marketing/api/strategy.service';
+import marketingApi from '../../../features/marketing/api/marketingApi';
 
 type Step = 'intake' | 'analyzing' | 'qa' | 'finishing' | 'skipped' | 'done';
 
@@ -33,6 +34,11 @@ type Step = 'intake' | 'analyzing' | 'qa' | 'finishing' | 'skipped' | 'done';
  * The URL is the only required input; socials + a one-liner are optional hints.
  * `{skipped}` (AI not configured server-side) is handled gracefully at both the
  * start and finish turns with a friendly message instead of an error.
+ *
+ * The URL and one-liner are PRE-FILLED from the workspace. Signup already
+ * collects both and tells the user the AI will use them — then this wizard
+ * asked for exactly the same two things again, which reads as "nothing I typed
+ * was kept". They remain editable; this only removes the retyping.
  */
 export default function StrategyOnboarding() {
   const { t } = useTranslation('marketing');
@@ -41,9 +47,30 @@ export default function StrategyOnboarding() {
 
   const [step, setStep] = useState<Step>('intake');
 
+  // Signup wrote these onto the workspace; /auth/profile is the only endpoint
+  // that returns them, and it is already fetched elsewhere so the key is shared.
+  const profile = useQuery({
+    queryKey: ['marketing', 'auth', 'profile'],
+    queryFn: () => marketingApi.get('/auth/profile').then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+
   // intake form — only the three networks the backend auto-analysis supports.
   const [url, setUrl] = useState('');
   const [oneLiner, setOneLiner] = useState('');
+  // Seed once, and never clobber typing: a late-arriving profile must not
+  // overwrite what the user has already put in the box.
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    if (seeded || !profile.data?.workspace) return;
+    const ws = profile.data.workspace as {
+      productUrl?: string | null;
+      productDescription?: string | null;
+    };
+    if (ws.productUrl) setUrl((v) => v || ws.productUrl!);
+    if (ws.productDescription) setOneLiner((v) => v || ws.productDescription!);
+    setSeeded(true);
+  }, [profile.data, seeded]);
   const [facebook, setFacebook] = useState('');
   const [instagram, setInstagram] = useState('');
   const [linkedin, setLinkedin] = useState('');

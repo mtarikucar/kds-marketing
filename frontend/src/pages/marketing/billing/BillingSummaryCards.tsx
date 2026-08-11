@@ -119,12 +119,24 @@ export function BillingSummaryCards({ sub, ent, usage, aiUsage, summaryLoading }
               : `${aiUsage.used} / ${aiUsage.limit}`
             : '…'}
         </p>
+        {/*
+          Warn BEFORE the wall, not at it. The plan ships deliberately modest
+          included credits with top-up as the release valve, so "you are nearly
+          out" is something the customer can still act on; colouring only at
+          100% told them once it was already too late.
+        */}
         <Progress
           value={aiUsage?.limit === -1 ? 8 : aiPct}
-          tone={aiPct >= 100 ? 'warning' : 'primary'}
+          tone={aiPct >= 100 ? 'danger' : aiPct >= 80 ? 'warning' : 'primary'}
         />
-        <p className="text-xs text-muted-foreground">
-          {t('billing.aiCreditsHint', 'Resets monthly. Add a boost below to raise the cap.')}
+        <p
+          className={`text-xs ${aiPct >= 80 ? 'font-medium text-warning' : 'text-muted-foreground'}`}
+        >
+          {aiUsage && aiUsage.limit !== -1 && aiPct >= 100
+            ? t('billing.aiCreditsOut', 'Out of AI credits — add more below to keep the AI working.')
+            : aiUsage && aiUsage.limit !== -1 && aiPct >= 80
+              ? t('billing.aiCreditsLow', 'Running low on AI credits — top up below before they run out.')
+              : t('billing.aiCreditsHint', 'Resets monthly. Add a boost below to raise the cap.')}
         </p>
       </Card>
 

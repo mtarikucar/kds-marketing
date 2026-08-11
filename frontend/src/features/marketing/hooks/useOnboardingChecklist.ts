@@ -1,10 +1,14 @@
 import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import marketingApi from '../api/marketingApi';
 import { getBrandProfile } from '../api/brandBrain.service';
 import { getStrategy } from '../api/strategy.service';
+import {
+  getOnboarding,
+  setOnboardingDismissed,
+  ONBOARDING_QUERY_KEY,
+} from '../api/onboarding.service';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
-import { useOnboardingStore } from '../../../store/onboardingStore';
 
 export interface ChecklistStep {
   id: string;
@@ -40,10 +44,38 @@ export interface OnboardingChecklist {
  */
 export function useOnboardingChecklist(): OnboardingChecklist {
   const { user } = useMarketingAuthStore();
+  const qc = useQueryClient();
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
-  const workspaceId = user?.workspaceId ?? 'unknown';
-  const dismissed = useOnboardingStore((s) => !!s.dismissed[workspaceId]);
-  const dismissWs = useOnboardingStore((s) => s.dismiss);
+
+  // Dismissal is a WORKSPACE fact, not a per-device opinion. It used to live in
+  // localStorage, so putting the guide away on a laptop left it waiting on a
+  // phone, clearing site data nagged a fully configured workspace again, and a
+  // second team member saw a guide the owner had already worked through.
+  const state = useQuery({
+    queryKey: ONBOARDING_QUERY_KEY,
+    queryFn: getOnboarding,
+    enabled: isManager,
+    staleTime: 60_000,
+  });
+  const setDismissed = useMutation({
+    mutationFn: setOnboardingDismissed,
+    // Optimistic: dismissing must feel instant, and the checklist unmounting is
+    // the confirmation. A refetch on settle keeps the server authoritative.
+    onMutate: async (next: boolean) => {
+      await qc.cancelQueries({ queryKey: ONBOARDING_QUERY_KEY });
+      const prev = qc.getQueryData(ONBOARDING_QUERY_KEY);
+      qc.setQueryData(ONBOARDING_QUERY_KEY, { dismissed: next });
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev !== undefined) qc.setQueryData(ONBOARDING_QUERY_KEY, ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ONBOARDING_QUERY_KEY }),
+  });
+
+  // Until the flag has loaded, treat the guide as dismissed: showing it and
+  // then yanking it away is worse than showing it a beat late.
+  const dismissed = state.data?.dismissed ?? true;
   const active = isManager && !dismissed;
 
   // getStrategy swallows a 404 into null, so a strategy-less workspace simply
@@ -116,8 +148,10 @@ export function useOnboardingChecklist(): OnboardingChecklist {
   // Latch dismissal once fully set up, so it stays gone on reload even if a
   // setup item is later removed.
   useEffect(() => {
-    if (active && allDone) dismissWs(workspaceId);
-  }, [active, allDone, workspaceId, dismissWs]);
+    if (active && allDone && !setDismissed.isPending) setDismissed.mutate(true);
+    // `setDismissed` is a stable mutation object; depending on it would re-fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, allDone]);
 
   return {
     active,
@@ -126,6 +160,6 @@ export function useOnboardingChecklist(): OnboardingChecklist {
     total,
     allDone,
     incomplete: active && !allDone,
-    dismiss: () => dismissWs(workspaceId),
+    dismiss: () => setDismissed.mutate(true),
   };
 }
