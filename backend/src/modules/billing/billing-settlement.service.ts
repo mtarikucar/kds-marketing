@@ -7,6 +7,7 @@ import {
   DEFAULT_ACTIVATED_MODULES,
 } from './entitlements.service';
 import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
+import { AiCreditWalletService } from '../marketing/ai/ai-credit-wallet.service';
 
 const ADDON_GRANTS: Record<string, Record<string, number>> = {
   quota_boost_10: { 'limit.dailyLeadQuota': 10 },
@@ -31,6 +32,22 @@ const ADDON_GRANTS: Record<string, Record<string, number>> = {
 };
 
 /**
+ * Prepaid AI-credit top-ups: SKU → credits added to the wallet.
+ *
+ * These deliberately do NOT go through ADDON_GRANTS. A `limit.aiCreditsMonthly`
+ * grant only raises the ceiling for the CURRENT subscription period, so credits
+ * a customer paid for evaporated at period end — which is the wrong behaviour
+ * for a plan whose whole shape is "modest included credits, top up when you need
+ * more". They credit AiCreditWallet instead, where the balance persists until it
+ * is spent.
+ */
+const AI_CREDIT_TOPUPS: Record<string, number> = {
+  credits_1k: 1_000,
+  credits_4k: 4_000,
+  credits_12k: 12_000,
+};
+
+/**
  * The ONE place a payment outcome mutates billing state. Two-layer
  * idempotency, ported from the monorepo's checkout settlement:
  *   1. status pre-check (cheap early exit on replayed webhooks)
@@ -47,6 +64,7 @@ export class BillingSettlementService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly entitlements: EntitlementsService,
     private readonly growthWallet: GrowthWalletService,
+    private readonly aiCreditWallet: AiCreditWalletService,
   ) {}
 
   /**
@@ -452,11 +470,28 @@ export class BillingSettlementService implements OnModuleInit {
   }
 
   private async grantAddOn(order: {
+    id: string;
     workspaceId: string;
     addOnCode: string | null;
     quantity: number;
   }) {
     const code = order.addOnCode ?? '';
+
+    // Credit top-ups are a balance, not a period-scoped ceiling. Idempotent by
+    // the ledger's unique ref, exactly like the growth-wallet top-up above, so
+    // a webhook replay credits once.
+    const credits = AI_CREDIT_TOPUPS[code];
+    if (credits) {
+      await this.aiCreditWallet.credit(order.workspaceId, {
+        amount: credits * Math.max(1, order.quantity),
+        kind: 'TOPUP',
+        ref: `order:${order.id}`,
+        note: code,
+      });
+      this.entitlements.invalidate(order.workspaceId);
+      return;
+    }
+
     const grants = ADDON_GRANTS[code];
     if (!grants) throw new Error(`unknown add-on code: ${code}`);
 
@@ -481,4 +516,4 @@ export class BillingSettlementService implements OnModuleInit {
   }
 }
 
-export { ADDON_GRANTS };
+export { ADDON_GRANTS, AI_CREDIT_TOPUPS };

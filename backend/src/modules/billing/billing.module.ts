@@ -12,6 +12,10 @@ import { BILLING_PAYMENT_PROVIDERS } from './payments/payment-provider.port';
 // the marketing module: the service is stateless + prisma-only, so per-module
 // instances are the accepted pattern here (avoids a circular module import).
 import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
+// Prepaid AI-credit top-up settlement — registered here for the SAME reason as
+// GrowthWalletService above: stateless + prisma-only, so a per-module instance
+// avoids a circular module import.
+import { AiCreditWalletService } from '../marketing/ai/ai-credit-wallet.service';
 
 /**
  * Billing bounded context: packages → entitlements (the one source every
@@ -28,6 +32,7 @@ import { GrowthWalletService } from '../marketing/wallet/growth-wallet.service';
     BillingSettlementService,
     BillingSchedulerService,
     GrowthWalletService,
+    AiCreditWalletService,
     ManualTransferProvider,
     PaytrProvider,
     StripeProvider,

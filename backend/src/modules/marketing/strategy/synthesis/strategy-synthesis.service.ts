@@ -185,7 +185,7 @@ export class StrategySynthesisService {
               messages,
               tools,
               maxTokens: 4000,
-              tier: tierFor('strategy.turn'),
+              tier: tierFor('strategy.turn'), workspaceId: workspaceId, action: 'strategy.turn',
               cacheSystem: true,
             });
             if (!res.toolUses.length) break;

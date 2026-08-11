@@ -1652,7 +1652,8 @@
       "research": "AI lead araştırması"
     },
     "aiCreditsLow": "AI kredin azalıyor — bitmeden aşağıdan yükle.",
-    "aiCreditsOut": "AI kredin bitti — AI çalışmaya devam etsin diye aşağıdan yükle."
+    "aiCreditsOut": "AI kredin bitti — AI çalışmaya devam etsin diye aşağıdan yükle.",
+    "aiCreditsWallet": "Ön ödemeli: {{count}} kredi"
   },
   "commission": {
     "detailTitle": "Komisyon detayı",

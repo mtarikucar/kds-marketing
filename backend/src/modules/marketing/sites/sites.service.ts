@@ -180,7 +180,7 @@ export class SitesService {
         // 2000 was too small — a 3-6 block page with pricing/faq easily exceeds it,
         // truncating the JSON so it fails to parse (or lands empty). Give it room.
         maxTokens: 4000,
-        tier: tierFor('funnel.draft'),
+        tier: tierFor('funnel.draft'), workspaceId: workspaceId, action: 'funnel.draft',
       });
       // Tolerate ```json fences / prose around the object.
       const cleaned = res.text.replace(/```json/gi, '').replace(/```/g, '');

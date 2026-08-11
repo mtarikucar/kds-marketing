@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../../../prisma/prisma.service';
 import Anthropic from '@anthropic-ai/sdk';
 
 export type AiModelTier = 'default' | 'light' | 'conversation';
@@ -12,6 +13,14 @@ export interface AiCallOpts {
   tier?: AiModelTier;
   /** Cache the (large, stable) system prompt across calls. */
   cacheSystem?: boolean;
+  /**
+   * Pass BOTH to record measured token usage (AiUsageLog). Optional so no call
+   * site is forced to change, but every metered action should supply them:
+   * without measurement every credit price in ai-credit-costs.ts stays a
+   * max_tokens-ceiling guess, which is what they all are today.
+   */
+  workspaceId?: string;
+  action?: string;
 }
 
 export interface AiCompletion {
@@ -41,7 +50,10 @@ export class AnthropicService {
   private readonly logger = new Logger(AnthropicService.name);
   private client: Anthropic | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   isEnabled(): boolean {
     return (
@@ -101,6 +113,9 @@ export class AnthropicService {
       if (block.type === 'text') text += block.text;
       else if (block.type === 'tool_use') toolUses.push(block);
     }
+
+    void this.recordUsage(opts, res.usage.input_tokens, res.usage.output_tokens);
+
     return {
       text,
       toolUses,
@@ -110,6 +125,35 @@ export class AnthropicService {
         output: res.usage.output_tokens,
       },
     };
+  }
+
+  /**
+   * Persist what the call actually consumed.
+   *
+   * Fire-and-forget on purpose: this is telemetry, and losing a row must never
+   * fail a customer's AI call or add latency to it. Silently skipped when the
+   * caller did not identify itself — a log line with no workspace and no action
+   * cannot be turned into a price.
+   */
+  private async recordUsage(
+    opts: AiCallOpts,
+    inputTokens: number,
+    outputTokens: number,
+  ): Promise<void> {
+    if (!opts.workspaceId || !opts.action) return;
+    try {
+      await this.prisma.aiUsageLog.create({
+        data: {
+          workspaceId: opts.workspaceId,
+          action: opts.action,
+          model: this.modelFor(opts.tier ?? 'default'),
+          inputTokens,
+          outputTokens,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`ai usage log failed (${opts.action}): ${(e as Error)?.message ?? e}`);
+    }
   }
 
   /**

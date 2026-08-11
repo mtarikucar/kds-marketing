@@ -27,6 +27,7 @@ describe('BillingSettlementService — idempotent settlement', () => {
   let prisma: any;
   let entitlements: { invalidate: jest.Mock };
   let growthWallet: { credit: jest.Mock };
+  let aiCreditWallet: { credit: jest.Mock };
   let svc: BillingSettlementService;
 
   beforeEach(() => {
@@ -55,7 +56,12 @@ describe('BillingSettlementService — idempotent settlement', () => {
     };
     entitlements = { invalidate: jest.fn() };
     growthWallet = { credit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }) };
-    svc = new BillingSettlementService(prisma, entitlements as any, growthWallet as any);
+    // Prepaid AI credits are a BALANCE, not a period-scoped ceiling — a
+    // credit top-up credits this instead of creating a WorkspaceAddOn.
+    aiCreditWallet = { credit: jest.fn().mockResolvedValue(1000) };
+    svc = new BillingSettlementService(
+      prisma, entitlements as any, growthWallet as any, aiCreditWallet as any,
+    );
   });
 
   it('activates the subscription and invalidates entitlements on first success', async () => {
@@ -129,6 +135,59 @@ describe('BillingSettlementService — idempotent settlement', () => {
         grants: { 'limit.dailyLeadQuota': 10 },
         currentPeriodEnd: periodEnd,
       }),
+    });
+  });
+
+  /**
+   * Credit top-ups deliberately bypass ADDON_GRANTS. A
+   * `limit.aiCreditsMonthly` grant only raises the ceiling for the CURRENT
+   * subscription period, so credits a customer PAID for evaporated at period
+   * end — the wrong behaviour for a plan built on modest included credits plus
+   * top-up. They credit a persistent balance instead.
+   */
+  describe('prepaid AI credit top-ups', () => {
+    const topUpOrder = (code: string, quantity = 1) => ({
+      ...ORDER,
+      type: 'ADDON',
+      packageId: null,
+      addOnCode: code,
+      quantity,
+    });
+
+    it('credits the wallet and creates NO period-scoped add-on row', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('credits_4k'));
+
+      await svc.settleSuccess('order-1');
+
+      expect(aiCreditWallet.credit).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ amount: 4000, kind: 'TOPUP', ref: 'order:order-1' }),
+      );
+      // A WorkspaceAddOn would expire with the period — exactly the behaviour
+      // being replaced.
+      expect(prisma.workspaceAddOn.create).not.toHaveBeenCalled();
+      expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+    });
+
+    it('multiplies by quantity', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('credits_1k', 3));
+      await svc.settleSuccess('order-1');
+      expect(aiCreditWallet.credit.mock.calls[0][1]).toMatchObject({ amount: 3000 });
+    });
+
+    it('carries the order ref so a replayed webhook credits exactly once', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('credits_12k'));
+      await svc.settleSuccess('order-1');
+      // Idempotency lives in the ledger's unique ref, same as the growth-wallet
+      // top-up above.
+      expect(aiCreditWallet.credit.mock.calls[0][1].ref).toBe('order:order-1');
+    });
+
+    it('leaves non-credit add-ons on the entitlement-grant path', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('quota_boost_10'));
+      await svc.settleSuccess('order-1');
+      expect(aiCreditWallet.credit).not.toHaveBeenCalled();
+      expect(prisma.workspaceAddOn.create).toHaveBeenCalled();
     });
   });
 

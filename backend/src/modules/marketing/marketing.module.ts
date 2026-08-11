@@ -141,6 +141,7 @@ import { ScheduledJobService } from './scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiCreditsService } from './ai/ai-credits.service';
+import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
 import { KnowledgeService } from './ai/knowledge.service';
 import { AgentProfileService } from './ai/agent-profile.service';
 import { ContentAiService } from './ai/content-ai.service';
@@ -833,6 +834,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiCreditsService,
+    AiCreditWalletService,
     KnowledgeService,
     AgentProfileService,
     ContentAiService,

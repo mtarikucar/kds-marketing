@@ -168,7 +168,7 @@ export class WorkflowsService {
         system: DSL_GUIDE,
         messages: [{ role: 'user', content: prompt.slice(0, 2000) }],
         maxTokens: 1500,
-        tier: tierFor('workflow.draft'),
+        tier: tierFor('workflow.draft'), workspaceId: workspaceId, action: 'workflow.draft',
       });
       const json = this.extractJson(res.text);
       return parseWorkflowParts(json.trigger, json.steps); // throws → caught below

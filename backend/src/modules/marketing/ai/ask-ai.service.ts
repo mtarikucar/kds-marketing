@@ -74,7 +74,7 @@ export class AskAiService {
         // Charge before the call so an exhausted workspace stops spending.
         await this.credits.reserve(workspaceId, creditCost('ask_ai.turn'));
         turnsCharged += 1;
-        const res = await this.anthropic.complete({ system, messages, tools: TOOLS, maxTokens: 800, tier: tierFor('ask_ai.turn') });
+        const res = await this.anthropic.complete({ system, messages, tools: TOOLS, maxTokens: 800, tier: tierFor('ask_ai.turn'), workspaceId: workspaceId, action: 'ask_ai.turn' });
         if (res.text) answer = res.text;
         if (!res.toolUses.length) break;
         const results: Anthropic.ToolResultBlockParam[] = [];

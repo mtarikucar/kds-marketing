@@ -16,7 +16,7 @@ import {
   BILLING_PAYMENT_PROVIDERS,
   CheckoutHandle,
 } from './payments/payment-provider.port';
-import { ADDON_GRANTS } from './billing-settlement.service';
+import { ADDON_GRANTS, AI_CREDIT_TOPUPS } from './billing-settlement.service';
 
 export interface CheckoutInput {
   packageCode?: string;
@@ -48,7 +48,17 @@ const ADDON_PRICES: Record<string, { TRY: number; USD: number; name: string }> =
   quota_boost_10: { TRY: 2690, USD: 79, name: '+10 leads/day boost' },
   extra_profile: { TRY: 1690, USD: 49, name: 'Extra research profile' },
   // Phase F P1 — AI metering boosts (monthly recurring; fold via ADDON_GRANTS).
+  // RETIRED: a monthly ceiling bump, so credits paid for vanished at period
+  // end. Kept sellable-by-code for anything mid-flight, hidden from the
+  // catalogue below; credits_* are the replacement and persist as a balance.
   ai_credit_boost_500: { TRY: 290, USD: 9, name: '+500 AI credits / month' },
+  // Prepaid AI credits. Never expire — they are a balance, not a ceiling.
+  // Priced so the marginal credit stays well under what it costs to serve
+  // while getting cheaper in bulk (the plan's included credits are the
+  // expensive ones; top-ups are the volume lane).
+  credits_1k: { TRY: 1290, USD: 29, name: '1.000 AI credits' },
+  credits_4k: { TRY: 4390, USD: 99, name: '4.000 AI credits' },
+  credits_12k: { TRY: 10900, USD: 249, name: '12.000 AI credits' },
   messages_boost_1000: { TRY: 190, USD: 6, name: '+1000 messages / month' },
   // NetGSM SMS v2 Task 12 — unlocks the `smsOtp` feature (2FA-SMS factor +
   // lead phone verification). Recurring like the AI boosts above (rides the
@@ -270,7 +280,10 @@ export class BillingService {
     } else {
       const code = input.addOnCode!;
       const price = ADDON_PRICES[code];
-      if (!price || !ADDON_GRANTS[code]) {
+      // A sellable add-on is one we know how to GRANT: either an entitlement
+      // boost or a prepaid credit top-up. Checking only ADDON_GRANTS would 404
+      // every credit SKU, since those credit the wallet instead.
+      if (!price || (!ADDON_GRANTS[code] && !AI_CREDIT_TOPUPS[code])) {
         throw new NotFoundException('Add-on not found');
       }
       // Boosts extend a live subscription — there must be one to extend.

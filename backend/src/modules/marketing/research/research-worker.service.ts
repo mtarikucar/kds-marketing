@@ -92,7 +92,7 @@ export class ResearchWorkerService {
               messages,
               tools: RESEARCH_TOOLS,
               maxTokens: 4000,
-              tier: tierFor('research.turn'),
+              tier: tierFor('research.turn'), workspaceId: job.workspaceId, action: 'research.turn',
               cacheSystem: true,
             });
             if (!res.toolUses.length) break;
