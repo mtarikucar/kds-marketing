@@ -59,8 +59,14 @@ export class CreateCampaignDto {
   @IsOptional() @IsString() @MaxLength(64)
   emailTemplateId?: string;
 
-  /** Lead-filter DSL (lead.* fields), same op vocabulary as workflows. */
+  /** Lead-filter DSL (lead.* fields), same op vocabulary as workflows.
+   *  @Type(() => Object) is load-bearing — see the note on CreateWorkflowDto:
+   *  under the global pipe's enableImplicitConversion, an unpinned free-shape
+   *  array turns every element into `[]`. Here that silently EMPTIES the
+   *  audience filter, and an empty filter means "everyone" — a campaign aimed
+   *  at one segment would go to the entire lead list. */
   @IsOptional() @IsArray()
+  @Type(() => Object)
   audienceFilter?: unknown[];
 
   @IsOptional() @IsDateString()
@@ -94,7 +100,9 @@ export class UpdateCampaignDto {
   @IsOptional() @IsString() @MaxLength(64)
   emailTemplateId?: string;
 
+  /** See CreateCampaignDto.audienceFilter — the same @Type pin, same reason. */
   @IsOptional() @IsArray()
+  @Type(() => Object)
   audienceFilter?: unknown[];
 
   @IsOptional() @IsDateString()

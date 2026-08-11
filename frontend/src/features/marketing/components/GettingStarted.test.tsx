@@ -1,17 +1,31 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import i18n from 'i18next';
 import '@/i18n/config';
 import { useMarketingAuthStore, type MarketingUser } from '@/store/marketingAuthStore';
-import { useOnboardingStore } from '@/store/onboardingStore';
 import GettingStarted from './GettingStarted';
 
 const MANAGER: MarketingUser = {
   id: 'u1', workspaceId: 'w1', email: 'm@x.io', firstName: 'M', lastName: 'X', role: 'MANAGER',
 };
+
+// Dismissal is server state now (Workspace.settings.onboarding), not a
+// localStorage flag — it is a workspace fact, not a per-device opinion.
+const getOnboarding = vi.fn();
+const setOnboardingDismissed = vi.fn();
+vi.mock('../api/onboarding.service', async () => {
+  const actual = await vi.importActual<typeof import('../api/onboarding.service')>(
+    '../api/onboarding.service',
+  );
+  return {
+    ...actual,
+    getOnboarding: () => getOnboarding(),
+    setOnboardingDismissed: (d: boolean) => setOnboardingDismissed(d),
+  };
+});
 
 function makeQC() {
   return new QueryClient({
@@ -35,7 +49,16 @@ function renderGS() {
 describe('GettingStarted', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en');
-    useOnboardingStore.setState({ dismissed: {} });
+    // A tiny stateful fake server: the mutation must actually change what a
+    // subsequent read returns, because the hook invalidates and refetches after
+    // every write. A mock that always replied "not dismissed" would make the
+    // checklist reappear and hide a real regression behind a passing test.
+    let dismissed = false;
+    getOnboarding.mockReset().mockImplementation(async () => ({ dismissed }));
+    setOnboardingDismissed.mockReset().mockImplementation(async (next: boolean) => {
+      dismissed = next;
+      return { dismissed };
+    });
   });
 
   it('renders the checklist including the invite-team step', async () => {
@@ -56,15 +79,32 @@ describe('GettingStarted', () => {
     expect(titles[0]).toHaveTextContent('Build your growth strategy');
   });
 
-  it('hides on dismiss and reappears on reopen', async () => {
+  it('calls out the first outstanding step so there is one obvious next action', async () => {
+    renderGS();
+    const next = await screen.findByTestId('onboarding-next-step');
+    expect(next).toHaveAttribute('href', '/onboarding/strategy');
+  });
+
+  it('hides on dismiss and persists that to the server', async () => {
     const user = userEvent.setup();
     renderGS();
     await screen.findByText('Invite your team');
+
     await user.click(screen.getByRole('button', { name: /Dismiss/i }));
+
     await waitFor(() =>
       expect(screen.queryByText('Invite your team')).not.toBeInTheDocument(),
     );
-    act(() => useOnboardingStore.getState().reopen('w1'));
-    expect(await screen.findByText('Invite your team')).toBeInTheDocument();
+    // The whole point of the move off localStorage: the dismissal reaches the
+    // workspace, so another device or teammate sees the same state.
+    expect(setOnboardingDismissed).toHaveBeenCalledWith(true);
+  });
+
+  it('stays hidden when the workspace has already dismissed it elsewhere', async () => {
+    getOnboarding.mockImplementation(async () => ({ dismissed: true }));
+    renderGS();
+
+    await waitFor(() => expect(getOnboarding).toHaveBeenCalled());
+    expect(screen.queryByText('Invite your team')).not.toBeInTheDocument();
   });
 });

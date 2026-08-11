@@ -141,7 +141,7 @@ export class ReviewsService {
         system: 'You are a business owner replying to a customer review. Write a short, warm, professional reply. If the review is negative, acknowledge + offer to make it right, never argue.',
         messages: [{ role: 'user', content: `Rating: ${review.rating ?? '?'}/5\nReview: ${review.text ?? '(no text)'}` }],
         maxTokens: 400,
-        tier: tierFor('review.reply_draft'),
+        tier: tierFor('review.reply_draft'), workspaceId: workspaceId, action: 'review.reply_draft',
       });
       const draft = res.text.trim();
       await this.prisma.review.update({ where: { id: review.id }, data: { replyDraft: draft } });

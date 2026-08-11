@@ -78,7 +78,7 @@ export class ContentAiService {
         system,
         messages: [{ role: 'user', content: userParts.join('\n') }],
         maxTokens: 1500,
-        tier: tierFor('content.compose'),
+        tier: tierFor('content.compose'), workspaceId: workspaceId, action: 'content.compose',
       });
 
       return this.parse(res.text, dto.kind, n);

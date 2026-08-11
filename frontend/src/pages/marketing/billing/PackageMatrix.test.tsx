@@ -14,6 +14,8 @@ const BACKEND_FEATURE_KEYS = [
   'advancedReports',
   'apiAccess',
   'conversationAi',
+  'sms',
+  'smsOtp',
   'workflows',
   'campaigns',
   'funnels',
@@ -24,6 +26,8 @@ const BACKEND_FEATURE_KEYS = [
   'invoicing',
   'mediaGen',
   'socialCampaigns',
+  'voiceCampaigns',
+  'fax',
   'memberships',
   'research',
 ] as const;
@@ -81,6 +85,26 @@ describe('PackageMatrix checkout loading', () => {
     for (const btn of screen.getAllByRole('button', { name: /choose/i })) {
       expect(btn).not.toHaveAttribute('aria-busy');
     }
+  });
+});
+
+describe('PackageMatrix with a single sellable package', () => {
+  // The catalogue collapsed to one plan (backend seed-packages.ts, 2026-08).
+  // Two things used to break here: the highlight was hardcoded to
+  // `code === 'GROWTH'`, a now-retired tier, so the only card on the page was
+  // never highlighted; and "Most popular" is a comparison claim that means
+  // nothing when there is nothing to compare against.
+  it('renders the one plan without a "most popular" badge', () => {
+    render(<PackageMatrix {...baseProps} isPending={false} packages={[PKG('JEETA', 'Jeeta')]} />);
+
+    expect(screen.getByRole('heading', { name: 'Jeeta' })).toBeInTheDocument();
+    expect(screen.queryByText(/most popular/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /choose/i })).toHaveLength(1);
+  });
+
+  it('still badges a recommendation when more than one package is published', () => {
+    render(<PackageMatrix {...baseProps} isPending={false} />);
+    expect(screen.getByText(/most popular/i)).toBeInTheDocument();
   });
 });
 

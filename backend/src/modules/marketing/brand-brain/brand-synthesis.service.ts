@@ -80,14 +80,18 @@ export class BrandSynthesisService {
     if (!this.anthropic.isEnabled()) throw new ServiceUnavailableException('AI is not configured');
     await this.credits.reserve(workspaceId, creditCost('brand.analyze'));
     try {
-      return await this.callModel(sourceResults, defaultLanguage);
+      return await this.callModel(workspaceId, sourceResults, defaultLanguage);
     } catch (e) {
       await this.credits.refund(workspaceId, creditCost('brand.analyze'));
       throw e;
     }
   }
 
-  private async callModel(sourceResults: BrandSourceResult[], lang: string): Promise<BrandAnalysisDraft> {
+  private async callModel(
+    workspaceId: string,
+    sourceResults: BrandSourceResult[],
+    lang: string,
+  ): Promise<BrandAnalysisDraft> {
     const digest = this.buildDigest(sourceResults);
     const system = [
       'You are a brand strategist. From the gathered source material about ONE business, synthesize a single structured brand profile.',
@@ -104,6 +108,8 @@ export class BrandSynthesisService {
         tools: [SUBMIT_BRAND_DRAFT_TOOL],
         maxTokens: 4000,
         tier: tierFor('brand.analyze'),
+        workspaceId,
+        action: 'brand.analyze',
       });
       const tu = res.toolUses.find((t) => t.name === 'submit_brand_profile');
       if (tu?.input) return this.normalize(tu.input as Record<string, any>);

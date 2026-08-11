@@ -95,15 +95,24 @@ export const TOGGLEABLE_MODULE_KEYS: readonly FeatureKey[] = FEATURE_KEYS.filter
 );
 
 /**
- * New-workspace default `activatedModules`: every toggleable module active
- * EXCEPT the ones hidden by default for a leaner first-run (memberships +
- * research). Existing workspaces keep `activatedModules = null` (all-active),
- * so this only affects freshly-created workspaces; the two hidden modules stay
- * entitled and can be switched on in Modules settings.
+ * New-workspace default `activatedModules`: every toggleable module active.
+ *
+ * This used to hide `memberships` and `research` for a leaner first run. That
+ * made sense while the plan ladder decided what you owned — it no longer does.
+ * With a single sellable package (seed-packages.ts, 2026-08) every customer
+ * is entitled to both, and a default that omits them means a customer who has
+ * just paid for "everything" opens the console and finds Courses and Research
+ * missing, with no indication that a Settings toggle is what stands in the way.
+ * A paid capability must not be invisible by default.
+ *
+ * First-run clutter is a real concern, but it belongs to onboarding sequencing
+ * — what we guide someone to do FIRST — not to hiding things they bought.
+ *
+ * Existing workspaces with a customized (non-null) allow-list are brought
+ * forward by 20260810120000_backfill_memberships_research_activated_modules;
+ * `null` still means all-entitled-modules-active and is untouched.
  */
-export const DEFAULT_ACTIVATED_MODULES: FeatureKey[] = TOGGLEABLE_MODULE_KEYS.filter(
-  (k) => k !== 'memberships' && k !== 'research',
-);
+export const DEFAULT_ACTIVATED_MODULES: FeatureKey[] = [...TOGGLEABLE_MODULE_KEYS];
 
 /**
  * Numeric entitlement limits beyond the three legacy columns. Stored in

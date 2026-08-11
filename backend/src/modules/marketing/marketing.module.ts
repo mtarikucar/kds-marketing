@@ -120,6 +120,8 @@ import { TelephonyCallbackController } from './controllers/telephony-callback.co
 import { TelephonyCallbackService } from './services/telephony-callback.service';
 import { NetgsmOnboardingController } from './controllers/netgsm-onboarding.controller';
 import { NetgsmOnboardingService } from './services/netgsm-onboarding.service';
+import { OnboardingController } from './controllers/onboarding.controller';
+import { OnboardingService } from './services/onboarding.service';
 
 // Phase 3 installation ops — crews, jobs, scheduling, tasks, ops dashboard.
 import { InstallationController } from './installations/installation.controller';
@@ -139,6 +141,7 @@ import { ScheduledJobService } from './scheduling/scheduled-job.service';
 import { ScheduledJobRunnerService } from './scheduling/scheduled-job-runner.service';
 import { AnthropicService } from './ai/anthropic.service';
 import { AiCreditsService } from './ai/ai-credits.service';
+import { AiCreditWalletService } from './ai/ai-credit-wallet.service';
 import { KnowledgeService } from './ai/knowledge.service';
 import { AgentProfileService } from './ai/agent-profile.service';
 import { ContentAiService } from './ai/content-ai.service';
@@ -629,6 +632,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     TelephonyCallbackController,
     TelephonyReportsController,
     NetgsmOnboardingController,
+    OnboardingController,
     InstallationController,
     SalesTargetController,
     MarketingResearchController,
@@ -812,6 +816,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // TelephonyStreamController's GET /marketing/telephony/stream.
     TelephonyStreamService,
     NetgsmOnboardingService,
+    OnboardingService,
     // Phase 3 installation ops: crews, jobs, and the auto-create consumer
     // (reacts to marketing.lead.converted.v1).
     InstallationJobService,
@@ -829,6 +834,7 @@ import { CommunityChannelController } from './strategy/channels/community-channe
     // one-shot content generation.
     AnthropicService,
     AiCreditsService,
+    AiCreditWalletService,
     KnowledgeService,
     AgentProfileService,
     ContentAiService,

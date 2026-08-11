@@ -35,8 +35,14 @@ function deps(overrides: { aiEnabled?: boolean; completions?: any[]; session?: a
   const website = { collect: jest.fn().mockResolvedValue({ source: 'website', status: 'inert', raw: null }) };
   const social = { collect: jest.fn().mockResolvedValue({ source: 'social', status: 'inert', raw: null }) };
 
-  const svc = new StrategyIntakeService(prisma as any, anthropic as any, credits as any, website as any, social as any);
-  return { svc, complete, credits, prisma, website, social, store };
+  // Firecrawl/Apify money spent by those adapters is Jeeta's; onboarding
+  // records it now, exactly as brand-analysis already did.
+  const spend = { settle: jest.fn().mockResolvedValue({ amount: 0.01 }) };
+
+  const svc = new StrategyIntakeService(
+    prisma as any, anthropic as any, credits as any, website as any, social as any, spend as any,
+  );
+  return { svc, complete, credits, prisma, website, social, spend, store };
 }
 
 const analysis = () =>
@@ -122,5 +128,49 @@ describe('StrategyIntakeService', () => {
       const { svc } = deps({ aiEnabled: false });
       expect(await svc.answer('ws1', 'sess1', ['x'])).toEqual({ skipped: 'ai-not-configured' });
     });
+  });
+});
+
+/**
+ * Onboarding crawls the customer's website (and socials) through the same
+ * Brand Brain adapters brand-analysis uses — real Firecrawl/Apify money on
+ * Jeeta's accounts. That path recorded NONE of it: the service did not import
+ * the spend ledger at all, so the one flow every new workspace runs was the
+ * one flow whose vendor cost was invisible.
+ */
+describe('StrategyIntakeService — source spend accounting', () => {
+  it('settles firecrawl pages and apify runs reported by the adapters', async () => {
+    const { svc, website, social, spend } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+    website.collect.mockResolvedValue({ source: 'website', status: 'ok', raw: {}, firecrawlPages: 8 });
+    social.collect.mockResolvedValue({ source: 'social', status: 'ok', raw: {}, apifyRuns: 2 });
+
+    await svc.start('ws1', INPUT);
+
+    expect(spend.settle).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({ unit: 'FIRECRAWL_PAGE', quantity: 8 }),
+    );
+    expect(spend.settle).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({ unit: 'APIFY_RUN', quantity: 2 }),
+    );
+  });
+
+  it('does not settle anything when the adapters were inert', async () => {
+    const { svc, spend } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+
+    await svc.start('ws1', INPUT);
+
+    expect(spend.settle).not.toHaveBeenCalled();
+  });
+
+  it('completes onboarding even if the accounting write throws', async () => {
+    const { svc, website, spend } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+    website.collect.mockResolvedValue({ source: 'website', status: 'ok', raw: {}, firecrawlPages: 3 });
+    spend.settle.mockRejectedValue(new Error('ledger down'));
+
+    // Onboarding is the one flow a new customer cannot route around — a
+    // bookkeeping miss must never be what stops them.
+    await expect(svc.start('ws1', INPUT)).resolves.toBeDefined();
   });
 });

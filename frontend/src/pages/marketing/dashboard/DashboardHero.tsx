@@ -43,6 +43,7 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
   if (isManager && totalLeads === 0) {
     return (
       <EmptyState
+        data-testid="dashboard-hero"
         icon={<UserPlus className="h-6 w-6" />}
         title={t('dashboard.hero.emptyTitle', 'Start with your first lead')}
         description={t(
@@ -93,7 +94,10 @@ export function DashboardHero({ stats, today, isManager, firstName }: DashboardH
       : t('dashboard.hero.clear', "You're all caught up — nice work.");
 
   return (
-    <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+    <Card
+      data-testid="dashboard-hero"
+      className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"
+    >
       <div className="min-w-0">
         <h2 className="font-display text-h3 text-foreground">{greeting}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>

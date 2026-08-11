@@ -6,6 +6,8 @@ import { withAdvisoryLock } from '../../../common/scheduling/advisory-lock';
 import { safeFetch } from '../../../common/util/safe-fetch';
 import { R2StorageService } from '../../../common/storage/r2-storage.service';
 import { SttService } from '../voice-ai/stt.service';
+import { AiCreditsService } from '../ai/ai-credits.service';
+import { creditCost } from '../ai/ai-credit-costs';
 import { ChannelAdapterRegistry } from './channel-adapter.registry';
 import { ConversationIngressService } from './conversation-ingress.service';
 import { AccountRateBudgeter } from '../../netgsm/core/account-rate-budgeter';
@@ -113,6 +115,7 @@ export class NetgsmVoicemailPollService {
     private readonly ingress: ConversationIngressService,
     private readonly r2: R2StorageService,
     private readonly stt: SttService,
+    private readonly credits: AiCreditsService,
   ) {}
 
   @Cron(CronExpression.EVERY_HOUR, { name: 'netgsm-voicemail-poll' })
@@ -238,7 +241,7 @@ export class NetgsmVoicemailPollService {
     if (existing) return false;
 
     const recordingStorageKey = await this.tryStoreRecording(channel.workspaceId, row);
-    const sttPreview = await this.tryTranscribe(row);
+    const sttPreview = await this.tryTranscribe(channel.workspaceId, row);
 
     const bodyText = sttPreview || 'Sesli mesaj';
     // Reuse NetgsmSmsAdapter.parseInbound for the SAME +90 E.164 sender
@@ -307,13 +310,34 @@ export class NetgsmVoicemailPollService {
   /** Best-effort STT preview. `SttService.transcribeUrl` is already inert
    *  (resolves to null, no network call) until STT_PROVIDER/STT_API_KEY are
    *  set, and never throws — this wraps it defensively anyway so a future
-   *  change to that contract can never take the poll tick down with it. */
-  private async tryTranscribe(row: VoicemailRow): Promise<string | null> {
+   *  change to that contract can never take the poll tick down with it.
+   *
+   *  Metered per minute of audio, like the post-call analysis path. This ran
+   *  on a POLL — unattended, on every inbound voicemail — and did not import
+   *  the credit meter at all, so it was a standing per-tick leak on Jeeta's
+   *  own STT key. A workspace out of credits gets no preview rather than a
+   *  free one; the voicemail itself still lands ("Sesli mesaj"), so nothing
+   *  is dropped, only the transcription is withheld. */
+  private async tryTranscribe(workspaceId: string, row: VoicemailRow): Promise<string | null> {
     if (!row.audioUrl) return null;
+
+    const cost =
+      creditCost('stt.minute') * Math.max(1, Math.ceil((row.durationSec ?? 60) / 60));
+    try {
+      await this.credits.reserve(workspaceId, cost);
+    } catch {
+      // Out of credits (or not entitled) — skip the preview, keep the message.
+      return null;
+    }
+
     try {
       const result = await this.stt.transcribeUrl(row.audioUrl);
-      return result?.text?.trim() || null;
+      const text = result?.text?.trim() || null;
+      // Nothing usable came back — don't bill for it.
+      if (!text) await this.credits.refund(workspaceId, cost).catch(() => undefined);
+      return text;
     } catch {
+      await this.credits.refund(workspaceId, cost).catch(() => undefined);
       return null;
     }
   }

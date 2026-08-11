@@ -1,4 +1,5 @@
 import { AskAiService } from './ask-ai.service';
+import { creditCost } from './ai-credit-costs';
 
 /**
  * Ask-AI runs a Claude tool-loop over workspace-scoped READ tools and returns
@@ -33,7 +34,14 @@ describe('AskAiService', () => {
 
     const res = await svc.ask(WS, 'How many new leads?');
     expect(res.answer).toBe('You have 5 NEW leads.');
-    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    // Base once, then once PER TURN. A single flat reserve used to cover the
+    // whole loop, so a 4-turn answer cost the same as a 1-turn one while
+    // costing Jeeta several times more — the credit ceiling bounded credits,
+    // not dollars. Two model calls here → base + 2 turns.
+    expect(credits.reserve).toHaveBeenCalledTimes(3);
+    expect(credits.reserve).toHaveBeenNthCalledWith(1, WS, creditCost('ask_ai.question'));
+    expect(credits.reserve).toHaveBeenNthCalledWith(2, WS, creditCost('ask_ai.turn'));
+    expect(credits.reserve).toHaveBeenNthCalledWith(3, WS, creditCost('ask_ai.turn'));
     // the read tool ran, workspace-scoped + active leads only
     expect(prisma.lead.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ workspaceId: WS, deletedAt: null, mergedIntoId: null }) }),
@@ -41,10 +49,16 @@ describe('AskAiService', () => {
     expect(credits.refund).not.toHaveBeenCalled();
   });
 
-  it('refunds the credit if the model call fails', async () => {
+  it('refunds the base AND every turn charged if the model call fails', async () => {
     anthropic.complete.mockRejectedValue(new Error('api down'));
     await expect(svc.ask(WS, 'hi')).rejects.toThrow('api down');
+    // One turn was charged before the failing call, so the refund must cover
+    // base + that turn — refunding only the base would bill for an error.
     expect(credits.refund).toHaveBeenCalledTimes(1);
+    expect(credits.refund).toHaveBeenCalledWith(
+      WS,
+      creditCost('ask_ai.question') + creditCost('ask_ai.turn'),
+    );
   });
 
   it('recovers from a tool failure (bad enum guess) instead of aborting + refunding', async () => {

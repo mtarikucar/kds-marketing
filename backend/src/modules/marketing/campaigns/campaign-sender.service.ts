@@ -455,10 +455,24 @@ export class CampaignSenderService implements OnModuleInit {
         // Per-workspace From from a VERIFIED sending domain — null (platform
         // default) unless an ESP transport is configured, so this is inert today.
         const from = (await this.sendingDomains.resolveFrom(workspaceId)) ?? undefined;
-        const ok = html
-          ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
-          : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
-        return { ok, messageId: null, error: ok ? undefined : 'email send failed' };
+        // Campaign email was the one outbound channel with NO meter at all:
+        // this branch returned before the reserve below, and MessageQuotaService
+        // — which already counts EMAIL as metered — was never called for it.
+        // That inverted the economics: SMS and WhatsApp, which bill to the
+        // CUSTOMER's own provider account, were metered, while email, which
+        // leaves on JEETA's SMTP account, was unlimited. Metered exactly like
+        // the other channels now, refund on failure included.
+        await this.quota.reserve(workspaceId, 'EMAIL');
+        try {
+          const ok = html
+            ? await this.email.sendCampaignEmail(to, subject ?? 'Update', body, html, from)
+            : await this.email.sendPlainEmail(to, subject ?? 'Update', body, from);
+          if (!ok) await this.quota.refund(workspaceId, 'EMAIL');
+          return { ok, messageId: null, error: ok ? undefined : 'email send failed' };
+        } catch (e) {
+          await this.quota.refund(workspaceId, 'EMAIL');
+          throw e; // the outer catch turns this into { ok: false, error }
+        }
       }
       const channelType = channel === 'SMS' ? 'SMS' : 'WHATSAPP';
       const ch = await this.prisma.channel.findFirst({ where: { workspaceId, type: channelType, status: 'ACTIVE' } });

@@ -4325,6 +4325,83 @@ model GrowthWalletLedgerEntry {
   @@map("growth_wallet_ledger_entries")
 }
 
+/// Prepaid AI credits (top-ups). ONE wallet per workspace.
+///
+/// WHY THIS EXISTS. `limits.aiCreditsMonthly` is a per-month ALLOWANCE that
+/// resets, and the old `ai_credit_boost_500` add-on raised that allowance for
+/// the current subscription period only — so credits a customer PAID for
+/// vanished at period end and never carried over. With the single plan shipping
+/// deliberately modest included credits and top-up as the release valve, that
+/// is the wrong shape: bought credits must behave like money, not like a
+/// temporary ceiling.
+///
+/// Consumption order is: the monthly allowance first, this balance only after
+/// it is exhausted — so nobody burns credits they paid for while free ones are
+/// still sitting there.
+///
+/// Balance is in whole credits (never fractional), mutated ONLY together with
+/// an append-only ledger entry, and debited via a conditional updateMany
+/// (balance >= amount) so it is race-safe and can NEVER go negative.
+/// Distinct from GrowthWallet (TRY ad money) — do not conflate the two.
+model AiCreditWallet {
+  id          String   @id @default(uuid())
+  workspaceId String   @unique
+  balance     Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries AiCreditLedgerEntry[]
+
+  @@map("ai_credit_wallets")
+}
+
+/// Append-only audit trail for AiCreditWallet. `ref` is globally unique so a
+/// replayed settlement webhook (`order:{id}`) credits exactly ONCE.
+/// kind: TOPUP | SPEND | REFUND | ADJUST | GRANT.
+model AiCreditLedgerEntry {
+  id           String         @id @default(uuid())
+  workspaceId  String
+  walletId     String
+  wallet       AiCreditWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  delta        Int // signed: >0 credit, <0 debit
+  balanceAfter Int
+  kind         String // TOPUP | SPEND | REFUND | ADJUST | GRANT
+  ref          String?        @unique
+  note         String?
+  createdAt    DateTime       @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@map("ai_credit_ledger_entries")
+}
+
+/// Measured token usage per AI call.
+///
+/// WHY. Every credit price in `ai-credit-costs.ts` was derived from `max_tokens`
+/// CEILINGS, not from what calls actually consume — deliberately conservative,
+/// but still a guess. `AnthropicService.complete()` has always returned real
+/// `usage` and every caller threw it away, so nothing in the system knew what a
+/// credit costs. This row is what turns the price table from an estimate into
+/// arithmetic: sum `inputTokens`/`outputTokens` by `action`, multiply by the
+/// model's published rate, divide by the credits charged.
+///
+/// Written best-effort and never in the request path's way — losing a log line
+/// must never fail a customer's AI call.
+model AiUsageLog {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  /// The AiAction key the call was charged under (ai-credit-costs.ts).
+  action       String
+  /// Resolved model id, so a tier remap stays comparable after the fact.
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  createdAt    DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([action, createdAt])
+  @@map("ai_usage_logs")
+}
+
 /// The single growth budget a workspace gives the Budget Autopilot for a month
 /// (Faz 7). `totalAmount` is the hard cap the autopilot may NEVER exceed.
 /// `scope` = HOLISTIC (ads + content + conversations) or AD_ONLY. `killSwitch`

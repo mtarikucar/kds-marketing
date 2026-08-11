@@ -10,7 +10,10 @@ import { toast } from 'sonner';
 import marketingApi from '../api/marketingApi';
 import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
 import { useCommandPaletteStore } from '../../../store/commandPaletteStore';
-import { useOnboardingStore } from '../../../store/onboardingStore';
+import {
+  setOnboardingDismissed,
+  ONBOARDING_QUERY_KEY,
+} from '../api/onboarding.service';
 import { useTourStore } from '../../../store/tourStore';
 import { useTwoFactorStatus } from '../hooks/useTwoFactorStatus';
 import { QUICK_ACTIONS } from '../quickActions';
@@ -114,7 +117,12 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
   const queryClient = useQueryClient();
   const { t } = useTranslation('marketing');
   const openPalette = useCommandPaletteStore((s) => s.setOpen);
-  const reopenOnboarding = useOnboardingStore((s) => s.reopen);
+  // Un-dismissing is a workspace-level write now, not a localStorage flip, so
+  // "show setup guide" reaches every device and every teammate.
+  const reopenOnboarding = useMutation({
+    mutationFn: () => setOnboardingDismissed(false),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ONBOARDING_QUERY_KEY }),
+  });
   const openTour = useTourStore((s) => s.setOpen);
 
   const [showNotifications, setShowNotifications] = useState(false);
@@ -490,7 +498,7 @@ export default function MarketingHeader({ onMenuClick }: { onMenuClick?: () => v
               {isManager && (
                 <DropdownMenuItem
                   onSelect={() => {
-                    reopenOnboarding(user?.workspaceId ?? 'unknown');
+                    reopenOnboarding.mutate();
                     navigate('/dashboard');
                     // Confirm the action even when the workspace is fully set up
                     // (in which case the checklist stays hidden — nothing to do).

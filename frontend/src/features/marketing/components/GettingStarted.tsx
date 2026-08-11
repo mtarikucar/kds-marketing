@@ -1,13 +1,7 @@
-import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { CheckCircle, ChevronRight, X } from 'lucide-react';
-import marketingApi from '../api/marketingApi';
-import { getBrandProfile } from '../api/brandBrain.service';
-import { getStrategy } from '../api/strategy.service';
-import { useMarketingAuthStore } from '../../../store/marketingAuthStore';
-import { useOnboardingStore } from '../../../store/onboardingStore';
+import { useOnboardingChecklist } from '../hooks/useOnboardingChecklist';
 import {
   Card,
   CardHeader,
@@ -19,104 +13,27 @@ import {
 } from '@/components/ui';
 
 /**
- * Manager-only first-run checklist on the dashboard. Self-fetches each setup
- * area's list (reusing the AI pages' exact query keys, so the data is shared —
- * no duplicate fetches) and marks a step done when that area has ≥1 item.
- * Dismissible, and auto-hides once every step is complete; dismissal latches
- * per-workspace in the (persisted) onboarding store so a configured workspace is
- * never nagged, yet a "Show setup guide" action can reopen it.
+ * Manager-only first-run checklist. State lives in `useOnboardingChecklist` so
+ * the dashboard can read the same signal and decide what to render FIRST — an
+ * unconfigured workspace should not be told to "add your first lead" above the
+ * setup guide.
+ *
+ * Dismissible, auto-hides once every step is complete, and dismissal latches
+ * per-workspace in the persisted onboarding store so a configured workspace is
+ * never nagged. "Show setup guide" in the header avatar menu reopens it.
  */
 export default function GettingStarted() {
   const { t } = useTranslation('marketing');
-  const { user } = useMarketingAuthStore();
-  const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER';
-  const workspaceId = user?.workspaceId ?? 'unknown';
-  const dismissed = useOnboardingStore((s) => !!s.dismissed[workspaceId]);
-  const dismissWs = useOnboardingStore((s) => s.dismiss);
-  const active = isManager && !dismissed;
-
-  // Reuses the Strategy console's exact query key so the cache is shared.
-  // getStrategy already swallows a 404 into null, so a strategy-less workspace
-  // simply reads as not-done (no rejected query to special-case here).
-  const strategy = useQuery({
-    queryKey: ['marketing', 'strategy'],
-    queryFn: getStrategy,
-    enabled: active,
-  });
-  const agents = useQuery<any[]>({
-    queryKey: ['marketing', 'ai', 'agents'],
-    queryFn: () => marketingApi.get('/ai/agents').then((r) => r.data),
-    enabled: active,
-  });
-  const docs = useQuery<any[]>({
-    queryKey: ['marketing', 'ai', 'knowledge'],
-    queryFn: () => marketingApi.get('/ai/knowledge').then((r) => r.data),
-    enabled: active,
-  });
-  const brandProfile = useQuery({
-    queryKey: ['marketing', 'brand-brain', 'profile'],
-    queryFn: getBrandProfile,
-    enabled: active,
-  });
-  const channels = useQuery<any[]>({
-    queryKey: ['marketing', 'channels'],
-    queryFn: () => marketingApi.get('/channels').then((r) => r.data),
-    enabled: active,
-  });
-  const sites = useQuery<any[]>({
-    queryKey: ['marketing', 'sites'],
-    queryFn: () => marketingApi.get('/sites').then((r) => r.data),
-    enabled: active,
-  });
-  const leads = useQuery<{ meta?: { total?: number } }>({
-    queryKey: ['marketing', 'leads', 'onboarding-count'],
-    queryFn: () =>
-      marketingApi.get('/leads', { params: { limit: 1 } }).then((r) => r.data),
-    enabled: active,
-    staleTime: 60_000,
-  });
-  const team = useQuery<any[]>({
-    queryKey: ['marketing', 'users'],
-    queryFn: () => marketingApi.get('/users').then((r) => r.data),
-    enabled: active,
-    staleTime: 60_000,
-  });
-
-  const steps = [
-    // The strategy is the brain that drives lead/content/channel/ad work, so it
-    // leads the checklist.
-    {
-      id: 'strategy',
-      to: '/onboarding/strategy',
-      done: !!(strategy.data?.id || strategy.data?.archetype),
-    },
-    { id: 'agent', to: '/inbox?tab=agents', done: (agents.data?.length ?? 0) > 0 },
-    { id: 'knowledge', to: '/inbox?tab=knowledge', done: (docs.data?.length ?? 0) > 0 },
-    { id: 'brand', to: '/branding?tab=brain', done: brandProfile.data?.status === 'ACTIVE' },
-    { id: 'channel', to: '/inbox?tab=channels', done: (channels.data?.length ?? 0) > 0 },
-    { id: 'leads', to: '/leads', done: (leads.data?.meta?.total ?? 0) > 0 },
-    // "Invite your team" — done once there's more than just the owner.
-    { id: 'team', to: '/users', done: (team.data?.length ?? 0) > 1 },
-    { id: 'site', to: '/sites', done: (sites.data?.length ?? 0) > 0 },
-  ];
-  const total = steps.length;
-  const done = steps.filter((s) => s.done).length;
-  const allDone = done === total;
-
-  // Latch dismissal once fully set up, so it stays gone on reload even if a
-  // setup item is later removed.
-  useEffect(() => {
-    if (active && allDone) {
-      dismissWs(workspaceId);
-    }
-  }, [active, allDone, workspaceId, dismissWs]);
+  const { active, steps, done, total, allDone, dismiss } = useOnboardingChecklist();
 
   if (!active || allDone) return null;
 
-  const dismiss = () => dismissWs(workspaceId);
+  // The first outstanding step is the one to actually do next. Saying so beats
+  // showing eight equal-weight rows and leaving the reader to pick.
+  const nextIndex = steps.findIndex((s) => !s.done);
 
   return (
-    <Card>
+    <Card data-testid="getting-started">
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -146,36 +63,55 @@ export default function GettingStarted() {
 
         {/* Step list */}
         <div className="space-y-1.5">
-          {steps.map((s, i) => (
-            <Link
-              key={s.id}
-              to={s.to}
-              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-surface-muted transition-colors"
-            >
-              {s.done ? (
-                <CheckCircle className="w-6 h-6 shrink-0 text-success" />
-              ) : (
-                <span className="w-6 h-6 shrink-0 rounded-full border-2 border-border flex items-center justify-center text-xs font-semibold text-muted-foreground">
-                  {i + 1}
+          {steps.map((s, i) => {
+            const isNext = i === nextIndex;
+            return (
+              <Link
+                key={s.id}
+                to={s.to}
+                data-testid={isNext ? 'onboarding-next-step' : undefined}
+                className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+                  isNext
+                    ? 'border-primary bg-primary/5 hover:bg-primary/10'
+                    : 'border-border hover:bg-surface-muted'
+                }`}
+              >
+                {s.done ? (
+                  <CheckCircle className="w-6 h-6 shrink-0 text-success" />
+                ) : (
+                  <span
+                    className={`w-6 h-6 shrink-0 rounded-full border-2 flex items-center justify-center text-xs font-semibold ${
+                      isNext
+                        ? 'border-primary text-primary'
+                        : 'border-border text-muted-foreground'
+                    }`}
+                  >
+                    {i + 1}
+                  </span>
+                )}
+                <span className="flex-1 min-w-0">
+                  <span
+                    className={`block font-medium text-sm ${
+                      s.done ? 'text-muted-foreground line-through' : 'text-foreground'
+                    }`}
+                  >
+                    {t(`onboarding.steps.${s.id}.title`)}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {t(`onboarding.steps.${s.id}.desc`)}
+                  </span>
                 </span>
-              )}
-              <span className="flex-1 min-w-0">
-                <span
-                  className={`block font-medium text-sm ${
-                    s.done ? 'text-muted-foreground line-through' : 'text-foreground'
-                  }`}
-                >
-                  {t(`onboarding.steps.${s.id}.title`)}
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {t(`onboarding.steps.${s.id}.desc`)}
-                </span>
-              </span>
-              {!s.done && (
-                <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground" />
-              )}
-            </Link>
-          ))}
+                {isNext && (
+                  <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground">
+                    {t('onboarding.startHere', 'Buradan başla')}
+                  </span>
+                )}
+                {!s.done && !isNext && (
+                  <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground" />
+                )}
+              </Link>
+            );
+          })}
         </div>
       </CardContent>
     </Card>

@@ -27,6 +27,7 @@ describe('BillingSettlementService — idempotent settlement', () => {
   let prisma: any;
   let entitlements: { invalidate: jest.Mock };
   let growthWallet: { credit: jest.Mock };
+  let aiCreditWallet: { credit: jest.Mock };
   let svc: BillingSettlementService;
 
   beforeEach(() => {
@@ -44,6 +45,7 @@ describe('BillingSettlementService — idempotent settlement', () => {
       },
       workspaceAddOn: { create: jest.fn().mockResolvedValue({}) },
       growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(null) },
+      aiCreditLedgerEntry: { findUnique: jest.fn().mockResolvedValue(null) },
       // FIX 5: activateSubscription now widens the module allow-list. Default to
       // null (all-active) so the common path is a no-op; module-union tests
       // override these.
@@ -55,7 +57,12 @@ describe('BillingSettlementService — idempotent settlement', () => {
     };
     entitlements = { invalidate: jest.fn() };
     growthWallet = { credit: jest.fn().mockResolvedValue({ wallet: {}, replayed: false }) };
-    svc = new BillingSettlementService(prisma, entitlements as any, growthWallet as any);
+    // Prepaid AI credits are a BALANCE, not a period-scoped ceiling — a
+    // credit top-up credits this instead of creating a WorkspaceAddOn.
+    aiCreditWallet = { credit: jest.fn().mockResolvedValue(1000) };
+    svc = new BillingSettlementService(
+      prisma, entitlements as any, growthWallet as any, aiCreditWallet as any,
+    );
   });
 
   it('activates the subscription and invalidates entitlements on first success', async () => {
@@ -132,6 +139,96 @@ describe('BillingSettlementService — idempotent settlement', () => {
     });
   });
 
+  /**
+   * Credit top-ups deliberately bypass ADDON_GRANTS. A
+   * `limit.aiCreditsMonthly` grant only raises the ceiling for the CURRENT
+   * subscription period, so credits a customer PAID for evaporated at period
+   * end — the wrong behaviour for a plan built on modest included credits plus
+   * top-up. They credit a persistent balance instead.
+   */
+  describe('prepaid AI credit top-ups', () => {
+    const topUpOrder = (code: string, quantity = 1) => ({
+      ...ORDER,
+      type: 'ADDON',
+      packageId: null,
+      addOnCode: code,
+      quantity,
+    });
+
+    it('credits the wallet and creates NO period-scoped add-on row', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('credits_4k'));
+
+      await svc.settleSuccess('order-1');
+
+      expect(aiCreditWallet.credit).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ amount: 4000, kind: 'TOPUP', ref: 'order:order-1' }),
+      );
+      // A WorkspaceAddOn would expire with the period — exactly the behaviour
+      // being replaced.
+      expect(prisma.workspaceAddOn.create).not.toHaveBeenCalled();
+      expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
+    });
+
+    it('multiplies by quantity', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('credits_1k', 3));
+      await svc.settleSuccess('order-1');
+      expect(aiCreditWallet.credit.mock.calls[0][1]).toMatchObject({ amount: 3000 });
+    });
+
+    it('carries the order ref so a replayed webhook credits exactly once', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('credits_12k'));
+      await svc.settleSuccess('order-1');
+      // Idempotency lives in the ledger's unique ref, same as the growth-wallet
+      // top-up above.
+      expect(aiCreditWallet.credit.mock.calls[0][1].ref).toBe('order:order-1');
+    });
+
+    /**
+     * ADDON is excluded from the recovery sweeps because grantAddOn's
+     * WorkspaceAddOn create is not idempotent. Credit top-ups ride the same
+     * type but ARE idempotent (unique ledger ref), so without their own pass a
+     * customer whose ₺10.900 order flipped to SUCCEEDED while the wallet write
+     * failed had paid for credits nothing would ever deliver.
+     */
+    it('the recovery sweep re-credits a paid top-up whose wallet write failed', async () => {
+      const order = { ...topUpOrder('credits_12k'), id: 'order-9' };
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type === 'ADDON' ? [order] : [],
+      );
+      prisma.paymentOrder.findUnique.mockResolvedValue(order);
+      prisma.paymentOrder.update = jest.fn().mockResolvedValue({});
+
+      const regranted = await svc.reconcileUngrantedOrders();
+
+      expect(regranted).toBe(1);
+      expect(aiCreditWallet.credit).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ amount: 12000, ref: 'order:order-9' }),
+      );
+    });
+
+    it('the sweep skips a top-up whose credit already landed', async () => {
+      const order = { ...topUpOrder('credits_1k'), id: 'order-8' };
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type === 'ADDON' ? [order] : [],
+      );
+      prisma.aiCreditLedgerEntry.findUnique.mockResolvedValue({ id: 'led-1' });
+      prisma.paymentOrder.update = jest.fn().mockResolvedValue({});
+
+      await svc.reconcileUngrantedOrders();
+
+      expect(aiCreditWallet.credit).not.toHaveBeenCalled();
+    });
+
+    it('leaves non-credit add-ons on the entitlement-grant path', async () => {
+      prisma.paymentOrder.findUnique.mockResolvedValue(topUpOrder('quota_boost_10'));
+      await svc.settleSuccess('order-1');
+      expect(aiCreditWallet.credit).not.toHaveBeenCalled();
+      expect(prisma.workspaceAddOn.create).toHaveBeenCalled();
+    });
+  });
+
   describe('module activation on upgrade (FIX 5)', () => {
     it('unions newly-entitled default-ON modules into a customised activatedModules allow-list', async () => {
       prisma.workspace.findUnique.mockResolvedValue({
@@ -145,9 +242,18 @@ describe('BillingSettlementService — idempotent settlement', () => {
 
       const upd = prisma.workspace.update.mock.calls[0][0];
       expect(upd.where).toEqual({ id: 'ws-1' });
-      // campaigns is newly entitled + default-ON → added; telephony already on;
-      // memberships is entitled but hidden-by-default → NOT auto-activated.
-      expect(upd.data.activatedModules).toEqual(['telephony', 'campaigns']);
+      // telephony was already on; campaigns and memberships are newly entitled
+      // and every toggleable module is now default-ON, so both are added.
+      //
+      // This asserts the ENTITLEMENT filter, not just the union: the package
+      // mock grants exactly three features, and DEFAULT_ACTIVATED_MODULES now
+      // contains all 21 toggleable keys. If the union ignored entitlement it
+      // would splice in all 21 and this equality would fail loudly.
+      expect(upd.data.activatedModules).toEqual([
+        'telephony',
+        'campaigns',
+        'memberships',
+      ]);
       expect(entitlements.invalidate).toHaveBeenCalledWith('ws-1');
     });
 
@@ -305,11 +411,18 @@ describe('BillingSettlementService — idempotent settlement', () => {
       expect(grantMarks()).toHaveLength(0);
     });
 
-    it('both reconcile queries filter grantedAt: null (the window fix)', async () => {
+    it('every reconcile query filters grantedAt: null (the window fix)', async () => {
       await svc.reconcileUngrantedOrders();
       const wheres = prisma.paymentOrder.findMany.mock.calls.map((c: any[]) => c[0].where);
-      expect(wheres).toHaveLength(2);
+      // Assert the PROPERTY, not the count: a new recovery pass (credit
+      // top-ups were the third) must inherit the marker filter, and pinning a
+      // number just makes adding one look like a regression.
+      expect(wheres.length).toBeGreaterThanOrEqual(3);
       for (const where of wheres) expect(where).toMatchObject({ grantedAt: null });
+      // The three families the sweep must cover.
+      expect(wheres.some((w: any) => w.type?.in)).toBe(true);
+      expect(wheres.some((w: any) => w.type === 'WALLET_TOPUP')).toBe(true);
+      expect(wheres.some((w: any) => w.type === 'ADDON' && w.addOnCode?.in)).toBe(true);
     });
 
     it('reconcile stamps grantedAt on a successful re-grant', async () => {

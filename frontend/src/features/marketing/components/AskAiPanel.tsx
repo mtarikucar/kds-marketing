@@ -7,7 +7,11 @@ import marketingApi from '../api/marketingApi';
 /**
  * Ask-AI slide-over, mounted globally in the layout. A read-only natural-
  * language analyst over the workspace's own data (leads/tasks/campaigns).
- * Gated on the `askAi` feature server-side — a 403 surfaces as an upgrade hint.
+ * Gated on the `askAi` feature server-side. Note that a 403 here is ambiguous:
+ * it can mean the feature is not entitled (FEATURE_NOT_IN_PACKAGE) OR that the
+ * workspace has spent its monthly AI credits (AI_CREDITS_EXHAUSTED). Both used
+ * to render "Ask AI is not in your plan — upgrade to enable it", which told a
+ * paying customer to buy a feature they already own, and pointed nowhere.
  */
 export default function AskAiPanel() {
   const { t } = useTranslation('marketing');
@@ -18,12 +22,24 @@ export default function AskAiPanel() {
   const ask = useMutation({
     mutationFn: (question: string) => marketingApi.post('/ai/ask', { question }).then((r) => r.data),
     onSuccess: (d) => setAnswer(d.answer),
-    onError: (e: any) =>
-      setAnswer(
-        e.response?.status === 403
-          ? t('askAi.locked', 'Ask AI is not in your plan — upgrade to enable it.')
-          : (e.response?.data?.message ?? t('askAi.failed', 'Something went wrong.')),
-      ),
+    onError: (e: any) => {
+      const status = e.response?.status;
+      const code = e.response?.data?.code;
+      if (status === 403 && code === 'AI_CREDITS_EXHAUSTED') {
+        setAnswer(
+          t(
+            'askAi.creditsExhausted',
+            'You have used this month’s AI credits. Add credits from Billing to keep asking.',
+          ),
+        );
+        return;
+      }
+      if (status === 403) {
+        setAnswer(t('askAi.locked', 'Ask AI is not in your plan — upgrade to enable it.'));
+        return;
+      }
+      setAnswer(e.response?.data?.message ?? t('askAi.failed', 'Something went wrong.'));
+    },
   });
 
   const examples = [

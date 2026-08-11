@@ -1,75 +1,75 @@
 /**
- * Playwright E2E smoke — BACKEND-FREE
+ * Smoke — the suite's canary.
  *
- * Verifies:
- *  1. /login renders the Marketing Console login page (heading + fields + submit).
- *  2. Dark-mode: exercises the theme mechanism by calling the theme store's
- *     setPref function (mirroring the ThemeToggle click) via page.evaluate,
- *     then asserts that <html> gains the `dark` class — exactly as
- *     applyTheme('dark') in lib/theme.ts dictates.
- *
- * No real API call is made; the suite runs against the Vite dev server only.
+ * Unlike the previous version, these tests run against a REAL backend and a
+ * REAL session. The old dark-mode test asserted a class it had just set
+ * itself and never touched app code; it could not fail. What follows either
+ * exercises the product or is not here.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { test as base, expect as baseExpect } from '@playwright/test';
+import * as fs from 'fs';
+import * as path from 'path';
+import { APP_URL, OWNER_STATE_FILE } from './support/config';
+import type { OwnerState } from './global-setup';
 
-test.describe('Marketing Console smoke', () => {
-  // ── 1. Login page renders ──────────────────────────────────────────────────
-  test('login page shows heading, email field, password field, and submit button', async ({
-    page,
-  }) => {
-    await page.goto('/login');
+// ── Public surface (no session needed) ──────────────────────────────────────
 
-    // The heading rendered by MarketingLoginPage (i18n key login.title).
-    // We don't assert the exact translated string to keep it resilient to locale.
-    await expect(page.locator('h1')).toBeVisible();
+base('login page renders its form', async ({ page }) => {
+  await page.goto(`${APP_URL}/login`);
 
-    // Email input
-    const emailInput = page.locator('input[type="email"]');
-    await expect(emailInput).toBeVisible();
+  await baseExpect(page.locator('h1')).toBeVisible();
+  await baseExpect(page.locator('input[type="email"]')).toBeVisible();
+  await baseExpect(page.locator('input[type="password"]')).toBeVisible();
+  await baseExpect(page.locator('button[type="submit"]')).toBeVisible();
+});
 
-    // Password input
-    const passwordInput = page.locator('input[type="password"]');
-    await expect(passwordInput).toBeVisible();
+base('an unauthenticated deep link is bounced to /login', async ({ page }) => {
+  await page.goto(`${APP_URL}/leads`);
+  await baseExpect(page).toHaveURL(/\/login/);
+});
 
-    // Submit button (the form's only <button type="submit">)
-    const submitBtn = page.locator('button[type="submit"]');
-    await expect(submitBtn).toBeVisible();
+/**
+ * The one test that signs in the way a human does. Kept to a SINGLE occurrence
+ * on purpose — see the `workers` note in playwright.config.ts for the 5/60s
+ * login budget.
+ */
+base('signing in through the UI reaches the dashboard', async ({ page }) => {
+  const saved = JSON.parse(
+    fs.readFileSync(path.resolve(OWNER_STATE_FILE), 'utf8'),
+  ) as OwnerState;
+
+  await page.goto(`${APP_URL}/login`);
+  await page.locator('input[type="email"]').fill(saved.email);
+  await page.locator('input[type="password"]').fill(saved.password);
+  await page.locator('button[type="submit"]').click();
+
+  await baseExpect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
+});
+
+// ── Authenticated surface (fresh workspace per test) ────────────────────────
+
+test('a fresh workspace lands on the dashboard, not the login page', async ({ app }) => {
+  const failures: string[] = [];
+  app.on('response', (r) => {
+    if (r.url().includes('/api/') && r.status() >= 500) {
+      failures.push(`${r.status()} ${r.url()}`);
+    }
   });
 
-  // ── 2. Dark-mode mechanism ─────────────────────────────────────────────────
-  // The app header's ThemeToggle (in the authenticated shell) is not available
-  // on the public /login page. We verify the theme mechanism end-to-end by:
-  //   a) Loading the login page (proves the app boots).
-  //   b) Calling the same `classList.toggle('dark', true)` that lib/theme.ts
-  //      `applyTheme('dark')` uses — the DOM contract the ThemeToggle depends on.
-  //   c) Additionally seeding the zustand-persist key so a reload also applies
-  //      the class via ThemeProvider (proves the store-to-DOM path).
-  test('dark theme mechanism adds class "dark" to <html>', async ({ page }) => {
-    // 1. Load the login page — app is fully booted.
-    await page.goto('/login');
-    await expect(page.locator('h1')).toBeVisible();
+  await app.goto('/dashboard');
 
-    // 2. Invoke applyTheme semantics directly (the same one-liner from lib/theme.ts).
-    //    This exercises the DOM path that ThemeToggle → setPref → applyTheme uses.
-    await page.evaluate(() => {
-      document.documentElement.classList.toggle('dark', true);
-    });
+  await expect(app).toHaveURL(/\/dashboard/);
+  await expect(app.getByRole('navigation').first()).toBeVisible();
+  expect(failures, `server errors during dashboard bootstrap:\n${failures.join('\n')}`).toEqual([]);
+});
 
-    // 3. Assert <html> has the `dark` class.
-    await expect(page.locator('html')).toHaveClass(/dark/);
+test('each test gets its own empty workspace', async ({ app, workspace }) => {
+  await app.goto('/leads');
 
-    // 4. Also seed localStorage so a future reload honours the pref — proves
-    //    the ThemeProvider store-to-DOM path without needing the authenticated shell.
-    await page.evaluate(() => {
-      localStorage.setItem(
-        'kds-theme',
-        JSON.stringify({ state: { pref: 'dark' }, version: 0 }),
-      );
-    });
-    const storedPref = await page.evaluate(() => {
-      const raw = localStorage.getItem('kds-theme');
-      return raw ? JSON.parse(raw).state.pref : null;
-    });
-    expect(storedPref).toBe('dark');
-  });
+  await expect(app).toHaveURL(/\/leads/);
+  // A brand-new workspace has no leads; the page must say so rather than
+  // showing another test's rows.
+  await expect(app.getByText(/henüz lead yok|no leads/i).first()).toBeVisible();
+  expect(workspace.id).toMatch(/^[0-9a-f-]{36}$/);
 });

@@ -47,7 +47,16 @@ import { RoutinesModule } from './modules/routines/routines.module';
     ThrottlerModule.forRootAsync({
       inject: [RedisThrottlerStorage],
       useFactory: (storage: RedisThrottlerStorage | null) => ({
-        throttlers: [{ ttl: 60_000, limit: 300 }],
+        // 300/60s is the production envelope. Overridable ONLY because a
+        // browser E2E suite is legitimately noisier than a human: ~40 tests,
+        // each loading a console page that fans out to a dozen endpoints,
+        // burns a single user's budget several times over — and the 429s
+        // surface as "auth is broken" rather than as a rate limit.
+        // ops/e2e/up.mjs raises it; nothing else sets it, so production and
+        // every normal dev run keep 300.
+        throttlers: [
+          { ttl: 60_000, limit: Number(process.env.THROTTLE_GLOBAL_LIMIT ?? 300) },
+        ],
         ...(storage ? { storage } : {}),
       }),
     }),

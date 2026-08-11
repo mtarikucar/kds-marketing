@@ -564,7 +564,8 @@
       "confirmDesc": "Enrolling {{count}} lead(s) into \"{{name}}\" may start sending automated messages.",
       "confirmButton": "Enroll",
       "label": "Enroll in workflow"
-    }
+    },
+    "emptyTitle": "No leads"
   },
   "leadDetail": {
     "back": "Back to leads",
@@ -1339,7 +1340,35 @@
     "agents": "AI agents",
     "knowledgeDocs": "Knowledge docs",
     "aiCreditsWord": "AI credits",
-    "messagesWord": "messages"
+    "messagesWord": "messages",
+    "feature": {
+      "autoAssign": "Auto lead assignment",
+      "telephony": "Click-to-call",
+      "installations": "Field installations",
+      "commissions": "Commission tracking",
+      "advancedReports": "Advanced reports",
+      "apiAccess": "API access (ingest tokens)",
+      "conversationAi": "Conversation AI (auto-reply)",
+      "sms": "SMS",
+      "smsOtp": "SMS one-time passwords",
+      "workflows": "Workflow automation",
+      "campaigns": "Email & SMS campaigns",
+      "funnels": "Funnels, forms & booking",
+      "reviews": "Reviews & reputation",
+      "askAi": "Ask-AI assistant",
+      "agentStudio": "AI Agent Studio",
+      "voiceAi": "Voice AI receptionist",
+      "invoicing": "Customer invoicing",
+      "mediaGen": "AI media generation",
+      "socialCampaigns": "Social campaigns",
+      "voiceCampaigns": "Voice campaigns",
+      "fax": "Fax",
+      "memberships": "Memberships & courses",
+      "research": "AI lead research"
+    },
+    "aiCreditsLow": "Running low on AI credits — top up below before they run out.",
+    "aiCreditsOut": "Out of AI credits — add more below to keep the AI working.",
+    "aiCreditsWallet": "Prepaid: {{count}} credits"
   },
   "commission": {
     "detailTitle": "Commission detail",
@@ -1775,7 +1804,8 @@
     "failed": "Something went wrong.",
     "ex1": "How many leads are in each status?",
     "ex2": "Which leads in Istanbul are still NEW?",
-    "ex3": "What's the status of my campaigns?"
+    "ex3": "What's the status of my campaigns?",
+    "creditsExhausted": "You have used this month’s AI credits. Add credits from Billing to keep asking."
   },
   "voice": {
     "title": "Voice AI",
@@ -2001,7 +2031,8 @@
         "title": "Publish a landing page",
         "desc": "Capture leads with an AI-drafted funnel page."
       }
-    }
+    },
+    "startHere": "Start here"
   },
   "needsAttention": {
     "title": "Needs attention",
@@ -2296,7 +2327,8 @@
     "empty": {
       "title": "No posts yet",
       "hint": "Compose your first social post.",
-      "connectFirst": "Connect a social account, then compose your first post."
+      "connectFirst": "Connect a social account, then compose your first post.",
+      "connectCta": "Connect an account"
     },
     "accounts": {
       "empty": "No connected accounts",
@@ -2749,7 +2781,24 @@
       "voice": "Voice",
       "usp": "USP",
       "audience": "Audience",
-      "channels": "Channels",
+      "channels": {
+        "title": "Community channels",
+        "desc": "Connect Discord and Reddit to post into communities you own or manage.",
+        "connected": "Connected",
+        "connect": "Connect",
+        "disconnect": "Disconnect",
+        "discordWebhook": "Webhook connected",
+        "discordWebhookLabel": "Discord webhook URL",
+        "discordHelp": "Paste your own Discord server's webhook URL (Server Settings → Integrations → Webhooks).",
+        "redditHelp": "Connect your Reddit account to post to a subreddit you own or moderate.",
+        "connectReddit": "Connect Reddit",
+        "tos": "Only post to communities you own or are authorized to post in.",
+        "discordConnected": "Discord connected",
+        "redditConnected": "Reddit connected",
+        "redditError": "Could not connect Reddit. Please try again.",
+        "disconnected": "Channel disconnected",
+        "connectFailed": "Could not connect the channel"
+      },
       "channelsDesc": "Where to focus, ranked by fit.",
       "pillars": "Content pillars",
       "pillarTone": "Tone: {{tone}}",
@@ -2769,25 +2818,7 @@
       "actionFailed": "Something went wrong",
       "emptyTitle": "No strategy yet",
       "emptyDesc": "Let the AI strategist analyze your brand and draft a full marketing strategy with an action plan.",
-      "startOnboarding": "Build my strategy",
-      "channels": {
-        "title": "Community channels",
-        "desc": "Connect Discord and Reddit to post into communities you own or manage.",
-        "connected": "Connected",
-        "connect": "Connect",
-        "disconnect": "Disconnect",
-        "discordWebhook": "Webhook connected",
-        "discordWebhookLabel": "Discord webhook URL",
-        "discordHelp": "Paste your own Discord server's webhook URL (Server Settings → Integrations → Webhooks).",
-        "redditHelp": "Connect your Reddit account to post to a subreddit you own or moderate.",
-        "connectReddit": "Connect Reddit",
-        "tos": "Only post to communities you own or are authorized to post in.",
-        "discordConnected": "Discord connected",
-        "redditConnected": "Reddit connected",
-        "redditError": "Could not connect Reddit. Please try again.",
-        "disconnected": "Channel disconnected",
-        "connectFailed": "Could not connect the channel"
-      }
+      "startOnboarding": "Build my strategy"
     }
   },
   "studio": {
@@ -3022,6 +3053,13 @@
       "automations_manage": "Create, arm and run your marketing automations",
       "courses_manage": "Manage your courses and enrol your contacts in them",
       "settings_manage": "Manage your workspace settings"
+    }
+  },
+  "gate": {
+    "upgrade": {
+      "title": "Requires an active subscription",
+      "body": "Your subscription does not cover this right now. Activate the plan to unlock it.",
+      "cta": "View the plan"
     }
   }
 }

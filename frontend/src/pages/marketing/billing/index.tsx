@@ -262,24 +262,33 @@ export default function BillingPage() {
           <CardContent>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {[
+                // Prepaid AI credits. These NEVER expire — they are a balance,
+                // not a monthly ceiling. The old ai_credit_boost_500 raised
+                // `limit.aiCreditsMonthly` for one subscription period, so
+                // credits a customer paid for evaporated at period end; it is
+                // retired and no longer offered.
                 {
-                  code: 'quota_boost_10',
-                  label: `+10 ${t('billing.leadsPerDay', 'leads/day')}`,
-                  priceTRY: '₺2.690',
-                  priceUSD: '$79',
+                  code: 'credits_1k',
+                  label: `1.000 ${t('billing.aiCreditsWord', 'AI credits')}`,
+                  priceTRY: '₺1.290',
+                  priceUSD: '$29',
                 },
                 {
-                  code: 'extra_profile',
-                  label: `+1 ${t('billing.profilesWord', 'research profile')}`,
-                  priceTRY: '₺1.690',
-                  priceUSD: '$49',
+                  code: 'credits_4k',
+                  label: `4.000 ${t('billing.aiCreditsWord', 'AI credits')}`,
+                  priceTRY: '₺4.390',
+                  priceUSD: '$99',
                 },
                 {
-                  code: 'ai_credit_boost_500',
-                  label: `+500 ${t('billing.aiCreditsWord', 'AI credits')}`,
-                  priceTRY: '₺290',
-                  priceUSD: '$9',
+                  code: 'credits_12k',
+                  label: `12.000 ${t('billing.aiCreditsWord', 'AI credits')}`,
+                  priceTRY: '₺10.900',
+                  priceUSD: '$249',
                 },
+                // Lead-quota and research-profile boosts are gone: the single
+                // plan already carries them. Messages keep a valve for the same
+                // reason credits do — the cap is a real ceiling and campaign
+                // email now counts against it.
                 {
                   code: 'messages_boost_1000',
                   label: `+1000 ${t('billing.messagesWord', 'messages')}`,

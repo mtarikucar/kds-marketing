@@ -51,11 +51,38 @@ export class CallAnalysisService {
     const audioUrl = call.recordingStorageKey
       ? this.r2.urlForKey(call.recordingStorageKey)
       : (call.recordingUrl as string);
-    const stt = await this.stt.transcribeUrl(audioUrl);
-    if (!stt || !stt.text) return { status: 'FAILED', reason: 'no transcript' };
+
+    // Transcription costs Jeeta real money (Deepgram/Whisper on a platform
+    // key) and used to be charged to nobody: it ran BEFORE any reserve, so a
+    // workspace at zero credits still burned it, and a call whose transcript
+    // came back empty returned early and was never billed at all. Charge it
+    // per minute of audio, up front, and refund if nothing usable comes back.
+    const sttCost =
+      creditCost('stt.minute') * Math.max(1, Math.ceil((call.durationSec ?? 60) / 60));
+    await this.credits.reserve(call.workspaceId, sttCost);
+
+    let stt: Awaited<ReturnType<SttService['transcribeUrl']>>;
+    try {
+      stt = await this.stt.transcribeUrl(audioUrl);
+    } catch (err) {
+      await this.credits.refund(call.workspaceId, sttCost);
+      throw err;
+    }
+    if (!stt || !stt.text) {
+      await this.credits.refund(call.workspaceId, sttCost);
+      return { status: 'FAILED', reason: 'no transcript' };
+    }
 
     const cost = creditCost('voice.analysis');
-    await this.credits.reserve(call.workspaceId, cost);
+    try {
+      await this.credits.reserve(call.workspaceId, cost);
+    } catch (err) {
+      // The STT charge was already taken — possibly out of PREPAID credits.
+      // Refusing the analysis here without handing it back bills the customer
+      // for a transcript that gets discarded.
+      await this.credits.refund(call.workspaceId, sttCost).catch(() => undefined);
+      throw err;
+    }
 
     let parsed: ParsedAnalysis;
     try {

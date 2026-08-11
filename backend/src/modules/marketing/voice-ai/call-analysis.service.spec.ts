@@ -1,4 +1,5 @@
 import { CallAnalysisService } from './call-analysis.service';
+import { creditCost } from '../ai/ai-credit-costs';
 
 function makeDeps() {
   const prisma = {
@@ -138,14 +139,38 @@ describe('CallAnalysisService', () => {
     expect(stt.transcribeUrl).toHaveBeenCalledWith('https://netgsm.example.com/token/abc');
   });
 
-  it('FAILED when STT yields no text (no credit reserved)', async () => {
+  /**
+   * Transcription is Jeeta's cost (Deepgram/Whisper on a platform key) and it
+   * used to run BEFORE any reserve — so a workspace at zero credits still
+   * burned it, and an empty transcript returned early and was billed to nobody.
+   * It is charged up front per minute now and refunded when nothing usable
+   * comes back; the ANALYSIS credit is still never reserved, because no LLM
+   * call happens.
+   */
+  it('refunds the STT charge — and never reserves the analysis — when STT yields no text', async () => {
     const { prisma, stt, credits, svc } = makeDeps();
-    prisma.salesCall.findUnique.mockResolvedValue(CALL);
+    prisma.salesCall.findUnique.mockResolvedValue({ ...CALL, durationSec: 90 });
     stt.transcribeUrl.mockResolvedValue(null);
 
     const r = await svc.analyzeSalesCall('call-1');
     expect(r.status).toBe('FAILED');
-    expect(credits.reserve).not.toHaveBeenCalled();
+
+    // 90s → 2 minutes, charged up front then handed back.
+    const sttCost = creditCost('stt.minute') * 2;
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.reserve).toHaveBeenCalledWith('ws-1', sttCost);
+    expect(credits.refund).toHaveBeenCalledWith('ws-1', sttCost);
+    expect(credits.reserve).not.toHaveBeenCalledWith('ws-1', creditCost('voice.analysis'));
+  });
+
+  it('charges STT before transcribing, so an out-of-credits workspace cannot burn it', async () => {
+    const { prisma, stt, credits, svc } = makeDeps();
+    prisma.salesCall.findUnique.mockResolvedValue({ ...CALL, durationSec: 30 });
+    credits.reserve.mockRejectedValueOnce(new Error('AI_CREDITS_EXHAUSTED'));
+
+    await expect(svc.analyzeSalesCall('call-1')).rejects.toThrow('AI_CREDITS_EXHAUSTED');
+    // The whole point: the vendor call never happened.
+    expect(stt.transcribeUrl).not.toHaveBeenCalled();
   });
 
   it('refunds when Claude throws', async () => {

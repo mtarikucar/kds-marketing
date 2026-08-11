@@ -153,7 +153,13 @@ export class StrategySynthesisService {
       workspaceId,
       { agent: 'strategy-synthesis', goal: 'Synthesize marketing strategy', input: { sessionId } },
       async (runId) => {
+        // Base only. The expensive part is the tool-loop below and it is
+        // charged PER TURN: a single flat per-run reserve priced one credit
+        // amount for anywhere between one and MAX_ITERS Opus calls at
+        // maxTokens 4000, so the credit ceiling was not a spend ceiling.
         await this.credits.reserve(workspaceId, creditCost('strategy.synthesize'));
+        let turnsCharged = 0;
+        let turnsCompleted = 0;
         try {
           const ctx: ResearchToolCtx = { workspaceId, runId, geo: {}, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
@@ -169,14 +175,21 @@ export class StrategySynthesisService {
           const deadline = Date.now() + MAX_WALL_MS;
 
           for (let i = 0; i < MAX_ITERS && Date.now() < deadline && toolCalls < MAX_TOOL_CALLS; i++) {
+            // Charge before the call, not after: an exhausted workspace must
+            // stop spending Jeeta's money, not discover the limit afterwards.
+            // Letting this throw is deliberate — the caller gets a truthful
+            // AI_CREDITS_EXHAUSTED rather than "synthesis produced no strategy".
+            await this.credits.reserve(workspaceId, creditCost('strategy.turn'));
+            turnsCharged += 1;
             const res = await this.anthropic.complete({
               system: this.SYSTEM,
               messages,
               tools,
               maxTokens: 4000,
-              tier: tierFor('strategy.synthesize'),
+              tier: tierFor('strategy.turn'), workspaceId: workspaceId, action: 'strategy.turn',
               cacheSystem: true,
             });
+            turnsCompleted += 1;
             if (!res.toolUses.length) break;
 
             const results: Anthropic.ToolResultBlockParam[] = [];
@@ -223,7 +236,19 @@ export class StrategySynthesisService {
           this.logger.log(`strategy synthesis ${runId}: ${archetype} + ${actionCount} actions (ws ${workspaceId})`);
           return { strategyId, actionCount };
         } catch (e) {
-          await this.credits.refund(workspaceId, creditCost('strategy.synthesize')).catch(() => undefined);
+          // Refund the base and only the turn that did NOT run.
+          // Turns whose Anthropic call actually RETURNED are real vendor spend
+          // and must stay charged. Refunding them let a workspace sitting just
+          // under its cap replay the loop for free: charge a turn, execute it,
+          // hit AI_CREDITS_EXHAUSTED on the next one, get everything back.
+
+          await this.credits
+            .refund(
+              workspaceId,
+              creditCost('strategy.synthesize') +
+                Math.max(0, turnsCharged - turnsCompleted) * creditCost('strategy.turn'),
+            )
+            .catch(() => undefined);
           throw e;
         }
       },
@@ -231,7 +256,13 @@ export class StrategySynthesisService {
   }
 
   /** Upsert the workspace's single strategy (ACTIVE, version-bumped on replace)
-   *  and re-seed its ActionPlan (drop prior PROPOSED plan, insert the new one). */
+   *  and re-seed its ActionPlan (drop prior PROPOSED plan, insert the new one).
+   *
+   *  The strategy row is TOUCHED LAST, after its actions exist. The weekly
+   *  feedback cron decides whether anything is worth re-synthesizing by asking
+   *  "has a StrategyAction moved since the strategy was written?" — and writing
+   *  the strategy first made every freshly-seeded action newer than it, so the
+   *  answer was always yes and the gate never skipped a single workspace. */
   private async persist(
     workspaceId: string,
     archetype: BusinessArchetype,
@@ -259,6 +290,18 @@ export class StrategySynthesisService {
         })),
       });
     }
+
+    // Touch the strategy LAST, so it is strictly newer than the actions it just
+    // seeded. The weekly feedback cron asks "has any StrategyAction moved since
+    // the strategy was written?" — with the strategy written first, every fresh
+    // action was newer than it, the answer was always yes, and the gate skipped
+    // nobody. That put a full Opus re-synthesis plus live crawl spend on every
+    // ACTIVE strategy every week, including workspaces nobody had touched.
+    await this.prisma.marketingStrategy.update({
+      where: { id: strategy.id },
+      data: { status: 'ACTIVE' },
+    });
+
     return { strategyId: strategy.id, actionCount: actions.length };
   }
 
