@@ -54,3 +54,17 @@ test('a new workspace starts on the trial, which grants every feature', async ({
   await expect(app).toHaveURL(/\/studio\?view=tools/);
   await expect(app.getByText(/aktif abonelik gerekiyor|growth plan/i)).toHaveCount(0);
 });
+
+test('credit packs are sold as a one-off, not as a monthly charge', async ({ app }) => {
+  await app.goto('/billing');
+
+  const pack = app.getByText('1.000 AI kredisi').first();
+  await expect(pack).toBeVisible();
+
+  // The price line used to read "₺1.290/ay" for every add-on. Credits are a
+  // balance bought once that never expires — promising a recurring charge next
+  // to a Buy button is the wrong thing to get wrong on a payment control.
+  const priceLine = app.getByText(/₺1\.290/).first();
+  await expect(priceLine).toContainText(/tek seferlik/i);
+  await expect(priceLine).not.toContainText(/\/ay/);
+});

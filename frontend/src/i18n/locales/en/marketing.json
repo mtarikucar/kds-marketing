@@ -1368,7 +1368,11 @@
     },
     "aiCreditsLow": "Running low on AI credits — top up below before they run out.",
     "aiCreditsOut": "Out of AI credits — add more below to keep the AI working.",
-    "aiCreditsWallet": "Prepaid: {{count}} credits"
+    "aiCreditsWallet": "Prepaid: {{count}} credits",
+    "oneOff": "one-off, never expires",
+    "thisPeriod": "for the current period",
+    "smsOtpWord": "SMS OTP verification",
+    "voiceCampaignsWord": "Voice campaigns"
   },
   "commission": {
     "detailTitle": "Commission detail",

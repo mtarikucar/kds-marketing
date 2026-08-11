@@ -1653,7 +1653,11 @@
     },
     "aiCreditsLow": "AI kredin azalıyor — bitmeden aşağıdan yükle.",
     "aiCreditsOut": "AI kredin bitti — AI çalışmaya devam etsin diye aşağıdan yükle.",
-    "aiCreditsWallet": "Ön ödemeli: {{count}} kredi"
+    "aiCreditsWallet": "Ön ödemeli: {{count}} kredi",
+    "oneOff": "tek seferlik, süresi dolmaz",
+    "thisPeriod": "bu dönem için",
+    "smsOtpWord": "SMS ile doğrulama (OTP)",
+    "voiceCampaignsWord": "Sesli kampanyalar"
   },
   "commission": {
     "detailTitle": "Komisyon detayı",

@@ -269,18 +269,21 @@ export default function BillingPage() {
                 // retired and no longer offered.
                 {
                   code: 'credits_1k',
+                  oneOff: true,
                   label: `1.000 ${t('billing.aiCreditsWord', 'AI credits')}`,
                   priceTRY: '₺1.290',
                   priceUSD: '$29',
                 },
                 {
                   code: 'credits_4k',
+                  oneOff: true,
                   label: `4.000 ${t('billing.aiCreditsWord', 'AI credits')}`,
                   priceTRY: '₺4.390',
                   priceUSD: '$99',
                 },
                 {
                   code: 'credits_12k',
+                  oneOff: true,
                   label: `12.000 ${t('billing.aiCreditsWord', 'AI credits')}`,
                   priceTRY: '₺10.900',
                   priceUSD: '$249',
@@ -319,7 +322,13 @@ export default function BillingPage() {
                   priceTRY: '₺990',
                   priceUSD: '$29',
                 },
-              ].map((addon) => (
+              ].map((addon: {
+                code: string;
+                label: string;
+                priceTRY: string;
+                priceUSD: string;
+                oneOff?: boolean;
+              }) => (
                 <div
                   key={addon.code}
                   className="flex items-center justify-between rounded-lg border border-border p-4"
@@ -327,8 +336,18 @@ export default function BillingPage() {
                   <div>
                     <p className="text-sm font-medium text-foreground">{addon.label}</p>
                     <p className="text-xs text-muted-foreground">
-                      {currency === 'TRY' ? addon.priceTRY : addon.priceUSD}/
-                      {t('billing.mo', 'mo')}
+                      {currency === 'TRY' ? addon.priceTRY : addon.priceUSD}
+                      {/*
+                        Credit packs are a ONE-OFF purchase of a balance that
+                        never expires. Printing "/mo" next to a Buy button
+                        promised a recurring charge that does not exist — the
+                        wrong thing to get wrong on a payment control. The
+                        entitlement boosts really do ride the subscription
+                        period, so they say so rather than claiming to renew.
+                      */}
+                      {addon.oneOff
+                        ? ` · ${t('billing.oneOff', 'one-off, never expires')}`
+                        : ` · ${t('billing.thisPeriod', 'for the current period')}`}
                     </p>
                   </div>
                   <Button
