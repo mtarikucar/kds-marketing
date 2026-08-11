@@ -18,6 +18,9 @@ function tool(overrides: Partial<McpTool>): McpTool {
 
 function deps() {
   const registry = new McpToolRegistry();
+  // Stands in for McpBrokerService.invoke. Captured so the call_tool tests can
+  // prove WHAT was dispatched — the target's name and args, unchanged.
+  const dispatch = jest.fn(async () => ({ status: 'OK' as const, result: { ok: true } }));
   registry.register(
     tool({
       name: 'jeeta.click_to_dial',
@@ -35,8 +38,8 @@ function deps() {
   registry.register(
     tool({ name: 'jeeta.secret_ads', domain: 'ads', description: 'Ad spend.', scopes: ['settings.manage'] }),
   );
-  registerDiscoveryTools(registry, { registry });
-  return { registry };
+  registerDiscoveryTools(registry, { registry, dispatch });
+  return { registry, dispatch };
 }
 
 const call = (registry: McpToolRegistry, scopes: string[], args: Record<string, unknown> = {}) =>
@@ -88,7 +91,7 @@ describe('jeeta.find_tools', () => {
     const { registry } = deps();
     const out = await call(registry, ['leads.read', 'leads.write']);
     expect(out.tools.map((t) => t.name).sort()).toEqual(
-      ['jeeta.click_to_dial', 'jeeta.find_tools', 'jeeta.search_leads'].sort(),
+      ['jeeta.call_tool', 'jeeta.click_to_dial', 'jeeta.find_tools', 'jeeta.search_leads'].sort(),
     );
   });
 
@@ -96,7 +99,7 @@ describe('jeeta.find_tools', () => {
     const { registry } = deps();
     const out = await call(registry, ['leads.read', 'leads.write'], { limit: 1 });
     expect(out.returned).toBe(1);
-    expect(out.total).toBe(3);
+    expect(out.total).toBe(4);
     expect(out.tools).toHaveLength(1);
   });
 
@@ -107,5 +110,72 @@ describe('jeeta.find_tools', () => {
     expect(tool.defer).toBeUndefined();
     expect(tool.risk).toBe('READ');
     expect(tool.requiresApproval).toBe(false);
+  });
+});
+
+/**
+ * `jeeta.call_tool` — the half of progressive disclosure that makes the other
+ * half true. `find_tools` promises a deferred tool "is never unavailable to
+ * you", but an MCP client can only call names it saw in `tools/list`, so the
+ * deferred surface was unreachable in practice until this existed.
+ */
+describe('jeeta.call_tool', () => {
+  const ctx = { workspaceId: 'ws1', grantedScopes: ['leads.write'] } as never;
+  const invoke = (registry: McpToolRegistry, args: Record<string, unknown>) =>
+    registry.get('jeeta.call_tool')!.handler(ctx, args);
+
+  it('is advertised — a dispatcher nobody can see is no dispatcher at all', () => {
+    const { registry } = deps();
+    expect(registry.listAdvertised(['leads.write']).map((t) => t.name)).toContain('jeeta.call_tool');
+  });
+
+  it('forwards the target name and args verbatim to the broker', async () => {
+    const { registry, dispatch } = deps();
+    await invoke(registry, { name: 'jeeta.call_lead', input: { leadId: 'l1' } });
+
+    expect(dispatch).toHaveBeenCalledWith(ctx, 'jeeta.call_lead', { leadId: 'l1' });
+  });
+
+  it('dispatches with the SAME context, so scopes and audit are the callerimeter own', async () => {
+    const { registry, dispatch } = deps();
+    await invoke(registry, { name: 'jeeta.search_leads' });
+
+    // The broker resolves every gate from the target tool against THIS ctx —
+    // passing a synthesized or widened context here would be the bypass this
+    // tool must never become.
+    expect(dispatch.mock.calls[0][0]).toBe(ctx);
+    expect(dispatch.mock.calls[0][2]).toEqual({});
+  });
+
+  it('reports a pending approval as NOT applied, instead of a bare success', async () => {
+    const { registry, dispatch } = deps();
+    dispatch.mockResolvedValue({ status: 'PENDING_APPROVAL' as const, approvalId: 'ap1' } as never);
+
+    const res = (await invoke(registry, { name: 'jeeta.call_lead', input: { leadId: 'l1' } })) as {
+      applied: boolean;
+      status: string;
+      approvalId: string;
+      message: string;
+    };
+
+    // The inner PENDING_APPROVAL is a VALUE here, not the transport status the
+    // server factory inspects; returned bare it would read as "done".
+    expect(res.applied).toBe(false);
+    expect(res.status).toBe('PENDING_APPROVAL');
+    expect(res.approvalId).toBe('ap1');
+    expect(res.message).toMatch(/NOT been applied/i);
+  });
+
+  it('refuses to invoke itself', async () => {
+    const { registry, dispatch } = deps();
+    await expect(invoke(registry, { name: 'jeeta.call_tool' })).rejects.toThrow(/cannot invoke itself/i);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('needs no scopes of its own — the target is what gets gated', () => {
+    const { registry } = deps();
+    expect(registry.get('jeeta.call_tool')!.scopes).toEqual([]);
+    // A caller holding nothing still sees the door; the broker refuses the room.
+    expect(registry.listAdvertised([]).map((t) => t.name)).toContain('jeeta.call_tool');
   });
 });
