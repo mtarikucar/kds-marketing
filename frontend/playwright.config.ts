@@ -29,7 +29,8 @@ export default defineConfig({
    */
   workers: process.env.CI ? 2 : 4,
 
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'never' }]],
+  // `list` for a readable log, `html` for the artifact CI uploads on failure.
+  reporter: [['list'], ['html', { open: 'never' }]],
   timeout: 60_000,
   expect: { timeout: 10_000 },
 
@@ -50,7 +51,16 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
   webServer: {
-    command: 'npm run dev -- --port 5173 --strictPort',
+    /**
+     * CI serves the PRODUCTION build; locally the dev server.
+     *
+     * The dev bundle never exercises the tsc gate, the chunking, or the
+     * esbuild console-drop that actually ships — so a CI suite running against
+     * `vite dev` can be fully green while the built app is broken.
+     */
+    command: process.env.CI
+      ? 'npm run build && npm run preview -- --port 5173 --strictPort'
+      : 'npm run dev -- --port 5173 --strictPort',
     url: process.env.E2E_APP_URL ?? 'http://localhost:5173',
     /**
      * Locally reuse a dev server you already have running; in CI never do —
@@ -58,7 +68,10 @@ export default defineConfig({
      * another branch could be tested without any signal.
      */
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    // CI has to compile the bundle first (tsc + vite build), which is minutes,
+    // not seconds — the dev server's 2-minute budget would time out on the
+    // build rather than on anything real.
+    timeout: process.env.CI ? 420_000 : 120_000,
     env: {
       VITE_API_URL: process.env.E2E_API_URL ?? 'http://localhost:3101/api',
     },
