@@ -39,10 +39,15 @@ function deps(overrides: { aiEnabled?: boolean; completions?: any[]; session?: a
   // records it now, exactly as brand-analysis already did.
   const spend = { settle: jest.fn().mockResolvedValue({ amount: 0.01 }) };
 
+  // Intake kicks off the Brand Brain build itself (autoApply) — a separate
+  // "set up your brand" step was pure demand when the material is identical.
+  const brandAnalysis = { startAnalysis: jest.fn().mockResolvedValue({ runId: 'bar1' }) };
+  prisma.brandProfile = { findUnique: jest.fn().mockResolvedValue(null) };
+
   const svc = new StrategyIntakeService(
-    prisma as any, anthropic as any, credits as any, website as any, social as any, spend as any,
+    prisma as any, anthropic as any, credits as any, website as any, social as any, spend as any, brandAnalysis as any,
   );
-  return { svc, complete, credits, prisma, website, social, spend, store };
+  return { svc, complete, credits, prisma, website, social, spend, brandAnalysis, store };
 }
 
 const analysis = () =>
@@ -172,5 +177,53 @@ describe('StrategyIntakeService — source spend accounting', () => {
     // Onboarding is the one flow a new customer cannot route around — a
     // bookkeeping miss must never be what stops them.
     await expect(svc.start('ws1', INPUT)).resolves.toBeDefined();
+  });
+});
+
+/**
+ * The intake is now the ONE place a user introduces their business, so it also
+ * starts the Brand Brain build (autoApply) and requires the interviewer to ask
+ * about acquisition methods already tried. Both used to be separate demands.
+ */
+describe('StrategyIntakeService — one intake builds the rest', () => {
+  it('kicks off the Brand Brain with autoApply from the intake inputs', async () => {
+    const { svc, brandAnalysis } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+    await svc.start('ws1', INPUT);
+
+    expect(brandAnalysis.startAnalysis).toHaveBeenCalledWith('ws1', {
+      websiteUrl: INPUT.url,
+      socialHandles: INPUT.socials,
+      autoApply: true,
+    });
+  });
+
+  it('does NOT start a brand build when a profile already exists (never clobber a shaped brand)', async () => {
+    const { svc, prisma, brandAnalysis } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+    prisma.brandProfile.findUnique.mockResolvedValue({ id: 'bp1' });
+
+    await svc.start('ws1', INPUT);
+
+    expect(brandAnalysis.startAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('completes onboarding even when the brand kickoff throws', async () => {
+    const { svc, brandAnalysis } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+    brandAnalysis.startAnalysis.mockRejectedValue(new Error('scheduler down'));
+
+    // The interview is the critical path; a background enrichment that cannot
+    // start must never block it.
+    await expect(svc.start('ws1', INPUT)).resolves.toBeDefined();
+  });
+
+  it('requires the interviewer to ask about acquisition methods and their results', async () => {
+    const { svc, complete } = deps({ completions: [analysis(), ask('q1', ['Budget?'])] });
+    await svc.start('ws1', INPUT);
+
+    // The interview turn is the SECOND complete() call (the first is the
+    // auto-analysis classification).
+    const system = complete.mock.calls[1][0].system as string;
+    expect(system).toMatch(/acquire customers/i);
+    expect(system).toMatch(/already tried/i);
+    expect(system).toMatch(/results/i);
   });
 });

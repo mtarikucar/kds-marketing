@@ -51,8 +51,10 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
     strategyAction: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   };
   const orchestrator = { applyPlan: jest.fn().mockResolvedValue({ lane: 'ASSISTED', applied: 0, skipped: 0 }) };
-  const svc = new StrategySynthesisService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, orchestrator as any);
-  return { svc, complete, credits, runs, sources, spend, prisma, orchestrator };
+  // The strategy provisions the default agent itself — best-effort, never fails synthesis.
+  const provisioning = { ensureDefaultAgent: jest.fn().mockResolvedValue(undefined) };
+  const svc = new StrategySynthesisService(prisma as any, anthropic as any, credits as any, runs as any, sources as any, spend as any, orchestrator as any, provisioning as any);
+  return { svc, complete, credits, runs, sources, spend, prisma, orchestrator, provisioning };
 }
 
 describe('StrategySynthesisService', () => {
@@ -208,5 +210,33 @@ describe('StrategySynthesisService', () => {
     // back. This is the regression that matters: refunding the turns as well
     // made a capped-out workspace able to burn Opus indefinitely for free.
     expect(credits.refund).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
+  });
+});
+
+/**
+ * "Create your first AI agent" used to be a checklist chore. By the time a
+ * strategy exists the system knows the product, voice and audience better than
+ * a first-run user can type them — so synthesis provisions the default agent.
+ */
+describe('StrategySynthesisService — default agent provisioning', () => {
+  it('hands the validated brief to provisioning after persisting', async () => {
+    const { svc, provisioning } = deps({
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: GOOD_BRIEF, actions: [] })])],
+    });
+    await svc.synthesize('ws1', 'sess1');
+
+    expect(provisioning.ensureDefaultAgent).toHaveBeenCalledTimes(1);
+    expect(provisioning.ensureDefaultAgent).toHaveBeenCalledWith('ws1', expect.objectContaining({
+      identity: expect.objectContaining({ product: expect.any(String) }),
+    }));
+  });
+
+  it('does not provision when the brief is rejected', async () => {
+    const badBrief = { ...GOOD_BRIEF, channels: [] };
+    const { svc, provisioning } = deps({
+      completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [] })])],
+    });
+    await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow();
+    expect(provisioning.ensureDefaultAgent).not.toHaveBeenCalled();
   });
 });

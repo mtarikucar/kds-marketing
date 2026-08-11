@@ -12,6 +12,7 @@ import { validateBrief } from '../strategy.schema';
 import { ARCHETYPES, archetypeMeta } from '../archetypes';
 import { ActionKind, BusinessArchetype, StrategyActionItem } from '../strategy.types';
 import { StrategyOrchestrator } from '../orchestrator/strategy-orchestrator.service';
+import { StrategyProvisioningService } from '../provisioning/strategy-provisioning.service';
 
 export interface StrategySynthesisResult {
   strategyId: string | null;
@@ -129,6 +130,7 @@ export class StrategySynthesisService {
     private readonly sources: ResearchSourcesService,
     private readonly spend: ResearchSpendService,
     private readonly orchestrator: StrategyOrchestrator,
+    private readonly provisioning: StrategyProvisioningService,
   ) {}
 
   /**
@@ -221,6 +223,11 @@ export class StrategySynthesisService {
           const actions = this.normalizeActions(submission.actions);
 
           const { strategyId, actionCount } = await this.persist(workspaceId, archetype, check.brief, actions);
+
+          // The strategy builds the workspace's default agent itself — the
+          // brief already knows the product, voice and audience better than a
+          // first-run user can type them. Best-effort: never fails synthesis.
+          await this.provisioning.ensureDefaultAgent(workspaceId, check.brief);
           await this.prisma.strategyIntakeSession
             .updateMany({ where: { id: sessionId, workspaceId }, data: { status: 'COMPLETE' } })
             .catch(() => undefined);

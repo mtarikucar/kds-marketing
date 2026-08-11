@@ -89,3 +89,27 @@ test('the strategy wizard is pre-filled from what signup already collected', asy
   await expect(app.locator(`input[value="${E2E_PRODUCT_URL}"]`)).toBeVisible();
   await expect(app.getByText(E2E_PRODUCT_DESCRIPTION, { exact: false })).toBeVisible();
 });
+
+test('the checklist demands three human steps, not eight chores', async ({ app }) => {
+  await app.goto('/dashboard');
+
+  const checklist = app.getByTestId('getting-started');
+  await expect(checklist).toBeVisible();
+
+  // Down from eight: agent, knowledge, brand brain, first lead and site are
+  // now BYPRODUCTS of the strategy (intake starts the Brand Brain with
+  // autoApply, synthesis provisions the default agent, research generates
+  // leads). Listing them as steps was asking the user to do the system's job.
+  await expect(checklist.getByRole('link')).toHaveCount(3);
+  await expect(checklist.getByText('3 adımdan 0 tamamlandı')).toBeVisible();
+
+  // What remains is what only a human can do.
+  await expect(checklist.getByText('Büyüme stratejini oluştur')).toBeVisible();
+  await expect(checklist.getByText('Kanal bağla')).toBeVisible();
+  await expect(checklist.getByText('Ekibini davet et')).toBeVisible();
+
+  // The old chores are gone from the list (they live in their own pages).
+  await expect(checklist.getByText(/İlk AI temsilcini oluştur/)).toHaveCount(0);
+  await expect(checklist.getByText(/Bilgi ekle/)).toHaveCount(0);
+  await expect(checklist.getByText(/Marka Beynini oluştur/)).toHaveCount(0);
+});

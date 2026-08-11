@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import marketingApi from '../api/marketingApi';
-import { getBrandProfile } from '../api/brandBrain.service';
 import { getStrategy } from '../api/strategy.service';
 import {
   getOnboarding,
@@ -85,36 +84,10 @@ export function useOnboardingChecklist(): OnboardingChecklist {
     queryFn: getStrategy,
     enabled: active,
   });
-  const agents = useQuery<any[]>({
-    queryKey: ['marketing', 'ai', 'agents'],
-    queryFn: () => marketingApi.get('/ai/agents').then((r) => r.data),
-    enabled: active,
-  });
-  const docs = useQuery<any[]>({
-    queryKey: ['marketing', 'ai', 'knowledge'],
-    queryFn: () => marketingApi.get('/ai/knowledge').then((r) => r.data),
-    enabled: active,
-  });
-  const brandProfile = useQuery({
-    queryKey: ['marketing', 'brand-brain', 'profile'],
-    queryFn: getBrandProfile,
-    enabled: active,
-  });
   const channels = useQuery<any[]>({
     queryKey: ['marketing', 'channels'],
     queryFn: () => marketingApi.get('/channels').then((r) => r.data),
     enabled: active,
-  });
-  const sites = useQuery<any[]>({
-    queryKey: ['marketing', 'sites'],
-    queryFn: () => marketingApi.get('/sites').then((r) => r.data),
-    enabled: active,
-  });
-  const leads = useQuery<{ meta?: { total?: number } }>({
-    queryKey: ['marketing', 'leads', 'onboarding-count'],
-    queryFn: () => marketingApi.get('/leads', { params: { limit: 1 } }).then((r) => r.data),
-    enabled: active,
-    staleTime: 60_000,
   });
   const team = useQuery<any[]>({
     queryKey: ['marketing', 'users'],
@@ -123,22 +96,30 @@ export function useOnboardingChecklist(): OnboardingChecklist {
     staleTime: 60_000,
   });
 
+  /**
+   * THREE steps, down from eight.
+   *
+   * The old checklist demanded agent, knowledge, brand brain, a first lead and
+   * a published site as separate chores. Every one of those is now a BYPRODUCT
+   * of the strategy: intake starts the Brand Brain from the same material and
+   * auto-applies it (brand profile + knowledge docs + research profile), the
+   * synthesis provisions the default agent, and the research agent generates
+   * leads on its own. Listing them as steps was asking the user to do the
+   * system's job — the exact complexity complaint this flow exists to answer.
+   *
+   * What remains is what only a human CAN do: describe the business (strategy),
+   * plug in where customers talk to them (channel), and bring their people
+   * (team). Everything provisioned stays editable in its own pages.
+   */
   const steps: ChecklistStep[] = [
-    // The strategy is the brain that drives lead/content/channel/ad work, so it
-    // leads the checklist.
     {
       id: 'strategy',
       to: '/onboarding/strategy',
       done: !!(strategy.data?.id || strategy.data?.archetype),
     },
-    { id: 'agent', to: '/inbox?tab=agents', done: (agents.data?.length ?? 0) > 0 },
-    { id: 'knowledge', to: '/inbox?tab=knowledge', done: (docs.data?.length ?? 0) > 0 },
-    { id: 'brand', to: '/branding?tab=brain', done: brandProfile.data?.status === 'ACTIVE' },
     { id: 'channel', to: '/inbox?tab=channels', done: (channels.data?.length ?? 0) > 0 },
-    { id: 'leads', to: '/leads', done: (leads.data?.meta?.total ?? 0) > 0 },
     // "Invite your team" — done once there's more than just the owner.
     { id: 'team', to: '/users', done: (team.data?.length ?? 0) > 1 },
-    { id: 'site', to: '/sites', done: (sites.data?.length ?? 0) > 0 },
   ];
 
   const total = steps.length;

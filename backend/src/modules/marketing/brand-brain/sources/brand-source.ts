@@ -16,6 +16,15 @@ export interface BrandSourceInput {
   socialHandles?: Array<{ network: 'INSTAGRAM' | 'FACEBOOK' | 'LINKEDIN'; handle: string }>;
   gbpQuery?: string; // the workspace's OWN business name / GBP URL
   uploadKeys?: string[]; // R2 object keys already uploaded by the wizard
+  /**
+   * Apply the draft automatically when synthesis finishes, instead of parking
+   * it at READY_FOR_REVIEW for a human. Set by strategy onboarding: the whole
+   * point of that flow is that the user introduces their business ONCE and the
+   * system builds the rest (brand profile, knowledge docs, research profile)
+   * without demanding a second round of clicks. Everything apply() seeds stays
+   * editable afterwards, and its seed paths never clobber user edits.
+   */
+  autoApply?: boolean;
 }
 
 export interface BrandSourceResult {

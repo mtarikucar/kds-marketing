@@ -8,6 +8,7 @@ import { WebsiteBrandSource } from '../../brand-brain/sources/website.source';
 import { SocialBrandSource } from '../../brand-brain/sources/social.source';
 import { BrandSourceInput, BrandSourceResult } from '../../brand-brain/sources/brand-source';
 import { ResearchSpendService } from '../../budget/research-spend.service';
+import { BrandAnalysisService } from '../../brand-brain/brand-analysis.service';
 import { ARCHETYPES, archetypeMeta } from '../archetypes';
 import { BusinessArchetype } from '../strategy.types';
 
@@ -104,6 +105,7 @@ export class StrategyIntakeService {
     private readonly website: WebsiteBrandSource,
     private readonly social: SocialBrandSource,
     private readonly spend: ResearchSpendService,
+    private readonly brandAnalysis: BrandAnalysisService,
   ) {}
 
   async start(workspaceId: string, input: StrategyIntakeInput): Promise<StartResult> {
@@ -117,6 +119,15 @@ export class StrategyIntakeService {
     await this.credits.reserve(workspaceId, cost);
     try {
       const autoAnalysis = await this.autoAnalyze(workspaceId, input);
+
+      // Brand Brain starts HERE, from the same material, in the background.
+      // It used to be a separate checklist step the user had to find and run —
+      // but the strategy intake already holds everything it needs (the site,
+      // the socials), so asking again was pure demand. autoApply means the
+      // finished draft seeds the brand profile, knowledge docs and research
+      // profile on its own; all of it stays editable in its own pages.
+      await this.startBrandBrain(workspaceId, input);
+
       const deltas = autoAnalysis.suggestedArchetype
         ? archetypeMeta(autoAnalysis.suggestedArchetype).interviewDeltas
         : [];
@@ -239,6 +250,32 @@ export class StrategyIntakeService {
     return { toolUse: tu, questions, done: false };
   }
 
+  /** Kick off the Brand Brain build from the intake's own inputs. Best-effort
+   *  and skipped when a brand profile already exists — apply() upserts the
+   *  profile as OWNED, and auto-overwriting a brand the user has already
+   *  shaped is exactly the kind of surprise onboarding must not produce. */
+  private async startBrandBrain(workspaceId: string, input: StrategyIntakeInput): Promise<void> {
+    if (!input.url) return;
+    try {
+      const existing = await this.prisma.brandProfile.findUnique({
+        where: { workspaceId },
+        select: { id: true },
+      });
+      if (existing) return;
+      await this.brandAnalysis.startAnalysis(workspaceId, {
+        websiteUrl: input.url,
+        socialHandles: input.socials,
+        autoApply: true,
+      });
+    } catch (e) {
+      // Onboarding must never fail because a background enrichment could not
+      // start — the strategy interview is the critical path here.
+      this.logger.warn(
+        `strategy-intake: brand-brain kickoff failed for ws ${workspaceId}: ${(e as Error)?.message ?? e}`,
+      );
+    }
+  }
+
   /** Record what the source adapters actually spent, mirroring
    *  brand-analysis.service.ts. Best-effort: an accounting miss must never
    *  break onboarding, which is the one flow a new customer cannot route
@@ -338,6 +375,11 @@ export class StrategyIntakeService {
   private readonly INTERVIEW_SYSTEM =
     'You are an onboarding strategist for a marketing-automation platform. ' +
     'Given the auto-analysis, ask ONLY the gaps it leaves + the strategic intent (goal, audience specifics, budget, competitors, constraints, offer). ' +
+    // What has ALREADY been tried is the highest-signal input a strategist can
+    // get: it tells the synthesis which channels are proven, which failed and
+    // why, and where the customer's instincts point. The auto-analysis cannot
+    // see any of it, so this is a REQUIRED topic, not a gap-filler.
+    'You MUST ask, in some form: how do they currently acquire customers (or plan to), which acquisition methods they have already tried, and what results those produced. ' +
     'Keep questions short and concrete. Adapt to the suggested archetype signals. ' +
     'Emit questions via ask_questions; when you have enough to synthesize a strategy, call intake_done.';
 }

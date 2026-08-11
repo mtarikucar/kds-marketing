@@ -1997,7 +1997,7 @@
   },
   "onboarding": {
     "title": "Get set up",
-    "subtitle": "A few steps to get your workspace working for you.",
+    "subtitle": "Describe your business once — the system builds the rest.",
     "progress": "{{done}} of {{total}} done",
     "dismiss": "Dismiss",
     "reopen": "Show setup guide",
@@ -2005,7 +2005,7 @@
     "steps": {
       "strategy": {
         "title": "Build your growth strategy",
-        "desc": "Let the AI map your channels, audience and content plan."
+        "desc": "The AI analyses your business and builds your brand brain, knowledge base and AI agent for you."
       },
       "agent": {
         "title": "Create your first AI agent",
@@ -2021,7 +2021,7 @@
       },
       "channel": {
         "title": "Connect a channel",
-        "desc": "Web chat, WhatsApp or SMS — where customers message you."
+        "desc": "Web chat, WhatsApp or SMS — your AI agent goes live the moment you connect one."
       },
       "leads": {
         "title": "Add your first lead",
@@ -2750,7 +2750,7 @@
   "strategy": {
     "onboarding": {
       "title": "Build your marketing strategy with AI",
-      "subtitle": "Point us at your website — we’ll analyze it, ask a few sharp questions, and draft a full strategy with an action plan.",
+      "subtitle": "Give us your website — we analyse it, ask a few sharp questions and build a complete strategy. Your brand brain, knowledge base and first AI agent are set up automatically along the way.",
       "websiteUrl": "Website URL",
       "websiteUrlHint": "Required — this is our main source.",
       "oneLiner": "One-liner (optional)",
