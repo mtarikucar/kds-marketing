@@ -2302,7 +2302,7 @@
   },
   "onboarding": {
     "title": "Kuruluma başla",
-    "subtitle": "Çalışma alanını çalışır hâle getirmek için birkaç adım.",
+    "subtitle": "İşini bir kez anlat — gerisini sistem kursun.",
     "progress": "{{total}} adımdan {{done}} tamamlandı",
     "dismiss": "Kapat",
     "reopen": "Kurulum rehberini göster",
@@ -2310,7 +2310,7 @@
     "steps": {
       "strategy": {
         "title": "Büyüme stratejini oluştur",
-        "desc": "AI kanallarını, kitleni ve içerik planını çıkarsın."
+        "desc": "AI işini analiz etsin; marka beynini, bilgi tabanını ve AI temsilcini de kendisi kursun."
       },
       "agent": {
         "title": "İlk AI temsilcini oluştur",
@@ -2326,7 +2326,7 @@
       },
       "channel": {
         "title": "Kanal bağla",
-        "desc": "Web sohbeti, WhatsApp veya SMS — müşterilerin sana yazdığı yer."
+        "desc": "Web sohbeti, WhatsApp veya SMS — AI temsilcin bağladığın anda devreye girer."
       },
       "leads": {
         "title": "İlk lead'ini ekle",
@@ -2334,7 +2334,7 @@
       },
       "team": {
         "title": "Ekibini davet et",
-        "desc": "Lead'lerin atanıp işlenebilmesi için ekip arkadaşlarını ekle."
+        "desc": "Lead'lerin atanıp işlenmesi için ekip arkadaşlarını ekle."
       },
       "site": {
         "title": "Açılış sayfası yayınla",
@@ -3603,7 +3603,7 @@
   "strategy": {
     "onboarding": {
       "title": "Yapay zeka ile pazarlama stratejini oluştur",
-      "subtitle": "Web sitenin adresini ver — analiz edelim, birkaç net soru soralım ve eylem planıyla birlikte tam bir strateji hazırlayalım.",
+      "subtitle": "Web sitenin adresini ver — analiz edelim, birkaç net soru soralım ve tam bir strateji hazırlayalım. Marka beynin, bilgi tabanın ve ilk AI temsilcin de bu sırada otomatik kurulur.",
       "websiteUrl": "Web sitesi URL’si",
       "websiteUrlHint": "Zorunlu — ana kaynağımız bu.",
       "oneLiner": "Tek cümlelik özet (isteğe bağlı)",

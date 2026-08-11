@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ResearchSpendService } from '../budget/research-spend.service';
 import { ScheduledJobService } from '../scheduling/scheduled-job.service';
 import { BrandSynthesisService } from './brand-synthesis.service';
+import { BrandApplyService } from './brand-apply.service';
 import { BrandSource, BrandSourceInput, BrandSourceResult } from './sources/brand-source';
 import { WebsiteBrandSource } from './sources/website.source';
 import { SocialBrandSource } from './sources/social.source';
@@ -21,6 +22,7 @@ export class BrandAnalysisService {
     private readonly synthesis: BrandSynthesisService,
     private readonly spend: ResearchSpendService,
     private readonly scheduledJob: ScheduledJobService,
+    private readonly applyService: BrandApplyService,
     website: WebsiteBrandSource,
     social: SocialBrandSource,
     gbp: GbpBrandSource,
@@ -100,6 +102,22 @@ export class BrandAnalysisService {
         where: { id: runId },
         data: { status: 'READY_FOR_REVIEW', sourceResults: results as any, draft: draft as any, costUsd, completedAt: new Date() },
       });
+
+      // Strategy onboarding sets autoApply: the user has already introduced
+      // their business once, and parking the draft behind a review button is
+      // exactly the "one more thing to click" the flow exists to remove. A
+      // failed apply is logged and leaves the run READY_FOR_REVIEW, so the
+      // manual path still works as the fallback.
+      if (input.autoApply) {
+        try {
+          await this.applyService.apply(run.workspaceId, runId);
+          this.logger.log(`brand analysis ${runId} auto-applied (strategy onboarding)`);
+        } catch (e) {
+          this.logger.warn(
+            `brand analysis ${runId} auto-apply failed (left READY_FOR_REVIEW): ${e instanceof Error ? e.message : e}`,
+          );
+        }
+      }
     } catch (e) {
       this.logger.warn(`brand analysis ${runId} failed: ${e instanceof Error ? e.message : e}`);
       await this.prisma.brandAnalysisRun.update({

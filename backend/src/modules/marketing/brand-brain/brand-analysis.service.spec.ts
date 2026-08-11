@@ -18,17 +18,21 @@ function makeSvc() {
   const social: any = { collect: jest.fn() };
   const gbp: any = { collect: jest.fn() };
   const upload: any = { collect: jest.fn() };
+  // Strategy onboarding can flag a run autoApply — the finished draft then
+  // seeds the workspace without waiting for a human review click.
+  const applyService: any = { apply: jest.fn().mockResolvedValue({ applied: true }) };
   const svc = new BrandAnalysisService(
     prisma,
     synthesis,
     spend,
     scheduledJob,
+    applyService,
     website,
     social,
     gbp,
     upload,
   );
-  return { svc, prisma, synthesis, spend, scheduledJob, website, social, gbp, upload };
+  return { svc, prisma, synthesis, spend, scheduledJob, applyService, website, social, gbp, upload };
 }
 
 describe('BrandAnalysisService', () => {
@@ -194,5 +198,57 @@ describe('BrandAnalysisService', () => {
 
       expect(prisma.brandAnalysisRun.findFirst).toHaveBeenCalledWith({ where: { id: 'run1', workspaceId: 'ws1' } });
     });
+  });
+});
+
+/**
+ * Strategy onboarding flags its run `autoApply`: the user has already
+ * introduced their business once, so the finished draft seeds the workspace
+ * (brand profile, knowledge docs, research profile) without a review click.
+ */
+describe('BrandAnalysisService — autoApply', () => {
+  const RUN = { id: 'run1', workspaceId: 'ws1', status: 'QUEUED', inputs: { websiteUrl: 'https://acme.example', autoApply: true } };
+
+  function primeHappyPath(deps: ReturnType<typeof makeSvc>) {
+    deps.prisma.brandAnalysisRun.findUnique.mockResolvedValue({ ...RUN });
+    deps.prisma.brandAnalysisRun.update.mockResolvedValue({});
+    deps.prisma.workspace.findUnique.mockResolvedValue({ defaultLanguage: 'tr' });
+    for (const src of [deps.website, deps.social, deps.gbp, deps.upload]) {
+      src.collect.mockResolvedValue({ source: 'website', status: 'inert', raw: null });
+    }
+    deps.synthesis.synthesize.mockResolvedValue({ profile: { brandName: 'Acme' } });
+  }
+
+  it('applies the draft as soon as synthesis finishes', async () => {
+    const deps = makeSvc();
+    primeHappyPath(deps);
+
+    await deps.svc.runAnalysis('run1');
+
+    expect(deps.applyService.apply).toHaveBeenCalledWith('ws1', 'run1');
+  });
+
+  it('leaves the run READY_FOR_REVIEW when auto-apply fails (manual path still works)', async () => {
+    const deps = makeSvc();
+    primeHappyPath(deps);
+    deps.applyService.apply.mockRejectedValue(new Error('knowledge cap'));
+
+    await expect(deps.svc.runAnalysis('run1')).resolves.toBeUndefined();
+
+    // The terminal status write happened BEFORE the apply attempt, so the run
+    // is reviewable by hand; the failure must not mark the run FAILED.
+    const statuses = deps.prisma.brandAnalysisRun.update.mock.calls.map((c: any) => c[0].data.status);
+    expect(statuses).toContain('READY_FOR_REVIEW');
+    expect(statuses).not.toContain('FAILED');
+  });
+
+  it('does not apply when the flag is absent (review flow unchanged)', async () => {
+    const deps = makeSvc();
+    primeHappyPath(deps);
+    deps.prisma.brandAnalysisRun.findUnique.mockResolvedValue({ ...RUN, inputs: { websiteUrl: 'https://acme.example' } });
+
+    await deps.svc.runAnalysis('run1');
+
+    expect(deps.applyService.apply).not.toHaveBeenCalled();
   });
 });
