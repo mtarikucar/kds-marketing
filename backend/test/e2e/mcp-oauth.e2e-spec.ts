@@ -277,6 +277,15 @@ describe('MCP OAuth authorization server (e2e)', () => {
       }
       // and a tool needing a scope this token lacks is genuinely absent
       expect(names).not.toContain('jeeta.list_conversations');
+
+      // The discovery pair must be visible to EVERY caller, over real HTTP.
+      // `find_tools` is how a deferred tool is found and `call_tool` is how it
+      // is then run — and a client can only call names that came back from
+      // THIS response, which is exactly why advertising the dispatcher is not
+      // optional. Neither declares scopes, so a token holding only leads.read
+      // still sees both.
+      expect(names).toContain('jeeta.find_tools');
+      expect(names).toContain('jeeta.call_tool');
     });
 
     it('challenges an unauthenticated MCP call with the discovery pointer', async () => {
