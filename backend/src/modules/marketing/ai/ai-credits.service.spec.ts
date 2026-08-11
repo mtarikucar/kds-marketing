@@ -154,17 +154,38 @@ describe('AiCreditsService — prepaid credits', () => {
 
   beforeEach(() => {
     counter = 0;
+    // Metric-aware: reserve() writes BOTH the total meter and the
+    // wallet-funded meter, so a single shared variable would conflate them.
+    const meters: Record<string, number> = {};
+    const metricOf = (args: any) => args.where.workspaceId_metric_periodKey.metric;
     prisma = {
       usageCounter: {
-        findUnique: jest.fn().mockImplementation(async () => ({ value: counter })),
+        findUnique: jest.fn().mockImplementation(async (args: any) => {
+          const m = metricOf(args);
+          if (m === AI_CREDITS_METRIC) return { value: counter };
+          return meters[m] === undefined ? null : { value: meters[m] };
+        }),
         upsert: jest.fn().mockImplementation(async (args: any) => {
-          if (args.update?.value?.increment !== undefined) counter += args.update.value.increment;
-          else if (args.create?.value !== undefined && counter === 0) counter = args.create.value;
-          return { value: counter };
+          const m = metricOf(args);
+          const inc = args.update?.value?.increment;
+          if (m === AI_CREDITS_METRIC) {
+            if (inc !== undefined) counter += inc;
+            else if (args.create?.value !== undefined && counter === 0) counter = args.create.value;
+            return { value: counter };
+          }
+          meters[m] = inc !== undefined ? (meters[m] ?? 0) + inc : args.create.value;
+          return { value: meters[m] };
         }),
         update: jest.fn().mockImplementation(async (args: any) => {
-          if (args.data?.value !== undefined) counter = args.data.value;
-          return { value: counter };
+          const m = metricOf(args);
+          const dec = args.data?.value?.decrement;
+          if (m === AI_CREDITS_METRIC) {
+            if (args.data?.value !== undefined && dec === undefined) counter = args.data.value;
+            return { value: counter };
+          }
+          if (dec !== undefined) meters[m] = (meters[m] ?? 0) - dec;
+          else if (args.data?.value !== undefined) meters[m] = args.data.value;
+          return { value: meters[m] };
         }),
       },
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
@@ -239,5 +260,95 @@ describe('AiCreditsService — prepaid credits', () => {
       remaining: 6,
       walletBalance: 2500,
     });
+  });
+});
+
+/**
+ * chargeOverage() bumps the counter past the monthly limit WITHOUT taking
+ * anything from the wallet — deliberately, since the work was already
+ * delivered. That breaks the "everything above the limit came from the wallet"
+ * shortcut, so a later refund from any OTHER action in the same month would
+ * read the inflated counter and credit the wallet for credits it never gave up.
+ * Free credits, minted out of nothing.
+ */
+describe('AiCreditsService — refund cannot mint credits after an overage', () => {
+  const WS3 = 'ws-overage';
+  let counters: Record<string, number>;
+  let prisma: any;
+  let entitlements: any;
+  let wallet: any;
+  let svc: AiCreditsService;
+
+  const key = (metric: string) => metric;
+
+  beforeEach(() => {
+    counters = {};
+    prisma = {
+      usageCounter: {
+        findUnique: jest.fn().mockImplementation(async ({ where }: any) => {
+          const m = where.workspaceId_metric_periodKey.metric;
+          return counters[key(m)] === undefined ? null : { value: counters[key(m)] };
+        }),
+        upsert: jest.fn().mockImplementation(async (args: any) => {
+          const m = args.where.workspaceId_metric_periodKey.metric;
+          const cur = counters[key(m)] ?? 0;
+          if (args.update?.value?.increment !== undefined) counters[key(m)] = cur + args.update.value.increment;
+          else counters[key(m)] = args.create.value;
+          return { value: counters[key(m)] };
+        }),
+        update: jest.fn().mockImplementation(async (args: any) => {
+          const m = args.where.workspaceId_metric_periodKey.metric;
+          if (args.data?.value?.decrement !== undefined) {
+            counters[key(m)] = (counters[key(m)] ?? 0) - args.data.value.decrement;
+          } else if (args.data?.value !== undefined) {
+            counters[key(m)] = args.data.value;
+          }
+          return { value: counters[key(m)] };
+        }),
+      },
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    entitlements = { getEffective: jest.fn().mockResolvedValue({ limits: { aiCreditsMonthly: 100 } }) };
+    wallet = {
+      balance: jest.fn().mockResolvedValue(0),
+      debitUpTo: jest.fn().mockResolvedValue(0),
+      credit: jest.fn().mockResolvedValue(0),
+    };
+    svc = new AiCreditsService(prisma as any, entitlements as any, wallet as any);
+  });
+
+  it('refunds NOTHING to the wallet when the over-limit usage came from an overage', async () => {
+    await svc.reserve(WS3, 100); // allowance fully consumed, wallet untouched
+    await svc.chargeOverage(WS3, 50); // counter 150, still nothing from the wallet
+
+    await svc.refund(WS3, 50);
+
+    // The derivation alone would have said "50 came from the wallet".
+    expect(wallet.credit).not.toHaveBeenCalled();
+  });
+
+  it('still refunds exactly what the wallet did fund', async () => {
+    wallet.debitUpTo.mockResolvedValue(20);
+    await svc.reserve(WS3, 120); // 100 allowance + 20 wallet
+    await svc.chargeOverage(WS3, 30); // counter 150; wallet-funded total stays 20
+
+    await svc.refund(WS3, 50);
+
+    // Capped at the 20 the wallet actually gave up, not the 50 the counter drop
+    // would suggest.
+    expect(wallet.credit).toHaveBeenCalledTimes(1);
+    expect(wallet.credit.mock.calls[0][1]).toMatchObject({ amount: 20, kind: 'REFUND' });
+  });
+
+  it('does not refund the same wallet credits twice across two refunds', async () => {
+    wallet.debitUpTo.mockResolvedValue(20);
+    await svc.reserve(WS3, 120);
+
+    await svc.refund(WS3, 20);
+    await svc.refund(WS3, 20);
+
+    const total = wallet.credit.mock.calls.reduce((n: number, c: any) => n + c[1].amount, 0);
+    expect(total).toBe(20);
   });
 });

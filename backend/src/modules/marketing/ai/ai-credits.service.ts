@@ -5,6 +5,20 @@ import { AiCreditWalletService } from './ai-credit-wallet.service';
 
 export const AI_CREDITS_METRIC = 'ai.credits';
 
+/**
+ * How much of this period's consumption was funded by the PREPAID WALLET.
+ *
+ * Without it, refund() has to infer the paid portion from "everything above the
+ * monthly limit came from the wallet" — and `chargeOverage()` breaks that
+ * invariant on purpose: it bumps the counter past the limit WITHOUT a wallet
+ * debit, because the work was already delivered. A later refund from any other
+ * action in the same month would then read the inflated counter and credit the
+ * wallet for credits it never gave up, minting them out of nothing.
+ *
+ * Tracking the wallet-funded total explicitly makes the refund floor exact.
+ */
+export const AI_CREDITS_WALLET_METRIC = 'ai.credits.wallet';
+
 /** UTC month key (YYYY-MM) — AI credits + message meters reset monthly. */
 export function monthKey(now = new Date()): string {
   return now.toISOString().slice(0, 7);
@@ -91,9 +105,24 @@ export class AiCreditsService {
             message: `Monthly AI credit limit reached (${limit}) and prepaid credits are insufficient`,
           });
         }
-        // The counter tracks TOTAL consumed, allowance + wallet, which keeps a
-        // single source of truth: everything above `limit` was paid for out of
-        // the wallet, and refund() derives the split from exactly that.
+        // Record the paid portion separately so refund() can hand back exactly
+        // what the wallet gave up — see AI_CREDITS_WALLET_METRIC.
+        await tx.usageCounter.upsert({
+          where: {
+            workspaceId_metric_periodKey: {
+              workspaceId,
+              metric: AI_CREDITS_WALLET_METRIC,
+              periodKey: period,
+            },
+          },
+          create: {
+            workspaceId,
+            metric: AI_CREDITS_WALLET_METRIC,
+            periodKey: period,
+            value: taken,
+          },
+          update: { value: { increment: taken } },
+        });
       }
       await tx.usageCounter.upsert({
         where: {
@@ -139,13 +168,40 @@ export class AiCreditsService {
         const effective = await this.entitlements.getEffective(workspaceId);
         const limit = effective.limits.aiCreditsMonthly;
         if (limit >= 0) {
-          walletBack = Math.max(0, before - limit) - Math.max(0, next - limit);
+          const derived = Math.max(0, before - limit) - Math.max(0, next - limit);
+          // Floor by what the wallet ACTUALLY funded. chargeOverage() pushes the
+          // counter past the limit without taking anything from the wallet, so
+          // the derivation alone would refund credits that were never debited.
+          const fundedRow = await tx.usageCounter.findUnique({
+            where: {
+              workspaceId_metric_periodKey: {
+                workspaceId,
+                metric: AI_CREDITS_WALLET_METRIC,
+                periodKey: period,
+              },
+            },
+            select: { value: true },
+          });
+          walletBack = Math.max(0, Math.min(derived, fundedRow?.value ?? 0));
         }
 
         await tx.usageCounter.update({
           where: { workspaceId_metric_periodKey: { workspaceId, metric: AI_CREDITS_METRIC, periodKey: period } },
           data: { value: next },
         });
+
+        if (walletBack > 0) {
+          await tx.usageCounter.update({
+            where: {
+              workspaceId_metric_periodKey: {
+                workspaceId,
+                metric: AI_CREDITS_WALLET_METRIC,
+                periodKey: period,
+              },
+            },
+            data: { value: { decrement: walletBack } },
+          });
+        }
 
         // Inside the transaction, for the same reason the debit is: the meter
         // and the balance must move together or not at all.
