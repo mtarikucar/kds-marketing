@@ -36,6 +36,7 @@ describe('NetgsmVoicemailPollService.poll', () => {
   let ingress: any;
   let r2: any;
   let stt: any;
+  let credits: any;
   let service: NetgsmVoicemailPollService;
   // A real adapter instance for genuine (not re-implemented) parseInbound
   // behavior — the constructor deps (registry/balance/smsV2) aren't touched by
@@ -91,8 +92,16 @@ describe('NetgsmVoicemailPollService.poll', () => {
     };
     r2 = { isConfigured: jest.fn().mockReturnValue(false), uploadToKey: jest.fn().mockResolvedValue({ url: 'https://r2/x', key: 'k', mime: 'audio/mpeg' }) };
     stt = { transcribeUrl: jest.fn().mockResolvedValue(null) };
+    // STT runs on a JEETA-owned key and this poll invokes it unattended for
+    // every inbound voicemail, so it is credit-metered now.
+    credits = {
+      reserve: jest.fn().mockResolvedValue(undefined),
+      refund: jest.fn().mockResolvedValue(undefined),
+    };
     mockSafeFetch.mockReset();
-    service = new NetgsmVoicemailPollService(prisma, registry, voicesms, budgeter, ingress, r2, stt);
+    service = new NetgsmVoicemailPollService(
+      prisma, registry, voicesms, budgeter, ingress, r2, stt, credits,
+    );
   });
 
   afterEach(() => {

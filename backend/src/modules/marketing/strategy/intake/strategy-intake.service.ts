@@ -7,6 +7,7 @@ import { creditCost, tierFor } from '../../ai/ai-credit-costs';
 import { WebsiteBrandSource } from '../../brand-brain/sources/website.source';
 import { SocialBrandSource } from '../../brand-brain/sources/social.source';
 import { BrandSourceInput, BrandSourceResult } from '../../brand-brain/sources/brand-source';
+import { ResearchSpendService } from '../../budget/research-spend.service';
 import { ARCHETYPES, archetypeMeta } from '../archetypes';
 import { BusinessArchetype } from '../strategy.types';
 
@@ -102,6 +103,7 @@ export class StrategyIntakeService {
     private readonly credits: AiCreditsService,
     private readonly website: WebsiteBrandSource,
     private readonly social: SocialBrandSource,
+    private readonly spend: ResearchSpendService,
   ) {}
 
   async start(workspaceId: string, input: StrategyIntakeInput): Promise<StartResult> {
@@ -237,6 +239,38 @@ export class StrategyIntakeService {
     return { toolUse: tu, questions, done: false };
   }
 
+  /** Record what the source adapters actually spent, mirroring
+   *  brand-analysis.service.ts. Best-effort: an accounting miss must never
+   *  break onboarding, which is the one flow a new customer cannot route
+   *  around. */
+  private async settleSourceSpend(
+    workspaceId: string,
+    material: BrandSourceResult[],
+  ): Promise<void> {
+    for (const r of material) {
+      try {
+        if (r.firecrawlPages) {
+          await this.spend.settle(workspaceId, {
+            unit: 'FIRECRAWL_PAGE',
+            quantity: r.firecrawlPages,
+            ref: `strategy-intake:${workspaceId}`,
+          });
+        }
+        if (r.apifyRuns) {
+          await this.spend.settle(workspaceId, {
+            unit: 'APIFY_RUN',
+            quantity: r.apifyRuns,
+            ref: `strategy-intake:${workspaceId}`,
+          });
+        }
+      } catch (e) {
+        this.logger.warn(
+          `strategy-intake: source spend accounting failed for ws ${workspaceId}: ${(e as Error)?.message ?? e}`,
+        );
+      }
+    }
+  }
+
   /** Reuse the Brand Brain website/social source adapters to gather the
    *  workspace's own material, then one Anthropic call to extract product /
    *  category / tone / suggested archetype. Never throws on a source miss — the
@@ -249,6 +283,14 @@ export class StrategyIntakeService {
     const material: BrandSourceResult[] = [];
     material.push(await this.website.collect(workspaceId, brandInput));
     if (brandInput.socialHandles?.length) material.push(await this.social.collect(workspaceId, brandInput));
+
+    // These adapters spend real Firecrawl/Apify money on Jeeta's accounts, and
+    // this path recorded none of it — brand-analysis.service.ts settles the
+    // very same counters (:87,:91) while onboarding, which crawls the same way
+    // for every new workspace, did not import the ledger at all. Accounting
+    // only: ResearchSpendService never blocks and never throws, and it no-ops
+    // without a ChannelTariff row, so this cannot fail an onboarding.
+    await this.settleSourceSpend(workspaceId, material);
 
     const res = await this.anthropic.complete({
       system:

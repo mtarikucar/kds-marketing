@@ -26,6 +26,7 @@ describe('ai-credit-costs — cost table tripwire', () => {
       'strategy.interview',
       'strategy.synthesize',
       'strategy.turn',
+      'stt.minute',
       'voice.analysis',
       'voice.copilot',
       'voice.turn',

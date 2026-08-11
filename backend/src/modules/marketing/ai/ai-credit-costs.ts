@@ -45,6 +45,13 @@ export const AI_CREDIT_COSTS = {
   'voice.turn': { credits: 2, tier: 'default' as AiModelTier },
   // Voice-AI Phase 5.2 cost decisions (were numeric literals in the services):
   'voice.analysis': { credits: 3, tier: 'default' as AiModelTier },
+  // Speech-to-text (Deepgram/Whisper via STT_API_KEY — a JEETA-owned key).
+  // Charged PER MINUTE of audio, rounded up. This was billed to nobody: the
+  // transcription ran before any reserve, so a workspace with zero credits
+  // still burned Jeeta's STT money, and a call whose transcript came back
+  // empty was never charged at all. `tier` is unused (no LLM call) — 'light'
+  // is a harmless placeholder, as with the social-publish rows.
+  'stt.minute': { credits: 1, tier: 'light' as AiModelTier },
   'voice.copilot': { credits: 1, tier: 'conversation' as AiModelTier },
   // AI Social Content Studio — per-model estimate (media-models.config) governs
   // the reserve; these are the registered floor + tripwire-pinned cost decision.
