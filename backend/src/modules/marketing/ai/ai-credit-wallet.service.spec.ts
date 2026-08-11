@@ -102,6 +102,46 @@ describe('AiCreditWalletService', () => {
     expect(tx.$transaction).not.toHaveBeenCalled();
   });
 
+  /**
+   * run() writes TWO unique columns: the ledger `ref` and, via upsert, the
+   * workspace-unique wallet row. A blanket "P2002 means already applied" catch
+   * turns a lost race on the WALLET row into a silent success — the settlement
+   * stamps the order granted and the credits the customer paid for are gone.
+   */
+  it('rethrows a P2002 that is NOT the ledger ref, so a paid top-up is never lost', async () => {
+    const { svc, client } = makeDeps(0);
+    const err: any = new Error('Unique constraint failed');
+    err.code = 'P2002';
+    err.meta = { target: ['workspaceId'] }; // ai_credit_wallets_workspaceId_key
+    client.aiCreditWallet.upsert.mockRejectedValueOnce(err);
+
+    await expect(
+      svc.credit(WS, { amount: 4000, kind: 'TOPUP', ref: 'order:o9' }),
+    ).rejects.toThrow('Unique constraint failed');
+  });
+
+  it('still treats a genuine ref conflict as already-applied', async () => {
+    const { svc, client } = makeDeps(0);
+    const err: any = new Error('Unique constraint failed');
+    err.code = 'P2002';
+    err.meta = { target: ['ref'] };
+    client.aiCreditLedgerEntry.create.mockRejectedValueOnce(err);
+
+    await expect(svc.credit(WS, { amount: 1000, kind: 'TOPUP', ref: 'order:o1' })).resolves.toBeDefined();
+  });
+
+  it('a non-ref P2002 on debit surfaces instead of reporting "took nothing"', async () => {
+    const { svc, client } = makeDeps(500);
+    const err: any = new Error('Unique constraint failed');
+    err.code = 'P2002';
+    err.meta = { target: ['workspaceId'] };
+    client.aiCreditWallet.upsert.mockRejectedValueOnce(err);
+
+    // Returning 0 here would make reserve() tell a workspace WITH credits that
+    // it is out of them.
+    await expect(svc.debitUpTo(WS, { amount: 10, kind: 'SPEND', ref: 'x' })).rejects.toThrow();
+  });
+
   it('reports 0 for a workspace that has never topped up', async () => {
     const { svc, client } = makeDeps(0);
     client.aiCreditWallet.findUnique.mockResolvedValueOnce(null);

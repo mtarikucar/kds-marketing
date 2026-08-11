@@ -19,7 +19,12 @@
  * pricing table, the checkout guard and the operator picker, which is all the
  * removal that is actually needed. Their features are raised to match JEETA so
  * that a stray legacy subscription gets the full product rather than a
- * frozen-in-time subset.
+ * frozen-in-time subset — but only ever UPWARD. A retired tier keeps every
+ * capability and every allowance it was sold (SCALE's voiceCampaigns, SCALE's
+ * 6.000 credits, GROWTH's 5.000 messages): those workspaces are still being
+ * billed, the seed upserts on every deploy, and entitlements read straight off
+ * the Package row, so a downward edit here silently degrades a paying customer
+ * mid-period with no proration and no notice.
  *
  * WHY THESE BLOCKS ARE NOT DRY. Every customer-facing package now carries the
  * same feature set, so a shared constant is the obvious refactor — and it
@@ -201,6 +206,10 @@ const PACKAGES = [
       fax: false,
     },
     limits: {
+      // Retired tiers keep the allowances they were SOLD. The seed upserts on
+      // every deploy and entitlements read straight off the Package row, so
+      // lowering these would cut a still-billed subscriber's ceiling mid-period
+      // with no proration and no notice.
       aiCreditsMonthly: 1500,
       messagesMonthly: 2500,
       maxAgents: -1,
@@ -252,8 +261,12 @@ const PACKAGES = [
       fax: false,
     },
     limits: {
-      aiCreditsMonthly: 1500,
-      messagesMonthly: 2500,
+      // Retired tiers keep the allowances they were SOLD. The seed upserts on
+      // every deploy and entitlements read straight off the Package row, so
+      // lowering these would cut a still-billed subscriber's ceiling mid-period
+      // with no proration and no notice.
+      aiCreditsMonthly: 2000,
+      messagesMonthly: 5000,
       maxAgents: -1,
       maxWorkflows: -1,
       maxFunnels: -1,
@@ -299,12 +312,20 @@ const PACKAGES = [
       research: true,
       mediaGen: true,
       socialCampaigns: true,
-      voiceCampaigns: false,
+      // SCALE granted this in-plan. Retired tiers are raised to match
+      // JEETA, but raising must never mean TAKING AWAY: this workspace
+      // is still billed ₺16.900/mo and the seed upserts on every deploy,
+      // so flipping it false would 403 their dialer and voice campaigns.
+      voiceCampaigns: true,
       fax: false,
     },
     limits: {
-      aiCreditsMonthly: 1500,
-      messagesMonthly: 2500,
+      // Retired tiers keep the allowances they were SOLD. The seed upserts on
+      // every deploy and entitlements read straight off the Package row, so
+      // lowering these would cut a still-billed subscriber's ceiling mid-period
+      // with no proration and no notice.
+      aiCreditsMonthly: 6000,
+      messagesMonthly: 20000,
       maxAgents: -1,
       maxWorkflows: -1,
       maxFunnels: -1,

@@ -42,7 +42,12 @@ function deps(overrides: { enabled?: boolean; aiEnabled?: boolean; completions?:
       findFirst: jest.fn().mockResolvedValue(session),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
-    marketingStrategy: { upsert: jest.fn().mockResolvedValue({ id: 'strat1' }) },
+    marketingStrategy: {
+      upsert: jest.fn().mockResolvedValue({ id: 'strat1' }),
+      // persist() touches the strategy AFTER seeding its actions so the weekly
+      // feedback gate can tell "nothing moved" from "a fresh plan".
+      update: jest.fn().mockResolvedValue({ id: 'strat1' }),
+    },
     strategyAction: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   };
   const orchestrator = { applyPlan: jest.fn().mockResolvedValue({ lane: 'ASSISTED', applied: 0, skipped: 0 }) };
@@ -167,12 +172,10 @@ describe('StrategySynthesisService', () => {
       completions: [completion([toolUse('t2', 'submit_strategy', { archetype: 'B2C_ECOMMERCE', brief: badBrief, actions: [] })])],
     });
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow(/invalid strategy brief/);
-    // One model call happened before the brief was rejected, so the refund is
-    // base + 1 turn. Refunding only the base would bill for a failed run.
-    expect(credits.refund).toHaveBeenCalledWith(
-      'ws1',
-      creditCost('strategy.synthesize') + creditCost('strategy.turn'),
-    );
+    // The single turn RAN — a real Opus call at maxTokens 4000 — so it stays
+    // charged. Refunding executed turns would let a workspace near its cap
+    // replay the loop for free.
+    expect(credits.refund).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
     expect(prisma.marketingStrategy.upsert).not.toHaveBeenCalled();
   });
 
@@ -180,7 +183,8 @@ describe('StrategySynthesisService', () => {
     const { svc, credits, complete } = deps({ completions: [] });
     complete.mockRejectedValueOnce(new Error('anthropic down'));
     await expect(svc.synthesize('ws1', 'sess1')).rejects.toThrow('anthropic down');
-    // The turn was charged before the call that then threw — refund both.
+    // The call itself threw, so that turn produced nothing — base + that turn
+    // come back, and no executed turn is refunded because none completed.
     expect(credits.refund).toHaveBeenCalledWith(
       'ws1',
       creditCost('strategy.synthesize') + creditCost('strategy.turn'),
@@ -200,9 +204,9 @@ describe('StrategySynthesisService', () => {
     const turns = complete.mock.calls.length;
     expect(turns).toBeGreaterThan(1);
     expect(credits.reserve).toHaveBeenCalledTimes(1 + turns);
-    expect(credits.refund).toHaveBeenCalledWith(
-      'ws1',
-      creditCost('strategy.synthesize') + turns * creditCost('strategy.turn'),
-    );
+    // Every one of those turns actually hit Anthropic, so only the base comes
+    // back. This is the regression that matters: refunding the turns as well
+    // made a capped-out workspace able to burn Opus indefinitely for free.
+    expect(credits.refund).toHaveBeenCalledWith('ws1', creditCost('strategy.synthesize'));
   });
 });

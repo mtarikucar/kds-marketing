@@ -10,6 +10,27 @@ import { PrismaService } from '../../../prisma/prisma.service';
  */
 type WalletTx = Prisma.TransactionClient;
 
+/**
+ * Is this unique-constraint violation the LEDGER REF one?
+ *
+ * `run()` writes two unique columns: `ai_credit_ledger_entries.ref` (the
+ * idempotency key) and, via upsert, `ai_credit_wallets.workspaceId`. Treating
+ * every P2002 as "this ref was already applied" is what makes a paid top-up
+ * vanish: two settlements racing to create the FIRST wallet row for a workspace
+ * both pass the ref pre-check, the loser violates the WORKSPACE index, and a
+ * blanket catch reports success while crediting nothing.
+ *
+ * Prisma reports the offending columns in `meta.target`, so match on that and
+ * rethrow anything else.
+ */
+function isRefConflict(e: unknown): boolean {
+  const err = e as { code?: string; meta?: { target?: unknown } };
+  if (err?.code !== 'P2002') return false;
+  const target = err.meta?.target;
+  const cols = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
+  return cols.some((c) => c.includes('ref'));
+}
+
 export type AiCreditLedgerKind = 'TOPUP' | 'SPEND' | 'REFUND' | 'ADJUST' | 'GRANT';
 
 export interface AiCreditMovement {
@@ -92,8 +113,11 @@ export class AiCreditWalletService {
     try {
       return tx ? await run(tx) : await this.prisma.$transaction(run);
     } catch (e) {
-      // Lost a race on the unique ref — the other writer applied it.
-      if (ref && (e as { code?: string })?.code === 'P2002') return this.balance(workspaceId);
+      // Lost a race on the unique REF — the other writer applied this exact
+      // movement, so returning is correct. Any other P2002 (notably the
+      // workspace-unique wallet row) means nothing was credited and must
+      // surface, or the caller stamps the order as granted for free.
+      if (ref && isRefConflict(e)) return this.balance(workspaceId);
       throw e;
     }
   }
@@ -156,10 +180,13 @@ export class AiCreditWalletService {
     try {
       return tx ? await run(tx) : await this.prisma.$transaction(run);
     } catch (e) {
-      if (ref && (e as { code?: string })?.code === 'P2002') {
+      if (ref && isRefConflict(e)) {
         const existing = await this.prisma.aiCreditLedgerEntry.findUnique({ where: { ref } });
         return existing ? Math.abs(existing.delta) : 0;
       }
+      // Anything else — including a lost race on the workspace-unique wallet
+      // row — must NOT be reported as "took nothing": reserve() would turn it
+      // into AI_CREDITS_EXHAUSTED for a workspace that actually has credits.
       throw e;
     }
   }

@@ -352,3 +352,51 @@ describe('AiCreditsService — refund cannot mint credits after an overage', () 
     expect(total).toBe(20);
   });
 });
+
+/**
+ * Prepaid credits were sold as non-expiring money. A lapsed, cancelled or
+ * expired subscription resolves to zeroEntitlements (limit 0) — and the fast
+ * path there used to throw before the wallet was ever consulted, leaving a paid
+ * balance displayed on the billing page but permanently unspendable.
+ */
+describe('AiCreditsService — a lapsed plan can still spend prepaid credits', () => {
+  const WS4 = 'ws-lapsed';
+  let prisma: any;
+  let entitlements: any;
+  let wallet: any;
+  let svc: AiCreditsService;
+
+  beforeEach(() => {
+    prisma = {
+      usageCounter: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({ value: 0 }),
+        update: jest.fn().mockResolvedValue({ value: 0 }),
+      },
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ locked: 'x' }]),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    entitlements = { getEffective: jest.fn().mockResolvedValue({ limits: { aiCreditsMonthly: 0 } }) };
+    wallet = {
+      balance: jest.fn().mockResolvedValue(0),
+      debitUpTo: jest.fn(),
+      credit: jest.fn().mockResolvedValue(0),
+    };
+    svc = new AiCreditsService(prisma as any, entitlements as any, wallet as any);
+  });
+
+  it('spends the prepaid balance when the plan grants no allowance', async () => {
+    wallet.debitUpTo.mockResolvedValue(5);
+    await expect(svc.reserve(WS4, 5)).resolves.toBeUndefined();
+    expect(wallet.debitUpTo.mock.calls[0][1]).toMatchObject({ amount: 5, kind: 'SPEND' });
+  });
+
+  it('refuses — and hands back what it took — when the balance cannot cover it', async () => {
+    wallet.debitUpTo.mockResolvedValue(2);
+    await expect(svc.reserve(WS4, 5)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(wallet.credit).toHaveBeenCalledWith(
+      WS4,
+      expect.objectContaining({ amount: 2, kind: 'REFUND' }),
+    );
+  });
+});

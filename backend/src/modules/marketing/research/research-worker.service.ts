@@ -69,6 +69,7 @@ export class ResearchWorkerService {
         // Jeeta roughly thirty times what it charged.
         await this.credits.reserve(job.workspaceId, creditCost('research.qualify'));
         let turnsCharged = 0;
+        let turnsCompleted = 0;
         try {
           const geo = (job.profile.geo as ResearchToolCtx['geo']) ?? {};
           const ctx: ResearchToolCtx = { workspaceId: job.workspaceId, runId, geo, budgetId: null };
@@ -95,6 +96,7 @@ export class ResearchWorkerService {
               tier: tierFor('research.turn'), workspaceId: job.workspaceId, action: 'research.turn',
               cacheSystem: true,
             });
+            turnsCompleted += 1;
             if (!res.toolUses.length) break;
 
             const results: Anthropic.ToolResultBlockParam[] = [];
@@ -133,12 +135,17 @@ export class ResearchWorkerService {
           this.logger.log(`research run ${runId}: ${candidates.length} qualified, ${staged} staged, ${duplicates} dupes (ws ${job.workspaceId})`);
           return { runId, researched: candidates.length, staged, duplicates };
         } catch (e) {
-          // Refund the base AND every turn charged — the run produced nothing
-          // usable and the existing policy is not to bill for errors.
+          // Refund the base and only the turn that did NOT run.
+          // Turns whose Anthropic call actually RETURNED are real vendor spend
+          // and must stay charged. Refunding them let a workspace sitting just
+          // under its cap replay the loop for free: charge a turn, execute it,
+          // hit AI_CREDITS_EXHAUSTED on the next one, get everything back.
+
           await this.credits
             .refund(
               job.workspaceId,
-              creditCost('research.qualify') + turnsCharged * creditCost('research.turn'),
+              creditCost('research.qualify') +
+                Math.max(0, turnsCharged - turnsCompleted) * creditCost('research.turn'),
             )
             .catch(() => undefined);
           throw e;

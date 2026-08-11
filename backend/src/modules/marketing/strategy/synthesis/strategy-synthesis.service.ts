@@ -159,6 +159,7 @@ export class StrategySynthesisService {
         // maxTokens 4000, so the credit ceiling was not a spend ceiling.
         await this.credits.reserve(workspaceId, creditCost('strategy.synthesize'));
         let turnsCharged = 0;
+        let turnsCompleted = 0;
         try {
           const ctx: ResearchToolCtx = { workspaceId, runId, geo: {}, budgetId: null };
           const deps = { sources: this.sources, spend: this.spend, runs: this.runs };
@@ -188,6 +189,7 @@ export class StrategySynthesisService {
               tier: tierFor('strategy.turn'), workspaceId: workspaceId, action: 'strategy.turn',
               cacheSystem: true,
             });
+            turnsCompleted += 1;
             if (!res.toolUses.length) break;
 
             const results: Anthropic.ToolResultBlockParam[] = [];
@@ -234,12 +236,17 @@ export class StrategySynthesisService {
           this.logger.log(`strategy synthesis ${runId}: ${archetype} + ${actionCount} actions (ws ${workspaceId})`);
           return { strategyId, actionCount };
         } catch (e) {
-          // Refund the base AND every turn actually charged — the run produced
-          // nothing usable, and the existing policy is not to bill for errors.
+          // Refund the base and only the turn that did NOT run.
+          // Turns whose Anthropic call actually RETURNED are real vendor spend
+          // and must stay charged. Refunding them let a workspace sitting just
+          // under its cap replay the loop for free: charge a turn, execute it,
+          // hit AI_CREDITS_EXHAUSTED on the next one, get everything back.
+
           await this.credits
             .refund(
               workspaceId,
-              creditCost('strategy.synthesize') + turnsCharged * creditCost('strategy.turn'),
+              creditCost('strategy.synthesize') +
+                Math.max(0, turnsCharged - turnsCompleted) * creditCost('strategy.turn'),
             )
             .catch(() => undefined);
           throw e;
@@ -249,7 +256,13 @@ export class StrategySynthesisService {
   }
 
   /** Upsert the workspace's single strategy (ACTIVE, version-bumped on replace)
-   *  and re-seed its ActionPlan (drop prior PROPOSED plan, insert the new one). */
+   *  and re-seed its ActionPlan (drop prior PROPOSED plan, insert the new one).
+   *
+   *  The strategy row is TOUCHED LAST, after its actions exist. The weekly
+   *  feedback cron decides whether anything is worth re-synthesizing by asking
+   *  "has a StrategyAction moved since the strategy was written?" — and writing
+   *  the strategy first made every freshly-seeded action newer than it, so the
+   *  answer was always yes and the gate never skipped a single workspace. */
   private async persist(
     workspaceId: string,
     archetype: BusinessArchetype,
@@ -277,6 +290,18 @@ export class StrategySynthesisService {
         })),
       });
     }
+
+    // Touch the strategy LAST, so it is strictly newer than the actions it just
+    // seeded. The weekly feedback cron asks "has any StrategyAction moved since
+    // the strategy was written?" — with the strategy written first, every fresh
+    // action was newer than it, the answer was always yes, and the gate skipped
+    // nobody. That put a full Opus re-synthesis plus live crawl spend on every
+    // ACTIVE strategy every week, including workspaces nobody had touched.
+    await this.prisma.marketingStrategy.update({
+      where: { id: strategy.id },
+      data: { status: 'ACTIVE' },
+    });
+
     return { strategyId: strategy.id, actionCount: actions.length };
   }
 

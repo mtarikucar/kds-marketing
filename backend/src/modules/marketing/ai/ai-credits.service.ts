@@ -57,10 +57,29 @@ export class AiCreditsService {
       return;
     }
     if (limit === 0) {
-      throw new ForbiddenException({
-        code: 'AI_CREDITS_EXHAUSTED',
-        message: 'AI credits are not included in your plan',
+      // No allowance — but prepaid credits are the customer's MONEY and were
+      // sold as non-expiring. A lapsed or cancelled subscription resolves to
+      // zeroEntitlements, and throwing here made a paid balance permanently
+      // unspendable while the billing page still displayed it.
+      const taken = await this.wallet.debitUpTo(workspaceId, {
+        amount: cost,
+        kind: 'SPEND',
+        note: 'no monthly allowance — spending prepaid credits',
       });
+      if (taken < cost) {
+        if (taken > 0) {
+          await this.wallet
+            .credit(workspaceId, { amount: taken, kind: 'REFUND', note: 'insufficient balance' })
+            .catch(() => undefined);
+        }
+        throw new ForbiddenException({
+          code: 'AI_CREDITS_EXHAUSTED',
+          message: 'AI credits are not included in your plan and prepaid credits are insufficient',
+        });
+      }
+      await this.bump(workspaceId, period, cost);
+      await this.bumpWalletFunded(workspaceId, period, cost);
+      return;
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -141,7 +160,12 @@ export class AiCreditsService {
   /** Return reserved credits to the pool when the AI call itself failed. */
   async refund(workspaceId: string, cost: number): Promise<void> {
     if (cost <= 0) return;
-    const period = monthKey();
+    // A refund must land on the period the RESERVE was made in. Keying purely
+    // on "now" loses a reservation made at 23:55 on the last day of the month
+    // whose call fails minutes later: the new period has no counter row, the
+    // early return fires, and prepaid credits the customer paid cash for are
+    // gone with no ledger entry explaining it.
+    const period = (await this.periodHoldingCharge(workspaceId, cost)) ?? monthKey();
     let walletBack = 0;
 
     // Floored read-modify-write under the SAME per-workspace lock as reserve, so
@@ -253,6 +277,36 @@ export class AiCreditsService {
       remaining: limit === -1 ? -1 : Math.max(0, limit - used),
       walletBalance,
     };
+  }
+
+  /** The UTC month whose meter still holds this charge — current month if it
+   *  has one, else the previous month (a reserve that straddled the rollover). */
+  private async periodHoldingCharge(workspaceId: string, cost: number): Promise<string | null> {
+    const now = monthKey();
+    const current = await this.prisma.usageCounter.findUnique({
+      where: { workspaceId_metric_periodKey: { workspaceId, metric: AI_CREDITS_METRIC, periodKey: now } },
+      select: { value: true },
+    });
+    if ((current?.value ?? 0) >= cost) return now;
+
+    const d = new Date();
+    const prev = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+    const previous = await this.prisma.usageCounter.findUnique({
+      where: { workspaceId_metric_periodKey: { workspaceId, metric: AI_CREDITS_METRIC, periodKey: prev } },
+      select: { value: true },
+    });
+    if ((previous?.value ?? 0) >= cost) return prev;
+    return current ? now : null;
+  }
+
+  private async bumpWalletFunded(workspaceId: string, periodKey: string, delta: number): Promise<void> {
+    await this.prisma.usageCounter.upsert({
+      where: {
+        workspaceId_metric_periodKey: { workspaceId, metric: AI_CREDITS_WALLET_METRIC, periodKey },
+      },
+      create: { workspaceId, metric: AI_CREDITS_WALLET_METRIC, periodKey, value: Math.max(0, delta) },
+      update: { value: { increment: delta } },
+    });
   }
 
   private async bump(workspaceId: string, periodKey: string, delta: number): Promise<void> {

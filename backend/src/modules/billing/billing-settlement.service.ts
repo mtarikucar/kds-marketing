@@ -326,6 +326,48 @@ export class BillingSettlementService implements OnModuleInit {
         );
       }
     }
+
+    // Prepaid AI-credit top-ups ride the ADDON type, which is otherwise
+    // excluded from this sweep because grantAddOn's WorkspaceAddOn create is
+    // not idempotent. That reasoning does NOT apply to a credit top-up: it
+    // credits AiCreditWallet under the unique ref `order:{id}`, exactly the
+    // property that makes WALLET_TOPUP safe to re-run above. Without this pass,
+    // a customer whose ₺10.900 order flipped to SUCCEEDED while the wallet
+    // write failed had paid for credits that no code path would ever deliver.
+    const creditTopUps = await this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'SUCCEEDED',
+        grantedAt: null,
+        type: 'ADDON',
+        addOnCode: { in: Object.keys(AI_CREDIT_TOPUPS) },
+      },
+      orderBy: { succeededAt: 'asc' },
+      take: limit,
+    });
+    for (const order of creditTopUps) {
+      const landed = await this.prisma.aiCreditLedgerEntry.findUnique({
+        where: { ref: `order:${order.id}` },
+        select: { id: true },
+      });
+      if (landed) {
+        await this.markGranted(order.id); // already credited — evict from the window
+        continue;
+      }
+
+      try {
+        await this.grantEntitlement(order);
+        await this.markGranted(order.id);
+        this.entitlements.invalidate(order.workspaceId);
+        regranted++;
+        this.logger.warn(
+          `reconcile: re-credited uncredited SUCCEEDED credit top-up ${order.id} for workspace ${order.workspaceId}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `reconcile: credit top-up re-credit failed for order ${order.id}: ${(e as Error)?.message}`,
+        );
+      }
+    }
     return regranted;
   }
 

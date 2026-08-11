@@ -45,6 +45,7 @@ describe('BillingSettlementService — idempotent settlement', () => {
       },
       workspaceAddOn: { create: jest.fn().mockResolvedValue({}) },
       growthWalletLedgerEntry: { findUnique: jest.fn().mockResolvedValue(null) },
+      aiCreditLedgerEntry: { findUnique: jest.fn().mockResolvedValue(null) },
       // FIX 5: activateSubscription now widens the module allow-list. Default to
       // null (all-active) so the common path is a no-op; module-union tests
       // override these.
@@ -181,6 +182,43 @@ describe('BillingSettlementService — idempotent settlement', () => {
       // Idempotency lives in the ledger's unique ref, same as the growth-wallet
       // top-up above.
       expect(aiCreditWallet.credit.mock.calls[0][1].ref).toBe('order:order-1');
+    });
+
+    /**
+     * ADDON is excluded from the recovery sweeps because grantAddOn's
+     * WorkspaceAddOn create is not idempotent. Credit top-ups ride the same
+     * type but ARE idempotent (unique ledger ref), so without their own pass a
+     * customer whose ₺10.900 order flipped to SUCCEEDED while the wallet write
+     * failed had paid for credits nothing would ever deliver.
+     */
+    it('the recovery sweep re-credits a paid top-up whose wallet write failed', async () => {
+      const order = { ...topUpOrder('credits_12k'), id: 'order-9' };
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type === 'ADDON' ? [order] : [],
+      );
+      prisma.paymentOrder.findUnique.mockResolvedValue(order);
+      prisma.paymentOrder.update = jest.fn().mockResolvedValue({});
+
+      const regranted = await svc.reconcileUngrantedOrders();
+
+      expect(regranted).toBe(1);
+      expect(aiCreditWallet.credit).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ amount: 12000, ref: 'order:order-9' }),
+      );
+    });
+
+    it('the sweep skips a top-up whose credit already landed', async () => {
+      const order = { ...topUpOrder('credits_1k'), id: 'order-8' };
+      prisma.paymentOrder.findMany.mockImplementation(async ({ where }: any) =>
+        where.type === 'ADDON' ? [order] : [],
+      );
+      prisma.aiCreditLedgerEntry.findUnique.mockResolvedValue({ id: 'led-1' });
+      prisma.paymentOrder.update = jest.fn().mockResolvedValue({});
+
+      await svc.reconcileUngrantedOrders();
+
+      expect(aiCreditWallet.credit).not.toHaveBeenCalled();
     });
 
     it('leaves non-credit add-ons on the entitlement-grant path', async () => {
@@ -373,11 +411,18 @@ describe('BillingSettlementService — idempotent settlement', () => {
       expect(grantMarks()).toHaveLength(0);
     });
 
-    it('both reconcile queries filter grantedAt: null (the window fix)', async () => {
+    it('every reconcile query filters grantedAt: null (the window fix)', async () => {
       await svc.reconcileUngrantedOrders();
       const wheres = prisma.paymentOrder.findMany.mock.calls.map((c: any[]) => c[0].where);
-      expect(wheres).toHaveLength(2);
+      // Assert the PROPERTY, not the count: a new recovery pass (credit
+      // top-ups were the third) must inherit the marker filter, and pinning a
+      // number just makes adding one look like a regression.
+      expect(wheres.length).toBeGreaterThanOrEqual(3);
       for (const where of wheres) expect(where).toMatchObject({ grantedAt: null });
+      // The three families the sweep must cover.
+      expect(wheres.some((w: any) => w.type?.in)).toBe(true);
+      expect(wheres.some((w: any) => w.type === 'WALLET_TOPUP')).toBe(true);
+      expect(wheres.some((w: any) => w.type === 'ADDON' && w.addOnCode?.in)).toBe(true);
     });
 
     it('reconcile stamps grantedAt on a successful re-grant', async () => {
