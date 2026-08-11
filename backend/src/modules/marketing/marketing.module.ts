@@ -1186,6 +1186,10 @@ export class MarketingModule {
   // unless registered here).
   constructor(
     registry: McpToolRegistry,
+    // Injected so `jeeta.call_tool` can dispatch a discovered tool back
+    // through the SAME broker every other call goes through — every scope,
+    // approval and audit gate resolves from the target tool, not the caller.
+    mcpBroker: McpBrokerService,
     analytics: AnalyticsService,
     brand: BrandBrainService,
     leads: MarketingLeadsService,
@@ -1268,6 +1272,9 @@ export class MarketingModule {
     registerReviewTools(registry, { reviews, entitlements });
     // Registered LAST: `jeeta.find_tools` searches the catalogue, so everything
     // it must be able to find has to already be in the registry it closes over.
-    registerDiscoveryTools(registry, { registry });
+    registerDiscoveryTools(registry, {
+      registry,
+      dispatch: (ctx, toolName, args) => mcpBroker.invoke(ctx, toolName, args),
+    });
   }
 }
