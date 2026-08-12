@@ -177,9 +177,9 @@ describe('ThreadPane — internal notes and reopen', () => {
     const user = userEvent.setup();
     render(
       <ThreadPane
-        {...(baseProps({
+        {...baseProps({
           notes: [{ id: 'n1', body: 'Called, asked for a quote', createdAt: new Date().toISOString() }],
-        }) as never)}
+        })}
       />,
     );
     await user.click(screen.getByText('Internal notes'));
@@ -188,7 +188,7 @@ describe('ThreadPane — internal notes and reopen', () => {
 
   it('says plainly that the notes are team-only when there are none', async () => {
     const user = userEvent.setup();
-    render(<ThreadPane {...(baseProps({ notes: [] }) as never)} />);
+    render(<ThreadPane {...baseProps({ notes: [] })} />);
     await user.click(screen.getByText('Internal notes'));
     expect(screen.getByText(/only your team can see these/i)).toBeInTheDocument();
   });
@@ -197,7 +197,7 @@ describe('ThreadPane — internal notes and reopen', () => {
     const user = userEvent.setup();
     const onAddNote = vi.fn();
     render(
-      <ThreadPane {...(baseProps({ notes: [], noteDraft: 'heads up', onAddNote }) as never)} />,
+      <ThreadPane {...baseProps({ notes: [], noteDraft: 'heads up', onAddNote })} />,
     );
     await user.click(screen.getByText('Internal notes'));
     await user.click(screen.getByRole('button', { name: 'Add' }));
@@ -210,7 +210,7 @@ describe('ThreadPane — internal notes and reopen', () => {
     const user = userEvent.setup();
     render(
       <ThreadPane
-        {...(baseProps({ notes: [], noteDraft: 'heads up', isAddingNote: true }) as never)}
+        {...baseProps({ notes: [], noteDraft: 'heads up', isAddingNote: true })}
       />,
     );
     await user.click(screen.getByText('Internal notes'));
@@ -221,7 +221,7 @@ describe('ThreadPane — internal notes and reopen', () => {
     const onReopen = vi.fn();
     render(
       <ThreadPane
-        {...(baseProps({ convo: { id: 'c1', aiPaused: false, status: 'CLOSED' }, onReopen }) as never)}
+        {...baseProps({ convo: { id: 'c1', aiPaused: false, status: 'CLOSED' }, onReopen })}
       />,
     );
     expect(screen.getByLabelText('Reopen')).toBeInTheDocument();
@@ -229,7 +229,7 @@ describe('ThreadPane — internal notes and reopen', () => {
   });
 
   it('offers Close on an open thread', () => {
-    render(<ThreadPane {...(baseProps() as never)} />);
+    render(<ThreadPane {...baseProps()} />);
     expect(screen.getByLabelText('Close')).toBeInTheDocument();
     expect(screen.queryByLabelText('Reopen')).not.toBeInTheDocument();
   });
