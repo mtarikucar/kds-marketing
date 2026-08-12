@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Send,
@@ -11,6 +11,8 @@ import {
   Users,
   Mic,
   FileText,
+  RotateCcw,
+  StickyNote,
 } from 'lucide-react';
 import { Button, IconButton, Card, ScrollArea, Badge } from '@/components/ui';
 import { smsSegments, NETGSM_HEADER_OVERHEAD_CHARS } from '@/lib/smsSegments';
@@ -41,6 +43,12 @@ interface MessageRow {
   } | null;
 }
 
+interface NoteRow {
+  id: string;
+  body: string;
+  createdAt: string;
+}
+
 interface ThreadPaneProps {
   convo: {
     id: string;
@@ -59,10 +67,19 @@ interface ThreadPaneProps {
   isSending: boolean;
   isTogglingAi: boolean;
   isClosing: boolean;
+  isReopening?: boolean;
+  /** Team-only notes on this thread; never delivered to the customer.
+   *  Optional so the pane still renders while the notes query is in flight. */
+  notes?: NoteRow[];
+  noteDraft?: string;
+  isAddingNote?: boolean;
   onDraftChange: (v: string) => void;
   onSend: () => void;
   onToggleAi: () => void;
   onClose: () => void;
+  onReopen?: () => void;
+  onNoteDraftChange?: (v: string) => void;
+  onAddNote?: () => void;
   onBack: () => void;
   onShowContext: () => void;
 }
@@ -79,14 +96,22 @@ export function ThreadPane({
   isSending,
   isTogglingAi,
   isClosing,
+  isReopening,
+  notes = [],
+  noteDraft = '',
+  isAddingNote,
   onDraftChange,
   onSend,
   onToggleAi,
   onClose,
+  onReopen,
+  onNoteDraftChange,
+  onAddNote,
   onBack,
   onShowContext,
 }: ThreadPaneProps) {
   const { t } = useTranslation('marketing');
+  const [notesOpen, setNotesOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const prevConvoId = useRef<string | undefined>(undefined);
   const convoId = convo?.id;
@@ -175,17 +200,90 @@ export function ThreadPane({
             )}
           </IconButton>
 
-          {/* Close conversation */}
-          <IconButton
-            variant="ghost"
-            size="sm"
-            aria-label={t('inbox.close', 'Close')}
-            onClick={onClose}
-            disabled={isClosing}
-          >
-            <CheckCircle className="w-5 h-5" />
-          </IconButton>
+          {/* Close, or reopen one closed by mistake. The backend has always had
+              a reopen route; nothing in the panel called it, so closing was a
+              one-way door unless the customer happened to write again. */}
+          {convo.status === 'CLOSED' ? (
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label={t('inbox.reopen', 'Reopen')}
+              onClick={() => onReopen?.()}
+              disabled={isReopening}
+            >
+              <RotateCcw className="w-5 h-5" />
+            </IconButton>
+          ) : (
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label={t('inbox.close', 'Close')}
+              onClick={onClose}
+              disabled={isClosing}
+            >
+              <CheckCircle className="w-5 h-5" />
+            </IconButton>
+          )}
         </div>
+      </div>
+
+      {/* Internal notes — team-only, never delivered to the customer.
+          The routes and the MCP tool both existed; the panel called neither, so
+          a note written by an agent (or by another teammate over the API) was
+          stored where no human could read it. */}
+      <div className="border-b border-border bg-warning/5 px-4 py-2">
+        <button
+          type="button"
+          onClick={() => setNotesOpen((v) => !v)}
+          className="flex w-full items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+        >
+          <StickyNote className="h-4 w-4" />
+          {t('inbox.internalNotes', 'Internal notes')}
+          {notes.length > 0 && <Badge size="sm">{notes.length}</Badge>}
+          <span className="ms-auto">{notesOpen ? '−' : '+'}</span>
+        </button>
+
+        {notesOpen && (
+          <div className="mt-2 space-y-2">
+            {notes.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t('inbox.noNotes', 'No internal notes yet. Only your team can see these.')}
+              </p>
+            )}
+            {notes.map((n) => (
+              <div key={n.id} className="rounded border border-border bg-surface p-2 text-xs">
+                <p className="whitespace-pre-wrap text-foreground">{n.body}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {new Date(n.createdAt).toLocaleString()}
+                </p>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <input
+                value={noteDraft}
+                onChange={(e) => onNoteDraftChange?.(e.target.value)}
+                placeholder={t('inbox.notePlaceholder', 'Note for the team…')}
+                className="flex-1 rounded border border-border bg-surface px-2 py-1 text-xs"
+                onKeyDown={(e) => {
+                  // Same guard the composer uses: Enter must respect the
+                  // in-flight state or a fast second press double-posts.
+                  if (e.key === 'Enter' && !e.shiftKey && noteDraft.trim() && !isAddingNote) {
+                    e.preventDefault();
+                    onAddNote?.();
+                  }
+                }}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onAddNote?.()}
+                disabled={!noteDraft.trim() || isAddingNote}
+              >
+                {t('inbox.addNote', 'Add')}
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Message thread */}
