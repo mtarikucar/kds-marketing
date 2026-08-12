@@ -66,6 +66,33 @@ export interface SchedulingToolDeps {
  */
 export function registerSchedulingTools(registry: McpToolRegistry, deps: SchedulingToolDeps): void {
   registry.register({
+    name: 'jeeta.list_calendars',
+    description:
+      "List this workspace's booking calendars with their id, name, slug, slot length and timezone. Every " +
+      'other scheduling tool needs a calendarId and nothing else returns one, so start here before ' +
+      'jeeta.get_booking_availability or jeeta.create_booking. An empty list means no calendar has been set ' +
+      'up yet — bookings are impossible until someone creates one in the panel. Read-only.',
+    domain: 'scheduling',
+    defer: true,
+    scopes: ['tasks.read'],
+    risk: 'READ',
+    requiresApproval: false,
+    inputSchema: z.object({}),
+    handler: async (ctx) => {
+      await assertFeature(deps.entitlements, ctx.workspaceId, 'funnels');
+      const rows = await deps.bookings.list(ctx.workspaceId);
+      return rows.map((c: Record<string, unknown>) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug ?? null,
+        slotMinutes: c.slotMinutes ?? null,
+        timezone: c.timezone ?? null,
+        status: c.status ?? null,
+      }));
+    },
+  });
+
+  registry.register({
     name: 'jeeta.list_bookings',
     description:
       'List bookings (real appointments, excluding external busy blocks) in this workspace, optionally filtered by calendar, status or time range. Read-only.',
